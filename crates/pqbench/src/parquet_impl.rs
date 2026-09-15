@@ -1,0 +1,95 @@
+//! The bundled `PageParser` implementation, backed by parquet-rs.
+//!
+//! This module is private (`lib.rs` doesn't `pub mod` it); the only thing the
+//! crate exposes is [`crate::parquet_helpers::default_parser`]. Tool code never
+//! imports `parquet` directly.
+
+use std::path::Path;
+
+use parquet::basic::Compression;
+use parquet::column::page::{Page as ParquetPage, PageReader};
+use parquet::file::reader::{FileReader, SerializedFileReader};
+
+use crate::parquet_helpers::{
+    ColumnChunk, ColumnMass, Error, FileMass, MetadataParser, Page, PageParser, ParquetFile,
+};
+
+/// The parquet-rs-backed page parser.
+pub struct ParquetRsParser;
+
+impl PageParser for ParquetRsParser {
+    /// Read a parquet file from an in-memory byte slice and extract its pages.
+    ///
+    /// No disk I/O: `bytes` is wrapped as an in-memory `ChunkReader` and every
+    /// page payload is copied out into the returned [`ParquetFile`].
+    fn parse_pages(&self, bytes: &[u8]) -> Result<ParquetFile, Error> {
+        let reader = SerializedFileReader::new(bytes::Bytes::copy_from_slice(bytes))?;
+        let mut file = ParquetFile { chunks: Vec::new() };
+        for rg in 0..reader.num_row_groups() {
+            let row_group = reader.get_row_group(rg)?;
+            for col in 0..row_group.num_columns() {
+                let meta = row_group.metadata().column(col);
+                let column = meta.column_path().string();
+                let compression = meta.compression();
+                if compression != Compression::UNCOMPRESSED {
+                    return Err(Error(format!(
+                        "only NONE (uncompressed) parquet is supported; column {column} is {compression}"
+                    )));
+                }
+                let pages = collect_pages(row_group.get_column_page_reader(col)?)?;
+                file.chunks.push(ColumnChunk { column, pages });
+            }
+        }
+        Ok(file)
+    }
+}
+
+impl MetadataParser for ParquetRsParser {
+    /// Read a parquet file's per-column byte masses from its footer metadata.
+    ///
+    /// Only the footer is read: no page is decoded, so compressed columns are
+    /// fine, and large files aren't loaded into memory.
+    fn read_masses(&self, path: &Path) -> Result<FileMass, Error> {
+        let reader = SerializedFileReader::try_from(path)?;
+        let mut num_rows = 0i64;
+        let mut columns = Vec::new();
+        for rg in 0..reader.num_row_groups() {
+            let row_group = reader.get_row_group(rg)?;
+            num_rows += row_group.metadata().num_rows();
+            for col in 0..row_group.num_columns() {
+                let meta = row_group.metadata().column(col);
+                columns.push(ColumnMass {
+                    path: meta.column_path().string(),
+                    bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
+                });
+            }
+        }
+        Ok(FileMass {
+            num_rows: u64::try_from(num_rows).unwrap_or(0),
+            columns,
+        })
+    }
+}
+
+fn collect_pages(reader: Box<dyn PageReader>) -> Result<Vec<Page>, Error> {
+    let mut out = Vec::new();
+    for page in reader {
+        let page = page?;
+        out.push(page_from_parquet(page));
+    }
+    Ok(out)
+}
+
+fn page_from_parquet(page: ParquetPage) -> Page {
+    Page {
+        payload: page.buffer().to_vec(),
+        num_values: page.num_values(),
+        is_dictionary: page.is_dictionary_page(),
+    }
+}
+
+impl From<parquet::errors::ParquetError> for Error {
+    fn from(e: parquet::errors::ParquetError) -> Self {
+        Error(e.to_string())
+    }
+}

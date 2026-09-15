@@ -1,0 +1,14 @@
+# Build the bundled C codecs with the exact flags lzbench uses (the e2e
+# reference). snappy_src compiles snappy.cc via the `cc` crate, which injects
+# `-fPIC` in its own defaults BEFORE these flags and `-fPIC` measurably slows
+# snappy's tight decompress loop (~14%): `-fPIE` must come after it
+# (last-one-wins in gcc) — matching lzbench's `-fPIE`.
+#
+# Not present: the snappy-specific `SNAPPY_HAVE_SSSE3`/`_X86_CRC32`/`_BMI2`
+# defines. `-march=native` makes snappy auto-derive those from `__SSSE3__`,
+# `__SSE4_2__`, `__BMI2__` (snappy.cc:32-53), and explicitly defining them
+# measurably changed snappy's decompress codegen vs lzbench (which defines
+# none). `-DHAVE_BUILTIN_CTZ` is the one intrinsic snappy does not auto-detect,
+# which lzbench passes via its own probe.
+[env]
+CXXFLAGS = "-O3 -DNDEBUG -fPIE -march=native -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"

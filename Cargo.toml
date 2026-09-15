@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pqbench",
+    "crates/pqbench-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["pqbench contributors"]
+repository = "https://github.com/pqbench/pqbench"
+
+[workspace.dependencies]
+pqbench = { path = "crates/pqbench" }
