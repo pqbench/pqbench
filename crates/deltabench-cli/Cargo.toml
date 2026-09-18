@@ -1,0 +1,23 @@
+[package]
+name = "deltabench-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version = "1.91.1"
+description = "Command line frontend for deltabench."
+
+[[bin]]
+name = "deltabench"
+path = "src/main.rs"
+
+[dependencies]
+deltabench = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+parquet = { version = "59", default-features = false }
+serde_json = "1"
+tempfile = "3"

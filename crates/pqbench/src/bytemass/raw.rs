@@ -50,10 +50,14 @@ mod tests {
                 ColumnMass {
                     path: "text".into(),
                     bytes: 40,
+                    uncompressed_bytes: 80,
+                    codec: "SNAPPY".into(),
                 },
                 ColumnMass {
                     path: "a.b".into(),
                     bytes: 60,
+                    uncompressed_bytes: 120,
+                    codec: "SNAPPY".into(),
                 },
             ],
         };

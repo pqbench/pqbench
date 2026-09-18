@@ -10,5 +10,10 @@
 # measurably changed snappy's decompress codegen vs lzbench (which defines
 # none). `-DHAVE_BUILTIN_CTZ` is the one intrinsic snappy does not auto-detect,
 # which lzbench passes via its own probe.
+[build]
+# Use sccache when installed and invoke rustc directly otherwise. This keeps
+# fresh clones and CI working without mandatory machine-level configuration.
+rustc-wrapper = ".cargo/scripts/rustc-wrapper.sh"
+
 [env]
 CXXFLAGS = "-O3 -DNDEBUG -fPIE -march=native -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
