@@ -27,6 +27,17 @@ trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "ok:   $*"; }
 
+run_image() { "$runtime" run --rm --network none --read-only "$@"; }
+
+# check_codecs <output_file> <command_name>
+check_codecs() {
+    for codec in gzip lz4 snappy zstd; do
+        grep -q "$codec" "$1" \
+            || fail "codec '$codec' is missing from '$2' output"
+        ok "codec present: $codec"
+    done
+}
+
 echo "== smoke-testing $image (runtime: $runtime) =="
 
 echo "checking the image runs as non-root user 65532:65532..."
@@ -36,15 +47,14 @@ u=$("$runtime" image inspect --format '{{.Config.User}}' "$image") \
 ok "image user is 65532:65532"
 
 echo "checking 'pqbench --help' runs and lists subcommands..."
-"$runtime" run --rm --network none --read-only "$image" --help > "$scratch/help" \
+run_image "$image" --help > "$scratch/help" \
     || fail "'--help' exited non-zero"
 grep -q bytemass "$scratch/help" \
     || fail "'--help' output does not mention 'bytemass'"
 ok "'--help' mentions bytemass"
 
 echo "checking 'bytemass --json' parses a parquet file..."
-"$runtime" run --rm --network none --read-only \
-    -v "$root/crates/pqbench/tests/fixtures:/data:ro" \
+run_image -v "$root/crates/pqbench/tests/fixtures:/data:ro" \
     "$image" bytemass /data/small_snappy.parquet --json > "$scratch/mass.json" \
     || fail "'bytemass --json' exited non-zero"
 python3 - "$scratch/mass.json" <<'PY'
@@ -59,26 +69,17 @@ PY
 ok "bytemass produced a valid byte-mass JSON tree"
 
 echo "checking 'lz' sweeps every wired codec..."
-"$runtime" run --rm --network none --read-only \
-    -v "$root:/data:ro" "$image" lz /data/README.md \
+run_image -v "$root:/data:ro" "$image" lz /data/README.md \
     --samples 1 --warmup-iterations 0 > "$scratch/lz" \
     || fail "'lz' exited non-zero"
-for codec in gzip lz4 snappy zstd; do
-    grep -q "$codec" "$scratch/lz" \
-        || fail "codec '$codec' is missing from 'lz' output"
-    ok "codec present: $codec"
-done
+check_codecs "$scratch/lz" "lz"
 
 echo "checking 'compression' runs on a NONE-compressed parquet..."
-"$runtime" run --rm --network none --read-only \
-    -v "$root/crates/pqbench/tests/fixtures:/data:ro" \
+run_image -v "$root/crates/pqbench/tests/fixtures:/data:ro" \
     "$image" compression /data/small_reddit_none.parquet \
     --samples 1 --warmup-iterations 0 > "$scratch/comp" \
     || fail "'compression' exited non-zero"
-for codec in gzip lz4 snappy zstd; do
-    grep -q "$codec" "$scratch/comp" \
-        || fail "codec '$codec' is missing from 'compression' output"
-done
+check_codecs "$scratch/comp" "compression"
 ok "compression produced a codec sweep"
 
 echo "PASS: all smoke tests passed"
