@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1
 FROM rust:1.90-alpine3.22 AS build
 
+# TARGETARCH is set automatically by buildx during multi-platform builds
+# (amd64 / arm64 / ...). NATIVE=1 opts into exact-host tuning (local only).
+ARG TARGETARCH
+ARG CPU=""
+ARG NATIVE=0
+
 RUN apk add --no-cache build-base pkgconf zlib-dev zlib-static
 
 WORKDIR /src
@@ -8,10 +14,24 @@ COPY Cargo.toml Cargo.lock ./
 COPY .cargo/ .cargo/
 COPY crates/ crates/
 
-# Published binaries must run on CPUs other than the build host. Override
-# .cargo/config.toml's -march=native while retaining the other codec flags.
-ENV CXXFLAGS="-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
-RUN cargo build --locked --release --package pqbench-cli
+# Choose the CPU baseline: a portable per-arch baseline by default (so the
+# published image runs on any CPU), or -march=native when NATIVE=1. This
+# overrides .cargo/config.toml's -march=native while retaining the other codec
+# flags. Baseline numbers differ from a native build; see docs/docker.md.
+RUN if [ "$NATIVE" = "1" ]; then \
+        march=native; \
+    elif [ -n "$CPU" ]; then \
+        march="$CPU"; \
+    else \
+        case "$TARGETARCH" in \
+          arm64|arm64/v8) march=neoverse-n1 ;; \
+          amd64|x86_64)   march=x86-64-v3 ;; \
+          *) march=generic ;; \
+        esac; \
+    fi; \
+    export CXXFLAGS="-O3 -DNDEBUG -fPIE -march=$march -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"; \
+    export RUSTFLAGS="-C target-cpu=$march"; \
+    cargo build --locked --release --package pqbench-cli
 
 FROM alpine:3.22 AS runtime
 RUN apk add --no-cache ca-certificates
