@@ -63,18 +63,18 @@ build on the target machine when you need numbers you can compare across runs.
 ## Publishing strategy and tradeoffs
 
 One multi-arch image (`amd64` + `arm64` under a single tag) is published to
-Docker Hub on a GitHub release. It ships a version tag (`vMAJOR.MINOR.PATCH`)
-plus `latest` for stable releases. The build uses musl (Alpine) and a per-arch
-portable CPU baseline (`x86-64-v3` / `neoverse-n1`), with a `--build-arg
-NATIVE=1` escape hatch for exact-host builds.
+Docker Hub on a GitHub release. For now it ships as `latest` only, with no
+version tags. The build uses musl (Alpine) and a per-arch portable CPU baseline
+(`x86-64-v3` / `neoverse-n1`), with a `--build-arg NATIVE=1` escape hatch for
+exact-host builds.
 
 - **Multi-arch as one tag** — one `docker pull` works on any machine. Cost: a
   single image serves both arches, so per-arch CPU tuning is the only lever; you
   can't get an "amd64-only" fast path without splitting tags.
-- **Version + `latest`** — a version tag gives reproducible, pinnable releases;
-  `latest` is the ergonomic default. Cost: `latest` is mutable (two pulls on
-  different days can differ), so pin a version tag or `@sha256:` digest when you
-  need to reproduce or compare numbers across time.
+- **`latest` only** — always newest, zero versioning work. Cost: not
+  reproducible (two pulls on different days differ), no rollback, no pinning. For
+  a benchmark tool that matters, since users can't reproduce or compare numbers
+  across time.
 - **musl vs glibc** — tiny (~5 MB), static, runs anywhere. Cost: benchmark
   numbers differ slightly from a native glibc build; ties you to Alpine.
 - **Portable baseline vs `native`** — runs on any CPU (no SIGILL). Cost: it's a
