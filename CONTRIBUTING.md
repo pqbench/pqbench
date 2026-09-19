@@ -43,6 +43,7 @@ make check        # = fmt-check + clippy -D warnings + test
   `explaining-variables`, `explaining-constants`, `chunk-statements`,
   `extract-helper`, `delete-redundant-comments`.
 - See AGENTS.md *Tidyings* for the full list; run them before behavior changes.
+- These tidyings are from Kent Beck's *Tidy First?* (O'Reilly, 2023) — [newsletter](https://newsletter.kentbeck.com/).
 
 ## 4. Check conventions
 
