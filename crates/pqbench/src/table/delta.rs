@@ -27,26 +27,39 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// A column's physical storage summed across all active data files.
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct ColumnReport {
+    /// Column path in schema form, e.g. `content` or `a.b`.
     pub path: String,
+    /// Total on-disk bytes across the snapshot's active files.
     pub compressed_bytes: u64,
+    /// Total encoded bytes before compression.
     pub uncompressed_bytes: u64,
+    /// Compression codecs present in the active files.
     pub codecs: BTreeSet<String>,
 }
 
 /// A complete measurement of one local snapshot. File bytes include Parquet
 /// overhead, but exclude the Delta log, tombstones, and unrelated files.
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct TableReport {
+    /// Resolved Delta snapshot version.
     pub version: u64,
+    /// Number of active Parquet files.
     pub file_count: usize,
+    /// Total physical rows in the active files.
     pub physical_rows: u64,
+    /// Total size of the active Parquet files, including file overhead.
     pub file_bytes: u64,
+    /// Total compressed column-chunk bytes.
     pub compressed_column_bytes: u64,
+    /// Total uncompressed column-chunk bytes.
     pub uncompressed_column_bytes: u64,
     /// Partition values live in the log and need not occupy Parquet columns.
     pub partition_columns: Vec<String>,
+    /// Per-column physical storage totals.
     pub columns: Vec<ColumnReport>,
     /// Compressed column bytes per physical table row, for JSON/HTML consumers.
     tree: MassNode,
@@ -68,7 +81,10 @@ impl TableReport {
 /// paths, column mapping, deletion vectors, or unsupported Delta reader features.
 /// No partial report is returned on failure.
 pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
-    let root = local_root(path)?;
+    let path = path.to_owned();
+    let root = tokio::task::spawn_blocking(move || local_root(&path))
+        .await
+        .map_err(blocking_error)??;
     let table = load_local_table(&root, version).await?;
     let snapshot = snapshot_info(&table)?;
     let measured = measure_active_files(&table, &root).await?;
@@ -125,7 +141,6 @@ fn snapshot_info(table: &DeltaTable) -> Result<SnapshotInfo, Error> {
 
 async fn measure_active_files(table: &DeltaTable, root: &Path) -> Result<MeasuredFiles, Error> {
     let mut files = table.get_active_add_actions_by_partitions(&[]);
-    let parser = default_metadata_parser();
     let mut mass = MassAccumulator::new();
     let mut file_bytes = 0;
     while let Some(file) = files.try_next().await.map_err(delta_error)? {
@@ -134,10 +149,16 @@ async fn measure_active_files(table: &DeltaTable, root: &Path) -> Result<Measure
                 "deletion vectors are not supported by local byte-mass analysis".into(),
             ));
         }
-        let relative = file.path();
+        let relative = file.path().to_string();
         let expected = u64::try_from(file.size())
             .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
-        let (actual, file_mass) = measure_local_file(root, relative.as_ref(), expected, &parser)?;
+        let task_root = root.to_owned();
+        let task_relative = relative.clone();
+        let (actual, file_mass) = tokio::task::spawn_blocking(move || {
+            measure_local_file(&task_root, &task_relative, expected)
+        })
+        .await
+        .map_err(blocking_error)??;
         file_bytes = checked_sum(file_bytes, actual)?;
         mass.add(file_mass).map_err(parquet_error)?;
     }
@@ -151,7 +172,6 @@ fn measure_local_file(
     root: &Path,
     relative: &str,
     expected: u64,
-    parser: &impl MetadataParser,
 ) -> Result<(u64, crate::parquet_helpers::FileMass), Error> {
     let local = local_file(root, relative)?;
     let actual = std::fs::metadata(&local)
@@ -162,7 +182,7 @@ fn measure_local_file(
             "active file size differs from log: {relative} (expected {expected}, found {actual})"
         )));
     }
-    let mass = parser
+    let mass = default_metadata_parser()
         .read_masses(&local)
         .map_err(|e| Error(format!("cannot read active file {relative}: {e}")))?;
     Ok((actual, mass))
@@ -219,6 +239,10 @@ fn build_report(
 
 fn parquet_error(error: crate::parquet_helpers::Error) -> Error {
     Error(error.to_string())
+}
+
+fn blocking_error(error: tokio::task::JoinError) -> Error {
+    Error(format!("blocking file task failed: {error}"))
 }
 
 /// Serialize the snapshot report as pretty-printed JSON.

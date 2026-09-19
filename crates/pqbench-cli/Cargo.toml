@@ -2,10 +2,15 @@
 name = "pqbench-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Command line frontend for pqbench."
+
+[features]
+default = []
+delta = ["pqbench/delta", "dep:tokio"]
 
 [[bin]]
 name = "pqbench"
@@ -15,3 +20,4 @@ path = "src/main.rs"
 pqbench = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 glob = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }

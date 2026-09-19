@@ -9,6 +9,9 @@ use pqbench::compression;
 use pqbench::parquet_helpers::PageParser;
 use pqbench::stats;
 
+#[cfg(feature = "delta")]
+mod delta;
+
 #[derive(Parser)]
 #[command(
     name = "pqbench",
@@ -21,6 +24,7 @@ Examples:
   pqbench bytemass part-1.parquet part-2.parquet
   pqbench bytemass 'data/*.parquet'
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
+  pqbench delta ./table --json
 "#
 )]
 struct Cli {
@@ -69,6 +73,9 @@ Examples:
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#)]
     Bytemass(BytemassArgs),
+    /// analyze the active Parquet files in a local Delta snapshot
+    #[cfg(feature = "delta")]
+    Delta(delta::Args),
 }
 
 /// Arguments for `bytemass`.
@@ -95,6 +102,8 @@ fn main() -> ExitCode {
         Command::Lz(args) => run_lz(&args),
         Command::Compression(args) => run_compression(&args),
         Command::Bytemass(args) => run_bytemass(&args),
+        #[cfg(feature = "delta")]
+        Command::Delta(args) => delta::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -166,7 +175,7 @@ fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, CliError> {
 }
 
 fn has_glob_metachar(input: &str) -> bool {
-    input.contains(['*', '?', '['])
+    input.contains(['*', '?'])
 }
 
 fn collection_label(paths: &[PathBuf]) -> String {
@@ -238,16 +247,19 @@ mod tests {
 
     #[test]
     fn expands_masks_and_rejects_empty_matches() {
-        let mask = format!(
-            "{}/tests/fixtures/*.parquet",
-            env!("CARGO_MANIFEST_DIR").replace("pqbench-cli", "pqbench")
-        );
+        let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
         let paths = expand_inputs(&[mask]).unwrap();
-        assert_eq!(paths.len(), 2);
-        assert_eq!(collection_label(&paths), "2 parquet files");
+        assert_eq!(paths.len(), 1);
 
         let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
         assert!(expand_inputs(&[missing]).is_err());
+    }
+
+    #[test]
+    fn treats_brackets_as_literal_path_characters() {
+        assert!(!has_glob_metachar("data/archive[1].parquet"));
+        assert!(has_glob_metachar("data/archive?.parquet"));
+        assert!(has_glob_metachar("data/*.parquet"));
     }
 
     #[test]

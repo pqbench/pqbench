@@ -9,23 +9,33 @@ use crate::parquet_helpers::{
 
 /// One column's byte mass summed across a collection of Parquet files.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ColumnMassSummary {
+    /// Column path in schema form, e.g. `content` or `a.b`.
     pub path: String,
+    /// Total on-disk bytes across all physical files.
     pub compressed_bytes: u64,
+    /// Total encoded bytes before compression across all physical files.
     pub uncompressed_bytes: u64,
+    /// Compression codecs present in the column chunks.
     pub codecs: BTreeSet<String>,
 }
 
 /// Byte masses summed across a collection of Parquet files.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct MassSummary {
+    /// Number of physical Parquet files included in the summary.
     pub file_count: usize,
+    /// Total physical rows across all files.
     pub num_rows: u64,
+    /// Per-column byte totals and codecs.
     pub columns: Vec<ColumnMassSummary>,
 }
 
 impl MassSummary {
     /// Convert the summary to the existing byte-mass analytics input.
+    #[must_use]
     pub fn file_mass(&self) -> FileMass {
         FileMass {
             num_rows: self.num_rows,
@@ -36,7 +46,7 @@ impl MassSummary {
                     path: column.path.clone(),
                     bytes: column.compressed_bytes,
                     uncompressed_bytes: column.uncompressed_bytes,
-                    codec: String::new(),
+                    codec: column.codecs.iter().cloned().collect::<Vec<_>>().join(","),
                 })
                 .collect(),
         }
@@ -55,6 +65,8 @@ pub struct MassAccumulator {
 }
 
 impl MassAccumulator {
+    /// Create an empty byte-mass accumulator.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -87,6 +99,8 @@ impl MassAccumulator {
         Ok(())
     }
 
+    /// Finish aggregation and return the accumulated summary.
+    #[must_use]
     pub fn finish(self) -> MassSummary {
         MassSummary {
             file_count: self.file_count,
@@ -145,6 +159,27 @@ mod tests {
         assert_eq!(summary.columns[0].compressed_bytes, 24);
         assert_eq!(summary.columns[0].uncompressed_bytes, 48);
         assert_eq!(summary.columns[0].codecs, BTreeSet::from(["SNAPPY".into()]));
+        assert_eq!(summary.file_mass().columns[0].codec, "SNAPPY");
+    }
+
+    #[test]
+    fn file_mass_preserves_multiple_codecs() {
+        let mut accumulator = MassAccumulator::new();
+        for codec in ["ZSTD", "SNAPPY"] {
+            accumulator
+                .add(FileMass {
+                    num_rows: 1,
+                    columns: vec![ColumnMass {
+                        path: "value".into(),
+                        bytes: 1,
+                        uncompressed_bytes: 2,
+                        codec: codec.into(),
+                    }],
+                })
+                .unwrap();
+        }
+        let mass = accumulator.finish().file_mass();
+        assert_eq!(mass.columns[0].codec, "SNAPPY,ZSTD");
     }
 
     #[test]

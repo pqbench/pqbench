@@ -31,8 +31,8 @@ aggregates the results.
 cargo build --release
 ```
 
-The Delta feature requires Rust 1.91.1 or newer, matching delta-rs 0.32.4. The
-default `pqbench` workspace members retain their existing toolchain support.
+The workspace requires Rust 1.91.1 or newer, matching the minimum required by
+delta-rs 0.32.4 when the optional Delta feature is enabled.
 
 For development, prefer `cargo check` and normal debug builds. Release builds
 perform substantially more optimization and should be reserved for benchmarks
@@ -126,9 +126,11 @@ pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 
 `pqbench::table::delta` analyzes the latest snapshot, or an explicit version,
 by reading only the active Parquet files' footer metadata. Enable the feature
-when building or testing:
+when building, running, or testing:
 
 ```
+cargo run -p pqbench-cli --features delta -- delta ./path/to/table
+cargo run -p pqbench-cli --features delta -- delta ./path/to/table --version 3 --json
 cargo test -p pqbench --features delta
 ```
 
