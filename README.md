@@ -14,20 +14,8 @@ docker pull pqbench/pqbench:latest
 docker run --rm -v "$PWD:/data:ro" pqbench/pqbench:latest bytemass /data/your.parquet
 ```
 
-Podman is a drop-in — `podman pull` / `podman run` work the same.
-
-Or build from source (requires Rust 1.91.1+) and run the bundled sample:
-
-```sh
-git clone https://github.com/pqbench/pqbench.git
-cd pqbench
-cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
-```
-
-`examples/quickstart.parquet` is a small smoke sample (a few KB) — its numbers
-aren't benchmark-grade. Use `make samples` for real data; see
-[docs/docker.md](docs/docker.md) for how the published image's numbers compare to
-a native build.
+The published image is a portable baseline build; see
+[docs/docker.md](docs/docker.md) for how its numbers compare to a native build.
 
 ## Commands
 

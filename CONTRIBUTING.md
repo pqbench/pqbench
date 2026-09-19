@@ -3,16 +3,18 @@
 ## Getting started
 
 Requires Rust 1.91.1+ and [git-lfs](https://git-lfs.com) (for the LFS test
-fixtures). Clone and run the gate:
+fixtures). Clone, build, and try the bundled sample:
 
 ```sh
 git clone https://github.com/pqbench/pqbench.git
 cd pqbench
 make check   # fmt-check + clippy -D warnings + test
+cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
 ```
 
-`make samples` fetches local test data. For using the CLI, see the README
-quick start.
+`examples/quickstart.parquet` is a small smoke sample — its numbers aren't
+benchmark-grade. `make samples` fetches real test data. For using the CLI, see
+the README quick start.
 
 ## The loop
 
