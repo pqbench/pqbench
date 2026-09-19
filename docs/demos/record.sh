@@ -11,8 +11,12 @@ for command in asciinema agg docker; do
     }
 done
 
-test -f .docker-data/deltabench-example/alltypes_dictionary.parquet || {
-    echo "stage the documented Delta example under .docker-data first" >&2
+test -f .docker-data/nyc-taxi/yellow_tripdata_2024-01.parquet || {
+    echo "stage the documented NYC Taxi Parquet example under .docker-data first" >&2
+    exit 1
+}
+test -f .docker-data/stackexchange-delta/_delta_log/00000000000000000000.json || {
+    echo "stage the documented Stack Exchange Delta example under .docker-data first" >&2
     exit 1
 }
 
@@ -52,7 +56,7 @@ asciinema rec --headless --overwrite --return --window-size 100x28 \
     --command "sh docs/demos/deltabench-bytemass-session.sh" \
     /tmp/deltabench-bytemass.cast
 
-agg --theme github-dark --font-size 20 --idle-time-limit 2 \
+agg --theme github-dark --font-size 20 --idle-time-limit 6 \
     /tmp/pqbench-bytemass.cast docs/images/pqbench-bytemass.gif
-agg --theme github-dark --font-size 20 --idle-time-limit 2 \
+agg --theme github-dark --font-size 20 --idle-time-limit 6 \
     /tmp/deltabench-bytemass.cast docs/images/deltabench-bytemass.gif
