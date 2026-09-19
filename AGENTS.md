@@ -97,6 +97,17 @@ Grounded in McIlroy's maxims, Pike's notes, and the classic rules:
   evolve forward without breaking readers.
 - **Diversity.** Distrust claims of "one true way"; keep options open.
 
+## Low coupling · domain isolation · small dep tree
+
+- **Low coupling** — decouple commands and modules as much as possible; a change
+  shouldn't spread into unrelated code.
+- **Domain isolation** — isolate third-party APIs and domain code into their own
+  modules (like the parquet helpers); the CLI is a thin wrapper over the library.
+- **Small dep tree** — keep heavy dependencies optional and off the default build;
+  compile and test time are hard constraints.
+
+Reference (history): https://github.com/pqbench/pqbench/pull/6
+
 ## First principles
 
 Reason from first principles (what is true / the data model) rather than by
