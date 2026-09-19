@@ -111,3 +111,4 @@ every file you edit in your reply as a plain path reference (see AGENTS.md
 - **No ad-hoc workarounds** — if the environment is wrong, fix it (the flatpak
   SDK toolchain / its manifest), don't PATH-hack, bundle broken artifacts, or
   hardcode paths.
+- **README / docs** — follow developer-advocate best practices.

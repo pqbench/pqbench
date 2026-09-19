@@ -21,6 +21,7 @@ Working rules for agents in the pqbench repository.
   trivially keep passing). A test that can only fail because its own
   implementation is wrong is useless; it must be able to fail because the
   behavior is wrong.
+- **Docs** — follow developer-advocate best practices.
 
 ## Naming guidelines (AIP)
 
