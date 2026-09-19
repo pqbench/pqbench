@@ -43,7 +43,7 @@ Benchmark results always depend on the CPU that runs them — there is no single
    build can differ by a few percent.
 2. **CPU baseline** — the published image compiles the codecs for a portable
    baseline instead of `-march=native`, so it runs on a wide range of CPUs:
-   `x86-64-v3` on AMD64, `neoverse-n1` on ARM64.
+   `-march=x86-64-v3` on AMD64, `-mcpu=neoverse-n1` on ARM64.
 
 The published image is a "baseline" build: it runs everywhere, but its numbers
 are baseline numbers, not your CPU's best.
@@ -65,7 +65,7 @@ build on the target machine when you need numbers you can compare across runs.
 One multi-arch image (`amd64` + `arm64` under a single tag) is published to
 Docker Hub on a GitHub release. For now it ships as `latest` only, with no
 version tags. The build uses musl (Alpine) and a per-arch portable CPU baseline
-(`x86-64-v3` / `neoverse-n1`), with a `--build-arg NATIVE=1` escape hatch for
+(`-march=x86-64-v3` / `-mcpu=neoverse-n1`), with a `--build-arg NATIVE=1` escape hatch for
 exact-host builds.
 
 - **Multi-arch as one tag** — one `docker pull` works on any machine. Cost: a
