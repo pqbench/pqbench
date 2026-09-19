@@ -20,59 +20,9 @@ test suite). `make samples` fetches a few open parquet datasets into
 
 ## Docker
 
-Build an image containing the release binary (no local Rust toolchain needed):
-
-```sh
-docker build -t pqbench:local .
-docker run --rm pqbench:local --help
-docker run --rm -v "$PWD:/data:ro" pqbench:local bytemass /data/file.parquet
-docker run --rm -v "$PWD:/data:ro" pqbench:local bytemass /data/file.parquet --json > masses.json
-docker run --rm -v "$PWD:/data:ro" pqbench:local bytemass /data/file.parquet --d3 > treemap.html
-docker run --rm -v "$PWD:/data:ro" pqbench:local lz /data/file.bin -c zstd@3
-docker run --rm -v "$PWD:/data:ro" pqbench:local compression /data/uncompressed.parquet --per-column
-```
-
-The image runs as UID/GID `65532:65532`. Mounted input files must be readable by
-that user; on Linux, `--user "$(id -u):$(id -g)"` can use your own file permissions.
-Shell redirects write output on the host. `compression` still requires
-NONE-compressed Parquet input. The final Alpine image contains the binary and
-runtime libraries only; the Rust toolchain stays in a separate build stage.
-Images use musl libc and portable CPU settings rather than the local build's
-`-march=native`, so benchmark results can differ from native glibc builds.
-
-The Docker workflow builds and smoke-tests Linux AMD64 and ARM64 images on pushes,
-pull requests, and published releases. Run the same smoke tests locally with
-`sh scripts/test_docker.sh pqbench:local` (requires Docker and Python 3).
-
-### Docker Hub release setup
-
-Before publishing, maintainers must create the Docker Hub repository and configure
-these GitHub repository settings under **Settings → Secrets and variables → Actions**:
-
-| Setting | Kind | Value |
-| --- | --- | --- |
-| `DOCKERHUB_USERNAME` | Secret | Docker Hub account with push access |
-| `DOCKERHUB_TOKEN` | Secret | Docker Hub access token with write permission |
-| `DOCKERHUB_IMAGE` | Variable | Namespace/image, default `pqbench/pqbench` |
-
-The workflow contains secret references only; do not put credentials in files or
-Docker build arguments. Publication runs only for releases in `pqbench/pqbench`,
-after both architecture smoke tests pass. Forks and pull requests only build/test.
-Manual workflow runs also only build/test.
-
-Publish a GitHub release tagged `vMAJOR.MINOR.PATCH` (for example, `v0.0.1`) to push
-the multi-platform image tagged `0.0.1` and `latest`. Prerelease suffixes such as
-`v0.0.2-rc.1` are supported and never update `latest`; releases marked as prereleases
-also never update `latest`. Keep release tags immutable and aligned with the Cargo
-workspace version. Once the first image has been published:
-
-```sh
-docker pull pqbench/pqbench:0.0.1
-docker run --rm -v "$PWD:/data:ro" pqbench/pqbench:0.0.1 bytemass /data/file.parquet
-# For reproducible use, replace the tag with @sha256:<published-manifest-digest>.
-```
-
-Substitute the configured `DOCKERHUB_IMAGE` if using a different namespace.
+Build, run, and publish a container image of the release binary (no local Rust
+toolchain needed). See [docs/docker.md](docs/docker.md) for usage, the
+multi-arch workflow, and Docker Hub release setup.
 
 ## Commands
 
