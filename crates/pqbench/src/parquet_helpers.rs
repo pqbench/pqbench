@@ -110,7 +110,7 @@ mod tests {
     fn parse_none_file_extracts_pages() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../data/bench/reddit_chunk1_NONE.parquet"
+            "/tests/fixtures/small_reddit_none.parquet"
         );
         let buf = std::fs::read(path).expect("missing NONE fixture");
 

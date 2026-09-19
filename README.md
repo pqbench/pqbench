@@ -59,7 +59,14 @@ directory in each shell.
 
 The gate is `make check` (`cargo fmt --check`, `clippy -D warnings`, and the
 test suite). `make samples` fetches a few open parquet datasets into
-`local/samples/` for manual testing.
+`local/samples/` for manual testing. Larger local benchmark data lives in the
+gitignored `local/`. The source code is `MIT OR Apache-2.0`.
+
+## Docker
+
+Build, run, and publish a container image of the release binary (no local Rust
+toolchain needed). See [docs/docker.md](docs/docker.md) for usage, the
+multi-arch workflow, and Docker Hub release setup.
 
 ## Commands
 

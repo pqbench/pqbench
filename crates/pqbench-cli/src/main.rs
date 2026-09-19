@@ -243,8 +243,8 @@ mod tests {
             env!("CARGO_MANIFEST_DIR").replace("pqbench-cli", "pqbench")
         );
         let paths = expand_inputs(&[mask]).unwrap();
-        assert_eq!(paths.len(), 1);
-        assert_eq!(collection_label(&paths), "small_snappy.parquet");
+        assert_eq!(paths.len(), 2);
+        assert_eq!(collection_label(&paths), "2 parquet files");
 
         let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
         assert!(expand_inputs(&[missing]).is_err());

@@ -1,0 +1,14 @@
+# Only send the files required to build and license the binary.
+*
+!Dockerfile
+!Cargo.toml
+!Cargo.lock
+!.cargo/
+!.cargo/config.toml
+!crates/
+!crates/**
+!scripts/docker_build.sh
+!LICENSE-MIT
+!LICENSE-APACHE
+**/target
+**/.env

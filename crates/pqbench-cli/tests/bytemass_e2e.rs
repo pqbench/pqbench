@@ -1,5 +1,8 @@
 use std::process::Command;
 
+// `small_reddit_none.parquet` is a 3000-row NONE-compressed subset of the
+// MIT-licensed reddit_dataset_90 (goldentraversy07/reddit_dataset_90).
+
 /// End-to-end: run the `pqbench bytemass` CLI and verify the text (tui) stats
 /// it prints for a real parquet file.
 #[test]
@@ -7,7 +10,7 @@ fn bytemass_text_stats_end_to_end() {
     let exe = env!("CARGO_BIN_EXE_pqbench");
     let file = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../data/bench/reddit_chunk1_NONE.parquet"
+        "/tests/fixtures/small_reddit_none.parquet"
     );
     let out = Command::new(exe).args(["bytemass", file]).output().unwrap();
     assert!(
@@ -17,7 +20,7 @@ fn bytemass_text_stats_end_to_end() {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
 
-    assert!(stdout.contains("bytemass: reddit_chunk1_NONE.parquet"));
+    assert!(stdout.contains("bytemass: small_reddit_none.parquet"));
     assert!(stdout.contains("column"));
     assert!(stdout.contains("bytes/row"));
 
