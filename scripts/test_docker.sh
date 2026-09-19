@@ -8,6 +8,7 @@
 #      byte-mass JSON tree (works on any parquet, compressed or not),
 #   4. `lz` sweeps the file and reports every wired codec (gzip, lz4, snappy,
 #      zstd) — proving the statically linked codecs shipped in the image.
+#   5. `compression` runs on a NONE-compressed parquet and reports every codec.
 #
 # It deliberately uses the checked-in fixture (not the untracked data/bench
 # files), runs with --network none, and needs no credentials, so it can run on
@@ -67,5 +68,17 @@ for codec in gzip lz4 snappy zstd; do
         || fail "codec '$codec' is missing from 'lz' output"
     ok "codec present: $codec"
 done
+
+echo "checking 'compression' runs on a NONE-compressed parquet..."
+"$runtime" run --rm --network none --read-only \
+    -v "$root/crates/pqbench/tests/fixtures:/data:ro" \
+    "$image" compression /data/small_reddit_none.parquet \
+    --samples 1 --warmup-iterations 0 > "$scratch/comp" \
+    || fail "'compression' exited non-zero"
+for codec in gzip lz4 snappy zstd; do
+    grep -q "$codec" "$scratch/comp" \
+        || fail "codec '$codec' is missing from 'compression' output"
+done
+ok "compression produced a codec sweep"
 
 echo "PASS: all smoke tests passed"
