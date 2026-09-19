@@ -23,7 +23,7 @@ test:
 lint:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
-# Fetch open-dataset sample parquet files into data/samples/ for local testing.
+# Fetch open-dataset sample parquet files into local/samples/ for local testing.
 samples:
 	./scripts/fetch_samples.sh
 
