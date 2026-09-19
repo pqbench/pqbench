@@ -1,7 +1,7 @@
 mod support;
 
-use deltabench::{self, read_local};
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
+use pqbench::table::delta::read_local;
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
 

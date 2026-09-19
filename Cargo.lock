@@ -832,12 +832,9 @@ dependencies = [
 name = "deltabench"
 version = "0.0.1"
 dependencies = [
- "buoyant_kernel_derive",
  "deltalake",
- "futures",
  "parquet 59.3.0",
  "pqbench",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2163,13 +2160,17 @@ dependencies = [
 name = "pqbench"
 version = "0.0.1"
 dependencies = [
+ "buoyant_kernel_derive",
  "bytes",
+ "deltalake",
  "flate2",
+ "futures",
  "lz4",
  "parquet 59.3.0",
  "serde",
  "serde_json",
  "snappy_src",
+ "url",
  "zstd",
 ]
 

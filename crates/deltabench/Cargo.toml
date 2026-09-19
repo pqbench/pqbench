@@ -9,18 +9,12 @@ rust-version = "1.91.1"
 description = "Delta Lake snapshot orchestration and physical storage analysis."
 
 [dependencies]
-pqbench = { workspace = true }
-deltalake = { version = "=0.32.4", default-features = false, features = ["rustls"] }
-# delta-rs 0.32.4 was released against the 1.0 proc macros. Its transitive
-# semver range also accepts 1.2, whose renamed macros do not compile with
-# buoyant_kernel 0.22.2. Keep this direct pin until delta-rs updates the range.
-buoyant_kernel_derive = "=1.0.0"
-futures = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-url = "2"
+pqbench = { workspace = true, features = ["delta"] }
 
 [dev-dependencies]
+deltalake = { version = "=0.32.4", default-features = false, features = ["rustls"] }
+serde_json = "1"
+url = "2"
 parquet = { version = "59", default-features = false }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
