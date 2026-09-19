@@ -8,24 +8,22 @@ compresses/decompresses them, and how big each column is on disk. It is
 dependency-light, reads only what it needs, and keeps measurement separate from
 presentation so its output can be fed to other tools.
 
-The workspace also contains `deltabench`, a higher-level tool that resolves a
-Delta Lake snapshot and orchestrates `pqbench` footer analysis across its active
-Parquet files. Delta, Arrow, and async storage dependencies remain outside the
-low-level `pqbench` crates.
+The `pqbench` library also contains an optional Delta Lake table module that
+resolves a snapshot and orchestrates footer analysis across its active Parquet
+files. Delta dependencies are feature-gated and remain out of the default
+dependency graph.
 
 ```mermaid
 flowchart TD
-    delta_log[Delta transaction log] --> deltabench[deltabench library]
-    deltabench --> pqbench[pqbench library]
-    deltabench_cli[deltabench-cli] --> deltabench
+    delta_log[Delta transaction log] --> delta[pqbench::table::delta]
+    delta --> pqbench[pqbench library]
     pqbench_cli[pqbench-cli] --> pqbench
     pqbench --> parquet[Parquet file footers]
 ```
 
-`pqbench` reads metadata from individual Parquet files. `deltabench` uses
+`pqbench` reads metadata from individual Parquet files. The Delta module uses
 delta-rs to select a table snapshot, passes each active file to `pqbench`, and
-aggregates the results. The two CLI crates only parse arguments and render their
-respective library results.
+aggregates the results.
 
 ## Build
 
@@ -33,13 +31,7 @@ respective library results.
 cargo build --release
 ```
 
-Build the Delta tool separately:
-
-```
-cargo build --release --package deltabench-cli
-```
-
-The Delta crates require Rust 1.91.1 or newer, matching delta-rs 0.32.4. The
+The Delta feature requires Rust 1.91.1 or newer, matching delta-rs 0.32.4. The
 default `pqbench` workspace members retain their existing toolchain support.
 
 For development, prefer `cargo check` and normal debug builds. Release builds
@@ -125,13 +117,12 @@ pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 
 ### Local Delta tables
 
-`deltabench` analyzes the latest snapshot, or an explicit version, by reading
-only the active Parquet files' footer metadata:
+`pqbench::table::delta` analyzes the latest snapshot, or an explicit version,
+by reading only the active Parquet files' footer metadata. Enable the feature
+when building or testing:
 
 ```
-deltabench ./table
-deltabench ./table --version 42 --json
-deltabench ./table --d3 > treemap.html
+cargo test -p pqbench --features delta
 ```
 
 The report describes physical storage: active file bytes, physical Parquet rows,

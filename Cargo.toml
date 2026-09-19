@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/deltabench",
-    "crates/deltabench-cli",
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
@@ -19,7 +17,6 @@ authors = ["pqbench contributors"]
 repository = "https://github.com/pqbench/pqbench"
 
 [workspace.dependencies]
-deltabench = { version = "0.0.1", path = "crates/deltabench" }
 pqbench = { version = "0.0.1", path = "crates/pqbench" }
 
 [profile.dev]

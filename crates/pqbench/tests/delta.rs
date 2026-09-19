@@ -35,10 +35,10 @@ async fn resolves_versions_and_weights_columns_by_total_rows() {
     assert_eq!(latest.uncompressed_column_bytes, uncompressed);
     assert_eq!(latest.compressed_bytes_per_row(), bytes as f64 / 14.0);
     let report: serde_json::Value =
-        serde_json::from_str(&deltabench::json(&latest).unwrap()).unwrap();
+        serde_json::from_str(&pqbench::table::delta::json(&latest).unwrap()).unwrap();
     assert_eq!(report["physical_rows"], 14);
     assert_eq!(report["columns"][0]["compressed_bytes"], bytes);
-    assert!(deltabench::render(&latest).contains("physical rows: 14"));
+    assert!(pqbench::table::delta::render(&latest).contains("physical rows: 14"));
 }
 
 #[tokio::test]

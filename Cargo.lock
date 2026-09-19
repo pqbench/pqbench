@@ -829,31 +829,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deltabench"
-version = "0.0.1"
-dependencies = [
- "deltalake",
- "parquet 59.3.0",
- "pqbench",
- "serde_json",
- "tempfile",
- "tokio",
- "url",
-]
-
-[[package]]
-name = "deltabench-cli"
-version = "0.0.1"
-dependencies = [
- "clap",
- "deltabench",
- "parquet 59.3.0",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "deltalake"
 version = "0.32.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2170,6 +2145,8 @@ dependencies = [
  "serde",
  "serde_json",
  "snappy_src",
+ "tempfile",
+ "tokio",
  "url",
  "zstd",
 ]
