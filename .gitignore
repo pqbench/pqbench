@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target
+/.docker-data
 
 # Editor/IDE
 .idea/
