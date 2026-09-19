@@ -105,10 +105,14 @@ Per-column byte masses — how many on-disk bytes each column takes per row:
 
 ```
 pqbench bytemass data.parquet
+pqbench bytemass part-1.parquet part-2.parquet
+pqbench bytemass 'data/part-*.parquet'
 ```
 
 This reads **only the parquet footer metadata**, so it works on any file
-regardless of column compression and never loads the pages into memory.
+regardless of column compression and never loads the pages into memory. Multiple
+paths and quoted glob masks are aggregated using their combined physical row
+count. Shell-expanded masks work as multiple paths too.
 
 - `--json` — emit the byte-mass tree as composable `{name, value, children}` JSON
   for a downstream tool.

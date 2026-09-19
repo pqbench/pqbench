@@ -14,3 +14,4 @@ path = "src/main.rs"
 [dependencies]
 pqbench = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+glob = "0.3"

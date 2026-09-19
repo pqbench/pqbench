@@ -3,16 +3,16 @@
 //! delta-rs resolves the snapshot; only active data-file footers are inspected.
 //! Results measure physical storage, not decoded values or logical live rows.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
-use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaTable, DeltaTableBuilder};
 use futures::TryStreamExt;
 use serde::Serialize;
 use url::Url;
 
-use pqbench::bytemass::{self, MassNode};
-use pqbench::parquet_helpers::{default_metadata_parser, ColumnMass, FileMass, MetadataParser};
+use pqbench::bytemass::{self, MassAccumulator, MassNode, MassSummary};
+use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
 
 /// Errors resolving a local snapshot or measuring its active files.
 #[derive(Debug)]
@@ -68,19 +68,44 @@ impl TableReport {
 /// paths, column mapping, deletion vectors, or unsupported Delta reader features.
 /// No partial report is returned on failure.
 pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
+    let root = local_root(path)?;
+    let table = load_local_table(&root, version).await?;
+    let snapshot = snapshot_info(&table)?;
+    let measured = measure_active_files(&table, &root).await?;
+    build_report(&root, snapshot, measured)
+}
+
+struct SnapshotInfo {
+    version: u64,
+    partition_columns: Vec<String>,
+}
+
+struct MeasuredFiles {
+    file_bytes: u64,
+    mass: MassSummary,
+}
+
+fn local_root(path: &Path) -> Result<PathBuf, Error> {
     let root = path
         .canonicalize()
         .map_err(|e| Error(format!("cannot open table {}: {e}", path.display())))?;
     if !root.join("_delta_log").is_dir() {
         return Err(Error(format!("missing _delta_log in {}", root.display())));
     }
-    let url = Url::from_directory_path(&root)
+    Ok(root)
+}
+
+async fn load_local_table(root: &Path, version: Option<u64>) -> Result<DeltaTable, Error> {
+    let url = Url::from_directory_path(root)
         .map_err(|()| Error("cannot convert table path to a local file URL".into()))?;
     let mut builder = DeltaTableBuilder::from_url(url).map_err(delta_error)?;
     if let Some(version) = version {
         builder = builder.with_version(version);
     }
-    let table = builder.load().await.map_err(delta_error)?;
+    builder.load().await.map_err(delta_error)
+}
+
+fn snapshot_info(table: &DeltaTable) -> Result<SnapshotInfo, Error> {
     let snapshot = table.snapshot().map_err(delta_error)?;
     if snapshot
         .metadata()
@@ -92,15 +117,17 @@ pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport
             "column mapping is not supported by local byte-mass analysis".into(),
         ));
     }
+    Ok(SnapshotInfo {
+        version: snapshot.version(),
+        partition_columns: snapshot.metadata().partition_columns().to_vec(),
+    })
+}
 
-    let version = snapshot.version();
-    let partition_columns = snapshot.metadata().partition_columns().to_vec();
+async fn measure_active_files(table: &DeltaTable, root: &Path) -> Result<MeasuredFiles, Error> {
     let mut files = table.get_active_add_actions_by_partitions(&[]);
     let parser = default_metadata_parser();
-    let mut totals = BTreeMap::<String, ColumnReport>::new();
-    let mut physical_rows = 0;
+    let mut mass = MassAccumulator::new();
     let mut file_bytes = 0;
-    let mut file_count = 0;
     while let Some(file) = files.try_next().await.map_err(delta_error)? {
         if file.deletion_vector_descriptor().is_some() {
             return Err(Error(
@@ -108,37 +135,68 @@ pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport
             ));
         }
         let relative = file.path();
-        let local = local_file(&root, relative.as_ref())?;
         let expected = u64::try_from(file.size())
             .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
-        let actual = std::fs::metadata(&local)
-            .map_err(|e| Error(format!("cannot stat active file {relative}: {e}")))?
-            .len();
-        if actual != expected {
-            return Err(Error(format!("active file size differs from log: {relative} (expected {expected}, found {actual})")));
-        }
-        let mass = parser
-            .read_masses(&local)
-            .map_err(|e| Error(format!("cannot read active file {relative}: {e}")))?;
-        physical_rows = checked_sum(physical_rows, mass.num_rows)?;
+        let (actual, file_mass) = measure_local_file(root, relative.as_ref(), expected, &parser)?;
         file_bytes = checked_sum(file_bytes, actual)?;
-        file_count += 1;
-        for column in mass.columns {
-            let total = totals
-                .entry(column.path.clone())
-                .or_insert_with(|| ColumnReport {
-                    path: column.path,
-                    compressed_bytes: 0,
-                    uncompressed_bytes: 0,
-                    codecs: BTreeSet::new(),
-                });
-            total.compressed_bytes = checked_sum(total.compressed_bytes, column.bytes)?;
-            total.uncompressed_bytes =
-                checked_sum(total.uncompressed_bytes, column.uncompressed_bytes)?;
-            total.codecs.insert(column.codec);
-        }
+        mass.add(file_mass).map_err(parquet_error)?;
     }
-    let columns: Vec<_> = totals.into_values().collect();
+    Ok(MeasuredFiles {
+        file_bytes,
+        mass: mass.finish(),
+    })
+}
+
+fn measure_local_file(
+    root: &Path,
+    relative: &str,
+    expected: u64,
+    parser: &impl MetadataParser,
+) -> Result<(u64, pqbench::parquet_helpers::FileMass), Error> {
+    let local = local_file(root, relative)?;
+    let actual = std::fs::metadata(&local)
+        .map_err(|e| Error(format!("cannot stat active file {relative}: {e}")))?
+        .len();
+    if actual != expected {
+        return Err(Error(format!(
+            "active file size differs from log: {relative} (expected {expected}, found {actual})"
+        )));
+    }
+    let mass = parser
+        .read_masses(&local)
+        .map_err(|e| Error(format!("cannot read active file {relative}: {e}")))?;
+    Ok((actual, mass))
+}
+
+fn build_report(
+    root: &Path,
+    snapshot: SnapshotInfo,
+    measured: MeasuredFiles,
+) -> Result<TableReport, Error> {
+    let mass = measured.mass.file_mass();
+    let mut tree = bytemass::aggregate(&bytemass::read(&mass));
+    let label = root
+        .file_name()
+        .unwrap_or(root.as_os_str())
+        .to_string_lossy();
+    tree.label = format!(
+        "{label} @ version {} (physical bytes/row)",
+        snapshot.version
+    );
+    let MassSummary {
+        file_count,
+        num_rows,
+        columns,
+    } = measured.mass;
+    let columns: Vec<_> = columns
+        .into_iter()
+        .map(|column| ColumnReport {
+            path: column.path,
+            compressed_bytes: column.compressed_bytes,
+            uncompressed_bytes: column.uncompressed_bytes,
+            codecs: column.codecs,
+        })
+        .collect();
     let mut compressed_column_bytes = 0;
     let mut uncompressed_column_bytes = 0;
     for column in &columns {
@@ -146,35 +204,21 @@ pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport
         uncompressed_column_bytes =
             checked_sum(uncompressed_column_bytes, column.uncompressed_bytes)?;
     }
-    let mass = FileMass {
-        num_rows: physical_rows,
-        columns: columns
-            .iter()
-            .map(|c| ColumnMass {
-                path: c.path.clone(),
-                bytes: c.compressed_bytes,
-                uncompressed_bytes: c.uncompressed_bytes,
-                codec: String::new(),
-            })
-            .collect(),
-    };
-    let mut tree = bytemass::aggregate(&bytemass::read(&mass));
-    let label = root
-        .file_name()
-        .unwrap_or(root.as_os_str())
-        .to_string_lossy();
-    tree.label = format!("{label} @ version {version} (physical bytes/row)");
     Ok(TableReport {
-        version,
+        version: snapshot.version,
         file_count,
-        physical_rows,
-        file_bytes,
+        physical_rows: num_rows,
+        file_bytes: measured.file_bytes,
         compressed_column_bytes,
         uncompressed_column_bytes,
-        partition_columns,
+        partition_columns: snapshot.partition_columns,
         columns,
         tree,
     })
+}
+
+fn parquet_error(error: pqbench::parquet_helpers::Error) -> Error {
+    Error(error.to_string())
 }
 
 /// Serialize the snapshot report as pretty-printed JSON.
