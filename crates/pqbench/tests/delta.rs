@@ -1,3 +1,5 @@
+#![cfg(feature = "delta")]
+
 mod support;
 
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
