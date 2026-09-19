@@ -140,6 +140,29 @@ async fn rejects_unsupported_column_mapping() {
 }
 
 #[tokio::test]
+async fn rejects_deletion_vectors_before_reading_data_files() {
+    let fixture = Fixture::new();
+    let mut add = fixture.add("part=a/added.parquet", "a", 9);
+    add["add"]["deletionVector"] = json!({
+        "storageType": "u",
+        "pathOrInlineDv": "deletion-vector.bin",
+        "offset": 0,
+        "sizeInBytes": 1,
+        "cardinality": 1
+    });
+    fixture.commit(2, &[add]);
+    let error = read_local(fixture.path(), None)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        error.contains("deletion vectors are not supported"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn rejects_external_data_paths() {
     let fixture = Fixture::new();
     let parent = fixture.path().parent().unwrap();
