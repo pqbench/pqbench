@@ -1,5 +1,19 @@
 # Contributing to pqbench
 
+## Getting started
+
+Requires Rust 1.91.1+ and [git-lfs](https://git-lfs.com) (for the LFS test
+fixtures). Clone and run the gate:
+
+```sh
+git clone https://github.com/pqbench/pqbench.git
+cd pqbench
+make check   # fmt-check + clippy -D warnings + test
+```
+
+`make samples` fetches local test data. For using the CLI, see the README
+quick start.
+
 ## The loop
 
 Every change follows the same loop. Steps 2–4 are the checks you run before

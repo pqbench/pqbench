@@ -7,27 +7,27 @@ each column costs.
 
 ## Quick start
 
-Requires Rust 1.91.1+ and [git-lfs](https://git-lfs.com) (for the parquet
-fixtures):
+Docker is the fastest way to try it — no Rust toolchain, no build:
+
+```sh
+docker pull pqbench/pqbench:latest
+docker run --rm -v "$PWD:/data:ro" pqbench/pqbench:latest bytemass /data/your.parquet
+```
+
+Podman is a drop-in — `podman pull` / `podman run` work the same.
+
+Or build from source (requires Rust 1.91.1+) and run the bundled sample:
 
 ```sh
 git clone https://github.com/pqbench/pqbench.git
 cd pqbench
-cargo run -p pqbench-cli -- bytemass crates/pqbench/tests/fixtures/small_snappy.parquet
+cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
 ```
 
-This prints the per-column byte masses, read from the footer only:
-
-```
-bytemass: small_snappy.parquet
-column                              bytes/row
-a                                        0.38
---------------------------------------------
-total                                    0.38
-```
-
-For your own data, `make samples` fetches a few open datasets into
-`local/samples/`.
+`examples/quickstart.parquet` is a small smoke sample (a few KB) — its numbers
+aren't benchmark-grade. Use `make samples` for real data; see
+[docs/docker.md](docs/docker.md) for how the published image's numbers compare to
+a native build.
 
 ## Commands
 
