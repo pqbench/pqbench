@@ -4,7 +4,7 @@
 
 CARGO ?= cargo
 
-.PHONY: all fmt fmt-check build test lint samples check clean
+.PHONY: all fmt fmt-check build test lint cache-stats samples check clean
 
 all: fmt build test lint
 
@@ -22,6 +22,13 @@ test:
 
 lint:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+
+cache-stats:
+	@if command -v sccache >/dev/null 2>&1; then \
+		sccache --show-stats; \
+	else \
+		echo "sccache is not installed; run: cargo install sccache"; \
+	fi
 
 # Fetch open-dataset sample parquet files into local/samples/ for local testing.
 samples:

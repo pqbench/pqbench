@@ -70,6 +70,10 @@ pub struct ColumnMass {
     pub path: String,
     /// On-disk (compressed) bytes for this column chunk.
     pub bytes: u64,
+    /// Encoded bytes before compression (including page headers).
+    pub uncompressed_bytes: u64,
+    /// Compression codec recorded in the column chunk metadata.
+    pub codec: String,
 }
 
 /// A file's byte masses, read purely from metadata.

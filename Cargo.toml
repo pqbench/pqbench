@@ -4,13 +4,23 @@ members = [
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
+default-members = [
+    "crates/pqbench",
+    "crates/pqbench-cli",
+]
 
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
+rust-version = "1.91.1"
 license = "MIT OR Apache-2.0"
 authors = ["pqbench contributors"]
 repository = "https://github.com/pqbench/pqbench"
 
 [workspace.dependencies]
 pqbench = { version = "0.0.1", path = "crates/pqbench" }
+
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true

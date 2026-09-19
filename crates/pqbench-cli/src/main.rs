@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -5,8 +6,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use pqbench::bytemass;
 use pqbench::codecs::{Codec, CodecImpl};
 use pqbench::compression;
-use pqbench::parquet_helpers::{MetadataParser, PageParser};
+use pqbench::parquet_helpers::PageParser;
 use pqbench::stats;
+
+#[cfg(feature = "delta")]
+mod delta;
 
 #[derive(Parser)]
 #[command(
@@ -17,6 +21,8 @@ Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench bytemass data.parquet
+  pqbench bytemass part-1.parquet part-2.parquet
+  pqbench bytemass 'data/*.parquet'
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -66,13 +72,18 @@ Examples:
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#)]
     Bytemass(BytemassArgs),
+    /// analyze the active Parquet files in a local Delta snapshot
+    #[cfg(feature = "delta")]
+    #[command(after_help = "Example:\n  pqbench delta ./table --json")]
+    Delta(delta::Args),
 }
 
 /// Arguments for `bytemass`.
 #[derive(Args)]
 struct BytemassArgs {
-    /// input parquet file
-    file: PathBuf,
+    /// parquet paths or glob masks; quote masks to prevent shell expansion
+    #[arg(required = true)]
+    inputs: Vec<String>,
     /// emit the byte-mass tree as JSON (composable) instead of text stats
     #[arg(long, conflicts_with = "d3")]
     json: bool,
@@ -91,6 +102,8 @@ fn main() -> ExitCode {
         Command::Lz(args) => run_lz(&args),
         Command::Compression(args) => run_compression(&args),
         Command::Bytemass(args) => run_bytemass(&args),
+        #[cfg(feature = "delta")]
+        Command::Delta(args) => delta::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -122,18 +135,15 @@ fn run_compression(args: &BenchArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Read a parquet file's column byte masses from its footer and output them as
+/// Read Parquet files' column byte masses from their footers and output them as
 /// text stats (agent-facing), JSON (composable), or, with `--d3`, as a
 /// self-contained browser treemap. This is `bytemass` wired end-to-end.
 fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
-    let mass = pqbench::parquet_helpers::default_metadata_parser().read_masses(&args.file)?;
+    let paths = expand_inputs(&args.inputs)?;
+    let mass = bytemass::summarize_files(&paths)?.file_mass();
     let raw = bytemass::read(&mass);
     let mut tree = bytemass::aggregate(&raw);
-    tree.label = args
-        .file
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".into());
+    tree.label = collection_label(&paths);
     let out = if args.json {
         bytemass::tree(&tree)?
     } else if args.d3 {
@@ -143,6 +153,43 @@ fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
     };
     print!("{out}");
     Ok(())
+}
+
+fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, CliError> {
+    let mut paths = BTreeSet::new();
+    for input in inputs {
+        if has_glob_metachar(input) {
+            let mut matched = false;
+            for entry in glob::glob(&escape_literal_brackets(input))? {
+                paths.insert(entry?);
+                matched = true;
+            }
+            if !matched {
+                return Err(format!("mask matched no files: {input}").into());
+            }
+        } else {
+            paths.insert(PathBuf::from(input));
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn has_glob_metachar(input: &str) -> bool {
+    input.contains(['*', '?'])
+}
+
+fn escape_literal_brackets(input: &str) -> String {
+    input.replace('[', "[[]")
+}
+
+fn collection_label(paths: &[PathBuf]) -> String {
+    if let [path] = paths {
+        return path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+    }
+    format!("{} parquet files", paths.len())
 }
 
 /// What a bench run needs: the codec×level set, the analytics decisions, and
@@ -196,4 +243,36 @@ fn parse_spec(spec: &str) -> Result<(Codec, u8), String> {
     };
     let codec = Codec::from_name(name).ok_or_else(|| format!("unknown codec: {name}"))?;
     Ok((codec, level.unwrap_or_else(|| default_level(codec))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_masks_and_rejects_empty_matches() {
+        let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
+        let paths = expand_inputs(&[mask]).unwrap();
+        assert!(!paths.is_empty());
+
+        let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
+        assert!(expand_inputs(&[missing]).is_err());
+    }
+
+    #[test]
+    fn treats_brackets_as_literal_path_characters() {
+        assert!(!has_glob_metachar("data/archive[1].parquet"));
+        assert!(has_glob_metachar("data/archive?.parquet"));
+        assert!(has_glob_metachar("data/*.parquet"));
+        assert_eq!(
+            escape_literal_brackets("data/part[1]/*.parquet"),
+            "data/part[[]1]/*.parquet"
+        );
+    }
+
+    #[test]
+    fn labels_multiple_files_as_a_collection() {
+        let paths = vec![PathBuf::from("a.parquet"), PathBuf::from("b.parquet")];
+        assert_eq!(collection_label(&paths), "2 parquet files");
+    }
 }

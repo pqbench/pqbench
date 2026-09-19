@@ -8,12 +8,14 @@
 //! (`render_html`) wraps the JSON in a self-contained browser treemap.
 
 mod analytics;
+mod collection;
 mod d3;
 mod json;
 mod raw;
 mod text;
 
 pub use analytics::{aggregate, MassNode};
+pub use collection::{summarize_files, ColumnMassSummary, MassAccumulator, MassSummary};
 pub use d3::render_html;
 pub use json::tree;
 pub use raw::{read, FileRaw, RawColumn};

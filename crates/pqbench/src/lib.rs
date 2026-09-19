@@ -9,4 +9,5 @@ pub mod parquet_helpers;
 mod parquet_impl;
 pub mod report;
 pub mod stats;
+pub mod table;
 mod text;

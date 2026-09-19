@@ -61,6 +61,8 @@ impl MetadataParser for ParquetRsParser {
                 columns.push(ColumnMass {
                     path: meta.column_path().string(),
                     bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
+                    uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
+                    codec: meta.compression().to_string(),
                 });
             }
         }
