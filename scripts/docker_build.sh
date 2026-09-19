@@ -32,7 +32,8 @@ else
     esac
 fi
 
-export CXXFLAGS="-O3 -DNDEBUG -fPIE $cpuflag=$march -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
+codec_flags="-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
+export CXXFLAGS="$codec_flags $cpuflag=$march"
 export RUSTFLAGS="-C target-cpu=$march"
 
 exec cargo build --locked --release --package pqbench-cli
