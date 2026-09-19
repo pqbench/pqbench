@@ -16,7 +16,8 @@ cargo build --release
 
 The gate is `make check` (`cargo fmt --check`, `clippy -D warnings`, and the
 test suite). `make samples` fetches a few open parquet datasets into
-`data/samples/` for manual testing.
+`local/samples/` for manual testing. Larger local benchmark data lives in the
+gitignored `local/`. The source code is `MIT OR Apache-2.0`.
 
 ## Docker
 
