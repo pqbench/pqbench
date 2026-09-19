@@ -11,7 +11,7 @@ use futures::TryStreamExt;
 use serde::Serialize;
 use url::Url;
 
-use crate::bytemass::{self, MassAccumulator, MassNode, MassSummary};
+use crate::bytemass::{self, ColumnMassSummary, MassAccumulator, MassNode, MassSummary};
 use crate::parquet_helpers::{default_metadata_parser, MetadataParser};
 
 /// Errors resolving a local snapshot or measuring its active files.
@@ -208,15 +208,7 @@ fn build_report(
         num_rows,
         columns,
     } = measured.mass;
-    let columns: Vec<_> = columns
-        .into_iter()
-        .map(|column| ColumnReport {
-            path: column.path,
-            compressed_bytes: column.compressed_bytes,
-            uncompressed_bytes: column.uncompressed_bytes,
-            codecs: column.codecs,
-        })
-        .collect();
+    let columns = into_report_columns(columns);
     let mut compressed_column_bytes = 0;
     let mut uncompressed_column_bytes = 0;
     for column in &columns {
@@ -235,6 +227,18 @@ fn build_report(
         columns,
         tree,
     })
+}
+
+fn into_report_columns(columns: Vec<ColumnMassSummary>) -> Vec<ColumnReport> {
+    columns
+        .into_iter()
+        .map(|column| ColumnReport {
+            path: column.path,
+            compressed_bytes: column.compressed_bytes,
+            uncompressed_bytes: column.uncompressed_bytes,
+            codecs: column.codecs,
+        })
+        .collect()
 }
 
 fn parquet_error(error: crate::parquet_helpers::Error) -> Error {
