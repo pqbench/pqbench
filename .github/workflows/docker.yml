@@ -25,6 +25,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - uses: docker/setup-buildx-action@v4
       - name: Build runtime image
         uses: docker/build-push-action@v7
@@ -48,6 +50,8 @@ jobs:
       DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE || 'pqbench/pqbench' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - name: Check release tag and publishing credentials
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
