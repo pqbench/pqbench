@@ -29,7 +29,7 @@ make check        # = fmt-check + clippy -D warnings + test
   ```
   cargo test -p pqbench-cli --test bytemass_e2e -- --test-threads=1
   ```
-- `make samples` fetches a few open parquet datasets into `data/samples/` for
+- `make samples` fetches a few open parquet datasets into `local/samples/` for
   manual testing.
 - Tests are **blackbox** (observable behavior through the public API), unit
   level, sub-second, no network, no external build steps.

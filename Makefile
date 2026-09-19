@@ -30,7 +30,7 @@ cache-stats:
 		echo "sccache is not installed; run: cargo install sccache"; \
 	fi
 
-# Fetch open-dataset sample parquet files into data/samples/ for local testing.
+# Fetch open-dataset sample parquet files into local/samples/ for local testing.
 samples:
 	./scripts/fetch_samples.sh
 

@@ -1,10 +1,10 @@
 #!/bin/sh
-# Fetch public open-dataset parquet files into data/samples/ for local testing.
+# Fetch public open-dataset parquet files into local/samples/ for local testing.
 # Run via `make samples`. Idempotent: skips files already present and valid.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
-out="$root/data/samples"
+out="$root/local/samples"
 mkdir -p "$out"
 
 base=https://github.com/apache/parquet-testing/raw/master/data

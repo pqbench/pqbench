@@ -16,6 +16,7 @@ experiments.md
 
 # Sample data (large parquet files)
 /data
+/local/samples
 
 # Generated treemap HTML samples (regenerable via `pqbench ... --d3`)
 /samples

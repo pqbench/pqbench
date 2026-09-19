@@ -59,7 +59,7 @@ directory in each shell.
 
 The gate is `make check` (`cargo fmt --check`, `clippy -D warnings`, and the
 test suite). `make samples` fetches a few open parquet datasets into
-`data/samples/` for manual testing.
+`local/samples/` for manual testing.
 
 ## Commands
 
