@@ -24,7 +24,6 @@ Examples:
   pqbench bytemass part-1.parquet part-2.parquet
   pqbench bytemass 'data/*.parquet'
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
-  pqbench delta ./table --json
 "#
 )]
 struct Cli {
@@ -75,6 +74,7 @@ Examples:
     Bytemass(BytemassArgs),
     /// analyze the active Parquet files in a local Delta snapshot
     #[cfg(feature = "delta")]
+    #[command(after_help = "Example:\n  pqbench delta ./table --json")]
     Delta(delta::Args),
 }
 
@@ -160,7 +160,7 @@ fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, CliError> {
     for input in inputs {
         if has_glob_metachar(input) {
             let mut matched = false;
-            for entry in glob::glob(input)? {
+            for entry in glob::glob(&escape_literal_brackets(input))? {
                 paths.insert(entry?);
                 matched = true;
             }
@@ -176,6 +176,10 @@ fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, CliError> {
 
 fn has_glob_metachar(input: &str) -> bool {
     input.contains(['*', '?'])
+}
+
+fn escape_literal_brackets(input: &str) -> String {
+    input.replace('[', "[[]")
 }
 
 fn collection_label(paths: &[PathBuf]) -> String {
@@ -260,6 +264,10 @@ mod tests {
         assert!(!has_glob_metachar("data/archive[1].parquet"));
         assert!(has_glob_metachar("data/archive?.parquet"));
         assert!(has_glob_metachar("data/*.parquet"));
+        assert_eq!(
+            escape_literal_brackets("data/part[1]/*.parquet"),
+            "data/part[[]1]/*.parquet"
+        );
     }
 
     #[test]
