@@ -8,6 +8,7 @@ use std::path::Path;
 
 use parquet::basic::Compression;
 use parquet::column::page::{Page as ParquetPage, PageReader};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
 use crate::parquet_helpers::{
@@ -51,26 +52,35 @@ impl MetadataParser for ParquetRsParser {
     /// fine, and large files aren't loaded into memory.
     fn read_masses(&self, path: &Path) -> Result<FileMass, Error> {
         let reader = SerializedFileReader::try_from(path)?;
-        let mut num_rows = 0i64;
-        let mut columns = Vec::new();
-        for rg in 0..reader.num_row_groups() {
-            let row_group = reader.get_row_group(rg)?;
-            num_rows += row_group.metadata().num_rows();
-            for col in 0..row_group.num_columns() {
-                let meta = row_group.metadata().column(col);
-                columns.push(ColumnMass {
-                    path: meta.column_path().string(),
-                    bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
-                    uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
-                    codec: meta.compression().to_string(),
-                });
-            }
-        }
-        Ok(FileMass {
-            num_rows: u64::try_from(num_rows).unwrap_or(0),
-            columns,
-        })
+        masses_from_metadata(reader.metadata())
     }
+}
+
+/// Decode byte masses from a complete Parquet footer without reading pages.
+pub(crate) fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
+    let metadata =
+        ParquetMetaDataReader::new().parse_and_finish(&bytes::Bytes::copy_from_slice(footer))?;
+    masses_from_metadata(&metadata)
+}
+
+fn masses_from_metadata(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
+    let mut num_rows = 0i64;
+    let mut columns = Vec::new();
+    for row_group in metadata.row_groups() {
+        num_rows += row_group.num_rows();
+        for meta in row_group.columns() {
+            columns.push(ColumnMass {
+                path: meta.column_path().string(),
+                bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
+                uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
+                codec: meta.compression().to_string(),
+            });
+        }
+    }
+    Ok(FileMass {
+        num_rows: u64::try_from(num_rows).unwrap_or(0),
+        columns,
+    })
 }
 
 fn collect_pages(reader: Box<dyn PageReader>) -> Result<Vec<Page>, Error> {

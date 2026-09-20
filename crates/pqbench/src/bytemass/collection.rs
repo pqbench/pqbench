@@ -130,6 +130,33 @@ where
     Ok(accumulator.finish())
 }
 
+/// Read and aggregate footer metadata from local paths and/or storage URIs.
+///
+/// Inputs containing a URI scheme (`s3://`, `file://`, …) are read through the
+/// remote object reader; everything else is a local path. Input expansion
+/// (globbing) is a shell/CLI concern and is not performed here.
+///
+/// # Errors
+/// Returns [`Error`] when an input cannot be read or a total overflows.
+pub async fn summarize_inputs<I, S>(inputs: I) -> Result<MassSummary, Error>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let parser = default_metadata_parser();
+    let mut accumulator = MassAccumulator::new();
+    for input in inputs {
+        let input = input.as_ref();
+        let mass = if input.contains("://") {
+            super::remote::read_remote(input).await?.1
+        } else {
+            parser.read_masses(Path::new(input))?
+        };
+        accumulator.add(mass)?;
+    }
+    Ok(accumulator.finish())
+}
+
 fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
     left.checked_add(right)
         .ok_or_else(|| Error("metadata totals exceed u64".into()))

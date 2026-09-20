@@ -12,11 +12,15 @@ mod collection;
 mod d3;
 mod json;
 mod raw;
+mod remote;
 mod text;
 
 pub use analytics::{aggregate, MassNode};
-pub use collection::{summarize_files, ColumnMassSummary, MassAccumulator, MassSummary};
+pub use collection::{
+    summarize_files, summarize_inputs, ColumnMassSummary, MassAccumulator, MassSummary,
+};
 pub use d3::render_html;
 pub use json::tree;
 pub use raw::{read, FileRaw, RawColumn};
+pub use remote::{read_remote, read_remote_with_options};
 pub use text::render;

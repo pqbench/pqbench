@@ -1,4 +1,4 @@
-//! Local Delta snapshot storage analysis.
+//! Delta snapshot storage analysis.
 //!
 //! delta-rs resolves the snapshot; only active data-file footers are inspected.
 //! Results measure physical storage, not decoded values or logical live rows.
@@ -86,9 +86,43 @@ pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport
         .await
         .map_err(blocking_error)??;
     let table = load_local_table(&root, version).await?;
-    let snapshot = snapshot_info(&table)?;
-    let measured = measure_active_files(&table, &root).await?;
-    build_report(&root, snapshot, measured)
+    read_table(&table, &local_label(&root)).await
+}
+
+/// Analyze the latest or requested version of a Delta table at a storage URI.
+///
+/// The URI is resolved by delta-rs. Active Parquet objects are measured through
+/// `bytemass`'s public remote reader, which fetches object metadata and bounded
+/// footer reads only — never data pages.
+///
+/// # Errors
+/// Fails for invalid snapshots, missing or changed active objects, external
+/// data paths, column mapping, deletion vectors, or unsupported Delta reader
+/// features. No partial report is returned on failure.
+pub async fn read_remote(uri: &str, version: Option<u64>) -> Result<TableReport, Error> {
+    let url = Url::parse(uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
+    if url.scheme() == "file" {
+        let path = url
+            .to_file_path()
+            .map_err(|()| Error("invalid local table URI".into()))?;
+        return read_local(&path, version).await;
+    }
+    let table = load_table(url, version).await?;
+    read_table(&table, table.table_url().as_str()).await
+}
+
+async fn read_table(table: &DeltaTable, label: &str) -> Result<TableReport, Error> {
+    let snapshot = snapshot_info(table)?;
+    let measured = if table.table_url().scheme() == "file" {
+        let root = table
+            .table_url()
+            .to_file_path()
+            .map_err(|()| Error("invalid local table URI".into()))?;
+        measure_local_active_files(table, &root).await?
+    } else {
+        measure_remote_active_files(table).await?
+    };
+    build_report(label, snapshot, measured)
 }
 
 struct SnapshotInfo {
@@ -114,6 +148,10 @@ fn local_root(path: &Path) -> Result<PathBuf, Error> {
 async fn load_local_table(root: &Path, version: Option<u64>) -> Result<DeltaTable, Error> {
     let url = Url::from_directory_path(root)
         .map_err(|()| Error("cannot convert table path to a local file URL".into()))?;
+    load_table(url, version).await
+}
+
+async fn load_table(url: Url, version: Option<u64>) -> Result<DeltaTable, Error> {
     let mut builder = DeltaTableBuilder::from_url(url).map_err(delta_error)?;
     if let Some(version) = version {
         builder = builder.with_version(version);
@@ -139,7 +177,10 @@ fn snapshot_info(table: &DeltaTable) -> Result<SnapshotInfo, Error> {
     })
 }
 
-async fn measure_active_files(table: &DeltaTable, root: &Path) -> Result<MeasuredFiles, Error> {
+async fn measure_local_active_files(
+    table: &DeltaTable,
+    root: &Path,
+) -> Result<MeasuredFiles, Error> {
     let mut files = table.get_active_add_actions_by_partitions(&[]);
     let mut mass = MassAccumulator::new();
     let mut file_bytes = 0;
@@ -168,6 +209,60 @@ async fn measure_active_files(table: &DeltaTable, root: &Path) -> Result<Measure
     })
 }
 
+async fn measure_remote_active_files(table: &DeltaTable) -> Result<MeasuredFiles, Error> {
+    let base = table.table_url();
+    let mut files = table.get_active_add_actions_by_partitions(&[]);
+    let mut mass = MassAccumulator::new();
+    let mut file_bytes = 0;
+    while let Some(file) = files.try_next().await.map_err(delta_error)? {
+        if file.deletion_vector_descriptor().is_some() {
+            return Err(Error(
+                "deletion vectors are not supported by remote byte-mass analysis".into(),
+            ));
+        }
+        let relative = file.path();
+        let expected = u64::try_from(file.size())
+            .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
+        let uri = object_uri(base, &relative)?;
+        let (actual, file_mass) = bytemass::read_remote(&uri)
+            .await
+            .map_err(|e| Error(format!("cannot read active file {relative}: {e}")))?;
+        if actual != expected {
+            return Err(Error(format!(
+                "active file size differs from log: {relative} (expected {expected}, found {actual})"
+            )));
+        }
+        file_bytes = checked_sum(file_bytes, actual)?;
+        mass.add(file_mass).map_err(parquet_error)?;
+    }
+    Ok(MeasuredFiles {
+        file_bytes,
+        mass: mass.finish(),
+    })
+}
+
+/// Build a full object URI for one active file from the table URL.
+fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {
+    if relative.is_empty()
+        || relative.contains("://")
+        || !Path::new(relative)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+    {
+        return Err(Error(format!(
+            "only relative data paths inside the table are supported: {relative}"
+        )));
+    }
+    let mut directory = base.clone();
+    if !directory.path().ends_with('/') {
+        directory.set_path(&format!("{}/", directory.path()));
+    }
+    Ok(directory
+        .join(relative)
+        .map_err(|e| Error(format!("invalid active file path {relative}: {e}")))?
+        .into())
+}
+
 fn measure_local_file(
     root: &Path,
     relative: &str,
@@ -189,16 +284,12 @@ fn measure_local_file(
 }
 
 fn build_report(
-    root: &Path,
+    label: &str,
     snapshot: SnapshotInfo,
     measured: MeasuredFiles,
 ) -> Result<TableReport, Error> {
     let mass = measured.mass.file_mass();
     let mut tree = bytemass::aggregate(&bytemass::read(&mass));
-    let label = root
-        .file_name()
-        .unwrap_or(root.as_os_str())
-        .to_string_lossy();
     tree.label = format!(
         "{label} @ version {} (physical bytes/row)",
         snapshot.version
@@ -284,6 +375,13 @@ fn delta_error(error: deltalake::DeltaTableError) -> Error {
 fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
     left.checked_add(right)
         .ok_or_else(|| Error("storage totals exceed u64".into()))
+}
+
+fn local_label(root: &Path) -> String {
+    root.file_name()
+        .unwrap_or(root.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {

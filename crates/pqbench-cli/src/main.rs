@@ -140,7 +140,7 @@ fn run_compression(args: &BenchArgs) -> Result<(), CliError> {
 /// self-contained browser treemap. This is `bytemass` wired end-to-end.
 fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
     let paths = expand_inputs(&args.inputs)?;
-    let mass = bytemass::summarize_files(&paths)?.file_mass();
+    let mass = summarize(&paths)?.file_mass();
     let raw = bytemass::read(&mass);
     let mut tree = bytemass::aggregate(&raw);
     tree.label = collection_label(&paths);
@@ -153,6 +153,39 @@ fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
     };
     print!("{out}");
     Ok(())
+}
+
+/// Measure every input; local paths go through the synchronous path, URIs
+/// through the remote object reader (which needs an async runtime).
+#[cfg(feature = "aws")]
+fn summarize(paths: &[PathBuf]) -> Result<bytemass::MassSummary, CliError> {
+    if !paths.iter().any(|path| has_uri_scheme(path)) {
+        return Ok(bytemass::summarize_files(paths)?);
+    }
+    let inputs: Vec<String> = paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    Ok(runtime.block_on(bytemass::summarize_inputs(&inputs))?)
+}
+
+#[cfg(not(feature = "aws"))]
+fn summarize(paths: &[PathBuf]) -> Result<bytemass::MassSummary, CliError> {
+    if let Some(remote) = paths.iter().find(|path| has_uri_scheme(path)) {
+        return Err(format!(
+            "remote input {} requires the `aws` feature",
+            remote.display()
+        )
+        .into());
+    }
+    Ok(bytemass::summarize_files(paths)?)
+}
+
+fn has_uri_scheme(path: &std::path::Path) -> bool {
+    path.to_string_lossy().contains("://")
 }
 
 fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, CliError> {

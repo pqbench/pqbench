@@ -40,11 +40,13 @@ pqbench compression data.parquet --per-column
 
 Per-column byte masses — how many on-disk bytes each column takes per row.
 Reads only the footer metadata, so it works on any file regardless of
-compression. Multiple paths and quoted glob masks are aggregated:
+compression. Multiple paths, quoted glob masks, and storage URIs are
+aggregated:
 
 ```sh
 pqbench bytemass data.parquet
 pqbench bytemass 'data/part-*.parquet'
+pqbench bytemass s3://bucket/table/part-0.parquet   # requires --features aws
 ```
 
 `--json` emits a composable `{name, value, children}` tree; `--d3` emits a
@@ -54,6 +56,12 @@ self-contained HTML treemap:
 pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 ```
 
+Remote reads fetch the object metadata, the Parquet trailer, and the
+serialized footer — never the data pages. `s3://` support is the `aws`
+feature; a URI whose backend is not compiled in fails at runtime with the
+missing feature named. The library it uses (`bytemass::read_remote`,
+`bytemass::summarize_inputs`) is always available and never feature-gated.
+
 ### delta
 
 Byte-mass summary of a local Delta table snapshot. Feature-gated — build with
@@ -62,6 +70,9 @@ Byte-mass summary of a local Delta table snapshot. Feature-gated — build with
 ```sh
 pqbench delta ./path/to/table
 ```
+
+Add `--features delta-s3` to resolve and measure Delta tables at `s3://` URIs;
+the active files are measured through `bytemass`'s public remote reader.
 
 ## Documentation
 

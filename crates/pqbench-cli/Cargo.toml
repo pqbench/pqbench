@@ -11,6 +11,8 @@ description = "Command line frontend for pqbench."
 [features]
 default = []
 delta = ["pqbench/delta", "dep:tokio"]
+aws = ["pqbench/aws", "dep:tokio"]
+delta-s3 = ["delta", "pqbench/delta-s3", "aws"]
 
 [[bin]]
 name = "pqbench"

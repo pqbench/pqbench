@@ -3,7 +3,7 @@
 mod support;
 
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
-use pqbench::table::delta::read_local;
+use pqbench::table::delta::{read_local, read_remote};
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
 
@@ -41,6 +41,18 @@ async fn resolves_versions_and_weights_columns_by_total_rows() {
     assert_eq!(report["physical_rows"], 14);
     assert_eq!(report["columns"][0]["compressed_bytes"], bytes);
     assert!(pqbench::table::delta::render(&latest).contains("physical rows: 14"));
+}
+
+#[tokio::test]
+async fn reads_a_table_uri_with_the_public_remote_api() {
+    let fixture = Fixture::new();
+    let uri = url::Url::from_directory_path(fixture.path()).unwrap();
+    let report = read_remote(uri.as_str(), None).await.unwrap();
+
+    assert_eq!(report.version, 1);
+    assert_eq!(report.file_count, 2);
+    assert_eq!(report.physical_rows, 14);
+    assert_eq!(report.partition_columns, ["part"]);
 }
 
 #[tokio::test]

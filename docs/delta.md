@@ -8,14 +8,20 @@ graph.
 ```mermaid
 flowchart TD
     delta_log[Delta transaction log] --> delta[pqbench::table::delta]
-    delta --> pqbench[pqbench library]
-    pqbench_cli[pqbench-cli] --> pqbench
-    pqbench --> parquet[Parquet file footers]
+    delta --> bytemass[pqbench::bytemass]
+    bytemass --> isolation[pqbench::object_store]
+    isolation --> object_store[object_store crate]
+    bytemass --> parquet[Parquet file footers]
+    pqbench_cli[pqbench-cli] --> delta
+    pqbench_cli --> bytemass
 ```
 
 `pqbench` reads metadata from individual Parquet files. The Delta module uses
-delta-rs to select a table snapshot, passes each active file to `pqbench`, and
-aggregates the results.
+delta-rs to select a table snapshot and measures each active file through
+`bytemass`'s public API, so it does not reach into `bytemass` internals and
+names no storage-backend types itself. The only module that names the
+`object_store` crate is `pqbench::object_store`, which adapts it to the small
+`ObjectReader` interface (`stat` + `read_range`) the rest of the crate uses.
 
 ## Usage
 
@@ -29,6 +35,22 @@ cargo run -p pqbench-cli --features delta -- delta ./path/to/table --version 3 -
 cargo test -p pqbench --features delta
 ```
 
+Remote tables are resolved with `delta-s3` (which enables `aws`), and the
+active objects are measured through `bytemass::read_remote`:
+
+```
+cargo run -p pqbench-cli --features delta-s3 -- delta s3://bucket/table --json
+```
+
+## Backends
+
+S3 support is compiled behind the `aws` feature inside `pqbench::object_store`
+(the only module that names the `object_store` crate). A URI whose backend is
+not compiled in fails at runtime with a message naming the missing feature;
+`bytemass` and `pqbench::table::delta` contain no feature flags and no
+third-party storage types. Adding another scheme is one arm in the factory plus
+one feature.
+
 ## Report
 
 The report describes physical storage: active file bytes, physical Parquet rows,
@@ -37,10 +59,10 @@ It excludes the Delta log and tombstoned files.
 
 ## Limitations
 
-The current local implementation rejects deletion vectors, column mapping,
-external data paths, and active files whose size differs from the transaction
-log. Path traversal and symlink escapes are rejected, and no partial report is
-returned on failure.
+The implementation rejects deletion vectors, column mapping, external data
+paths, and active files whose size differs from the transaction log. Local path
+traversal and symlink escapes are rejected; remote file paths must be relative
+to the table root. No partial report is returned on failure.
 
 ## Dependencies
 
