@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per ref: a new push cancels the superseded run. Keyed on the branch
+# (head_ref for PRs, commit for pushes) and the workflow so concurrent
+# workflows for the same commit don't cancel each other.
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.94.1"
+  # Override .cargo/config.toml's `-march=native` (Cargo [env] does not override
+  # an existing variable). Native-tuned codec objects restored from a cache built
+  # on a differently-featured runner caused SIGILL; a portable baseline is safe
+  # to cache and to share across runners. Same idea as scripts/docker_build.sh.
+  CXXFLAGS: "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - run: make fmt-check
+
+  # Clippy once over the union of features. Isolated feature sets don't need
+  # their own lint pass: `--all-features` sees every gated `cfg(feature = ...)`
+  # branch, and `default` (in the test matrix) covers `cfg(not(feature = ...))`.
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+      - run: make lint CARGO_FEATURES=--all-features
+
+  # `cargo test` builds as it goes, so there is no separate build step. A leg
+  # per feature set catches feature-gating bugs, and `--include-ignored` turns
+  # on the network e2e (redset, gated on `aws`) on the aws/all-features legs.
+  # default and all-features also run on arm64; fmt/clippy are arch-independent.
+  test:
+    name: Test (${{ matrix.features || 'default' }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: amd64
+            features: ""
+            cargo_flags: ""
+            test_flags: ""
+          - os: ubuntu-24.04
+            arch: amd64
+            features: aws
+            cargo_flags: --features aws
+            test_flags: --include-ignored
+          - os: ubuntu-24.04
+            arch: amd64
+            features: delta
+            cargo_flags: --features delta
+            test_flags: ""
+          - os: ubuntu-24.04
+            arch: amd64
+            features: all-features
+            cargo_flags: --all-features
+            test_flags: --include-ignored
+          # arm64: default catches arch/codec issues, all-features covers the
+          # delta/aws build. aws/delta alone stay amd64 to bound the job count.
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            features: ""
+            cargo_flags: ""
+            test_flags: ""
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            features: all-features
+            cargo_flags: --all-features
+            test_flags: --include-ignored
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Test fixtures are LFS-typed (see .gitattributes).
+          lfs: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # One cache per (arch, feature set): a single target dir only holds one
+          # feature configuration, so sharing across feature sets makes cargo
+          # rebuild every crate whose features differ. Key on both so each leg
+          # reuses its own artifacts.
+          key: ${{ matrix.arch }}-${{ matrix.features || 'default' }}
+      - run: make test CARGO_FEATURES="${{ matrix.cargo_flags }}" TEST_FLAGS="${{ matrix.test_flags }}"
+
+  # Single required status: fails if any upstream job failed, was cancelled or
+  # was skipped, so branch protection only has to require `CI`.
+  ci:
+    name: CI
+    if: always()
+    needs: [fmt, clippy, test]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail if a required job did not succeed
+        run: exit 1
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
