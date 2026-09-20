@@ -17,7 +17,11 @@ pub(crate) struct CompressionArgs {
 
 pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
     let request = CompressionRequest {
-        bench: args.bench.request(),
+        file: args.bench.file.clone(),
+        codec_specs: args.bench.codec_specs.clone(),
+        samples: args.bench.samples,
+        warmup_iterations: args.bench.warmup_iterations,
+        mode: args.bench.mode.into(),
         per_column: args.is_per_column,
     };
     let report = compression::compression(&request)?;

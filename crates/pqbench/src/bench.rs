@@ -1,54 +1,37 @@
-//! The request and codec-spec parsing shared by the `lz` and `compression`
-//! sweeps.
+//! Shared codec-sweep mechanism for the `lz` and `compression` commands.
 //!
-//! Both commands share the same arguments (`file`, `-c codec@level`, samples,
-//! warmup, mode); a [`BenchRequest`] is the typed form of those arguments. The
-//! command modules ([`crate::lz`], [`crate::compression`]) resolve the request
-//! into a [`BenchPlan`] and run their own measurement, so parsing lives here
-//! once and the CLI stays a thin wrapper.
-
-use std::path::PathBuf;
+//! The two commands own their own request types ([`crate::lz::LzRequest`],
+//! [`crate::compression::CompressionRequest`]); this module holds only the
+//! resolution they both need: parsing `codec@level` specs, the analytics
+//! config, and the raw pass count. It deliberately carries no request type of
+//! its own, so neither command depends on the other.
 
 use crate::codecs::{Codec, CodecImpl, Error as CodecError};
 use crate::stats;
 
-/// Arguments shared by the `lz` and `compression` commands.
-#[derive(Debug, Clone)]
-pub struct BenchRequest {
-    /// Input file.
-    pub file: PathBuf,
-    /// `codec@level` specs, repeatable; empty selects every wired codec at its
-    /// first level. The `@level` part is optional.
-    pub codec_specs: Vec<String>,
-    /// Timed passes to collect per sweep (after warmup).
-    pub samples: u32,
-    /// Timed passes to discard before sampling (cold-start effects).
-    pub warmup_iterations: u32,
-    /// How to reduce the samples.
-    pub mode: stats::Mode,
-}
-
-/// The measurement decisions a [`BenchRequest`] resolves to: the codec×level
-/// set, the analytics config, and the raw pass count the upstream wants.
-pub(crate) struct BenchPlan {
+/// The measurement decisions a request resolves to: the codec×level set, the
+/// analytics config, and the raw pass count the upstream wants.
+pub(crate) struct Sweep {
     pub(crate) codec_configs: Vec<(Codec, u8)>,
     pub(crate) stats_config: stats::Config,
     pub(crate) passes: u32,
 }
 
-impl BenchRequest {
-    /// Resolve the request into codec configs, an analytics config, and the raw
-    /// pass count (warmup + samples).
-    pub(crate) fn plan(&self) -> Result<BenchPlan, Error> {
-        Ok(BenchPlan {
-            codec_configs: parse_codec_configs(&self.codec_specs)?,
-            stats_config: stats::Config {
-                warmup_iterations: self.warmup_iterations as usize,
-                mode: self.mode,
-            },
-            passes: self.samples + self.warmup_iterations,
-        })
-    }
+/// Resolve the shared sweep decisions from a command's arguments.
+pub(crate) fn resolve(
+    codec_specs: &[String],
+    samples: u32,
+    warmup_iterations: u32,
+    mode: stats::Mode,
+) -> Result<Sweep, Error> {
+    Ok(Sweep {
+        codec_configs: parse_codec_configs(codec_specs)?,
+        stats_config: stats::Config {
+            warmup_iterations: warmup_iterations as usize,
+            mode,
+        },
+        passes: samples + warmup_iterations,
+    })
 }
 
 /// Errors from a codec sweep: spec parsing, the codec/parquet layers, or
@@ -159,18 +142,11 @@ mod tests {
     }
 
     #[test]
-    fn plan_sums_warmup_and_samples_into_passes() {
-        let request = BenchRequest {
-            file: PathBuf::from("x"),
-            codec_specs: vec!["zstd@1".into()],
-            samples: 10,
-            warmup_iterations: 3,
-            mode: stats::Mode::Mean,
-        };
-        let plan = request.plan().unwrap();
-        assert_eq!(plan.passes, 13);
-        assert_eq!(plan.stats_config.warmup_iterations, 3);
-        assert_eq!(plan.stats_config.mode, stats::Mode::Mean);
-        assert_eq!(plan.codec_configs, [(Codec::Zstd, 1)]);
+    fn resolve_sums_warmup_and_samples_into_passes() {
+        let sweep = resolve(&["zstd@1".into()], 10, 3, stats::Mode::Mean).unwrap();
+        assert_eq!(sweep.passes, 13);
+        assert_eq!(sweep.stats_config.warmup_iterations, 3);
+        assert_eq!(sweep.stats_config.mode, stats::Mode::Mean);
+        assert_eq!(sweep.codec_configs, [(Codec::Zstd, 1)]);
     }
 }

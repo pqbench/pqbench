@@ -1,9 +1,8 @@
 //! `lz`: lzbench-equivalent compression benchmark over raw file bytes.
 //!
-//! The command is one function: [`lz`] takes the shared
-//! [`crate::bench::BenchRequest`] and returns the measured table. Rendering is
-//! a fold of that table: [`render_text`] prints the stats table, [`render_json`]
-//! serializes it.
+//! The command is one function: [`lz`] takes an [`LzRequest`] and returns the
+//! measured table. Rendering is a fold of that table: [`render_text`] prints
+//! the stats table, [`render_json`] serializes it.
 //!
 //! Split by layer: `raw` (`bench_file`) loads the file once and records raw
 //! per-pass times per config; `analytics` (`aggregate`) reduces the samples
@@ -17,7 +16,7 @@ mod raw;
 mod text;
 
 pub use analytics::aggregate;
-pub use api::lz;
+pub use api::{lz, LzRequest};
 pub use json::render_json;
 pub use raw::{bench_file, RawRow};
 pub use text::render_text;
@@ -25,7 +24,6 @@ pub use text::render_text;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::BenchRequest;
     use crate::codecs::Codec;
     use crate::stats::{Config, Mode};
 
@@ -35,7 +33,7 @@ mod tests {
         let path = dir.join("pqbench_lz_command.bin");
         std::fs::write(&path, b"the quick brown fox ".repeat(4096)).unwrap();
 
-        let request = BenchRequest {
+        let request = LzRequest {
             file: path.clone(),
             codec_specs: vec!["zstd@1".into()],
             samples: 2,
