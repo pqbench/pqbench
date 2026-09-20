@@ -276,6 +276,21 @@ fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {
         .into())
 }
 
+/// Resolve a local active file, rejecting escapes from the table directory.
+fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {
+    let path = relative_data_path(relative)?;
+    let local = root
+        .join(path)
+        .canonicalize()
+        .map_err(|e| Error(format!("cannot open active file {relative}: {e}")))?;
+    if !local.starts_with(root) {
+        return Err(Error(format!(
+            "active file is outside the table directory: {relative}"
+        )));
+    }
+    Ok(local)
+}
+
 /// Resolve a local active file, rejecting escapes from the table directory and
 /// early-detecting a size change before its footer is parsed.
 fn local_input(root: &Path, relative: &str, expected: u64) -> Result<String, Error> {
@@ -342,20 +357,6 @@ fn delta_error(error: deltalake::DeltaTableError) -> Error {
 fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
     left.checked_add(right)
         .ok_or_else(|| Error("storage totals exceed u64".into()))
-}
-
-fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {
-    let path = relative_data_path(relative)?;
-    let local = root
-        .join(path)
-        .canonicalize()
-        .map_err(|e| Error(format!("cannot open active file {relative}: {e}")))?;
-    if !local.starts_with(root) {
-        return Err(Error(format!(
-            "active file is outside the table directory: {relative}"
-        )));
-    }
-    Ok(local)
 }
 
 /// Serialize the snapshot report as pretty-printed JSON.
