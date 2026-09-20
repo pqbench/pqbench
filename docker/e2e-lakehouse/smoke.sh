@@ -15,6 +15,6 @@ compose run --rm -T examples seed
 for engine in unity iceberg ducklake; do
     compose run --rm -T examples "$engine" |
         "$root/target/debug/pqbench" bytemass --source - --json |
-        python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["value"] > 0; assert {c["name"] for c in r["children"]} == {"id", "label"}'
+        python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["num_rows"] == 3; assert {c["path"] for c in r["columns"]} == {"id", "label"}; assert all(c["compressed_bytes"] > 0 for c in r["columns"])'
     echo "PASS: $engine catalog → source JSON → pqbench S3 footer reads"
 done
