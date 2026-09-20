@@ -1,0 +1,65 @@
+name: pqbench-lakehouse
+
+services:
+  localstack:
+    image: localstack/localstack:4.11.0
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: us-east-1
+      PERSISTENCE: "1"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    ports:
+      - "127.0.0.1:${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - ./localstack-init.sh:/etc/localstack/init/ready.d/10-create-buckets.sh:ro
+    healthcheck:
+      test: ["CMD", "awslocal", "s3api", "head-bucket", "--bucket", "lakehouse"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:1.10.0
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://lakehouse/iceberg
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://localstack:4566
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "127.0.0.1:${ICEBERG_REST_PORT:-8181}:8181"
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+  # This service is intentionally server-only: no UI and no external database.
+  # Its own metadata is persisted in the named volume below. Catalog entries can
+  # point at the same S3-compatible storage used by the other services.
+  unity-catalog:
+    image: unitycatalog/unitycatalog:v0.5.0
+    ports:
+      - "127.0.0.1:${UNITY_CATALOG_PORT:-8080}:8080"
+    volumes:
+      - unity-catalog-data:/home/unitycatalog/etc/db
+
+  examples:
+    profiles: [tools]
+    build: ./client
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      SOURCE_S3_ENDPOINT: http://localhost:${LOCALSTACK_PORT:-4566}
+    volumes:
+      - ducklake-metadata:/state
+      - ./examples.py:/app/examples.py:ro
+    entrypoint: ["python", "/app/examples.py"]
+
+volumes:
+  localstack-data:
+  unity-catalog-data:
+  ducklake-metadata:

@@ -76,6 +76,8 @@ the active files are measured through `bytemass`'s public remote reader.
 
 ## Documentation
 
+- [Local lakehouse E2E examples](docker/e2e-lakehouse/README.md) — LocalStack S3,
+  Unity Catalog, Iceberg REST and DuckLake piped into `bytemass --source -`
 - [Delta tables](docs/delta.md) — snapshot resolution, report shape, limitations
 - [Docker](docs/docker.md) — build, run, and publish a container image
 
