@@ -28,8 +28,8 @@ fn request(file: PathBuf, per_column: bool) -> CompressionRequest {
 }
 
 #[test]
-fn sweeps_encoded_pages_and_renders_a_text_table() {
-    let report = compression(&request(fixture("small_reddit_none.parquet"), false)).unwrap();
+fn sweeps_encoded_pages_and_renders_a_text_table() -> Result<(), Box<dyn std::error::Error>> {
+    let report = compression(&request(fixture("small_reddit_none.parquet"), false))?;
 
     assert_eq!(report.rows.len(), 1);
     let row = &report.rows[0];
@@ -39,14 +39,15 @@ fn sweeps_encoded_pages_and_renders_a_text_table() {
     assert!(row.ratio > 0.0 && row.ratio < 1.0);
     assert!(report.columns.is_empty());
 
-    let text = render_text(&report, false).unwrap();
+    let text = render_text(&report, false)?;
     assert!(text.contains("zstd"));
     assert!(!text.contains("-- per-column"));
+    Ok(())
 }
 
 #[test]
-fn per_column_adds_one_row_per_column_chunk() {
-    let report = compression(&request(fixture("small_reddit_none.parquet"), true)).unwrap();
+fn per_column_adds_one_row_per_column_chunk() -> Result<(), Box<dyn std::error::Error>> {
+    let report = compression(&request(fixture("small_reddit_none.parquet"), true))?;
 
     assert!(!report.columns.is_empty());
     assert!(report
@@ -60,12 +61,13 @@ fn per_column_adds_one_row_per_column_chunk() {
         .sum();
     assert_eq!(chunk_bytes, report.rows[0].uncompressed_bytes);
 
-    let text = render_text(&report, true).unwrap();
+    let text = render_text(&report, true)?;
     assert!(text.contains("-- per-column"));
     assert!(text.contains("column"));
     for column in &report.columns {
         assert!(text.contains(&column.column), "missing {}", column.column);
     }
+    Ok(())
 }
 
 #[test]

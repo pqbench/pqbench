@@ -28,10 +28,10 @@ mod tests {
     use crate::stats::{Config, Mode};
 
     #[test]
-    fn lz_runs_the_sweep_and_renders_both_formats() {
+    fn lz_runs_the_sweep_and_renders_both_formats() -> Result<(), Box<dyn std::error::Error>> {
         let dir = std::env::temp_dir();
         let path = dir.join("pqbench_lz_command.bin");
-        std::fs::write(&path, b"the quick brown fox ".repeat(4096)).unwrap();
+        std::fs::write(&path, b"the quick brown fox ".repeat(4096))?;
 
         let request = LzRequest {
             file: path.clone(),
@@ -40,15 +40,16 @@ mod tests {
             warmup_iterations: 1,
             mode: Mode::Fastest,
         };
-        let report = lz(&request).unwrap();
-        std::fs::remove_file(&path).unwrap();
+        let report = lz(&request)?;
+        std::fs::remove_file(&path)?;
 
         assert_eq!(report.rows.len(), 1);
         assert_eq!(report.rows[0].codec, Codec::Zstd);
-        assert!(render_text(&report).unwrap().contains("zstd"));
+        assert!(render_text(&report)?.contains("zstd"));
 
-        let json: serde_json::Value = serde_json::from_str(&render_json(&report).unwrap()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&render_json(&report)?)?;
         assert_eq!(json["rows"][0]["level"], 1);
+        Ok(())
     }
 
     #[test]

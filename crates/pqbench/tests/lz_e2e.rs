@@ -27,9 +27,9 @@ fn request(file: PathBuf) -> LzRequest {
 }
 
 #[test]
-fn sweeps_raw_file_bytes_and_renders_a_text_table() {
+fn sweeps_raw_file_bytes_and_renders_a_text_table() -> Result<(), Box<dyn std::error::Error>> {
     let file = fixture("small_reddit_none.parquet");
-    let report = lz(&request(file.clone())).unwrap();
+    let report = lz(&request(file.clone()))?;
 
     assert_eq!(report.rows.len(), 1);
     let row = &report.rows[0];
@@ -37,15 +37,16 @@ fn sweeps_raw_file_bytes_and_renders_a_text_table() {
     assert_eq!(row.level, 1);
     assert_eq!(
         row.uncompressed_bytes as u64,
-        std::fs::metadata(&file).unwrap().len()
+        std::fs::metadata(&file)?.len()
     );
     assert!(row.compressed_bytes < row.uncompressed_bytes);
     assert!(row.ratio > 0.0 && row.ratio < 1.0);
 
-    let text = render_text(&report).unwrap();
+    let text = render_text(&report)?;
     assert!(text.contains("codec"));
     assert!(text.contains("ratio%"));
     assert!(text.contains("snappy"));
+    Ok(())
 }
 
 #[test]
