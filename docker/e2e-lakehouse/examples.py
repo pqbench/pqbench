@@ -2,7 +2,6 @@
 import argparse
 import io
 import json
-import os
 import sys
 import time
 import urllib.error
@@ -133,12 +132,7 @@ def source(engine):
     if not inputs:
         raise ValueError("No active Parquet files; run seed first")
     print(json.dumps({"kind": "pqbench.remote-source", "version": 1,
-                      "inputs": sorted(set(inputs)), "object_store_options": {
-                          "aws_access_key_id": "test", "aws_secret_access_key": "test",
-                          "aws_region": "us-east-1", "aws_allow_http": "true",
-                          "aws_endpoint": os.environ["SOURCE_S3_ENDPOINT"],
-                          "aws_virtual_hosted_style_request": "false",
-                      }}))
+                      "inputs": sorted(set(inputs))}))
 
 
 if __name__ == "__main__":

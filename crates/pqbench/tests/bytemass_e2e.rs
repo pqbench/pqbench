@@ -9,10 +9,7 @@ fn fixture(name: &str) -> String {
 }
 
 fn request(inputs: Vec<String>) -> BytemassRequest {
-    BytemassRequest {
-        inputs,
-        ..Default::default()
-    }
+    BytemassRequest { inputs }
 }
 
 #[tokio::test]

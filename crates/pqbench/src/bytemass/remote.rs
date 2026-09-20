@@ -12,16 +12,25 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 /// Read an individual Parquet object's size and byte masses from a URI.
 ///
 /// Only the trailer and serialized footer metadata are fetched, never data
-/// pages or indexes. Backend configuration comes from the environment; the
-/// `options` pairs override it.
+/// pages or indexes. Backend configuration comes from the environment; use
+/// [`read_remote_with_options`] to pass explicit backend options.
 ///
 /// # Errors
 /// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
-pub(super) async fn read_remote(
+pub(super) async fn read_remote(uri: &str) -> Result<(u64, FileMass), Error> {
+    read_remote_with_options(uri, []).await
+}
+
+/// Read a Parquet object using backend-specific configuration options.
+///
+/// # Errors
+/// As [`read_remote`].
+async fn read_remote_with_options(
     uri: &str,
-    options: &[(String, String)],
+    options: impl IntoIterator<Item = (String, String)>,
 ) -> Result<(u64, FileMass), Error> {
-    let reader = object_store::open(uri, options).map_err(storage_error)?;
+    let options: Vec<(String, String)> = options.into_iter().collect();
+    let reader = object_store::open(uri, &options).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
     let size = stat.size;
     if size < PARQUET_FOOTER_SIZE {
@@ -81,7 +90,7 @@ mod tests {
         ));
         let expected = default_metadata_parser().read_masses(path).unwrap();
         let uri = url::Url::from_file_path(path).unwrap();
-        let (size, actual) = read_remote(uri.as_str(), &[]).await.unwrap();
+        let (size, actual) = read_remote(uri.as_str()).await.unwrap();
         assert_eq!(size, std::fs::metadata(path).unwrap().len());
         assert_eq!(actual.num_rows, expected.num_rows);
         assert_eq!(actual.columns.len(), expected.columns.len());

@@ -42,6 +42,11 @@ compose build examples
 compose up -d --wait
 compose run --rm -T examples seed
 
+# pqbench reads this stand's S3 the same way it reads any other:
+export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1
+export AWS_ENDPOINT=http://localhost:9000
+export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
+
 # Unity Catalog → remote source document → byte-mass JSON
 compose run --rm -T examples unity |
   target/debug/pqbench bytemass --source - --json
@@ -59,21 +64,22 @@ compose run --rm -T examples iceberg | python3 -m json.tool
 ```
 
 `-T` prevents terminal formatting from contaminating stdout. Producer errors
-go to stderr. The JSON uses `kind: pqbench.remote-source`, `version: 1`,
-`inputs`, and `object_store_options`; pqbench itself has no catalog dependency.
-The stock published pqbench image is not assumed to contain this branch or its
-AWS feature, hence the explicit local build.
+go to stderr. The JSON is `{"kind": "pqbench.remote-source", "version": 1,
+"inputs": [...]}`: the producer answers *which objects*, the environment says
+*how to reach storage*, and pqbench itself has no catalog dependency. The stock
+published pqbench image is not assumed to contain this branch or its AWS
+feature, hence the explicit local build.
 
 ## Endpoints and state
 
 Host endpoints bind to loopback: S3 `http://localhost:9000`, Unity Catalog
 `http://localhost:8080`, Iceberg REST `http://localhost:8181`. Override with
-`RUSTFS_PORT`, `UNITY_CATALOG_PORT`, and `ICEBERG_REST_PORT`.
-The producer automatically uses `RUSTFS_PORT` in the JSON for host pqbench.
-Container clients use `http://rustfs:9000`; when piping into a container on
-this Compose network, pass `-e SOURCE_S3_ENDPOINT=http://rustfs:9000` to the
-producer's `compose run`. Credentials are local dummy values `test` / `test`,
-region `us-east-1`, HTTP and path-style S3.
+`RUSTFS_PORT`, `UNITY_CATALOG_PORT`, and `ICEBERG_REST_PORT`. Containers on the
+Compose network reach the same objects at `http://rustfs:9000`, so a pqbench
+running there wants that as its `AWS_ENDPOINT` instead of `localhost`.
+Credentials are local dummy values `test` / `test`, region `us-east-1`, HTTP and
+path-style S3 — hence `AWS_ALLOW_HTTP` and
+`AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false`.
 
 The object store is pinned to `rustfs/rustfs:1.0.0`, so a rerun next month
 measures the same bytes; bump it deliberately. Compose polls the image's
@@ -98,10 +104,10 @@ after recreating it. SQLite is local to Docker; this is not a remote SQL server.
 
 ## Scope
 
-Unity Catalog resolves an external Parquet table location; the example lists
-Parquet files under that location and supplies local test credentials directly.
-It does **not** test credential vending, IAM enforcement, or Databricks managed
-tables. Iceberg uses `scan().plan_files()` and DuckLake uses
+Unity Catalog resolves an external Parquet table location; the example lists the
+Parquet files under that location, and the caller's environment supplies local
+test credentials. It does **not** test credential vending, IAM enforcement, or
+Databricks managed tables. Iceberg uses `scan().plan_files()` and DuckLake uses
 `ducklake_list_files`, rather than recursively measuring obsolete objects.
 Those examples reject delete files; pqbench measures physical Parquet storage,
 not logical rows after deletions. rustfs speaks the S3 API but is not AWS: it

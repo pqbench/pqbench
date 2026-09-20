@@ -219,7 +219,6 @@ async fn measure_active(active: &[ActiveFile]) -> Result<(Vec<MassRow>, u64), Er
     }
     let request = BytemassRequest {
         inputs: active.iter().map(|file| file.input.clone()).collect(),
-        ..Default::default()
     };
     let rows = bytemass::bytemass(&request)
         .await

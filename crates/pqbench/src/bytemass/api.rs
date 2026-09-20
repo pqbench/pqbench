@@ -11,13 +11,10 @@ use crate::parquet_helpers::Error;
 use super::collection;
 
 /// Arguments for the `bytemass` command.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BytemassRequest {
     /// Parquet paths or glob masks; quote masks to prevent shell expansion.
     pub inputs: Vec<String>,
-    /// Backend configuration for remote URIs (endpoint, credentials, …).
-    /// Empty means environment defaults via the object-store factory.
-    pub object_store_options: Vec<(String, String)>,
 }
 
 /// One column chunk's measured byte mass: a row of the `bytemass` table.
@@ -54,5 +51,5 @@ pub async fn bytemass(request: &BytemassRequest) -> Result<Vec<MassRow>, Error> 
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_inputs(&request.inputs, &request.object_store_options).await
+    collection::measure_inputs(&request.inputs).await
 }

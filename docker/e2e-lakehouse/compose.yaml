@@ -54,7 +54,6 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
-      SOURCE_S3_ENDPOINT: http://localhost:${RUSTFS_PORT:-9000}
     volumes:
       - ducklake-metadata:/state
       - ./examples.py:/app/examples.py:ro
