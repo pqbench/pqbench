@@ -143,36 +143,12 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    summarize_inputs_with_options(inputs, []).await
-}
-
-/// Read and aggregate footer metadata using explicit object-store options for
-/// every remote input.
-///
-/// The options are deliberately an untyped key/value boundary. Callers keep
-/// provider credential formats outside the byte-mass domain; the isolated
-/// object reader is the only layer that interprets them.
-///
-/// # Errors
-/// Returns [`Error`] when an input cannot be read or a total overflows.
-pub async fn summarize_inputs_with_options<I, S, O>(
-    inputs: I,
-    options: O,
-) -> Result<MassSummary, Error>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-    O: IntoIterator<Item = (String, String)>,
-{
-    let options: Vec<(String, String)> = options.into_iter().collect();
     let parser = default_metadata_parser();
     let mut accumulator = MassAccumulator::new();
     for input in inputs {
         let input = input.as_ref();
         let mass = if input.contains("://") {
-            super::remote::read_remote_with_options(input, options.clone())
-                .await?
-                .1
+            super::remote::read_remote(input).await?.1
         } else {
             parser.read_masses(Path::new(input))?
         };

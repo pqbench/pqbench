@@ -31,6 +31,3 @@ decisions/
 
 # Agent skills / tooling config (not part of the library/CLI)
 /.opencode
-
-# Stateful Docker volumes/bind mounts for the local lakehouse test stand.
-/docker/e2e-lakehouse/state/

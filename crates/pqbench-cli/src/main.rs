@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -9,6 +8,7 @@ use pqbench::codecs::{Codec, CodecImpl};
 use pqbench::compression;
 use pqbench::parquet_helpers::PageParser;
 use pqbench::stats;
+#[cfg(feature = "aws")]
 use serde::Deserialize;
 
 #[cfg(feature = "delta")]
@@ -167,12 +167,8 @@ fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Machine-readable remote input supplied by an external credential broker.
-///
-/// This remains provider-neutral: `object_store_options` are interpreted only
-/// by pqbench's isolated object-store adapter. It is intentionally stdin-only
-/// so short-lived credentials are not put in command arguments or environment
-/// variables by pqbench.
+/// Stdin protocol for external catalog/credential producers.
+#[cfg(feature = "aws")]
 #[derive(Deserialize)]
 struct RemoteSource {
     kind: String,
@@ -182,6 +178,7 @@ struct RemoteSource {
     object_store_options: std::collections::BTreeMap<String, String>,
 }
 
+#[cfg(feature = "aws")]
 fn summarize_source(
     source: &str,
 ) -> Result<(pqbench::parquet_helpers::FileMass, String), CliError> {
@@ -190,9 +187,7 @@ fn summarize_source(
             "--source accepts only `-` (a remote-source JSON document on standard input)".into(),
         );
     }
-    let mut document = String::new();
-    std::io::stdin().read_to_string(&mut document)?;
-    let source: RemoteSource = serde_json::from_str(&document)
+    let source: RemoteSource = serde_json::from_reader(std::io::stdin().lock())
         .map_err(|error| format!("invalid pqbench remote source document: {error}"))?;
     if source.kind != "pqbench.remote-source" || source.version != 1 {
         return Err(
@@ -205,12 +200,20 @@ fn summarize_source(
     if source.inputs.iter().any(|input| !input.contains("://")) {
         return Err("remote source inputs must be absolute URIs".into());
     }
-    let label = if source.inputs.len() == 1 {
-        source.inputs[0].clone()
-    } else {
-        format!("{} parquet files", source.inputs.len())
-    };
-    let summary = summarize_with_options(&source.inputs, source.object_store_options)?;
+    let label = collection_label(&source.inputs.iter().map(PathBuf::from).collect::<Vec<_>>());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let summary = runtime.block_on(async {
+        let mut accumulator = bytemass::MassAccumulator::new();
+        for uri in &source.inputs {
+            let (_, mass) =
+                bytemass::read_remote_with_options(uri, source.object_store_options.clone())
+                    .await?;
+            accumulator.add(mass)?;
+        }
+        Ok::<_, CliError>(accumulator.finish())
+    })?;
     Ok((summary.file_mass(), label))
 }
 
@@ -231,25 +234,8 @@ fn summarize(paths: &[PathBuf]) -> Result<bytemass::MassSummary, CliError> {
     Ok(runtime.block_on(bytemass::summarize_inputs(&inputs))?)
 }
 
-#[cfg(feature = "aws")]
-fn summarize_with_options(
-    inputs: &[String],
-    options: std::collections::BTreeMap<String, String>,
-) -> Result<bytemass::MassSummary, CliError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    Ok(runtime.block_on(bytemass::summarize_inputs_with_options(
-        inputs,
-        options.into_iter(),
-    ))?)
-}
-
 #[cfg(not(feature = "aws"))]
-fn summarize_with_options(
-    _inputs: &[String],
-    _options: std::collections::BTreeMap<String, String>,
-) -> Result<bytemass::MassSummary, CliError> {
+fn summarize_source(_: &str) -> Result<(pqbench::parquet_helpers::FileMass, String), CliError> {
     Err("--source requires the `aws` feature".into())
 }
 
