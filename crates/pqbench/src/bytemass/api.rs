@@ -11,7 +11,7 @@ use crate::parquet_helpers::Error;
 use super::collection;
 
 /// Arguments for the `bytemass` command.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BytemassRequest {
     /// Parquet paths or glob masks; quote masks to prevent shell expansion.
     pub inputs: Vec<String>,

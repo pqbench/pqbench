@@ -27,7 +27,7 @@ pub struct ColumnMassSummary {
 }
 
 /// Byte masses summed across a collection of Parquet files.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct MassSummary {
     /// Number of physical Parquet files included in the summary.
