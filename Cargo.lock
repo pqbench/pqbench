@@ -2767,6 +2767,8 @@ dependencies = [
  "clap",
  "glob",
  "pqbench",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

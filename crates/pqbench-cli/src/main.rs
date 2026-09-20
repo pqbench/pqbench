@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -8,6 +9,7 @@ use pqbench::codecs::{Codec, CodecImpl};
 use pqbench::compression;
 use pqbench::parquet_helpers::PageParser;
 use pqbench::stats;
+use serde::Deserialize;
 
 #[cfg(feature = "delta")]
 mod delta;
@@ -23,6 +25,7 @@ Examples:
   pqbench bytemass data.parquet
   pqbench bytemass part-1.parquet part-2.parquet
   pqbench bytemass 'data/*.parquet'
+  producer | pqbench bytemass --source -
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -69,6 +72,7 @@ enum Command {
     #[command(after_help = r#"
 Examples:
   pqbench bytemass data.parquet
+  producer | pqbench bytemass --source -
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#)]
     Bytemass(BytemassArgs),
@@ -82,8 +86,11 @@ Examples:
 #[derive(Args)]
 struct BytemassArgs {
     /// parquet paths or glob masks; quote masks to prevent shell expansion
-    #[arg(required = true)]
+    #[arg(required_unless_present = "source", conflicts_with = "source")]
     inputs: Vec<String>,
+    /// versioned pqbench remote-source JSON read from standard input (`-` only)
+    #[arg(long, value_name = "-")]
+    source: Option<String>,
     /// emit the byte-mass tree as JSON (composable) instead of text stats
     #[arg(long, conflicts_with = "d3")]
     json: bool,
@@ -139,11 +146,16 @@ fn run_compression(args: &BenchArgs) -> Result<(), CliError> {
 /// text stats (agent-facing), JSON (composable), or, with `--d3`, as a
 /// self-contained browser treemap. This is `bytemass` wired end-to-end.
 fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
-    let paths = expand_inputs(&args.inputs)?;
-    let mass = summarize(&paths)?.file_mass();
+    let (mass, label) = match &args.source {
+        Some(source) => summarize_source(source)?,
+        None => {
+            let paths = expand_inputs(&args.inputs)?;
+            (summarize(&paths)?.file_mass(), collection_label(&paths))
+        }
+    };
     let raw = bytemass::read(&mass);
     let mut tree = bytemass::aggregate(&raw);
-    tree.label = collection_label(&paths);
+    tree.label = label;
     let out = if args.json {
         bytemass::tree(&tree)?
     } else if args.d3 {
@@ -153,6 +165,53 @@ fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
     };
     print!("{out}");
     Ok(())
+}
+
+/// Machine-readable remote input supplied by an external credential broker.
+///
+/// This remains provider-neutral: `object_store_options` are interpreted only
+/// by pqbench's isolated object-store adapter. It is intentionally stdin-only
+/// so short-lived credentials are not put in command arguments or environment
+/// variables by pqbench.
+#[derive(Deserialize)]
+struct RemoteSource {
+    kind: String,
+    version: u32,
+    inputs: Vec<String>,
+    #[serde(default)]
+    object_store_options: std::collections::BTreeMap<String, String>,
+}
+
+fn summarize_source(
+    source: &str,
+) -> Result<(pqbench::parquet_helpers::FileMass, String), CliError> {
+    if source != "-" {
+        return Err(
+            "--source accepts only `-` (a remote-source JSON document on standard input)".into(),
+        );
+    }
+    let mut document = String::new();
+    std::io::stdin().read_to_string(&mut document)?;
+    let source: RemoteSource = serde_json::from_str(&document)
+        .map_err(|error| format!("invalid pqbench remote source document: {error}"))?;
+    if source.kind != "pqbench.remote-source" || source.version != 1 {
+        return Err(
+            "unsupported remote source; expected kind `pqbench.remote-source` version 1".into(),
+        );
+    }
+    if source.inputs.is_empty() {
+        return Err("remote source contains no inputs".into());
+    }
+    if source.inputs.iter().any(|input| !input.contains("://")) {
+        return Err("remote source inputs must be absolute URIs".into());
+    }
+    let label = if source.inputs.len() == 1 {
+        source.inputs[0].clone()
+    } else {
+        format!("{} parquet files", source.inputs.len())
+    };
+    let summary = summarize_with_options(&source.inputs, source.object_store_options)?;
+    Ok((summary.file_mass(), label))
 }
 
 /// Measure every input; local paths go through the synchronous path, URIs
@@ -170,6 +229,28 @@ fn summarize(paths: &[PathBuf]) -> Result<bytemass::MassSummary, CliError> {
         .enable_all()
         .build()?;
     Ok(runtime.block_on(bytemass::summarize_inputs(&inputs))?)
+}
+
+#[cfg(feature = "aws")]
+fn summarize_with_options(
+    inputs: &[String],
+    options: std::collections::BTreeMap<String, String>,
+) -> Result<bytemass::MassSummary, CliError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    Ok(runtime.block_on(bytemass::summarize_inputs_with_options(
+        inputs,
+        options.into_iter(),
+    ))?)
+}
+
+#[cfg(not(feature = "aws"))]
+fn summarize_with_options(
+    _inputs: &[String],
+    _options: std::collections::BTreeMap<String, String>,
+) -> Result<bytemass::MassSummary, CliError> {
+    Err("--source requires the `aws` feature".into())
 }
 
 #[cfg(not(feature = "aws"))]

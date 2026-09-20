@@ -17,7 +17,8 @@ mod text;
 
 pub use analytics::{aggregate, MassNode};
 pub use collection::{
-    summarize_files, summarize_inputs, ColumnMassSummary, MassAccumulator, MassSummary,
+    summarize_files, summarize_inputs, summarize_inputs_with_options, ColumnMassSummary,
+    MassAccumulator, MassSummary,
 };
 pub use d3::render_html;
 pub use json::tree;
