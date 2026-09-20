@@ -9,7 +9,7 @@ use crate::parquet_helpers::{
     default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
 };
 
-use super::command::FileMassRecord;
+use super::api::FileMassRecord;
 use super::remote;
 
 /// One column's byte mass summed across a collection of Parquet files.

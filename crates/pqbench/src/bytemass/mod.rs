@@ -12,8 +12,8 @@
 //! (`render_html`) wraps the JSON in a self-contained browser treemap.
 
 mod analytics;
+mod api;
 mod collection;
-mod command;
 mod d3;
 mod json;
 mod raw;
@@ -21,5 +21,5 @@ mod remote;
 mod text;
 
 pub use analytics::MassNode;
+pub use api::{bytemass, BytemassOutput, BytemassRequest, FileMassRecord};
 pub use collection::{ColumnMassSummary, MassSummary};
-pub use command::{bytemass, BytemassOutput, BytemassRequest, FileMassRecord};
