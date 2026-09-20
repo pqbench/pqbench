@@ -73,18 +73,14 @@ fn parse_configs(specs: &[String]) -> Result<Vec<(Codec, u8)>, String> {
 /// One `codec@level` spec. The `@level` part is optional and defaults to the
 /// codec's lowest level.
 fn parse_spec(spec: &str) -> Result<(Codec, u8), String> {
-    let (name, level) = match spec.split_once('@') {
-        Some((n, l)) => (
-            n,
-            Some(
-                l.parse::<u8>()
-                    .map_err(|_| format!("bad level in {spec}"))?,
-            ),
-        ),
-        None => (spec, None),
+    let Some((name, level)) = spec.split_once('@') else {
+        let codec = parse_codec(spec)?;
+        return Ok((codec, default_level(codec)));
     };
-    let codec = parse_codec(name)?;
-    Ok((codec, level.unwrap_or_else(|| default_level(codec))))
+    let level = level
+        .parse::<u8>()
+        .map_err(|_| format!("bad level in {spec}"))?;
+    Ok((parse_codec(name)?, level))
 }
 
 fn parse_codec(name: &str) -> Result<Codec, String> {
