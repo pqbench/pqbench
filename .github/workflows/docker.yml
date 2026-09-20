@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+# One run per ref: a new push cancels the superseded build so quick commits
+# don't burn a whole matrix of image builds. Release publishes never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
 jobs:
   test:
     name: Build and test (${{ matrix.arch }})
