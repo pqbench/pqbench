@@ -16,8 +16,8 @@ objects accessed over HTTP, including pqbench's S3 range reads of footers.
 
 ## Run everything
 
-Requires Docker Compose v2, a Rust toolchain for this branch, Bash, and Python 3
-for smoke-test assertions. From the repository root:
+Requires Docker Compose v2, a Rust toolchain for this branch, Bash, and `jq`.
+From the repository root:
 
 ```bash
 bash docker/e2e-lakehouse/smoke.sh
@@ -69,7 +69,7 @@ compose run --rm -T examples ducklake |
   target/debug/pqbench bytemass --source - --d3 > ducklake-treemap.html
 
 # Inspect the protocol without running pqbench:
-compose run --rm -T examples iceberg | python3 -m json.tool
+compose run --rm -T examples iceberg | jq .
 ```
 
 `-T` prevents terminal formatting from contaminating stdout. Producer errors
@@ -89,7 +89,8 @@ those credentials and nothing else — no keys in your shell, no long-lived key
 anywhere in the pipe:
 
 ```bash
-UC=http://localhost:8080/api/2.1/unity-catalog; curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/json' -d "{\"table_id\":\"$(curl -s $UC/tables/pqbench.demo.events | python3 -c 'import json,sys;print(json.load(sys.stdin)["table_id"])')\",\"operation\":\"READ\"}" | python3 -c 'import json,sys;c=json.load(sys.stdin)["aws_temp_credentials"];print(json.dumps({"kind":"pqbench.remote-source","version":1,"inputs":["s3://lakehouse/unity/events/part-0.parquet"],"env":{"AWS_ACCESS_KEY_ID":c["access_key_id"],"AWS_SECRET_ACCESS_KEY":c["secret_access_key"],"AWS_SESSION_TOKEN":c["session_token"],"AWS_REGION":"us-east-1","AWS_ENDPOINT":"http://localhost:9000","AWS_ALLOW_HTTP":"true","AWS_VIRTUAL_HOSTED_STYLE_REQUEST":"false"}}))' | target/debug/pqbench bytemass --source -
+UC=http://localhost:8080/api/2.1/unity-catalog
+curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/json' -d "$(curl -s $UC/tables/pqbench.demo.events | jq -c '{table_id, operation: "READ"}')" | jq -c '{kind: "pqbench.remote-source", version: 1, inputs: ["s3://lakehouse/unity/events/part-0.parquet"], env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id, AWS_SECRET_ACCESS_KEY: .secret_access_key, AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1", AWS_ENDPOINT: "http://localhost:9000", AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' | target/debug/pqbench bytemass --source -
 ```
 
 `compose run --rm -T examples unity` is the same flow with the file list resolved

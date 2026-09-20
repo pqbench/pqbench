@@ -5,7 +5,8 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 compose() { docker compose -f "$root/docker/e2e-lakehouse/compose.yaml" "$@"; }
 assert_events_table() {
-    python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["num_rows"] == 3; assert {c["path"] for c in r["columns"]} == {"id", "label"}; assert all(c["compressed_bytes"] > 0 for c in r["columns"])'
+    jq -e '.num_rows == 3 and ([.columns[].path] | sort) == ["id", "label"]
+        and all(.columns[]; .compressed_bytes > 0)' > /dev/null
 }
 cargo build -p pqbench-cli --features aws
 compose build examples
