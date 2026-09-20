@@ -1,7 +1,8 @@
 //! Blackbox end-to-end tests of the public `bytemass` command.
 
 use pqbench::bytemass::{
-    aggregate, bytemass, render_html, render_json, render_text, BytemassRequest,
+    aggregate, bytemass, bytemass_with_cache, render_html, render_json, render_text,
+    BytemassRequest, FileMassCache,
 };
 
 fn fixture(name: &str) -> String {
@@ -100,6 +101,70 @@ async fn rejects_empty_inputs_and_unmatched_masks() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("mask matched no files"), "{error}");
+}
+
+#[tokio::test]
+async fn reuses_an_unchanged_parquet_file() {
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache = FileMassCache::open(cache_dir.path()).unwrap();
+    let request = request(vec![fixture("small_snappy.parquet")]);
+    let first = bytemass_with_cache(&request, &cache).await.unwrap();
+    let documents = std::fs::read_dir(cache_dir.path())
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("json")
+        })
+        .count();
+    assert_eq!(documents, 1);
+    let document: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            std::fs::read_dir(cache_dir.path())
+                .unwrap()
+                .find(|entry| {
+                    entry
+                        .as_ref()
+                        .unwrap()
+                        .path()
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        == Some("json")
+                })
+                .unwrap()
+                .unwrap()
+                .path(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(document["kind"], "pqbench.file-mass");
+    assert_eq!(document["version"], 1);
+    assert_eq!(document["uri"], fixture("small_snappy.parquet"));
+    assert_eq!(document["size"], first[0].size);
+
+    let second = bytemass_with_cache(&request, &cache).await.unwrap();
+    assert_eq!(second.len(), first.len());
+    assert_eq!(second[0].compressed_bytes, first[0].compressed_bytes);
+    assert_eq!(
+        std::fs::read_dir(cache_dir.path())
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("json")
+            })
+            .count(),
+        1
+    );
 }
 
 #[cfg(not(feature = "aws"))]

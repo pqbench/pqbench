@@ -42,6 +42,28 @@ active objects are measured from their footers only:
 cargo run -p pqbench-cli --features delta-s3 -- delta s3://bucket/table --json
 ```
 
+Reuse footer measurements across runs and snapshots with `--cache-dir`:
+
+```
+pqbench delta s3://bucket/table --cache-dir ~/.cache/pqbench
+pqbench delta s3://bucket/table --version 12 --cache-dir ~/.cache/pqbench
+```
+
+## File-mass cache
+
+The cache lives at the Parquet layer, not the snapshot layer. Each document is
+one object's footer measurement, keyed by URI, size, and S3 ETag (local files
+use URI and size). A later full scan of snapshot 12 after measuring snapshot 10
+reuses every surviving object and footer-reads only new or replaced files.
+
+`HEAD` still runs on remote objects so a replaced file (new ETag) misses. The
+footer `GET` is skipped on a hit. Documents are self-describing JSON
+(`kind: pqbench.file-mass`, version 1) in `--cache-dir`. The same flag on
+`bytemass` shares the store: unchanged Parquet objects are reused whether they
+were reached through a Delta snapshot or a direct path.
+
+Default `delta` and `bytemass` stay uncached.
+
 ## Backends
 
 S3 support is compiled behind the `aws` feature inside `pqbench::object_store`

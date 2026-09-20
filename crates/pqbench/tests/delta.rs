@@ -2,8 +2,9 @@
 
 mod support;
 
+use pqbench::bytemass::FileMassCache;
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
-use pqbench::table::delta::{delta, render_json, render_text, DeltaRequest};
+use pqbench::table::delta::{delta, delta_with_cache, render_json, render_text, DeltaRequest};
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
 
@@ -214,6 +215,99 @@ async fn rejects_external_data_paths() {
         .unwrap()
         .to_string();
     assert!(error.contains("only relative data paths"), "{error}");
+}
+
+fn cache_documents(directory: &std::path::Path) -> Vec<serde_json::Value> {
+    let mut documents = std::fs::read_dir(directory)
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            (path.extension().and_then(|extension| extension.to_str()) == Some("json")).then(|| {
+                serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path).unwrap())
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    documents.sort_by(|left, right| left["uri"].as_str().cmp(&right["uri"].as_str()));
+    documents
+}
+
+#[tokio::test]
+async fn reuses_unchanged_parquet_files_across_snapshots() {
+    let fixture = Fixture::new();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache = FileMassCache::open(cache_dir.path()).unwrap();
+    let table = fixture.path().to_string_lossy();
+
+    let previous = delta_with_cache(&request(table.as_ref(), Some(0)), &cache)
+        .await
+        .unwrap();
+    let after_previous = cache_documents(cache_dir.path());
+    assert_eq!(after_previous.len(), 2);
+    assert!(after_previous.iter().all(|document| {
+        document["kind"] == "pqbench.file-mass"
+            && document["version"] == 1
+            && document["size"].as_u64().unwrap() > 0
+            && document["uri"].as_str().unwrap().contains("part=")
+    }));
+    let kept = after_previous
+        .iter()
+        .find(|document| document["uri"].as_str().unwrap().contains("kept.parquet"))
+        .cloned()
+        .unwrap();
+
+    let cold = delta(&request(table.as_ref(), None)).await.unwrap();
+    let cached = delta_with_cache(&request(table.as_ref(), None), &cache)
+        .await
+        .unwrap();
+    assert_eq!(cached.version, cold.version);
+    assert_eq!(cached.file_bytes, cold.file_bytes);
+    assert_eq!(cached.physical_rows, cold.physical_rows);
+    assert_eq!(render_json(&cached).unwrap(), render_json(&cold).unwrap());
+    assert_eq!(previous.file_count, 2);
+
+    let after_latest = cache_documents(cache_dir.path());
+    assert_eq!(after_latest.len(), 3);
+    let kept_again = after_latest
+        .iter()
+        .find(|document| document["uri"].as_str().unwrap().contains("kept.parquet"))
+        .unwrap();
+    assert_eq!(kept_again, &kept);
+    assert!(after_latest
+        .iter()
+        .any(|document| document["uri"].as_str().unwrap().contains("added.parquet")));
+}
+
+#[tokio::test]
+async fn empty_cache_dir_matches_uncached_delta() {
+    let fixture = Fixture::new();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache = FileMassCache::open(cache_dir.path()).unwrap();
+    let cached = delta_with_cache(&request(fixture.path().to_string_lossy(), None), &cache)
+        .await
+        .unwrap();
+    let cold = delta(&request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
+    assert_eq!(cached.file_bytes, cold.file_bytes);
+    assert_eq!(cached.compressed_column_bytes, cold.compressed_column_bytes);
+}
+
+#[tokio::test]
+async fn size_mismatch_still_fails_when_a_cache_is_present() {
+    let fixture = Fixture::new();
+    let cache_dir = tempfile::tempdir().unwrap();
+    let cache = FileMassCache::open(cache_dir.path()).unwrap();
+    delta_with_cache(&request(fixture.path().to_string_lossy(), None), &cache)
+        .await
+        .unwrap();
+    std::fs::write(fixture.path().join("part=a/added.parquet"), b"changed").unwrap();
+    let error = delta_with_cache(&request(fixture.path().to_string_lossy(), None), &cache)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("size differs from log"), "{error}");
 }
 
 #[cfg(unix)]

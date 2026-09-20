@@ -77,7 +77,9 @@ pqbench delta ./path/to/table
 ```
 
 Add `--features delta-s3` to resolve and measure Delta tables at `s3://` URIs;
-the active files are measured from their footers only.
+the active files are measured from their footers only. `--cache-dir` reuses
+those footer measurements when the object URI, size, and S3 ETag are unchanged,
+so a later snapshot only reads new or replaced files.
 
 ## Documentation
 

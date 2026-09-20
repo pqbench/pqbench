@@ -7,27 +7,30 @@
 use crate::object_store;
 use crate::parquet_helpers::{read_footer_masses, Error, FileMass};
 
+use super::cache::FileMassCache;
+
 const PARQUET_FOOTER_SIZE: u64 = 8;
 
 /// Read an individual Parquet object's size and byte masses from a URI.
 ///
 /// Only the trailer and serialized footer metadata are fetched, never data
-/// pages or indexes. Backend configuration comes from the environment; use
-/// [`read_remote_with_options`] to pass explicit backend options.
+/// pages or indexes. A `HEAD` still runs so a replaced object misses; the
+/// footer `GET` is skipped when `cache` already has that size and ETag.
 ///
 /// # Errors
-/// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
-pub(super) async fn read_remote(uri: &str) -> Result<(u64, FileMass), Error> {
-    read_remote_with_options(uri, []).await
+/// Fails for unsupported URIs, unreadable objects, invalid Parquet footers,
+/// or a cache document that cannot be written.
+pub(super) async fn read_remote_cached(
+    uri: &str,
+    cache: Option<&FileMassCache>,
+) -> Result<(u64, FileMass), Error> {
+    read_remote_with_options(uri, [], cache).await
 }
 
-/// Read a Parquet object using backend-specific configuration options.
-///
-/// # Errors
-/// As [`read_remote`].
 async fn read_remote_with_options(
     uri: &str,
     options: impl IntoIterator<Item = (String, String)>,
+    cache: Option<&FileMassCache>,
 ) -> Result<(u64, FileMass), Error> {
     let options: Vec<(String, String)> = options.into_iter().collect();
     let reader = object_store::open(uri, &options).map_err(storage_error)?;
@@ -39,6 +42,11 @@ async fn read_remote_with_options(
         )));
     }
     let identity = stat.identity.as_deref();
+    if let Some(cache) = cache {
+        if let Some(mass) = cache.get(uri, size, identity)? {
+            return Ok((size, mass));
+        }
+    }
 
     let trailer = reader
         .read_range(size - PARQUET_FOOTER_SIZE..size, identity)
@@ -70,7 +78,11 @@ async fn read_remote_with_options(
         )));
     }
     footer.extend_from_slice(&trailer);
-    Ok((size, read_footer_masses(&footer)?))
+    let mass = read_footer_masses(&footer)?;
+    if let Some(cache) = cache {
+        cache.put(uri, size, identity, &mass)?;
+    }
+    Ok((size, mass))
 }
 
 fn storage_error(error: object_store::Error) -> Error {
@@ -79,7 +91,7 @@ fn storage_error(error: object_store::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::read_remote;
+    use super::read_remote_cached;
     use crate::parquet_helpers::{default_metadata_parser, MetadataParser};
 
     #[tokio::test]
@@ -90,7 +102,7 @@ mod tests {
         ));
         let expected = default_metadata_parser().read_masses(path).unwrap();
         let uri = url::Url::from_file_path(path).unwrap();
-        let (size, actual) = read_remote(uri.as_str()).await.unwrap();
+        let (size, actual) = read_remote_cached(uri.as_str(), None).await.unwrap();
         assert_eq!(size, std::fs::metadata(path).unwrap().len());
         assert_eq!(actual.num_rows, expected.num_rows);
         assert_eq!(actual.columns.len(), expected.columns.len());

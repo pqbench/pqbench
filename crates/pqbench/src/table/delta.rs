@@ -16,7 +16,9 @@ use futures::TryStreamExt;
 use serde::Serialize;
 use url::Url;
 
-use crate::bytemass::{self, aggregate, BytemassRequest, ColumnMassSummary, MassRow, MassSummary};
+use crate::bytemass::{
+    self, aggregate, BytemassRequest, ColumnMassSummary, FileMassCache, MassRow, MassSummary,
+};
 
 /// Errors resolving a local snapshot or measuring its active files.
 #[derive(Debug)]
@@ -102,10 +104,31 @@ pub struct DeltaRequest {
 /// paths, column mapping, deletion vectors, or unsupported Delta reader
 /// features. No partial report is returned on failure.
 pub async fn delta(request: &DeltaRequest) -> Result<TableReport, Error> {
+    analyze(request, None).await
+}
+
+/// Analyze a snapshot, reusing Parquet file masses when the object is unchanged.
+///
+/// The cache is the Parquet-layer store: a later snapshot only footer-reads
+/// files whose URI, size, or S3 ETag differ from a previous measurement.
+///
+/// # Errors
+/// As [`delta`]. Also fails if a cache document cannot be written.
+pub async fn delta_with_cache(
+    request: &DeltaRequest,
+    cache: &FileMassCache,
+) -> Result<TableReport, Error> {
+    analyze(request, Some(cache)).await
+}
+
+async fn analyze(
+    request: &DeltaRequest,
+    cache: Option<&FileMassCache>,
+) -> Result<TableReport, Error> {
     if request.table.contains("://") {
-        read_remote(&request.table, request.version).await
+        read_remote(&request.table, request.version, cache).await
     } else {
-        read_local(Path::new(&request.table), request.version).await
+        read_local(Path::new(&request.table), request.version, cache).await
     }
 }
 
@@ -117,10 +140,14 @@ pub async fn delta(request: &DeltaRequest) -> Result<TableReport, Error> {
 /// Fails for invalid snapshots, missing/changed active files, external data
 /// paths, column mapping, deletion vectors, or unsupported Delta reader features.
 /// No partial report is returned on failure.
-async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
+async fn read_local(
+    path: &Path,
+    version: Option<u64>,
+    cache: Option<&FileMassCache>,
+) -> Result<TableReport, Error> {
     let root = local_root(path)?;
     let table = load_local_table(&root, version).await?;
-    read_table(&table).await
+    read_table(&table, cache).await
 }
 
 /// Analyze the latest or requested version of a Delta table at a storage URI.
@@ -133,22 +160,29 @@ async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Er
 /// Fails for invalid snapshots, missing or changed active objects, external
 /// data paths, column mapping, deletion vectors, or unsupported Delta reader
 /// features. No partial report is returned on failure.
-async fn read_remote(uri: &str, version: Option<u64>) -> Result<TableReport, Error> {
+async fn read_remote(
+    uri: &str,
+    version: Option<u64>,
+    cache: Option<&FileMassCache>,
+) -> Result<TableReport, Error> {
     let url = Url::parse(uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
     if url.scheme() == "file" {
         let path = url
             .to_file_path()
             .map_err(|()| Error("invalid local table URI".into()))?;
-        return read_local(&path, version).await;
+        return read_local(&path, version, cache).await;
     }
     let table = load_table(url, version).await?;
-    read_table(&table).await
+    read_table(&table, cache).await
 }
 
-async fn read_table(table: &DeltaTable) -> Result<TableReport, Error> {
+async fn read_table(
+    table: &DeltaTable,
+    cache: Option<&FileMassCache>,
+) -> Result<TableReport, Error> {
     let snapshot = snapshot_info(table)?;
     let active = active_files(table).await?;
-    let (rows, file_bytes) = measure_active(&active).await?;
+    let (rows, file_bytes) = measure_active(&active, cache).await?;
     build_report(snapshot, file_bytes, rows)
 }
 
@@ -246,16 +280,21 @@ async fn active_files(table: &DeltaTable) -> Result<Vec<ActiveFile>, Error> {
 
 /// Measure the active files through `bytemass`, confirming each file's size
 /// still matches the transaction log.
-async fn measure_active(active: &[ActiveFile]) -> Result<(Vec<MassRow>, u64), Error> {
+async fn measure_active(
+    active: &[ActiveFile],
+    cache: Option<&FileMassCache>,
+) -> Result<(Vec<MassRow>, u64), Error> {
     if active.is_empty() {
         return Ok((vec![], 0));
     }
     let request = BytemassRequest {
         inputs: active.iter().map(|file| file.input.clone()).collect(),
     };
-    let rows = bytemass::bytemass(&request)
-        .await
-        .map_err(|e| Error(format!("cannot read active files: {e}")))?;
+    let rows = match cache {
+        Some(cache) => bytemass::bytemass_with_cache(&request, cache).await,
+        None => bytemass::bytemass(&request).await,
+    }
+    .map_err(|e| Error(format!("cannot read active files: {e}")))?;
     let file_bytes = verify_sizes(active, &rows)?;
     Ok((rows, file_bytes))
 }

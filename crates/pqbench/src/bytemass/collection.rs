@@ -10,6 +10,7 @@ use crate::parquet_helpers::{
 };
 
 use super::api::MassRow;
+use super::cache::FileMassCache;
 use super::remote;
 
 /// One column's byte mass summed across a collection of Parquet files.
@@ -60,12 +61,15 @@ impl MassSummary {
 
 /// Expand the inputs, measure each file's footer, and flatten the collection
 /// into one row per column chunk.
-pub(super) async fn measure_inputs(inputs: &[String]) -> Result<Vec<MassRow>, Error> {
+pub(super) async fn measure_inputs(
+    inputs: &[String],
+    cache: Option<&FileMassCache>,
+) -> Result<Vec<MassRow>, Error> {
     let paths = expand_inputs(inputs)?;
     let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
-        let (size, mass) = read_input(&input).await?;
+        let (size, mass) = read_input(&input, cache).await?;
         let num_rows = mass.num_rows;
         for column in mass.columns {
             rows.push(MassRow {
@@ -112,14 +116,22 @@ fn escape_literal_brackets(input: &str) -> String {
     input.replace('[', "[[]")
 }
 
-async fn read_input(input: &str) -> Result<(u64, FileMass), Error> {
+async fn read_input(input: &str, cache: Option<&FileMassCache>) -> Result<(u64, FileMass), Error> {
     if input.contains("://") {
-        return remote::read_remote(input).await;
+        return remote::read_remote_cached(input, cache).await;
     }
     let path = Path::new(input);
     let size = std::fs::metadata(path)
         .map_err(|e| Error(format!("cannot stat {input}: {e}")))?
         .len();
+    if let Some(cache) = cache {
+        if let Some(mass) = cache.get(input, size, None)? {
+            return Ok((size, mass));
+        }
+    }
     let mass = default_metadata_parser().read_masses(path)?;
+    if let Some(cache) = cache {
+        cache.put(input, size, None, &mass)?;
+    }
     Ok((size, mass))
 }

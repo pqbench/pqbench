@@ -15,6 +15,9 @@ pub(crate) struct BytemassArgs {
     /// emit a self-contained d3 treemap HTML (open in a browser) instead of text stats
     #[arg(long = "d3")]
     d3: bool,
+    /// reuse footer measurements when the object URI, size, and S3 ETag match
+    #[arg(long, value_name = "DIR")]
+    cache_dir: Option<std::path::PathBuf>,
 }
 
 /// Build the typed request, measure, and render the CLI's chosen format. The
@@ -26,7 +29,13 @@ pub(crate) fn run(args: &BytemassArgs) -> Result<(), CliError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let rows = runtime.block_on(bytemass::bytemass(&request))?;
+    let rows = match &args.cache_dir {
+        Some(directory) => {
+            let cache = bytemass::FileMassCache::open(directory)?;
+            runtime.block_on(bytemass::bytemass_with_cache(&request, &cache))?
+        }
+        None => runtime.block_on(bytemass::bytemass(&request))?,
+    };
     let output = if args.json {
         bytemass::render_json(&rows)?
     } else if args.d3 {

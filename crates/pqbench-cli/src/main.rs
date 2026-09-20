@@ -48,7 +48,10 @@ Examples:
     Bytemass(bytemass::BytemassArgs),
     /// analyze the active Parquet files in a local Delta snapshot
     #[cfg(feature = "delta")]
-    #[command(after_help = "Example:\n  pqbench delta ./table --json")]
+    #[command(after_help = r#"Examples:
+  pqbench delta ./table --json
+  pqbench delta s3://bucket/table --cache-dir ~/.cache/pqbench
+"#)]
     Delta(delta::DeltaArgs),
 }
 

@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::parquet_helpers::Error;
 
+use super::cache::FileMassCache;
 use super::collection;
 
 /// Arguments for the `bytemass` command.
@@ -48,8 +49,26 @@ pub struct MassRow {
 /// Fails when there are no inputs, a mask matches no files, an input cannot be
 /// read, or a byte total overflows.
 pub async fn bytemass(request: &BytemassRequest) -> Result<Vec<MassRow>, Error> {
+    measure(request, None).await
+}
+
+/// Measure Parquet footers, reusing cached masses when the object is unchanged.
+///
+/// # Errors
+/// As [`bytemass`]. Also fails if a cache document cannot be written.
+pub async fn bytemass_with_cache(
+    request: &BytemassRequest,
+    cache: &FileMassCache,
+) -> Result<Vec<MassRow>, Error> {
+    measure(request, Some(cache)).await
+}
+
+async fn measure(
+    request: &BytemassRequest,
+    cache: Option<&FileMassCache>,
+) -> Result<Vec<MassRow>, Error> {
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_inputs(&request.inputs).await
+    collection::measure_inputs(&request.inputs, cache).await
 }
