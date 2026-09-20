@@ -73,7 +73,7 @@ fn renders_the_report_as_composable_json() {
     let report = compression(&request(fixture("small_reddit_none.parquet"), true)).unwrap();
     let json: serde_json::Value = serde_json::from_str(&render_json(&report).unwrap()).unwrap();
 
-    assert_eq!(json["rows"][0]["codec"], "Zstd");
+    assert_eq!(json["rows"][0]["codec"], "zstd");
     assert!(json["columns"].is_array());
     assert!(!json["columns"].as_array().unwrap().is_empty());
     assert!(json["columns"][0]["column"].is_string());
@@ -92,16 +92,14 @@ fn empty_specs_sweep_every_wired_codec() {
 
 #[test]
 fn rejects_compressed_input_unknown_codecs_and_missing_files() {
-    let compressed = compression(&request(fixture("small_snappy.parquet"), false))
-        .err()
-        .unwrap();
+    let compressed = compression(&request(fixture("small_snappy.parquet"), false)).unwrap_err();
     assert!(compressed.to_string().contains("NONE"), "{compressed}");
 
     let unknown = CompressionRequest {
         codec_specs: vec!["nope".into()],
         ..request(fixture("small_reddit_none.parquet"), false)
     };
-    let error = compression(&unknown).err().unwrap().to_string();
+    let error = compression(&unknown).unwrap_err().to_string();
     assert!(error.contains("unknown codec"), "{error}");
 
     assert!(compression(&request(fixture("does-not-exist.parquet"), false)).is_err());

@@ -65,6 +65,7 @@ impl From<std::io::Error> for Error {
 
 /// The closed set of Parquet compression codecs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Codec {
     Snappy,
     Zstd,

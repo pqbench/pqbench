@@ -1,6 +1,6 @@
 //! The `lz` command: one typed request in, one report out.
 //!
-//! The CLI parses its arguments into an [`LzRequest`], awaits [`lz`], and
+//! The CLI parses its arguments into an [`LzRequest`], calls [`lz`], and
 //! renders the report with [`render_text`] or [`render_json`].
 
 use std::path::PathBuf;

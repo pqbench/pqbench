@@ -1,6 +1,6 @@
 //! The `compression` command: one typed request in, one report out.
 //!
-//! The CLI parses its arguments into a [`CompressionRequest`], awaits
+//! The CLI parses its arguments into a [`CompressionRequest`], calls
 //! [`compression`], and renders the report with [`render_text`] or
 //! [`render_json`].
 

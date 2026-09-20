@@ -37,6 +37,7 @@ pub(crate) fn resolve(
 /// Errors from a codec sweep: spec parsing, the codec/parquet layers, or
 /// rendering.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A `codec@level` spec could not be parsed.
     Spec(String),

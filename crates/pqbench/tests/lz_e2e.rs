@@ -52,10 +52,12 @@ fn renders_the_report_as_composable_json() {
     let report = lz(&request(fixture("small_reddit_none.parquet"))).unwrap();
     let json: serde_json::Value = serde_json::from_str(&render_json(&report).unwrap()).unwrap();
 
-    assert_eq!(json["rows"][0]["codec"], "Snappy");
+    assert_eq!(json["rows"][0]["codec"], "snappy");
     assert_eq!(json["rows"][0]["level"], 1);
     assert!(json["rows"][0]["compressed_bytes"].is_number());
     assert!(json["rows"][0]["ratio"].is_number());
+    // lz never reports per-column rows, so the field is omitted.
+    assert!(json.get("columns").is_none());
 }
 
 #[test]
@@ -92,7 +94,7 @@ fn rejects_unknown_codecs_and_missing_files() {
         codec_specs: vec!["nope".into()],
         ..request(fixture("small_reddit_none.parquet"))
     };
-    let error = lz(&unknown).err().unwrap().to_string();
+    let error = lz(&unknown).unwrap_err().to_string();
     assert!(error.contains("unknown codec"), "{error}");
 
     let missing = lz(&request(fixture("does-not-exist.parquet")));

@@ -11,7 +11,7 @@ use crate::codecs::Codec;
 use crate::stats::Estimate;
 
 /// One codec×level row in a [`Report`].
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReportRow {
     pub codec: Codec,
     pub level: u8,
@@ -46,7 +46,7 @@ impl ReportRow {
 }
 
 /// One column's per-codec×level breakdown (from `compression --per-column`).
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ColumnRow {
     pub codec: Codec,
     pub level: u8,
@@ -93,9 +93,11 @@ fn ratio(compressed_bytes: usize, uncompressed_bytes: usize) -> f64 {
 
 /// A sweep's result: file-level rows ordered by compress speed, plus the
 /// per-column breakdown (empty unless requested).
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Report {
     pub rows: Vec<ReportRow>,
+    /// Per-column breakdown; omitted from JSON when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<ColumnRow>,
 }
 
