@@ -96,7 +96,7 @@ fn page_from_parquet(page: ParquetPage) -> Page {
     Page {
         payload: page.buffer().to_vec(),
         num_values: page.num_values(),
-        is_dictionary: page.is_dictionary_page(),
+        dictionary: page.is_dictionary_page(),
     }
 }
 

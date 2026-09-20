@@ -12,7 +12,7 @@ pub(crate) struct CompressionArgs {
     bench: BenchArgs,
     /// report per-column breakdown
     #[arg(long = "per-column")]
-    is_per_column: bool,
+    per_column: bool,
 }
 
 pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
@@ -22,13 +22,13 @@ pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
         samples: args.bench.samples,
         warmup_iterations: args.bench.warmup_iterations,
         mode: args.bench.mode.into(),
-        per_column: args.is_per_column,
+        per_column: args.per_column,
     };
     let report = compression::compression(&request)?;
-    let output = if args.bench.is_json {
+    let output = if args.bench.json {
         compression::render_json(&report)?
     } else {
-        compression::render_text(&report, args.is_per_column)
+        compression::render_text(&report, args.per_column)
     };
     print!("{output}");
     Ok(())

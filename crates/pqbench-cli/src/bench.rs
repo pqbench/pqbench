@@ -22,7 +22,7 @@ pub(crate) struct BenchArgs {
     pub(crate) mode: BenchMode,
     /// emit the report as JSON (composable) instead of a text table
     #[arg(long = "json")]
-    pub(crate) is_json: bool,
+    pub(crate) json: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

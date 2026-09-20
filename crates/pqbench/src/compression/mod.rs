@@ -34,7 +34,7 @@ mod tests {
         let mk = |s: &str, n: usize| Page {
             payload: s.as_bytes().repeat(n),
             num_values: n as u32,
-            is_dictionary: false,
+            dictionary: false,
         };
         ParquetFile {
             chunks: vec![

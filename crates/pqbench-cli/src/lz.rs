@@ -12,7 +12,7 @@ pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
         mode: args.mode.into(),
     };
     let report = lz::lz(&request)?;
-    let output = if args.is_json {
+    let output = if args.json {
         lz::render_json(&report)?
     } else {
         lz::render_text(&report)
