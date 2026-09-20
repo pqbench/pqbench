@@ -83,6 +83,10 @@ fn parse_spec(spec: &str) -> Result<(Codec, u8), String> {
         ),
         None => (spec, None),
     };
-    let codec = Codec::from_name(name).ok_or_else(|| format!("unknown codec: {name}"))?;
+    let codec = parse_codec(name)?;
     Ok((codec, level.unwrap_or_else(|| default_level(codec))))
+}
+
+fn parse_codec(name: &str) -> Result<Codec, String> {
+    Codec::from_name(name).ok_or_else(|| format!("unknown codec: {name}"))
 }
