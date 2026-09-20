@@ -11,9 +11,7 @@ use futures::TryStreamExt;
 use serde::Serialize;
 use url::Url;
 
-use crate::bytemass::{
-    self, BytemassOutput, BytemassRequest, ColumnMassSummary, MassNode, MassSummary,
-};
+use crate::bytemass::{self, aggregate, BytemassRequest, ColumnMassSummary, MassRow, MassSummary};
 
 /// Errors resolving a local snapshot or measuring its active files.
 #[derive(Debug)]
@@ -62,14 +60,19 @@ pub struct TableReport {
     pub partition_columns: Vec<String>,
     /// Per-column physical storage totals.
     pub columns: Vec<ColumnReport>,
-    /// Compressed column bytes per physical table row, for JSON/HTML consumers.
-    tree: MassNode,
+    /// The measured table the report was folded from; kept for re-rendering.
+    #[serde(skip)]
+    rows: Vec<MassRow>,
 }
 
 impl TableReport {
     /// Total compressed column bytes per physical Parquet row.
     pub fn compressed_bytes_per_row(&self) -> f64 {
-        self.tree.value
+        if self.physical_rows == 0 {
+            0.0
+        } else {
+            self.compressed_column_bytes as f64 / self.physical_rows as f64
+        }
     }
 }
 
@@ -84,7 +87,7 @@ impl TableReport {
 pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
     let root = local_root(path)?;
     let table = load_local_table(&root, version).await?;
-    read_table(&table, &local_label(&root)).await
+    read_table(&table).await
 }
 
 /// Analyze the latest or requested version of a Delta table at a storage URI.
@@ -106,14 +109,14 @@ pub async fn read_remote(uri: &str, version: Option<u64>) -> Result<TableReport,
         return read_local(&path, version).await;
     }
     let table = load_table(url, version).await?;
-    read_table(&table, table.table_url().as_str()).await
+    read_table(&table).await
 }
 
-async fn read_table(table: &DeltaTable, label: &str) -> Result<TableReport, Error> {
+async fn read_table(table: &DeltaTable) -> Result<TableReport, Error> {
     let snapshot = snapshot_info(table)?;
     let active = active_files(table).await?;
-    let (summary, tree, file_bytes) = measure_active(&active).await?;
-    build_report(label, snapshot, file_bytes, summary, tree)
+    let (rows, file_bytes) = measure_active(&active).await?;
+    build_report(snapshot, file_bytes, rows)
 }
 
 struct SnapshotInfo {
@@ -210,54 +213,38 @@ async fn active_files(table: &DeltaTable) -> Result<Vec<ActiveFile>, Error> {
 
 /// Measure the active files through `bytemass`, confirming each file's size
 /// still matches the transaction log.
-async fn measure_active(active: &[ActiveFile]) -> Result<(MassSummary, MassNode, u64), Error> {
+async fn measure_active(active: &[ActiveFile]) -> Result<(Vec<MassRow>, u64), Error> {
     if active.is_empty() {
-        return Ok((MassSummary::default(), empty_tree(), 0));
+        return Ok((vec![], 0));
     }
     let request = BytemassRequest {
         inputs: active.iter().map(|file| file.input.clone()).collect(),
-        is_json: None,
-        is_d3: None,
     };
-    let output = bytemass::bytemass(&request)
+    let rows = bytemass::bytemass(&request)
         .await
         .map_err(|e| Error(format!("cannot read active files: {e}")))?;
-    let file_bytes = verify_sizes(active, &output)?;
-    Ok((output.summary, output.tree, file_bytes))
+    let file_bytes = verify_sizes(active, &rows)?;
+    Ok((rows, file_bytes))
 }
 
-fn verify_sizes(active: &[ActiveFile], output: &BytemassOutput) -> Result<u64, Error> {
-    let records = &output.files;
-    if records.len() != active.len() {
-        return Err(Error(format!(
-            "measured {} files for {} active files",
-            records.len(),
-            active.len()
-        )));
-    }
-    let mut file_bytes = 0;
-    for record in records {
+fn verify_sizes(active: &[ActiveFile], rows: &[MassRow]) -> Result<u64, Error> {
+    for row in rows {
         let file = active
             .iter()
-            .find(|file| file.input == record.path)
-            .ok_or_else(|| Error(format!("unexpected measured file: {}", record.path)))?;
-        if record.size != file.expected {
+            .find(|file| file.input == row.file)
+            .ok_or_else(|| Error(format!("unexpected measured file: {}", row.file)))?;
+        if row.size != file.expected {
             return Err(Error(format!(
                 "active file size differs from log: {} (expected {}, found {})",
-                file.relative, file.expected, record.size
+                file.relative, file.expected, row.size
             )));
         }
-        file_bytes = checked_sum(file_bytes, record.size)?;
+    }
+    let mut file_bytes = 0;
+    for file in active {
+        file_bytes = checked_sum(file_bytes, file.expected)?;
     }
     Ok(file_bytes)
-}
-
-fn empty_tree() -> MassNode {
-    MassNode {
-        label: "file".into(),
-        value: 0.0,
-        children: vec![],
-    }
 }
 
 /// Build a full object URI for one active file from the table URL.
@@ -298,16 +285,11 @@ fn local_input(root: &Path, relative: &str, expected: u64) -> Result<String, Err
 }
 
 fn build_report(
-    label: &str,
     snapshot: SnapshotInfo,
     file_bytes: u64,
-    summary: MassSummary,
-    mut tree: MassNode,
+    rows: Vec<MassRow>,
 ) -> Result<TableReport, Error> {
-    tree.label = format!(
-        "{label} @ version {} (physical bytes/row)",
-        snapshot.version
-    );
+    let summary = aggregate(&rows).map_err(|e| Error(e.to_string()))?;
     let MassSummary {
         file_count,
         num_rows,
@@ -330,7 +312,7 @@ fn build_report(
         uncompressed_column_bytes,
         partition_columns: snapshot.partition_columns,
         columns,
-        tree,
+        rows,
     })
 }
 
@@ -355,13 +337,6 @@ fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
         .ok_or_else(|| Error("storage totals exceed u64".into()))
 }
 
-fn local_label(root: &Path) -> String {
-    root.file_name()
-        .unwrap_or(root.as_os_str())
-        .to_string_lossy()
-        .into_owned()
-}
-
 fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {
     let path = Path::new(relative);
     if relative.contains("://") || !path.components().all(|c| matches!(c, Component::Normal(_))) {
@@ -381,17 +356,6 @@ fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {
     Ok(local)
 }
 
-/// Wrap one tree in the command output so its public `Display` renders it.
-fn rendered(tree: &MassNode, is_json: bool, is_d3: bool) -> BytemassOutput {
-    BytemassOutput {
-        files: vec![],
-        summary: MassSummary::default(),
-        tree: tree.clone(),
-        is_json,
-        is_d3,
-    }
-}
-
 /// Serialize the snapshot report as pretty-printed JSON.
 pub fn json(report: &TableReport) -> Result<String, Error> {
     serde_json::to_string_pretty(report).map_err(|e| Error(format!("cannot serialize report: {e}")))
@@ -400,14 +364,18 @@ pub fn json(report: &TableReport) -> Result<String, Error> {
 /// Render the physical byte-mass hierarchy as a self-contained HTML treemap.
 ///
 /// # Errors
-/// Returns an error if the hierarchy cannot be serialized.
+/// Returns an error if the hierarchy cannot be aggregated or serialized.
 pub fn render_html(report: &TableReport) -> Result<String, Error> {
-    Ok(rendered(&report.tree, false, true).to_string())
+    bytemass::render_html(&report.rows).map_err(|e| Error(e.to_string()))
 }
 
 /// Render the snapshot summary followed by the byte-mass table.
-pub fn render(report: &TableReport) -> String {
-    format!(
+///
+/// # Errors
+/// Returns an error if a byte total overflows while aggregating.
+pub fn render(report: &TableReport) -> Result<String, Error> {
+    let table = bytemass::render_text(&report.rows).map_err(|e| Error(e.to_string()))?;
+    Ok(format!(
         "delta version: {}\nactive files: {}\nphysical rows: {}\nactive parquet bytes: {}\ncompressed column bytes: {}\nuncompressed column bytes: {}\n{}",
         report.version,
         report.file_count,
@@ -415,6 +383,6 @@ pub fn render(report: &TableReport) -> String {
         report.file_bytes,
         report.compressed_column_bytes,
         report.uncompressed_column_bytes,
-        rendered(&report.tree, false, false),
-    )
+        table,
+    ))
 }

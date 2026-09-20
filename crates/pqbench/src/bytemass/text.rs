@@ -5,10 +5,22 @@
 //! composable data and the browser picture come from [`super::json`] and
 //! [`super::d3`].
 
+use crate::parquet_helpers::Error;
+
+use super::aggregate::tree;
 use super::analytics::MassNode;
+use super::api::MassRow;
 
 /// Render the per-column byte-mass stats as a text table.
-pub(super) fn render(tree: &MassNode) -> String {
+///
+/// # Errors
+/// Returns [`Error`] if a byte total overflows while aggregating.
+pub fn render_text(rows: &[MassRow]) -> Result<String, Error> {
+    Ok(render(&tree(rows)?))
+}
+
+/// Render a byte-mass tree as a text table.
+fn render(tree: &MassNode) -> String {
     let mut out = String::new();
     out.push_str(&format!("bytemass: {}\n", tree.label));
     out.push_str(&format!("{:<32} {:>12}\n", "column", "bytes/row"));
@@ -45,31 +57,26 @@ fn leaves(node: &MassNode, prefix: &str, out: &mut Vec<(String, f64)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytemass::analytics::MassNode;
+    use crate::bytemass::api::MassRow;
 
-    fn leaf(label: &str, value: f64) -> MassNode {
-        MassNode {
-            label: label.into(),
-            value,
-            children: vec![],
-        }
+    fn rows(columns: &[(&str, u64)]) -> Vec<MassRow> {
+        columns
+            .iter()
+            .map(|(column, bytes)| MassRow {
+                file: "sample.parquet".into(),
+                size: 0,
+                num_rows: 1,
+                column: (*column).into(),
+                compressed_bytes: *bytes,
+                uncompressed_bytes: *bytes,
+                codec: "SNAPPY".into(),
+            })
+            .collect()
     }
 
     #[test]
     fn render_lists_columns_sorted_by_bytes_per_row() {
-        let tree = MassNode {
-            label: "sample.parquet".into(),
-            value: 3.0,
-            children: vec![
-                leaf("text", 2.0),
-                MassNode {
-                    label: "a".into(),
-                    value: 1.0,
-                    children: vec![leaf("b", 1.0)],
-                },
-            ],
-        };
-        let text = render(&tree);
+        let text = render_text(&rows(&[("text", 2), ("a.b", 1)])).unwrap();
         assert!(text.contains("bytemass: sample.parquet"));
         assert!(text.contains("text"));
         assert!(text.contains("a.b"));

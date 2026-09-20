@@ -1,11 +1,12 @@
-//! Data layer: serialize the byte-mass tree as `{name, value, children}` JSON.
+//! Presentation: serialize the byte-mass tree as `{name, value, children}` JSON.
 //!
 //! This is the composable output of `bytemass`. The `d3` page builder consumes
 //! it, and a CLI `--json` flag lets any other tool consume it.
 
 use serde_json;
 
-use super::analytics::MassNode;
+use super::aggregate::tree;
+use super::api::MassRow;
 use crate::parquet_helpers::Error;
 
 impl From<serde_json::Error> for Error {
@@ -14,40 +15,37 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-/// Serialize a treemap node as `{name, value, children}` JSON (pretty).
+/// Serialize the byte-mass tree as `{name, value, children}` JSON (pretty).
 ///
 /// # Errors
-/// Returns [`Error`] only if serialization fails; for a [`MassNode`] this is
-/// impossible, since its fields are always serializable.
-pub(super) fn tree(node: &MassNode) -> Result<String, Error> {
-    Ok(serde_json::to_string_pretty(node)?)
+/// Returns [`Error`] if aggregation overflows or serialization fails.
+pub fn render_json(rows: &[MassRow]) -> Result<String, Error> {
+    Ok(serde_json::to_string_pretty(&tree(rows)?)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytemass::analytics::MassNode;
+    use crate::bytemass::api::MassRow;
 
-    fn leaf(label: &str, value: f64) -> MassNode {
-        MassNode {
-            label: label.into(),
-            value,
-            children: vec![],
-        }
+    fn rows(columns: &[(&str, u64)]) -> Vec<MassRow> {
+        columns
+            .iter()
+            .map(|(column, bytes)| MassRow {
+                file: "f".into(),
+                size: 0,
+                num_rows: 1,
+                column: (*column).into(),
+                compressed_bytes: *bytes,
+                uncompressed_bytes: *bytes,
+                codec: "SNAPPY".into(),
+            })
+            .collect()
     }
 
     #[test]
-    fn tree_is_valid_json_with_d3_shape() {
-        let root = MassNode {
-            label: "f".into(),
-            value: 2.0,
-            children: vec![MassNode {
-                label: "a".into(),
-                value: 2.0,
-                children: vec![leaf("b", 2.0)],
-            }],
-        };
-        let json = tree(&root).unwrap();
+    fn render_json_has_d3_shape() {
+        let json = render_json(&rows(&[("a.b", 2)])).unwrap();
         assert!(json.contains("\"name\": \"f\""));
         assert!(json.contains("\"children\": ["));
         assert!(json.contains("\"name\": \"b\""));

@@ -1,35 +1,36 @@
 //! Blackbox end-to-end tests of the public `bytemass` command.
 
-use pqbench::bytemass::{bytemass, BytemassRequest};
+use pqbench::bytemass::{
+    aggregate, bytemass, render_html, render_json, render_text, BytemassRequest,
+};
 
 fn fixture(name: &str) -> String {
     format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
 }
 
 fn request(inputs: Vec<String>) -> BytemassRequest {
-    BytemassRequest {
-        inputs,
-        ..BytemassRequest::default()
-    }
+    BytemassRequest { inputs }
 }
 
 #[tokio::test]
 async fn measures_a_local_file_from_its_footer() {
-    let output = bytemass(&request(vec![fixture("small_snappy.parquet")]))
+    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
         .await
         .unwrap();
 
-    let summary = &output.summary;
+    assert!(!rows.is_empty());
+    assert!(rows
+        .iter()
+        .all(|row| row.file == fixture("small_snappy.parquet")));
+
+    let summary = aggregate(&rows).unwrap();
     assert_eq!(summary.file_count, 1);
     assert!(summary.num_rows > 0);
     assert!(!summary.columns.is_empty());
+    assert_eq!(rows[0].num_rows, summary.num_rows);
+    assert!(rows[0].size > 0);
 
-    let files = &output.files;
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, fixture("small_snappy.parquet"));
-    assert_eq!(files[0].mass.num_rows, summary.num_rows);
-
-    let text = output.to_string();
+    let text = render_text(&rows).unwrap();
     assert!(text.contains("bytemass: small_snappy.parquet"));
     assert!(text.contains("bytes/row"));
     assert!(text
@@ -39,9 +40,10 @@ async fn measures_a_local_file_from_its_footer() {
 
 #[tokio::test]
 async fn emits_the_tree_as_composable_json() {
-    let mut request = request(vec![fixture("small_snappy.parquet")]);
-    request.is_json = Some(true);
-    let output = bytemass(&request).await.unwrap().to_string();
+    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
+        .await
+        .unwrap();
+    let output = render_json(&rows).unwrap();
 
     let tree: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(tree["name"], "small_snappy.parquet");
@@ -51,9 +53,10 @@ async fn emits_the_tree_as_composable_json() {
 
 #[tokio::test]
 async fn emits_a_self_contained_d3_page() {
-    let mut request = request(vec![fixture("small_snappy.parquet")]);
-    request.is_d3 = Some(true);
-    let page = bytemass(&request).await.unwrap().to_string();
+    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
+        .await
+        .unwrap();
+    let page = render_html(&rows).unwrap();
 
     assert!(page.starts_with("<!DOCTYPE html>"));
     assert!(page.contains("<title>small_snappy.parquet</title>"));
@@ -62,14 +65,13 @@ async fn emits_a_self_contained_d3_page() {
 }
 
 #[tokio::test]
-async fn expands_globs_into_one_labelled_collection() {
+async fn expands_globs_into_one_collection() {
     let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
-    let output = bytemass(&request(vec![mask])).await.unwrap();
+    let rows = bytemass(&request(vec![mask])).await.unwrap();
 
-    let summary = &output.summary;
+    let summary = aggregate(&rows).unwrap();
     assert!(summary.file_count > 1);
-    assert_eq!(output.files.len(), summary.file_count);
-    assert!(output.to_string().contains("parquet files"));
+    assert!(render_text(&rows).unwrap().contains("parquet files"));
 }
 
 #[tokio::test]
@@ -77,14 +79,14 @@ async fn treats_brackets_as_literal_path_characters() {
     let dir = tempfile::tempdir().unwrap();
     let literal = dir.path().join("archive[1].parquet");
     std::fs::copy(fixture("small_snappy.parquet"), &literal).unwrap();
-    let output = bytemass(&request(vec![literal.to_string_lossy().into_owned()]))
+    let rows = bytemass(&request(vec![literal.to_string_lossy().into_owned()]))
         .await
         .unwrap();
-    assert_eq!(output.files.len(), 1);
+    assert!(!rows.is_empty());
 }
 
 #[tokio::test]
-async fn rejects_empty_inputs_empty_masks_and_conflicting_formats() {
+async fn rejects_empty_inputs_and_unmatched_masks() {
     assert!(bytemass(&request(vec![])).await.is_err());
 
     let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
@@ -93,11 +95,6 @@ async fn rejects_empty_inputs_empty_masks_and_conflicting_formats() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("mask matched no files"), "{error}");
-
-    let mut conflict = request(vec![fixture("small_snappy.parquet")]);
-    conflict.is_json = Some(true);
-    conflict.is_d3 = Some(true);
-    assert!(bytemass(&conflict).await.is_err());
 }
 
 #[cfg(not(feature = "aws"))]

@@ -8,7 +8,7 @@
 //!
 //! Ignored by default because it reads a public S3 object; run with `make e2e`.
 
-use pqbench::bytemass::{bytemass, BytemassRequest};
+use pqbench::bytemass::{aggregate, bytemass, render_text, BytemassRequest};
 
 const REDSET_SAMPLE_0_001: &str = "s3://redshift-downloads/redset/serverless/sample_0.001.parquet";
 
@@ -18,20 +18,17 @@ async fn measures_the_redset_sample_anonymously() {
     std::env::set_var("AWS_SKIP_SIGNATURE", "true");
     let request = BytemassRequest {
         inputs: vec![REDSET_SAMPLE_0_001.to_string()],
-        ..BytemassRequest::default()
     };
-    let output = bytemass(&request).await.unwrap();
+    let rows = bytemass(&request).await.unwrap();
 
-    let summary = &output.summary;
+    let summary = aggregate(&rows).unwrap();
     assert_eq!(summary.file_count, 1);
     assert!(summary.num_rows > 0);
     assert!(!summary.columns.is_empty());
 
-    let files = &output.files;
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, REDSET_SAMPLE_0_001);
-    assert_eq!(files[0].mass.num_rows, summary.num_rows);
-    assert_eq!(files[0].mass.columns.len(), summary.columns.len());
+    assert!(rows.iter().all(|row| row.file == REDSET_SAMPLE_0_001));
+    assert_eq!(rows[0].num_rows, summary.num_rows);
+    assert_eq!(rows.len(), summary.columns.len());
 
-    print!("{output}");
+    print!("{}", render_text(&rows).unwrap());
 }

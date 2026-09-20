@@ -7,18 +7,18 @@
 //! selection) from a CDN — not the whole d3 bundle — and embeds the tree as
 //! JSON, so it needs no installs, no server, and no other setup: just open it.
 
-use super::analytics::MassNode;
+use super::aggregate::label;
+use super::api::MassRow;
 use super::json;
 use crate::parquet_helpers::Error;
 
 /// The d3 treemap page, as a self-contained HTML string.
 ///
 /// # Errors
-/// Returns [`Error`] only if [`super::json::tree`] fails, which cannot happen
-/// for a [`MassNode`].
-pub(super) fn render_html(tree: &MassNode) -> Result<String, Error> {
-    let title = html_escape(&tree.label);
-    let data = json::tree(tree)?.replace('<', "\\u003c");
+/// Returns [`Error`] if aggregation overflows or the tree cannot be serialized.
+pub fn render_html(rows: &[MassRow]) -> Result<String, Error> {
+    let title = html_escape(&label(rows));
+    let data = json::render_json(rows)?.replace('<', "\\u003c");
     let mut out = head(&title);
     out.push_str(&treemap_script(&data));
     out.push_str("</body>\n</html>\n");
@@ -97,24 +97,26 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytemass::analytics::MassNode;
+    use crate::bytemass::api::MassRow;
 
-    fn leaf(label: &str, value: f64) -> MassNode {
-        MassNode {
-            label: label.into(),
-            value,
-            children: vec![],
-        }
+    fn rows(columns: &[(&str, u64)]) -> Vec<MassRow> {
+        columns
+            .iter()
+            .map(|(column, bytes)| MassRow {
+                file: "sample.parquet".into(),
+                size: 0,
+                num_rows: 1,
+                column: (*column).into(),
+                compressed_bytes: *bytes,
+                uncompressed_bytes: *bytes,
+                codec: "SNAPPY".into(),
+            })
+            .collect()
     }
 
     #[test]
     fn render_html_is_self_contained() {
-        let tree = MassNode {
-            label: "sample.parquet".into(),
-            value: 3.0,
-            children: vec![leaf("text", 2.0), leaf("nums", 1.0)],
-        };
-        let html = render_html(&tree).unwrap();
+        let html = render_html(&rows(&[("text", 2), ("nums", 1)])).unwrap();
         assert!(html.starts_with("<!DOCTYPE html>"));
         assert!(html.contains("type=\"module\""));
         assert!(html.contains("d3-hierarchy@3"));

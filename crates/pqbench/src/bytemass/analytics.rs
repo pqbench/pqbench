@@ -10,7 +10,7 @@ use super::raw::FileRaw;
 /// One treemap node: a path segment (or the file root). Leaves have no
 /// children and their `value` is the on-disk bytes/row of that column.
 #[derive(Debug, Clone, Serialize)]
-pub struct MassNode {
+pub(super) struct MassNode {
     /// Label drawn on the cell: a path segment, column name, or the file root.
     #[serde(rename = "name")]
     pub label: String,

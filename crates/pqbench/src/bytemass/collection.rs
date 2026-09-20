@@ -1,6 +1,6 @@
 //! Aggregate byte-mass metadata across multiple physical Parquet files.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -9,7 +9,7 @@ use crate::parquet_helpers::{
     default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
 };
 
-use super::api::FileMassRecord;
+use super::api::MassRow;
 use super::remote;
 
 /// One column's byte mass summed across a collection of Parquet files.
@@ -58,100 +58,28 @@ impl MassSummary {
     }
 }
 
-/// Incrementally aggregate Parquet metadata from any file source.
-///
-/// Local paths, Delta snapshots, and future object-store adapters can all feed
-/// this type after obtaining one [`FileMass`] at a time.
-#[derive(Debug, Default)]
-struct MassAccumulator {
-    file_count: usize,
-    num_rows: u64,
-    columns: BTreeMap<String, ColumnMassSummary>,
-}
-
-impl MassAccumulator {
-    /// Create an empty byte-mass accumulator.
-    #[must_use]
-    fn new() -> Self {
-        Self::default()
-    }
-
-    /// Add one physical Parquet file's footer metadata.
-    ///
-    /// # Errors
-    /// Returns [`Error`] if a row or byte total exceeds its integer type.
-    fn add(&mut self, mass: FileMass) -> Result<(), Error> {
-        self.num_rows = checked_sum(self.num_rows, mass.num_rows)?;
-        self.file_count = self
-            .file_count
-            .checked_add(1)
-            .ok_or_else(|| Error("file count exceeds usize".into()))?;
-        for column in mass.columns {
-            let total =
-                self.columns
-                    .entry(column.path.clone())
-                    .or_insert_with(|| ColumnMassSummary {
-                        path: column.path,
-                        compressed_bytes: 0,
-                        uncompressed_bytes: 0,
-                        codecs: BTreeSet::new(),
-                    });
-            total.compressed_bytes = checked_sum(total.compressed_bytes, column.bytes)?;
-            total.uncompressed_bytes =
-                checked_sum(total.uncompressed_bytes, column.uncompressed_bytes)?;
-            total.codecs.insert(column.codec);
-        }
-        Ok(())
-    }
-
-    /// Finish aggregation and return the accumulated summary.
-    #[must_use]
-    fn finish(self) -> MassSummary {
-        MassSummary {
-            file_count: self.file_count,
-            num_rows: self.num_rows,
-            columns: self.columns.into_values().collect(),
-        }
-    }
-}
-
-fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
-    left.checked_add(right)
-        .ok_or_else(|| Error("metadata totals exceed u64".into()))
-}
-
-/// A measured input collection: per-file records, the aggregate summary, and
-/// the label the analytics tree is rooted at.
-pub(super) struct MeasuredInputs {
-    /// Per-input measured masses, in input order.
-    pub files: Vec<FileMassRecord>,
-    /// Per-column totals across all inputs.
-    pub summary: MassSummary,
-    /// File name for one input, or `N parquet files` for a collection.
-    pub label: String,
-}
-
-/// Expand the inputs, measure each file's footer, and aggregate the collection.
-pub(super) async fn measure_inputs(inputs: &[String]) -> Result<MeasuredInputs, Error> {
+/// Expand the inputs, measure each file's footer, and flatten the collection
+/// into one row per column chunk.
+pub(super) async fn measure_inputs(inputs: &[String]) -> Result<Vec<MassRow>, Error> {
     let paths = expand_inputs(inputs)?;
-    let label = collection_label(&paths);
-    let mut accumulator = MassAccumulator::new();
-    let mut files = Vec::with_capacity(paths.len());
+    let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
         let (size, mass) = read_input(&input).await?;
-        accumulator.add(mass.clone())?;
-        files.push(FileMassRecord {
-            path: input,
-            size,
-            mass,
-        });
+        let num_rows = mass.num_rows;
+        for column in mass.columns {
+            rows.push(MassRow {
+                file: input.clone(),
+                size,
+                num_rows,
+                column: column.path,
+                compressed_bytes: column.bytes,
+                uncompressed_bytes: column.uncompressed_bytes,
+                codec: column.codec,
+            });
+        }
     }
-    Ok(MeasuredInputs {
-        files,
-        summary: accumulator.finish(),
-        label,
-    })
+    Ok(rows)
 }
 
 fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, Error> {
@@ -184,16 +112,6 @@ fn escape_literal_brackets(input: &str) -> String {
     input.replace('[', "[[]")
 }
 
-fn collection_label(paths: &[PathBuf]) -> String {
-    if let [path] = paths {
-        return path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".into());
-    }
-    format!("{} parquet files", paths.len())
-}
-
 async fn read_input(input: &str) -> Result<(u64, FileMass), Error> {
     if input.contains("://") {
         return remote::read_remote(input).await;
@@ -204,52 +122,4 @@ async fn read_input(input: &str) -> Result<(u64, FileMass), Error> {
         .len();
     let mass = default_metadata_parser().read_masses(path)?;
     Ok((size, mass))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accumulator_combines_files_and_column_codecs() {
-        let file = || FileMass {
-            num_rows: 3,
-            columns: vec![ColumnMass {
-                path: "value".into(),
-                bytes: 12,
-                uncompressed_bytes: 24,
-                codec: "SNAPPY".into(),
-            }],
-        };
-        let mut accumulator = MassAccumulator::new();
-        accumulator.add(file()).unwrap();
-        accumulator.add(file()).unwrap();
-        let summary = accumulator.finish();
-        assert_eq!(summary.file_count, 2);
-        assert_eq!(summary.num_rows, 6);
-        assert_eq!(summary.columns[0].compressed_bytes, 24);
-        assert_eq!(summary.columns[0].uncompressed_bytes, 48);
-        assert_eq!(summary.columns[0].codecs, BTreeSet::from(["SNAPPY".into()]));
-        assert_eq!(summary.file_mass().columns[0].codec, "SNAPPY");
-    }
-
-    #[test]
-    fn file_mass_preserves_multiple_codecs() {
-        let mut accumulator = MassAccumulator::new();
-        for codec in ["ZSTD", "SNAPPY"] {
-            accumulator
-                .add(FileMass {
-                    num_rows: 1,
-                    columns: vec![ColumnMass {
-                        path: "value".into(),
-                        bytes: 1,
-                        uncompressed_bytes: 2,
-                        codec: codec.into(),
-                    }],
-                })
-                .unwrap();
-        }
-        let mass = accumulator.finish().file_mass();
-        assert_eq!(mass.columns[0].codec, "SNAPPY,ZSTD");
-    }
 }

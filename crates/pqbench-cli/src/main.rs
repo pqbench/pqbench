@@ -134,18 +134,24 @@ fn run_compression(args: &BenchArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Build the typed request, call the library's single entry point, and print
-/// its selected rendering. This is `bytemass` wired end-to-end.
+/// Build the typed request, measure, and render the CLI's chosen format. The
+/// CLI owns the format decision; the library just returns the table.
 fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
     let request = bytemass::BytemassRequest {
         inputs: args.inputs.clone(),
-        is_json: Some(args.json),
-        is_d3: Some(args.d3),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    print!("{}", runtime.block_on(bytemass::bytemass(&request))?);
+    let rows = runtime.block_on(bytemass::bytemass(&request))?;
+    let output = if args.json {
+        bytemass::render_json(&rows)?
+    } else if args.d3 {
+        bytemass::render_html(&rows)?
+    } else {
+        bytemass::render_text(&rows)?
+    };
+    print!("{output}");
     Ok(())
 }
 
