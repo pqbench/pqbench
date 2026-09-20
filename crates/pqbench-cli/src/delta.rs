@@ -18,7 +18,7 @@ pub(crate) struct Args {
     d3: bool,
 }
 
-pub(crate) fn run(args: &Args) -> Result<(), super::CliError> {
+pub(crate) fn run(args: &Args) -> Result<(), crate::CliError> {
     let runtime = tokio::runtime::Runtime::new()?;
     let report = runtime.block_on(pqbench::table::delta::read_local(&args.path, args.version))?;
     let output = if args.json {
