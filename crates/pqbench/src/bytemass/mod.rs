@@ -1,6 +1,10 @@
 //! `bytemass`: the per-column byte masses of a parquet file.
 //!
-//! Split by layer like `compression`: `raw` (`read`) carries the per-chunk
+//! The command is one function: [`bytemass`] takes a [`BytemassRequest`] and
+//! returns a typed [`BytemassOutput`], whose `Display` selects the text stats,
+//! the composable JSON tree, or the d3 treemap page.
+//!
+//! The layers behind it are private: `raw` (`read`) carries the per-chunk
 //! on-disk byte masses; `analytics` (`aggregate`) sums chunks across row groups
 //! into a tree keyed on on-disk bytes per row, nested by column path; `json`
 //! (`tree`) serializes that tree as composable `{name, value, children}` JSON;
@@ -9,18 +13,27 @@
 
 mod analytics;
 mod collection;
+mod command;
 mod d3;
 mod json;
 mod raw;
+#[cfg(any(feature = "aws", feature = "delta"))]
 mod remote;
 mod text;
 
-pub use analytics::{aggregate, MassNode};
-pub use collection::{
-    summarize_files, summarize_inputs, ColumnMassSummary, MassAccumulator, MassSummary,
-};
-pub use d3::render_html;
-pub use json::tree;
-pub use raw::{read, FileRaw, RawColumn};
-pub use remote::{read_remote, read_remote_with_options};
-pub use text::render;
+pub use analytics::MassNode;
+pub use collection::{ColumnMassSummary, MassSummary};
+pub use command::{bytemass, BytemassOutput, BytemassRequest, FileMassRecord};
+
+#[cfg(feature = "delta")]
+pub(crate) use analytics::aggregate;
+#[cfg(feature = "delta")]
+pub(crate) use collection::MassAccumulator;
+#[cfg(feature = "delta")]
+pub(crate) use d3::render_html;
+#[cfg(feature = "delta")]
+pub(crate) use raw::read;
+#[cfg(feature = "delta")]
+pub(crate) use remote::read_remote;
+#[cfg(feature = "delta")]
+pub(crate) use text::render;

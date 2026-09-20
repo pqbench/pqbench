@@ -1,14 +1,13 @@
 //! Aggregate byte-mass metadata across multiple physical Parquet files.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
-use crate::parquet_helpers::{
-    default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
-};
+use serde::Serialize;
+
+use crate::parquet_helpers::{ColumnMass, Error, FileMass};
 
 /// One column's byte mass summed across a collection of Parquet files.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct ColumnMassSummary {
     /// Column path in schema form, e.g. `content` or `a.b`.
@@ -22,7 +21,7 @@ pub struct ColumnMassSummary {
 }
 
 /// Byte masses summed across a collection of Parquet files.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[non_exhaustive]
 pub struct MassSummary {
     /// Number of physical Parquet files included in the summary.
@@ -110,53 +109,6 @@ impl MassAccumulator {
     }
 }
 
-/// Read and aggregate footer metadata from local Parquet paths.
-///
-/// Storage adapters that do not expose local paths can feed [`MassAccumulator`]
-/// directly instead.
-///
-/// # Errors
-/// Returns [`Error`] when a file cannot be read or a total overflows.
-pub fn summarize_files<I, P>(paths: I) -> Result<MassSummary, Error>
-where
-    I: IntoIterator<Item = P>,
-    P: AsRef<Path>,
-{
-    let parser = default_metadata_parser();
-    let mut accumulator = MassAccumulator::new();
-    for path in paths {
-        accumulator.add(parser.read_masses(path.as_ref())?)?;
-    }
-    Ok(accumulator.finish())
-}
-
-/// Read and aggregate footer metadata from local paths and/or storage URIs.
-///
-/// Inputs containing a URI scheme (`s3://`, `file://`, …) are read through the
-/// remote object reader; everything else is a local path. Input expansion
-/// (globbing) is a shell/CLI concern and is not performed here.
-///
-/// # Errors
-/// Returns [`Error`] when an input cannot be read or a total overflows.
-pub async fn summarize_inputs<I, S>(inputs: I) -> Result<MassSummary, Error>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let parser = default_metadata_parser();
-    let mut accumulator = MassAccumulator::new();
-    for input in inputs {
-        let input = input.as_ref();
-        let mass = if input.contains("://") {
-            super::remote::read_remote(input).await?.1
-        } else {
-            parser.read_masses(Path::new(input))?
-        };
-        accumulator.add(mass)?;
-    }
-    Ok(accumulator.finish())
-}
-
 fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
     left.checked_add(right)
         .ok_or_else(|| Error("metadata totals exceed u64".into()))
@@ -207,17 +159,5 @@ mod tests {
         }
         let mass = accumulator.finish().file_mass();
         assert_eq!(mass.columns[0].codec, "SNAPPY,ZSTD");
-    }
-
-    #[test]
-    fn summarize_files_accepts_multiple_paths() {
-        let path = Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_snappy.parquet"
-        ));
-        let summary = summarize_files([path, path]).unwrap();
-        assert_eq!(summary.file_count, 2);
-        assert!(summary.num_rows > 0);
-        assert!(!summary.columns.is_empty());
     }
 }

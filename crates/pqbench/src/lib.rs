@@ -5,6 +5,7 @@ pub mod bytemass;
 pub mod codecs;
 pub mod compression;
 pub mod lz;
+#[cfg(any(feature = "aws", feature = "delta"))]
 mod object_store;
 pub mod parquet_helpers;
 mod parquet_impl;
