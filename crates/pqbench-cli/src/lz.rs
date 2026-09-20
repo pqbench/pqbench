@@ -15,7 +15,7 @@ pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
     let output = if args.json {
         lz::render_json(&report)?
     } else {
-        lz::render_text(&report)
+        lz::render_text(&report)?
     };
     print!("{output}");
     Ok(())

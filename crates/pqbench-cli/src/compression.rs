@@ -28,7 +28,7 @@ pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
     let output = if args.bench.json {
         compression::render_json(&report)?
     } else {
-        compression::render_text(&report, args.per_column)
+        compression::render_text(&report, args.per_column)?
     };
     print!("{output}");
     Ok(())

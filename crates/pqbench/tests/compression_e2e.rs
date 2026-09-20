@@ -39,7 +39,7 @@ fn sweeps_encoded_pages_and_renders_a_text_table() {
     assert!(row.ratio > 0.0 && row.ratio < 1.0);
     assert!(report.columns.is_empty());
 
-    let text = render_text(&report, false);
+    let text = render_text(&report, false).unwrap();
     assert!(text.contains("zstd"));
     assert!(!text.contains("-- per-column"));
 }
@@ -60,7 +60,7 @@ fn per_column_adds_one_row_per_column_chunk() {
         .sum();
     assert_eq!(chunk_bytes, report.rows[0].uncompressed_bytes);
 
-    let text = render_text(&report, true);
+    let text = render_text(&report, true).unwrap();
     assert!(text.contains("-- per-column"));
     assert!(text.contains("column"));
     for column in &report.columns {

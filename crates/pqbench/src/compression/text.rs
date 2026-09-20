@@ -2,12 +2,13 @@
 
 use std::fmt::Write;
 
+use crate::bench::Error;
 use crate::report;
 use crate::text;
 
 /// Render a report's file-level rows, plus a per-column section when
 /// `per_column` is set.
-pub fn render_text(report: &report::Report, per_column: bool) -> String {
+pub fn render_text(report: &report::Report, per_column: bool) -> Result<String, Error> {
     let mut out = String::new();
     text::render_rows(&mut out, report);
     if per_column {
@@ -46,5 +47,5 @@ pub fn render_text(report: &report::Report, per_column: bool) -> String {
             }
         }
     }
-    out
+    Ok(out)
 }

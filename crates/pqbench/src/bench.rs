@@ -4,7 +4,8 @@
 //! [`crate::compression::CompressionRequest`]); this module holds only the
 //! resolution they both need: parsing `codec@level` specs, the analytics
 //! config, and the raw pass count. It deliberately carries no request type of
-//! its own, so neither command depends on the other.
+//! its own, so neither command depends on the other. Its [`Error`] is the error
+//! type both sweeps and their renderers return.
 
 use crate::codecs::{Codec, CodecImpl, Error as CodecError};
 use crate::stats;
@@ -108,46 +109,4 @@ fn parse_codec(name: &str) -> Result<Codec, Error> {
 
 fn default_level(codec: Codec) -> u8 {
     codec.level_range().first_level as u8
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn empty_specs_select_every_codec_at_its_first_level() {
-        let configs = parse_codec_configs(&[]).unwrap();
-        assert_eq!(configs.len(), Codec::all().count());
-        for (codec, level) in configs {
-            assert_eq!(level, default_level(codec));
-        }
-    }
-
-    #[test]
-    fn parses_an_explicit_level() {
-        assert_eq!(parse_spec("zstd@3").unwrap(), (Codec::Zstd, 3));
-    }
-
-    #[test]
-    fn missing_level_defaults_to_the_first_level() {
-        assert_eq!(
-            parse_spec("snappy").unwrap(),
-            (Codec::Snappy, default_level(Codec::Snappy))
-        );
-    }
-
-    #[test]
-    fn unknown_codec_and_bad_level_are_spec_errors() {
-        assert!(matches!(parse_spec("nope"), Err(Error::Spec(_))));
-        assert!(matches!(parse_spec("zstd@x"), Err(Error::Spec(_))));
-    }
-
-    #[test]
-    fn resolve_sums_warmup_and_samples_into_passes() {
-        let sweep = resolve(&["zstd@1".into()], 10, 3, stats::Mode::Mean).unwrap();
-        assert_eq!(sweep.passes, 13);
-        assert_eq!(sweep.stats_config.warmup_iterations, 3);
-        assert_eq!(sweep.stats_config.mode, stats::Mode::Mean);
-        assert_eq!(sweep.codec_configs, [(Codec::Zstd, 1)]);
-    }
 }

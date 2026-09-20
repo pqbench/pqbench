@@ -45,7 +45,7 @@ mod tests {
 
         assert_eq!(report.rows.len(), 1);
         assert_eq!(report.rows[0].codec, Codec::Zstd);
-        assert!(render_text(&report).contains("zstd"));
+        assert!(render_text(&report).unwrap().contains("zstd"));
 
         let json: serde_json::Value = serde_json::from_str(&render_json(&report).unwrap()).unwrap();
         assert_eq!(json["rows"][0]["level"], 1);

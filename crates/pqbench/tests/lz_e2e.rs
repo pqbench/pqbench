@@ -1,7 +1,8 @@
 //! Blackbox end-to-end tests of the public `lz` command.
 //!
 //! `small_reddit_none.parquet` is a 3000-row NONE-compressed subset of the
-//! MIT-licensed reddit_dataset_90 (goldentraversy07/reddit_dataset_90).
+//! MIT-licensed reddit_dataset_90 (goldentraversy07/reddit_dataset_90);
+//! `small_snappy.parquet` is the same shape, compressed.
 
 use std::path::PathBuf;
 
@@ -41,7 +42,7 @@ fn sweeps_raw_file_bytes_and_renders_a_text_table() {
     assert!(row.compressed_bytes < row.uncompressed_bytes);
     assert!(row.ratio > 0.0 && row.ratio < 1.0);
 
-    let text = render_text(&report);
+    let text = render_text(&report).unwrap();
     assert!(text.contains("codec"));
     assert!(text.contains("ratio%"));
     assert!(text.contains("snappy"));
