@@ -22,12 +22,12 @@ async fn measures_the_redset_sample_anonymously() {
     };
     let output = bytemass(&request).await.unwrap();
 
-    let summary = output.summary.as_ref().unwrap();
+    let summary = &output.summary;
     assert_eq!(summary.file_count, 1);
     assert!(summary.num_rows > 0);
     assert!(!summary.columns.is_empty());
 
-    let files = output.files.as_ref().unwrap();
+    let files = &output.files;
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, REDSET_SAMPLE_0_001);
     assert_eq!(files[0].mass.num_rows, summary.num_rows);

@@ -38,35 +38,30 @@ pub struct FileMassRecord {
     pub mass: FileMass,
 }
 
-/// The command's result: typed payloads plus the output options.
-#[derive(Debug, Clone, Serialize)]
+/// The command's typed result.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct BytemassOutput {
     /// Per-input measured masses, in input order.
-    pub files: Option<Vec<FileMassRecord>>,
+    pub files: Vec<FileMassRecord>,
     /// Per-column totals across all inputs.
-    pub summary: Option<MassSummary>,
+    pub summary: MassSummary,
     /// Byte-mass tree rooted at the input collection's label.
-    pub tree: Option<MassNode>,
-    /// Render the tree as JSON instead of text.
-    #[serde(skip)]
-    pub is_json: Option<bool>,
+    pub tree: MassNode,
+    /// Render the tree as composable JSON instead of text.
+    pub is_json: bool,
     /// Render the tree as a self-contained d3 treemap page instead of text.
-    #[serde(skip)]
-    pub is_d3: Option<bool>,
+    pub is_d3: bool,
 }
 
 impl fmt::Display for BytemassOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Some(tree) = &self.tree else {
-            return Ok(());
-        };
-        if self.is_json == Some(true) {
-            f.write_str(&json::tree(tree).map_err(|_| fmt::Error)?)
-        } else if self.is_d3 == Some(true) {
-            f.write_str(&d3::render_html(tree).map_err(|_| fmt::Error)?)
+        if self.is_json {
+            f.write_str(&json::tree(&self.tree).map_err(|_| fmt::Error)?)
+        } else if self.is_d3 {
+            f.write_str(&d3::render_html(&self.tree).map_err(|_| fmt::Error)?)
         } else {
-            f.write_str(&text::render(tree))
+            f.write_str(&text::render(&self.tree))
         }
     }
 }
@@ -94,10 +89,10 @@ pub async fn bytemass(request: &BytemassRequest) -> Result<BytemassOutput, Error
     let mut tree = analytics::aggregate(&raw::read(&measured.summary.file_mass()));
     tree.label = measured.label;
     Ok(BytemassOutput {
-        files: Some(measured.files),
-        summary: Some(measured.summary),
-        tree: Some(tree),
-        is_json: request.is_json,
-        is_d3: request.is_d3,
+        files: measured.files,
+        summary: measured.summary,
+        tree,
+        is_json: request.is_json == Some(true),
+        is_d3: request.is_d3 == Some(true),
     })
 }

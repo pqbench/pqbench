@@ -223,20 +223,11 @@ async fn measure_active(active: &[ActiveFile]) -> Result<(MassSummary, MassNode,
         .await
         .map_err(|e| Error(format!("cannot read active files: {e}")))?;
     let file_bytes = verify_sizes(active, &output)?;
-    let summary = output
-        .summary
-        .ok_or_else(|| Error("measurement returned no summary".into()))?;
-    let tree = output
-        .tree
-        .ok_or_else(|| Error("measurement returned no tree".into()))?;
-    Ok((summary, tree, file_bytes))
+    Ok((output.summary, output.tree, file_bytes))
 }
 
 fn verify_sizes(active: &[ActiveFile], output: &BytemassOutput) -> Result<u64, Error> {
-    let records = output
-        .files
-        .as_deref()
-        .ok_or_else(|| Error("measurement returned no files".into()))?;
+    let records = &output.files;
     if records.len() != active.len() {
         return Err(Error(format!(
             "measured {} files for {} active files",
@@ -393,11 +384,11 @@ fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {
 /// Wrap one tree in the command output so its public `Display` renders it.
 fn rendered(tree: &MassNode, is_json: bool, is_d3: bool) -> BytemassOutput {
     BytemassOutput {
-        files: None,
-        summary: None,
-        tree: Some(tree.clone()),
-        is_json: Some(is_json),
-        is_d3: Some(is_d3),
+        files: vec![],
+        summary: MassSummary::default(),
+        tree: tree.clone(),
+        is_json,
+        is_d3,
     }
 }
 

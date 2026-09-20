@@ -19,12 +19,12 @@ async fn measures_a_local_file_from_its_footer() {
         .await
         .unwrap();
 
-    let summary = output.summary.as_ref().unwrap();
+    let summary = &output.summary;
     assert_eq!(summary.file_count, 1);
     assert!(summary.num_rows > 0);
     assert!(!summary.columns.is_empty());
 
-    let files = output.files.as_ref().unwrap();
+    let files = &output.files;
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, fixture("small_snappy.parquet"));
     assert_eq!(files[0].mass.num_rows, summary.num_rows);
@@ -66,9 +66,9 @@ async fn expands_globs_into_one_labelled_collection() {
     let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
     let output = bytemass(&request(vec![mask])).await.unwrap();
 
-    let summary = output.summary.as_ref().unwrap();
+    let summary = &output.summary;
     assert!(summary.file_count > 1);
-    assert_eq!(output.files.as_ref().unwrap().len(), summary.file_count);
+    assert_eq!(output.files.len(), summary.file_count);
     assert!(output.to_string().contains("parquet files"));
 }
 
@@ -80,7 +80,7 @@ async fn treats_brackets_as_literal_path_characters() {
     let output = bytemass(&request(vec![literal.to_string_lossy().into_owned()]))
         .await
         .unwrap();
-    assert_eq!(output.files.as_ref().unwrap().len(), 1);
+    assert_eq!(output.files.len(), 1);
 }
 
 #[tokio::test]
