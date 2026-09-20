@@ -248,18 +248,24 @@ fn verify_sizes(active: &[ActiveFile], rows: &[MassRow]) -> Result<u64, Error> {
     Ok(file_bytes)
 }
 
-/// Build a full object URI for one active file from the table URL.
-fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {
+/// A data path that stays inside the table: empty, absolute, or URI paths are
+/// rejected here, once, for both local and object adapters.
+fn relative_data_path(relative: &str) -> Result<&Path, Error> {
+    let path = Path::new(relative);
     if relative.is_empty()
         || relative.contains("://")
-        || !Path::new(relative)
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)))
+        || !path.components().all(|c| matches!(c, Component::Normal(_)))
     {
         return Err(Error(format!(
             "only relative data paths inside the table are supported: {relative}"
         )));
     }
+    Ok(path)
+}
+
+/// Build a full object URI for one active file from the table URL.
+fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {
+    relative_data_path(relative)?;
     let mut directory = base.clone();
     if !directory.path().ends_with('/') {
         directory.set_path(&format!("{}/", directory.path()));
@@ -339,12 +345,7 @@ fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
 }
 
 fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {
-    let path = Path::new(relative);
-    if relative.contains("://") || !path.components().all(|c| matches!(c, Component::Normal(_))) {
-        return Err(Error(format!(
-            "only relative data paths inside the table are supported: {relative}"
-        )));
-    }
+    let path = relative_data_path(relative)?;
     let local = root
         .join(path)
         .canonicalize()
