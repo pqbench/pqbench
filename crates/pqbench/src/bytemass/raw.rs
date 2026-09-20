@@ -7,7 +7,7 @@
 use crate::parquet_helpers::FileMass;
 
 /// One column chunk's raw on-disk byte mass.
-pub struct RawColumn {
+pub(super) struct RawColumn {
     /// Column path in schema form, e.g. `content` or `a.b`.
     pub path: String,
     /// On-disk (compressed) bytes for this column chunk.
@@ -15,7 +15,7 @@ pub struct RawColumn {
 }
 
 /// A file's raw column masses, plus the row count that normalizes them.
-pub struct FileRaw {
+pub(super) struct FileRaw {
     /// Number of rows in the file (shared denominator for per-row mass).
     pub num_rows: u64,
     /// One entry per column chunk, in file order.
@@ -23,7 +23,7 @@ pub struct FileRaw {
 }
 
 /// Lift parsed metadata into the raw per-chunk masses.
-pub fn read(mass: &FileMass) -> FileRaw {
+pub(super) fn read(mass: &FileMass) -> FileRaw {
     FileRaw {
         num_rows: mass.num_rows,
         columns: mass

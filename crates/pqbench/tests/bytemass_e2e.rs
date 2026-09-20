@@ -13,9 +13,11 @@ fn request(inputs: Vec<String>) -> BytemassRequest {
     }
 }
 
-#[test]
-fn measures_a_local_file_from_its_footer() {
-    let output = bytemass(&request(vec![fixture("small_snappy.parquet")])).unwrap();
+#[tokio::test]
+async fn measures_a_local_file_from_its_footer() {
+    let output = bytemass(&request(vec![fixture("small_snappy.parquet")]))
+        .await
+        .unwrap();
 
     let summary = output.summary.as_ref().unwrap();
     assert_eq!(summary.file_count, 1);
@@ -35,11 +37,11 @@ fn measures_a_local_file_from_its_footer() {
         .any(|line| line.trim_start().starts_with("total")));
 }
 
-#[test]
-fn emits_the_tree_as_composable_json() {
+#[tokio::test]
+async fn emits_the_tree_as_composable_json() {
     let mut request = request(vec![fixture("small_snappy.parquet")]);
     request.is_json = Some(true);
-    let output = bytemass(&request).unwrap().to_string();
+    let output = bytemass(&request).await.unwrap().to_string();
 
     let tree: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(tree["name"], "small_snappy.parquet");
@@ -47,11 +49,11 @@ fn emits_the_tree_as_composable_json() {
     assert!(tree["children"].is_array());
 }
 
-#[test]
-fn emits_a_self_contained_d3_page() {
+#[tokio::test]
+async fn emits_a_self_contained_d3_page() {
     let mut request = request(vec![fixture("small_snappy.parquet")]);
     request.is_d3 = Some(true);
-    let page = bytemass(&request).unwrap().to_string();
+    let page = bytemass(&request).await.unwrap().to_string();
 
     assert!(page.starts_with("<!DOCTYPE html>"));
     assert!(page.contains("<title>small_snappy.parquet</title>"));
@@ -59,10 +61,10 @@ fn emits_a_self_contained_d3_page() {
     assert!(page.contains("\"name\": \"small_snappy.parquet\""));
 }
 
-#[test]
-fn expands_globs_into_one_labelled_collection() {
+#[tokio::test]
+async fn expands_globs_into_one_labelled_collection() {
     let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
-    let output = bytemass(&request(vec![mask])).unwrap();
+    let output = bytemass(&request(vec![mask])).await.unwrap();
 
     let summary = output.summary.as_ref().unwrap();
     assert!(summary.file_count > 1);
@@ -70,22 +72,39 @@ fn expands_globs_into_one_labelled_collection() {
     assert!(output.to_string().contains("parquet files"));
 }
 
-#[test]
-fn rejects_empty_masks_and_conflicting_formats() {
+#[tokio::test]
+async fn treats_brackets_as_literal_path_characters() {
+    let dir = tempfile::tempdir().unwrap();
+    let literal = dir.path().join("archive[1].parquet");
+    std::fs::copy(fixture("small_snappy.parquet"), &literal).unwrap();
+    let output = bytemass(&request(vec![literal.to_string_lossy().into_owned()]))
+        .await
+        .unwrap();
+    assert_eq!(output.files.as_ref().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn rejects_empty_inputs_empty_masks_and_conflicting_formats() {
+    assert!(bytemass(&request(vec![])).await.is_err());
+
     let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
-    let error = bytemass(&request(vec![missing])).unwrap_err().to_string();
+    let error = bytemass(&request(vec![missing]))
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("mask matched no files"), "{error}");
 
     let mut conflict = request(vec![fixture("small_snappy.parquet")]);
     conflict.is_json = Some(true);
     conflict.is_d3 = Some(true);
-    assert!(bytemass(&conflict).is_err());
+    assert!(bytemass(&conflict).await.is_err());
 }
 
 #[cfg(not(feature = "aws"))]
-#[test]
-fn remote_inputs_name_the_missing_aws_feature() {
+#[tokio::test]
+async fn remote_inputs_name_the_missing_aws_feature() {
     let error = bytemass(&request(vec!["s3://bucket/file.parquet".into()]))
+        .await
         .unwrap_err()
         .to_string();
     assert!(error.contains("`aws` feature"), "{error}");

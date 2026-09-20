@@ -142,7 +142,10 @@ fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
         is_json: Some(args.json),
         is_d3: Some(args.d3),
     };
-    print!("{}", bytemass::bytemass(&request)?);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    print!("{}", runtime.block_on(bytemass::bytemass(&request))?);
     Ok(())
 }
 

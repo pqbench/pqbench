@@ -11,9 +11,9 @@ description = "A benchmarking library for Parquet files (in-memory read/write th
 [features]
 default = []
 # S3 object reads. Without it, `s3://` fails at runtime, not at compile time.
-aws = ["dep:object_store", "object_store/aws", "dep:tokio"]
+aws = ["dep:object_store", "object_store/aws"]
 # Delta snapshot resolution requires Rust 1.91.1 or newer.
-delta = ["dep:deltalake", "dep:buoyant_kernel_derive", "dep:futures", "dep:tokio"]
+delta = ["dep:deltalake", "dep:buoyant_kernel_derive", "dep:futures"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
 
 [dependencies]
@@ -32,7 +32,6 @@ deltalake = { version = "=0.32.4", default-features = false, features = ["rustls
 # buoyant_kernel 0.22.2. Keep this direct pin until delta-rs updates the range.
 buoyant_kernel_derive = { version = "=1.0.0", optional = true }
 futures = { version = "0.3", optional = true }
-tokio = { version = "1", features = ["rt"], optional = true }
 url = "2"
 # Must match delta-rs 0.32.4's ObjectStore trait version: stores cross that
 # internal boundary. Keep the pin until delta-rs upgrades its dependency.

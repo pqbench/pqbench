@@ -12,15 +12,15 @@ use pqbench::bytemass::{bytemass, BytemassRequest};
 
 const REDSET_SAMPLE_0_001: &str = "s3://redshift-downloads/redset/serverless/sample_0.001.parquet";
 
-#[test]
+#[tokio::test]
 #[ignore = "network: reads a public object from s3://redshift-downloads"]
-fn measures_the_redset_sample_anonymously() {
+async fn measures_the_redset_sample_anonymously() {
     std::env::set_var("AWS_SKIP_SIGNATURE", "true");
     let request = BytemassRequest {
         inputs: vec![REDSET_SAMPLE_0_001.to_string()],
         ..BytemassRequest::default()
     };
-    let output = bytemass(&request).unwrap();
+    let output = bytemass(&request).await.unwrap();
 
     let summary = output.summary.as_ref().unwrap();
     assert_eq!(summary.file_count, 1);

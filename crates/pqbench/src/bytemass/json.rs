@@ -19,7 +19,7 @@ impl From<serde_json::Error> for Error {
 /// # Errors
 /// Returns [`Error`] only if serialization fails; for a [`MassNode`] this is
 /// impossible, since its fields are always serializable.
-pub fn tree(node: &MassNode) -> Result<String, Error> {
+pub(super) fn tree(node: &MassNode) -> Result<String, Error> {
     Ok(serde_json::to_string_pretty(node)?)
 }
 

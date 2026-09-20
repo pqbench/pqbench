@@ -8,7 +8,7 @@
 use super::analytics::MassNode;
 
 /// Render the per-column byte-mass stats as a text table.
-pub fn render(tree: &MassNode) -> String {
+pub(super) fn render(tree: &MassNode) -> String {
     let mut out = String::new();
     out.push_str(&format!("bytemass: {}\n", tree.label));
     out.push_str(&format!("{:<32} {:>12}\n", "column", "bytes/row"));

@@ -26,7 +26,7 @@ pub struct MassNode {
 /// Chunks for the same column path are summed across row groups; the leaf
 /// value is that total divided by the file's row count (on-disk bytes per
 /// row). The hierarchy nests by the column path's `.`-separated segments.
-pub fn aggregate(file: &FileRaw) -> MassNode {
+pub(super) fn aggregate(file: &FileRaw) -> MassNode {
     let mut totals: BTreeMap<&str, u64> = BTreeMap::new();
     for c in &file.columns {
         *totals.entry(c.path.as_str()).or_insert(0) += c.bytes;

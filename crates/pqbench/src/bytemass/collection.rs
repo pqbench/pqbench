@@ -1,10 +1,16 @@
 //! Aggregate byte-mass metadata across multiple physical Parquet files.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::parquet_helpers::{ColumnMass, Error, FileMass};
+use crate::parquet_helpers::{
+    default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
+};
+
+use super::command::FileMassRecord;
+use super::remote;
 
 /// One column's byte mass summed across a collection of Parquet files.
 #[derive(Debug, Clone, Serialize)]
@@ -35,7 +41,7 @@ pub struct MassSummary {
 impl MassSummary {
     /// Convert the summary to the existing byte-mass analytics input.
     #[must_use]
-    pub fn file_mass(&self) -> FileMass {
+    pub(super) fn file_mass(&self) -> FileMass {
         FileMass {
             num_rows: self.num_rows,
             columns: self
@@ -57,7 +63,7 @@ impl MassSummary {
 /// Local paths, Delta snapshots, and future object-store adapters can all feed
 /// this type after obtaining one [`FileMass`] at a time.
 #[derive(Debug, Default)]
-pub struct MassAccumulator {
+struct MassAccumulator {
     file_count: usize,
     num_rows: u64,
     columns: BTreeMap<String, ColumnMassSummary>,
@@ -66,7 +72,7 @@ pub struct MassAccumulator {
 impl MassAccumulator {
     /// Create an empty byte-mass accumulator.
     #[must_use]
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self::default()
     }
 
@@ -74,7 +80,7 @@ impl MassAccumulator {
     ///
     /// # Errors
     /// Returns [`Error`] if a row or byte total exceeds its integer type.
-    pub fn add(&mut self, mass: FileMass) -> Result<(), Error> {
+    fn add(&mut self, mass: FileMass) -> Result<(), Error> {
         self.num_rows = checked_sum(self.num_rows, mass.num_rows)?;
         self.file_count = self
             .file_count
@@ -100,7 +106,7 @@ impl MassAccumulator {
 
     /// Finish aggregation and return the accumulated summary.
     #[must_use]
-    pub fn finish(self) -> MassSummary {
+    fn finish(self) -> MassSummary {
         MassSummary {
             file_count: self.file_count,
             num_rows: self.num_rows,
@@ -112,6 +118,92 @@ impl MassAccumulator {
 fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
     left.checked_add(right)
         .ok_or_else(|| Error("metadata totals exceed u64".into()))
+}
+
+/// A measured input collection: per-file records, the aggregate summary, and
+/// the label the analytics tree is rooted at.
+pub(super) struct MeasuredInputs {
+    /// Per-input measured masses, in input order.
+    pub files: Vec<FileMassRecord>,
+    /// Per-column totals across all inputs.
+    pub summary: MassSummary,
+    /// File name for one input, or `N parquet files` for a collection.
+    pub label: String,
+}
+
+/// Expand the inputs, measure each file's footer, and aggregate the collection.
+pub(super) async fn measure_inputs(inputs: &[String]) -> Result<MeasuredInputs, Error> {
+    let paths = expand_inputs(inputs)?;
+    let label = collection_label(&paths);
+    let mut accumulator = MassAccumulator::new();
+    let mut files = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let input = path.to_string_lossy().into_owned();
+        let (size, mass) = read_input(&input).await?;
+        accumulator.add(mass.clone())?;
+        files.push(FileMassRecord {
+            path: input,
+            size,
+            mass,
+        });
+    }
+    Ok(MeasuredInputs {
+        files,
+        summary: accumulator.finish(),
+        label,
+    })
+}
+
+fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, Error> {
+    let mut paths = BTreeSet::new();
+    for input in inputs {
+        if has_glob_metachar(input) && !input.contains("://") {
+            let mut matched = false;
+            for entry in glob::glob(&escape_literal_brackets(input))
+                .map_err(|e| Error(format!("invalid mask {input}: {e}")))?
+            {
+                let path = entry.map_err(|e| Error(format!("cannot expand mask {input}: {e}")))?;
+                paths.insert(path);
+                matched = true;
+            }
+            if !matched {
+                return Err(Error(format!("mask matched no files: {input}")));
+            }
+        } else {
+            paths.insert(PathBuf::from(input));
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn has_glob_metachar(input: &str) -> bool {
+    input.contains(['*', '?'])
+}
+
+fn escape_literal_brackets(input: &str) -> String {
+    input.replace('[', "[[]")
+}
+
+fn collection_label(paths: &[PathBuf]) -> String {
+    if let [path] = paths {
+        return path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+    }
+    format!("{} parquet files", paths.len())
+}
+
+async fn read_input(input: &str) -> Result<(u64, FileMass), Error> {
+    if input.contains("://") {
+        return remote::read_remote(input).await;
+    }
+    let path = Path::new(input);
+    let size = std::fs::metadata(path)
+        .map_err(|e| Error(format!("cannot stat {input}: {e}")))?
+        .len();
+    let mass = default_metadata_parser().read_masses(path)?;
+    Ok((size, mass))
 }
 
 #[cfg(test)]

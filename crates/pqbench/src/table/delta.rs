@@ -11,8 +11,9 @@ use futures::TryStreamExt;
 use serde::Serialize;
 use url::Url;
 
-use crate::bytemass::{self, ColumnMassSummary, MassAccumulator, MassNode, MassSummary};
-use crate::parquet_helpers::{default_metadata_parser, MetadataParser};
+use crate::bytemass::{
+    self, BytemassOutput, BytemassRequest, ColumnMassSummary, MassNode, MassSummary,
+};
 
 /// Errors resolving a local snapshot or measuring its active files.
 #[derive(Debug)]
@@ -81,10 +82,7 @@ impl TableReport {
 /// paths, column mapping, deletion vectors, or unsupported Delta reader features.
 /// No partial report is returned on failure.
 pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
-    let path = path.to_owned();
-    let root = tokio::task::spawn_blocking(move || local_root(&path))
-        .await
-        .map_err(blocking_error)??;
+    let root = local_root(path)?;
     let table = load_local_table(&root, version).await?;
     read_table(&table, &local_label(&root)).await
 }
@@ -92,8 +90,8 @@ pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport
 /// Analyze the latest or requested version of a Delta table at a storage URI.
 ///
 /// The URI is resolved by delta-rs. Active Parquet objects are measured through
-/// `bytemass`'s public remote reader, which fetches object metadata and bounded
-/// footer reads only — never data pages.
+/// `bytemass`'s public reader, which fetches object metadata and bounded footer
+/// reads only — never data pages.
 ///
 /// # Errors
 /// Fails for invalid snapshots, missing or changed active objects, external
@@ -113,16 +111,9 @@ pub async fn read_remote(uri: &str, version: Option<u64>) -> Result<TableReport,
 
 async fn read_table(table: &DeltaTable, label: &str) -> Result<TableReport, Error> {
     let snapshot = snapshot_info(table)?;
-    let measured = if table.table_url().scheme() == "file" {
-        let root = table
-            .table_url()
-            .to_file_path()
-            .map_err(|()| Error("invalid local table URI".into()))?;
-        measure_local_active_files(table, &root).await?
-    } else {
-        measure_remote_active_files(table).await?
-    };
-    build_report(label, snapshot, measured)
+    let active = active_files(table).await?;
+    let (summary, tree, file_bytes) = measure_active(&active).await?;
+    build_report(label, snapshot, file_bytes, summary, tree)
 }
 
 struct SnapshotInfo {
@@ -130,9 +121,12 @@ struct SnapshotInfo {
     partition_columns: Vec<String>,
 }
 
-struct MeasuredFiles {
-    file_bytes: u64,
-    mass: MassSummary,
+/// One active data file: the input bytemass measures, its log path, and the
+/// size the transaction log claims it has.
+struct ActiveFile {
+    input: String,
+    relative: String,
+    expected: u64,
 }
 
 fn local_root(path: &Path) -> Result<PathBuf, Error> {
@@ -177,68 +171,102 @@ fn snapshot_info(table: &DeltaTable) -> Result<SnapshotInfo, Error> {
     })
 }
 
-async fn measure_local_active_files(
-    table: &DeltaTable,
-    root: &Path,
-) -> Result<MeasuredFiles, Error> {
+/// Resolve every active data file to the input `bytemass` measures, rejecting
+/// deletion vectors and data paths outside the table.
+async fn active_files(table: &DeltaTable) -> Result<Vec<ActiveFile>, Error> {
+    let root = if table.table_url().scheme() == "file" {
+        Some(
+            table
+                .table_url()
+                .to_file_path()
+                .map_err(|()| Error("invalid local table URI".into()))?,
+        )
+    } else {
+        None
+    };
     let mut files = table.get_active_add_actions_by_partitions(&[]);
-    let mut mass = MassAccumulator::new();
-    let mut file_bytes = 0;
+    let mut active = vec![];
     while let Some(file) = files.try_next().await.map_err(delta_error)? {
         if file.deletion_vector_descriptor().is_some() {
             return Err(Error(
-                "deletion vectors are not supported by local byte-mass analysis".into(),
+                "deletion vectors are not supported by byte-mass analysis".into(),
             ));
         }
         let relative = file.path().to_string();
         let expected = u64::try_from(file.size())
             .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
-        let task_root = root.to_owned();
-        let task_relative = relative.clone();
-        let (actual, file_mass) = tokio::task::spawn_blocking(move || {
-            measure_local_file(&task_root, &task_relative, expected)
-        })
-        .await
-        .map_err(blocking_error)??;
-        file_bytes = checked_sum(file_bytes, actual)?;
-        mass.add(file_mass).map_err(parquet_error)?;
+        let input = match &root {
+            Some(root) => local_input(root, &relative, expected)?,
+            None => object_uri(table.table_url(), &relative)?,
+        };
+        active.push(ActiveFile {
+            input,
+            relative,
+            expected,
+        });
     }
-    Ok(MeasuredFiles {
-        file_bytes,
-        mass: mass.finish(),
-    })
+    Ok(active)
 }
 
-async fn measure_remote_active_files(table: &DeltaTable) -> Result<MeasuredFiles, Error> {
-    let base = table.table_url();
-    let mut files = table.get_active_add_actions_by_partitions(&[]);
-    let mut mass = MassAccumulator::new();
+/// Measure the active files through `bytemass`, confirming each file's size
+/// still matches the transaction log.
+async fn measure_active(active: &[ActiveFile]) -> Result<(MassSummary, MassNode, u64), Error> {
+    if active.is_empty() {
+        return Ok((MassSummary::default(), empty_tree(), 0));
+    }
+    let request = BytemassRequest {
+        inputs: active.iter().map(|file| file.input.clone()).collect(),
+        is_json: None,
+        is_d3: None,
+    };
+    let output = bytemass::bytemass(&request)
+        .await
+        .map_err(|e| Error(format!("cannot read active files: {e}")))?;
+    let file_bytes = verify_sizes(active, &output)?;
+    let summary = output
+        .summary
+        .ok_or_else(|| Error("measurement returned no summary".into()))?;
+    let tree = output
+        .tree
+        .ok_or_else(|| Error("measurement returned no tree".into()))?;
+    Ok((summary, tree, file_bytes))
+}
+
+fn verify_sizes(active: &[ActiveFile], output: &BytemassOutput) -> Result<u64, Error> {
+    let records = output
+        .files
+        .as_deref()
+        .ok_or_else(|| Error("measurement returned no files".into()))?;
+    if records.len() != active.len() {
+        return Err(Error(format!(
+            "measured {} files for {} active files",
+            records.len(),
+            active.len()
+        )));
+    }
     let mut file_bytes = 0;
-    while let Some(file) = files.try_next().await.map_err(delta_error)? {
-        if file.deletion_vector_descriptor().is_some() {
-            return Err(Error(
-                "deletion vectors are not supported by remote byte-mass analysis".into(),
-            ));
-        }
-        let relative = file.path();
-        let expected = u64::try_from(file.size())
-            .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
-        let uri = object_uri(base, &relative)?;
-        let (actual, file_mass) = bytemass::read_remote(&uri)
-            .await
-            .map_err(|e| Error(format!("cannot read active file {relative}: {e}")))?;
-        if actual != expected {
+    for record in records {
+        let file = active
+            .iter()
+            .find(|file| file.input == record.path)
+            .ok_or_else(|| Error(format!("unexpected measured file: {}", record.path)))?;
+        if record.size != file.expected {
             return Err(Error(format!(
-                "active file size differs from log: {relative} (expected {expected}, found {actual})"
+                "active file size differs from log: {} (expected {}, found {})",
+                file.relative, file.expected, record.size
             )));
         }
-        file_bytes = checked_sum(file_bytes, actual)?;
-        mass.add(file_mass).map_err(parquet_error)?;
+        file_bytes = checked_sum(file_bytes, record.size)?;
     }
-    Ok(MeasuredFiles {
-        file_bytes,
-        mass: mass.finish(),
-    })
+    Ok(file_bytes)
+}
+
+fn empty_tree() -> MassNode {
+    MassNode {
+        label: "file".into(),
+        value: 0.0,
+        children: vec![],
+    }
 }
 
 /// Build a full object URI for one active file from the table URL.
@@ -263,33 +291,28 @@ fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {
         .into())
 }
 
-fn measure_local_file(
-    root: &Path,
-    relative: &str,
-    expected: u64,
-) -> Result<(u64, crate::parquet_helpers::FileMass), Error> {
+/// Resolve a local active file, rejecting escapes from the table directory and
+/// early-detecting a size change before its footer is parsed.
+fn local_input(root: &Path, relative: &str, expected: u64) -> Result<String, Error> {
     let local = local_file(root, relative)?;
-    let actual = std::fs::metadata(&local)
-        .map_err(|e| Error(format!("cannot stat active file {relative}: {e}")))?
+    let size = std::fs::metadata(&local)
+        .map_err(|e| Error(format!("cannot open active file {relative}: {e}")))?
         .len();
-    if actual != expected {
+    if size != expected {
         return Err(Error(format!(
-            "active file size differs from log: {relative} (expected {expected}, found {actual})"
+            "active file size differs from log: {relative} (expected {expected}, found {size})"
         )));
     }
-    let mass = default_metadata_parser()
-        .read_masses(&local)
-        .map_err(|e| Error(format!("cannot read active file {relative}: {e}")))?;
-    Ok((actual, mass))
+    Ok(local.to_string_lossy().into_owned())
 }
 
 fn build_report(
     label: &str,
     snapshot: SnapshotInfo,
-    measured: MeasuredFiles,
+    file_bytes: u64,
+    summary: MassSummary,
+    mut tree: MassNode,
 ) -> Result<TableReport, Error> {
-    let mass = measured.mass.file_mass();
-    let mut tree = bytemass::aggregate(&bytemass::read(&mass));
     tree.label = format!(
         "{label} @ version {} (physical bytes/row)",
         snapshot.version
@@ -298,7 +321,7 @@ fn build_report(
         file_count,
         num_rows,
         columns,
-    } = measured.mass;
+    } = summary;
     let columns = into_report_columns(columns);
     let mut compressed_column_bytes = 0;
     let mut uncompressed_column_bytes = 0;
@@ -311,7 +334,7 @@ fn build_report(
         version: snapshot.version,
         file_count,
         physical_rows: num_rows,
-        file_bytes: measured.file_bytes,
+        file_bytes,
         compressed_column_bytes,
         uncompressed_column_bytes,
         partition_columns: snapshot.partition_columns,
@@ -330,42 +353,6 @@ fn into_report_columns(columns: Vec<ColumnMassSummary>) -> Vec<ColumnReport> {
             codecs: column.codecs,
         })
         .collect()
-}
-
-fn parquet_error(error: crate::parquet_helpers::Error) -> Error {
-    Error(error.to_string())
-}
-
-fn blocking_error(error: tokio::task::JoinError) -> Error {
-    Error(format!("blocking file task failed: {error}"))
-}
-
-/// Serialize the snapshot report as pretty-printed JSON.
-pub fn json(report: &TableReport) -> Result<String, Error> {
-    serde_json::to_string_pretty(report).map_err(|e| Error(format!("cannot serialize report: {e}")))
-}
-
-/// Render the physical byte-mass hierarchy as a self-contained HTML treemap.
-///
-/// # Errors
-/// Returns an error if the hierarchy cannot be serialized.
-pub fn render_html(report: &TableReport) -> Result<String, Error> {
-    bytemass::render_html(&report.tree)
-        .map_err(|e| Error(format!("cannot render HTML report: {e}")))
-}
-
-/// Render the snapshot summary followed by the existing byte-mass table.
-pub fn render(report: &TableReport) -> String {
-    format!(
-        "delta version: {}\nactive files: {}\nphysical rows: {}\nactive parquet bytes: {}\ncompressed column bytes: {}\nuncompressed column bytes: {}\n{}",
-        report.version,
-        report.file_count,
-        report.physical_rows,
-        report.file_bytes,
-        report.compressed_column_bytes,
-        report.uncompressed_column_bytes,
-        bytemass::render(&report.tree),
-    )
 }
 
 fn delta_error(error: deltalake::DeltaTableError) -> Error {
@@ -401,4 +388,42 @@ fn local_file(root: &Path, relative: &str) -> Result<PathBuf, Error> {
         )));
     }
     Ok(local)
+}
+
+/// Wrap one tree in the command output so its public `Display` renders it.
+fn rendered(tree: &MassNode, is_json: bool, is_d3: bool) -> BytemassOutput {
+    BytemassOutput {
+        files: None,
+        summary: None,
+        tree: Some(tree.clone()),
+        is_json: Some(is_json),
+        is_d3: Some(is_d3),
+    }
+}
+
+/// Serialize the snapshot report as pretty-printed JSON.
+pub fn json(report: &TableReport) -> Result<String, Error> {
+    serde_json::to_string_pretty(report).map_err(|e| Error(format!("cannot serialize report: {e}")))
+}
+
+/// Render the physical byte-mass hierarchy as a self-contained HTML treemap.
+///
+/// # Errors
+/// Returns an error if the hierarchy cannot be serialized.
+pub fn render_html(report: &TableReport) -> Result<String, Error> {
+    Ok(rendered(&report.tree, false, true).to_string())
+}
+
+/// Render the snapshot summary followed by the byte-mass table.
+pub fn render(report: &TableReport) -> String {
+    format!(
+        "delta version: {}\nactive files: {}\nphysical rows: {}\nactive parquet bytes: {}\ncompressed column bytes: {}\nuncompressed column bytes: {}\n{}",
+        report.version,
+        report.file_count,
+        report.physical_rows,
+        report.file_bytes,
+        report.compressed_column_bytes,
+        report.uncompressed_column_bytes,
+        rendered(&report.tree, false, false),
+    )
 }

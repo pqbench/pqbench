@@ -10,7 +10,7 @@ description = "Command line frontend for pqbench."
 
 [features]
 default = []
-delta = ["pqbench/delta", "dep:tokio"]
+delta = ["pqbench/delta"]
 aws = ["pqbench/aws"]
 delta-s3 = ["delta", "pqbench/delta-s3", "aws"]
 
@@ -21,4 +21,4 @@ path = "src/main.rs"
 [dependencies]
 pqbench = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"] }

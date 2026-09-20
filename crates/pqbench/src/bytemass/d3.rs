@@ -16,7 +16,7 @@ use crate::parquet_helpers::Error;
 /// # Errors
 /// Returns [`Error`] only if [`super::json::tree`] fails, which cannot happen
 /// for a [`MassNode`].
-pub fn render_html(tree: &MassNode) -> Result<String, Error> {
+pub(super) fn render_html(tree: &MassNode) -> Result<String, Error> {
     let title = html_escape(&tree.label);
     let data = json::tree(tree)?.replace('<', "\\u003c");
     let mut out = head(&title);

@@ -17,7 +17,7 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 ///
 /// # Errors
 /// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
-pub async fn read_remote(uri: &str) -> Result<(u64, FileMass), Error> {
+pub(super) async fn read_remote(uri: &str) -> Result<(u64, FileMass), Error> {
     read_remote_with_options(uri, []).await
 }
 
@@ -25,7 +25,7 @@ pub async fn read_remote(uri: &str) -> Result<(u64, FileMass), Error> {
 ///
 /// # Errors
 /// As [`read_remote`].
-pub async fn read_remote_with_options(
+async fn read_remote_with_options(
     uri: &str,
     options: impl IntoIterator<Item = (String, String)>,
 ) -> Result<(u64, FileMass), Error> {

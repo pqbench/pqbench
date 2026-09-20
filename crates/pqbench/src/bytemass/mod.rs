@@ -17,23 +17,9 @@ mod command;
 mod d3;
 mod json;
 mod raw;
-#[cfg(any(feature = "aws", feature = "delta"))]
 mod remote;
 mod text;
 
 pub use analytics::MassNode;
 pub use collection::{ColumnMassSummary, MassSummary};
 pub use command::{bytemass, BytemassOutput, BytemassRequest, FileMassRecord};
-
-#[cfg(feature = "delta")]
-pub(crate) use analytics::aggregate;
-#[cfg(feature = "delta")]
-pub(crate) use collection::MassAccumulator;
-#[cfg(feature = "delta")]
-pub(crate) use d3::render_html;
-#[cfg(feature = "delta")]
-pub(crate) use raw::read;
-#[cfg(feature = "delta")]
-pub(crate) use remote::read_remote;
-#[cfg(feature = "delta")]
-pub(crate) use text::render;
