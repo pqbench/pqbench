@@ -49,7 +49,7 @@ Examples:
     /// analyze the active Parquet files in a local Delta snapshot
     #[cfg(feature = "delta")]
     #[command(after_help = "Example:\n  pqbench delta ./table --json")]
-    Delta(delta::Args),
+    Delta(delta::DeltaArgs),
 }
 
 fn main() -> ExitCode {

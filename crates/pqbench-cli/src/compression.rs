@@ -10,10 +10,10 @@ pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
     let plan = bench_plan(args)?;
     let bytes = std::fs::read(&args.file)?;
     let parsed = default_parser().parse_pages(&bytes)?;
-    let raw = compression::bench_file(&parsed, &plan.configs, plan.passes)?;
+    let raw = compression::bench_file(&parsed, &plan.codec_configs, plan.passes)?;
     compression::render(
-        &compression::aggregate(&raw, &plan.cfg, args.per_column),
-        args.per_column,
+        &compression::aggregate(&raw, &plan.stats_config, args.is_per_column),
+        args.is_per_column,
     );
     Ok(())
 }
