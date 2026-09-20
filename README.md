@@ -59,8 +59,8 @@ pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 Remote reads fetch the object metadata, the Parquet trailer, and the
 serialized footer — never the data pages. `s3://` support is the `aws`
 feature; a URI whose backend is not compiled in fails at runtime with the
-missing feature named. The library it uses (`bytemass::read_remote`,
-`bytemass::summarize_inputs`) is always available and never feature-gated.
+missing feature named. The library entry point (`bytemass::bytemass`) is
+always available and never feature-gated.
 
 ### delta
 
@@ -72,7 +72,7 @@ pqbench delta ./path/to/table
 ```
 
 Add `--features delta-s3` to resolve and measure Delta tables at `s3://` URIs;
-the active files are measured through `bytemass`'s public remote reader.
+the active files are measured from their footers only.
 
 ## Documentation
 

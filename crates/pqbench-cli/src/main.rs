@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -135,94 +134,25 @@ fn run_compression(args: &BenchArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Read Parquet files' column byte masses from their footers and output them as
-/// text stats (agent-facing), JSON (composable), or, with `--d3`, as a
-/// self-contained browser treemap. This is `bytemass` wired end-to-end.
+/// Build the typed request, measure, and render the CLI's chosen format. The
+/// CLI owns the format decision; the library just returns the table.
 fn run_bytemass(args: &BytemassArgs) -> Result<(), CliError> {
-    let paths = expand_inputs(&args.inputs)?;
-    let mass = summarize(&paths)?.file_mass();
-    let raw = bytemass::read(&mass);
-    let mut tree = bytemass::aggregate(&raw);
-    tree.label = collection_label(&paths);
-    let out = if args.json {
-        bytemass::tree(&tree)?
-    } else if args.d3 {
-        bytemass::render_html(&tree)?
-    } else {
-        bytemass::render(&tree)
+    let request = bytemass::BytemassRequest {
+        inputs: args.inputs.clone(),
     };
-    print!("{out}");
-    Ok(())
-}
-
-/// Measure every input; local paths go through the synchronous path, URIs
-/// through the remote object reader (which needs an async runtime).
-#[cfg(feature = "aws")]
-fn summarize(paths: &[PathBuf]) -> Result<bytemass::MassSummary, CliError> {
-    if !paths.iter().any(|path| has_uri_scheme(path)) {
-        return Ok(bytemass::summarize_files(paths)?);
-    }
-    let inputs: Vec<String> = paths
-        .iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    Ok(runtime.block_on(bytemass::summarize_inputs(&inputs))?)
-}
-
-#[cfg(not(feature = "aws"))]
-fn summarize(paths: &[PathBuf]) -> Result<bytemass::MassSummary, CliError> {
-    if let Some(remote) = paths.iter().find(|path| has_uri_scheme(path)) {
-        return Err(format!(
-            "remote input {} requires the `aws` feature",
-            remote.display()
-        )
-        .into());
-    }
-    Ok(bytemass::summarize_files(paths)?)
-}
-
-fn has_uri_scheme(path: &std::path::Path) -> bool {
-    path.to_string_lossy().contains("://")
-}
-
-fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, CliError> {
-    let mut paths = BTreeSet::new();
-    for input in inputs {
-        if has_glob_metachar(input) {
-            let mut matched = false;
-            for entry in glob::glob(&escape_literal_brackets(input))? {
-                paths.insert(entry?);
-                matched = true;
-            }
-            if !matched {
-                return Err(format!("mask matched no files: {input}").into());
-            }
-        } else {
-            paths.insert(PathBuf::from(input));
-        }
-    }
-    Ok(paths.into_iter().collect())
-}
-
-fn has_glob_metachar(input: &str) -> bool {
-    input.contains(['*', '?'])
-}
-
-fn escape_literal_brackets(input: &str) -> String {
-    input.replace('[', "[[]")
-}
-
-fn collection_label(paths: &[PathBuf]) -> String {
-    if let [path] = paths {
-        return path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".into());
-    }
-    format!("{} parquet files", paths.len())
+    let rows = runtime.block_on(bytemass::bytemass(&request))?;
+    let output = if args.json {
+        bytemass::render_json(&rows)?
+    } else if args.d3 {
+        bytemass::render_html(&rows)?
+    } else {
+        bytemass::render_text(&rows)?
+    };
+    print!("{output}");
+    Ok(())
 }
 
 /// What a bench run needs: the codec×level set, the analytics decisions, and
@@ -276,36 +206,4 @@ fn parse_spec(spec: &str) -> Result<(Codec, u8), String> {
     };
     let codec = Codec::from_name(name).ok_or_else(|| format!("unknown codec: {name}"))?;
     Ok((codec, level.unwrap_or_else(|| default_level(codec))))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn expands_masks_and_rejects_empty_matches() {
-        let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
-        let paths = expand_inputs(&[mask]).unwrap();
-        assert!(!paths.is_empty());
-
-        let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
-        assert!(expand_inputs(&[missing]).is_err());
-    }
-
-    #[test]
-    fn treats_brackets_as_literal_path_characters() {
-        assert!(!has_glob_metachar("data/archive[1].parquet"));
-        assert!(has_glob_metachar("data/archive?.parquet"));
-        assert!(has_glob_metachar("data/*.parquet"));
-        assert_eq!(
-            escape_literal_brackets("data/part[1]/*.parquet"),
-            "data/part[[]1]/*.parquet"
-        );
-    }
-
-    #[test]
-    fn labels_multiple_files_as_a_collection() {
-        let paths = vec![PathBuf::from("a.parquet"), PathBuf::from("b.parquet")];
-        assert_eq!(collection_label(&paths), "2 parquet files");
-    }
 }

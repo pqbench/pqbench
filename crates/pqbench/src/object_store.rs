@@ -127,10 +127,23 @@ pub(crate) fn open(uri: &str, options: &[(String, String)]) -> Result<ObjectRead
 
 #[cfg(feature = "aws")]
 fn s3(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
-    let (store, location) =
-        ::object_store::parse_url_opts(url, options.iter().cloned()).map_err(remote_error)?;
+    use ::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+
+    // The AWS_* environment supplies the defaults (credentials, region,
+    // AWS_SKIP_SIGNATURE=true for public buckets); explicit options override it.
+    let mut builder = AmazonS3Builder::from_env().with_url(url.to_string());
+    for (key, value) in options {
+        let config_key: AmazonS3ConfigKey = key
+            .to_ascii_lowercase()
+            .parse()
+            .map_err(|_| Error(format!("unknown object store option `{key}`")))?;
+        builder = builder.with_config(config_key, value.clone());
+    }
+    let store = builder.build().map_err(remote_error)?;
+    let (_, location) =
+        ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
     Ok(ObjectReader {
-        source: Source::Remote(store, location),
+        source: Source::Remote(Box::new(store), location),
     })
 }
 

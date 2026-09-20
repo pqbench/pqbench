@@ -26,7 +26,7 @@ pub(crate) fn run(args: &Args) -> Result<(), super::CliError> {
     } else if args.d3 {
         pqbench::table::delta::render_html(&report)?
     } else {
-        pqbench::table::delta::render(&report)
+        pqbench::table::delta::render(&report)?
     };
     print!("{output}");
     Ok(())

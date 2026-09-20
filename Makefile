@@ -4,7 +4,7 @@
 
 CARGO ?= cargo
 
-.PHONY: all fmt fmt-check build test lint cache-stats samples check clean
+.PHONY: all fmt fmt-check build test lint cache-stats samples e2e check clean
 
 all: fmt build test lint
 
@@ -33,6 +33,10 @@ cache-stats:
 # Fetch open-dataset sample parquet files into local/samples/ for local testing.
 samples:
 	./scripts/fetch_samples.sh
+
+# Network e2e (ignored by default): measure a public S3 object anonymously.
+e2e:
+	$(CARGO) test -p pqbench --features aws --test redset_e2e -- --ignored
 
 check: fmt-check lint test
 
