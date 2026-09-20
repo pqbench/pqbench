@@ -240,6 +240,7 @@ fn verify_sizes(active: &[ActiveFile], rows: &[MassRow]) -> Result<u64, Error> {
             )));
         }
     }
+
     let mut file_bytes = 0;
     for file in active {
         file_bytes = checked_sum(file_bytes, file.expected)?;
