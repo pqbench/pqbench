@@ -1,5 +1,10 @@
 //! Delta snapshot storage analysis.
 //!
+//! The command is one function: [`delta`] takes a [`DeltaRequest`] and returns
+//! the [`TableReport`]. Rendering is a fold of that report: [`render_text`]
+//! prints the summary and byte-mass table, [`render_json`] serializes it, and
+//! [`render_html`] wraps the byte-mass hierarchy in a self-contained treemap.
+//!
 //! delta-rs resolves the snapshot; only active data-file footers are inspected.
 //! Results measure physical storage, not decoded values or logical live rows.
 
@@ -76,6 +81,34 @@ impl TableReport {
     }
 }
 
+/// Arguments for the `delta` command.
+#[derive(Debug, Clone)]
+pub struct DeltaRequest {
+    /// Local table directory or table URI (`file://`, `s3://`, ...).
+    pub table: String,
+    /// Snapshot version; `None` selects the latest.
+    pub version: Option<u64>,
+}
+
+/// Analyze the latest or requested version of a Delta table.
+///
+/// `request.table` is a filesystem path or a storage URI. Bare paths and
+/// `file://` URIs are read through the filesystem; other schemes are resolved
+/// by delta-rs (S3 requires the `delta-s3` feature). Run inside a Tokio
+/// runtime.
+///
+/// # Errors
+/// Fails for invalid snapshots, missing/changed active files, external data
+/// paths, column mapping, deletion vectors, or unsupported Delta reader
+/// features. No partial report is returned on failure.
+pub async fn delta(request: &DeltaRequest) -> Result<TableReport, Error> {
+    if request.table.contains("://") {
+        read_remote(&request.table, request.version).await
+    } else {
+        read_local(Path::new(&request.table), request.version).await
+    }
+}
+
 /// Analyze the latest or requested version of a local Delta table.
 ///
 /// Run inside a Tokio runtime. Paths are filesystem paths, not storage URIs.
@@ -84,7 +117,7 @@ impl TableReport {
 /// Fails for invalid snapshots, missing/changed active files, external data
 /// paths, column mapping, deletion vectors, or unsupported Delta reader features.
 /// No partial report is returned on failure.
-pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
+async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
     let root = local_root(path)?;
     let table = load_local_table(&root, version).await?;
     read_table(&table).await
@@ -100,7 +133,7 @@ pub async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport
 /// Fails for invalid snapshots, missing or changed active objects, external
 /// data paths, column mapping, deletion vectors, or unsupported Delta reader
 /// features. No partial report is returned on failure.
-pub async fn read_remote(uri: &str, version: Option<u64>) -> Result<TableReport, Error> {
+async fn read_remote(uri: &str, version: Option<u64>) -> Result<TableReport, Error> {
     let url = Url::parse(uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
     if url.scheme() == "file" {
         let path = url
@@ -360,7 +393,7 @@ fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
 }
 
 /// Serialize the snapshot report as pretty-printed JSON.
-pub fn json(report: &TableReport) -> Result<String, Error> {
+pub fn render_json(report: &TableReport) -> Result<String, Error> {
     serde_json::to_string_pretty(report).map_err(|e| Error(format!("cannot serialize report: {e}")))
 }
 
@@ -376,7 +409,7 @@ pub fn render_html(report: &TableReport) -> Result<String, Error> {
 ///
 /// # Errors
 /// Returns an error if a byte total overflows while aggregating.
-pub fn render(report: &TableReport) -> Result<String, Error> {
+pub fn render_text(report: &TableReport) -> Result<String, Error> {
     let table = bytemass::render_text(&report.rows).map_err(|e| Error(e.to_string()))?;
     Ok(format!(
         "delta version: {}\nactive files: {}\nphysical rows: {}\nactive parquet bytes: {}\ncompressed column bytes: {}\nuncompressed column bytes: {}\n{}",

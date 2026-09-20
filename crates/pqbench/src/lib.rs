@@ -1,6 +1,7 @@
 //! pqbench is a benchmarking library for Parquet files (in-memory read/write
 //! throughput, compression ratio), lzbench-style but Parquet-aware.
 
+pub mod bench;
 pub mod bytemass;
 pub mod codecs;
 pub mod compression;

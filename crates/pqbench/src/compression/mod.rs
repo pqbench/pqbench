@@ -1,18 +1,27 @@
 //! `compression`: lzbench-style codec sweep over encoded parquet pages.
 //!
+//! The command is one function: [`compression`] takes a
+//! [`CompressionRequest`] and returns the measured table. Rendering is a fold
+//! of that table: [`render_text`] prints the stats table (optionally with the
+//! per-column breakdown), [`render_json`] serializes it.
+//!
 //! Split by layer: `raw` (benchmarking), `analytics` (aggregation), `text`
 //! (presentation). Raw sweeps each column chunk independently and records raw
 //! per-pass samples; analytics reduces them (warmup/mode) into
 //! [`crate::stats::Estimate`]s and composes them per column and per file via
-//! the measurement monoid; the text renders the report.
+//! the measurement monoid.
 
 mod analytics;
+mod api;
+mod json;
 mod raw;
 mod text;
 
 pub use analytics::aggregate;
+pub use api::{compression, CompressionRequest};
+pub use json::render_json;
 pub use raw::{bench_file, ChunkResult, PageResult, RawRow};
-pub use text::render;
+pub use text::render_text;
 
 #[cfg(test)]
 mod tests {
@@ -25,7 +34,7 @@ mod tests {
         let mk = |s: &str, n: usize| Page {
             payload: s.as_bytes().repeat(n),
             num_values: n as u32,
-            is_dictionary: false,
+            dictionary: false,
         };
         ParquetFile {
             chunks: vec![

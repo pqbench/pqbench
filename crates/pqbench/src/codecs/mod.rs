@@ -20,6 +20,8 @@ use std::fmt;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 /// Errors from the codec layer.
 #[derive(Debug)]
 pub enum Error {
@@ -62,7 +64,8 @@ impl From<std::io::Error> for Error {
 }
 
 /// The closed set of Parquet compression codecs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Codec {
     Snappy,
     Zstd,

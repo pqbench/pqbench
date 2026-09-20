@@ -5,7 +5,7 @@
 #   1. the image runs as the non-root user the Dockerfile declares,
 #   2. `pqbench --help` runs and lists the subcommands,
 #   3. `bytemass` reads a parquet file's metadata and emits a well-formed
-#      byte-mass JSON tree (works on any parquet, compressed or not),
+#      flat per-column JSON report (works on any parquet, compressed or not),
 #   4. `lz` sweeps the file and reports every wired codec (gzip, lz4, snappy,
 #      zstd) — proving the statically linked codecs shipped in the image.
 #   5. `compression` runs on a NONE-compressed parquet and reports every codec.
@@ -61,12 +61,13 @@ python3 - "$scratch/mass.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1]) as stream:
-    tree = json.load(stream)
-assert tree["name"] == "small_snappy.parquet", f"name is {tree.get('name')!r}"
-assert tree["value"] > 0, f"value is {tree.get('value')!r}"
-assert tree["children"], "no children in tree"
+    report = json.load(stream)
+assert report["file_count"] == 1, f"file_count is {report.get('file_count')!r}"
+assert report["num_rows"] > 0, f"num_rows is {report.get('num_rows')!r}"
+assert report["columns"], "no columns in report"
+assert all("path" in column and "compressed_bytes" in column for column in report["columns"])
 PY
-ok "bytemass produced a valid byte-mass JSON tree"
+ok "bytemass produced a valid byte-mass JSON report"
 
 echo "checking 'lz' sweeps every wired codec..."
 run_image -v "$root:/data:ro" "$image" lz /data/README.md \

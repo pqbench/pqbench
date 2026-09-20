@@ -27,6 +27,8 @@ lzbench-style compression benchmark over raw file bytes:
 pqbench lz file.bin -c zstd@3 --samples 10
 ```
 
+`--json` emits the same report as composable JSON.
+
 ### compression
 
 The same codec sweep over the encoded pages of a **NONE-compressed** parquet
@@ -35,6 +37,9 @@ file:
 ```sh
 pqbench compression data.parquet --per-column
 ```
+
+`--json` emits the same report as composable JSON (the per-column rows are
+included when `--per-column` is set).
 
 ### bytemass
 
@@ -49,8 +54,8 @@ pqbench bytemass 'data/part-*.parquet'
 pqbench bytemass s3://bucket/table/part-0.parquet   # requires --features aws
 ```
 
-`--json` emits a composable `{name, value, children}` tree; `--d3` emits a
-self-contained HTML treemap:
+`--json` emits a flat per-column JSON table (file/row counts plus one record
+per column); `--d3` emits a self-contained HTML treemap:
 
 ```sh
 pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html

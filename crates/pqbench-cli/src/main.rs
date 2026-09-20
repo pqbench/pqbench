@@ -39,7 +39,7 @@ enum Command {
     /// lzbench-style compression benchmark over raw file bytes
     Lz(bench::BenchArgs),
     /// lzbench-style codec sweep over encoded parquet pages (NONE-compressed input)
-    Compression(bench::BenchArgs),
+    Compression(compression::CompressionArgs),
     /// export per-column byte masses (on-disk bytes/row)
     #[command(after_help = r#"
 Examples:
