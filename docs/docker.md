@@ -22,6 +22,9 @@ docker run --rm -v "$PWD:/tmp:ro" pqbench:local compression /tmp/uncompressed.pa
 - The image ships only the binary and its statically linked codecs (snappy,
   zstd, lz4, zlib); the Rust toolchain lives in a separate build stage. It uses
   musl libc, so it runs on any Linux regardless of the host glibc.
+- Built with `--no-default-features` (core): the `aws`, `delta` and `delta-s3`
+  features are not included, so `s3://` inputs and Delta tables are unavailable
+  in the container.
 
 ## Smoke tests
 
