@@ -1,8 +1,9 @@
 # Local lakehouse → pqbench
 
-Three catalog examples share LocalStack S3. The services run without Spark,
-Postgres or a UI; Python/DuckDB runs only when seeding or resolving files.
-Unity Catalog's official image is still a large download (about 2.4 GB).
+Three catalog examples share one S3-compatible object store, [rustfs](https://docs.rustfs.com/en/installation/container/docker/).
+The services run without Spark, Postgres or a UI; Python/DuckDB runs only when
+seeding or resolving files. Unity Catalog's official image is still a large
+download (about 2.4 GB).
 
 | Catalog | Example | Data |
 | --- | --- | --- |
@@ -65,17 +66,25 @@ AWS feature, hence the explicit local build.
 
 ## Endpoints and state
 
-Host endpoints bind to loopback: S3 `http://localhost:4566`, Unity Catalog
+Host endpoints bind to loopback: S3 `http://localhost:9000`, Unity Catalog
 `http://localhost:8080`, Iceberg REST `http://localhost:8181`. Override with
-`LOCALSTACK_PORT`, `UNITY_CATALOG_PORT`, and `ICEBERG_REST_PORT`.
-The producer automatically uses `LOCALSTACK_PORT` in the JSON for host pqbench.
-Container clients use `http://localstack:4566`; when piping into a container on
-this Compose network, pass `-e SOURCE_S3_ENDPOINT=http://localstack:4566` to the
+`RUSTFS_PORT`, `UNITY_CATALOG_PORT`, and `ICEBERG_REST_PORT`.
+The producer automatically uses `RUSTFS_PORT` in the JSON for host pqbench.
+Container clients use `http://rustfs:9000`; when piping into a container on
+this Compose network, pass `-e SOURCE_S3_ENDPOINT=http://rustfs:9000` to the
 producer's `compose run`. Credentials are local dummy values `test` / `test`,
 region `us-east-1`, HTTP and path-style S3.
 
+The object store is pinned to `rustfs/rustfs:1.0.0`, so a rerun next month
+measures the same bytes; bump it deliberately. Compose polls the image's
+`GET /health` with its bundled `curl` and starts the catalogs only once that
+answers, which keeps `compose up -d --wait` reliable.
+
+Any S3 client reaches the objects — the AWS CLI needs only the endpoint:
+
 ```bash
-compose exec -T localstack awslocal s3 ls s3://lakehouse/ --recursive
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1 \
+  aws --endpoint-url http://localhost:9000 s3 ls s3://lakehouse/ --recursive
 curl http://localhost:8181/v1/config
 curl http://localhost:8080/api/2.1/unity-catalog/tables/pqbench.demo.events
 compose down           # stop; retain named volumes
@@ -83,7 +92,7 @@ compose down           # stop; retain named volumes
 compose down -v
 ```
 
-LocalStack objects, Unity Catalog's H2 metadata, and DuckLake's SQLite metadata
+The rustfs objects, Unity Catalog's H2 metadata, and DuckLake's SQLite metadata
 use named volumes. The Iceberg fixture catalog is disposable; rerun `seed`
 after recreating it. SQLite is local to Docker; this is not a remote SQL server.
 
@@ -95,10 +104,11 @@ It does **not** test credential vending, IAM enforcement, or Databricks managed
 tables. Iceberg uses `scan().plan_files()` and DuckLake uses
 `ducklake_list_files`, rather than recursively measuring obsolete objects.
 Those examples reject delete files; pqbench measures physical Parquet storage,
-not logical rows after deletions. LocalStack does not reproduce WAN latency or
-all AWS authorization behavior. These checks are opt-in and separate from the
-fast Rust test suite.
+not logical rows after deletions. rustfs speaks the S3 API but is not AWS: it
+reproduces neither WAN latency nor IAM authorization. These checks are opt-in
+and separate from the fast Rust test suite.
 
-References: [Unity Catalog Compose](https://docs.unitycatalog.io/docker_compose/),
+References: [rustfs in Docker](https://docs.rustfs.com/en/installation/container/docker/),
+[Unity Catalog Compose](https://docs.unitycatalog.io/docker_compose/),
 [Iceberg REST fixture](https://iceberg.apache.org/spark-quickstart/),
 [DuckLake file listing](https://ducklake.select/docs/stable/duckdb/metadata/list_files).

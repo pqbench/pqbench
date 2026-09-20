@@ -76,7 +76,7 @@ the active files are measured from their footers only.
 
 ## Documentation
 
-- [Local lakehouse E2E examples](docker/e2e-lakehouse/README.md) — LocalStack S3,
+- [Local lakehouse E2E examples](docker/e2e-lakehouse/README.md) — rustfs S3,
   Unity Catalog, Iceberg REST and DuckLake piped into `bytemass --source -`
 - [Delta tables](docs/delta.md) — snapshot resolution, report shape, limitations
 - [Docker](docs/docker.md) — build, run, and publish a container image

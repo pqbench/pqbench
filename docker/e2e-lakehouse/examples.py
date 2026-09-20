@@ -12,9 +12,10 @@ import boto3
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+from botocore.exceptions import ClientError
 from pyiceberg.catalog import load_catalog
 
-S3 = "http://localstack:4566"
+S3 = "http://rustfs:9000"
 UC = "http://unity-catalog:8080/api/2.1/unity-catalog"
 
 
@@ -53,7 +54,7 @@ def lake():
     for extension in ("httpfs", "sqlite", "ducklake"):
         c.execute("LOAD " + extension)
     c.execute("""CREATE SECRET (TYPE s3, KEY_ID 'test', SECRET 'test',
-        REGION 'us-east-1', ENDPOINT 'localstack:4566', URL_STYLE 'path', USE_SSL false)""")
+        REGION 'us-east-1', ENDPOINT 'rustfs:9000', URL_STYLE 'path', USE_SSL false)""")
     c.execute("""ATTACH 'ducklake:sqlite:/state/examples.sqlite' AS lake
         (DATA_PATH 's3://lakehouse/ducklake/', DATA_INLINING_ROW_LIMIT 0)""")
     return c
@@ -63,10 +64,19 @@ def s3():
     return boto3.client("s3", endpoint_url=S3)
 
 
+def ensure_bucket():
+    client = s3()
+    try:
+        client.head_bucket(Bucket="lakehouse")
+    except ClientError:
+        client.create_bucket(Bucket="lakehouse")
+
+
 def seed():
     # Bound startup waits; do not mistake a started JVM for an available API.
     for attempt in range(60):
         try:
+            ensure_bucket()
             api("/catalogs")
             iceberg().list_namespaces()
             break
