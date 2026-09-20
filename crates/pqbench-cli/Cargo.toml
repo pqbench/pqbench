@@ -10,8 +10,8 @@ description = "Command line frontend for pqbench."
 
 [features]
 default = []
-delta = ["pqbench/delta", "dep:tokio"]
-aws = ["pqbench/aws", "dep:tokio"]
+delta = ["pqbench/delta"]
+aws = ["pqbench/aws", "dep:serde", "dep:serde_json"]
 delta-s3 = ["delta", "pqbench/delta-s3", "aws"]
 
 [[bin]]
@@ -21,7 +21,6 @@ path = "src/main.rs"
 [dependencies]
 pqbench = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-glob = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"] }

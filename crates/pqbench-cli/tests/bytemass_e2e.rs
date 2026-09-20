@@ -44,3 +44,53 @@ fn bytemass_text_stats_end_to_end() {
 
     assert!(stdout.lines().any(|l| l.trim_start().starts_with("total")));
 }
+
+/// End-to-end: `--json` prints the composable `{name, value, children}` tree.
+#[test]
+fn bytemass_json_tree_end_to_end() {
+    let exe = env!("CARGO_BIN_EXE_pqbench");
+    let file = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/small_reddit_none.parquet"
+    );
+    let out = Command::new(exe)
+        .args(["bytemass", file, "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+
+    assert!(stdout.trim_start().starts_with('{'));
+    assert!(stdout.contains("\"name\": \"small_reddit_none.parquet\""));
+    assert!(stdout.contains("\"children\""));
+    assert!(stdout.contains("\"value\""));
+}
+
+/// End-to-end: `--d3` prints a self-contained treemap page.
+#[test]
+fn bytemass_d3_page_end_to_end() {
+    let exe = env!("CARGO_BIN_EXE_pqbench");
+    let file = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/small_reddit_none.parquet"
+    );
+    let out = Command::new(exe)
+        .args(["bytemass", file, "--d3"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+
+    assert!(stdout.starts_with("<!DOCTYPE html>"));
+    assert!(stdout.contains("<title>small_reddit_none.parquet</title>"));
+    assert!(stdout.contains("d3-hierarchy@3"));
+    assert!(stdout.contains("bytes per row"));
+}

@@ -10,6 +10,8 @@
 
 use std::path::Path;
 
+use serde::Serialize;
+
 /// One encoded page: the payload a codec compresses, plus its metadata.
 #[derive(Debug, Clone)]
 pub struct Page {
@@ -64,7 +66,7 @@ pub fn default_parser() -> impl PageParser {
 }
 
 /// A column's byte mass, read from parquet metadata (no page decoding).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ColumnMass {
     /// Column path in schema form, e.g. `content` or `a.b`.
     pub path: String,
@@ -77,7 +79,7 @@ pub struct ColumnMass {
 }
 
 /// A file's byte masses, read purely from metadata.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileMass {
     /// Number of rows in the file (shared denominator for per-row mass).
     pub num_rows: u64,

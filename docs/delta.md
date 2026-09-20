@@ -17,11 +17,11 @@ flowchart TD
 ```
 
 `pqbench` reads metadata from individual Parquet files. The Delta module uses
-delta-rs to select a table snapshot and measures each active file through
-`bytemass`'s public API, so it does not reach into `bytemass` internals and
-names no storage-backend types itself. The only module that names the
-`object_store` crate is `pqbench::object_store`, which adapts it to the small
-`ObjectReader` interface (`stat` + `read_range`) the rest of the crate uses.
+delta-rs to select a table snapshot and measures each active file from its
+footer metadata, so it names no storage-backend types itself. The only module
+that names the `object_store` crate is `pqbench::object_store`, which adapts it
+to the small `ObjectReader` interface (`stat` + `read_range`) the rest of the
+crate uses.
 
 ## Usage
 
@@ -36,7 +36,7 @@ cargo test -p pqbench --features delta
 ```
 
 Remote tables are resolved with `delta-s3` (which enables `aws`), and the
-active objects are measured through `bytemass::read_remote`:
+active objects are measured from their footers only:
 
 ```
 cargo run -p pqbench-cli --features delta-s3 -- delta s3://bucket/table --json

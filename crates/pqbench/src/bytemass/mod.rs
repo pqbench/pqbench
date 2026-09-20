@@ -1,13 +1,19 @@
 //! `bytemass`: the per-column byte masses of a parquet file.
 //!
-//! Split by layer like `compression`: `raw` (`read`) carries the per-chunk
+//! The command is one function: [`bytemass`] takes a [`BytemassRequest`] and
+//! returns the measured table, a `Vec<MassRow>` with one row per (file, column
+//! chunk). Rendering is a fold of that table, one module per output:
+//! [`render_text`] prints the stats as CLI text, [`render_json`] serializes the
+//! composable `{name, value, children}` tree, [`render_html`] wraps that tree
+//! in a self-contained browser treemap, and [`aggregate`] sums it per column.
+//!
+//! The layers behind those are private: `raw` (`read`) carries the per-chunk
 //! on-disk byte masses; `analytics` (`aggregate`) sums chunks across row groups
-//! into a tree keyed on on-disk bytes per row, nested by column path; `json`
-//! (`tree`) serializes that tree as composable `{name, value, children}` JSON;
-//! `text` (`render`) prints the stats as CLI text for agentic calls; `d3`
-//! (`render_html`) wraps the JSON in a self-contained browser treemap.
+//! into a tree keyed on on-disk bytes per row, nested by column path.
 
+mod aggregate;
 mod analytics;
+mod api;
 mod collection;
 mod d3;
 mod json;
@@ -15,12 +21,9 @@ mod raw;
 mod remote;
 mod text;
 
-pub use analytics::{aggregate, MassNode};
-pub use collection::{
-    summarize_files, summarize_inputs, ColumnMassSummary, MassAccumulator, MassSummary,
-};
+pub use aggregate::aggregate;
+pub use api::{bytemass, BytemassRequest, MassRow};
+pub use collection::{ColumnMassSummary, MassSummary};
 pub use d3::render_html;
-pub use json::tree;
-pub use raw::{read, FileRaw, RawColumn};
-pub use remote::{read_remote, read_remote_with_options};
-pub use text::render;
+pub use json::render_json;
+pub use text::render_text;
