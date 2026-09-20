@@ -5,10 +5,13 @@
 //! the sort live here once. Speeds are carried as [`crate::stats::Estimate`]
 //! so error bars survive and per-chunk measurements compose to file-level rows.
 
+use serde::Serialize;
+
 use crate::codecs::Codec;
 use crate::stats::Estimate;
 
 /// One codec×level row in a [`Report`].
+#[derive(Serialize)]
 pub struct ReportRow {
     pub codec: Codec,
     pub level: u8,
@@ -43,6 +46,7 @@ impl ReportRow {
 }
 
 /// One column's per-codec×level breakdown (from `compression --per-column`).
+#[derive(Serialize)]
 pub struct ColumnRow {
     pub codec: Codec,
     pub level: u8,
@@ -89,6 +93,7 @@ fn ratio(compressed_bytes: usize, uncompressed_bytes: usize) -> f64 {
 
 /// A sweep's result: file-level rows ordered by compress speed, plus the
 /// per-column breakdown (empty unless requested).
+#[derive(Serialize)]
 pub struct Report {
     pub rows: Vec<ReportRow>,
     pub columns: Vec<ColumnRow>,

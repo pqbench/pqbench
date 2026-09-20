@@ -1,20 +1,25 @@
-//! Presentation: render a [`report::Report`] to the terminal.
+//! Presentation: render a compression [`report::Report`] to a text table.
+
+use std::fmt::Write;
 
 use crate::report;
 use crate::text;
 
 /// Render a report's file-level rows, plus a per-column section when
 /// `per_column` is set.
-pub fn render(report: &report::Report, per_column: bool) {
-    text::render_rows(report);
+pub fn render_text(report: &report::Report, per_column: bool) -> String {
+    let mut out = String::new();
+    text::render_rows(&mut out, report);
     if per_column {
         for row in &report.rows {
-            println!(
+            let _ = writeln!(
+                out,
                 "\n-- per-column {}@{level} --",
                 row.codec,
                 level = row.level
             );
-            println!(
+            let _ = writeln!(
+                out,
                 "{:<24} {:>13} {:>13} {:>10} {:>7}",
                 "column", "compress", "decompress", "size", "ratio%"
             );
@@ -23,7 +28,8 @@ pub fn render(report: &report::Report, per_column: bool) {
                 .iter()
                 .filter(|c| c.codec == row.codec && c.level == row.level)
             {
-                println!(
+                let _ = writeln!(
+                    out,
                     "{:<24} {:>8.0} ± {:>3.0} {:>8.0} ± {:>3.0} {:>10} {:>7.2}",
                     c.column,
                     c.compress_estimate
@@ -40,4 +46,5 @@ pub fn render(report: &report::Report, per_column: bool) {
             }
         }
     }
+    out
 }

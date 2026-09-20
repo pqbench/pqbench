@@ -1,12 +1,11 @@
-use std::path::PathBuf;
-
 use clap::Args;
+use pqbench::table::delta::{self, DeltaRequest};
 
-/// Arguments for local Delta snapshot analysis.
+/// Arguments for Delta snapshot analysis.
 #[derive(Args)]
 pub(crate) struct DeltaArgs {
-    /// local Delta table directory
-    path: PathBuf,
+    /// local Delta table directory or table URI
+    table: String,
     /// snapshot version; defaults to the latest version
     #[arg(long)]
     version: Option<u64>,
@@ -19,14 +18,18 @@ pub(crate) struct DeltaArgs {
 }
 
 pub(crate) fn run(args: &DeltaArgs) -> Result<(), crate::CliError> {
+    let request = DeltaRequest {
+        table: args.table.clone(),
+        version: args.version,
+    };
     let runtime = tokio::runtime::Runtime::new()?;
-    let report = runtime.block_on(pqbench::table::delta::read_local(&args.path, args.version))?;
+    let report = runtime.block_on(delta::delta(&request))?;
     let output = if args.is_json {
-        pqbench::table::delta::json(&report)?
+        delta::render_json(&report)?
     } else if args.is_d3 {
-        pqbench::table::delta::render_html(&report)?
+        delta::render_html(&report)?
     } else {
-        pqbench::table::delta::render(&report)?
+        delta::render_text(&report)?
     };
     print!("{output}");
     Ok(())

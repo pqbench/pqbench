@@ -1,25 +1,57 @@
 //! `lz`: lzbench-equivalent compression benchmark over raw file bytes.
 //!
-//! The baseline command (`pqbench lz <file> -c zstd@3`): a reimplementation of
-//! lzbench's core whose numbers must match lzbench within tolerance. Split by
-//! layer like `compression`: `raw` (`bench_file`) loads the file once and
-//! records raw per-pass times per config; `analytics` (`aggregate`) reduces the
-//! samples (warmup/mode) into a shared [`crate::report::ReportRow`] and orders
-//! the rows by compress speed; `text` (`render`) prints the report.
+//! The command is one function: [`lz`] takes the shared
+//! [`crate::bench::BenchRequest`] and returns the measured table. Rendering is
+//! a fold of that table: [`render_text`] prints the stats table, [`render_json`]
+//! serializes it.
+//!
+//! Split by layer: `raw` (`bench_file`) loads the file once and records raw
+//! per-pass times per config; `analytics` (`aggregate`) reduces the samples
+//! (warmup/mode) into a shared [`crate::report::ReportRow`] and orders the rows
+//! by compress speed.
 
 mod analytics;
+mod api;
+mod json;
 mod raw;
 mod text;
 
 pub use analytics::aggregate;
+pub use api::lz;
+pub use json::render_json;
 pub use raw::{bench_file, RawRow};
-pub use text::render;
+pub use text::render_text;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bench::BenchRequest;
     use crate::codecs::Codec;
     use crate::stats::{Config, Mode};
+
+    #[test]
+    fn lz_runs_the_sweep_and_renders_both_formats() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("pqbench_lz_command.bin");
+        std::fs::write(&path, b"the quick brown fox ".repeat(4096)).unwrap();
+
+        let request = BenchRequest {
+            file: path.clone(),
+            codec_specs: vec!["zstd@1".into()],
+            samples: 2,
+            warmup_iterations: 1,
+            mode: Mode::Fastest,
+        };
+        let report = lz(&request).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.rows[0].codec, Codec::Zstd);
+        assert!(render_text(&report).contains("zstd"));
+
+        let json: serde_json::Value = serde_json::from_str(&render_json(&report).unwrap()).unwrap();
+        assert_eq!(json["rows"][0]["level"], 1);
+    }
 
     #[test]
     fn bench_file_and_aggregate_agree_with_compression() {

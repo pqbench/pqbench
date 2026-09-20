@@ -1,19 +1,31 @@
-use pqbench::compression;
-use pqbench::parquet_helpers::{default_parser, PageParser};
+use clap::Args;
+use pqbench::compression::{self, CompressionRequest};
 
-use crate::bench::{bench_plan, BenchArgs};
+use crate::bench::BenchArgs;
 use crate::CliError;
 
-/// Read a NONE-compressed parquet file, parse its pages, and sweep every config
-/// over them. This is `compression` wired end-to-end.
-pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
-    let plan = bench_plan(args)?;
-    let bytes = std::fs::read(&args.file)?;
-    let parsed = default_parser().parse_pages(&bytes)?;
-    let raw = compression::bench_file(&parsed, &plan.codec_configs, plan.passes)?;
-    compression::render(
-        &compression::aggregate(&raw, &plan.stats_config, args.is_per_column),
-        args.is_per_column,
-    );
+/// Arguments for `compression`: the shared sweep arguments plus the
+/// compression-only per-column breakdown.
+#[derive(Args)]
+pub(crate) struct CompressionArgs {
+    #[command(flatten)]
+    bench: BenchArgs,
+    /// report per-column breakdown
+    #[arg(long = "per-column")]
+    is_per_column: bool,
+}
+
+pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
+    let request = CompressionRequest {
+        bench: args.bench.request(),
+        per_column: args.is_per_column,
+    };
+    let report = compression::compression(&request)?;
+    let output = if args.bench.is_json {
+        compression::render_json(&report)?
+    } else {
+        compression::render_text(&report, args.is_per_column)
+    };
+    print!("{output}");
     Ok(())
 }

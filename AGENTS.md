@@ -128,8 +128,8 @@ analogy, convention, or precedent:
 
 ## Repo layout
 
-- `crates/pqbench/` — the library (bytemass, codecs, compression, lz, parquet,
-  report, stats)
+- `crates/pqbench/` — the library (bench, bytemass, codecs, compression, lz,
+  parquet, report, stats)
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
 - `scripts/` — build / sample / smoke-test helpers
 - `docs/` — user documentation (e.g. `docker.md`)

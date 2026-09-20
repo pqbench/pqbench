@@ -27,6 +27,8 @@ lzbench-style compression benchmark over raw file bytes:
 pqbench lz file.bin -c zstd@3 --samples 10
 ```
 
+`--json` emits the same report as composable JSON.
+
 ### compression
 
 The same codec sweep over the encoded pages of a **NONE-compressed** parquet
@@ -35,6 +37,9 @@ file:
 ```sh
 pqbench compression data.parquet --per-column
 ```
+
+`--json` emits the same report as composable JSON (the per-column rows are
+included when `--per-column` is set).
 
 ### bytemass
 
