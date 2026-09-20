@@ -12,22 +12,16 @@ use super::raw;
 
 /// Sum the measured table across all files into a per-column summary.
 ///
-/// Files are emitted contiguously, so the file count and row total are a single
-/// pass over the rows; no row is dropped or merged.
-///
 /// # Errors
 /// Returns [`Error`] if a row or byte total exceeds its integer type.
 pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
-    let mut file_count = 0;
+    let runs = file_runs(rows);
     let mut num_rows = 0;
-    let mut previous: Option<&str> = None;
+    for run in &runs {
+        num_rows = checked_sum(num_rows, run.num_rows)?;
+    }
     let mut columns: BTreeMap<String, ColumnMassSummary> = BTreeMap::new();
     for row in rows {
-        if previous != Some(row.file.as_str()) {
-            file_count += 1;
-            num_rows = checked_sum(num_rows, row.num_rows)?;
-            previous = Some(row.file.as_str());
-        }
         let total = columns
             .entry(row.column.clone())
             .or_insert_with(|| ColumnMassSummary {
@@ -41,10 +35,24 @@ pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
         total.codecs.insert(row.codec.clone());
     }
     Ok(MassSummary {
-        file_count,
+        file_count: runs.len(),
         num_rows,
         columns: columns.into_values().collect(),
     })
+}
+
+/// One entry per contiguous run of rows from the same file: the run's first row.
+///
+/// Files are emitted contiguously, so no row is dropped or merged to recover
+/// the file boundaries.
+fn file_runs(rows: &[MassRow]) -> Vec<&MassRow> {
+    let mut runs: Vec<&MassRow> = Vec::new();
+    for row in rows {
+        if runs.last().is_none_or(|last| last.file != row.file) {
+            runs.push(row);
+        }
+    }
+    runs
 }
 
 /// Build the byte-mass tree that text, JSON, and d3 render.
@@ -57,15 +65,10 @@ pub(super) fn tree(rows: &[MassRow]) -> Result<MassNode, Error> {
 
 /// The root label: one file's name, or `N parquet files` for a collection.
 pub(super) fn label(rows: &[MassRow]) -> String {
-    let mut files: Vec<&str> = Vec::new();
-    for row in rows {
-        if files.last().copied() != Some(row.file.as_str()) {
-            files.push(&row.file);
-        }
-    }
+    let files = file_runs(rows);
     match files.as_slice() {
         [] => "file".into(),
-        [file] => Path::new(file)
+        [file] => Path::new(file.file.as_str())
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "file".into()),
