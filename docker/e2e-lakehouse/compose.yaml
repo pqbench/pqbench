@@ -40,12 +40,27 @@ services:
   # This service is intentionally server-only: no UI and no external database.
   # Its own metadata is persisted in the named volume below. Catalog entries can
   # point at the same S3-compatible storage used by the other services.
+  #
+  # The `s3.*` entries are Unity's per-bucket configuration. Unity cannot send
+  # AssumeRole to an S3-compatible endpoint (unitycatalog/unitycatalog#43), so
+  # the stand hands it a session credential that rustfs already minted and Unity
+  # vends that verbatim — its documented preset-credential mode. `make vend`
+  # (smoke.sh) fills these in; without them Unity has no credential to vend.
   unity-catalog:
-    image: unitycatalog/unitycatalog:v0.5.0
+    image: unitycatalog/unitycatalog:v0.6.0
+    environment:
+      s3.bucketPath.0: s3://lakehouse
+      s3.region.0: us-east-1
+      s3.accessKey.0: ${VENDED_ACCESS_KEY_ID:-}
+      s3.secretKey.0: ${VENDED_SECRET_ACCESS_KEY:-}
+      s3.sessionToken.0: ${VENDED_SESSION_TOKEN:-}
     ports:
       - "127.0.0.1:${UNITY_CATALOG_PORT:-8080}:8080"
     volumes:
       - unity-catalog-data:/home/unitycatalog/etc/db
+    depends_on:
+      rustfs:
+        condition: service_healthy
 
   examples:
     profiles: [tools]
@@ -54,6 +69,9 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
+      # The endpoint a host pqbench will use, for documents that carry vended
+      # credentials. Override when piping into a container on this network.
+      SOURCE_S3_ENDPOINT: http://localhost:${RUSTFS_PORT:-9000}
     volumes:
       - ducklake-metadata:/state
       - ./examples.py:/app/examples.py:ro

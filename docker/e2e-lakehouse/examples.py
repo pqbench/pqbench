@@ -2,6 +2,7 @@
 import argparse
 import io
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -63,6 +64,36 @@ def s3():
     return boto3.client("s3", endpoint_url=S3)
 
 
+def credentials():
+    """Mint an expiring credential from rustfs's STS, as shell exports.
+
+    Unity has no way to call AssumeRole against an S3-compatible endpoint
+    (unitycatalog/unitycatalog#43), so the stand mints the session credential
+    here and Unity is configured to vend exactly this one.
+    """
+    session = boto3.client("sts", endpoint_url=S3).assume_role(
+        RoleArn="arn:aws:iam::000000000000:role/pqbench-read",
+        RoleSessionName="pqbench-stand",
+        DurationSeconds=43200,
+    )["Credentials"]
+    for name, key in (("ACCESS_KEY_ID", "AccessKeyId"),
+                      ("SECRET_ACCESS_KEY", "SecretAccessKey"),
+                      ("SESSION_TOKEN", "SessionToken")):
+        print(f"export VENDED_{name}='{session[key]}'")
+    print("Minted a 12h rustfs session credential for Unity to vend", file=sys.stderr)
+
+
+def vended_env(table_id):
+    """Ask Unity for this table's temporary credentials, as pqbench env."""
+    vended = api("/temporary-table-credentials",
+                 {"table_id": table_id, "operation": "READ"})["aws_temp_credentials"]
+    return {"AWS_ACCESS_KEY_ID": vended["access_key_id"],
+            "AWS_SECRET_ACCESS_KEY": vended["secret_access_key"],
+            "AWS_SESSION_TOKEN": vended["session_token"],
+            "AWS_REGION": "us-east-1", "AWS_ENDPOINT": os.environ["SOURCE_S3_ENDPOINT"],
+            "AWS_ALLOW_HTTP": "true", "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false"}
+
+
 def ensure_bucket():
     client = s3()
     try:
@@ -111,6 +142,9 @@ def seed():
 
 
 def source(engine):
+    # Unity vends credentials, so its document carries them; the other two only
+    # name objects and leave storage configuration to the caller's environment.
+    env = {}
     if engine == "unity":
         table = api("/tables/pqbench.demo.events")
         assert table["data_source_format"] == "PARQUET"
@@ -118,6 +152,7 @@ def source(engine):
         inputs = [f"s3://{bucket}/{obj['Key']}"
                   for page in s3().get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix)
                   for obj in page.get("Contents", []) if obj["Key"].endswith(".parquet")]
+        env = vended_env(table["table_id"])
     elif engine == "iceberg":
         tasks = list(iceberg().load_table("demo.events").scan().plan_files())
         if any(task.delete_files for task in tasks):
@@ -131,12 +166,17 @@ def source(engine):
         inputs = [row[0] for row in rows]
     if not inputs:
         raise ValueError("No active Parquet files; run seed first")
-    print(json.dumps({"kind": "pqbench.remote-source", "version": 1,
-                      "inputs": sorted(set(inputs))}))
+    document = {"kind": "pqbench.remote-source", "version": 1, "inputs": sorted(set(inputs))}
+    print(json.dumps(document | {"env": env} if env else document))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["seed", "unity", "iceberg", "ducklake"])
+    parser.add_argument("command", choices=["credentials", "seed", "unity", "iceberg", "ducklake"])
     args = parser.parse_args()
-    seed() if args.command == "seed" else source(args.command)
+    if args.command == "credentials":
+        credentials()
+    elif args.command == "seed":
+        seed()
+    else:
+        source(args.command)

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use clap::Args;
 use pqbench::bytemass;
 use serde::Deserialize;
@@ -45,13 +47,16 @@ pub(crate) fn run(args: &BytemassArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// A versioned document naming the objects an external producer resolved.
-/// Storage configuration stays in the `AWS_*` environment, as for any URI.
+/// A versioned document naming the objects an external producer resolved, plus
+/// the storage environment to read them with — a catalog that vends expiring
+/// credentials can put them here instead of exporting them around the pipe.
 #[derive(Deserialize)]
 struct RemoteSource {
     kind: String,
     version: u32,
     inputs: Vec<String>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
 }
 
 /// Read the inputs a producer piped in, as `pqbench.remote-source` version 1.
@@ -68,6 +73,14 @@ fn read_source(source: &str) -> Result<Vec<String>, CliError> {
     }
     if source.inputs.is_empty() {
         return Err("source document contains no inputs".into());
+    }
+    for (key, value) in &source.env {
+        if !key.starts_with("AWS_") {
+            return Err(
+                format!("source document may only set AWS_* variables, not `{key}`").into(),
+            );
+        }
+        std::env::set_var(key, value);
     }
     Ok(source.inputs)
 }
