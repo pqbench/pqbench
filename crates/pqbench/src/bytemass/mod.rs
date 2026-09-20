@@ -4,8 +4,8 @@
 //! returns the measured table, a `Vec<MassRow>` with one row per (file, column
 //! chunk). Rendering is a fold of that table, one module per output:
 //! [`render_text`] prints the stats as CLI text, [`render_json`] serializes the
-//! composable `{name, value, children}` tree, [`render_html`] wraps that tree
-//! in a self-contained browser treemap, and [`aggregate`] sums it per column.
+//! per-column totals as flat, composable JSON, [`render_html`] folds the table
+//! into a browser treemap, and [`aggregate`] sums it per column.
 //!
 //! The layers behind those are private: `raw` (`read`) carries the per-chunk
 //! on-disk byte masses; `analytics` (`aggregate`) sums chunks across row groups

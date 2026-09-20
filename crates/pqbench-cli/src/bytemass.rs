@@ -9,7 +9,7 @@ pub(crate) struct BytemassArgs {
     /// parquet paths or glob masks; quote masks to prevent shell expansion
     #[arg(required = true)]
     inputs: Vec<String>,
-    /// emit the byte-mass tree as JSON (composable) instead of text stats
+    /// emit per-column byte masses as JSON instead of text stats
     #[arg(long = "json", conflicts_with = "d3")]
     json: bool,
     /// emit a self-contained d3 treemap HTML (open in a browser) instead of text stats

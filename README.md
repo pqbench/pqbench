@@ -54,8 +54,8 @@ pqbench bytemass 'data/part-*.parquet'
 pqbench bytemass s3://bucket/table/part-0.parquet   # requires --features aws
 ```
 
-`--json` emits a composable `{name, value, children}` tree; `--d3` emits a
-self-contained HTML treemap:
+`--json` emits a flat per-column JSON table (file/row counts plus one record
+per column); `--d3` emits a self-contained HTML treemap:
 
 ```sh
 pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
