@@ -67,6 +67,27 @@ feature; a URI whose backend is not compiled in fails at runtime with the
 missing feature named. The library entry point (`bytemass::bytemass`) is
 always available and never feature-gated.
 
+### --source -
+
+A producer that resolves names in a catalog hands pqbench a versioned document
+on standard input instead of a path list:
+
+```sh
+producer | pqbench bytemass --source -   # inputs name Parquet objects
+producer | pqbench delta --source -      # inputs name one Delta table
+```
+
+```json
+{"kind": "pqbench.remote-source", "version": 1,
+ "inputs": ["s3://bucket/table/part-0.parquet"],
+ "env": {"AWS_SESSION_TOKEN": "..."}}
+```
+
+`env` is optional, accepts only `AWS_*` names, and is applied before the read,
+so a catalog that vends expiring credentials can pass them through the pipe
+rather than into your shell. pqbench keeps no catalog dependency of its own; the
+[Unity Catalog example](docker/e2e-lakehouse/README.md) shows a producer.
+
 ### delta
 
 Byte-mass summary of a local Delta table snapshot. Feature-gated — build with
@@ -81,8 +102,8 @@ the active files are measured from their footers only.
 
 ## Documentation
 
-- [Local lakehouse E2E examples](docker/e2e-lakehouse/README.md) — rustfs S3,
-  Unity Catalog, Iceberg REST and DuckLake piped into `bytemass --source -`
+- [Unity Catalog E2E example](docker/e2e-lakehouse/README.md) — a catalog vending
+  expiring credentials into `--source -`, over rustfs S3
 - [Delta tables](docs/delta.md) — snapshot resolution, report shape, limitations
 - [Docker](docs/docker.md) — build, run, and publish a container image
 
