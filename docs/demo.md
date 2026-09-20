@@ -24,20 +24,23 @@ The treemap area represents each column's compressed bytes per physical row:
 
 ![NYC Taxi Parquet byte-mass treemap](images/pqbench-bytemass.png)
 
-## deltabench: one Delta snapshot
+## pqbench delta: one Delta snapshot
+
+The `delta` command is feature-gated; build with `--features delta` (the
+published Docker image ships without it):
 
 ```sh
-deltabench ./stackexchange-delta
-deltabench ./stackexchange-delta --version 0 --json
-deltabench ./stackexchange-delta --d3 > treemap.html
+pqbench delta ./stackexchange-delta
+pqbench delta ./stackexchange-delta --version 0 --json
+pqbench delta ./stackexchange-delta --d3 > treemap.html
 ```
 
-![deltabench CLI walkthrough](images/deltabench-bytemass.gif)
+![pqbench delta CLI walkthrough](images/pqbench-delta-bytemass.gif)
 
 The table-level treemap aggregates the active Parquet files selected by the
 Delta transaction log:
 
-![Stack Exchange Delta byte-mass treemap](images/deltabench-bytemass.png)
+![Stack Exchange Delta byte-mass treemap](images/pqbench-delta-bytemass.png)
 
 ## Regenerate the terminal recordings
 
@@ -48,5 +51,6 @@ Stage the datasets under `.docker-data/` as documented in
 docs/demos/record.sh
 ```
 
-The script detects the Docker daemon's native ARM64 or AMD64 architecture and
-uses persistent, architecture-specific Cargo volumes.
+The script detects the Docker daemon's native ARM64 or AMD64 architecture,
+builds `pqbench` with the `delta` feature using persistent,
+architecture-specific Cargo volumes, and renders both GIFs.

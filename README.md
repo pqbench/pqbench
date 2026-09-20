@@ -82,6 +82,7 @@ the active files are measured from their footers only.
 ## Documentation
 
 - [Delta tables](docs/delta.md) — snapshot resolution, report shape, limitations
+- [Visual demos](docs/demo.md) — screenshots and terminal recordings
 - [Docker](docs/docker.md) — build, run, and publish a container image
 
 ## Contributing

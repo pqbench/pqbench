@@ -6,7 +6,7 @@ run_pqbench() {
         -v "$PWD:/src:ro" \
         -v "$PWD/.docker-data/nyc-taxi:/demo:ro" \
         -v "$PQBENCH_DEMO_TARGET:/src/target" \
-        -w /src rust:1.91.1-bookworm \
+        -w /src rust:1.94.1-bookworm \
         target/debug/pqbench "$@"
 }
 
