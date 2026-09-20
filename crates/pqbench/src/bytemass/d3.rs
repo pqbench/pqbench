@@ -1,15 +1,15 @@
 //! Presentation: export a bytemass [`MassNode`] treemap as a self-contained
 //! HTML page rendered by [d3.treemap](https://d3js.org) in the browser.
 //!
-//! Per Unix philosophy this layer emits the treemap *data* (from
-//! [`super::json`]) wrapped in a thin page; d3 owns the squarified layout and
-//! drawing. The page imports only the d3 modules it uses (hierarchy, scale,
-//! selection) from a CDN — not the whole d3 bundle — and embeds the tree as
-//! JSON, so it needs no installs, no server, and no other setup: just open it.
+//! Per Unix philosophy this layer folds the rows into a treemap hierarchy (via
+//! [`super::aggregate::tree`]) and wraps its JSON in a thin page; d3 owns the
+//! squarified layout and drawing. The page imports only the d3 modules it uses
+//! (hierarchy, scale, selection) from a CDN — not the whole d3 bundle — and
+//! embeds the tree as JSON, so it needs no installs, no server, and no other
+//! setup: just open it.
 
-use super::aggregate::label;
+use super::aggregate::{label, tree};
 use super::api::MassRow;
-use super::json;
 use crate::parquet_helpers::Error;
 
 /// The d3 treemap page, as a self-contained HTML string.
@@ -18,7 +18,7 @@ use crate::parquet_helpers::Error;
 /// Returns [`Error`] if aggregation overflows or the tree cannot be serialized.
 pub fn render_html(rows: &[MassRow]) -> Result<String, Error> {
     let title = html_escape(&label(rows));
-    let data = json::render_json(rows)?.replace('<', "\\u003c");
+    let data = serde_json::to_string_pretty(&tree(rows)?)?.replace('<', "\\u003c");
     let mut out = head(&title);
     out.push_str(&treemap_script(&data));
     out.push_str("</body>\n</html>\n");

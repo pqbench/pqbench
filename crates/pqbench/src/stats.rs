@@ -8,6 +8,8 @@
 
 use std::time::Duration;
 
+use serde::Serialize;
+
 /// How to reduce a sample set to the reported value. Both are "the mean over
 /// some subset of samples": fastest = the mean over the single best sample,
 /// mean = the mean over all of them.
@@ -31,7 +33,7 @@ pub struct Config {
 /// total time is the sum of the means and its SE² is the sum of the SE²s
 /// (independent variances add). `fastest` mode falls out naturally — a single
 /// sample has SE² 0.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Estimate {
     /// Number of samples the mean is over.
     pub n: u64,

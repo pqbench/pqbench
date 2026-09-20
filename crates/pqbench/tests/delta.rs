@@ -3,19 +3,30 @@
 mod support;
 
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
-use pqbench::table::delta::{read_local, read_remote};
+use pqbench::table::delta::{delta, render_json, render_text, DeltaRequest};
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
+
+fn request(table: impl Into<String>, version: Option<u64>) -> DeltaRequest {
+    DeltaRequest {
+        table: table.into(),
+        version,
+    }
+}
 
 #[tokio::test]
 async fn resolves_versions_and_weights_columns_by_total_rows() {
     let fixture = Fixture::new();
-    let previous = read_local(fixture.path(), Some(0)).await.unwrap();
+    let previous = delta(&request(fixture.path().to_string_lossy(), Some(0)))
+        .await
+        .unwrap();
     assert_eq!(previous.version, 0);
     assert_eq!(previous.file_count, 2);
     assert_eq!(previous.physical_rows, 7);
 
-    let latest = read_local(fixture.path(), None).await.unwrap();
+    let latest = delta(&request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
     assert_eq!(latest.version, 1);
     assert_eq!(latest.file_count, 2);
     assert_eq!(latest.physical_rows, 14);
@@ -36,20 +47,17 @@ async fn resolves_versions_and_weights_columns_by_total_rows() {
     assert_eq!(latest.compressed_column_bytes, bytes);
     assert_eq!(latest.uncompressed_column_bytes, uncompressed);
     assert_eq!(latest.compressed_bytes_per_row(), bytes as f64 / 14.0);
-    let report: serde_json::Value =
-        serde_json::from_str(&pqbench::table::delta::json(&latest).unwrap()).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&render_json(&latest).unwrap()).unwrap();
     assert_eq!(report["physical_rows"], 14);
     assert_eq!(report["columns"][0]["compressed_bytes"], bytes);
-    assert!(pqbench::table::delta::render(&latest)
-        .unwrap()
-        .contains("physical rows: 14"));
+    assert!(render_text(&latest).unwrap().contains("physical rows: 14"));
 }
 
 #[tokio::test]
 async fn reads_a_table_uri_with_the_public_remote_api() {
     let fixture = Fixture::new();
     let uri = url::Url::from_directory_path(fixture.path()).unwrap();
-    let report = read_remote(uri.as_str(), None).await.unwrap();
+    let report = delta(&request(uri.as_str(), None)).await.unwrap();
 
     assert_eq!(report.version, 1);
     assert_eq!(report.file_count, 2);
@@ -67,13 +75,15 @@ async fn ignores_tombstoned_and_untracked_files() {
     .unwrap();
     std::fs::write(fixture.path().join("untracked.parquet"), b"not parquet").unwrap();
     assert_eq!(
-        read_local(fixture.path(), None)
+        delta(&request(fixture.path().to_string_lossy(), None))
             .await
             .unwrap()
             .physical_rows,
         14
     );
-    assert!(read_local(fixture.path(), Some(0)).await.is_err());
+    assert!(delta(&request(fixture.path().to_string_lossy(), Some(0)))
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -89,7 +99,9 @@ async fn resolves_checkpoint_after_old_json_is_removed() {
         .await
         .unwrap();
     std::fs::remove_file(fixture.path().join("_delta_log/00000000000000000000.json")).unwrap();
-    let report = read_local(fixture.path(), Some(1)).await.unwrap();
+    let report = delta(&request(fixture.path().to_string_lossy(), Some(1)))
+        .await
+        .unwrap();
     assert_eq!(report.physical_rows, 14);
     assert_eq!(report.file_count, 2);
 }
@@ -104,7 +116,9 @@ async fn empty_snapshot_has_zero_totals() {
             remove("part=a/added.parquet"),
         ],
     );
-    let report = read_local(fixture.path(), None).await.unwrap();
+    let report = delta(&request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
     assert_eq!(report.version, 2);
     assert_eq!(report.file_count, 0);
     assert_eq!(report.physical_rows, 0);
@@ -118,14 +132,14 @@ async fn missing_or_changed_active_files_fail_without_partial_results() {
     let fixture = Fixture::new();
     let path = fixture.path().join("part=a/added.parquet");
     std::fs::write(&path, b"changed").unwrap();
-    let error = read_local(fixture.path(), None)
+    let error = delta(&request(fixture.path().to_string_lossy(), None))
         .await
         .err()
         .unwrap()
         .to_string();
     assert!(error.contains("size differs from log"), "{error}");
     std::fs::remove_file(path).unwrap();
-    let error = read_local(fixture.path(), None)
+    let error = delta(&request(fixture.path().to_string_lossy(), None))
         .await
         .err()
         .unwrap()
@@ -136,9 +150,11 @@ async fn missing_or_changed_active_files_fail_without_partial_results() {
 #[tokio::test]
 async fn rejects_missing_versions_and_non_tables() {
     let fixture = Fixture::new();
-    assert!(read_local(fixture.path(), Some(99)).await.is_err());
+    assert!(delta(&request(fixture.path().to_string_lossy(), Some(99)))
+        .await
+        .is_err());
     let empty = tempfile::tempdir().unwrap();
-    let error = read_local(empty.path(), None)
+    let error = delta(&request(empty.path().to_string_lossy(), None))
         .await
         .err()
         .unwrap()
@@ -152,7 +168,9 @@ async fn rejects_unsupported_column_mapping() {
     // A feature advertised without valid mapping metadata must be rejected by
     // either delta-rs protocol validation or our reporting capability check.
     fixture.commit(2, &[metadata(json!({"delta.columnMapping.mode": "name"}))]);
-    assert!(read_local(fixture.path(), None).await.is_err());
+    assert!(delta(&request(fixture.path().to_string_lossy(), None))
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -167,7 +185,7 @@ async fn rejects_deletion_vectors_before_reading_data_files() {
         "cardinality": 1
     });
     fixture.commit(2, &[add]);
-    let error = read_local(fixture.path(), None)
+    let error = delta(&request(fixture.path().to_string_lossy(), None))
         .await
         .err()
         .unwrap()
@@ -190,7 +208,7 @@ async fn rejects_external_data_paths() {
         outside.path().file_name().unwrap().to_string_lossy()
     ));
     fixture.commit(2, &[add]);
-    let error = read_local(fixture.path(), None)
+    let error = delta(&request(fixture.path().to_string_lossy(), None))
         .await
         .err()
         .unwrap()
@@ -210,7 +228,7 @@ async fn rejects_symlink_escape_from_table_directory() {
     let mut add = fixture.add("part=a/added.parquet", "a", 9);
     add["add"]["path"] = json!("escape/outside.parquet");
     fixture.commit(2, &[add]);
-    let error = read_local(fixture.path(), None)
+    let error = delta(&request(fixture.path().to_string_lossy(), None))
         .await
         .err()
         .unwrap()

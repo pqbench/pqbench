@@ -39,16 +39,21 @@ async fn measures_a_local_file_from_its_footer() {
 }
 
 #[tokio::test]
-async fn emits_the_tree_as_composable_json() {
+async fn emits_composable_json_per_column() {
     let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
         .await
         .unwrap();
     let output = render_json(&rows).unwrap();
 
-    let tree: serde_json::Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(tree["name"], "small_snappy.parquet");
-    assert!(tree["value"].is_number());
-    assert!(tree["children"].is_array());
+    let summary: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(summary["file_count"], 1);
+    assert!(summary["num_rows"].as_u64().unwrap() > 0);
+    let columns = summary["columns"].as_array().unwrap();
+    assert!(!columns.is_empty());
+    assert!(columns[0]["path"].is_string());
+    assert!(columns[0]["compressed_bytes"].is_number());
+    // The JSON is a flat table, not a d3 treemap hierarchy.
+    assert!(summary.get("children").is_none());
 }
 
 #[tokio::test]

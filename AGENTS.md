@@ -31,8 +31,9 @@ Follow Google AIP conventions for the public surface (AIP-121/122/190/136/140/14
   for resources; custom methods are imperative verbs (`render`, `aggregate`,
   `measure`, `bench_file`, `read_masses`). No `get` prefix.
 - **Types** — `CamelCase` nouns (`ReportRow`, `MassNode`, `Estimate`, `ChunkResult`).
-- **Fields/struct members** — `snake_case` nouns, not verbs; booleans as
-  `is_`/`has_`/`can_`; no field/type name collision (`ReportRow.rows`).
+- **Fields/struct members** — `snake_case` nouns, not verbs; booleans omit the
+  verb prefix (`dictionary`, `json` — not `is_dictionary`; AIP-140); no
+  field/type name collision (`ReportRow.rows`).
 - **Units** are spelled out, never ambiguous abbreviations (AIP-141):
   `megabytes_per_second`, not `mbps`/`mb_per_s`; `_duration`/`_durations`, not
   `_times`; `_estimate` for a measurement (not `_measurement`).
@@ -128,8 +129,8 @@ analogy, convention, or precedent:
 
 ## Repo layout
 
-- `crates/pqbench/` — the library (bytemass, codecs, compression, lz, parquet,
-  report, stats)
+- `crates/pqbench/` — the library (bench, bytemass, codecs, compression, lz,
+  parquet, report, stats)
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
 - `scripts/` — build / sample / smoke-test helpers
 - `docs/` — user documentation (e.g. `docker.md`)

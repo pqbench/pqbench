@@ -20,7 +20,7 @@ pub struct Page {
     /// Number of values in this page.
     pub num_values: u32,
     /// True for a dictionary page (first page of a dictionary-encoded chunk).
-    pub is_dictionary: bool,
+    pub dictionary: bool,
 }
 
 /// A column chunk: the pages of one column in one row group.
