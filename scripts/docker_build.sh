@@ -36,4 +36,5 @@ codec_flags="-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-ma
 export CXXFLAGS="$codec_flags $cpuflag=$march"
 export RUSTFLAGS="-C target-cpu=$march"
 
-exec cargo build --locked --release --package pqbench-cli
+# Core only: the image ships without the aws/delta/delta-s3 features.
+exec cargo build --locked --release --package pqbench-cli --no-default-features

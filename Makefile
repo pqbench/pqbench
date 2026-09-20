@@ -1,10 +1,17 @@
 # Standard Rust workspace developer/orchestration targets.
-# Overridable without modifying this file: CARGO (default: cargo).
-# Example: make CARGO=cargo+  build
+# Overridable without modifying this file:
+#   CARGO          (default: cargo)
+#   CARGO_FEATURES (default: empty) feature selection, e.g. --all-features
+#   TEST_FLAGS     (default: empty) test-harness args after `--`, e.g. --include-ignored
+# Examples:
+#   make build CARGO_FEATURES="--features aws"
+#   make test  CARGO_FEATURES=--all-features TEST_FLAGS=--include-ignored
 
 CARGO ?= cargo
+CARGO_FEATURES ?=
+TEST_FLAGS ?=
 
-.PHONY: all fmt fmt-check build test lint cache-stats samples e2e check clean
+.PHONY: all fmt fmt-check build test lint cache-stats samples check clean
 
 all: fmt build test lint
 
@@ -15,13 +22,13 @@ fmt-check:
 	$(CARGO) fmt --all -- --check
 
 build:
-	$(CARGO) build --workspace
+	$(CARGO) build --workspace $(CARGO_FEATURES)
 
 test:
-	$(CARGO) test --workspace
+	$(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
 
 lint:
-	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	$(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
 
 cache-stats:
 	@if command -v sccache >/dev/null 2>&1; then \
@@ -33,10 +40,6 @@ cache-stats:
 # Fetch open-dataset sample parquet files into local/samples/ for local testing.
 samples:
 	./scripts/fetch_samples.sh
-
-# Network e2e (ignored by default): measure a public S3 object anonymously.
-e2e:
-	$(CARGO) test -p pqbench --features aws --test redset_e2e -- --ignored
 
 check: fmt-check lint test
 

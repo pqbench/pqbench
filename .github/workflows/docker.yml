@@ -42,7 +42,9 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           tags: pqbench:test
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+          # mode=min caches only the final image layers; mode=max also caches
+          # every intermediate layer (hundreds of blobs) and blows the cache budget.
+          cache-to: type=gha,mode=min,scope=docker-${{ matrix.arch }}
       - name: Smoke test
         run: sh scripts/test_docker.sh pqbench:test
 
