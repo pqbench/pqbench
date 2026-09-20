@@ -6,6 +6,7 @@ mod bench;
 mod bytemass;
 mod compression;
 mod lz;
+mod source;
 
 #[cfg(feature = "delta")]
 mod delta;
@@ -50,7 +51,10 @@ Examples:
     Bytemass(bytemass::BytemassArgs),
     /// analyze the active Parquet files in a local Delta snapshot
     #[cfg(feature = "delta")]
-    #[command(after_help = "Example:\n  pqbench delta ./table --json")]
+    #[command(after_help = r#"Examples:
+  pqbench delta ./table --json
+  producer | pqbench delta --source -
+"#)]
     Delta(delta::DeltaArgs),
 }
 
