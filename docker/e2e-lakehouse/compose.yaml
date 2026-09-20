@@ -21,22 +21,6 @@ services:
       timeout: 3s
       retries: 30
 
-  iceberg-rest:
-    image: apache/iceberg-rest-fixture:1.10.0
-    environment:
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
-      AWS_REGION: us-east-1
-      CATALOG_WAREHOUSE: s3://lakehouse/iceberg
-      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://rustfs:9000
-      CATALOG_S3_PATH__STYLE__ACCESS: "true"
-    ports:
-      - "127.0.0.1:${ICEBERG_REST_PORT:-8181}:8181"
-    depends_on:
-      rustfs:
-        condition: service_healthy
-
   # This service is intentionally server-only: no UI and no external database.
   # Its own metadata is persisted in the named volume below. Catalog entries can
   # point at the same S3-compatible storage used by the other services.
@@ -62,22 +46,19 @@ services:
       rustfs:
         condition: service_healthy
 
-  examples:
+  # A one-off S3 client, not a server: it uploads `table/` and mints the session
+  # credential Unity vends. `make lakehouse` runs it; nothing else needs it.
+  aws:
     profiles: [tools]
-    build: ./client
+    image: amazon/aws-cli:2.36.49
     environment:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
-      # The endpoint a host pqbench will use, for documents that carry vended
-      # credentials. Override when piping into a container on this network.
-      SOURCE_S3_ENDPOINT: http://localhost:${RUSTFS_PORT:-9000}
+      AWS_ENDPOINT_URL: http://rustfs:9000
     volumes:
-      - ducklake-metadata:/state
-      - ./examples.py:/app/examples.py:ro
-    entrypoint: ["python", "/app/examples.py"]
+      - ./table:/table:ro
 
 volumes:
   rustfs-data:
   unity-catalog-data:
-  ducklake-metadata:
