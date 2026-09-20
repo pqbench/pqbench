@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.91.1-alpine3.22 AS build
+FROM rust:1.94.1-alpine3.22 AS build
 
 # TARGETARCH is set automatically by buildx during multi-platform builds
 # (amd64 / arm64 / ...). NATIVE=1 opts into exact-host tuning (local only).
