@@ -1,15 +1,21 @@
 # Unity Catalog → pqbench
 
-A catalog that vends expiring credentials, an S3-compatible object store, and a
-Delta table measured through the pipe between them. Two services, no Spark, no
-Postgres, no UI: [Unity Catalog OSS](https://docs.unitycatalog.io/docker_compose/)
-and [rustfs](https://docs.rustfs.com/en/installation/container/docker/). Unity's
-official image is a large download (about 2.4 GB). Iceberg REST and DuckLake
-examples will land here separately.
+Two catalogs share one S3-compatible object store. Unity Catalog OSS vends
+expiring credentials for a Delta table; an Iceberg REST fixture names an
+Iceberg table. No Spark, no Postgres, no UI:
+[Unity Catalog OSS](https://docs.unitycatalog.io/docker_compose/),
+an [Iceberg REST fixture](https://iceberg.apache.org/spark-quickstart/), and
+[rustfs](https://docs.rustfs.com/en/installation/container/docker/). Unity's
+official image is a large download (about 2.4 GB).
 
-The table is `pqbench.demo.events` — external Delta at `s3://lakehouse/unity/events`,
-three rows, two columns (`id`, `label`). It is committed as data in
-[`table/`](table), so a rerun next month measures the same bytes.
+| Catalog | Table | Objects |
+| --- | --- | --- |
+| Unity Catalog OSS | `pqbench.demo.events` (external Delta) | `s3://lakehouse/unity/events` |
+| Iceberg REST | `demo.events` | `s3://lakehouse/iceberg/demo/events` |
+
+Each table has three rows and two columns (`id`, `label`). The bytes are
+committed under [`table/`](table) and [`iceberg/`](iceberg), so a rerun next
+month measures the same files.
 
 ## Run it
 
@@ -24,10 +30,11 @@ That reaches a stand you can query, in three steps you can also run alone:
 
 | Target | What it does |
 | --- | --- |
-| `make lakehouse-up` | builds pqbench with `--features delta-s3`, starts rustfs, mints the session credential Unity will vend, waits for the catalog API to answer |
+| `make lakehouse-up` | builds pqbench with `--features delta-s3,iceberg-s3`, starts rustfs, mints the session credential Unity will vend, waits for Unity and Iceberg REST to answer |
 | `make lakehouse-seed-s3` | uploads [`table/`](table) to `s3://lakehouse/unity/events` |
 | `make lakehouse-seed-unity` | registers `pqbench.demo.events` as an external Delta table |
-| `make lakehouse` | all three, then the credential-vending check below |
+| `make lakehouse-seed-iceberg` | uploads [`iceberg/`](iceberg) and registers `demo.events` over REST |
+| `make lakehouse` | all of the above, then the checks below |
 
 Every step is idempotent, and the minted credential is cached in
 `local/lakehouse/vended.env` for its 12-hour life, so a rerun neither mints a new
@@ -82,9 +89,26 @@ id                                      22.00
 total                                   46.00
 ```
 
-`make lakehouse` runs exactly this pipe as its last step. Pass `--d3` to
-`bytemass` to get a treemap, or stop after `pqbench table` and pipe to `jq .`
-to read the log document itself.
+Iceberg REST does not vend credentials. `loadTable` returns the metadata JSON
+location; `pqbench table` reads that and the manifests:
+
+```bash
+ICEBERG=http://localhost:8181
+S3=http://localhost:9000
+
+curl -s $ICEBERG/v1/namespaces/demo/tables/events |
+  jq -c --arg s3 "$S3" '{kind: "pqbench.remote-source", version: 1,
+    inputs: [."metadata-location"],
+    env: {AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
+      AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
+      AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' |
+  target/debug/pqbench table |
+  target/debug/pqbench bytemass
+```
+
+`make lakehouse` runs both pipes as its last step. Pass `--d3` to `bytemass` to
+get a treemap, or stop after `pqbench table` and pipe to `jq .` to read the
+log document itself.
 
 The document is `{"kind": "pqbench.remote-source", "version": 1, "inputs": [...],
 "env": {...}}`. The producer answers *which table*, `pqbench table` detects
@@ -144,7 +168,8 @@ the pipe rather than caching it in your shell. Azure and GCP return
 ## Endpoints and state
 
 Host endpoints bind to loopback: S3 `http://localhost:9000`, Unity Catalog
-`http://localhost:8080`. Override with `RUSTFS_PORT` and `UNITY_CATALOG_PORT`.
+`http://localhost:8080`, Iceberg REST `http://localhost:8181`. Override with
+`RUSTFS_PORT`, `UNITY_CATALOG_PORT`, and `ICEBERG_REST_PORT`.
 Containers on the Compose network reach the same objects at `http://rustfs:9000`,
 so a pqbench running there wants that endpoint instead of `localhost`.
 Credentials are the local dummy values `test` / `test`, region `us-east-1`, HTTP
@@ -152,7 +177,8 @@ and path-style S3 — hence `AWS_ALLOW_HTTP` and
 `AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false`.
 
 The images are pinned (`rustfs/rustfs:1.0.0`, `unitycatalog/unitycatalog:v0.6.0`,
-and `amazon/aws-cli:2.36.49` as a one-off client); bump them deliberately.
+`apache/iceberg-rest-fixture:1.10.0`, and `amazon/aws-cli:2.36.49` as a one-off
+client); bump them deliberately.
 Compose polls rustfs's `GET /health` with its bundled `curl` and starts Unity
 only once that answers.
 
