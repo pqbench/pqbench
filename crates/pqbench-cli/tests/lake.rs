@@ -138,10 +138,17 @@ fn table_refs(records: &[Value]) -> Vec<Value> {
 }
 
 #[test]
-fn lake_lists_delta_tables_as_ndjson_on_a_pipe() {
+fn lake_lists_delta_and_iceberg_tables_as_ndjson_on_a_pipe() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("sales/events/_delta_log")).unwrap();
     std::fs::create_dir_all(root.path().join("orders/_delta_log")).unwrap();
+    std::fs::create_dir_all(root.path().join("catalog/reviews/metadata")).unwrap();
+    std::fs::write(
+        root.path()
+            .join("catalog/reviews/metadata/v1.metadata.json"),
+        "{}",
+    )
+    .unwrap();
     let output = pqbench().arg("lake").arg(root.path()).output().unwrap();
     assert!(
         output.status.success(),
@@ -151,10 +158,11 @@ fn lake_lists_delta_tables_as_ndjson_on_a_pipe() {
     let records = ndjson(&output.stdout);
     assert_eq!(records[0]["event"], "begin");
     let refs = table_refs(&records);
-    assert_eq!(refs[0]["id"], "orders");
-    assert_eq!(refs[1]["id"], "sales/events");
+    assert_eq!(refs[0]["id"], "catalog/reviews");
+    assert_eq!(refs[1]["id"], "orders");
+    assert_eq!(refs[2]["id"], "sales/events");
     assert_eq!(records.last().unwrap()["event"], "end");
-    assert_eq!(records.last().unwrap()["table_count"], 2);
+    assert_eq!(records.last().unwrap()["table_count"], 3);
 }
 
 #[test]
@@ -184,6 +192,71 @@ fn lake_include_and_exclude_filter_directory_names() {
         .map(|record| record["id"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(ids, ["sales/events"]);
+}
+
+#[test]
+fn lake_file_uri_matches_a_bare_path() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("orders/_delta_log")).unwrap();
+    std::fs::create_dir_all(root.path().join("reviews/data/nested/_delta_log")).unwrap();
+    std::fs::create_dir_all(root.path().join("reviews/metadata")).unwrap();
+    std::fs::write(root.path().join("reviews/metadata/v1.metadata.json"), "{}").unwrap();
+    let path = pqbench().arg("lake").arg(root.path()).output().unwrap();
+    assert!(
+        path.status.success(),
+        "{}",
+        String::from_utf8_lossy(&path.stderr)
+    );
+    let uri = format!("file://{}", root.path().display());
+    let file = pqbench().arg("lake").arg(&uri).output().unwrap();
+    assert!(
+        file.status.success(),
+        "{}",
+        String::from_utf8_lossy(&file.stderr)
+    );
+    let from_path: Vec<_> = table_refs(&ndjson(&path.stdout))
+        .into_iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+    let from_file: Vec<_> = table_refs(&ndjson(&file.stdout))
+        .into_iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(from_path, ["orders", "reviews"]);
+    assert_eq!(from_path, from_file);
+}
+
+#[test]
+fn lake_max_depth_does_not_walk_past_the_bound() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("orders/_delta_log")).unwrap();
+    std::fs::create_dir_all(root.path().join("sales/events/_delta_log")).unwrap();
+    let output = pqbench()
+        .args(["lake", root.path().to_str().unwrap(), "--max-depth", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ids: Vec<_> = table_refs(&ndjson(&output.stdout))
+        .into_iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["orders"]);
+}
+
+#[cfg(not(feature = "aws"))]
+#[test]
+fn lake_names_the_missing_aws_feature_for_s3() {
+    let output = pqbench()
+        .args(["lake", "s3://bucket/warehouse"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("aws"), "{stderr}");
 }
 
 #[test]

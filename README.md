@@ -100,23 +100,29 @@ producer | pqbench table | pqbench bytemass
 
 ### lake
 
-List tables as `pqbench.table-ref` lines. A directory that contains
-`_delta_log` is one Delta table. A `pqbench.lake-source` document, from a file
-or stdin, lists a catalog. `GET /v1/config` chooses the protocol: a 200 with a
-`defaults` object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is
-Unity. A down catalog is an error, not Unity. The same Unity routes serve
-[Unity Catalog OSS](https://docs.unitycatalog.io/) and
-[Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
-then schemas, then tables, following `next_page_token`. Iceberg REST lists
-namespaces and tables, then `loadTable` for each metadata location.
-`--concurrency` lists schemas or namespaces in parallel. `--include` /
-`--exclude` match an FQN (`main`, `main.default`, `main.default.events`) as a
-glob or a prefix, and prune the walk when the leading name is a literal. `token`
-is the Databricks bearer token. `env` holds `AWS_*` storage credentials and is
-copied onto each table-ref. `info` stays unset until `pqbench table` loads.
+List tables as `pqbench.table-ref` lines. A directory, `file://` URI, or
+`s3://` prefix is walked until a table marker that `pqbench table` also
+accepts: `_delta_log` is Delta; Iceberg is `metadata/version-hint.text` or
+`metadata/*.metadata.json` (one path component). A remote walk lists each
+prefix once and reads format off the listing (`_delta_log/` or Iceberg
+metadata objects) instead of probing every child with HEADs. Children of a
+table are not searched. UniForm stays Delta. `file://` and a bare path name
+the same tables. `--max-depth` (default 8) bounds a tree with no marker.
+`--concurrency` lists sibling prefixes, schemas, or namespaces in parallel.
+`s3://` listing needs `--features aws`. A `pqbench.lake-source` document,
+from a file or stdin, lists a catalog. `GET /v1/config` chooses the protocol:
+a 200 with a `defaults` object is Iceberg REST; a 200 without `defaults`, or
+HTTP 404, is Unity. A down catalog is an error, not Unity. The same Unity
+routes serve [Unity Catalog OSS](https://docs.unitycatalog.io/) and
+[Databricks](https://docs.databricks.com/api/workspace/tables/list).
+`--include` / `--exclude` match an FQN as a glob or a prefix, and prune the
+walk when the leading name is a literal. `token` is the Databricks bearer
+token. `env` holds `AWS_*` storage credentials and is copied onto each
+table-ref. `info` stays unset until `pqbench table` loads.
 
 ```sh
 pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
+pqbench lake s3://bucket/warehouse --max-depth 2 --concurrency 8 | pqbench table | pqbench bytemass
 pqbench lake unity.json --include main --concurrency 8 | pqbench table | pqbench bytemass
 ```
 

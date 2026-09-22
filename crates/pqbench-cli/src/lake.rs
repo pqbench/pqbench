@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -14,14 +15,17 @@ use crate::CliError;
 /// Arguments for `lake`.
 #[derive(Args)]
 pub(crate) struct LakeArgs {
-    /// lake directory, a `pqbench.lake` document, or `-` for standard input
+    /// lake directory, object URI, a `pqbench.lake` document, or `-` for stdin
     input: Option<String>,
     /// zstd NDJSON stream (required on a terminal)
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// catalogs, schemas, or tables to list at once
+    /// catalogs, schemas, prefixes, or tables to list at once
     #[arg(long, default_value = "4", value_name = "N")]
     concurrency: NonZeroUsize,
+    /// path components below the walk root to search
+    #[arg(long = "max-depth", default_value = "8", value_name = "N")]
+    max_depth: NonZeroUsize,
     /// keep FQNs that match a glob or prefix (`main`, `main.default`, `main.default.events`)
     #[arg(long = "include", value_name = "PATTERN")]
     include: Vec<String>,
@@ -45,15 +49,22 @@ async fn run_async(args: &LakeArgs) -> Result<(), CliError> {
         version: 1,
         event: "begin",
     })?;
+    let concurrency = args.concurrency.get();
+    let max_depth = args.max_depth.get();
     let tables = match &args.input {
         None if !std::io::stdin().is_terminal() => {
-            stream_document("-", &filter, args.concurrency.get(), &mut emit).await?
+            stream_document("-", &filter, concurrency, &mut emit).await?
         }
-        None => return Err("lake needs a directory or a document on standard input".into()),
+        None => {
+            return Err("lake needs a directory, a URI, or a document on standard input".into())
+        }
         Some(value) if document::looks_like_document(value) => {
-            stream_document(value, &filter, args.concurrency.get(), &mut emit).await?
+            stream_document(value, &filter, concurrency, &mut emit).await?
         }
-        Some(path) => write_discovered(Path::new(path), &filter, &mut emit)?,
+        Some(uri) if uri.contains("://") => {
+            write_discovered_uri(uri, &filter, max_depth, &mut emit).await?
+        }
+        Some(path) => write_discovered(Path::new(path), &filter, max_depth, &mut emit)?,
     };
     emit.write(&EndRecord {
         kind: "pqbench.lake",
@@ -82,7 +93,8 @@ async fn stream_document(
     } else {
         document::open_file(Path::new(input))?
     };
-    document::visit_records(reader, |record| match record {
+    document::visit_records(reader, |record| {
+        match record {
         Record::Lake(listed) => {
             lake = Some(listed);
             Ok(())
@@ -108,9 +120,10 @@ async fn stream_document(
         | Record::Log { .. }
         | Record::File { .. }
         | Record::End { .. } => Err(
-            "pqbench lake reads a directory, a pqbench.lake document, or a pqbench.lake-source"
+            "pqbench lake reads a directory, a URI, a pqbench.lake document, or a pqbench.lake-source"
                 .into(),
         ),
+    }
     })?;
     if let Some(source) = source {
         let token = source.token.as_deref().filter(|token| !token.is_empty());
@@ -135,8 +148,26 @@ async fn stream_document(
     Err("empty lake document".into())
 }
 
-fn write_discovered(root: &Path, filter: &NameFilter, emit: &mut Emit) -> Result<usize, CliError> {
-    write_lake(&lake::discover(root)?, filter, emit)
+fn write_discovered(
+    root: &Path,
+    filter: &NameFilter,
+    max_depth: usize,
+    emit: &mut Emit,
+) -> Result<usize, CliError> {
+    write_lake(&lake::discover_at(root, Some(max_depth))?, filter, emit)
+}
+
+async fn write_discovered_uri(
+    uri: &str,
+    filter: &NameFilter,
+    max_depth: usize,
+    emit: &mut Emit,
+) -> Result<usize, CliError> {
+    write_lake(
+        &lake::discover_uri_at(uri, &BTreeMap::new(), Some(max_depth)).await?,
+        filter,
+        emit,
+    )
 }
 
 fn write_lake(lake: &Lake, filter: &NameFilter, emit: &mut Emit) -> Result<usize, CliError> {

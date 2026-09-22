@@ -7,7 +7,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::table::TableInfo;
+use crate::object_store::{self, PrefixListing};
+use crate::table::{self, TableInfo};
 
 /// Errors discovering a lake.
 #[derive(Debug)]
@@ -50,12 +51,23 @@ pub struct Lake {
     pub tables: Vec<LakeTable>,
 }
 
-/// Find every Delta table under `root`. A directory that contains `_delta_log`
-/// is a table, and its children are not searched.
+/// Find every Delta or Iceberg table under `root`. A directory that contains
+/// `_delta_log`, `metadata/version-hint.text`, or `metadata/*.metadata.json`
+/// is a table, and its children are not searched. Delta wins when both markers
+/// are present (UniForm).
 ///
 /// # Errors
-/// Fails when `root` cannot be opened or it contains no Delta tables.
+/// Fails when `root` cannot be opened or it contains no tables.
 pub fn discover(root: &Path) -> Result<Lake, Error> {
+    discover_at(root, None)
+}
+
+/// Find every Delta or Iceberg table under `root`, stopping after
+/// `max_depth` path components below the root. `None` walks until a marker.
+///
+/// # Errors
+/// Fails when `root` cannot be opened or it contains no tables.
+pub fn discover_at(root: &Path, max_depth: Option<usize>) -> Result<Lake, Error> {
     let root = root
         .canonicalize()
         .map_err(|e| Error(format!("cannot open lake {}: {e}", root.display())))?;
@@ -63,40 +75,58 @@ pub fn discover(root: &Path) -> Result<Lake, Error> {
         return Err(Error(format!("{} is not a directory", root.display())));
     }
     let mut tables = Vec::new();
-    walk(&root, &root, &mut tables)?;
-    if tables.is_empty() {
-        return Err(Error(format!("no delta tables under {}", root.display())));
-    }
-    tables.sort_by(|left, right| left.name.cmp(&right.name));
+    walk(&root, &root, 0, max_depth, &mut tables)?;
     let name = root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned());
-    Ok(Lake {
-        kind: "pqbench.lake".into(),
-        version: 1,
-        name,
-        tables,
-    })
+    finish(name, tables, root.display())
 }
 
-fn walk(root: &Path, dir: &Path, tables: &mut Vec<LakeTable>) -> Result<(), Error> {
-    if dir.join("_delta_log").is_dir() {
-        let name = if dir == root {
-            dir.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "table".into())
-        } else {
-            dir.strip_prefix(root)
-                .map_err(|e| Error(e.to_string()))?
-                .to_string_lossy()
-                .replace('\\', "/")
-        };
+/// Find every Delta or Iceberg table under `uri`. A local path or `file://`
+/// URI walks the filesystem. An `s3://` prefix lists one level at a time until
+/// a table marker, and requires the `aws` feature.
+///
+/// # Errors
+/// Fails when the location cannot be opened, listing fails, or no tables are
+/// found.
+pub async fn discover_uri(uri: &str, env: &BTreeMap<String, String>) -> Result<Lake, Error> {
+    discover_uri_at(uri, env, None).await
+}
+
+/// Find every table under `uri`. `max_depth` is path components below the
+/// walk root; `None` is unbounded.
+///
+/// # Errors
+/// Fails when the location cannot be opened, listing fails, or no tables are
+/// found.
+pub async fn discover_uri_at(
+    uri: &str,
+    env: &BTreeMap<String, String>,
+    max_depth: Option<usize>,
+) -> Result<Lake, Error> {
+    if is_local(uri) {
+        return discover_at(&local_path(uri)?, max_depth);
+    }
+    discover_listed(uri, env, max_depth).await
+}
+
+fn walk(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    max_depth: Option<usize>,
+    tables: &mut Vec<LakeTable>,
+) -> Result<(), Error> {
+    if is_table(dir)? {
         tables.push(LakeTable {
-            name,
+            name: table_name(root, dir)?,
             uri: dir.to_string_lossy().into_owned(),
             env: BTreeMap::new(),
             info: None,
         });
+        return Ok(());
+    }
+    if max_depth.is_some_and(|max| depth >= max) {
         return Ok(());
     }
     let entries =
@@ -110,9 +140,151 @@ fn walk(root: &Path, dir: &Path, tables: &mut Vec<LakeTable>) -> Result<(), Erro
         if entry.file_name().to_string_lossy().starts_with('.') {
             continue;
         }
-        walk(root, &path, tables)?;
+        walk(root, &path, depth + 1, max_depth, tables)?;
     }
     Ok(())
+}
+
+fn is_table(dir: &Path) -> Result<bool, Error> {
+    table::local_format(dir)
+        .map(|format| format.is_some())
+        .map_err(|error| Error(error.to_string()))
+}
+
+fn table_name(root: &Path, dir: &Path) -> Result<String, Error> {
+    if dir == root {
+        return Ok(dir
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "table".into()));
+    }
+    Ok(dir
+        .strip_prefix(root)
+        .map_err(|e| Error(e.to_string()))?
+        .to_string_lossy()
+        .replace('\\', "/"))
+}
+
+async fn discover_listed(
+    uri: &str,
+    env: &BTreeMap<String, String>,
+    max_depth: Option<usize>,
+) -> Result<Lake, Error> {
+    let options: Vec<(String, String)> = env
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    let root = uri.trim_end_matches('/').to_string();
+    let mut tables = Vec::new();
+    let mut pending = vec![(root.clone(), 0usize)];
+    while let Some((dir, depth)) = pending.pop() {
+        let listing = object_store::list_prefix(&dir, &options)
+            .await
+            .map_err(|e| Error(e.to_string()))?;
+        if listing_is_delta(&listing) {
+            tables.push(listed_table(&root, &dir, env));
+            continue;
+        }
+        if listing.prefixes.iter().any(|name| name == "metadata")
+            && metadata_is_iceberg(&dir, &options).await?
+        {
+            tables.push(listed_table(&root, &dir, env));
+            continue;
+        }
+        if max_depth.is_some_and(|max| depth >= max) {
+            continue;
+        }
+        for prefix in listing.prefixes {
+            if prefix.starts_with('.') || prefix.is_empty() {
+                continue;
+            }
+            if prefix == "_delta_log" || prefix == "metadata" {
+                continue;
+            }
+            pending.push((join_uri(&dir, &prefix), depth + 1));
+        }
+    }
+    finish(uri_name(&root), tables, &root)
+}
+
+fn listed_table(root: &str, dir: &str, env: &BTreeMap<String, String>) -> LakeTable {
+    LakeTable {
+        name: remote_table_name(root, dir),
+        uri: dir.to_string(),
+        env: env.clone(),
+        info: None,
+    }
+}
+
+fn listing_is_delta(listing: &PrefixListing) -> bool {
+    listing.prefixes.iter().any(|name| name == "_delta_log")
+}
+
+async fn metadata_is_iceberg(dir: &str, options: &[(String, String)]) -> Result<bool, Error> {
+    let listing = object_store::list_prefix(&join_uri(dir, "metadata"), options)
+        .await
+        .map_err(|e| Error(e.to_string()))?;
+    Ok(listing.objects.iter().any(|name| is_iceberg_metadata(name)))
+}
+
+fn is_iceberg_metadata(name: &str) -> bool {
+    !name.contains('/')
+        && (name == "version-hint.text"
+            || (name.ends_with(".metadata.json") && name != ".metadata.json"))
+}
+
+fn remote_table_name(root: &str, dir: &str) -> String {
+    let root = root.trim_end_matches('/');
+    let dir = dir.trim_end_matches('/');
+    if dir == root {
+        return uri_name(dir).unwrap_or_else(|| "table".into());
+    }
+    dir.strip_prefix(root)
+        .unwrap_or(dir)
+        .trim_start_matches('/')
+        .to_string()
+}
+
+fn join_uri(base: &str, relative: &str) -> String {
+    format!("{}/{relative}", base.trim_end_matches('/'))
+}
+
+fn uri_name(uri: &str) -> Option<String> {
+    uri.trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .find(|part| !part.is_empty())
+        .map(str::to_string)
+}
+
+fn is_local(uri: &str) -> bool {
+    !uri.contains("://") || uri.starts_with("file://")
+}
+
+fn local_path(uri: &str) -> Result<std::path::PathBuf, Error> {
+    if uri.starts_with("file://") {
+        return url::Url::parse(uri)
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+            .ok_or_else(|| Error("invalid local lake URI".into()));
+    }
+    Ok(std::path::PathBuf::from(uri))
+}
+
+fn finish(
+    name: Option<String>,
+    mut tables: Vec<LakeTable>,
+    root: impl std::fmt::Display,
+) -> Result<Lake, Error> {
+    if tables.is_empty() {
+        return Err(Error(format!("no tables under {root}")));
+    }
+    tables.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(Lake {
+        kind: "pqbench.lake".into(),
+        version: 1,
+        name,
+        tables,
+    })
 }
 
 /// Serialize the lake document as pretty-printed JSON.

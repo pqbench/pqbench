@@ -116,6 +116,14 @@ impl ObjectReader {
     }
 }
 
+/// One level of names under a prefix. Listing does not recurse.
+pub(crate) struct PrefixListing {
+    /// Child prefix names. A table walk stops when one of these is a marker.
+    pub prefixes: Vec<String>,
+    /// Object names at this level (one path component).
+    pub objects: Vec<String>,
+}
+
 /// Open the object named by `uri`.
 ///
 /// `file` URIs always work; `s3`/`s3a` URIs require the `aws` feature. Backend
@@ -138,8 +146,92 @@ pub(crate) fn open(uri: &str, options: &[(String, String)]) -> Result<ObjectRead
     }
 }
 
+/// List one level of children under `uri`. `s3`/`s3a` require the `aws` feature.
+pub(crate) async fn list_prefix(
+    uri: &str,
+    options: &[(String, String)],
+) -> Result<PrefixListing, Error> {
+    let url = Url::parse(uri).map_err(|e| Error(format!("invalid object URI {uri}: {e}")))?;
+    match url.scheme() {
+        "file" => list_file(&url),
+        "s3" | "s3a" => list_s3(&url, options).await,
+        scheme => Err(Error(format!(
+            "listing is not supported for object URI scheme `{scheme}`"
+        ))),
+    }
+}
+
+fn list_file(url: &Url) -> Result<PrefixListing, Error> {
+    let path = url
+        .to_file_path()
+        .map_err(|()| Error(format!("invalid local file URI: {url}")))?;
+    if !path.is_dir() {
+        return Ok(PrefixListing {
+            prefixes: Vec::new(),
+            objects: Vec::new(),
+        });
+    }
+    let entries = std::fs::read_dir(&path)
+        .map_err(|e| Error(format!("cannot list {}: {e}", path.display())))?;
+    let mut prefixes = Vec::new();
+    let mut objects = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| Error(format!("cannot list {}: {e}", path.display())))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        if entry.path().is_dir() {
+            prefixes.push(name);
+        } else {
+            objects.push(name);
+        }
+    }
+    Ok(PrefixListing { prefixes, objects })
+}
+
 #[cfg(feature = "aws")]
 fn s3(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
+    let (store, location) = s3_store(url, options)?;
+    Ok(ObjectReader {
+        source: Source::Remote(store, location),
+    })
+}
+
+#[cfg(feature = "aws")]
+async fn list_s3(url: &Url, options: &[(String, String)]) -> Result<PrefixListing, Error> {
+    let (store, location) = s3_store(url, options)?;
+    let prefix = (!location.as_ref().is_empty()).then_some(&location);
+    let result = store
+        .list_with_delimiter(prefix)
+        .await
+        .map_err(remote_error)?;
+    Ok(PrefixListing {
+        prefixes: result
+            .common_prefixes
+            .iter()
+            .map(|prefix| child_name(location.as_ref(), prefix.as_ref()))
+            .collect(),
+        objects: result
+            .objects
+            .iter()
+            .map(|object| child_name(location.as_ref(), object.location.as_ref()))
+            .filter(|name| !name.is_empty() && !name.contains('/'))
+            .collect(),
+    })
+}
+
+#[cfg(feature = "aws")]
+fn s3_store(
+    url: &Url,
+    options: &[(String, String)],
+) -> Result<
+    (
+        Box<dyn ::object_store::ObjectStore>,
+        ::object_store::path::Path,
+    ),
+    Error,
+> {
     use ::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
     // The AWS_* environment supplies the defaults (credentials, region,
@@ -155,13 +247,29 @@ fn s3(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
     let store = builder.build().map_err(remote_error)?;
     let (_, location) =
         ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
-    Ok(ObjectReader {
-        source: Source::Remote(Box::new(store), location),
-    })
+    Ok((Box::new(store), location))
+}
+
+#[cfg(feature = "aws")]
+fn child_name(parent: &str, child: &str) -> String {
+    let parent = parent.trim_end_matches('/');
+    let child = child.trim_end_matches('/');
+    let relative = match parent.is_empty() {
+        true => child,
+        false => child.strip_prefix(parent).unwrap_or(child),
+    };
+    relative.trim_start_matches('/').to_string()
 }
 
 #[cfg(not(feature = "aws"))]
 fn s3(_url: &Url, _options: &[(String, String)]) -> Result<ObjectReader, Error> {
+    Err(Error(
+        "object URI scheme `s3` requires the `aws` feature".into(),
+    ))
+}
+
+#[cfg(not(feature = "aws"))]
+async fn list_s3(_url: &Url, _options: &[(String, String)]) -> Result<PrefixListing, Error> {
     Err(Error(
         "object URI scheme `s3` requires the `aws` feature".into(),
     ))
