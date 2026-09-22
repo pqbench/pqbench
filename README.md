@@ -136,6 +136,7 @@ pqbench lake unity.json --include main --concurrency 8 | pqbench table | pqbench
 
 ## Documentation
 
+- [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, lake walk, catalogs
 - [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
   naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
