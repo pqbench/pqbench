@@ -70,8 +70,9 @@ always available and never feature-gated.
 ### table
 
 Detect the table format and load its metadata. For Delta this is the
-transaction log and the active files. A terminal pretty-prints the log; a pipe
-writes a `pqbench.table` document that `bytemass` measures:
+transaction log and the active files. For Iceberg it is the metadata JSON and
+Avro manifests. A terminal pretty-prints the log; a pipe writes a
+`pqbench.table` document that `bytemass` measures:
 
 ```sh
 pqbench table ./path/to/table
@@ -80,8 +81,8 @@ pqbench table ./path/to/table | pqbench bytemass --d3 > treemap.html
 ```
 
 Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
-is Iceberg). Iceberg is recognized and rejected until a loader exists. Delta
-needs `--features delta` (`delta-s3` for `s3://`).
+or `.metadata.json` is Iceberg). Delta needs `--features delta` (`delta-s3` for
+`s3://`); Iceberg needs `iceberg` (`iceberg-s3` for `s3://`).
 
 A producer can hand `table` a `pqbench.remote-source` document — one table URI
 plus optional `AWS_*` credentials — and the table document carries those
@@ -119,6 +120,7 @@ pqbench lake unity.json | pqbench table | pqbench bytemass
 - [Unity Catalog E2E example](docker/e2e-lakehouse/README.md) — a catalog vending
   expiring credentials into `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
+- [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
 - [Docker](docs/docker.md) — build, run, and publish a container image
 
 ## Contributing

@@ -15,6 +15,9 @@ aws = ["dep:object_store", "object_store/aws"]
 # Delta snapshot resolution requires Rust 1.91.1 or newer.
 delta = ["dep:deltalake", "dep:buoyant_kernel_derive", "dep:futures"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
+# Iceberg snapshot planning reads metadata JSON and Avro manifests.
+iceberg = ["dep:apache-avro"]
+iceberg-s3 = ["iceberg", "aws"]
 
 [dependencies]
 snappy_src = "0.2.5"
@@ -36,6 +39,7 @@ url = "2"
 # Must match delta-rs 0.32.4's ObjectStore trait version: stores cross that
 # internal boundary. Keep the pin until delta-rs upgrades its dependency.
 object_store = { version = "=0.13.2", optional = true }
+apache-avro = { version = "0.17", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

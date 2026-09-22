@@ -2,11 +2,13 @@
 //!
 //! [`detect`] names the format from on-disk markers before any format-specific
 //! loader runs. [`load`] then fetches the table metadata. For Delta that is the
-//! transaction log plus the resolved active files. Measurement is a later step:
-//! pipe the document to `bytemass`.
+//! transaction log plus the resolved active files; for Iceberg, the metadata
+//! JSON and Avro manifests. Measurement is a later step: pipe the document to
+//! `bytemass`.
 //!
 //! Enable the `delta` feature to load Delta logs. That feature requires Rust
-//! 1.91.1 or newer because of the Delta snapshot dependencies.
+//! 1.91.1 or newer because of the Delta snapshot dependencies. Iceberg needs
+//! `iceberg` (`iceberg-s3` for S3).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,6 +20,8 @@ use crate::object_store;
 
 #[cfg(feature = "delta")]
 pub mod delta;
+#[cfg(feature = "iceberg")]
+pub mod iceberg;
 
 /// Errors detecting a table format or loading its metadata.
 #[derive(Debug)]
@@ -34,6 +38,13 @@ impl std::error::Error for Error {}
 #[cfg(feature = "delta")]
 impl From<delta::Error> for Error {
     fn from(error: delta::Error) -> Self {
+        Error(error.to_string())
+    }
+}
+
+#[cfg(feature = "iceberg")]
+impl From<iceberg::Error> for Error {
+    fn from(error: iceberg::Error) -> Self {
         Error(error.to_string())
     }
 }
@@ -107,7 +118,8 @@ pub struct TableInfo {
 /// Arguments for [`load`].
 #[derive(Debug, Clone)]
 pub struct LoadRequest {
-    /// Local table directory or table URI (`file://`, `s3://`, ...).
+    /// Local table directory, table URI (`file://`, `s3://`, ...), or Iceberg
+    /// metadata JSON.
     pub uri: String,
     /// Snapshot version; `None` selects the latest.
     pub version: Option<u64>,
@@ -118,12 +130,16 @@ pub struct LoadRequest {
 /// Name the table format from well-known markers. Does not load the log.
 ///
 /// Delta wins when `_delta_log` is present. Iceberg is named from
-/// `metadata/version-hint.text`. An unrecognized location is an error.
+/// `metadata/version-hint.text`, `metadata/*.metadata.json`, or a
+/// `.metadata.json` path. An unrecognized location is an error.
 ///
 /// # Errors
 /// Fails when the location cannot be opened, a remote probe fails for a reason
 /// other than a missing marker, or no supported format is present.
 pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFormat, Error> {
+    if is_metadata_json(uri) {
+        return Ok(TableFormat::Iceberg);
+    }
     if is_local(uri) {
         detect_local(&local_path(uri)?)
     } else {
@@ -134,18 +150,16 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// Load table metadata: detect the format, then fetch the log.
 ///
 /// For Delta this is every remaining JSON commit plus the active files of the
-/// requested snapshot. Iceberg is recognized and rejected until a loader exists.
+/// requested snapshot. Iceberg reads metadata JSON and Avro manifests.
 ///
 /// # Errors
 /// As [`detect`], plus format-specific load failures. Delta needs the `delta`
-/// feature (`delta-s3` for S3).
+/// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     match format {
         TableFormat::Delta => load_delta(request).await,
-        TableFormat::Iceberg => Err(Error(
-            "iceberg tables are not supported yet; detected metadata/version-hint.text".into(),
-        )),
+        TableFormat::Iceberg => load_iceberg(request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
     }
 }
@@ -160,6 +174,20 @@ async fn load_delta(request: &LoadRequest) -> Result<TableInfo, Error> {
         let _ = request;
         Err(Error(
             "delta tables require the `delta` feature (`delta-s3` for S3)".into(),
+        ))
+    }
+}
+
+async fn load_iceberg(request: &LoadRequest) -> Result<TableInfo, Error> {
+    #[cfg(feature = "iceberg")]
+    {
+        iceberg::load(request).await.map_err(Error::from)
+    }
+    #[cfg(not(feature = "iceberg"))]
+    {
+        let _ = request;
+        Err(Error(
+            "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
         ))
     }
 }
@@ -214,9 +242,12 @@ fn action_summary(action: &serde_json::Value) -> String {
     match (
         kind.as_str(),
         body.get("path").and_then(|path| path.as_str()),
+        body.get("snapshot-id"),
     ) {
-        ("add", Some(path)) => format!("add {path}"),
-        ("remove", Some(path)) => format!("remove {path}"),
+        ("add", Some(path), _) => format!("add {path}"),
+        ("remove", Some(path), _) => format!("remove {path}"),
+        ("delete", Some(path), _) => format!("delete {path}"),
+        ("snapshot", _, Some(id)) => format!("snapshot {id}"),
         _ => kind.clone(),
     }
 }
@@ -225,10 +256,18 @@ fn detect_local(path: &Path) -> Result<TableFormat, Error> {
     if !path.exists() {
         return Err(Error(format!("cannot open table {}", path.display())));
     }
+    if path.is_file() {
+        if is_metadata_json_path(path) {
+            return Ok(TableFormat::Iceberg);
+        }
+        return Err(unrecognized(path.display()));
+    }
     if path.join("_delta_log").is_dir() {
         return Ok(TableFormat::Delta);
     }
-    if path.join("metadata").join("version-hint.text").is_file() {
+    if path.join("metadata").join("version-hint.text").is_file()
+        || has_metadata_json(&path.join("metadata"))
+    {
         return Ok(TableFormat::Iceberg);
     }
     Err(unrecognized(path.display()))
@@ -282,8 +321,29 @@ fn local_path(uri: &str) -> Result<PathBuf, Error> {
     }
 }
 
+fn is_metadata_json(uri: &str) -> bool {
+    uri.rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name.ends_with(".metadata.json"))
+}
+
+fn is_metadata_json_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".metadata.json"))
+}
+
+fn has_metadata_json(metadata: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(metadata) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| is_metadata_json_path(&entry.path()))
+}
+
 fn unrecognized(location: impl std::fmt::Display) -> Error {
     Error(format!(
-        "unrecognized table format at {location}; supported formats: delta"
+        "unrecognized table format at {location}; supported formats: delta, iceberg"
     ))
 }

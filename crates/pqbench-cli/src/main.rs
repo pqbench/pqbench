@@ -27,7 +27,7 @@ Examples:
   pqbench bytemass part-1.parquet part-2.parquet
   pqbench bytemass 'data/*.parquet'
   pqbench table ./delta-table
-  pqbench table ./delta-table | pqbench bytemass
+  pqbench table ./iceberg-table | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
