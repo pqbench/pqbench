@@ -13,6 +13,16 @@ storage="http://localhost:${RUSTFS_PORT:-9000}"
 location="s3://lakehouse/unity/events"
 vended="local/lakehouse/vended.env"
 
+pqbench_bin() {
+    echo "${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
+}
+
+ensure_pqbench() {
+    local bin
+    bin=$(pqbench_bin)
+    [ -x "$bin" ] || $CARGO build -p pqbench-cli --features delta-s3
+}
+
 # Create, or accept that a previous run already did.
 register() {
     local response
@@ -40,10 +50,10 @@ VENDED_ACCESS_KEY_ID=$key
 VENDED_SECRET_ACCESS_KEY=$secret
 VENDED_SESSION_TOKEN=$token
 EOF
+    chmod 0600 "$vended"
 }
 
 up() {
-    $CARGO build -p pqbench-cli --features delta-s3
     # Storage first: Unity starts with a credential rustfs has to mint.
     compose up -d --wait rustfs
     mint_credential
@@ -72,7 +82,11 @@ seed_unity() {
     register schemas '{"catalog_name": "pqbench", "name": "demo"}'
     # Unity cannot migrate a table definition, so replace it. The table is
     # EXTERNAL: dropping it leaves the objects alone.
-    curl -sS -X DELETE "$unity/tables/pqbench.demo.events" -o /dev/null
+    delete=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$unity/tables/pqbench.demo.events")
+    case "$delete" in
+        200 | 204 | 404) ;;
+        *) echo "DELETE tables/pqbench.demo.events failed: HTTP $delete" >&2; exit 1 ;;
+    esac
     register tables '{
         "catalog_name": "pqbench", "schema_name": "demo", "name": "events",
         "table_type": "EXTERNAL", "data_source_format": "DELTA",
@@ -88,6 +102,9 @@ seed_unity() {
 
 # The README's pipe, so the stand is seen to answer the question it exists for.
 check() {
+    ensure_pqbench
+    local bin
+    bin=$(pqbench_bin)
     curl -sS -X POST "$unity/temporary-table-credentials" \
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity/tables/pqbench.demo.events" |
@@ -99,8 +116,8 @@ check() {
                 AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
                 AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
                 AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
-        target/debug/pqbench table |
-        target/debug/pqbench bytemass --json |
+        "$bin" table |
+        "$bin" bytemass --json |
         jq -e '.num_rows == 3 and .file_count == 1
             and ([.columns[].path] | sort) == ["id", "label"]' > /dev/null
     echo "Unity Catalog ready: $unity/tables/pqbench.demo.events (storage $storage)"
