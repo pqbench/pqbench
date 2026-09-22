@@ -77,7 +77,8 @@ summary and requires `-o`; a pipe streams NDJSON for `bytemass`:
 ```sh
 pqbench table docker/e2e-lakehouse/table -o table.ndjson.zst
 pqbench table docker/e2e-lakehouse/table | pqbench bytemass
-pqbench table docker/e2e-lakehouse/table | pqbench dump --sample first:1
+pqbench table docker/e2e-lakehouse/table | pqbench dump --row-groups first:1 --output sample.parquet
+pqbench table docker/e2e-lakehouse/table | pqbench dump --sample first:1 --csv
 pqbench table docker/e2e-lakehouse/table | pqbench bytemass --d3 > treemap.html
 ```
 
