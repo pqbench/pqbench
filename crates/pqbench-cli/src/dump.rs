@@ -39,13 +39,13 @@ pub(crate) struct DumpArgs {
 }
 
 pub(crate) fn run(args: &DumpArgs) -> Result<(), CliError> {
+    let sample = Sample::parse(&args.sample)?;
+    pattern::keep("", &args.include, &args.exclude)?;
+    let _ = RowGroups::parse(&args.row_groups)?;
     let files = match resolve(args)? {
-        Input::Parquet(inputs) => parquet_files(inputs, args)?,
-        Input::Table(info) => {
-            document::apply_env(&info.env)?;
-            table_files(&info, args, None)?
-        }
-        Input::Lake(lake) => lake_files(lake, args)?,
+        Input::Parquet(inputs) => parquet_files(inputs, sample, args)?,
+        Input::Table(info) => table_files(&info, sample, args, None)?,
+        Input::Lake(lake) => lake_files(lake, sample, args)?,
     };
     let request = DumpRequest {
         files,
@@ -121,7 +121,7 @@ fn from_document(input: &str) -> Result<Input, CliError> {
     }
 }
 
-fn lake_files(lake: Lake, args: &DumpArgs) -> Result<Vec<DumpFile>, CliError> {
+fn lake_files(lake: Lake, sample: Sample, args: &DumpArgs) -> Result<Vec<DumpFile>, CliError> {
     let mut files = Vec::new();
     for table in &lake.tables {
         let info = table.info.as_ref().ok_or_else(|| {
@@ -130,8 +130,7 @@ fn lake_files(lake: Lake, args: &DumpArgs) -> Result<Vec<DumpFile>, CliError> {
                 table.name
             )
         })?;
-        document::apply_env(&info.env)?;
-        files.extend(table_files(info, args, Some(table.name.as_str()))?);
+        files.extend(table_files(info, sample, args, Some(table.name.as_str()))?);
     }
     if files.is_empty() {
         return Err("lake has no files to dump".into());
@@ -139,15 +138,13 @@ fn lake_files(lake: Lake, args: &DumpArgs) -> Result<Vec<DumpFile>, CliError> {
     Ok(files)
 }
 
-fn parquet_files(inputs: Vec<String>, args: &DumpArgs) -> Result<Vec<DumpFile>, CliError> {
+fn parquet_files(
+    inputs: Vec<String>,
+    sample: Sample,
+    args: &DumpArgs,
+) -> Result<Vec<DumpFile>, CliError> {
     let inputs = if selecting(args) {
-        pattern::select(
-            inputs,
-            String::as_str,
-            &args.include,
-            &args.exclude,
-            sample(args)?,
-        )?
+        pattern::select(inputs, String::as_str, &args.include, &args.exclude, sample)?
     } else {
         inputs
     };
@@ -157,16 +154,21 @@ fn parquet_files(inputs: Vec<String>, args: &DumpArgs) -> Result<Vec<DumpFile>, 
             path: input.clone(),
             uri: input,
             table: None,
+            env: Default::default(),
         })
         .collect())
 }
 
 fn table_files(
     info: &TableInfo,
+    sample: Sample,
     args: &DumpArgs,
     table: Option<&str>,
 ) -> Result<Vec<DumpFile>, CliError> {
     if info.files.is_empty() {
+        if !args.include.is_empty() {
+            return Err("no paths matched --include".into());
+        }
         return Ok(Vec::new());
     }
     let files = if selecting(args) {
@@ -175,7 +177,7 @@ fn table_files(
             |file| file.path.as_str(),
             &args.include,
             &args.exclude,
-            sample(args)?,
+            sample,
         )?
     } else {
         info.files.clone()
@@ -186,14 +188,11 @@ fn table_files(
             path: file.path,
             uri: file.uri,
             table: table.map(str::to_string),
+            env: info.env.clone(),
         })
         .collect())
 }
 
 fn selecting(args: &DumpArgs) -> bool {
     !args.include.is_empty() || !args.exclude.is_empty() || args.sample != "all"
-}
-
-fn sample(args: &DumpArgs) -> Result<Sample, CliError> {
-    Ok(Sample::parse(&args.sample)?)
 }
