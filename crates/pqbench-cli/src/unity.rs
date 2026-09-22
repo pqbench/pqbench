@@ -10,23 +10,71 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pqbench::lake::{Lake, LakeTable};
-use serde_json::Value;
+use serde::Deserialize;
 
 use crate::document::LakeSource;
 use crate::CliError;
+
+const PAGE_CAP: usize = 32;
+
+#[derive(Deserialize)]
+struct Named {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CatalogsPage {
+    catalogs: Vec<Named>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SchemasPage {
+    schemas: Vec<Named>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TablesPage {
+    tables: Vec<TableEntry>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TableEntry {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    full_name: Option<String>,
+    #[serde(default)]
+    data_source_format: Option<String>,
+    #[serde(default)]
+    storage_location: Option<String>,
+}
 
 /// List every Delta table the catalog will show, in name order.
 pub(crate) fn list_tables(source: &LakeSource) -> Result<Lake, CliError> {
     let root = api_root(&source.endpoint);
     let token = source.token.as_deref().filter(|token| !token.is_empty());
     let mut tables = Vec::new();
-    for catalog in names(&root, token, "/catalogs", &[], "catalogs")? {
-        let schemas = names(
+    for catalog in names::<CatalogsPage>(
+        &root,
+        token,
+        "/catalogs",
+        &[],
+        |page| page.catalogs.iter().map(|item| item.name.clone()).collect(),
+        |page| page_token(&page.next_page_token),
+    )? {
+        let schemas = names::<SchemasPage>(
             &root,
             token,
             "/schemas",
             &[("catalog_name", catalog.as_str())],
-            "schemas",
+            |page| page.schemas.iter().map(|item| item.name.clone()).collect(),
+            |page| page_token(&page.next_page_token),
         )?;
         for schema in schemas {
             for table in tables_in(&root, token, &catalog, &schema, &source.env)? {
@@ -55,27 +103,31 @@ fn api_root(endpoint: &str) -> String {
     }
 }
 
-fn names(
+fn names<P: for<'de> Deserialize<'de>>(
     root: &str,
     token: Option<&str>,
     path: &str,
     query: &[(&str, &str)],
-    field: &str,
+    field: fn(&P) -> Vec<String>,
+    next: fn(&P) -> Option<String>,
 ) -> Result<Vec<String>, CliError> {
     let mut names = Vec::new();
-    for page in pages(root, token, path, query)? {
-        let Some(items) = page.get(field).and_then(|value| value.as_array()) else {
-            continue;
-        };
-        for item in items {
-            if let Some(name) = item.get("name").and_then(|name| name.as_str()) {
-                if !name.is_empty() {
-                    names.push(name.to_string());
-                }
+    for page in pages::<P>(root, token, path, query, next)? {
+        for name in field(&page) {
+            if name.is_empty() {
+                return Err(format!("catalog {path} listed a nameless entry").into());
             }
+            names.push(name);
         }
     }
     Ok(names)
+}
+
+fn page_token(token: &Option<String>) -> Option<String> {
+    token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
 }
 
 fn tables_in(
@@ -86,17 +138,15 @@ fn tables_in(
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<LakeTable>, CliError> {
     let mut tables = Vec::new();
-    for page in pages(
+    for page in pages::<TablesPage>(
         root,
         token,
         "/tables",
         &[("catalog_name", catalog), ("schema_name", schema)],
+        |page| page_token(&page.next_page_token),
     )? {
-        let Some(items) = page.get("tables").and_then(|value| value.as_array()) else {
-            continue;
-        };
-        for item in items {
-            if let Some(table) = lake_table(item, catalog, schema, env) {
+        for item in page.tables {
+            if let Some(table) = lake_table(item, catalog, schema, env)? {
                 tables.push(table);
             }
         }
@@ -105,54 +155,53 @@ fn tables_in(
 }
 
 fn lake_table(
-    item: &Value,
+    item: TableEntry,
     catalog: &str,
     schema: &str,
     env: &BTreeMap<String, String>,
-) -> Option<LakeTable> {
-    let format = item
-        .get("data_source_format")
-        .and_then(|value| value.as_str())
-        .unwrap_or("DELTA");
+) -> Result<Option<LakeTable>, CliError> {
+    let format = item.data_source_format.as_deref().unwrap_or("DELTA");
     if !format.eq_ignore_ascii_case("DELTA") {
-        return None;
+        return Ok(None);
     }
-    let uri = item.get("storage_location")?.as_str()?.to_string();
-    if uri.is_empty() {
-        return None;
-    }
+    let uri = item
+        .storage_location
+        .filter(|uri| !uri.is_empty())
+        .ok_or_else(|| format!("Delta table {catalog}.{schema} is missing storage_location"))?;
     let name = item
-        .get("full_name")
-        .and_then(|value| value.as_str())
+        .full_name
         .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            let name = item
-                .get("name")
-                .and_then(|value| value.as_str())
-                .unwrap_or("table");
-            format!("{catalog}.{schema}.{name}")
-        });
-    Some(LakeTable {
+        .or_else(|| item.name.filter(|name| !name.is_empty()))
+        .map(|name| {
+            if name.contains('.') {
+                name
+            } else {
+                format!("{catalog}.{schema}.{name}")
+            }
+        })
+        .ok_or_else(|| format!("Delta table at {uri} has no name"))?;
+    Ok(Some(LakeTable {
         name,
         uri,
         env: env.clone(),
         info: None,
-    })
+    }))
 }
 
-/// Follow `next_page_token` until it is absent. `max_results=0` asks the server
-/// to choose the page size, which is what the Databricks list guide recommends.
-fn pages(
+fn pages<P: for<'de> Deserialize<'de>>(
     root: &str,
     token: Option<&str>,
     path: &str,
     query: &[(&str, &str)],
-) -> Result<Vec<Value>, CliError> {
+    next: fn(&P) -> Option<String>,
+) -> Result<Vec<P>, CliError> {
     let mut page_token: Option<String> = None;
     let mut seen = BTreeSet::new();
     let mut pages = Vec::new();
     loop {
+        if pages.len() >= PAGE_CAP {
+            return Err(format!("catalog listed more than {PAGE_CAP} pages at {path}").into());
+        }
         let mut url = format!("{root}{path}?max_results=0");
         for (key, value) in query {
             url.push('&');
@@ -164,12 +213,8 @@ fn pages(
             url.push_str("&page_token=");
             url.push_str(&encode(token));
         }
-        let page = get_json(&url, token)?;
-        let next = page
-            .get("next_page_token")
-            .and_then(|value| value.as_str())
-            .filter(|token| !token.is_empty())
-            .map(str::to_string);
+        let page: P = get_json(&url, token)?;
+        let next = next(&page);
         pages.push(page);
         let Some(next) = next else {
             return Ok(pages);
@@ -181,7 +226,7 @@ fn pages(
     }
 }
 
-fn get_json(url: &str, token: Option<&str>) -> Result<Value, CliError> {
+fn get_json<T: for<'de> Deserialize<'de>>(url: &str, token: Option<&str>) -> Result<T, CliError> {
     let request = ureq::get(url);
     let request = match token {
         Some(token) => request.set("Authorization", &format!("Bearer {token}")),
@@ -192,13 +237,18 @@ fn get_json(url: &str, token: Option<&str>) -> Result<Value, CliError> {
         .into_string()
         .map_err(|error| format!("catalog response was not text: {error}"))?;
     serde_json::from_str(&body)
-        .map_err(|error| format!("catalog response was not JSON: {error}").into())
+        .map_err(|error| format!("catalog response was not the expected document: {error}").into())
 }
 
 fn catalog_error(error: ureq::Error) -> CliError {
     match error {
         ureq::Error::Status(code, response) => {
-            let body = response.into_string().unwrap_or_default();
+            let body = response
+                .into_string()
+                .map_err(|error| {
+                    format!("catalog returned HTTP {code} and the body could not be read: {error}")
+                })
+                .unwrap_or_else(|error| error.to_string());
             format!("catalog returned HTTP {code}: {body}").into()
         }
         other => format!("catalog request failed: {other}").into(),

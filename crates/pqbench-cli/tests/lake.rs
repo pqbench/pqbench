@@ -18,7 +18,7 @@ impl Catalog {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
         let thread = std::thread::spawn(move || {
-            for stream in listener.incoming().take(8) {
+            for stream in listener.incoming().take(64) {
                 let mut stream = stream.unwrap();
                 let mut buffer = [0u8; 4096];
                 let n = stream.read(&mut buffer).unwrap_or(0);
@@ -117,10 +117,6 @@ fn unity_oss_lists_delta_tables_without_a_token() {
         None,
         vec![
             table,
-            json!({
-                "name": "view",
-                "data_source_format": "DELTA"
-            }),
             json!({
                 "name": "files",
                 "data_source_format": "PARQUET",
@@ -262,4 +258,49 @@ fn lake_table_bytemass_measures_each_table() {
     assert_eq!(report["tables"][0]["name"], "events");
     assert_eq!(report["tables"][0]["num_rows"], 3000);
     assert_eq!(report["tables"][0]["file_count"], 1);
+}
+
+#[test]
+fn lake_source_rejects_a_non_aws_env_key() {
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": "http://127.0.0.1:9",
+        "env": {"NOT_AWS": "x"}
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("AWS_*"), "{stderr}");
+}
+
+#[test]
+fn lake_rejects_a_catalog_page_without_catalogs() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let _thread = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buffer = [0u8; 1024];
+            let _ = stream.read(&mut buffer);
+            let body = b"{}";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": address
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected document") || stderr.contains("catalog"),
+        "{stderr}"
+    );
 }

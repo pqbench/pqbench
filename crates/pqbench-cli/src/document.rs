@@ -238,6 +238,12 @@ fn parse_lake(value: serde_json::Value) -> Result<Lake, CliError> {
     }
     for table in &lake.tables {
         aws_env_only(&table.env)?;
+        if let Some(info) = &table.info {
+            if info.kind != "pqbench.table" || info.version != 1 {
+                return Err("lake table info must be kind `pqbench.table` version 1".into());
+            }
+            aws_env_only(&info.env)?;
+        }
     }
     Ok(lake)
 }
