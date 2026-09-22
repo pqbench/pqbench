@@ -1,17 +1,33 @@
 //! Documents on stdin or a file. `kind` decides what the command does.
 //!
-//! A producer resolves a table and pqbench measures bytes. Known kinds are
-//! `pqbench.table` and `pqbench.remote-source`. Credentials stay on the
-//! document so a pipe can carry them between processes.
+//! A producer resolves a lake or a table and pqbench measures bytes. Known
+//! kinds are `pqbench.lake`, `pqbench.table`, and `pqbench.remote-source`.
+//! Credentials stay on the document so a pipe can carry them between processes.
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
 
+use pqbench::lake::Lake;
 use pqbench::table::TableInfo;
 use serde::Deserialize;
 
 use crate::CliError;
+
+/// Credentials for listing a Unity Catalog, OSS or Databricks. `endpoint` is
+/// the server origin (`http://localhost:8080` or
+/// `https://example.cloud.databricks.com`). `token` is the Databricks bearer
+/// token; Unity OSS often has none. `env` is copied onto each listed table so
+/// `pqbench table` can read its files.
+#[derive(Deserialize)]
+pub(crate) struct LakeSource {
+    pub version: u32,
+    pub endpoint: String,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
 
 /// A versioned document naming what an external producer resolved, plus the
 /// storage environment to read it with.
@@ -25,6 +41,8 @@ pub(crate) struct RemoteSource {
 
 /// One recognized stdin or file document.
 pub(crate) enum Document {
+    Lake(Lake),
+    LakeSource(LakeSource),
     Table(TableInfo),
     RemoteSource(RemoteSource),
 }
@@ -51,6 +69,33 @@ fn parse_bytes(bytes: &[u8]) -> Result<Document, CliError> {
         .and_then(|kind| kind.as_str())
         .ok_or_else(|| invalid_kind("document has no `kind`"))?;
     match kind {
+        "pqbench.lake" => {
+            let lake: Lake = serde_json::from_value(value).map_err(invalid_json)?;
+            if lake.version != 1 {
+                return Err(
+                    "unsupported lake document; expected kind `pqbench.lake` version 1".into(),
+                );
+            }
+            if lake.tables.is_empty() {
+                return Err("lake document contains no tables".into());
+            }
+            Ok(Document::Lake(lake))
+        }
+        "pqbench.lake-source" => {
+            let source: LakeSource = serde_json::from_value(value).map_err(invalid_json)?;
+            if source.version != 1 {
+                return Err(
+                    "unsupported lake source; expected kind `pqbench.lake-source` version 1".into(),
+                );
+            }
+            if source.endpoint.trim().is_empty() {
+                return Err("lake source needs an endpoint".into());
+            }
+            if source.env.keys().any(|key| !key.starts_with("AWS_")) {
+                return Err("lake source env may only contain AWS_* names".into());
+            }
+            Ok(Document::LakeSource(source))
+        }
         "pqbench.table" => {
             let table: TableInfo = serde_json::from_value(value).map_err(invalid_json)?;
             if table.version != 1 {
@@ -132,6 +177,8 @@ fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_kind(kind: &str) -> CliError {
-    format!("unsupported document kind `{kind}`; expected pqbench.table or pqbench.remote-source")
-        .into()
+    format!(
+        "unsupported document kind `{kind}`; expected pqbench.lake, pqbench.lake-source, pqbench.table, or pqbench.remote-source"
+    )
+    .into()
 }

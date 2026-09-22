@@ -1,0 +1,265 @@
+use serde_json::{json, Value};
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
+
+fn pqbench() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_pqbench"))
+}
+
+/// One Unity Catalog list server. `expect_bearer` is the Databricks token the
+/// client must send; `None` is Unity OSS, which sends no Authorization header.
+struct Catalog {
+    address: String,
+    _thread: std::thread::JoinHandle<()>,
+}
+
+impl Catalog {
+    fn spawn(expect_bearer: Option<&'static str>, tables: Vec<Value>) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(8) {
+                let mut stream = stream.unwrap();
+                let mut buffer = [0u8; 4096];
+                let n = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..n]);
+                if expect_bearer.is_some()
+                    && !request
+                        .contains(&format!("Authorization: Bearer {}", expect_bearer.unwrap()))
+                {
+                    let body = b"unauthorized";
+                    let response = format!(
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.write_all(body);
+                    continue;
+                }
+                if expect_bearer.is_none()
+                    && request.to_ascii_lowercase().contains("authorization:")
+                {
+                    panic!("Unity OSS request must not send an Authorization header");
+                }
+                let body = catalog_body(&request, &tables);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        Self {
+            address,
+            _thread: thread,
+        }
+    }
+}
+
+fn catalog_body(request: &str, tables: &[Value]) -> String {
+    let path = request.split_whitespace().nth(1).unwrap_or("");
+    if path.contains("/catalogs") {
+        return r#"{"catalogs":[{"name":"main"}]}"#.into();
+    }
+    if path.contains("/schemas") {
+        return r#"{"schemas":[{"name":"default"}]}"#.into();
+    }
+    // Databricks list tables: a page may be empty and still carry next_page_token.
+    // https://docs.databricks.com/api/workspace/tables/list
+    if path.contains("page_token=more") {
+        return json!({"tables": tables}).to_string();
+    }
+    json!({"tables": [], "next_page_token": "more"}).to_string()
+}
+
+fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+    let mut child = pqbench()
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn lake_lists_delta_tables_as_json_on_a_pipe() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("sales/events/_delta_log")).unwrap();
+    std::fs::create_dir_all(root.path().join("orders/_delta_log")).unwrap();
+    let output = pqbench().arg("lake").arg(root.path()).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lake: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(lake["kind"], "pqbench.lake");
+    assert_eq!(lake["tables"][0]["name"], "orders");
+    assert_eq!(lake["tables"][1]["name"], "sales/events");
+    assert!(lake["tables"][0].get("info").is_none());
+}
+
+#[test]
+fn unity_oss_lists_delta_tables_without_a_token() {
+    let table = json!({
+        "name": "events",
+        "catalog_name": "main",
+        "schema_name": "default",
+        "full_name": "main.default.events",
+        "data_source_format": "DELTA",
+        "storage_location": "s3://lakehouse/unity/events"
+    });
+    let catalog = Catalog::spawn(
+        None,
+        vec![
+            table,
+            json!({
+                "name": "view",
+                "data_source_format": "DELTA"
+            }),
+            json!({
+                "name": "files",
+                "data_source_format": "PARQUET",
+                "storage_location": "s3://lakehouse/files"
+            }),
+        ],
+    );
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address,
+        "env": {"AWS_REGION": "us-east-1"}
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("unity.json");
+    std::fs::write(&path, source.to_string()).unwrap();
+    let output = pqbench().arg("lake").arg(&path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lake: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(lake["kind"], "pqbench.lake");
+    assert_eq!(lake["tables"].as_array().unwrap().len(), 1);
+    assert_eq!(lake["tables"][0]["name"], "main.default.events");
+    assert_eq!(lake["tables"][0]["uri"], "s3://lakehouse/unity/events");
+    assert_eq!(lake["tables"][0]["env"]["AWS_REGION"], "us-east-1");
+    assert!(lake["tables"][0].get("info").is_none());
+}
+
+#[test]
+fn databricks_list_follows_an_empty_page_token() {
+    // The documented list response is `{tables, next_page_token}`. A page may
+    // contain zero tables while `next_page_token` is still set; the client
+    // stops only when that field is absent.
+    // https://docs.databricks.com/api/workspace/tables/list
+    // https://docs.databricks.com/aws/en/dev-tools/rest-api
+    let catalog = Catalog::spawn(
+        Some("dapi-example"),
+        vec![json!({
+            "name": "events",
+            "catalog_name": "main",
+            "schema_name": "default",
+            "table_type": "EXTERNAL",
+            "data_source_format": "DELTA",
+            "storage_location": "s3://bucket/events",
+            "full_name": "main.default.events",
+            "table_id": "11111111-1111-1111-1111-111111111111",
+            "columns": []
+        })],
+    );
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address,
+        "token": "dapi-example"
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("dapi-example"));
+    let lake: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(lake["tables"][0]["name"], "main.default.events");
+    assert_eq!(lake["tables"][0]["uri"], "s3://bucket/events");
+}
+
+#[test]
+fn bytemass_rejects_a_lake_that_has_not_been_loaded() {
+    let document = json!({
+        "kind": "pqbench.lake",
+        "version": 1,
+        "tables": [{"name": "events", "uri": "/tmp/events"}]
+    });
+    let output = pipe(&["bytemass"], document.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("pqbench table"), "{stderr}");
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn lake_table_bytemass_measures_each_table() {
+    let root = tempfile::tempdir().unwrap();
+    let table = root.path().join("events");
+    std::fs::create_dir_all(table.join("_delta_log")).unwrap();
+    let parquet = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/small_reddit_none.parquet"
+    );
+    let data = table.join("data.parquet");
+    std::fs::copy(parquet, &data).unwrap();
+    let size = std::fs::metadata(&data).unwrap().len();
+    let commit = format!(
+        "{}\n{}\n{}\n",
+        json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}),
+        json!({"metaData": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
+            "partitionColumns": [],
+            "configuration": {},
+            "createdTime": 0
+        }}),
+        json!({"add": {
+            "path": "data.parquet",
+            "partitionValues": {},
+            "size": size,
+            "modificationTime": 0,
+            "dataChange": true
+        }})
+    );
+    std::fs::write(table.join("_delta_log/00000000000000000000.json"), commit).unwrap();
+
+    let listed = pqbench().arg("lake").arg(root.path()).output().unwrap();
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let loaded = pipe(&["table"], &listed.stdout);
+    assert!(
+        loaded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&loaded.stderr)
+    );
+    let measured = pipe(&["bytemass", "--json"], &loaded.stdout);
+    assert!(
+        measured.status.success(),
+        "{}",
+        String::from_utf8_lossy(&measured.stderr)
+    );
+    let report: Value = serde_json::from_slice(&measured.stdout).unwrap();
+    assert_eq!(report["kind"], "pqbench.lake-report");
+    assert_eq!(report["tables"][0]["name"], "events");
+    assert_eq!(report["tables"][0]["num_rows"], 3000);
+    assert_eq!(report["tables"][0]["file_count"], 1);
+}

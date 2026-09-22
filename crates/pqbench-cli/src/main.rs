@@ -6,8 +6,10 @@ mod bench;
 mod bytemass;
 mod compression;
 mod document;
+mod lake;
 mod lz;
 mod table;
+mod unity;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.
@@ -26,6 +28,7 @@ Examples:
   pqbench bytemass 'data/*.parquet'
   pqbench table ./delta-table
   pqbench table ./delta-table | pqbench bytemass
+  pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -45,6 +48,7 @@ enum Command {
 Examples:
   pqbench bytemass data.parquet
   pqbench table ./delta-table | pqbench bytemass
+  pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#)]
     Bytemass(bytemass::BytemassArgs),
@@ -55,6 +59,12 @@ Examples:
   producer | pqbench table | pqbench bytemass
 "#)]
     Table(table::TableArgs),
+    /// list the Delta tables in a lake
+    #[command(after_help = r#"Examples:
+  pqbench lake ./warehouse
+  pqbench lake ./warehouse | pqbench table | pqbench bytemass
+"#)]
+    Lake(lake::LakeArgs),
 }
 
 fn main() -> ExitCode {
@@ -64,6 +74,7 @@ fn main() -> ExitCode {
         Command::Compression(args) => compression::run(&args),
         Command::Bytemass(args) => bytemass::run(&args),
         Command::Table(args) => table::run(&args),
+        Command::Lake(args) => lake::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
