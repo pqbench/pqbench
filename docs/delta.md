@@ -18,7 +18,8 @@ flowchart TD
     pqbench_cli --> bytemass
 ```
 
-`pqbench` reads metadata from individual Parquet files. The Delta module uses
+`pqbench table` names the format before it loads anything. `_delta_log` is
+Delta and wins UniForm; Iceberg has its own loader. The Delta module uses
 delta-rs to select a table snapshot and names each active file. It does not
 measure footers. The only module that names the `object_store` crate is
 `pqbench::object_store`, which adapts it to the small `ObjectReader` interface
