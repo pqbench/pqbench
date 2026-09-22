@@ -68,6 +68,7 @@ fn write_bytes(args: &DumpArgs, bytes: &[u8]) -> Result<(), CliError> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Input {
     Parquet(Vec<String>, BTreeMap<String, String>),
     Files(Vec<DumpFile>),

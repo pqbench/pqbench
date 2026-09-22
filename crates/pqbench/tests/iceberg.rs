@@ -7,6 +7,7 @@ use std::path::Path;
 
 use apache_avro::{Schema, Writer};
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
+use pqbench::pattern::Selection;
 use pqbench::table::{self, LoadRequest, TableFormat};
 use serde::Serialize;
 use support::write_parquet;
@@ -282,6 +283,40 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
         .iter()
         .any(|action| action.kind == "delete"));
     assert_eq!(latest.log.len(), 2);
+}
+
+#[tokio::test]
+async fn load_excludes_snapshots_created_after_a_time() {
+    let fixture = Fixture::new();
+    let info = table::load(
+        &load_request(fixture.root.to_string_lossy(), None).with_selection(Selection {
+            exclude_snapshot_after: Some("1970-01-01T00:00:00Z".into()),
+            ..Selection::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(info.snapshot_version, 0);
+    assert_eq!(info.files.len(), 1);
+    assert_eq!(
+        info.selection.exclude_snapshot_after.as_deref(),
+        Some("1970-01-01T00:00:00Z")
+    );
+}
+
+#[tokio::test]
+async fn load_rejects_modified_time_exclude_without_file_times() {
+    let fixture = Fixture::new();
+    let error = table::load(
+        &load_request(fixture.root.to_string_lossy(), None).with_selection(Selection {
+            exclude_modified_before: Some("1970-01-01T00:00:00Z".into()),
+            ..Selection::default()
+        }),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("modification time"), "{error}");
 }
 
 #[tokio::test]

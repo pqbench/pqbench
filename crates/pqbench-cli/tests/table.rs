@@ -253,6 +253,88 @@ fn bytemass_prunes_partitions_and_samples_files() {
 }
 
 #[test]
+fn table_excludes_files_by_modified_time_and_version() {
+    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
+    let file = |path: &str, modified: &str, version: u64| {
+        json!({
+            "path": path,
+            "uri": parquet_fixture(),
+            "size": size,
+            "last_modified_time": modified,
+            "snapshot_version": version
+        })
+    };
+    let document = json!({
+        "kind": "pqbench.table",
+        "version": 1,
+        "format": "delta",
+        "uri": "/tmp/table",
+        "snapshot_version": 2,
+        "partition_columns": [],
+        "log": [],
+        "files": [
+            file("old.parquet", "1970-01-01T00:00:00Z", 0),
+            file("new.parquet", "2001-09-09T01:46:40Z", 2)
+        ]
+    });
+
+    let by_time = pipe(
+        &["table", "--exclude-modified-before", "2000-01-01T00:00:00Z"],
+        &document.to_string(),
+    );
+    assert!(
+        by_time.status.success(),
+        "{}",
+        String::from_utf8_lossy(&by_time.stderr)
+    );
+    let records = ndjson_records(&by_time.stdout);
+    let files: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.table-file")
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["path"], "new.parquet");
+    let begin = records
+        .iter()
+        .find(|record| record["event"] == "begin")
+        .expect("table begin");
+    assert_eq!(
+        begin["selection"]["exclude_modified_before"],
+        "2000-01-01T00:00:00Z"
+    );
+
+    let by_version = pipe(
+        &["table", "--exclude-version-before", "1"],
+        &document.to_string(),
+    );
+    assert!(
+        by_version.status.success(),
+        "{}",
+        String::from_utf8_lossy(&by_version.stderr)
+    );
+    let records = ndjson_records(&by_version.stdout);
+    let files: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.table-file")
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["path"], "new.parquet");
+    let begin = records
+        .iter()
+        .find(|record| record["event"] == "begin")
+        .expect("table begin");
+    assert_eq!(begin["selection"]["exclude_version_before"], 1);
+
+    let empty = pipe(
+        &["table", "--exclude-version-before", "3"],
+        &document.to_string(),
+    );
+    assert!(!empty.status.success());
+    let stderr = String::from_utf8_lossy(&empty.stderr);
+    assert!(stderr.contains("no files remained"), "{stderr}");
+}
+
+#[test]
 fn table_rejects_an_unrecognized_directory() {
     let directory = tempfile::tempdir().unwrap();
     let output = pqbench()

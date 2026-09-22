@@ -53,21 +53,92 @@ mod resolve {
     impl std::error::Error for Error {}
 
     pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
+        if request.version.is_some() && request.selection.snapshot_time() {
+            return Err(Error(
+                "use --version or --exclude-snapshot-before/--exclude-snapshot-after, not both"
+                    .into(),
+            ));
+        }
         let table = open(&request.uri, request.version, &request.env).await?;
         let snapshot = snapshot_info(&table)?;
-        let files = active_files(&table).await?;
+        let version = match request.version {
+            Some(version) => version,
+            None if request.selection.snapshot_time() => {
+                snapshot_version_for_time(&table, snapshot.version, &request.selection)?
+            }
+            None => snapshot.version,
+        };
+        let table = if version == snapshot.version {
+            table
+        } else {
+            open(&request.uri, Some(version), &request.env).await?
+        };
+        let snapshot = snapshot_info(&table)?;
+        let mut files = active_files(&table).await?;
         let log = read_log(&table, snapshot.version).await?;
+        annotate_add_versions(&mut files, &log);
+        let snapshot_time = table
+            .snapshot()
+            .ok()
+            .and_then(|snap| snap.version_timestamp(snapshot.version))
+            .and_then(crate::object_store::unix_millis_rfc3339);
         Ok(TableInfo {
             kind: "pqbench.table".into(),
             version: 1,
             format: TableFormat::DELTA,
             uri: request.uri.clone(),
             snapshot_version: snapshot.version,
+            snapshot_time,
+            selection: request.selection.clone(),
             partition_columns: snapshot.partition_columns,
             log,
             files,
             env: request.env.clone(),
         })
+    }
+
+    fn snapshot_version_for_time(
+        table: &DeltaTable,
+        latest: u64,
+        selection: &crate::pattern::Selection,
+    ) -> Result<u64, Error> {
+        let snapshot = table.snapshot().map_err(delta_error)?;
+        let mut chosen = None;
+        for version in (0..=latest).rev() {
+            let Some(millis) = snapshot.version_timestamp(version) else {
+                continue;
+            };
+            if super::super::keep_snapshot_time(millis, selection)
+                .map_err(|e| Error(e.to_string()))?
+            {
+                chosen = Some(version);
+                break;
+            }
+        }
+        chosen.ok_or_else(|| Error("no snapshot remained after exclude".into()))
+    }
+
+    fn annotate_add_versions(files: &mut [TableFile], log: &[LogCommit]) {
+        let mut versions = BTreeMap::new();
+        for commit in log {
+            for action in &commit.actions {
+                let Some(path) = &action.path else {
+                    continue;
+                };
+                match action.kind.as_str() {
+                    "add" => {
+                        versions.insert(path.clone(), commit.version);
+                    }
+                    "remove" => {
+                        versions.remove(path);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for file in files {
+            file.snapshot_version = versions.get(&file.path).copied();
+        }
     }
 
     async fn open(
@@ -209,6 +280,10 @@ mod resolve {
                 path: relative,
                 uri,
                 size,
+                last_modified_time: crate::object_store::unix_millis_rfc3339(
+                    file.modification_time(),
+                ),
+                snapshot_version: None,
             });
         }
         Ok(active)

@@ -18,6 +18,7 @@ use crate::emit::Emit;
 
 use pqbench::bytemass::MassRow;
 use pqbench::lake::Lake;
+use pqbench::pattern::Selection;
 use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
 use serde::{Deserialize, Serialize};
 
@@ -389,6 +390,8 @@ pub(crate) fn write_table_records(
         format: info.format,
         uri: &info.uri,
         snapshot_version: info.snapshot_version,
+        snapshot_time: info.snapshot_time.as_deref(),
+        selection: &info.selection,
         partition_columns: &info.partition_columns,
         env: &info.env,
     })?;
@@ -422,6 +425,10 @@ struct BeginRecord<'a> {
     format: TableFormat,
     uri: &'a str,
     snapshot_version: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_time: Option<&'a str>,
+    #[serde(skip_serializing_if = "selection_default")]
+    selection: &'a Selection,
     partition_columns: &'a [String],
     #[serde(skip_serializing_if = "map_empty")]
     env: &'a BTreeMap<String, String>,
@@ -429,6 +436,10 @@ struct BeginRecord<'a> {
 
 fn map_empty(env: &&BTreeMap<String, String>) -> bool {
     env.is_empty()
+}
+
+fn selection_default(selection: &&Selection) -> bool {
+    selection.is_default()
 }
 
 #[derive(Serialize)]

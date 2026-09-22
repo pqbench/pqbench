@@ -40,6 +40,7 @@ mod tests {
                 compressed_bytes: *bytes,
                 uncompressed_bytes: *bytes,
                 codec: "SNAPPY".into(),
+                ..MassRow::default()
             })
             .collect()
     }

@@ -5,6 +5,7 @@
 //! `tmp` skips `tmp` and `sales/tmp`).
 
 use glob::Pattern;
+use serde::{Deserialize, Serialize};
 
 /// Errors from a glob or a sample spec.
 #[derive(Debug)]
@@ -47,6 +48,87 @@ impl Sample {
         Err(Error(format!(
             "unknown sample `{value}`; expected all, every:N, or first:N"
         )))
+    }
+
+    /// Wire form: `all`, `every:N`, or `first:N`.
+    #[must_use]
+    pub fn as_str(self) -> String {
+        match self {
+            Self::ALL => "all".into(),
+            Self::Every(count) => format!("every:{count}"),
+            Self::First(count) => format!("first:{count}"),
+        }
+    }
+}
+
+/// The file-selection options a command applied. Omitted from JSON when unused
+/// so a full-table analysis stays a short document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Selection {
+    /// Keep files whose partition path matches any of these globs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+    /// Drop files whose partition path matches any of these globs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// `all`, `every:N`, or `first:N`. Empty or `all` is omitted.
+    #[serde(default, skip_serializing_if = "is_all_sample")]
+    pub sample: String,
+    /// Drop files whose log modification time is before this RFC3339 instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_modified_before: Option<String>,
+    /// Drop files whose log modification time is after this RFC3339 instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_modified_after: Option<String>,
+    /// Drop files added before this snapshot version (Delta add version).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_version_before: Option<u64>,
+    /// Drop files added after this snapshot version (Delta add version).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_version_after: Option<u64>,
+    /// Drop snapshots created before this RFC3339 instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_snapshot_before: Option<String>,
+    /// Drop snapshots created after this RFC3339 instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_snapshot_after: Option<String>,
+}
+
+fn is_all_sample(sample: &str) -> bool {
+    sample.is_empty() || sample == "all"
+}
+
+impl Selection {
+    /// Whether no selection option was set.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.include.is_empty()
+            && self.exclude.is_empty()
+            && is_all_sample(&self.sample)
+            && self.exclude_modified_before.is_none()
+            && self.exclude_modified_after.is_none()
+            && self.exclude_version_before.is_none()
+            && self.exclude_version_after.is_none()
+            && self.exclude_snapshot_before.is_none()
+            && self.exclude_snapshot_after.is_none()
+    }
+
+    /// Whether a snapshot-time exclude was set.
+    #[must_use]
+    pub fn snapshot_time(&self) -> bool {
+        self.exclude_snapshot_before.is_some() || self.exclude_snapshot_after.is_some()
+    }
+
+    /// Whether a file modified-time exclude was set.
+    #[must_use]
+    pub fn modified_time(&self) -> bool {
+        self.exclude_modified_before.is_some() || self.exclude_modified_after.is_some()
+    }
+
+    /// Whether a file add-version exclude was set.
+    #[must_use]
+    pub fn add_version(&self) -> bool {
+        self.exclude_version_before.is_some() || self.exclude_version_after.is_some()
     }
 }
 

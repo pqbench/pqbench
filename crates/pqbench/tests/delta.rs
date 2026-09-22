@@ -3,6 +3,7 @@
 mod support;
 
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
+use pqbench::pattern::Selection;
 use pqbench::table::{self, LoadRequest, TableFormat};
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
@@ -290,4 +291,25 @@ async fn load_copies_env_onto_the_document() {
     .await
     .unwrap();
     assert_eq!(info.env, env);
+}
+
+#[tokio::test]
+async fn load_excludes_files_added_before_a_version() {
+    let fixture = Fixture::new();
+    let info = table::load(
+        &load_request(fixture.path().to_string_lossy(), None).with_selection(Selection {
+            exclude_version_before: Some(1),
+            ..Selection::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(info.files.len(), 1);
+    assert_eq!(info.files[0].path, "part=a/added.parquet");
+    assert_eq!(info.files[0].snapshot_version, Some(1));
+    assert_eq!(info.selection.exclude_version_before, Some(1));
+    assert_eq!(
+        info.files[0].last_modified_time.as_deref(),
+        Some("1970-01-01T00:00:00Z")
+    );
 }

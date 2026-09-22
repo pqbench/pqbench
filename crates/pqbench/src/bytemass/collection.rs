@@ -68,17 +68,21 @@ pub(super) async fn measure_inputs(
     let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
-        let (size, mass) = read_input(&input, env).await?;
+        let (stat, mass) = read_input(&input, env).await?;
         let num_rows = mass.num_rows;
         for column in mass.columns {
             rows.push(MassRow {
                 file: input.clone(),
-                size,
+                size: stat.size,
                 num_rows,
                 column: column.path,
                 compressed_bytes: column.bytes,
                 uncompressed_bytes: column.uncompressed_bytes,
                 codec: column.codec,
+                last_modified_time: stat.last_modified_time.clone(),
+                creation_time: stat.creation_time.clone(),
+                etag: stat.identity.clone(),
+                ..MassRow::default()
             });
         }
     }
@@ -115,7 +119,10 @@ fn escape_literal_brackets(input: &str) -> String {
     input.replace('[', "[[]")
 }
 
-async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64, FileMass), Error> {
+async fn read_input(
+    input: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(crate::object_store::ObjectStat, FileMass), Error> {
     if input.contains("://") {
         return remote::read_remote_with_options(
             input,
@@ -124,9 +131,7 @@ async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64,
         .await;
     }
     let path = Path::new(input);
-    let size = std::fs::metadata(path)
-        .map_err(|e| Error(format!("cannot stat {input}: {e}")))?
-        .len();
+    let stat = crate::object_store::stat_local(path).map_err(|e| Error(e.to_string()))?;
     let mass = default_metadata_parser().read_masses(path)?;
-    Ok((size, mass))
+    Ok((stat, mass))
 }

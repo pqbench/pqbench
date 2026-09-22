@@ -39,7 +39,9 @@ pqbench.viz(rows, output="report")               # report.sqlite + report.html
 
 `codecs` repeats `codec@level`. Defaults match the CLI: `samples` 10,
 `warmup_iterations` 3, `mode` `fastest`. `mode` is `fastest` or `mean`.
-`table` and `lake` always return the versioned document. `dump` accepts
+`table` and `lake` always return the versioned document. `table` accepts the
+same exclude kwargs as the CLI (`exclude_modified_before`,
+`exclude_version_before`, `exclude_snapshot_after`, …). `dump` accepts
 parquet paths or those documents and returns Parquet bytes. `viz` collects a
 bytemass row list into SQLite and HTML. `env` on `bytemass` and `table` may
 only contain `AWS_*` names.

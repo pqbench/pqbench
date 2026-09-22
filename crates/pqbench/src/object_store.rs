@@ -11,7 +11,8 @@
 //! feature flags outside this module.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use url::Url;
 
@@ -33,6 +34,10 @@ pub(crate) struct ObjectStat {
     pub size: u64,
     /// Backend ETag or version, used to pin range reads to one revision.
     pub identity: Option<String>,
+    /// Last modification time as RFC3339 UTC, when the store reports one.
+    pub last_modified_time: Option<String>,
+    /// Creation time as RFC3339 UTC, when the store reports one.
+    pub creation_time: Option<String>,
 }
 
 /// A random-access handle to a single object (local or remote).
@@ -69,20 +74,15 @@ impl ObjectReader {
     /// Report the object's size and identity.
     pub(crate) async fn stat(&self) -> Result<ObjectStat, Error> {
         match &self.source {
-            Source::Local(path) => {
-                let metadata = std::fs::metadata(path)
-                    .map_err(|e| Error(format!("cannot stat {}: {e}", path.display())))?;
-                Ok(ObjectStat {
-                    size: metadata.len(),
-                    identity: None,
-                })
-            }
+            Source::Local(path) => stat_local(path),
             #[cfg(feature = "aws")]
             Source::Remote(store, location) => {
                 let metadata = store.head(location).await.map_err(remote_error)?;
                 Ok(ObjectStat {
                     size: metadata.size,
                     identity: metadata.e_tag.or(metadata.version),
+                    last_modified_time: unix_timestamp_rfc3339(metadata.last_modified.timestamp()),
+                    creation_time: None,
                 })
             }
         }
@@ -280,6 +280,118 @@ fn remote_error(error: ::object_store::Error) -> Error {
     Error(error.to_string())
 }
 
+/// Stat a local path. Used by footer reads that already have a filesystem path.
+pub(crate) fn stat_local(path: &Path) -> Result<ObjectStat, Error> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| Error(format!("cannot stat {}: {e}", path.display())))?;
+    Ok(ObjectStat {
+        size: metadata.len(),
+        identity: None,
+        last_modified_time: metadata.modified().ok().and_then(system_time_rfc3339),
+        creation_time: metadata.created().ok().and_then(system_time_rfc3339),
+    })
+}
+
+fn system_time_rfc3339(time: SystemTime) -> Option<String> {
+    unix_timestamp_rfc3339(i64::try_from(time.duration_since(UNIX_EPOCH).ok()?.as_secs()).ok()?)
+}
+
+fn unix_timestamp_rfc3339(secs: i64) -> Option<String> {
+    let secs = u64::try_from(secs).ok()?;
+    Some(unix_secs_rfc3339(secs))
+}
+
+/// Format epoch milliseconds as RFC3339 UTC seconds.
+#[cfg(any(feature = "delta", feature = "iceberg"))]
+pub(crate) fn unix_millis_rfc3339(millis: i64) -> Option<String> {
+    unix_timestamp_rfc3339(millis.checked_div(1000)?)
+}
+
+/// Parse `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SSZ` to epoch milliseconds.
+pub(crate) fn parse_rfc3339_millis(value: &str) -> Result<i64, Error> {
+    let (date, time) = match value.split_once('T') {
+        Some((date, time)) => (date, time.trim_end_matches('Z')),
+        None => (value, "00:00:00"),
+    };
+    let mut date_parts = date.split('-');
+    let year: i32 = parse_time_part(date_parts.next(), "year", value)?;
+    let month: u32 = parse_time_part(date_parts.next(), "month", value)?;
+    let day: u32 = parse_time_part(date_parts.next(), "day", value)?;
+    if date_parts.next().is_some() {
+        return Err(Error(format!("invalid time `{value}`")));
+    }
+    let mut time_parts = time.split(':');
+    let hour: u32 = parse_time_part(time_parts.next(), "hour", value)?;
+    let minute: u32 = parse_time_part(time_parts.next(), "minute", value)?;
+    let second: u32 = parse_time_part(time_parts.next(), "second", value)?;
+    if time_parts.next().is_some()
+        || !(1..=12).contains(&month)
+        || day == 0
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return Err(Error(format!("invalid time `{value}`")));
+    }
+    let days = days_from_civil(year, month, day);
+    let secs = days
+        .checked_mul(86_400)
+        .and_then(|days| days.checked_add(i64::from(hour * 3_600 + minute * 60 + second)))
+        .ok_or_else(|| Error(format!("invalid time `{value}`")))?;
+    secs.checked_mul(1000)
+        .ok_or_else(|| Error(format!("invalid time `{value}`")))
+}
+
+fn parse_time_part<T: std::str::FromStr>(
+    part: Option<&str>,
+    name: &str,
+    value: &str,
+) -> Result<T, Error> {
+    part.ok_or_else(|| Error(format!("invalid time `{value}`: missing {name}")))?
+        .parse()
+        .map_err(|_| Error(format!("invalid time `{value}`")))
+}
+
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 {
+        i64::from(year) - 1
+    } else {
+        i64::from(year)
+    };
+    let month = i64::from(month);
+    let day = i64::from(day);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// UTC civil time as `YYYY-MM-DDTHH:MM:SSZ` (Howard Hinnant, days from Unix epoch).
+fn unix_secs_rfc3339(secs: u64) -> String {
+    let days = secs / 86_400;
+    let tod = secs % 86_400;
+    let hour = tod / 3_600;
+    let min = (tod % 3_600) / 60;
+    let sec = tod % 60;
+    let (year, month, day) = civil_from_days(i64::try_from(days).unwrap_or(i64::MAX));
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
+}
+
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = u64::try_from(z - era * 146_097).unwrap_or(0);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = i32::try_from(i64::try_from(yoe).unwrap_or(0) + era * 400).unwrap_or(i32::MAX);
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = if month <= 2 { year + 1 } else { year };
+    (year, month, day)
+}
+
 fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Error> {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -293,4 +405,20 @@ fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Erro
     file.read_exact(&mut buffer)
         .map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
     Ok(buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unix_secs_rfc3339;
+
+    #[test]
+    fn unix_epoch_is_rfc3339_utc() {
+        assert_eq!(unix_secs_rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(unix_secs_rfc3339(1_000_000_000), "2001-09-09T01:46:40Z");
+        assert_eq!(
+            super::parse_rfc3339_millis("2001-09-09T01:46:40Z").unwrap(),
+            1_000_000_000_000
+        );
+        assert_eq!(super::parse_rfc3339_millis("1970-01-01").unwrap(), 0);
+    }
 }

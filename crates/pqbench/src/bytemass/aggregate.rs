@@ -45,7 +45,7 @@ pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
 ///
 /// Files are emitted contiguously, so no row is dropped or merged to recover
 /// the file boundaries.
-fn file_runs(rows: &[MassRow]) -> Vec<&MassRow> {
+pub(super) fn file_runs(rows: &[MassRow]) -> Vec<&MassRow> {
     let mut runs: Vec<&MassRow> = Vec::new();
     for row in rows {
         if runs.last().is_none_or(|last| last.file != row.file) {
@@ -76,7 +76,7 @@ pub(super) fn label(rows: &[MassRow]) -> String {
     }
 }
 
-fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
+pub(super) fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
     left.checked_add(right)
         .ok_or_else(|| Error("metadata totals exceed u64".into()))
 }
@@ -95,6 +95,7 @@ mod tests {
             compressed_bytes: 12,
             uncompressed_bytes: 24,
             codec: codec.into(),
+            ..MassRow::default()
         }
     }
 

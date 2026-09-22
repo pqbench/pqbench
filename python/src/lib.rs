@@ -124,14 +124,53 @@ fn bytemass(
 ///
 /// Returns the `pqbench.table` document.
 #[pyfunction]
-#[pyo3(signature = (uri, *, version=None, env=None))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    uri,
+    *,
+    version=None,
+    env=None,
+    exclude_modified_before=None,
+    exclude_modified_after=None,
+    exclude_version_before=None,
+    exclude_version_after=None,
+    exclude_snapshot_before=None,
+    exclude_snapshot_after=None
+))]
 fn table(
     py: Python<'_>,
     uri: String,
     version: Option<u64>,
     env: Option<BTreeMap<String, String>>,
+    exclude_modified_before: Option<String>,
+    exclude_modified_after: Option<String>,
+    exclude_version_before: Option<u64>,
+    exclude_version_after: Option<u64>,
+    exclude_snapshot_before: Option<String>,
+    exclude_snapshot_after: Option<String>,
 ) -> PyResult<Py<PyAny>> {
-    let request = pqbench::table::LoadRequest::new(uri, version, aws_env(env)?);
+    let selection = pqbench::pattern::Selection {
+        exclude_modified_before,
+        exclude_modified_after,
+        exclude_version_before,
+        exclude_version_after,
+        exclude_snapshot_before,
+        exclude_snapshot_after,
+        ..pqbench::pattern::Selection::default()
+    };
+    for time in [
+        &selection.exclude_modified_before,
+        &selection.exclude_modified_after,
+        &selection.exclude_snapshot_before,
+        &selection.exclude_snapshot_after,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        pqbench::table::validate_time(time).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    }
+    let request =
+        pqbench::table::LoadRequest::new(uri, version, aws_env(env)?).with_selection(selection);
     let info = py
         .detach(|| block_on(pqbench::table::load(&request)))
         .map_err(runtime)?;

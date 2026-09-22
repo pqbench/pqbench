@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::object_store;
+use crate::pattern::Selection;
 
 pub mod delta;
 #[cfg(feature = "iceberg")]
@@ -90,6 +91,12 @@ pub struct TableFile {
     pub uri: String,
     /// Size the log claims, in bytes.
     pub size: u64,
+    /// Log modification time as RFC3339 UTC, when the format records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified_time: Option<String>,
+    /// Snapshot version that added this file, when the log records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_version: Option<u64>,
 }
 
 impl TableFile {
@@ -100,6 +107,8 @@ impl TableFile {
             path: path.into(),
             uri: uri.into(),
             size,
+            last_modified_time: None,
+            snapshot_version: None,
         }
     }
 }
@@ -118,6 +127,12 @@ pub struct TableInfo {
     pub uri: String,
     /// Snapshot version the files belong to.
     pub snapshot_version: u64,
+    /// Snapshot creation time as RFC3339 UTC, when the log records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_time: Option<String>,
+    /// File-selection options applied while loading this snapshot.
+    #[serde(default, skip_serializing_if = "Selection::is_default")]
+    pub selection: Selection,
     /// Partition columns live in the log and need not occupy Parquet columns.
     pub partition_columns: Vec<String>,
     /// Every available JSON commit, in version order. Checkpoint-only versions
@@ -148,11 +163,19 @@ impl TableInfo {
             format,
             uri: uri.into(),
             snapshot_version,
+            snapshot_time: None,
+            selection: Selection::default(),
             partition_columns,
             log,
             files,
             env,
         }
+    }
+
+    /// Total size the log claims for the active files.
+    #[must_use]
+    pub fn bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.size).sum()
     }
 }
 
@@ -167,6 +190,8 @@ pub struct LoadRequest {
     pub version: Option<u64>,
     /// Storage options (`AWS_*` names), copied onto the document.
     pub env: BTreeMap<String, String>,
+    /// Exclude files or snapshots by time and version.
+    pub selection: Selection,
 }
 
 impl LoadRequest {
@@ -181,7 +206,15 @@ impl LoadRequest {
             uri: uri.into(),
             version,
             env,
+            selection: Selection::default(),
         }
+    }
+
+    /// Set file and snapshot exclude options.
+    #[must_use]
+    pub fn with_selection(mut self, selection: Selection) -> Self {
+        self.selection = selection;
+        self
     }
 }
 
@@ -215,11 +248,112 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
-    match format {
-        TableFormat::DELTA => delta::load(request).await,
-        TableFormat::ICEBERG => load_iceberg(request).await,
-        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+    let mut info = match format {
+        TableFormat::DELTA => delta::load(request).await?,
+        TableFormat::ICEBERG => load_iceberg(request).await?,
+        TableFormat::UNSPECIFIED => return Err(Error("unrecognized table format".into())),
+    };
+    info.selection = request.selection.clone();
+    apply_file_selection(&mut info)?;
+    Ok(info)
+}
+
+/// Drop files excluded by modified time or add version.
+///
+/// # Errors
+/// Fails when a filter is set and a file does not record that field, or when
+/// nothing remains.
+pub fn apply_file_selection(info: &mut TableInfo) -> Result<(), Error> {
+    let selection = &info.selection;
+    if !selection.modified_time() && !selection.add_version() {
+        return Ok(());
     }
+    let mut kept = Vec::new();
+    for file in info.files.drain(..) {
+        if !keep_file(&file, selection)? {
+            continue;
+        }
+        kept.push(file);
+    }
+    if kept.is_empty() {
+        return Err(Error("no files remained after exclude".into()));
+    }
+    info.files = kept;
+    Ok(())
+}
+
+fn keep_file(file: &TableFile, selection: &Selection) -> Result<bool, Error> {
+    if let Some(before) = &selection.exclude_modified_before {
+        let time = file_modified_millis(file)?;
+        if time < object_store::parse_rfc3339_millis(before).map_err(|e| Error(e.to_string()))? {
+            return Ok(false);
+        }
+    }
+    if let Some(after) = &selection.exclude_modified_after {
+        let time = file_modified_millis(file)?;
+        if time > object_store::parse_rfc3339_millis(after).map_err(|e| Error(e.to_string()))? {
+            return Ok(false);
+        }
+    }
+    if let Some(before) = selection.exclude_version_before {
+        let version = file.snapshot_version.ok_or_else(|| {
+            Error(format!(
+                "file {} has no add version; cannot apply --exclude-version-before",
+                file.path
+            ))
+        })?;
+        if version < before {
+            return Ok(false);
+        }
+    }
+    if let Some(after) = selection.exclude_version_after {
+        let version = file.snapshot_version.ok_or_else(|| {
+            Error(format!(
+                "file {} has no add version; cannot apply --exclude-version-after",
+                file.path
+            ))
+        })?;
+        if version > after {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn file_modified_millis(file: &TableFile) -> Result<i64, Error> {
+    let time = file.last_modified_time.as_deref().ok_or_else(|| {
+        Error(format!(
+            "file {} has no log modification time; cannot apply --exclude-modified-*",
+            file.path
+        ))
+    })?;
+    object_store::parse_rfc3339_millis(time).map_err(|e| Error(e.to_string()))
+}
+
+/// Check that `value` is `YYYY-MM-DD` or RFC3339 UTC.
+///
+/// # Errors
+/// Fails when the instant cannot be parsed.
+pub fn validate_time(value: &str) -> Result<(), Error> {
+    object_store::parse_rfc3339_millis(value)
+        .map(|_| ())
+        .map_err(|error| Error(error.to_string()))
+}
+
+/// Whether a snapshot timestamp (epoch milliseconds) is kept.
+#[cfg(any(feature = "delta", feature = "iceberg"))]
+pub(crate) fn keep_snapshot_time(millis: i64, selection: &Selection) -> Result<bool, Error> {
+    if let Some(before) = &selection.exclude_snapshot_before {
+        if millis < object_store::parse_rfc3339_millis(before).map_err(|e| Error(e.to_string()))? {
+            return Ok(false);
+        }
+    }
+    if let Some(after) = &selection.exclude_snapshot_after {
+        if millis > object_store::parse_rfc3339_millis(after).map_err(|e| Error(e.to_string()))? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn load_iceberg(request: &LoadRequest) -> Result<TableInfo, Error> {

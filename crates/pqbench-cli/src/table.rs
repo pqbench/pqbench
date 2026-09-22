@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::Args;
+use pqbench::pattern::Selection;
 use pqbench::table::{self, LoadRequest, TableInfo};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -20,6 +21,24 @@ pub(crate) struct TableArgs {
     /// snapshot version; defaults to the latest version
     #[arg(long)]
     version: Option<u64>,
+    /// drop files whose log modification time is before this instant
+    #[arg(long, value_name = "TIME")]
+    exclude_modified_before: Option<String>,
+    /// drop files whose log modification time is after this instant
+    #[arg(long, value_name = "TIME")]
+    exclude_modified_after: Option<String>,
+    /// drop files added before this snapshot version
+    #[arg(long, value_name = "N")]
+    exclude_version_before: Option<u64>,
+    /// drop files added after this snapshot version
+    #[arg(long, value_name = "N")]
+    exclude_version_after: Option<u64>,
+    /// drop snapshots created before this instant
+    #[arg(long, value_name = "TIME")]
+    exclude_snapshot_before: Option<String>,
+    /// drop snapshots created after this instant
+    #[arg(long, value_name = "TIME")]
+    exclude_snapshot_after: Option<String>,
     /// zstd NDJSON stream (required on a terminal)
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
@@ -49,7 +68,10 @@ async fn load_one(
     env: BTreeMap<String, String>,
     args: &TableArgs,
 ) -> Result<(), CliError> {
-    let info = table::load(&LoadRequest::new(uri.clone(), args.version, env)).await?;
+    let info = table::load(
+        &LoadRequest::new(uri.clone(), args.version, env).with_selection(selection(args)?),
+    )
+    .await?;
     let mut emit = Emit::open("table", args.output.as_deref())?;
     document::write_table_records(&mut emit, &uri, &info)?;
     emit.finish(&summary(
@@ -89,6 +111,7 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
     let mut bytes = 0u64;
     let concurrency = args.concurrency.get();
     let version = args.version;
+    let selected = selection(args)?;
 
     loop {
         tokio::select! {
@@ -111,6 +134,7 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
                             &mut bytes,
                             concurrency,
                             version,
+                            selected.clone(),
                         )
                         .await?;
                     }
@@ -134,6 +158,7 @@ async fn queue_record(
     bytes: &mut u64,
     concurrency: usize,
     version: Option<u64>,
+    selected: Selection,
 ) -> Result<(), CliError> {
     match record {
         Record::TableRef(table_ref) => {
@@ -145,6 +170,7 @@ async fn queue_record(
                 bytes,
                 concurrency,
                 version,
+                selected,
                 table_ref,
             )
             .await
@@ -159,6 +185,7 @@ async fn queue_record(
                     bytes,
                     concurrency,
                     version,
+                    selected.clone(),
                     TableRef {
                         id: uri.clone(),
                         uri,
@@ -169,7 +196,11 @@ async fn queue_record(
             }
             Ok(())
         }
-        Record::Table(info) => {
+        Record::Table(mut info) => {
+            if !selected.is_default() {
+                info.selection = selected;
+                table::apply_file_selection(&mut info)?;
+            }
             *tables += 1;
             *files += info.files.len();
             *bytes += file_bytes(&info);
@@ -185,6 +216,7 @@ async fn queue_record(
                     bytes,
                     concurrency,
                     version,
+                    selected.clone(),
                     TableRef {
                         id: table.name,
                         uri: table.uri,
@@ -217,6 +249,7 @@ async fn spawn_ref(
     bytes: &mut u64,
     concurrency: usize,
     version: Option<u64>,
+    selected: Selection,
     table_ref: TableRef,
 ) -> Result<(), CliError> {
     while set.len() >= concurrency {
@@ -225,9 +258,11 @@ async fn spawn_ref(
         }
     }
     set.spawn(async move {
-        let info = table::load(&LoadRequest::new(table_ref.uri, version, table_ref.env))
-            .await
-            .map_err(|error| error.to_string())?;
+        let info = table::load(
+            &LoadRequest::new(table_ref.uri, version, table_ref.env).with_selection(selected),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         Ok((table_ref.id, info))
     });
     Ok(())
@@ -248,7 +283,31 @@ fn emit_loaded(
 }
 
 fn file_bytes(info: &TableInfo) -> u64 {
-    info.files.iter().map(|file| file.size).sum()
+    info.bytes()
+}
+
+fn selection(args: &TableArgs) -> Result<Selection, CliError> {
+    let selected = Selection {
+        exclude_modified_before: args.exclude_modified_before.clone(),
+        exclude_modified_after: args.exclude_modified_after.clone(),
+        exclude_version_before: args.exclude_version_before,
+        exclude_version_after: args.exclude_version_after,
+        exclude_snapshot_before: args.exclude_snapshot_before.clone(),
+        exclude_snapshot_after: args.exclude_snapshot_after.clone(),
+        ..Selection::default()
+    };
+    for time in [
+        &selected.exclude_modified_before,
+        &selected.exclude_modified_after,
+        &selected.exclude_snapshot_before,
+        &selected.exclude_snapshot_after,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        table::validate_time(time)?;
+    }
+    Ok(selected)
 }
 
 fn summary(tables: usize, files: usize, bytes: u64, output: Option<&std::path::Path>) -> String {

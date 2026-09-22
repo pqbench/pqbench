@@ -48,8 +48,13 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             metadata.format_version
         )));
     }
+    if request.version.is_some() && request.selection.snapshot_time() {
+        return Err(Error(
+            "use --version or --exclude-snapshot-before/--exclude-snapshot-after, not both".into(),
+        ));
+    }
     let requested = request.version.map(i64_from_u64).transpose()?;
-    let selected = select_snapshot(&metadata, requested)?;
+    let selected = select_snapshot(&metadata, requested, &request.selection)?;
     let snapshot_version = selected
         .as_ref()
         .map(|snapshot| u64_from_i64(snapshot.snapshot_id))
@@ -90,12 +95,17 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             });
         }
     }
+    let snapshot_time = selected
+        .and_then(|snapshot| snapshot.timestamp_ms)
+        .and_then(crate::object_store::unix_millis_rfc3339);
     Ok(TableInfo {
         kind: "pqbench.table".into(),
         version: 1,
         format: TableFormat::ICEBERG,
         uri: request.uri.clone(),
         snapshot_version,
+        snapshot_time,
+        selection: request.selection.clone(),
         partition_columns: partition_columns(&metadata),
         log,
         files,
@@ -139,6 +149,8 @@ struct Snapshot {
     parent_snapshot_id: Option<i64>,
     #[serde(rename = "manifest-list")]
     manifest_list: String,
+    #[serde(rename = "timestamp-ms", default)]
+    timestamp_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,16 +189,41 @@ fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn select_snapshot(
-    metadata: &TableMetadata,
+fn select_snapshot<'a>(
+    metadata: &'a TableMetadata,
     requested: Option<i64>,
-) -> Result<Option<&Snapshot>, Error> {
-    let snapshot_id = match requested {
+    selection: &crate::pattern::Selection,
+) -> Result<Option<&'a Snapshot>, Error> {
+    if let Some(snapshot_id) = requested {
+        return metadata
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.snapshot_id == snapshot_id)
+            .map(Some)
+            .ok_or_else(|| Error(format!("Iceberg snapshot does not exist: {snapshot_id}")));
+    }
+    if selection.snapshot_time() {
+        let mut chosen: Option<&Snapshot> = None;
+        for snapshot in &metadata.snapshots {
+            let millis = snapshot.timestamp_ms.ok_or_else(|| {
+                Error(format!(
+                    "Iceberg snapshot {} has no timestamp-ms; cannot apply --exclude-snapshot-*",
+                    snapshot.snapshot_id
+                ))
+            })?;
+            if super::keep_snapshot_time(millis, selection).map_err(|e| Error(e.to_string()))?
+                && chosen.is_none_or(|current| millis >= current.timestamp_ms.unwrap_or(i64::MIN))
+            {
+                chosen = Some(snapshot);
+            }
+        }
+        return chosen
+            .map(Some)
+            .ok_or_else(|| Error("no snapshot remained after exclude".into()));
+    }
+    let snapshot_id = match metadata.current_snapshot_id.filter(|id| *id != -1) {
         Some(snapshot_id) => snapshot_id,
-        None => match metadata.current_snapshot_id.filter(|id| *id != -1) {
-            Some(snapshot_id) => snapshot_id,
-            None => return Ok(None),
-        },
+        None => return Ok(None),
     };
     metadata
         .snapshots
@@ -355,6 +392,8 @@ async fn active_files(
                 path: entry.data_file.file_path,
                 uri,
                 size,
+                last_modified_time: None,
+                snapshot_version: None,
             });
         }
     }

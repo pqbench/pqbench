@@ -21,7 +21,7 @@ pub struct BytemassRequest {
 }
 
 /// One column chunk's measured byte mass: a row of the `bytemass` table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MassRow {
     /// Input path or URI as given.
@@ -38,6 +38,15 @@ pub struct MassRow {
     pub uncompressed_bytes: u64,
     /// Compression codec recorded in the column chunk metadata.
     pub codec: String,
+    /// Last modification time as RFC3339 UTC, when the store reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified_time: Option<String>,
+    /// Creation time as RFC3339 UTC, when the store reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_time: Option<String>,
+    /// Object ETag or version, when the store reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
 }
 
 /// Measure the per-column byte masses of Parquet files.

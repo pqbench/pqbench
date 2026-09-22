@@ -64,7 +64,13 @@ feature flag lives only in `pqbench::table::delta`.
 ## Document
 
 `pqbench.table` version 1 names the format, the JSON commits that remain on
-disk, and the active files (path, URI, log size). On a pipe that is one JSON object per line, each tagged with a table `id`:
+disk, and the active files (path, URI, log size, and log modification time /
+add version when the commit records them). Exclude files with
+`--exclude-modified-before/after` and `--exclude-version-before/after`, or
+pick a snapshot by creation time with `--exclude-snapshot-before/after`
+(not together with `--version`). `bytemass` then streams one
+`pqbench.bytemass-row` per column chunk, including object times when the
+store reports them. On a pipe that is one JSON object per line, each tagged with a table `id`:
 `begin`, then `pqbench.table-log` commits, then `pqbench.table-file` rows,
 then `end`. Lines from different ids may mix. `lake` emits `pqbench.table-ref` lines; `table --concurrency` loads them as
 they arrive. `bytemass --concurrency` measures files as they arrive.

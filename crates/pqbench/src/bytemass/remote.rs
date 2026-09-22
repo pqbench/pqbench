@@ -4,7 +4,7 @@
 //! third-party storage type appears here and there are no feature flags: a URI
 //! whose backend is not compiled in fails at runtime through the reader.
 
-use crate::object_store;
+use crate::object_store::{self, ObjectStat};
 use crate::parquet_helpers::{read_footer_masses, Error, FileMass};
 
 const PARQUET_FOOTER_SIZE: u64 = 8;
@@ -19,7 +19,7 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 pub(super) async fn read_remote_with_options(
     uri: &str,
     options: impl IntoIterator<Item = (String, String)>,
-) -> Result<(u64, FileMass), Error> {
+) -> Result<(ObjectStat, FileMass), Error> {
     let options: Vec<(String, String)> = options.into_iter().collect();
     let reader = object_store::open(uri, &options).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
@@ -61,7 +61,7 @@ pub(super) async fn read_remote_with_options(
         )));
     }
     footer.extend_from_slice(&trailer);
-    Ok((size, read_footer_masses(&footer)?))
+    Ok((stat, read_footer_masses(&footer)?))
 }
 
 fn storage_error(error: object_store::Error) -> Error {
@@ -81,8 +81,9 @@ mod tests {
         ));
         let expected = default_metadata_parser().read_masses(path).unwrap();
         let uri = url::Url::from_file_path(path).unwrap();
-        let (size, actual) = read_remote_with_options(uri.as_str(), []).await.unwrap();
-        assert_eq!(size, std::fs::metadata(path).unwrap().len());
+        let (stat, actual) = read_remote_with_options(uri.as_str(), []).await.unwrap();
+        assert_eq!(stat.size, std::fs::metadata(path).unwrap().len());
+        assert!(stat.last_modified_time.is_some());
         assert_eq!(actual.num_rows, expected.num_rows);
         assert_eq!(actual.columns.len(), expected.columns.len());
     }

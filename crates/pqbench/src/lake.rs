@@ -305,14 +305,58 @@ pub fn render_text(lake: &Lake) -> String {
     for table in &lake.tables {
         match &table.info {
             Some(info) => out.push_str(&format!(
-                "  {}  snapshot {}  {} files  {}\n",
+                "  {}  snapshot {}  {} files  {} B  {}\n",
                 table.name,
                 info.snapshot_version,
                 info.files.len(),
+                info.bytes(),
                 table.uri
             )),
             None => out.push_str(&format!("  {}  {}\n", table.name, table.uri)),
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::table::{TableFile, TableFormat, TableInfo};
+
+    #[test]
+    fn render_text_lists_file_bytes_after_table() {
+        let lake = Lake {
+            kind: "pqbench.lake".into(),
+            version: 1,
+            name: Some("warehouse".into()),
+            tables: vec![LakeTable {
+                name: "events".into(),
+                uri: "/tmp/events".into(),
+                env: BTreeMap::new(),
+                info: Some(TableInfo {
+                    kind: "pqbench.table".into(),
+                    version: 1,
+                    format: TableFormat::DELTA,
+                    uri: "/tmp/events".into(),
+                    snapshot_version: 3,
+                    snapshot_time: None,
+                    selection: crate::pattern::Selection::default(),
+                    partition_columns: Vec::new(),
+                    log: Vec::new(),
+                    files: vec![TableFile {
+                        path: "part.parquet".into(),
+                        uri: "/tmp/events/part.parquet".into(),
+                        size: 42,
+                        last_modified_time: None,
+                        snapshot_version: None,
+                    }],
+                    env: BTreeMap::new(),
+                }),
+            }],
+        };
+        let text = render_text(&lake);
+        assert!(text.contains("1 files"));
+        assert!(text.contains("42 B"));
+        assert_eq!(lake.tables[0].info.as_ref().unwrap().bytes(), 42);
+    }
 }
