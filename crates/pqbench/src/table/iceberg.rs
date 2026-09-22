@@ -61,9 +61,8 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         }
         None => (Vec::new(), Vec::new()),
     };
-    let mut log = metadata
-        .snapshots
-        .iter()
+    let mut log = ancestry(&metadata, selected)
+        .into_iter()
         .map(|snapshot| {
             Ok(LogCommit {
                 version: u64_from_i64(snapshot.snapshot_id)?,
@@ -136,6 +135,8 @@ struct PartitionField {
 struct Snapshot {
     #[serde(rename = "snapshot-id")]
     snapshot_id: i64,
+    #[serde(rename = "parent-snapshot-id", default)]
+    parent_snapshot_id: Option<i64>,
     #[serde(rename = "manifest-list")]
     manifest_list: String,
 }
@@ -195,6 +196,31 @@ fn select_snapshot(
         .ok_or_else(|| Error(format!("Iceberg snapshot does not exist: {snapshot_id}")))
 }
 
+fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> Vec<&'a Snapshot> {
+    let Some(selected) = selected else {
+        return Vec::new();
+    };
+    let mut chain = Vec::new();
+    let mut current = Some(selected.snapshot_id);
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id) {
+            break;
+        }
+        let Some(snapshot) = metadata
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.snapshot_id == id)
+        else {
+            break;
+        };
+        chain.push(snapshot);
+        current = snapshot.parent_snapshot_id.filter(|parent| *parent != -1);
+    }
+    chain.reverse();
+    chain
+}
+
 async fn resolve_metadata_location(
     uri: &str,
     options: &[(String, String)],
@@ -207,13 +233,9 @@ async fn resolve_metadata_location(
     }
     let hint = join_uri(uri, "metadata/version-hint.text")?;
     let bytes = read_location(&hint, options).await?;
-    let version = String::from_utf8_lossy(&bytes).trim().to_string();
-    for name in [
-        format!("metadata/{version}.metadata.json"),
-        format!("metadata/v{version}.metadata.json"),
-        format!("metadata/{version:0>5}.metadata.json"),
-    ] {
-        let candidate = join_uri(uri, &name)?;
+    let version = parse_hint_version(&String::from_utf8_lossy(&bytes))?;
+    for name in hint_names(version) {
+        let candidate = join_uri(uri, &format!("metadata/{name}"))?;
         if object_exists(&candidate, options).await? {
             return Ok(candidate);
         }
@@ -228,39 +250,66 @@ fn local_metadata(root: &Path) -> Result<String, Error> {
         return Ok(root.to_string_lossy().into_owned());
     }
     let metadata = root.join("metadata");
-    if let Ok(hint) = std::fs::read_to_string(metadata.join("version-hint.text")) {
-        let version = hint.trim();
-        for name in [
-            format!("{version}.metadata.json"),
-            format!("v{version}.metadata.json"),
-            format!("{version:0>5}.metadata.json"),
-        ] {
+    let hint_path = metadata.join("version-hint.text");
+    if hint_path.is_file() {
+        let hint = std::fs::read_to_string(&hint_path)
+            .map_err(|e| Error(format!("cannot read {}: {e}", hint_path.display())))?;
+        let version = parse_hint_version(&hint)?;
+        for name in hint_names(version) {
             let candidate = metadata.join(name);
             if candidate.is_file() {
                 return Ok(candidate.to_string_lossy().into_owned());
             }
         }
+        return Err(Error(format!(
+            "version-hint.text is {version} but no matching metadata JSON is in {}",
+            metadata.display()
+        )));
     }
+    let entries = std::fs::read_dir(&metadata)
+        .map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
     let mut found = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&metadata) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.ends_with(".metadata.json") {
-                found.push(entry.path());
-            }
-        }
+    for entry in entries {
+        let entry = entry.map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
+        let name = entry.file_name();
+        let Some(version) = metadata_json_version(&name.to_string_lossy()) else {
+            continue;
+        };
+        found.push((version, entry.path()));
     }
-    found.sort();
+    found.sort_by_key(|(version, _)| *version);
     found
         .pop()
-        .map(|path| path.to_string_lossy().into_owned())
+        .map(|(_, path)| path.to_string_lossy().into_owned())
         .ok_or_else(|| {
             Error(format!(
                 "no Iceberg metadata JSON in {}",
                 metadata.display()
             ))
         })
+}
+
+fn parse_hint_version(hint: &str) -> Result<u64, Error> {
+    let hint = hint.trim();
+    if hint.is_empty() || hint.contains(['/', '\\']) || hint.contains("..") {
+        return Err(Error(format!("invalid version-hint.text: {hint}")));
+    }
+    hint.parse::<u64>()
+        .map_err(|_| Error(format!("version-hint.text is not a version: {hint}")))
+}
+
+fn hint_names(version: u64) -> [String; 3] {
+    [
+        format!("{version}.metadata.json"),
+        format!("v{version}.metadata.json"),
+        format!("{version:05}.metadata.json"),
+    ]
+}
+
+fn metadata_json_version(name: &str) -> Option<u64> {
+    let stem = name.strip_suffix(".metadata.json")?;
+    let stem = stem.strip_prefix('v').unwrap_or(stem);
+    stem.parse().ok()
 }
 
 async fn active_files(
@@ -301,7 +350,7 @@ async fn active_files(
                     entry.data_file.file_path
                 ))
             })?;
-            let uri = resolve_data_file(&root, &entry.data_file.file_path, size)?;
+            let uri = resolve_data_file(&root, &entry.data_file.file_path)?;
             files.push(TableFile {
                 path: entry.data_file.file_path,
                 uri,
@@ -332,43 +381,27 @@ fn table_root(location: &str) -> Result<TableRoot, Error> {
     if looks_like_uri(location) {
         let url = parse_dir_url(location)?;
         if url.scheme() == "file" {
-            let path = url
-                .to_file_path()
-                .map_err(|()| {
-                    Error(format!(
-                        "cannot convert table location to a path: {location}"
-                    ))
-                })?
-                .canonicalize()
-                .map_err(|e| Error(format!("cannot open table location {location}: {e}")))?;
+            let path = url.to_file_path().map_err(|()| {
+                Error(format!(
+                    "cannot convert table location to a path: {location}"
+                ))
+            })?;
             return Ok(TableRoot::Local(path));
         }
         return Ok(TableRoot::Object(url));
     }
-    Ok(TableRoot::Local(
-        Path::new(location)
-            .canonicalize()
-            .map_err(|e| Error(format!("cannot open table location {location}: {e}")))?,
-    ))
+    Ok(TableRoot::Local(PathBuf::from(location)))
 }
 
-fn resolve_data_file(root: &TableRoot, location: &str, expected: u64) -> Result<String, Error> {
+fn resolve_data_file(root: &TableRoot, location: &str) -> Result<String, Error> {
     match root {
-        TableRoot::Local(root) => local_input(root, location, expected),
+        TableRoot::Local(root) => local_uri(root, location),
         TableRoot::Object(base) => object_input(base, location),
     }
 }
 
-fn local_input(root: &Path, location: &str, expected: u64) -> Result<String, Error> {
+fn local_uri(root: &Path, location: &str) -> Result<String, Error> {
     let path = local_data_path(root, location)?;
-    let size = std::fs::metadata(&path)
-        .map_err(|e| Error(format!("cannot open active file {location}: {e}")))?
-        .len();
-    if size != expected {
-        return Err(Error(format!(
-            "active file size differs from manifest: {location} (expected {expected}, found {size})"
-        )));
-    }
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -391,9 +424,7 @@ fn local_data_path(root: &Path, location: &str) -> Result<PathBuf, Error> {
         candidate
     } else {
         root.join(candidate)
-    }
-    .canonicalize()
-    .map_err(|e| Error(format!("cannot open active file {location}: {e}")))?;
+    };
     if !local.starts_with(root) {
         return Err(Error(format!(
             "active data file is outside the Iceberg table location: {location}"

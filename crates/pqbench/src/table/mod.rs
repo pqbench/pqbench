@@ -257,6 +257,13 @@ fn detect_local(path: &Path) -> Result<TableFormat, Error> {
 }
 
 async fn detect_remote(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFormat, Error> {
+    if uri
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name.ends_with(".metadata.json"))
+    {
+        return Ok(TableFormat::ICEBERG);
+    }
     let options: Vec<(String, String)> = env
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
@@ -302,12 +309,6 @@ fn local_path(uri: &str) -> Result<PathBuf, Error> {
     } else {
         Ok(PathBuf::from(uri))
     }
-}
-
-fn is_metadata_json(uri: &str) -> bool {
-    uri.rsplit(['/', '\\'])
-        .next()
-        .is_some_and(|name| name.ends_with(".metadata.json"))
 }
 
 fn is_metadata_json_path(path: &Path) -> bool {
