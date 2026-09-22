@@ -31,30 +31,20 @@ pub enum RowGroups {
 }
 
 impl RowGroups {
-    /// Parse `all` or `first:N`.
+    /// Parse `all` or `first:N`. The sample grammar also has `every:N`; that
+    /// is files, not row groups.
     ///
     /// # Errors
     /// Fails when the spec is unknown or `N` is not a positive integer.
     pub fn parse(value: &str) -> Result<Self, Error> {
-        if value == "all" {
-            return Ok(Self::ALL);
+        match crate::pattern::Sample::parse(value) {
+            Ok(crate::pattern::Sample::ALL) => Ok(Self::ALL),
+            Ok(crate::pattern::Sample::First(count)) => Ok(Self::First(count)),
+            Ok(crate::pattern::Sample::Every(_)) => Err(Error(
+                "row-groups does not support every:N; expected all or first:N".into(),
+            )),
+            Err(error) => Err(Error(error.to_string())),
         }
-        if let Some(count) = value.strip_prefix("first:") {
-            let count: u32 = count.parse().map_err(|_| {
-                Error(format!(
-                    "row-groups first needs a positive integer, got `{count}`"
-                ))
-            })?;
-            if count == 0 {
-                return Err(Error(
-                    "row-groups first needs a positive integer, got 0".into(),
-                ));
-            }
-            return Ok(Self::First(count));
-        }
-        Err(Error(format!(
-            "unknown row-groups `{value}`; expected all or first:N"
-        )))
     }
 
     fn keep(self, total: usize) -> usize {
@@ -74,6 +64,8 @@ pub struct DumpFile {
     pub uri: String,
     /// Lake table name, when the row comes from a lake.
     pub table: Option<String>,
+    /// Storage options for this file (`AWS_*`).
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// Arguments for [`dump`] and [`write_parquet`].
@@ -110,7 +102,7 @@ pub async fn dump(request: &DumpRequest) -> Result<Dump, Error> {
     let mut columns = Vec::new();
     let mut rows = Vec::new();
     for file in &files {
-        let source = open_source(&file.uri, request.row_groups).await?;
+        let source = open_source(file, request.row_groups).await?;
         let keep = request.row_groups.keep(source.metadata.num_row_groups());
         let (file_columns, file_rows) = read_rows(file, &source, keep)?;
         merge_columns(&mut columns, &file_columns, &mut rows);
@@ -131,16 +123,22 @@ pub async fn write_parquet(request: &DumpRequest) -> Result<Vec<u8>, Error> {
     if files.is_empty() {
         return Err(Error("no files".into()));
     }
-    let mut sources = Vec::new();
-    for file in &files {
-        sources.push(open_source(&file.uri, request.row_groups).await?);
-    }
-    let schema = sources[0]
+    let first = open_source(&files[0], request.row_groups).await?;
+    let schema = first
         .metadata
         .file_metadata()
         .schema_descr_ptr()
         .root_schema_ptr();
-    for (file, source) in files.iter().zip(&sources) {
+    let mut out = Vec::new();
+    let mut writer = SerializedFileWriter::new(&mut out, schema.clone(), Default::default())
+        .map_err(parquet_error)?;
+    append_groups(
+        &mut writer,
+        &first,
+        request.row_groups.keep(first.metadata.num_row_groups()),
+    )?;
+    for file in files.iter().skip(1) {
+        let source = open_source(file, request.row_groups).await?;
         let file_schema = source
             .metadata
             .file_metadata()
@@ -152,14 +150,9 @@ pub async fn write_parquet(request: &DumpRequest) -> Result<Vec<u8>, Error> {
                 file.uri
             )));
         }
-    }
-    let mut out = Vec::new();
-    let mut writer =
-        SerializedFileWriter::new(&mut out, schema, Default::default()).map_err(parquet_error)?;
-    for source in &sources {
         append_groups(
             &mut writer,
-            source,
+            &source,
             request.row_groups.keep(source.metadata.num_row_groups()),
         )?;
     }
@@ -294,6 +287,7 @@ fn expand_files(files: &[DumpFile]) -> Result<Vec<DumpFile>, Error> {
                     path: uri.clone(),
                     uri,
                     table: file.table.clone(),
+                    env: file.env.clone(),
                 });
                 matched = true;
             }
@@ -311,11 +305,11 @@ fn has_glob(input: &str) -> bool {
     input.contains(['*', '?'])
 }
 
-async fn open_source(uri: &str, row_groups: RowGroups) -> Result<Source, Error> {
-    if is_remote(uri) {
-        return open_remote(uri, row_groups).await;
+async fn open_source(file: &DumpFile, row_groups: RowGroups) -> Result<Source, Error> {
+    if is_remote(&file.uri) {
+        return open_remote(file, row_groups).await;
     }
-    let path = local_path(uri);
+    let path = local_path(&file.uri);
     let file = File::open(&path)
         .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;
     let metadata = ParquetMetaDataReader::new()
@@ -327,8 +321,14 @@ async fn open_source(uri: &str, row_groups: RowGroups) -> Result<Source, Error> 
     })
 }
 
-async fn open_remote(uri: &str, row_groups: RowGroups) -> Result<Source, Error> {
-    let reader = object_store::open(uri, &[]).map_err(|error| Error(error.to_string()))?;
+async fn open_remote(file: &DumpFile, row_groups: RowGroups) -> Result<Source, Error> {
+    let uri = &file.uri;
+    let options: Vec<(String, String)> = file
+        .env
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let reader = object_store::open(uri, &options).map_err(|error| Error(error.to_string()))?;
     let stat = reader
         .stat()
         .await
@@ -372,7 +372,7 @@ async fn open_remote(uri: &str, row_groups: RowGroups) -> Result<Source, Error> 
         .map_err(parquet_error)?;
     let keep = row_groups.keep(metadata.num_row_groups());
     let mut parts = vec![(metadata_start, Bytes::from(footer))];
-    for range in data_ranges(&metadata, keep) {
+    for range in data_ranges(&metadata, keep)? {
         let bytes = reader
             .read_range(range.clone(), identity)
             .await
@@ -385,13 +385,11 @@ async fn open_remote(uri: &str, row_groups: RowGroups) -> Result<Source, Error> 
     })
 }
 
-fn data_ranges(metadata: &ParquetMetaData, keep: usize) -> Vec<Range<u64>> {
-    let mut ranges: Vec<Range<u64>> = metadata
-        .row_groups()
-        .iter()
-        .take(keep)
-        .flat_map(group_range)
-        .collect();
+fn data_ranges(metadata: &ParquetMetaData, keep: usize) -> Result<Vec<Range<u64>>, Error> {
+    let mut ranges = Vec::new();
+    for group in metadata.row_groups().iter().take(keep) {
+        ranges.extend(group_range(group)?);
+    }
     ranges.sort_by_key(|range| range.start);
     let mut merged: Vec<Range<u64>> = Vec::new();
     for range in ranges {
@@ -400,20 +398,25 @@ fn data_ranges(metadata: &ParquetMetaData, keep: usize) -> Vec<Range<u64>> {
             _ => merged.push(range),
         }
     }
-    merged
+    Ok(merged)
 }
 
-fn group_range(group: &RowGroupMetaData) -> Vec<Range<u64>> {
-    group
-        .columns()
-        .iter()
-        .map(|column| {
-            let start = column
-                .dictionary_page_offset()
-                .unwrap_or_else(|| column.data_page_offset()) as u64;
-            start..start + column.compressed_size() as u64
-        })
-        .collect()
+fn group_range(group: &RowGroupMetaData) -> Result<Vec<Range<u64>>, Error> {
+    let mut ranges = Vec::new();
+    for column in group.columns() {
+        let start = column
+            .dictionary_page_offset()
+            .unwrap_or_else(|| column.data_page_offset());
+        let start = u64::try_from(start)
+            .map_err(|_| Error("parquet column offset does not fit in u64".into()))?;
+        let size = u64::try_from(column.compressed_size())
+            .map_err(|_| Error("parquet column size does not fit in u64".into()))?;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| Error("parquet column range overflowed".into()))?;
+        ranges.push(start..end);
+    }
+    Ok(ranges)
 }
 
 fn read_rows(
@@ -443,10 +446,16 @@ fn read_rows(
             }
             values.push(Value::String(file.path.clone()));
             for (name, field) in record.get_column_iter() {
+                if name == "_path" || name == "_table" {
+                    return Err(Error(format!(
+                        "{} already has a `{name}` column; dump will not replace it",
+                        file.uri
+                    )));
+                }
                 if rows.is_empty() {
                     columns.push(name.clone());
                 }
-                values.push(field_value(field));
+                values.push(field_value(field, name)?);
             }
             rows.push(values);
         }
@@ -464,8 +473,10 @@ fn append_groups<W: Write + Send>(
         let mut out = writer.next_row_group().map_err(parquet_error)?;
         for column in group.columns() {
             let close = ColumnCloseResult {
-                bytes_written: column.compressed_size() as u64,
-                rows_written: group.num_rows() as u64,
+                bytes_written: u64::try_from(column.compressed_size())
+                    .map_err(|_| Error("parquet column size does not fit in u64".into()))?,
+                rows_written: u64::try_from(group.num_rows())
+                    .map_err(|_| Error("parquet row count does not fit in u64".into()))?,
                 metadata: column.clone(),
                 bloom_filter: None,
                 column_index: None,
@@ -508,33 +519,33 @@ fn parquet_error(error: parquet::errors::ParquetError) -> Error {
     Error(error.to_string())
 }
 
-fn field_value(field: &Field) -> Value {
+fn field_value(field: &Field, name: &str) -> Result<Value, Error> {
     match field {
-        Field::Null => Value::Null,
-        Field::Bool(value) => Value::Bool(*value),
-        Field::Byte(value) => Value::from(*value),
-        Field::Short(value) => Value::from(*value),
-        Field::Int(value) => Value::from(*value),
-        Field::Long(value) => Value::from(*value),
-        Field::UByte(value) => Value::from(*value),
-        Field::UShort(value) => Value::from(*value),
-        Field::UInt(value) => Value::from(*value),
-        Field::ULong(value) => Value::from(*value),
+        Field::Null => Ok(Value::Null),
+        Field::Bool(value) => Ok(Value::Bool(*value)),
+        Field::Byte(value) => Ok(Value::from(*value)),
+        Field::Short(value) => Ok(Value::from(*value)),
+        Field::Int(value) => Ok(Value::from(*value)),
+        Field::Long(value) => Ok(Value::from(*value)),
+        Field::UByte(value) => Ok(Value::from(*value)),
+        Field::UShort(value) => Ok(Value::from(*value)),
+        Field::UInt(value) => Ok(Value::from(*value)),
+        Field::ULong(value) => Ok(Value::from(*value)),
         Field::Float(value) => serde_json::Number::from_f64(f64::from(*value))
             .map(Value::Number)
-            .unwrap_or(Value::Null),
+            .ok_or_else(|| Error(format!("column `{name}` is not a finite float"))),
         Field::Double(value) => serde_json::Number::from_f64(*value)
             .map(Value::Number)
-            .unwrap_or(Value::Null),
-        Field::Str(value) => Value::String(value.clone()),
+            .ok_or_else(|| Error(format!("column `{name}` is not a finite float"))),
+        Field::Str(value) => Ok(Value::String(value.clone())),
         Field::Group(row) => {
             let mut object = Map::new();
-            for (name, field) in row.get_column_iter() {
-                object.insert(name.clone(), field_value(field));
+            for (child, field) in row.get_column_iter() {
+                object.insert(child.clone(), field_value(field, child)?);
             }
-            Value::Object(object)
+            Ok(Value::Object(object))
         }
-        other => Value::String(other.to_string()),
+        other => Ok(Value::String(other.to_string())),
     }
 }
 

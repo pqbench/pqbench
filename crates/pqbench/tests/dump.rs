@@ -24,6 +24,7 @@ fn file(path: &str, uri: String) -> DumpFile {
         path: path.into(),
         uri,
         table: None,
+        env: Default::default(),
     }
 }
 
