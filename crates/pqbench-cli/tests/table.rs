@@ -142,6 +142,117 @@ fn bytemass_reads_an_iceberg_table_document_from_stdin() {
 }
 
 #[test]
+fn bytemass_prunes_partitions_and_samples_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
+    let file = |path: &str| {
+        let uri = directory.path().join(path.replace('/', "-"));
+        std::fs::copy(parquet_fixture(), &uri).unwrap();
+        json!({
+            "path": path,
+            "uri": uri,
+            "size": size
+        })
+    };
+    let document = json!({
+        "kind": "pqbench.table",
+        "version": 1,
+        "format": "delta",
+        "uri": "/tmp/table",
+        "snapshot_version": 0,
+        "partition_columns": ["year"],
+        "log": [],
+        "files": [
+            file("year=2023/part-0.parquet"),
+            file("year=2024/part-0.parquet"),
+            file("year=2024/part-1.parquet"),
+            file("year=2025/part-0.parquet")
+        ]
+    });
+
+    let pruned = pipe(
+        &["bytemass", "--json", "--include", "year=2024/**"],
+        &document.to_string(),
+    );
+    assert!(
+        pruned.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&pruned.stderr)
+    );
+    let end = ndjson_records(&pruned.stdout)
+        .into_iter()
+        .find(|record| record["event"] == "end")
+        .expect("bytemass end");
+    assert_eq!(end["file_count"], 2);
+    assert_eq!(end["num_rows"], 6000);
+
+    let sampled = pipe(
+        &[
+            "bytemass",
+            "--json",
+            "--include",
+            "year=2024/**",
+            "--sample",
+            "every:2",
+        ],
+        &document.to_string(),
+    );
+    assert!(
+        sampled.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&sampled.stderr)
+    );
+    let end = ndjson_records(&sampled.stdout)
+        .into_iter()
+        .find(|record| record["event"] == "end")
+        .expect("bytemass end");
+    assert_eq!(end["file_count"], 1);
+    assert_eq!(end["num_rows"], 3000);
+
+    let first = pipe(
+        &["bytemass", "--json", "--sample", "first:1"],
+        &document.to_string(),
+    );
+    assert!(first.status.success());
+    let end = ndjson_records(&first.stdout)
+        .into_iter()
+        .find(|record| record["event"] == "end")
+        .expect("bytemass end");
+    assert_eq!(end["file_count"], 1);
+
+    let unknown = pipe(&["bytemass", "--sample", "random"], &document.to_string());
+    assert!(!unknown.status.success());
+    let stderr = String::from_utf8(unknown.stderr).unwrap();
+    assert!(stderr.contains("every:N"), "{stderr}");
+
+    let unmatched = pipe(
+        &["bytemass", "--include", "year=1999/**"],
+        &document.to_string(),
+    );
+    assert!(!unmatched.status.success());
+    let stderr = String::from_utf8_lossy(&unmatched.stderr);
+    assert!(
+        stderr.contains("matched") || stderr.contains("include"),
+        "{stderr}"
+    );
+
+    let empty = json!({
+        "kind": "pqbench.table",
+        "version": 1,
+        "format": "delta",
+        "uri": "/tmp/empty",
+        "snapshot_version": 0,
+        "partition_columns": [],
+        "log": [],
+        "files": []
+    });
+    let empty_sample = pipe(&["bytemass", "--sample", "random"], &empty.to_string());
+    assert!(!empty_sample.status.success());
+    let stderr = String::from_utf8_lossy(&empty_sample.stderr);
+    assert!(stderr.contains("every:N"), "{stderr}");
+}
+
+#[test]
 fn table_rejects_an_unrecognized_directory() {
     let directory = tempfile::tempdir().unwrap();
     let output = pqbench()

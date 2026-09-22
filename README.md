@@ -67,7 +67,9 @@ feature; a URI whose backend is not compiled in fails at runtime with the
 missing feature named. The library entry point (`bytemass::bytemass`) is
 always available and never feature-gated. A pipe streams one NDJSON row per
 column as each file is measured; a terminal prints a short summary and
-requires `-o` (zstd NDJSON).
+requires `-o` (zstd NDJSON). `--include` / `--exclude` are Unix globs on the
+file path (`year=2024/**`); `--sample all`, `every:N`, or `first:N` runs after
+that. Lake `--include` / `--exclude` already select table names.
 
 ### table
 

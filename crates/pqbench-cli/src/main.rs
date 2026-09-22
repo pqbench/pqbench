@@ -53,6 +53,7 @@ enum Command {
 Examples:
   pqbench bytemass data.parquet
   pqbench table ./delta-table | pqbench bytemass
+  pqbench table ./delta-table | pqbench bytemass --include 'year=2024/**' --sample first:10
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench bytemass table.ndjson.zst
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html

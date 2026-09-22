@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use pqbench::bytemass;
+use pqbench::pattern::{self, Sample};
 use pqbench::table::TableFile;
 use serde::Serialize;
 
@@ -32,11 +33,22 @@ pub(crate) struct BytemassArgs {
     /// files to measure at once
     #[arg(long, default_value = "4", value_name = "N")]
     concurrency: NonZeroUsize,
+    /// keep files whose partition path matches this glob (repeatable)
+    #[arg(long, value_name = "GLOB")]
+    include: Vec<String>,
+    /// drop files whose partition path matches this glob (repeatable)
+    #[arg(long, value_name = "GLOB")]
+    exclude: Vec<String>,
+    /// file sample after include/exclude: all, every:N, first:N
+    #[arg(long, value_name = "METHOD", default_value = "all")]
+    sample: String,
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
 pub(crate) fn run(args: &BytemassArgs) -> Result<(), CliError> {
     let _ = args.json;
+    Sample::parse(&args.sample)?;
+    pattern::keep("", &args.include, &args.exclude)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -118,6 +130,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                             &mut envs,
                             &mut open,
                             concurrency,
+                            args,
                         )
                         .await?;
                     }
@@ -130,6 +143,9 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
     }
     if !open.is_empty() {
         return Err("table stream ended without end".into());
+    }
+    if stats.files.is_empty() && !args.include.is_empty() {
+        return Err("no paths matched --include".into());
     }
     finish_stream(emit, &stats, args.output.as_deref())
 }
@@ -149,6 +165,7 @@ async fn queue_record(
     envs: &mut BTreeMap<String, BTreeMap<String, String>>,
     open: &mut BTreeSet<String>,
     concurrency: usize,
+    args: &BytemassArgs,
 ) -> Result<(), CliError> {
     match record {
         Record::RemoteSource(source) => {
@@ -166,7 +183,7 @@ async fn queue_record(
             }
         }
         Record::Table(info) => {
-            for file in info.files {
+            for file in selected_files(info.files, args)? {
                 spawn_file(
                     set,
                     emit,
@@ -191,6 +208,9 @@ async fn queue_record(
             open.insert(begin.id);
         }
         Record::File { id, file } => {
+            if !pattern::keep(&file.path, &args.include, &args.exclude)? {
+                return Ok(());
+            }
             let env = envs.get(&id).cloned().unwrap_or_default();
             spawn_file(set, emit, stats, concurrency, id, file, env).await?;
         }
@@ -325,11 +345,41 @@ async fn measure_document_page(reader: impl Read, args: &BytemassArgs) -> Result
     write_page(&measured, args)
 }
 
+fn selected_files(files: Vec<TableFile>, args: &BytemassArgs) -> Result<Vec<TableFile>, CliError> {
+    if files.is_empty() {
+        if !args.include.is_empty() {
+            return Err("no paths matched --include".into());
+        }
+        return Ok(files);
+    }
+    if args.include.is_empty() && args.exclude.is_empty() && args.sample == "all" {
+        return Ok(files);
+    }
+    Ok(pattern::select(
+        files,
+        |file| file.path.as_str(),
+        &args.include,
+        &args.exclude,
+        Sample::parse(&args.sample)?,
+    )?)
+}
+
 async fn measure(
     inputs: Vec<String>,
     env: BTreeMap<String, String>,
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
+    let inputs = if args.include.is_empty() && args.exclude.is_empty() && args.sample == "all" {
+        inputs
+    } else {
+        pattern::select(
+            inputs,
+            String::as_str,
+            &args.include,
+            &args.exclude,
+            Sample::parse(&args.sample)?,
+        )?
+    };
     if args.d3 {
         let rows = bytemass::bytemass(&bytemass::BytemassRequest { inputs, env }).await?;
         return write_page(&rows, args);

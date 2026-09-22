@@ -8,6 +8,7 @@ pqbench bytemass data.parquet
 pqbench table ./delta-table | pqbench bytemass
 pqbench table ./iceberg-table | pqbench bytemass
 pqbench lake ./warehouse | pqbench table | pqbench bytemass --json
+pqbench table ./delta-table | pqbench bytemass --include 'year=2024/**' --sample first:10
 ```
 
 A TTY prints a short summary and requires `-o` (zstd NDJSON). A pipe streams
