@@ -90,17 +90,21 @@ total                                   46.00
 ```
 
 Iceberg REST does not vend credentials. `pqbench lake` lists namespaces and
-tables, then `loadTable` for each metadata location:
+tables, then `loadTable` for each metadata location. Catalog host and token
+are `env` keys (`CATALOG_ENDPOINT` / `DATABRICKS_HOST`, and optional
+`CATALOG_TOKEN` / `DATABRICKS_TOKEN`), not sibling fields; only `AWS_*` is
+copied onto listed tables:
 
 ```bash
 ICEBERG=http://localhost:8181
 S3=http://localhost:9000
 
 jq -n --arg endpoint "$ICEBERG" --arg s3 "$S3" \
-  '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
-    env: {AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
-      AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
-      AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' |
+  '{kind: "pqbench.lake-source", version: 1,
+    env: {CATALOG_ENDPOINT: $endpoint, AWS_ACCESS_KEY_ID: "test",
+      AWS_SECRET_ACCESS_KEY: "test", AWS_REGION: "us-east-1",
+      AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
+      AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' |
   target/debug/pqbench lake |
   target/debug/pqbench table |
   target/debug/pqbench bytemass

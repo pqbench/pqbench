@@ -24,18 +24,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::CliError;
 
-/// Credentials for listing a catalog. `endpoint` is the server origin
-/// (`http://localhost:8080`, `http://localhost:8181`, or
-/// `https://example.cloud.databricks.com`). `GET /v1/config` with a `defaults`
+/// Credentials for listing a catalog.
+///
+/// Catalog host and token live in `env` (or the process environment), the
+/// same way storage options do: `DATABRICKS_HOST` / `DATABRICKS_TOKEN`, or
+/// `CATALOG_ENDPOINT` / `CATALOG_TOKEN`. `GET /v1/config` with a `defaults`
 /// object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity.
-/// `token` is the Databricks bearer token; Unity OSS often has none. `env` is
-/// copied onto each listed table so `pqbench table` can read its files.
+/// Unity OSS often has no token. Only `AWS_*` is copied onto listed tables.
 #[derive(Deserialize)]
 pub(crate) struct LakeSource {
     pub version: u32,
-    pub endpoint: String,
-    #[serde(default)]
-    pub token: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// List this catalog, or a catalog-name glob. A literal skips `/catalogs`.
@@ -45,6 +43,58 @@ pub(crate) struct LakeSource {
     /// Requires `catalog`.
     #[serde(default)]
     pub schema: Option<String>,
+}
+
+const CATALOG_ENDPOINT_KEYS: &[&str] = &["DATABRICKS_HOST", "CATALOG_ENDPOINT"];
+const CATALOG_TOKEN_KEYS: &[&str] = &["DATABRICKS_TOKEN", "CATALOG_TOKEN"];
+
+impl LakeSource {
+    /// Catalog origin from `env`, then the process environment.
+    pub(crate) fn catalog_endpoint(&self) -> Result<String, CliError> {
+        env_value(&self.env, CATALOG_ENDPOINT_KEYS).ok_or_else(|| {
+            "lake source needs DATABRICKS_HOST or CATALOG_ENDPOINT (in env or the process environment)"
+                .into()
+        })
+    }
+
+    /// Bearer token from `env`, then the process environment. Empty is none.
+    pub(crate) fn catalog_token(&self) -> Option<String> {
+        env_value(&self.env, CATALOG_TOKEN_KEYS)
+    }
+
+    /// Storage options copied onto each listed table (`AWS_*` only).
+    pub(crate) fn storage_env(&self) -> BTreeMap<String, String> {
+        self.env
+            .iter()
+            .filter(|(key, _)| key.starts_with("AWS_"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+}
+
+fn env_value(env: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = env
+            .get(*key)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
+        }
+    }
+    for key in keys {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn catalog_env_key(key: &str) -> bool {
+    CATALOG_ENDPOINT_KEYS.contains(&key) || CATALOG_TOKEN_KEYS.contains(&key)
 }
 
 /// A versioned document naming what an external producer resolved, plus the
@@ -299,9 +349,6 @@ fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
             "unsupported lake source; expected kind `pqbench.lake-source` version 1".into(),
         );
     }
-    if source.endpoint.trim().is_empty() {
-        return Err("lake source needs an endpoint".into());
-    }
     if source
         .schema
         .as_deref()
@@ -310,7 +357,16 @@ fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
     {
         return Err("lake source schema needs a catalog".into());
     }
-    aws_env_only(&source.env)?;
+    if let Some(key) = source
+        .env
+        .keys()
+        .find(|key| !key.starts_with("AWS_") && !catalog_env_key(key))
+    {
+        return Err(format!(
+            "lake source env may only contain AWS_* or catalog names, not `{key}`"
+        )
+        .into());
+    }
     Ok(source)
 }
 

@@ -129,8 +129,9 @@ async fn stream_document(
     }
     })?;
     if let Some(source) = source {
-        let token = source.token.as_deref().filter(|token| !token.is_empty());
-        return match crate::catalog::protocol(&source.endpoint, token)? {
+        let endpoint = source.catalog_endpoint()?;
+        let token = source.catalog_token();
+        return match crate::catalog::protocol(&endpoint, token.as_deref())? {
             crate::catalog::Protocol::IcebergRest => {
                 crate::iceberg::list_tables(&source, filter, concurrency, |table| {
                     write_ref(emit, &table).map(|_| ())

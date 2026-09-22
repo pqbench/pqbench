@@ -51,9 +51,9 @@ pub(crate) async fn list_tables(
     concurrency: usize,
     mut on_table: impl FnMut(LakeTable) -> Result<(), CliError>,
 ) -> Result<usize, CliError> {
-    let root = source.endpoint.trim_end_matches('/').to_string();
-    let token = source.token.clone().filter(|token| !token.is_empty());
-    let env = source.env.clone();
+    let root = source.catalog_endpoint()?.trim_end_matches('/').to_string();
+    let token = source.catalog_token();
+    let env = source.storage_env();
     let namespaces = namespaces_to_list(&root, token.as_deref(), filter)?;
     let (tx, mut rx) = mpsc::unbounded_channel::<Result<LakeTable, String>>();
     let mut set: JoinSet<Result<(), String>> = JoinSet::new();

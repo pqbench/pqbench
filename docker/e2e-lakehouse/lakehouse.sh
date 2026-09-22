@@ -190,7 +190,8 @@ check_iceberg() {
     local bin
     bin=$(pqbench_bin)
     jq -c -n --arg endpoint "$iceberg" --argjson env "$(storage_env)" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
+        '{kind: "pqbench.lake-source", version: 1,
+          env: ($env + {CATALOG_ENDPOINT: $endpoint})}' |
         "$bin" lake |
         "$bin" table |
         "$bin" bytemass --json |

@@ -4,7 +4,13 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 fn pqbench() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_pqbench"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pqbench"));
+    command
+        .env_remove("DATABRICKS_HOST")
+        .env_remove("DATABRICKS_TOKEN")
+        .env_remove("CATALOG_ENDPOINT")
+        .env_remove("CATALOG_TOKEN");
+    command
 }
 
 /// One Unity Catalog list server. `expect_bearer` is the Databricks token the
@@ -289,8 +295,10 @@ fn unity_oss_lists_delta_tables_without_a_token() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address,
-        "env": {"AWS_REGION": "us-east-1"}
+        "env": {
+            "DATABRICKS_HOST": catalog.address,
+            "AWS_REGION": "us-east-1"
+        }
     });
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("unity.json");
@@ -306,6 +314,7 @@ fn unity_oss_lists_delta_tables_without_a_token() {
     assert_eq!(refs[0]["id"], "main.default.events");
     assert_eq!(refs[0]["uri"], "s3://lakehouse/unity/events");
     assert_eq!(refs[0]["env"]["AWS_REGION"], "us-east-1");
+    assert!(refs[0]["env"].get("DATABRICKS_HOST").is_none());
 }
 
 #[test]
@@ -327,8 +336,10 @@ fn databricks_list_follows_an_empty_page_token() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address,
-        "token": "dapi-example"
+        "env": {
+            "DATABRICKS_HOST": catalog.address,
+            "DATABRICKS_TOKEN": "dapi-example"
+        }
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(
@@ -341,6 +352,65 @@ fn databricks_list_follows_an_empty_page_token() {
     let refs = table_refs(&ndjson(stdout.as_bytes()));
     assert_eq!(refs[0]["id"], "main.default.events");
     assert_eq!(refs[0]["uri"], "s3://bucket/events");
+    assert!(refs[0]["env"].get("DATABRICKS_TOKEN").is_none());
+}
+
+#[test]
+fn lake_source_reads_the_catalog_token_from_the_process_environment() {
+    let catalog = Catalog::spawn(
+        Some("dapi-env"),
+        vec![json!({
+            "name": "events",
+            "catalog_name": "main",
+            "schema_name": "default",
+            "full_name": "main.default.events",
+            "data_source_format": "DELTA",
+            "storage_location": "s3://bucket/events"
+        })],
+    );
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "env": {"DATABRICKS_HOST": catalog.address}
+    });
+    let mut child = pqbench()
+        .args(["lake"])
+        .env("DATABRICKS_TOKEN", "dapi-env")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(source.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let refs = table_refs(&ndjson(&output.stdout));
+    assert_eq!(refs[0]["uri"], "s3://bucket/events");
+}
+
+#[test]
+fn lake_source_needs_a_catalog_host() {
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "env": {"AWS_REGION": "us-east-1"}
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("DATABRICKS_HOST") || stderr.contains("CATALOG_ENDPOINT"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -359,7 +429,7 @@ fn unity_skips_an_empty_schema_page() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address
+        "env": {"DATABRICKS_HOST": catalog.address}
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(
@@ -396,7 +466,7 @@ fn include_and_exclude_match_table_fqn() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address
+        "env": {"DATABRICKS_HOST": catalog.address}
     });
     let output = pipe(
         &[
@@ -436,7 +506,7 @@ fn include_table_fqn_skips_other_catalogs() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address
+        "env": {"DATABRICKS_HOST": catalog.address}
     });
     let output = pipe(
         &["lake", "--include", "main.default.events"],
@@ -472,7 +542,7 @@ fn include_prefix_skips_other_catalogs() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address
+        "env": {"DATABRICKS_HOST": catalog.address}
     });
     let output = pipe(
         &["lake", "--include", "main", "--concurrency", "8"],
@@ -496,8 +566,10 @@ fn iceberg_rest_lists_tables_from_metadata_location() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address,
-        "env": {"AWS_REGION": "us-east-1"}
+        "env": {
+            "CATALOG_ENDPOINT": catalog.address,
+            "AWS_REGION": "us-east-1"
+        }
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(
@@ -522,7 +594,7 @@ fn iceberg_rest_rejects_a_table_without_metadata_location() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address
+        "env": {"DATABRICKS_HOST": catalog.address}
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(!output.status.success());
@@ -539,7 +611,7 @@ fn iceberg_rest_rejects_a_namespace_page_without_namespaces() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address
+        "env": {"DATABRICKS_HOST": catalog.address}
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(!output.status.success());
@@ -556,7 +628,7 @@ fn iceberg_rest_rejects_an_identifier_without_a_name() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": catalog.address
+        "env": {"DATABRICKS_HOST": catalog.address}
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(!output.status.success());
@@ -572,7 +644,7 @@ fn lake_source_rejects_a_catalog_that_does_not_answer() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": "http://127.0.0.1:1"
+        "env": {"CATALOG_ENDPOINT": "http://127.0.0.1:1"}
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(!output.status.success());
@@ -734,7 +806,6 @@ fn lake_source_rejects_a_non_aws_env_key() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": "http://127.0.0.1:9",
         "env": {"NOT_AWS": "x"}
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
@@ -765,7 +836,7 @@ fn lake_rejects_a_catalog_with_no_delta_tables() {
     let source = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": address
+        "env": {"CATALOG_ENDPOINT": address}
     });
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(!output.status.success());

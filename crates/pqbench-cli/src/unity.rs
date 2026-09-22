@@ -73,9 +73,9 @@ pub(crate) async fn list_tables(
     concurrency: usize,
     mut on_table: impl FnMut(LakeTable) -> Result<(), CliError>,
 ) -> Result<usize, CliError> {
-    let root = api_root(&source.endpoint);
-    let token = source.token.clone().filter(|token| !token.is_empty());
-    let env = source.env.clone();
+    let root = api_root(&source.catalog_endpoint()?);
+    let token = source.catalog_token();
+    let env = source.storage_env();
     let catalogs = catalogs_to_list(&root, token.as_deref(), source, filter)?;
     let (tx, mut rx) = mpsc::unbounded_channel::<Result<LakeTable, String>>();
     let mut set: JoinSet<Result<(), String>> = JoinSet::new();
