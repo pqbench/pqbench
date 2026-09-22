@@ -18,6 +18,35 @@ The walkthroughs use the committed lakehouse fixtures under
 [`docker/e2e-lakehouse/`](../docker/e2e-lakehouse) and the small Parquet
 fixture in the test suite. Catalog pipes need `make lakehouse`.
 
+## Selecting files with Unix tools
+
+`bytemass` measures the files the `table` stream names; which files is a shell
+decision. The stream is one JSON record per line, so `jq` prunes file records
+by `path`, and `sort`, `head`, or `awk` sample by name:
+
+```sh
+# one partition: keep the begin/end records, drop the other files
+pqbench table ./delta-table \
+  | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("year=2024/")))' \
+  | pqbench bytemass --json
+
+# first N by path: sort the file URIs, cap them, then measure
+pqbench table ./delta-table \
+  | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
+  | sort | head -10 \
+  | xargs pqbench bytemass --json
+
+# every Nth file
+pqbench table ./delta-table \
+  | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
+  | awk 'NR % 2 == 1' \
+  | xargs pqbench bytemass --json
+```
+
+The first form keeps the per-table `env` (S3/Unity credentials) on the begin
+record, so it works for remote tables. Dropping to bare `uri`s (`jq -r`) is
+local-only: pass credentials in the environment when you use `xargs`.
+
 ## A lake of tables
 
 A directory, `file://` URI, or `s3://` prefix is walked until a table marker
