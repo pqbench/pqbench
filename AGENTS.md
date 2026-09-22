@@ -141,8 +141,8 @@ analogy, convention, or precedent:
 
 ## Repo layout
 
-- `crates/pqbench/` — the library (bench, bytemass, codecs, compression, lz,
-  parquet, report, stats)
+- `crates/pqbench/` — the library (bench, bytemass, codecs, compression, dump,
+  lz, parquet, report, stats)
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
 - `crates/aipnaming/`, `crates/aipnaming-cli/` — the AIP naming linter and its
   `aipnaming` binary

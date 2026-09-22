@@ -71,6 +71,19 @@ requires `-o` (zstd NDJSON). Selecting which files to measure is a shell job:
 filter the `table` stream with `jq`, `sort`, and `head` before `bytemass` (see
 [docs/demo.md](docs/demo.md)).
 
+### dump
+
+Write a row sample from the same files `bytemass` would measure. CSV on
+stdout; `--json` is NDJSON. Partition globs and `--sample` match `bytemass`
+(`all`, `every:N`, `first:N`). Each row carries `_path` (and `_table` from a
+lake):
+
+```sh
+pqbench dump data.parquet
+pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1
+pqbench table ./delta-table | pqbench dump --json
+```
+
 ### table
 
 Detect the table format and load its metadata. For Delta this is the

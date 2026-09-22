@@ -6,6 +6,7 @@ mod bench;
 mod bytemass;
 mod compression;
 mod document;
+mod dump;
 mod emit;
 mod lake;
 mod lz;
@@ -31,6 +32,7 @@ Examples:
   pqbench table ./iceberg-table | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
+  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 -o sample.parquet
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -73,6 +75,14 @@ Examples:
   pqbench lake creds.json | pqbench table | pqbench bytemass
 "#)]
     Lake(lake::LakeArgs),
+    /// write a row sample from parquet files or a table document
+    #[command(after_help = r#"Examples:
+  pqbench dump data.parquet
+  pqbench table ./delta-table | pqbench dump
+  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1
+  pqbench lake ./warehouse | pqbench table | pqbench dump -o sample.parquet
+"#)]
+    Dump(dump::DumpArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -84,6 +94,7 @@ async fn main() -> ExitCode {
         Command::Bytemass(args) => bytemass::run(&args).await,
         Command::Table(args) => table::run(&args).await,
         Command::Lake(args) => lake::run(&args).await,
+        Command::Dump(args) => dump::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
