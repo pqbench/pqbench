@@ -1,0 +1,11 @@
+{
+  "kind": "pqbench.lake",
+  "version": 1,
+  "name": "lakehouse",
+  "tables": [
+    {
+      "name": "unity/events",
+      "uri": "docker/e2e-lakehouse/table"
+    }
+  ]
+}

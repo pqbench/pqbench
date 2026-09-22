@@ -138,6 +138,7 @@ pqbench lake unity.json | pqbench table | pqbench bytemass
 
 ## Documentation
 
+- [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, lake walk, catalogs
 - [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
   naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
