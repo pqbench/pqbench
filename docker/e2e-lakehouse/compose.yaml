@@ -1,0 +1,64 @@
+name: pqbench-lakehouse
+
+services:
+  rustfs:
+    # Pin an explicit release tag; do not float on latest.
+    image: rustfs/rustfs:1.0.0@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: test
+      RUSTFS_SECRET_KEY: test
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    ports:
+      - "127.0.0.1:${RUSTFS_PORT:-9000}:9000"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  # This service is intentionally server-only: no UI and no external database.
+  # Its own metadata is persisted in the named volume below. Catalog entries can
+  # point at the same S3-compatible storage used by the other services.
+  #
+  # The `s3.*` entries are Unity's per-bucket configuration. Unity cannot send
+  # AssumeRole to an S3-compatible endpoint (unitycatalog/unitycatalog#43), so
+  # the stand hands it a session credential that rustfs already minted and Unity
+  # vends that verbatim — its documented preset-credential mode. `make vend`
+  # (smoke.sh) fills these in; without them Unity has no credential to vend.
+  unity-catalog:
+    image: unitycatalog/unitycatalog:v0.6.0@sha256:606349a178d99c3b42d9c9c8cfea72f04efb3cfc350ee89eec45368b96e50086
+    environment:
+      s3.bucketPath.0: s3://lakehouse
+      s3.region.0: us-east-1
+      s3.accessKey.0: ${VENDED_ACCESS_KEY_ID:-}
+      s3.secretKey.0: ${VENDED_SECRET_ACCESS_KEY:-}
+      s3.sessionToken.0: ${VENDED_SESSION_TOKEN:-}
+    ports:
+      - "127.0.0.1:${UNITY_CATALOG_PORT:-8080}:8080"
+    volumes:
+      - unity-catalog-data:/home/unitycatalog/etc/db
+    depends_on:
+      rustfs:
+        condition: service_healthy
+
+  # A one-off S3 client, not a server: it uploads `table/` and mints the session
+  # credential Unity vends. `make lakehouse` runs it; nothing else needs it.
+  aws:
+    profiles: [tools]
+    image: amazon/aws-cli:2.36.49@sha256:f42bf088cb1456ba9e179ce71fdeb22cc46ff64ea1e3aeae8251ff81391f5bb1
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://rustfs:9000
+    volumes:
+      - ./table:/table:ro
+
+volumes:
+  rustfs-data:
+  unity-catalog-data:
