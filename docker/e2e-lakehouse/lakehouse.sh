@@ -187,12 +187,11 @@ check_unity() {
 
 check_iceberg() {
     ensure_pqbench
-    local bin metadata
+    local bin
     bin=$(pqbench_bin)
-    metadata=$(curl -sS "$iceberg/v1/namespaces/demo/tables/events" |
-        jq -er '."metadata-location" // .metadata."metadata-location"')
-    jq -c -n --arg metadata "$metadata" --argjson env "$(storage_env)" \
-        '{kind: "pqbench.remote-source", version: 1, inputs: [$metadata], env: $env}' |
+    jq -c -n --arg endpoint "$iceberg" --argjson env "$(storage_env)" \
+        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
+        "$bin" lake |
         "$bin" table |
         "$bin" bytemass --json |
         assert_events

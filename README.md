@@ -100,17 +100,20 @@ producer | pqbench table | pqbench bytemass
 
 ### lake
 
-List Delta tables as `pqbench.table-ref` lines. A directory that contains
-`_delta_log` is one table. A `pqbench.lake-source` document, from a file or
-stdin, lists a Unity Catalog. The same routes serve
+List tables as `pqbench.table-ref` lines. A directory that contains
+`_delta_log` is one Delta table. A `pqbench.lake-source` document, from a file
+or stdin, lists a catalog. `GET /v1/config` chooses the protocol: a 200 with a
+`defaults` object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is
+Unity. A down catalog is an error, not Unity. The same Unity routes serve
 [Unity Catalog OSS](https://docs.unitycatalog.io/) and
 [Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
-then schemas, then tables, following `next_page_token`. `--concurrency` lists
-schemas in parallel. `--include` / `--exclude` match a Unity FQN (`main`,
-`main.default`, `main.default.events`) as a glob or a prefix, and prune the
-walk when the leading name is a literal (`--include main.default.events`
-does not list the other catalogs). `token` is the Databricks bearer token. `env`
-holds `AWS_*` storage credentials and is copied onto each table-ref.
+then schemas, then tables, following `next_page_token`. Iceberg REST lists
+namespaces and tables, then `loadTable` for each metadata location.
+`--concurrency` lists schemas or namespaces in parallel. `--include` /
+`--exclude` match an FQN (`main`, `main.default`, `main.default.events`) as a
+glob or a prefix, and prune the walk when the leading name is a literal. `token`
+is the Databricks bearer token. `env` holds `AWS_*` storage credentials and is
+copied onto each table-ref. `info` stays unset until `pqbench table` loads.
 
 ```sh
 pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'

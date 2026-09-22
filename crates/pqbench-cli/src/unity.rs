@@ -10,18 +10,17 @@
 //! https://docs.databricks.com/aws/en/dev-tools/rest-api
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
 
 use pqbench::lake::LakeTable;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
+use crate::catalog::{self, PAGE_CAP};
 use crate::document::LakeSource;
 use crate::filter::NameFilter;
 use crate::CliError;
 
-const PAGE_CAP: usize = 32;
 const PAGE_SIZE: u32 = 50;
 
 #[derive(Deserialize)]
@@ -361,13 +360,13 @@ fn pages<P: for<'de> Deserialize<'de>>(
             url.push('&');
             url.push_str(key);
             url.push('=');
-            url.push_str(&encode(value));
+            url.push_str(&catalog::encode(value));
         }
         if let Some(token) = &page_token {
             url.push_str("&page_token=");
-            url.push_str(&encode(token));
+            url.push_str(&catalog::encode(token));
         }
-        let page: P = get_json(&url, token)?;
+        let page: P = catalog::get_json(&url, token)?;
         let next = next(&page);
         pages.push(page);
         let Some(next) = next else {
@@ -378,46 +377,6 @@ fn pages<P: for<'de> Deserialize<'de>>(
         }
         page_token = Some(next);
     }
-}
-
-fn get_json<T: for<'de> Deserialize<'de>>(url: &str, token: Option<&str>) -> Result<T, CliError> {
-    let request = ureq::get(url);
-    let request = match token {
-        Some(token) => request.set("Authorization", &format!("Bearer {token}")),
-        None => request,
-    };
-    let response = request.call().map_err(catalog_error)?;
-    let mut body = String::new();
-    response
-        .into_reader()
-        .read_to_string(&mut body)
-        .map_err(|error| format!("catalog response was not text: {error}"))?;
-    serde_json::from_str(&body)
-        .map_err(|error| format!("catalog response was not the expected document: {error}").into())
-}
-
-fn catalog_error(error: ureq::Error) -> CliError {
-    match error {
-        ureq::Error::Status(code, response) => {
-            let mut body = String::new();
-            let _ = response.into_reader().read_to_string(&mut body);
-            format!("catalog returned HTTP {code}: {body}").into()
-        }
-        other => format!("catalog request failed: {other}").into(),
-    }
-}
-
-fn encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
 
 fn nonempty(value: &Option<String>) -> Option<&str> {

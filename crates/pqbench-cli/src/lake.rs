@@ -113,10 +113,21 @@ async fn stream_document(
         ),
     })?;
     if let Some(source) = source {
-        return crate::unity::list_tables(&source, filter, concurrency, |table| {
-            write_ref(emit, &table).map(|_| ())
-        })
-        .await;
+        let token = source.token.as_deref().filter(|token| !token.is_empty());
+        return match crate::catalog::protocol(&source.endpoint, token)? {
+            crate::catalog::Protocol::IcebergRest => {
+                crate::iceberg::list_tables(&source, filter, concurrency, |table| {
+                    write_ref(emit, &table).map(|_| ())
+                })
+                .await
+            }
+            crate::catalog::Protocol::Unity => {
+                crate::unity::list_tables(&source, filter, concurrency, |table| {
+                    write_ref(emit, &table).map(|_| ())
+                })
+                .await
+            }
+        };
     }
     if let Some(lake) = lake {
         return write_lake(&lake, filter, emit);

@@ -21,11 +21,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::CliError;
 
-/// Credentials for listing a Unity Catalog, OSS or Databricks. `endpoint` is
-/// the server origin (`http://localhost:8080` or
-/// `https://example.cloud.databricks.com`). `token` is the Databricks bearer
-/// token; Unity OSS often has none. `env` is copied onto each listed table so
-/// `pqbench table` can read its files.
+/// Credentials for listing a catalog. `endpoint` is the server origin
+/// (`http://localhost:8080`, `http://localhost:8181`, or
+/// `https://example.cloud.databricks.com`). `GET /v1/config` with a `defaults`
+/// object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity.
+/// `token` is the Databricks bearer token; Unity OSS often has none. `env` is
+/// copied onto each listed table so `pqbench table` can read its files.
 #[derive(Deserialize)]
 pub(crate) struct LakeSource {
     pub version: u32,

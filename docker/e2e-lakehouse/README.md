@@ -89,19 +89,19 @@ id                                      22.00
 total                                   46.00
 ```
 
-Iceberg REST does not vend credentials. `loadTable` returns the metadata JSON
-location; `pqbench table` reads that and the manifests:
+Iceberg REST does not vend credentials. `pqbench lake` lists namespaces and
+tables, then `loadTable` for each metadata location:
 
 ```bash
 ICEBERG=http://localhost:8181
 S3=http://localhost:9000
 
-curl -s $ICEBERG/v1/namespaces/demo/tables/events |
-  jq -c --arg s3 "$S3" '{kind: "pqbench.remote-source", version: 1,
-    inputs: [."metadata-location"],
+jq -n --arg endpoint "$ICEBERG" --arg s3 "$S3" \
+  '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
     env: {AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
       AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
       AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' |
+  target/debug/pqbench lake |
   target/debug/pqbench table |
   target/debug/pqbench bytemass
 ```
