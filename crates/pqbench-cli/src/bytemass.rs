@@ -194,6 +194,12 @@ async fn queue_record(
         Record::End { id } => {
             open.remove(&id);
         }
+        Record::Lake(_) | Record::LakeSource(_) => {
+            return Err(
+                "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
+                    .into(),
+            );
+        }
     }
     Ok(())
 }
@@ -296,6 +302,12 @@ async fn measure_document_page(reader: impl Read, args: &BytemassArgs) -> Result
             }
             Record::Log { .. } => {}
             Record::End { .. } => ended = true,
+            Record::Lake(_) | Record::LakeSource(_) => {
+                return Err(
+                    "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
+                        .into(),
+                );
+            }
         }
         Ok(())
     })?;

@@ -1,11 +1,12 @@
 //! Documents on stdin or a file. `kind` decides what the command does.
 //!
-//! A producer resolves a table and pqbench measures bytes. Known kinds are
-//! `pqbench.table`, `pqbench.table-ref`, and `pqbench.remote-source`. A pipe
-//! writes NDJSON; every record carries a table `id` so many tables can mix.
-//! A terminal prints a short summary and requires `-o` (zstd NDJSON).
-//! A single `pqbench.table` object is still accepted. Credentials stay on
-//! the document so a pipe can carry them between processes.
+//! A producer resolves a lake or a table and pqbench measures bytes. Known
+//! kinds are `pqbench.lake`, `pqbench.lake-source`, `pqbench.table`,
+//! `pqbench.table-ref`, and `pqbench.remote-source`. A pipe writes NDJSON;
+//! every record carries a table `id` so many tables can mix. A terminal prints
+//! a short summary and requires `-o` (zstd NDJSON). A single `pqbench.table`
+//! object is still accepted. Credentials stay on the document so a pipe can
+//! carry them between processes.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -14,10 +15,26 @@ use std::path::Path;
 
 use crate::emit::Emit;
 
+use pqbench::lake::Lake;
 use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
 use serde::{Deserialize, Serialize};
 
 use crate::CliError;
+
+/// Credentials for listing a Unity Catalog, OSS or Databricks. `endpoint` is
+/// the server origin (`http://localhost:8080` or
+/// `https://example.cloud.databricks.com`). `token` is the Databricks bearer
+/// token; Unity OSS often has none. `env` is copied onto each listed table so
+/// `pqbench table` can read its files.
+#[derive(Deserialize)]
+pub(crate) struct LakeSource {
+    pub version: u32,
+    pub endpoint: String,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
 
 /// A versioned document naming what an external producer resolved, plus the
 /// storage environment to read it with.
@@ -47,6 +64,8 @@ pub(crate) enum Record {
         id: String,
     },
     Table(TableInfo),
+    Lake(Lake),
+    LakeSource(LakeSource),
     RemoteSource(RemoteSource),
 }
 
@@ -104,6 +123,8 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             let (id, file) = parse_file(value)?;
             Ok(Record::File { id, file })
         }
+        ("pqbench.lake", _) => Ok(Record::Lake(parse_lake(value)?)),
+        ("pqbench.lake-source", _) => Ok(Record::LakeSource(parse_lake_source(value)?)),
         ("pqbench.remote-source", _) => Ok(Record::RemoteSource(parse_remote(value)?)),
         (other, _) => Err(invalid_kind(other)),
     }
@@ -205,6 +226,34 @@ fn parse_file(value: serde_json::Value) -> Result<(String, TableFile), CliError>
     }
     let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
     Ok((wire.id, wire.file))
+}
+
+fn parse_lake(value: serde_json::Value) -> Result<Lake, CliError> {
+    let lake: Lake = serde_json::from_value(value).map_err(invalid_json)?;
+    if lake.version != 1 {
+        return Err("unsupported lake document; expected kind `pqbench.lake` version 1".into());
+    }
+    if lake.tables.is_empty() {
+        return Err("lake document contains no tables".into());
+    }
+    for table in &lake.tables {
+        aws_env_only(&table.env)?;
+    }
+    Ok(lake)
+}
+
+fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
+    let source: LakeSource = serde_json::from_value(value).map_err(invalid_json)?;
+    if source.version != 1 {
+        return Err(
+            "unsupported lake source; expected kind `pqbench.lake-source` version 1".into(),
+        );
+    }
+    if source.endpoint.trim().is_empty() {
+        return Err("lake source needs an endpoint".into());
+    }
+    aws_env_only(&source.env)?;
+    Ok(source)
 }
 
 fn parse_remote(value: serde_json::Value) -> Result<RemoteSource, CliError> {
@@ -358,6 +407,6 @@ fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_kind(kind: &str) -> CliError {
-    format!("unsupported document kind `{kind}`; expected pqbench.table, pqbench.table-ref, or pqbench.remote-source")
+    format!("unsupported document kind `{kind}`; expected pqbench.lake, pqbench.lake-source, pqbench.table, pqbench.table-ref, or pqbench.remote-source")
         .into()
 }

@@ -175,6 +175,29 @@ async fn queue_record(
             *bytes += file_bytes(&info);
             document::write_table_records(emit, &info.uri, &info)
         }
+        Record::Lake(lake) => {
+            for table in lake.tables {
+                spawn_ref(
+                    set,
+                    emit,
+                    tables,
+                    files,
+                    bytes,
+                    concurrency,
+                    version,
+                    TableRef {
+                        id: table.name,
+                        uri: table.uri,
+                        env: table.env,
+                    },
+                )
+                .await?;
+            }
+            Ok(())
+        }
+        Record::LakeSource(_) => {
+            Err("a lake source lists tables; pass it to `pqbench lake` first".into())
+        }
         Record::Begin(_) | Record::Log { .. } | Record::File { .. } | Record::End { .. } => {
             Err("a loaded table stream goes to `pqbench bytemass`, not `pqbench table`".into())
         }
