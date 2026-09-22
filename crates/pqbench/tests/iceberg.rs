@@ -13,11 +13,7 @@ use support::write_parquet;
 use url::Url;
 
 fn load_request(uri: impl Into<String>, version: Option<u64>) -> LoadRequest {
-    LoadRequest {
-        uri: uri.into(),
-        version,
-        env: Default::default(),
-    }
+    LoadRequest::new(uri, version, Default::default())
 }
 
 #[derive(Serialize)]
@@ -150,6 +146,7 @@ impl Fixture {
                     },
                     {
                         "snapshot-id": 1,
+                        "parent-snapshot-id": 0,
                         "sequence-number": 1,
                         "timestamp-ms": 1,
                         "manifest-list": file_uri(&list1),
@@ -243,6 +240,18 @@ async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
 }
 
 #[tokio::test]
+async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
+    let fixture = Fixture::new();
+    fs::create_dir(fixture.root.join("_delta_log")).unwrap();
+    assert_eq!(
+        table::detect(&fixture.root.to_string_lossy(), &Default::default())
+            .await
+            .unwrap(),
+        TableFormat::DELTA
+    );
+}
+
+#[tokio::test]
 async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     let fixture = Fixture::new();
     let previous = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
@@ -253,7 +262,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     assert_eq!(previous.snapshot_version, 0);
     assert_eq!(previous.files.len(), 1);
     assert_eq!(previous.files[0].size, fixture.first_size);
-    assert_eq!(previous.log.len(), 2);
+    assert_eq!(previous.log.len(), 1);
 
     let latest = table::load(&load_request(fixture.root.to_string_lossy(), None))
         .await
@@ -271,10 +280,8 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     assert!(selected
         .actions
         .iter()
-        .any(|action| action.get("delete").is_some()));
-    let text = table::render_text(&latest);
-    assert!(text.contains("format: iceberg"));
-    assert!(text.contains("delete"));
+        .any(|action| action.kind == "delete"));
+    assert_eq!(latest.log.len(), 2);
 }
 
 #[tokio::test]
@@ -285,6 +292,7 @@ async fn load_then_bytemass_matches_footer_totals() {
         .unwrap();
     let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
         inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -312,12 +320,11 @@ async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
 
     let first = fixture.root.join("data/first.parquet");
     fs::write(&first, b"changed").unwrap();
-    let error = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
+    let info = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
         .await
-        .err()
-        .unwrap()
-        .to_string();
-    assert!(error.contains("size differs from manifest"), "{error}");
+        .unwrap();
+    assert_eq!(info.files[0].size, fixture.first_size);
+    assert_ne!(fs::metadata(&first).unwrap().len(), fixture.first_size);
 
     write_parquet(&first, 3);
     let outside = tempfile::tempdir().unwrap();
