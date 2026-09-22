@@ -29,7 +29,7 @@ services:
   # AssumeRole to an S3-compatible endpoint (unitycatalog/unitycatalog#43), so
   # the stand hands it a session credential that rustfs already minted and Unity
   # vends that verbatim — its documented preset-credential mode. `make vend`
-  # (smoke.sh) fills these in; without them Unity has no credential to vend.
+  # (`make lakehouse-up`) fills these in; without them Unity has no credential to vend.
   unity-catalog:
     image: unitycatalog/unitycatalog:v0.6.0@sha256:606349a178d99c3b42d9c9c8cfea72f04efb3cfc350ee89eec45368b96e50086
     environment:

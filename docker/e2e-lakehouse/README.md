@@ -24,7 +24,7 @@ That reaches a stand you can query, in three steps you can also run alone:
 
 | Target | What it does |
 | --- | --- |
-| `make lakehouse-up` | builds pqbench with `--features delta-s3`, starts rustfs, mints the session credential Unity will vend, waits for the catalog API to answer |
+| `make lakehouse-up` | starts rustfs, mints the session credential Unity will vend, waits for the catalog API to answer |
 | `make lakehouse-seed-s3` | uploads [`table/`](table) to `s3://lakehouse/unity/events` |
 | `make lakehouse-seed-unity` | registers `pqbench.demo.events` as an external Delta table |
 | `make lakehouse` | all three, then the credential-vending check below |
