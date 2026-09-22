@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The local stand behind `make lakehouse`: object storage holding a Delta table,
-# and a Unity Catalog that vends expiring credentials for it. Each verb is also
-# useful on its own; see docker/e2e-lakehouse/README.md.
+# The local stand behind `make lakehouse`: object storage holding Delta and
+# Iceberg tables, Unity Catalog for Delta, and Iceberg REST for Iceberg. Each
+# verb is also useful on its own; see docker/e2e-lakehouse/README.md.
 set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
@@ -9,9 +9,12 @@ CARGO=${CARGO:-cargo}
 compose() { docker compose -f "$root/docker/e2e-lakehouse/compose.yaml" "$@"; }
 aws_cli() { compose run --rm -T aws "$@"; }
 unity="http://localhost:${UNITY_CATALOG_PORT:-8080}/api/2.1/unity-catalog"
+iceberg="http://localhost:${ICEBERG_REST_PORT:-8181}"
 storage="http://localhost:${RUSTFS_PORT:-9000}"
 location="s3://lakehouse/unity/events"
+iceberg_location="s3://lakehouse/iceberg"
 vended="local/lakehouse/vended.env"
+iceberg_meta="$root/docker/e2e-lakehouse/iceberg/metadata-location"
 
 pqbench_bin() {
     echo "${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
@@ -20,7 +23,7 @@ pqbench_bin() {
 ensure_pqbench() {
     local bin
     bin=$(pqbench_bin)
-    [ -x "$bin" ] || $CARGO build -p pqbench-cli --features delta-s3
+    [ -x "$bin" ] || $CARGO build -p pqbench-cli --features delta-s3,iceberg-s3
 }
 
 # Create, or accept that a previous run already did.
@@ -53,6 +56,18 @@ EOF
     chmod 0600 "$vended"
 }
 
+wait_http() {
+    local url="$1" label="$2"
+    local attempt
+    for attempt in $(seq 60); do
+        curl -fsS "$url" -o /dev/null 2> /dev/null && return
+        [ "$attempt" -lt 60 ] || break
+        sleep 2
+    done
+    echo "$label did not answer at $url" >&2
+    exit 1
+}
+
 up() {
     # Storage first: Unity starts with a credential rustfs has to mint.
     compose up -d --wait rustfs
@@ -60,15 +75,16 @@ up() {
     set -a
     . "$vended"
     set +a
-    compose up -d --wait unity-catalog
-    # A started JVM is not an available API.
-    for attempt in $(seq 60); do
-        curl -fsS "$unity/catalogs" -o /dev/null 2> /dev/null && return
-        [ "$attempt" -lt 60 ] || break
-        sleep 2
-    done
-    echo "Unity Catalog did not answer at $unity" >&2
-    exit 1
+    compose up -d --wait unity-catalog iceberg-rest
+    wait_http "$unity/catalogs" "Unity Catalog"
+    wait_http "$iceberg/v1/config" "Iceberg REST"
+}
+
+storage_env() {
+    jq -n --arg s3 "$storage" '{
+        AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
+        AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
+        AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}'
 }
 
 seed_s3() {
@@ -100,8 +116,55 @@ seed_unity() {
              "type_json": "{\"name\": \"label\", \"type\": \"string\", \"nullable\": true, \"metadata\": {}}"}]}'
 }
 
+# Accept 409 (already exists) and 404 (nothing to delete). Any other status
+# is a down or 5xx catalog and must fail.
+iceberg_http() {
+    local method="$1" path="$2" body="${3:-}"
+    local tmp code
+    tmp=$(mktemp)
+    if [ -n "$body" ]; then
+        code=$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$iceberg$path" \
+            -H 'Content-Type: application/json' -d "$body")
+    else
+        code=$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$iceberg$path")
+    fi
+    case "$method:$code" in
+        POST:200 | POST:201 | POST:409 | DELETE:200 | DELETE:204 | DELETE:404)
+            cat "$tmp"
+            rm -f "$tmp"
+            ;;
+        *)
+            echo "$method $path failed: HTTP $code $(cat "$tmp")" >&2
+            rm -f "$tmp"
+            exit 1
+            ;;
+    esac
+}
+
+seed_iceberg() {
+    aws_cli s3 sync --delete /iceberg/demo "$iceberg_location/demo" > /dev/null
+    iceberg_http POST /v1/namespaces '{"namespace":["demo"]}' > /dev/null
+    iceberg_http DELETE /v1/namespaces/demo/tables/events > /dev/null
+    local metadata response
+    metadata=$(tr -d '\n' < "$iceberg_meta")
+    response=$(iceberg_http POST /v1/namespaces/demo/register \
+        "{\"name\":\"events\",\"metadata-location\":\"$metadata\"}")
+    if ! jq -e '."metadata-location" // .metadata.location' <<< "$response" > /dev/null; then
+        echo "$response" >&2
+        exit 1
+    fi
+}
+
+assert_events() {
+    jq -es '
+        (map(select(.event == "end")) | first
+            | .num_rows == 3 and .file_count == 1)
+        and ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort)
+            == ["id", "label"]' > /dev/null
+}
+
 # The README's pipe, so the stand is seen to answer the question it exists for.
-check() {
+check_unity() {
     ensure_pqbench
     local bin
     bin=$(pqbench_bin)
@@ -118,18 +181,36 @@ check() {
                 AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
         "$bin" table |
         "$bin" bytemass --json |
-        jq -es '
-            (map(select(.event == "end")) | first
-                | .num_rows == 3 and .file_count == 1)
-            and ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort)
-                == ["id", "label"]' > /dev/null
+        assert_events
     echo "Unity Catalog ready: $unity/tables/pqbench.demo.events (storage $storage)"
+}
+
+check_iceberg() {
+    ensure_pqbench
+    local bin metadata
+    bin=$(pqbench_bin)
+    metadata=$(curl -sS "$iceberg/v1/namespaces/demo/tables/events" |
+        jq -er '."metadata-location" // .metadata."metadata-location"')
+    jq -c -n --arg metadata "$metadata" --argjson env "$(storage_env)" \
+        '{kind: "pqbench.remote-source", version: 1, inputs: [$metadata], env: $env}' |
+        "$bin" table |
+        "$bin" bytemass --json |
+        assert_events
+    echo "Iceberg REST ready: $iceberg/v1/namespaces/demo/tables/events"
+}
+
+check() {
+    check_unity
+    check_iceberg
 }
 
 case "${1:-}" in
     up) up ;;
     seed-s3) seed_s3 ;;
     seed-unity) seed_unity ;;
+    seed-iceberg) seed_iceberg ;;
     check) check ;;
-    *) echo "usage: ${0##*/} up|seed-s3|seed-unity|check" >&2; exit 64 ;;
+    check-unity) check_unity ;;
+    check-iceberg) check_iceberg ;;
+    *) echo "usage: ${0##*/} up|seed-s3|seed-unity|seed-iceberg|check" >&2; exit 64 ;;
 esac

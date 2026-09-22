@@ -127,8 +127,8 @@ pqbench lake unity.json --include main --concurrency 8 | pqbench table | pqbench
 
 ## Documentation
 
-- [Unity Catalog E2E example](docker/e2e-lakehouse/README.md) — a catalog vending
-  expiring credentials into `pqbench table`, over rustfs S3
+- [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
+  naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
 - [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
 - [Docker](docs/docker.md) — build, run, and publish a container image
