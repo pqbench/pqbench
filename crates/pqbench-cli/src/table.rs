@@ -16,27 +16,27 @@ use crate::CliError;
 /// Arguments for `table`.
 #[derive(Args)]
 pub(crate) struct TableArgs {
-    /// table URI, a document file, or `-` for standard input
+    /// table URI, lake/table/remote-source document, or `-`
     input: Option<String>,
-    /// snapshot version; defaults to the latest version
+    /// Delta commit or Iceberg snapshot id (default: latest)
     #[arg(long)]
     version: Option<u64>,
-    /// drop files whose log modification time is before this instant
+    /// drop Delta files with log mtime before this RFC3339 UTC instant
     #[arg(long, value_name = "TIME")]
     exclude_modified_before: Option<String>,
-    /// drop files whose log modification time is after this instant
+    /// drop Delta files with log mtime after this RFC3339 UTC instant
     #[arg(long, value_name = "TIME")]
     exclude_modified_after: Option<String>,
-    /// drop files added before this snapshot version
+    /// drop Delta files whose add version is below N
     #[arg(long, value_name = "N")]
     exclude_version_before: Option<u64>,
-    /// drop files added after this snapshot version
+    /// drop Delta files whose add version is above N
     #[arg(long, value_name = "N")]
     exclude_version_after: Option<u64>,
-    /// drop snapshots created before this instant
+    /// drop snapshots created before this RFC3339 UTC instant
     #[arg(long, value_name = "TIME")]
     exclude_snapshot_before: Option<String>,
-    /// drop snapshots created after this instant
+    /// drop snapshots created after this RFC3339 UTC instant
     #[arg(long, value_name = "TIME")]
     exclude_snapshot_after: Option<String>,
     /// zstd NDJSON stream (required on a terminal)

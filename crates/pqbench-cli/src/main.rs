@@ -10,6 +10,7 @@ mod document;
 mod dump;
 mod emit;
 mod filter;
+mod help;
 mod iceberg;
 mod lake;
 mod lz;
@@ -24,21 +25,10 @@ pub(crate) type CliError = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Parser)]
 #[command(
     name = "pqbench",
-    about = "lzbench for parquet",
-    after_help = r#"
-Examples:
-  pqbench lz file.bin -c zstd@3 --samples 10
-  pqbench compression data.parquet --per-column
-  pqbench bytemass data.parquet
-  pqbench bytemass part-1.parquet part-2.parquet
-  pqbench bytemass 'data/*.parquet'
-  pqbench table ./delta-table -o table.ndjson.zst
-  pqbench table ./iceberg-table | pqbench bytemass
-  pqbench lake ./warehouse | pqbench table | pqbench bytemass
-  pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
-  pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
-  pqbench bytemass data.parquet | pqbench viz -o report && xdg-open report.html
-"#
+    about = help::ROOT_ABOUT,
+    long_about = help::ROOT_LONG_ABOUT,
+    after_help = help::ROOT_AFTER,
+    after_long_help = help::ROOT_AFTER
 )]
 struct Cli {
     #[command(subcommand)]
@@ -47,53 +37,54 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// lzbench-style compression benchmark over raw file bytes
+    #[command(
+        about = help::LZ_ABOUT,
+        long_about = help::LZ_LONG_ABOUT,
+        after_help = help::LZ_AFTER,
+        after_long_help = help::LZ_AFTER
+    )]
     Lz(bench::BenchArgs),
-    /// lzbench-style codec sweep over encoded parquet pages (NONE-compressed input)
+    #[command(
+        about = help::COMPRESSION_ABOUT,
+        long_about = help::COMPRESSION_LONG_ABOUT,
+        after_help = help::COMPRESSION_AFTER,
+        after_long_help = help::COMPRESSION_AFTER
+    )]
     Compression(compression::CompressionArgs),
-    /// export per-column byte masses (on-disk bytes/row)
-    #[command(after_help = r#"
-Examples:
-  pqbench bytemass data.parquet
-  pqbench table ./delta-table | pqbench bytemass
-  pqbench table ./delta-table | pqbench bytemass --include 'year=2024/**' --sample first:10
-  pqbench lake ./warehouse | pqbench table | pqbench bytemass
-  pqbench bytemass table.ndjson.zst
-  pqbench bytemass data.parquet | pqbench viz -o report && xdg-open report.html
-"#)]
+    #[command(
+        about = help::BYTEMASS_ABOUT,
+        long_about = help::BYTEMASS_LONG_ABOUT,
+        after_help = help::BYTEMASS_AFTER,
+        after_long_help = help::BYTEMASS_AFTER
+    )]
     Bytemass(bytemass::BytemassArgs),
-    /// fetch table metadata (detect the format, then load the log)
-    #[command(after_help = r#"Examples:
-  pqbench table ./delta-table -o table.ndjson.zst
-  pqbench table ./delta-table --concurrency 8 | pqbench bytemass --concurrency 8
-  pqbench table ./delta-table -o table.ndjson.zst | pqbench bytemass
-  producer | pqbench table | pqbench bytemass
-"#)]
+    #[command(
+        about = help::TABLE_ABOUT,
+        long_about = help::TABLE_LONG_ABOUT,
+        after_help = help::TABLE_AFTER,
+        after_long_help = help::TABLE_AFTER
+    )]
     Table(table::TableArgs),
-    /// list the tables in a lake
-    #[command(after_help = r#"Examples:
-  pqbench lake ./warehouse
-  pqbench lake s3://bucket/warehouse --max-depth 2 --concurrency 8
-  pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
-  pqbench lake creds.json --include 'main.default.*' --exclude 'main.default.tmp*'
-  pqbench lake creds.json --concurrency 8 | pqbench table | pqbench bytemass
-"#)]
+    #[command(
+        about = help::LAKE_ABOUT,
+        long_about = help::LAKE_LONG_ABOUT,
+        after_help = help::LAKE_AFTER,
+        after_long_help = help::LAKE_AFTER
+    )]
     Lake(lake::LakeArgs),
-    /// write a row sample from parquet files or a table document
-    #[command(after_help = r#"Examples:
-  pqbench dump data.parquet -o sample.parquet
-  pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
-  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 -o sample.parquet
-  pqbench lake ./warehouse | pqbench table | pqbench dump -o sample.parquet
-"#)]
+    #[command(
+        about = help::DUMP_ABOUT,
+        long_about = help::DUMP_LONG_ABOUT,
+        after_help = help::DUMP_AFTER,
+        after_long_help = help::DUMP_AFTER
+    )]
     Dump(dump::DumpArgs),
-    /// collect a bytemass stream into sqlite and a static HTML page
-    #[command(after_help = r#"Examples:
-  pqbench bytemass data.parquet | pqbench viz -o report
-  pqbench table ./delta-table | pqbench bytemass | pqbench viz -o report
-  pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
-  xdg-open report.html
-"#)]
+    #[command(
+        about = help::VIZ_ABOUT,
+        long_about = help::VIZ_LONG_ABOUT,
+        after_help = help::VIZ_AFTER,
+        after_long_help = help::VIZ_AFTER
+    )]
     Viz(viz::VizArgs),
 }
 

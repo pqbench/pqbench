@@ -138,9 +138,10 @@ HTTP 404, is Unity. A down catalog is an error, not Unity. The same Unity
 routes serve [Unity Catalog OSS](https://docs.unitycatalog.io/) and
 [Databricks](https://docs.databricks.com/api/workspace/tables/list).
 `--include` / `--exclude` match an FQN as a glob or a prefix, and prune the
-walk when the leading name is a literal. `token` is the Databricks bearer
-token. `env` holds `AWS_*` storage credentials and is copied onto each
-table-ref. `info` stays unset until `pqbench table` loads.
+walk when the leading name is a literal. Host and token live in `env` (`DATABRICKS_HOST` /
+`DATABRICKS_TOKEN` or `CATALOG_ENDPOINT` / `CATALOG_TOKEN`). Only `AWS_*`
+is copied onto each table-ref. `info` stays unset until `pqbench table`
+loads.
 
 ```sh
 pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
@@ -150,10 +151,10 @@ pqbench lake unity.json --include main --concurrency 8 | pqbench table | pqbench
 
 ```json
 {"kind": "pqbench.lake-source", "version": 1,
- "endpoint": "https://example.cloud.databricks.com",
- "token": "...",
  "catalog": "main",
- "env": {"AWS_REGION": "us-east-1"}}
+ "env": {"DATABRICKS_HOST": "https://example.cloud.databricks.com",
+         "DATABRICKS_TOKEN": "...",
+         "AWS_REGION": "us-east-1"}}
 ```
 
 ## Documentation
@@ -163,6 +164,7 @@ pqbench lake unity.json --include main --concurrency 8 | pqbench table | pqbench
   naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
 - [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
+- [CLI guide](docs/cli.md) — `pqbench --help` copy: auth, documents, flags
 - [Visualization](docs/viz.md) — `pqbench viz`, SQLite + static HTML
 - [Python bindings](python/README.md) — install the wheel and call every command
 - [Docker](docs/docker.md) — build, run, and publish a container image
