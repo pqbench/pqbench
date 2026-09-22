@@ -118,6 +118,29 @@ fn table_names_the_delta_feature_when_it_is_off() {
 }
 
 #[test]
+fn bytemass_reads_an_iceberg_table_document_from_stdin() {
+    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
+    let document = json!({
+        "kind": "pqbench.table",
+        "version": 1,
+        "format": "iceberg",
+        "uri": "/tmp/table",
+        "snapshot_version": 1,
+        "partition_columns": [],
+        "log": [{"version": 1, "actions": [{"snapshot": {"snapshot-id": 1}}]}],
+        "files": [{"path": "data/small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
+    });
+    let output = pipe(&["bytemass"], &document.to_string());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("bytemass: small_reddit_none.parquet"));
+}
+
+#[test]
 fn table_rejects_an_unrecognized_directory() {
     let directory = tempfile::tempdir().unwrap();
     let output = pqbench()

@@ -82,6 +82,11 @@ jobs:
             test_flags: ""
           - os: ubuntu-24.04
             arch: amd64
+            features: iceberg
+            cargo_flags: --features iceberg
+            test_flags: ""
+          - os: ubuntu-24.04
+            arch: amd64
             features: all-features
             cargo_flags: --all-features
             test_flags: --include-ignored
