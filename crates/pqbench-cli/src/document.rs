@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
 
-use pqbench::table::TableInfo;
+use pqbench::table::{LogAction, TableInfo};
 use serde::Deserialize;
 
 use crate::CliError;
@@ -58,6 +58,7 @@ fn parse_bytes(bytes: &[u8]) -> Result<Document, CliError> {
                     "unsupported table document; expected kind `pqbench.table` version 1".into(),
                 );
             }
+            aws_env_only(&table.env)?;
             Ok(Document::Table(table))
         }
         "pqbench.remote-source" => {
@@ -71,10 +72,18 @@ fn parse_bytes(bytes: &[u8]) -> Result<Document, CliError> {
             if source.inputs.is_empty() {
                 return Err("source document contains no inputs".into());
             }
+            aws_env_only(&source.env)?;
             Ok(Document::RemoteSource(source))
         }
         other => Err(invalid_kind(other)),
     }
+}
+
+fn aws_env_only(env: &BTreeMap<String, String>) -> Result<(), CliError> {
+    if let Some(key) = env.keys().find(|key| !key.starts_with("AWS_")) {
+        return Err(format!("document may only set AWS_* variables, not `{key}`").into());
+    }
+    Ok(())
 }
 
 /// Whether a path is `-` or a file whose first non-whitespace byte is `{`.
@@ -100,26 +109,57 @@ pub(crate) fn looks_like_json(path: &str) -> bool {
         == Some(b'{')
 }
 
-/// Apply storage options carried by a document. Only `AWS_*` names are allowed.
-pub(crate) fn apply_env(env: &BTreeMap<String, String>) -> Result<(), CliError> {
-    for (key, value) in env {
-        if !key.starts_with("AWS_") {
-            return Err(format!("document may only set AWS_* variables, not `{key}`").into());
-        }
-        std::env::set_var(key, value);
-    }
-    Ok(())
-}
-
 /// Write a table document: pretty text on a terminal, full JSON on a pipe.
 pub(crate) fn write_table(info: &TableInfo) -> Result<(), CliError> {
     let mut stdout = std::io::stdout().lock();
     if stdout.is_terminal() {
-        write!(stdout, "{}", pqbench::table::render_text(info))?;
+        write!(stdout, "{}", render_text(info))?;
     } else {
-        writeln!(stdout, "{}", pqbench::table::render_json(info)?)?;
+        writeln!(stdout, "{}", render_json(info)?)?;
     }
     Ok(())
+}
+
+fn render_json(info: &TableInfo) -> Result<String, CliError> {
+    serde_json::to_string_pretty(info)
+        .map_err(|error| format!("cannot serialize table document: {error}").into())
+}
+
+fn render_text(info: &TableInfo) -> String {
+    let mut out = format!(
+        "format: {}\nuri: {}\nsnapshot: {}\n",
+        info.format.as_str(),
+        info.uri,
+        info.snapshot_version
+    );
+    if !info.partition_columns.is_empty() {
+        out.push_str(&format!(
+            "partition columns: {}\n",
+            info.partition_columns.join(", ")
+        ));
+    }
+    out.push_str(&format!("\nlog: {} commit(s)\n", info.log.len()));
+    for commit in &info.log {
+        let summary = commit
+            .actions
+            .iter()
+            .map(action_summary)
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("  v{}  {summary}\n", commit.version));
+    }
+    out.push_str(&format!("\nfiles: {}\n", info.files.len()));
+    for file in &info.files {
+        out.push_str(&format!("  {}  {} bytes\n", file.path, file.size));
+    }
+    out
+}
+
+fn action_summary(action: &LogAction) -> String {
+    match action.path.as_deref() {
+        Some(path) => format!("{} {path}", action.kind),
+        None => action.kind.clone(),
+    }
 }
 
 fn invalid_json(error: serde_json::Error) -> CliError {

@@ -16,7 +16,6 @@ use url::Url;
 
 use crate::object_store;
 
-#[cfg(feature = "delta")]
 pub mod delta;
 
 /// Errors detecting a table format or loading its metadata.
@@ -31,13 +30,6 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[cfg(feature = "delta")]
-impl From<delta::Error> for Error {
-    fn from(error: delta::Error) -> Self {
-        Error(error.to_string())
-    }
-}
-
 /// On-disk table formats `pqbench table` can name. Detection runs before load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,31 +37,48 @@ pub enum TableFormat {
     /// Zero value; not a detected format.
     #[serde(rename = "unspecified")]
     UNSPECIFIED,
-    Delta,
-    Iceberg,
+    #[serde(rename = "delta")]
+    DELTA,
+    #[serde(rename = "iceberg")]
+    ICEBERG,
 }
 
 impl TableFormat {
-    fn as_str(self) -> &'static str {
+    /// Wire name of the format (`delta`, `iceberg`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::UNSPECIFIED => "unspecified",
-            Self::Delta => "delta",
-            Self::Iceberg => "iceberg",
+            Self::DELTA => "delta",
+            Self::ICEBERG => "iceberg",
         }
     }
 }
 
+/// One action from a commit file, in file order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct LogAction {
+    /// Action kind as stored (`add`, `remove`, `metaData`, ...).
+    pub kind: String,
+    /// Data path when the action names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
 /// One commit from the table log, as stored on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LogCommit {
     /// Commit version.
     pub version: u64,
-    /// Raw actions from the commit file, in file order.
-    pub actions: Vec<serde_json::Value>,
+    /// Actions from the commit file, in file order.
+    pub actions: Vec<LogAction>,
 }
 
 /// One data file the current snapshot treats as active.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TableFile {
     /// Path as recorded in the log, relative to the table root.
     pub path: String,
@@ -81,6 +90,7 @@ pub struct TableFile {
 
 /// A versioned table document: format, log, and the files the snapshot names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TableInfo {
     /// Document kind; always `pqbench.table`.
     pub kind: String,
@@ -106,6 +116,7 @@ pub struct TableInfo {
 
 /// Arguments for [`load`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LoadRequest {
     /// Local table directory or table URI (`file://`, `s3://`, ...).
     pub uri: String,
@@ -113,6 +124,22 @@ pub struct LoadRequest {
     pub version: Option<u64>,
     /// Storage options (`AWS_*` names), copied onto the document.
     pub env: BTreeMap<String, String>,
+}
+
+impl LoadRequest {
+    /// Build a load request. `env` is passed to the storage backend.
+    #[must_use]
+    pub fn new(
+        uri: impl Into<String>,
+        version: Option<u64>,
+        env: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            uri: uri.into(),
+            version,
+            env,
+        }
+    }
 }
 
 /// Name the table format from well-known markers. Does not load the log.
@@ -123,6 +150,7 @@ pub struct LoadRequest {
 /// # Errors
 /// Fails when the location cannot be opened, a remote probe fails for a reason
 /// other than a missing marker, or no supported format is present.
+#[must_use = "detecting a format has no effect unless the result is used"]
 pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFormat, Error> {
     if is_local(uri) {
         detect_local(&local_path(uri)?)
@@ -139,85 +167,15 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// # Errors
 /// As [`detect`], plus format-specific load failures. Delta needs the `delta`
 /// feature (`delta-s3` for S3).
+#[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     match format {
-        TableFormat::Delta => load_delta(request).await,
-        TableFormat::Iceberg => Err(Error(
+        TableFormat::DELTA => delta::load(request).await,
+        TableFormat::ICEBERG => Err(Error(
             "iceberg tables are not supported yet; detected metadata/version-hint.text".into(),
         )),
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
-    }
-}
-
-async fn load_delta(request: &LoadRequest) -> Result<TableInfo, Error> {
-    #[cfg(feature = "delta")]
-    {
-        delta::describe(request).await.map_err(Error::from)
-    }
-    #[cfg(not(feature = "delta"))]
-    {
-        let _ = request;
-        Err(Error(
-            "delta tables require the `delta` feature (`delta-s3` for S3)".into(),
-        ))
-    }
-}
-
-/// Serialize the table document as pretty-printed JSON.
-///
-/// # Errors
-/// Returns an error if the document cannot be serialized.
-pub fn render_json(info: &TableInfo) -> Result<String, Error> {
-    serde_json::to_string_pretty(info)
-        .map_err(|e| Error(format!("cannot serialize table document: {e}")))
-}
-
-/// Render a human-readable summary of the format, log, and active files.
-pub fn render_text(info: &TableInfo) -> String {
-    let mut out = format!(
-        "format: {}\nuri: {}\nsnapshot: {}\n",
-        info.format.as_str(),
-        info.uri,
-        info.snapshot_version
-    );
-    if !info.partition_columns.is_empty() {
-        out.push_str(&format!(
-            "partition columns: {}\n",
-            info.partition_columns.join(", ")
-        ));
-    }
-    out.push_str(&format!("\nlog: {} commit(s)\n", info.log.len()));
-    for commit in &info.log {
-        let summary = commit
-            .actions
-            .iter()
-            .map(action_summary)
-            .collect::<Vec<_>>()
-            .join(", ");
-        out.push_str(&format!("  v{}  {summary}\n", commit.version));
-    }
-    out.push_str(&format!("\nfiles: {}\n", info.files.len()));
-    for file in &info.files {
-        out.push_str(&format!("  {}  {} bytes\n", file.path, file.size));
-    }
-    out
-}
-
-fn action_summary(action: &serde_json::Value) -> String {
-    let Some(object) = action.as_object() else {
-        return "action".into();
-    };
-    let Some((kind, body)) = object.iter().next() else {
-        return "action".into();
-    };
-    match (
-        kind.as_str(),
-        body.get("path").and_then(|path| path.as_str()),
-    ) {
-        ("add", Some(path)) => format!("add {path}"),
-        ("remove", Some(path)) => format!("remove {path}"),
-        _ => kind.clone(),
     }
 }
 
@@ -226,10 +184,10 @@ fn detect_local(path: &Path) -> Result<TableFormat, Error> {
         return Err(Error(format!("cannot open table {}", path.display())));
     }
     if path.join("_delta_log").is_dir() {
-        return Ok(TableFormat::Delta);
+        return Ok(TableFormat::DELTA);
     }
     if path.join("metadata").join("version-hint.text").is_file() {
-        return Ok(TableFormat::Iceberg);
+        return Ok(TableFormat::ICEBERG);
     }
     Err(unrecognized(path.display()))
 }
@@ -242,10 +200,10 @@ async fn detect_remote(uri: &str, env: &BTreeMap<String, String>) -> Result<Tabl
     if probe(uri, "_delta_log/_last_checkpoint", &options).await?
         || probe(uri, "_delta_log/00000000000000000000.json", &options).await?
     {
-        return Ok(TableFormat::Delta);
+        return Ok(TableFormat::DELTA);
     }
     if probe(uri, "metadata/version-hint.text", &options).await? {
-        return Ok(TableFormat::Iceberg);
+        return Ok(TableFormat::ICEBERG);
     }
     Err(unrecognized(uri))
 }

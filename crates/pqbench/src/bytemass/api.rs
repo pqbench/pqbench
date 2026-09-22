@@ -4,6 +4,8 @@
 //! self-contained. The CLI owns the rendering decision: it awaits [`bytemass`]
 //! and calls `render_text`, `render_json`, or `render_html` on the rows.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::parquet_helpers::Error;
@@ -11,10 +13,12 @@ use crate::parquet_helpers::Error;
 use super::collection;
 
 /// Arguments for the `bytemass` command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BytemassRequest {
     /// Parquet paths or glob masks; quote masks to prevent shell expansion.
     pub inputs: Vec<String>,
+    /// Storage options (`AWS_*` names) for remote inputs.
+    pub env: BTreeMap<String, String>,
 }
 
 /// One column chunk's measured byte mass: a row of the `bytemass` table.
@@ -51,5 +55,5 @@ pub async fn bytemass(request: &BytemassRequest) -> Result<Vec<MassRow>, Error> 
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_inputs(&request.inputs).await
+    collection::measure_inputs(&request.inputs, &request.env).await
 }

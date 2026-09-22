@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use clap::Args;
@@ -24,13 +25,18 @@ pub(crate) struct BytemassArgs {
 /// CLI owns the format decision; the library just returns the table.
 pub(crate) fn run(args: &BytemassArgs) -> Result<(), CliError> {
     match resolve(args)? {
-        Input::Parquet(inputs) => measure(inputs, args),
+        Input::Parquet(inputs) => measure(inputs, BTreeMap::new(), args),
+        Input::Remote { inputs, env } => measure(inputs, env, args),
         Input::Table(info) => measure_table(info, args),
     }
 }
 
 enum Input {
     Parquet(Vec<String>),
+    Remote {
+        inputs: Vec<String>,
+        env: BTreeMap<String, String>,
+    },
     Table(TableInfo),
 }
 
@@ -50,17 +56,19 @@ fn resolve(args: &BytemassArgs) -> Result<Input, CliError> {
 fn from_document(input: &str) -> Result<Input, CliError> {
     match document::read_document(input)? {
         Document::Table(info) => Ok(Input::Table(info)),
-        Document::RemoteSource(source) => Ok(Input::Parquet(source.inputs)),
+        Document::RemoteSource(source) => Ok(Input::Remote {
+            inputs: source.inputs,
+            env: source.env,
+        }),
     }
 }
 
 fn measure_table(info: TableInfo, args: &BytemassArgs) -> Result<(), CliError> {
-    document::apply_env(&info.env)?;
     let inputs: Vec<String> = info.files.iter().map(|file| file.uri.clone()).collect();
     if inputs.is_empty() {
         return render(&[], args);
     }
-    let rows = read_rows(inputs)?;
+    let rows = read_rows(inputs, info.env)?;
     for row in &rows {
         let file = info
             .files
@@ -78,15 +86,27 @@ fn measure_table(info: TableInfo, args: &BytemassArgs) -> Result<(), CliError> {
     render(&rows, args)
 }
 
-fn measure(inputs: Vec<String>, args: &BytemassArgs) -> Result<(), CliError> {
-    render(&read_rows(inputs)?, args)
+fn measure(
+    inputs: Vec<String>,
+    env: BTreeMap<String, String>,
+    args: &BytemassArgs,
+) -> Result<(), CliError> {
+    render(&read_rows(inputs, env)?, args)
 }
 
-fn read_rows(inputs: Vec<String>) -> Result<Vec<bytemass::MassRow>, CliError> {
+fn read_rows(
+    inputs: Vec<String>,
+    env: BTreeMap<String, String>,
+) -> Result<Vec<bytemass::MassRow>, CliError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    Ok(runtime.block_on(bytemass::bytemass(&bytemass::BytemassRequest { inputs }))?)
+    Ok(
+        runtime.block_on(bytemass::bytemass(&bytemass::BytemassRequest {
+            inputs,
+            env,
+        }))?,
+    )
 }
 
 fn render(rows: &[bytemass::MassRow], args: &BytemassArgs) -> Result<(), CliError> {

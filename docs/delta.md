@@ -9,7 +9,8 @@ remain out of the default dependency graph.
 ```mermaid
 flowchart TD
     delta_log[Delta transaction log] --> delta[pqbench::table::delta]
-    delta --> bytemass[pqbench::bytemass]
+    delta --> document[pqbench.table document]
+    document --> bytemass[pqbench::bytemass]
     bytemass --> isolation[pqbench::object_store]
     isolation --> object_store[object_store crate]
     bytemass --> parquet[Parquet file footers]
@@ -18,17 +19,15 @@ flowchart TD
 ```
 
 `pqbench` reads metadata from individual Parquet files. The Delta module uses
-delta-rs to select a table snapshot and measures each active file from its
-footer metadata, so it names no storage-backend types itself. The only module
-that names the `object_store` crate is `pqbench::object_store`, which adapts it
-to the small `ObjectReader` interface (`stat` + `read_range`) the rest of the
-crate uses.
+delta-rs to select a table snapshot and names each active file. It does not
+measure footers. The only module that names the `object_store` crate is
+`pqbench::object_store`, which adapts it to the small `ObjectReader` interface
+(`stat` + `read_range`) the rest of the crate uses.
 
 ## Usage
 
-Analyze the latest snapshot, or an explicit version, by reading only the active
-Parquet files' footer metadata. Enable the feature when building, running, or
-testing:
+Load the latest snapshot, or an explicit version, then measure the named files.
+Enable the feature when building, running, or testing:
 
 ```
 cargo run -p pqbench-cli --features delta -- table ./path/to/table
@@ -37,8 +36,9 @@ cargo run -p pqbench-cli --features delta -- table ./path/to/table | cargo run -
 cargo test -p pqbench --features delta
 ```
 
-Remote tables are resolved with `delta-s3` (which enables `aws`), and the
-active objects are measured from their footers only:
+Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
+options travel on the document as `env` (`AWS_*` only); they are not written
+into the process environment:
 
 ```
 cargo run -p pqbench-cli --features delta-s3 -- table s3://bucket/table | cargo run -p pqbench-cli --features aws -- bytemass --json
@@ -56,23 +56,21 @@ producer | pqbench table | pqbench bytemass
 
 S3 support is compiled behind the `aws` feature inside `pqbench::object_store`
 (the only module that names the `object_store` crate). A URI whose backend is
-not compiled in fails at runtime with a message naming the missing feature;
-`bytemass` and `pqbench::table::delta` contain no feature flags and no
-third-party storage types. Adding another scheme is one arm in the factory plus
-one feature.
+not compiled in fails at runtime with a message naming the missing feature.
+Adding another scheme is one arm in the factory plus one feature. The `delta`
+feature flag lives only in `pqbench::table::delta`.
 
-## Report
+## Document
 
-The report describes physical storage: active file bytes, physical Parquet rows,
-compressed and uncompressed column bytes, codecs, and compressed bytes per row.
-It excludes the Delta log and tombstoned files.
+`pqbench.table` version 1 names the format, the JSON commits that remain on
+disk, and the active files (path, URI, log size). `bytemass` compares each
+measured file size to the log and fails if they differ.
 
 ## Limitations
 
-The implementation rejects deletion vectors, column mapping, external data
-paths, and active files whose size differs from the transaction log. Local path
-traversal and symlink escapes are rejected; remote file paths must be relative
-to the table root. No partial report is returned on failure.
+Data paths must stay inside the table root (no URIs, no `..`). A missing
+`delta` feature fails at runtime and names the feature. Iceberg is detected
+from `metadata/version-hint.text` and rejected until a loader exists.
 
 ## Dependencies
 

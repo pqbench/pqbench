@@ -27,20 +27,11 @@ pub(crate) fn run(args: &TableArgs) -> Result<(), CliError> {
 
 async fn load(args: &TableArgs) -> Result<TableInfo, CliError> {
     match input(args)? {
-        TableInput::Uri(uri) => Ok(table::load(&LoadRequest {
-            uri,
-            version: args.version,
-            env: BTreeMap::new(),
-        })
-        .await?),
+        TableInput::Uri(uri) => {
+            Ok(table::load(&LoadRequest::new(uri, args.version, BTreeMap::new())).await?)
+        }
         TableInput::RemoteSource { uri, env } => {
-            document::apply_env(&env)?;
-            Ok(table::load(&LoadRequest {
-                uri,
-                version: args.version,
-                env,
-            })
-            .await?)
+            Ok(table::load(&LoadRequest::new(uri, args.version, env)).await?)
         }
         TableInput::Table(info) => Ok(info),
     }

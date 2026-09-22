@@ -1,6 +1,6 @@
 //! Aggregate byte-mass metadata across multiple physical Parquet files.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -60,12 +60,15 @@ impl MassSummary {
 
 /// Expand the inputs, measure each file's footer, and flatten the collection
 /// into one row per column chunk.
-pub(super) async fn measure_inputs(inputs: &[String]) -> Result<Vec<MassRow>, Error> {
+pub(super) async fn measure_inputs(
+    inputs: &[String],
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<MassRow>, Error> {
     let paths = expand_inputs(inputs)?;
     let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
-        let (size, mass) = read_input(&input).await?;
+        let (size, mass) = read_input(&input, env).await?;
         let num_rows = mass.num_rows;
         for column in mass.columns {
             rows.push(MassRow {
@@ -112,9 +115,13 @@ fn escape_literal_brackets(input: &str) -> String {
     input.replace('[', "[[]")
 }
 
-async fn read_input(input: &str) -> Result<(u64, FileMass), Error> {
+async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64, FileMass), Error> {
     if input.contains("://") {
-        return remote::read_remote(input).await;
+        return remote::read_remote_with_options(
+            input,
+            env.iter().map(|(key, value)| (key.clone(), value.clone())),
+        )
+        .await;
     }
     let path = Path::new(input);
     let size = std::fs::metadata(path)

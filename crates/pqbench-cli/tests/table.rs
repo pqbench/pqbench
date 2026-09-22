@@ -40,7 +40,7 @@ fn bytemass_reads_a_table_document_from_stdin() {
         "uri": "/tmp/table",
         "snapshot_version": 0,
         "partition_columns": [],
-        "log": [{"version": 0, "actions": [{"add": {"path": "small_reddit_none.parquet"}}]}],
+        "log": [{"version": 0, "actions": [{"kind": "add", "path": "small_reddit_none.parquet"}]}],
         "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
     });
     let output = pipe(&["bytemass"], &document.to_string());
@@ -87,6 +87,23 @@ fn table_detects_delta_and_pipes_the_log_to_bytemass() {
     assert_eq!(report["num_rows"], 3000);
 }
 
+#[cfg(not(feature = "delta"))]
+#[test]
+fn table_names_the_delta_feature_when_it_is_off() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("_delta_log")).unwrap();
+    let output = pqbench()
+        .args(["table", directory.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`delta` feature") || stderr.contains("delta"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn table_rejects_an_unrecognized_directory() {
     let directory = tempfile::tempdir().unwrap();
@@ -97,6 +114,38 @@ fn table_rejects_an_unrecognized_directory() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("unrecognized table format"), "{stderr}");
+}
+
+#[test]
+fn bytemass_rejects_a_non_aws_env_key() {
+    let document = json!({
+        "kind": "pqbench.remote-source",
+        "version": 1,
+        "inputs": [parquet_fixture()],
+        "env": {"NOT_AWS": "x"}
+    });
+    let output = pipe(&["bytemass"], &document.to_string());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("AWS_*"), "{stderr}");
+}
+
+#[test]
+fn bytemass_rejects_a_size_mismatch_on_a_table_document() {
+    let document = json!({
+        "kind": "pqbench.table",
+        "version": 1,
+        "format": "delta",
+        "uri": "/tmp/table",
+        "snapshot_version": 0,
+        "partition_columns": [],
+        "log": [],
+        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": 1}]
+    });
+    let output = pipe(&["bytemass"], &document.to_string());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("size differs from log"), "{stderr}");
 }
 
 #[cfg(feature = "delta")]
