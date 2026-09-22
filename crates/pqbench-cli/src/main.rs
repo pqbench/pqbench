@@ -5,10 +5,9 @@ use clap::{Parser, Subcommand};
 mod bench;
 mod bytemass;
 mod compression;
+mod document;
 mod lz;
-
-#[cfg(feature = "delta")]
-mod delta;
+mod table;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.
@@ -25,6 +24,8 @@ Examples:
   pqbench bytemass data.parquet
   pqbench bytemass part-1.parquet part-2.parquet
   pqbench bytemass 'data/*.parquet'
+  pqbench table ./delta-table
+  pqbench table ./delta-table | pqbench bytemass
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -43,13 +44,17 @@ enum Command {
     #[command(after_help = r#"
 Examples:
   pqbench bytemass data.parquet
+  pqbench table ./delta-table | pqbench bytemass
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#)]
     Bytemass(bytemass::BytemassArgs),
-    /// analyze the active Parquet files in a local Delta snapshot
-    #[cfg(feature = "delta")]
-    #[command(after_help = "Example:\n  pqbench delta ./table --json")]
-    Delta(delta::DeltaArgs),
+    /// fetch table metadata (detect the format, then load the log)
+    #[command(after_help = r#"Examples:
+  pqbench table ./delta-table
+  pqbench table ./delta-table | pqbench bytemass
+  producer | pqbench table | pqbench bytemass
+"#)]
+    Table(table::TableArgs),
 }
 
 fn main() -> ExitCode {
@@ -58,8 +63,7 @@ fn main() -> ExitCode {
         Command::Lz(args) => lz::run(&args),
         Command::Compression(args) => compression::run(&args),
         Command::Bytemass(args) => bytemass::run(&args),
-        #[cfg(feature = "delta")]
-        Command::Delta(args) => delta::run(&args),
+        Command::Table(args) => table::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

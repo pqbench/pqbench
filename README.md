@@ -67,21 +67,33 @@ feature; a URI whose backend is not compiled in fails at runtime with the
 missing feature named. The library entry point (`bytemass::bytemass`) is
 always available and never feature-gated.
 
-### delta
+### table
 
-Byte-mass summary of a local Delta table snapshot. Feature-gated — build with
-`--features delta` to get the command:
+Detect the table format and load its metadata. For Delta this is the
+transaction log and the active files. A terminal pretty-prints the log; a pipe
+writes a `pqbench.table` document that `bytemass` measures:
 
 ```sh
-pqbench delta ./path/to/table
+pqbench table ./path/to/table
+pqbench table ./path/to/table | pqbench bytemass
+pqbench table ./path/to/table | pqbench bytemass --d3 > treemap.html
 ```
 
-Add `--features delta-s3` to resolve and measure Delta tables at `s3://` URIs;
-the active files are measured from their footers only.
+Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
+is Iceberg). Iceberg is recognized and rejected until a loader exists. Delta
+needs `--features delta` (`delta-s3` for `s3://`).
+
+A producer can hand `table` a `pqbench.remote-source` document — one table URI
+plus optional `AWS_*` credentials — and the table document carries those
+credentials to `bytemass`:
+
+```sh
+producer | pqbench table | pqbench bytemass
+```
 
 ## Documentation
 
-- [Delta tables](docs/delta.md) — snapshot resolution, report shape, limitations
+- [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
 - [Docker](docs/docker.md) — build, run, and publish a container image
 
 ## Contributing

@@ -1,9 +1,10 @@
 # Delta tables
 
-The `pqbench` library contains an optional Delta Lake table module that resolves
-a snapshot and orchestrates footer analysis across its active Parquet files.
-Delta dependencies are feature-gated and remain out of the default dependency
-graph.
+The `pqbench` library contains an optional Delta Lake table module that detects
+a Delta table, loads its transaction log, and names the active Parquet files.
+Measurement is a separate step: `pqbench table` emits the document, and
+`pqbench bytemass` reads the files. Delta dependencies are feature-gated and
+remain out of the default dependency graph.
 
 ```mermaid
 flowchart TD
@@ -30,8 +31,9 @@ Parquet files' footer metadata. Enable the feature when building, running, or
 testing:
 
 ```
-cargo run -p pqbench-cli --features delta -- delta ./path/to/table
-cargo run -p pqbench-cli --features delta -- delta ./path/to/table --version 3 --json
+cargo run -p pqbench-cli --features delta -- table ./path/to/table
+cargo run -p pqbench-cli --features delta -- table ./path/to/table --version 3
+cargo run -p pqbench-cli --features delta -- table ./path/to/table | cargo run -p pqbench-cli -- bytemass --json
 cargo test -p pqbench --features delta
 ```
 
@@ -39,7 +41,15 @@ Remote tables are resolved with `delta-s3` (which enables `aws`), and the
 active objects are measured from their footers only:
 
 ```
-cargo run -p pqbench-cli --features delta-s3 -- delta s3://bucket/table --json
+cargo run -p pqbench-cli --features delta-s3 -- table s3://bucket/table | cargo run -p pqbench-cli --features aws -- bytemass --json
+```
+
+A producer can supply the table URI and vended credentials as
+`pqbench.remote-source`. `table` detects the format, loads the log, and the
+document carries `env` to `bytemass`:
+
+```
+producer | pqbench table | pqbench bytemass
 ```
 
 ## Backends

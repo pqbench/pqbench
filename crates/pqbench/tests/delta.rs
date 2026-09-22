@@ -4,6 +4,7 @@ mod support;
 
 use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
 use pqbench::table::delta::{delta, render_json, render_text, DeltaRequest};
+use pqbench::table::{self, LoadRequest, TableFormat};
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
 
@@ -12,6 +13,44 @@ fn request(table: impl Into<String>, version: Option<u64>) -> DeltaRequest {
         table: table.into(),
         version,
     }
+}
+
+fn load_request(uri: impl Into<String>, version: Option<u64>) -> LoadRequest {
+    LoadRequest {
+        uri: uri.into(),
+        version,
+        env: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn load_emits_every_json_commit_and_only_active_files() {
+    let fixture = Fixture::new();
+    let info = table::load(&load_request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
+    assert_eq!(info.kind, "pqbench.table");
+    assert_eq!(info.format, TableFormat::Delta);
+    assert_eq!(info.snapshot_version, 1);
+    assert_eq!(info.log.len(), 2);
+    assert!(info.log[1]
+        .actions
+        .iter()
+        .any(|action| action.get("remove").is_some()));
+    let mut paths: Vec<_> = info.files.iter().map(|file| file.path.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
+    let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
+        inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
+    })
+    .await
+    .unwrap();
+    let summary = pqbench::bytemass::aggregate(&rows).unwrap();
+    let expected = delta(&request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
+    assert_eq!(summary.num_rows, expected.physical_rows);
+    assert_eq!(summary.file_count, expected.file_count);
 }
 
 #[tokio::test]

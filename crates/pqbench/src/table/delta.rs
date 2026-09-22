@@ -11,11 +11,13 @@
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
+use deltalake::logstore::LogStore;
 use deltalake::{DeltaTable, DeltaTableBuilder};
 use futures::TryStreamExt;
 use serde::Serialize;
 use url::Url;
 
+use super::{LoadRequest, LogCommit, TableFile, TableFormat, TableInfo};
 use crate::bytemass::{self, aggregate, BytemassRequest, ColumnMassSummary, MassRow, MassSummary};
 
 /// Errors resolving a local snapshot or measuring its active files.
@@ -102,47 +104,84 @@ pub struct DeltaRequest {
 /// paths, column mapping, deletion vectors, or unsupported Delta reader
 /// features. No partial report is returned on failure.
 pub async fn delta(request: &DeltaRequest) -> Result<TableReport, Error> {
-    if request.table.contains("://") {
-        read_remote(&request.table, request.version).await
-    } else {
-        read_local(Path::new(&request.table), request.version).await
-    }
-}
-
-/// Analyze the latest or requested version of a local Delta table.
-///
-/// Run inside a Tokio runtime. Paths are filesystem paths, not storage URIs.
-///
-/// # Errors
-/// Fails for invalid snapshots, missing/changed active files, external data
-/// paths, column mapping, deletion vectors, or unsupported Delta reader features.
-/// No partial report is returned on failure.
-async fn read_local(path: &Path, version: Option<u64>) -> Result<TableReport, Error> {
-    let root = local_root(path)?;
-    let table = load_local_table(&root, version).await?;
+    let table = open(&request.table, request.version).await?;
     read_table(&table).await
 }
 
-/// Analyze the latest or requested version of a Delta table at a storage URI.
-///
-/// The URI is resolved by delta-rs. Active Parquet objects are measured through
-/// `bytemass`'s public reader, which fetches object metadata and bounded footer
-/// reads only — never data pages.
+/// Load the transaction log and the active files. Does not read Parquet footers.
 ///
 /// # Errors
-/// Fails for invalid snapshots, missing or changed active objects, external
-/// data paths, column mapping, deletion vectors, or unsupported Delta reader
-/// features. No partial report is returned on failure.
-async fn read_remote(uri: &str, version: Option<u64>) -> Result<TableReport, Error> {
-    let url = Url::parse(uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
-    if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|()| Error("invalid local table URI".into()))?;
-        return read_local(&path, version).await;
+/// Fails for an unreadable log, an invalid snapshot, external data paths,
+/// column mapping, or deletion vectors. JSON commits removed after a checkpoint
+/// are omitted.
+pub async fn describe(request: &LoadRequest) -> Result<TableInfo, Error> {
+    let table = open(&request.uri, request.version).await?;
+    let snapshot = snapshot_info(&table)?;
+    let files = active_files(&table).await?;
+    let log = read_log(&table, snapshot.version).await?;
+    Ok(TableInfo {
+        kind: "pqbench.table".into(),
+        version: 1,
+        format: TableFormat::Delta,
+        uri: request.uri.clone(),
+        snapshot_version: snapshot.version,
+        partition_columns: snapshot.partition_columns,
+        log,
+        files: files
+            .into_iter()
+            .map(|file| TableFile {
+                path: file.relative,
+                uri: file.input,
+                size: file.expected,
+            })
+            .collect(),
+        env: request.env.clone(),
+    })
+}
+
+async fn open(uri: &str, version: Option<u64>) -> Result<DeltaTable, Error> {
+    if uri.contains("://") {
+        let url = Url::parse(uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
+        if url.scheme() == "file" {
+            let path = url
+                .to_file_path()
+                .map_err(|()| Error("invalid local table URI".into()))?;
+            return load_local_table(&local_root(&path)?, version).await;
+        }
+        return load_table(url, version).await;
     }
-    let table = load_table(url, version).await?;
-    read_table(&table).await
+    load_local_table(&local_root(Path::new(uri))?, version).await
+}
+
+async fn read_log(table: &DeltaTable, last_version: u64) -> Result<Vec<LogCommit>, Error> {
+    let store = table.log_store();
+    let mut commits = Vec::new();
+    for version in 0..=last_version {
+        let Some(bytes) = store
+            .read_commit_entry(version)
+            .await
+            .map_err(delta_error)?
+        else {
+            continue;
+        };
+        commits.push(LogCommit {
+            version,
+            actions: parse_commit(&bytes, version)?,
+        });
+    }
+    Ok(commits)
+}
+
+fn parse_commit(bytes: &[u8], version: u64) -> Result<Vec<serde_json::Value>, Error> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| Error(format!("commit {version} is not UTF-8: {e}")))?;
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line)
+                .map_err(|e| Error(format!("cannot parse commit {version}: {e}")))
+        })
+        .collect()
 }
 
 async fn read_table(table: &DeltaTable) -> Result<TableReport, Error> {

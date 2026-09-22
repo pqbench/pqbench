@@ -53,6 +53,19 @@ enum Source {
 use ::object_store::{GetOptions, ObjectStore, ObjectStoreExt};
 
 impl ObjectReader {
+    /// Whether the object exists. A missing object is `Ok(false)`.
+    pub(crate) async fn exists(&self) -> Result<bool, Error> {
+        match &self.source {
+            Source::Local(path) => Ok(path.exists()),
+            #[cfg(feature = "aws")]
+            Source::Remote(store, location) => match store.head(location).await {
+                Ok(_) => Ok(true),
+                Err(::object_store::Error::NotFound { .. }) => Ok(false),
+                Err(error) => Err(remote_error(error)),
+            },
+        }
+    }
+
     /// Report the object's size and identity.
     pub(crate) async fn stat(&self) -> Result<ObjectStat, Error> {
         match &self.source {

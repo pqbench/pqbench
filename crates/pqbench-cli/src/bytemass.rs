@@ -1,13 +1,16 @@
+use std::io::IsTerminal;
+
 use clap::Args;
 use pqbench::bytemass;
+use pqbench::table::TableInfo;
 
+use crate::document::{self, Document};
 use crate::CliError;
 
 /// Arguments for `bytemass`.
 #[derive(Args)]
 pub(crate) struct BytemassArgs {
-    /// parquet paths or glob masks; quote masks to prevent shell expansion
-    #[arg(required = true)]
+    /// parquet paths, a `pqbench.table` document, or `-` for standard input
     inputs: Vec<String>,
     /// emit per-column byte masses as JSON instead of text stats
     #[arg(long = "json", conflicts_with = "d3")]
@@ -20,19 +23,79 @@ pub(crate) struct BytemassArgs {
 /// Build the typed request, measure, and render the CLI's chosen format. The
 /// CLI owns the format decision; the library just returns the table.
 pub(crate) fn run(args: &BytemassArgs) -> Result<(), CliError> {
-    let request = bytemass::BytemassRequest {
-        inputs: args.inputs.clone(),
-    };
+    match resolve(args)? {
+        Input::Parquet(inputs) => measure(inputs, args),
+        Input::Table(info) => measure_table(info, args),
+    }
+}
+
+enum Input {
+    Parquet(Vec<String>),
+    Table(TableInfo),
+}
+
+fn resolve(args: &BytemassArgs) -> Result<Input, CliError> {
+    if args.inputs.is_empty() {
+        if std::io::stdin().is_terminal() {
+            return Err("bytemass needs parquet files or a table document".into());
+        }
+        return from_document("-");
+    }
+    if args.inputs.len() == 1 && document::looks_like_json(&args.inputs[0]) {
+        return from_document(&args.inputs[0]);
+    }
+    Ok(Input::Parquet(args.inputs.clone()))
+}
+
+fn from_document(input: &str) -> Result<Input, CliError> {
+    match document::read_document(input)? {
+        Document::Table(info) => Ok(Input::Table(info)),
+        Document::RemoteSource(source) => Ok(Input::Parquet(source.inputs)),
+    }
+}
+
+fn measure_table(info: TableInfo, args: &BytemassArgs) -> Result<(), CliError> {
+    document::apply_env(&info.env)?;
+    let inputs: Vec<String> = info.files.iter().map(|file| file.uri.clone()).collect();
+    if inputs.is_empty() {
+        return render(&[], args);
+    }
+    let rows = read_rows(inputs)?;
+    for row in &rows {
+        let file = info
+            .files
+            .iter()
+            .find(|file| file.uri == row.file)
+            .ok_or_else(|| format!("unexpected measured file: {}", row.file))?;
+        if row.size != file.size {
+            return Err(format!(
+                "active file size differs from log: {} (expected {}, found {})",
+                file.path, file.size, row.size
+            )
+            .into());
+        }
+    }
+    render(&rows, args)
+}
+
+fn measure(inputs: Vec<String>, args: &BytemassArgs) -> Result<(), CliError> {
+    render(&read_rows(inputs)?, args)
+}
+
+fn read_rows(inputs: Vec<String>) -> Result<Vec<bytemass::MassRow>, CliError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let rows = runtime.block_on(bytemass::bytemass(&request))?;
+    Ok(runtime.block_on(bytemass::bytemass(&bytemass::BytemassRequest { inputs }))?)
+}
+
+fn render(rows: &[bytemass::MassRow], args: &BytemassArgs) -> Result<(), CliError> {
     let output = if args.json {
-        bytemass::render_json(&rows)?
+        bytemass::render_json(rows)?
     } else if args.d3 {
-        bytemass::render_html(&rows)?
+        bytemass::render_html(rows)?
     } else {
-        bytemass::render_text(&rows)?
+        bytemass::render_text(rows)?
     };
     print!("{output}");
     Ok(())
