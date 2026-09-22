@@ -7,6 +7,7 @@ mod bytemass;
 mod catalog;
 mod compression;
 mod document;
+mod dump;
 mod emit;
 mod filter;
 mod iceberg;
@@ -34,6 +35,7 @@ Examples:
   pqbench table ./iceberg-table | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
+  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 -o sample.parquet
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -76,6 +78,14 @@ Examples:
   pqbench lake creds.json --concurrency 8 | pqbench table | pqbench bytemass
 "#)]
     Lake(lake::LakeArgs),
+    /// write a row sample from parquet files or a table document
+    #[command(after_help = r#"Examples:
+  pqbench dump data.parquet
+  pqbench table ./delta-table | pqbench dump
+  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1
+  pqbench lake ./warehouse | pqbench table | pqbench dump -o sample.parquet
+"#)]
+    Dump(dump::DumpArgs),
 }
 
 fn main() -> ExitCode {
@@ -86,6 +96,7 @@ fn main() -> ExitCode {
         Command::Bytemass(args) => bytemass::run(&args),
         Command::Table(args) => table::run(&args),
         Command::Lake(args) => lake::run(&args),
+        Command::Dump(args) => dump::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

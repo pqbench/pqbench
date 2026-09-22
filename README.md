@@ -71,6 +71,19 @@ requires `-o` (zstd NDJSON). `--include` / `--exclude` are Unix globs on the
 file path (`year=2024/**`); `--sample all`, `every:N`, or `first:N` runs after
 that. Lake `--include` / `--exclude` already select table names.
 
+### dump
+
+Write a row sample from the same files `bytemass` would measure. CSV on
+stdout; `--json` is NDJSON. Partition globs and `--sample` match `bytemass`
+(`all`, `every:N`, `first:N`). Each row carries `_path` (and `_table` from a
+lake):
+
+```sh
+pqbench dump data.parquet
+pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1
+pqbench table ./delta-table | pqbench dump --json
+```
+
 ### table
 
 Detect the table format and load its metadata. For Delta this is the

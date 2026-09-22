@@ -5,6 +5,7 @@ pub mod bench;
 pub mod bytemass;
 pub mod codecs;
 pub mod compression;
+pub mod dump;
 pub mod lake;
 pub mod lz;
 mod object_store;
