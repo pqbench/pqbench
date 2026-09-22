@@ -1,7 +1,8 @@
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 
 use clap::Args;
-use pqbench::dump::{self, DumpFile, DumpRequest};
+use pqbench::dump::{self, DumpFile, DumpRequest, RowGroups};
 use pqbench::lake::Lake;
 use pqbench::pattern::{self, Sample};
 use pqbench::table::{TableFile, TableInfo};
@@ -14,7 +15,13 @@ use crate::CliError;
 pub(crate) struct DumpArgs {
     /// parquet paths, a table or lake document, or `-` for standard input
     inputs: Vec<String>,
-    /// emit NDJSON instead of CSV
+    /// write Parquet to this path instead of standard output
+    #[arg(short, long, value_name = "PATH")]
+    output: Option<PathBuf>,
+    /// emit CSV instead of Parquet
+    #[arg(long, conflicts_with = "json")]
+    csv: bool,
+    /// emit NDJSON instead of Parquet
     #[arg(long = "json")]
     json: bool,
     /// keep files whose partition path matches this glob (repeatable)
@@ -26,6 +33,9 @@ pub(crate) struct DumpArgs {
     /// file sample after include/exclude: all, every:N, first:N
     #[arg(long, value_name = "METHOD", default_value = "all")]
     sample: String,
+    /// row groups to read from each file: all, first:N
+    #[arg(long, value_name = "METHOD", default_value = "all")]
+    row_groups: String,
 }
 
 pub(crate) fn run(args: &DumpArgs) -> Result<(), CliError> {
@@ -37,16 +47,48 @@ pub(crate) fn run(args: &DumpArgs) -> Result<(), CliError> {
         }
         Input::Lake(lake) => lake_files(lake, args)?,
     };
+    let request = DumpRequest {
+        files,
+        row_groups: RowGroups::parse(&args.row_groups)?,
+    };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let dump = runtime.block_on(dump::dump(&DumpRequest { files }))?;
-    if args.json {
-        print!("{}", dump::render_json(&dump)?);
-    } else {
-        print!("{}", dump::render_csv(&dump));
+    if args.csv {
+        let dump = runtime.block_on(dump::dump(&request))?;
+        return write_text(args, dump::render_csv(&dump));
     }
-    Ok(())
+    if args.json {
+        let dump = runtime.block_on(dump::dump(&request))?;
+        return write_text(args, dump::render_json(&dump)?);
+    }
+    if args.output.is_none() && std::io::stdout().is_terminal() {
+        return Err("dump writes Parquet; redirect standard output or pass --output".into());
+    }
+    let bytes = runtime.block_on(dump::write_parquet(&request))?;
+    write_bytes(args, &bytes)
+}
+
+fn write_text(args: &DumpArgs, text: String) -> Result<(), CliError> {
+    match &args.output {
+        Some(path) => std::fs::write(path, text)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()).into()),
+        None => {
+            print!("{text}");
+            Ok(())
+        }
+    }
+}
+
+fn write_bytes(args: &DumpArgs, bytes: &[u8]) -> Result<(), CliError> {
+    match &args.output {
+        Some(path) => std::fs::write(path, bytes)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()).into()),
+        None => {
+            std::io::stdout().write_all(bytes)?;
+            Ok(())
+        }
+    }
 }
 
 enum Input {

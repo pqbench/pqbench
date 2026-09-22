@@ -33,7 +33,7 @@ fn pipe(args: &[&str], stdin: &str) -> std::process::Output {
 #[test]
 fn dump_writes_csv_from_a_parquet_file() {
     let output = pqbench()
-        .args(["dump", parquet_fixture()])
+        .args(["dump", "--csv", parquet_fixture()])
         .output()
         .unwrap();
     assert!(
@@ -133,6 +133,57 @@ fn dump_prunes_partitions_and_samples_files() {
         paths.iter().map(String::as_str).collect::<Vec<_>>(),
         ["year=2024/part-0.parquet"]
     );
+}
+
+#[test]
+fn dump_writes_parquet_to_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_path = directory.path().join("sample.parquet");
+    let output = pqbench()
+        .args([
+            "dump",
+            parquet_fixture(),
+            "--row-groups",
+            "first:1",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = std::fs::read(&output_path).unwrap();
+    assert!(bytes.starts_with(b"PAR1"));
+    assert!(bytes.ends_with(b"PAR1"));
+
+    let csv = pqbench()
+        .args(["dump", "--csv", output_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(csv.status.success());
+    let stdout = String::from_utf8(csv.stdout).unwrap();
+    assert!(stdout.starts_with("_path,"));
+    assert!(stdout.contains("url_encoded"));
+}
+
+#[test]
+fn dump_rejects_unknown_row_groups() {
+    let output = pqbench()
+        .args([
+            "dump",
+            parquet_fixture(),
+            "--row-groups",
+            "every:2",
+            "--csv",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("first:N"), "{stderr}");
 }
 
 #[test]

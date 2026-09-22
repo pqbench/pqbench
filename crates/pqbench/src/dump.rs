@@ -1,17 +1,69 @@
-//! Dump sampled rows from Parquet files named by a table.
+//! Dump a sample of Parquet files named by a table.
 //!
 //! File selection (include/exclude/sample) is the caller's job. This module
-//! reads the named files and emits rows. The only module that names the
-//! `parquet` crate is this one and `parquet_impl`.
+//! reads the named files — optionally only the first row groups — and writes
+//! Parquet, CSV, or NDJSON. The only module that names the `parquet` crate
+//! is this one and `parquet_impl`.
 
-use std::path::Path;
-
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use bytes::Bytes;
+use parquet::column::writer::ColumnCloseResult;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::reader::{ChunkReader, FileReader, Length, SerializedFileReader};
+use parquet::file::writer::SerializedFileWriter;
+use parquet::record::reader::RowIter;
 use parquet::record::Field;
 use serde_json::{Map, Value};
+use std::fs::File;
+use std::io::{Cursor, Read, Write};
+use std::ops::Range;
+use std::path::Path;
 
 use crate::object_store;
 use crate::parquet_helpers::Error;
+
+/// How many leading row groups to read from each file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowGroups {
+    /// Read every row group.
+    ALL,
+    /// Read the first `n` row groups (`n >= 1`).
+    First(u32),
+}
+
+impl RowGroups {
+    /// Parse `all` or `first:N`.
+    ///
+    /// # Errors
+    /// Fails when the spec is unknown or `N` is not a positive integer.
+    pub fn parse(value: &str) -> Result<Self, Error> {
+        if value == "all" {
+            return Ok(Self::ALL);
+        }
+        if let Some(count) = value.strip_prefix("first:") {
+            let count: u32 = count.parse().map_err(|_| {
+                Error(format!(
+                    "row-groups first needs a positive integer, got `{count}`"
+                ))
+            })?;
+            if count == 0 {
+                return Err(Error(
+                    "row-groups first needs a positive integer, got 0".into(),
+                ));
+            }
+            return Ok(Self::First(count));
+        }
+        Err(Error(format!(
+            "unknown row-groups `{value}`; expected all or first:N"
+        )))
+    }
+
+    fn keep(self, total: usize) -> usize {
+        match self {
+            Self::ALL => total,
+            Self::First(count) => total.min(count as usize),
+        }
+    }
+}
 
 /// One file to dump. `path` is the log or input path; `uri` is what to read.
 #[derive(Debug, Clone)]
@@ -24,11 +76,13 @@ pub struct DumpFile {
     pub table: Option<String>,
 }
 
-/// Arguments for [`dump`].
+/// Arguments for [`dump`] and [`write_parquet`].
 #[derive(Debug, Clone)]
 pub struct DumpRequest {
     /// Files to read, in dump order.
     pub files: Vec<DumpFile>,
+    /// Row groups to take from each file.
+    pub row_groups: RowGroups,
 }
 
 /// Rows from one dump: a column list and one record per row.
@@ -40,29 +94,77 @@ pub struct Dump {
     pub rows: Vec<Vec<Value>>,
 }
 
-/// Read every row from the named files.
+/// Read rows from the named files, limited to [`DumpRequest::row_groups`].
 ///
-/// Local paths are opened on disk. `s3://` URIs fetch the whole object through
-/// `object_store` and need the `aws` feature.
+/// Local files are seeked. `s3://` URIs fetch the footer and the selected row
+/// groups, not the rest of the object, and need the `aws` feature.
 ///
 /// # Errors
 /// Fails when there are no files, a file cannot be read, or a row cannot be
 /// decoded.
 pub async fn dump(request: &DumpRequest) -> Result<Dump, Error> {
-    if request.files.is_empty() {
+    let files = expand_files(&request.files)?;
+    if files.is_empty() {
         return Err(Error("no files".into()));
     }
-    let files = expand_files(&request.files)?;
     let mut columns = Vec::new();
     let mut rows = Vec::new();
     for file in &files {
-        let (file_columns, file_rows) = read_file(file).await?;
+        let source = open_source(&file.uri, request.row_groups).await?;
+        let keep = request.row_groups.keep(source.metadata.num_row_groups());
+        let (file_columns, file_rows) = read_rows(file, &source, keep)?;
         merge_columns(&mut columns, &file_columns, &mut rows);
         for row in file_rows {
             rows.push(align(&columns, &file_columns, row));
         }
     }
     Ok(Dump { columns, rows })
+}
+
+/// Copy the selected row groups into one Parquet file, preserving encodings.
+///
+/// # Errors
+/// Fails when there are no files, a file cannot be read, schemas differ, or
+/// the writer cannot emit the file.
+pub async fn write_parquet(request: &DumpRequest) -> Result<Vec<u8>, Error> {
+    let files = expand_files(&request.files)?;
+    if files.is_empty() {
+        return Err(Error("no files".into()));
+    }
+    let mut sources = Vec::new();
+    for file in &files {
+        sources.push(open_source(&file.uri, request.row_groups).await?);
+    }
+    let schema = sources[0]
+        .metadata
+        .file_metadata()
+        .schema_descr_ptr()
+        .root_schema_ptr();
+    for (file, source) in files.iter().zip(&sources) {
+        let file_schema = source
+            .metadata
+            .file_metadata()
+            .schema_descr_ptr()
+            .root_schema_ptr();
+        if file_schema.as_ref() != schema.as_ref() {
+            return Err(Error(format!(
+                "{} has a different schema; dump parquet needs one schema",
+                file.uri
+            )));
+        }
+    }
+    let mut out = Vec::new();
+    let mut writer =
+        SerializedFileWriter::new(&mut out, schema, Default::default()).map_err(parquet_error)?;
+    for source in &sources {
+        append_groups(
+            &mut writer,
+            source,
+            request.row_groups.keep(source.metadata.num_row_groups()),
+        )?;
+    }
+    writer.close().map_err(parquet_error)?;
+    Ok(out)
 }
 
 /// Render the dump as CSV (header, then one row per line).
@@ -97,6 +199,86 @@ pub fn render_json(dump: &Dump) -> Result<String, Error> {
     Ok(out)
 }
 
+struct Source {
+    reader: SourceReader,
+    metadata: ParquetMetaData,
+}
+
+enum SourceReader {
+    Local(File),
+    Partial(PartialFile),
+}
+
+impl Length for SourceReader {
+    fn len(&self) -> u64 {
+        match self {
+            Self::Local(file) => file.len(),
+            Self::Partial(file) => file.len(),
+        }
+    }
+}
+
+impl ChunkReader for SourceReader {
+    type T = Box<dyn Read + Send>;
+
+    fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
+        match self {
+            Self::Local(file) => Ok(Box::new(file.get_read(start)?)),
+            Self::Partial(file) => Ok(Box::new(file.get_read(start)?)),
+        }
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
+        match self {
+            Self::Local(file) => file.get_bytes(start, length),
+            Self::Partial(file) => file.get_bytes(start, length),
+        }
+    }
+}
+
+struct PartialFile {
+    len: u64,
+    parts: Vec<(u64, Bytes)>,
+}
+
+impl Length for PartialFile {
+    fn len(&self) -> u64 {
+        self.len
+    }
+}
+
+impl PartialFile {
+    fn part_from(&self, start: u64) -> parquet::errors::Result<Bytes> {
+        for (offset, bytes) in &self.parts {
+            let end = *offset + bytes.len() as u64;
+            if start >= *offset && start < end {
+                return Ok(bytes.slice((start - offset) as usize..));
+            }
+        }
+        Err(parquet::errors::ParquetError::General(format!(
+            "byte {start} was not fetched"
+        )))
+    }
+}
+
+impl ChunkReader for PartialFile {
+    type T = Cursor<Bytes>;
+
+    fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
+        Ok(Cursor::new(self.part_from(start)?))
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
+        let bytes = self.part_from(start)?;
+        if bytes.len() < length {
+            return Err(parquet::errors::ParquetError::General(format!(
+                "byte range {start}+{length} was not fetched"
+            )));
+        }
+        Ok(bytes.slice(..length))
+    }
+}
+
 fn expand_files(files: &[DumpFile]) -> Result<Vec<DumpFile>, Error> {
     let mut expanded = Vec::new();
     for file in files {
@@ -129,9 +311,117 @@ fn has_glob(input: &str) -> bool {
     input.contains(['*', '?'])
 }
 
-async fn read_file(file: &DumpFile) -> Result<(Vec<String>, Vec<Vec<Value>>), Error> {
-    let bytes = read_bytes(&file.uri).await?;
-    let reader = SerializedFileReader::new(bytes::Bytes::from(bytes))
+async fn open_source(uri: &str, row_groups: RowGroups) -> Result<Source, Error> {
+    if is_remote(uri) {
+        return open_remote(uri, row_groups).await;
+    }
+    let path = local_path(uri);
+    let file = File::open(&path)
+        .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;
+    let metadata = ParquetMetaDataReader::new()
+        .parse_and_finish(&file)
+        .map_err(parquet_error)?;
+    Ok(Source {
+        reader: SourceReader::Local(file),
+        metadata,
+    })
+}
+
+async fn open_remote(uri: &str, row_groups: RowGroups) -> Result<Source, Error> {
+    let reader = object_store::open(uri, &[]).map_err(|error| Error(error.to_string()))?;
+    let stat = reader
+        .stat()
+        .await
+        .map_err(|error| Error(error.to_string()))?;
+    let size = stat.size;
+    if size < 8 {
+        return Err(Error(format!(
+            "object {uri} is too small to be a Parquet file: {size} bytes"
+        )));
+    }
+    let identity = stat.identity.as_deref();
+    let trailer = reader
+        .read_range(size - 8..size, identity)
+        .await
+        .map_err(|error| Error(error.to_string()))?;
+    let trailer: [u8; 8] = trailer
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error(format!("object {uri} returned a truncated Parquet trailer")))?;
+    if &trailer[4..] != b"PAR1" {
+        return Err(Error(format!("object {uri} has no Parquet footer magic")));
+    }
+    let metadata_size = u64::from(u32::from_le_bytes([
+        trailer[0], trailer[1], trailer[2], trailer[3],
+    ]));
+    let metadata_start = size
+        .checked_sub(8 + metadata_size)
+        .filter(|start| *start >= 4)
+        .ok_or_else(|| Error(format!("object {uri} has an invalid Parquet footer size")))?;
+    let footer = reader
+        .read_range(metadata_start..size, identity)
+        .await
+        .map_err(|error| Error(error.to_string()))?;
+    if footer.len() as u64 != size - metadata_start {
+        return Err(Error(format!(
+            "object {uri} returned truncated Parquet metadata"
+        )));
+    }
+    let metadata = ParquetMetaDataReader::new()
+        .parse_and_finish(&Bytes::from(footer.clone()))
+        .map_err(parquet_error)?;
+    let keep = row_groups.keep(metadata.num_row_groups());
+    let mut parts = vec![(metadata_start, Bytes::from(footer))];
+    for range in data_ranges(&metadata, keep) {
+        let bytes = reader
+            .read_range(range.clone(), identity)
+            .await
+            .map_err(|error| Error(error.to_string()))?;
+        parts.push((range.start, Bytes::from(bytes)));
+    }
+    Ok(Source {
+        reader: SourceReader::Partial(PartialFile { len: size, parts }),
+        metadata,
+    })
+}
+
+fn data_ranges(metadata: &ParquetMetaData, keep: usize) -> Vec<Range<u64>> {
+    let mut ranges: Vec<Range<u64>> = metadata
+        .row_groups()
+        .iter()
+        .take(keep)
+        .flat_map(group_range)
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<u64>> = Vec::new();
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
+}
+
+fn group_range(group: &RowGroupMetaData) -> Vec<Range<u64>> {
+    group
+        .columns()
+        .iter()
+        .map(|column| {
+            let start = column
+                .dictionary_page_offset()
+                .unwrap_or_else(|| column.data_page_offset()) as u64;
+            start..start + column.compressed_size() as u64
+        })
+        .collect()
+}
+
+fn read_rows(
+    file: &DumpFile,
+    source: &Source,
+    keep: usize,
+) -> Result<(Vec<String>, Vec<Vec<Value>>), Error> {
+    let reader = SerializedFileReader::new(clone_reader(&source.reader)?)
         .map_err(|error| Error(format!("{}: {error}", file.uri)))?;
     let mut columns = Vec::new();
     if file.table.is_some() {
@@ -139,45 +429,68 @@ async fn read_file(file: &DumpFile) -> Result<(Vec<String>, Vec<Vec<Value>>), Er
     }
     columns.push("_path".into());
     let mut rows = Vec::new();
-    for record in reader
-        .get_row_iter(None)
-        .map_err(|error| Error(format!("{}: {error}", file.uri)))?
-    {
-        let record = record.map_err(|error| Error(format!("{}: {error}", file.uri)))?;
-        let mut values = Vec::new();
-        if let Some(table) = &file.table {
-            values.push(Value::String(table.clone()));
-        }
-        values.push(Value::String(file.path.clone()));
-        for (name, field) in record.get_column_iter() {
-            if rows.is_empty() {
-                columns.push(name.clone());
+    for index in 0..keep {
+        let group = reader
+            .get_row_group(index)
+            .map_err(|error| Error(format!("{}: {error}", file.uri)))?;
+        for record in RowIter::from_row_group(None, group.as_ref())
+            .map_err(|error| Error(format!("{}: {error}", file.uri)))?
+        {
+            let record = record.map_err(|error| Error(format!("{}: {error}", file.uri)))?;
+            let mut values = Vec::new();
+            if let Some(table) = &file.table {
+                values.push(Value::String(table.clone()));
             }
-            values.push(field_value(field));
+            values.push(Value::String(file.path.clone()));
+            for (name, field) in record.get_column_iter() {
+                if rows.is_empty() {
+                    columns.push(name.clone());
+                }
+                values.push(field_value(field));
+            }
+            rows.push(values);
         }
-        rows.push(values);
     }
     Ok((columns, rows))
 }
 
-async fn read_bytes(uri: &str) -> Result<Vec<u8>, Error> {
-    if is_remote(uri) {
-        return read_remote(uri).await;
+fn append_groups<W: Write + Send>(
+    writer: &mut SerializedFileWriter<W>,
+    source: &Source,
+    keep: usize,
+) -> Result<(), Error> {
+    for index in 0..keep {
+        let group = source.metadata.row_group(index);
+        let mut out = writer.next_row_group().map_err(parquet_error)?;
+        for column in group.columns() {
+            let close = ColumnCloseResult {
+                bytes_written: column.compressed_size() as u64,
+                rows_written: group.num_rows() as u64,
+                metadata: column.clone(),
+                bloom_filter: None,
+                column_index: None,
+                offset_index: None,
+            };
+            out.append_column(&source.reader, close)
+                .map_err(parquet_error)?;
+        }
+        out.close().map_err(parquet_error)?;
     }
-    let path = local_path(uri);
-    std::fs::read(&path).map_err(|error| Error(format!("cannot read {}: {error}", path.display())))
+    Ok(())
 }
 
-async fn read_remote(uri: &str) -> Result<Vec<u8>, Error> {
-    let reader = object_store::open(uri, &[]).map_err(|error| Error(error.to_string()))?;
-    let stat = reader
-        .stat()
-        .await
-        .map_err(|error| Error(error.to_string()))?;
-    reader
-        .read_range(0..stat.size, stat.identity.as_deref())
-        .await
-        .map_err(|error| Error(error.to_string()))
+fn clone_reader(reader: &SourceReader) -> Result<SourceReader, Error> {
+    match reader {
+        SourceReader::Local(file) => {
+            Ok(SourceReader::Local(file.try_clone().map_err(|error| {
+                Error(format!("cannot reopen parquet file: {error}"))
+            })?))
+        }
+        SourceReader::Partial(file) => Ok(SourceReader::Partial(PartialFile {
+            len: file.len,
+            parts: file.parts.clone(),
+        })),
+    }
 }
 
 fn is_remote(uri: &str) -> bool {
@@ -189,6 +502,10 @@ fn local_path(uri: &str) -> std::path::PathBuf {
         return Path::new(path).to_path_buf();
     }
     Path::new(uri).to_path_buf()
+}
+
+fn parquet_error(error: parquet::errors::ParquetError) -> Error {
+    Error(error.to_string())
 }
 
 fn field_value(field: &Field) -> Value {

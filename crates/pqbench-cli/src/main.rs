@@ -32,7 +32,7 @@ Examples:
   pqbench table ./iceberg-table | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
-  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 -o sample.parquet
+  pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -77,9 +77,9 @@ Examples:
     Lake(lake::LakeArgs),
     /// write a row sample from parquet files or a table document
     #[command(after_help = r#"Examples:
-  pqbench dump data.parquet
-  pqbench table ./delta-table | pqbench dump
-  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1
+  pqbench dump data.parquet -o sample.parquet
+  pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
+  pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 -o sample.parquet
   pqbench lake ./warehouse | pqbench table | pqbench dump -o sample.parquet
 "#)]
     Dump(dump::DumpArgs),
