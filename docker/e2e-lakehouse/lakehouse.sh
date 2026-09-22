@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The local stand behind `make lakehouse`: object storage holding a Delta table,
-# and a Unity Catalog that vends expiring credentials for it. Each verb is also
-# useful on its own; see docker/e2e-lakehouse/README.md.
+# The local stand behind `make lakehouse`: object storage holding Delta and
+# Iceberg tables, Unity Catalog for Delta, and Iceberg REST for Iceberg. Each
+# verb is also useful on its own; see docker/e2e-lakehouse/README.md.
 set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
@@ -9,13 +9,16 @@ CARGO=${CARGO:-cargo}
 run_compose() { docker compose -f "$root/docker/e2e-lakehouse/compose.yaml" "$@"; }
 run_aws_cli() { run_compose run --rm -T aws-cli "$@"; }
 unity_catalog="http://localhost:${UNITY_CATALOG_PORT:-8080}/api/2.1/unity-catalog"
+iceberg_rest="http://localhost:${ICEBERG_REST_PORT:-8181}"
 s3_endpoint="http://localhost:${RUSTFS_PORT:-9000}"
 table_location="s3://lakehouse/unity/events"
+iceberg_location="s3://lakehouse/iceberg"
 vended_env="local/lakehouse/vended.env"
+iceberg_meta="$root/docker/e2e-lakehouse/iceberg/metadata-location"
 pqbench_bin="${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
 
 ensure_pqbench() {
-    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3,unity
+    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3,unity,iceberg-s3
 }
 
 # Create, or accept that a previous run already did.
@@ -53,15 +56,23 @@ EOF
 }
 
 # A started JVM is not an available API.
-wait_for_unity() {
+wait_http() {
+    local url=$1 label=$2
     local attempts=60 poll_interval_seconds=2 attempt
     for attempt in $(seq "$attempts"); do
-        curl -fsS "$unity_catalog/catalogs" -o /dev/null 2> /dev/null && return
+        curl -fsS "$url" -o /dev/null 2> /dev/null && return
         [ "$attempt" -lt "$attempts" ] || break
         sleep "$poll_interval_seconds"
     done
-    echo "Unity Catalog did not answer at $unity_catalog" >&2
+    echo "$label did not answer at $url" >&2
     exit 1
+}
+
+storage_env() {
+    jq -n --arg s3 "$s3_endpoint" '{
+        AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
+        AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
+        AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}'
 }
 
 up() {
@@ -71,8 +82,9 @@ up() {
     set -a
     . "$vended_env"
     set +a
-    run_compose up -d --wait unity-catalog
-    wait_for_unity
+    run_compose up -d --wait unity-catalog iceberg-rest
+    wait_http "$unity_catalog/catalogs" "Unity Catalog"
+    wait_http "$iceberg_rest/v1/config" "Iceberg REST"
 }
 
 seed_s3() {
@@ -104,6 +116,45 @@ seed_unity() {
              type_json: ({name: "label", type: "string", nullable: true, metadata: {}} | tojson)}]}')"
 }
 
+# Accept 409 (already exists) and 404 (nothing to delete). Any other status
+# is a down or 5xx catalog and must fail.
+iceberg_http() {
+    local method=$1 path=$2 body=${3:-}
+    local tmp code
+    tmp=$(mktemp)
+    if [ -n "$body" ]; then
+        code=$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$iceberg_rest$path" \
+            -H 'Content-Type: application/json' -d "$body")
+    else
+        code=$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$iceberg_rest$path")
+    fi
+    case "$method:$code" in
+        POST:200 | POST:201 | POST:409 | DELETE:200 | DELETE:204 | DELETE:404)
+            cat "$tmp"
+            rm -f "$tmp"
+            ;;
+        *)
+            echo "$method $path failed: HTTP $code $(cat "$tmp")" >&2
+            rm -f "$tmp"
+            exit 1
+            ;;
+    esac
+}
+
+seed_iceberg() {
+    run_aws_cli s3 sync --delete /iceberg/demo "$iceberg_location/demo" > /dev/null
+    iceberg_http POST /v1/namespaces '{"namespace":["demo"]}' > /dev/null
+    iceberg_http DELETE /v1/namespaces/demo/tables/events > /dev/null
+    local metadata response
+    metadata=$(tr -d '\n' < "$iceberg_meta")
+    response=$(iceberg_http POST /v1/namespaces/demo/register \
+        "{\"name\":\"events\",\"metadata-location\":\"$metadata\"}")
+    if ! jq -e '."metadata-location" // .metadata.location' <<< "$response" > /dev/null; then
+        echo "$response" >&2
+        exit 1
+    fi
+}
+
 # The README's shape: rows, file count, and column names from the bytemass end.
 measurement_shape() {
     jq -rs '
@@ -112,13 +163,23 @@ measurement_shape() {
         | "\($end.row_count) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"'
 }
 
-# The README's pipes, so the stand is seen to answer the question it exists for.
-check() {
+expect_events() {
+    local label=$1 measurement=$2
+    local expected="3 rows, 1 file(s), columns [id, label]"
+    local measured
+    measured=$(measurement_shape <<< "$measurement")
+    [ "$measured" = "$expected" ] || {
+        echo "check failed ($label): expected $expected; measured $measured" >&2
+        exit 1
+    }
+    echo "$measured"
+}
+
+check_unity() {
     ensure_pqbench
     set -a
     . "$vended_env"
     set +a
-    local expected="3 rows, 1 file(s), columns [id, label]"
     local measurement measured
 
     # Unity vends a temporary credential as a pqbench.remote-source.
@@ -138,11 +199,7 @@ check() {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
     }
-    measured=$(measurement_shape <<< "$measurement")
-    [ "$measured" = "$expected" ] || {
-        echo "check failed: expected $expected; measured $measured" >&2
-        exit 1
-    }
+    measured=$(expect_events "unity table" "$measurement")
 
     # `lake` lists the same table from Unity, then the same table | bytemass pipe.
     local lake_source="local/lakehouse/lake-source.json"
@@ -160,19 +217,39 @@ check() {
         echo "check failed: the lake pipe produced no measurement" >&2
         exit 1
     }
-    measured=$(measurement_shape <<< "$measurement")
-    [ "$measured" = "$expected" ] || {
-        echo "check failed: expected $expected; measured $measured" >&2
-        exit 1
-    }
+    measured=$(expect_events "unity lake" "$measurement")
 
     echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured"
+}
+
+check_iceberg() {
+    ensure_pqbench
+    local metadata measurement measured
+    metadata=$(curl -sS "$iceberg_rest/v1/namespaces/demo/tables/events" |
+        jq -er '."metadata-location" // .metadata."metadata-location"')
+    measurement=$(jq -c -n --arg metadata "$metadata" --argjson env "$(storage_env)" \
+        '{kind: "pqbench.remote-source", version: 1, inputs: [$metadata], env: $env}' |
+        "$pqbench_bin" table |
+        "$pqbench_bin" bytemass --json) || {
+        echo "check failed: the Iceberg table pipe produced no measurement" >&2
+        exit 1
+    }
+    measured=$(expect_events "iceberg table" "$measurement")
+    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured"
+}
+
+check() {
+    check_unity
+    check_iceberg
 }
 
 case "${1:-}" in
     up) up ;;
     seed-s3) seed_s3 ;;
     seed-unity) seed_unity ;;
+    seed-iceberg) seed_iceberg ;;
     check) check ;;
-    *) echo "usage: ${0##*/} up|seed-s3|seed-unity|check" >&2; exit 64 ;;
+    check-unity) check_unity ;;
+    check-iceberg) check_iceberg ;;
+    *) echo "usage: ${0##*/} up|seed-s3|seed-unity|seed-iceberg|check" >&2; exit 64 ;;
 esac
