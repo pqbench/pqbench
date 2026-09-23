@@ -15,6 +15,7 @@ that command and links back. This file is the durable copy.
 | Row sample | `pqbench dump FILE --output sample.parquet` |
 | Sample-level column facts | `pqbench dump FILE \| pqbench profile` |
 | Rewrite a sample and measure it | `pqbench dump FILE \| pqbench experiment --rewrite sort:ts --aim skipping` |
+| Agent skill (write / DDL / codec recipes) | `pqbench skill parquet-advisor` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
 | Codec speed on Parquet pages | `pqbench compression FILE` (NONE-compressed only) |
 
@@ -39,6 +40,7 @@ lake-source) and are not exported into the process environment.
 | `pqbench.bytemass` / `pqbench.bytemass-file` / `pqbench.bytemass-row` | `bytemass` | `viz` |
 | `pqbench.profile` / `pqbench.profile-column` / `pqbench.profile-dependency` | `profile` | an agent / the next pass |
 | `pqbench.experiment` / `pqbench.experiment-trial` / `pqbench.experiment-column` | `experiment` | an agent / the next pass |
+| `pqbench.skill` | `skill` (list) | an agent |
 
 All current documents are version `1`.
 

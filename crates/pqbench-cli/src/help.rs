@@ -19,6 +19,7 @@ versioned JSON document the next command reads.
   dump     →  Parquet              row sample from the same files (zstd)
   profile  →  pqbench.profile-column  sample-level column facts (cheap)
   experiment → pqbench.experiment-trial  rewrite a sample and measure it
+  skill      → markdown                  bundled agent recipes (write / DDL / codec)
 
 A TTY prints a short summary and requires `-o` (zstd NDJSON). A pipe
 streams NDJSON. Subcommand help is local (`pqbench table --help`).
@@ -35,6 +36,7 @@ Examples:
   pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
   pqbench dump data.parquet | pqbench profile
   pqbench dump data.parquet | pqbench experiment --rewrite sort:country --aim skipping
+  pqbench skill parquet-advisor
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
 
@@ -47,6 +49,7 @@ Documents (kind + version 1):
   pqbench.bytemass       begin/end around pqbench.bytemass-row lines
   pqbench.profile        begin/end around pqbench.profile-column lines
   pqbench.experiment     begin/end around pqbench.experiment-trial lines
+  pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
 for s3://. A missing feature fails at runtime and names itself.
@@ -307,6 +310,35 @@ See also:
   pqbench bytemass --help  footer masses of an existing file
   pqbench --help           documents
   docs/experiment.md  docs/cli.md";
+
+pub const SKILL_ABOUT: &str = "Print a bundled agent skill (write / DDL / compression recipes)";
+
+pub const SKILL_LONG_ABOUT: &str = "\
+Print an agent skill that is compiled into this binary. No TTY `-o`
+requirement: this is a document, like `--help`.
+
+  pqbench skill                       list skills as pqbench.skill lines
+  pqbench skill parquet-advisor       the advisor workflow
+  pqbench skill parquet-advisor recipes
+                                      write-path, table DDL, codec levels
+
+The advisor turns bytemass / profile / experiment facts into recipes
+(ingest settings, Iceberg/Delta/Spark/DuckDB DDL, compression level
+with pros and cons). It does not measure files.";
+
+pub const SKILL_AFTER: &str = "\
+Examples:
+  pqbench skill
+  pqbench skill parquet-advisor
+  pqbench skill parquet-advisor recipes
+  pqbench dump data.parquet | pqbench profile
+  pqbench experiment sample.parquet --rewrite sort:ts --aim skipping
+
+See also:
+  pqbench profile --help     cheap column facts
+  pqbench experiment --help  measure a rewrite
+  pqbench --help             documents
+  docs/skill.md  docs/cli.md";
 
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into SQLite and a static HTML page";
 
