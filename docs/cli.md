@@ -34,7 +34,7 @@ lake-source) and are not exported into the process environment.
 | `pqbench.table-ref` | `lake` | `table` |
 | `pqbench.table` | `table` | `bytemass`, `dump`, `table` (re-apply excludes) |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
-| `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
+| `pqbench.bytemass` / `pqbench.bytemass-file` / `pqbench.bytemass-row` | `bytemass` | `viz` |
 
 All current documents are version `1`.
 
@@ -42,7 +42,8 @@ All current documents are version `1`.
 
 | Flag | Meaning |
 | --- | --- |
-| `--include GLOB` / `--exclude GLOB` | Unix globs (`*`, `?`, `**`). On `lake` they match table names; on `bytemass` / `dump` they match file partition paths. |
+| `--include GLOB` / `--exclude GLOB` | Unix globs (`*`, `?`, `**`). On `lake` they match table names; on `table` / `bytemass` / `dump` they match file partition paths. Hive prefixes on `table` (`year=2024/**`) are pushed into the Delta listing. |
+| `--no-stats` | On `table`: keep `num_records` / `bytes_per_row`, drop min/max/null maps. |
 | `--sample all\|every:N\|first:N` | After include/exclude, keep every file, every Nth, or the first N. |
 | `--exclude-modified-before/after TIME` | RFC3339 UTC. Delta log `modificationTime`. Iceberg has none (fails). |
 | `--exclude-version-before/after N` | Delta add version. Iceberg has none (fails). |

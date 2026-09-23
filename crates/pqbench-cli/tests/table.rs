@@ -81,6 +81,12 @@ fn table_detects_delta_and_pipes_the_log_to_bytemass() {
         1
     );
     assert_eq!(records.last().unwrap()["event"], "end");
+    let file = records
+        .iter()
+        .find(|record| record["kind"] == "pqbench.table-file")
+        .expect("table-file");
+    assert_eq!(file["stats"]["num_records"], 3000);
+    assert_eq!(file["stats"]["null_count"]["id"], 0);
 
     let measured = pipe(
         &["bytemass", "--json"],
@@ -98,6 +104,65 @@ fn table_detects_delta_and_pipes_the_log_to_bytemass() {
         .expect("bytemass end");
     assert_eq!(end["file_count"], 1);
     assert_eq!(end["num_rows"], 3000);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "pqbench.bytemass-file"
+                && record["stats"]["num_records"] == 3000),
+        "{records:?}"
+    );
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn table_no_stats_keeps_record_counts() {
+    let fixture = delta_fixture();
+    let table = pqbench()
+        .args(["table", "--no-stats", fixture.path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        table.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&table.stderr)
+    );
+    let file = ndjson_records(&table.stdout)
+        .into_iter()
+        .find(|record| record["kind"] == "pqbench.table-file")
+        .expect("table-file");
+    assert_eq!(file["stats"]["num_records"], 3000);
+    assert!(file["stats"].get("min_values").is_none());
+    assert!(file["stats"].get("null_count").is_none());
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn table_include_keeps_one_hive_partition() {
+    let fixture = partitioned_delta_fixture();
+    let table = pqbench()
+        .args([
+            "table",
+            "--include",
+            "part=a/**",
+            fixture.path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        table.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&table.stderr)
+    );
+    let records = ndjson_records(&table.stdout);
+    let files: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.table-file")
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["path"], "part=a/data.parquet");
+    let end = records.last().unwrap();
+    assert_eq!(end["event"], "end");
+    assert_eq!(end["partitions"][0]["num_records"], 3000);
 }
 
 #[cfg(not(feature = "delta"))]
@@ -625,8 +690,59 @@ fn delta_fixture() -> DeltaFixture {
             "partitionValues": {},
             "size": size,
             "modificationTime": 0,
-            "dataChange": true
+            "dataChange": true,
+            "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
         }}
+    ]);
+    let text = commit
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(root.join("_delta_log/00000000000000000000.json"), text).unwrap();
+    DeltaFixture {
+        _directory: directory,
+        path: root,
+    }
+}
+
+#[cfg(feature = "delta")]
+fn partitioned_delta_fixture() -> DeltaFixture {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().to_path_buf();
+    std::fs::create_dir(root.join("_delta_log")).unwrap();
+    let a = root.join("part=a/data.parquet");
+    let b = root.join("part=b/data.parquet");
+    std::fs::create_dir_all(a.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(b.parent().unwrap()).unwrap();
+    std::fs::copy(parquet_fixture(), &a).unwrap();
+    std::fs::copy(parquet_fixture(), &b).unwrap();
+    let size = std::fs::metadata(&a).unwrap().len();
+    let add = |path: &str, part: &str| {
+        json!({"add": {
+            "path": path,
+            "partitionValues": {"part": part},
+            "size": size,
+            "modificationTime": 0,
+            "dataChange": true,
+            "stats": "{\"numRecords\":3000}"
+        }})
+    };
+    let commit = json!([
+        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
+        {"metaData": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}},{\"name\":\"part\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+            "partitionColumns": ["part"],
+            "configuration": {},
+            "createdTime": 0
+        }},
+        add("part=a/data.parquet", "a"),
+        add("part=b/data.parquet", "b")
     ]);
     let text = commit
         .as_array()

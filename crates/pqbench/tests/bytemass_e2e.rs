@@ -78,7 +78,7 @@ async fn viz_collects_measured_rows() {
         .collect();
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
-    viz::write_report(&prefix, &records).unwrap();
+    viz::write_report(&prefix, &records, &[]).unwrap();
     let sqlite = std::fs::read(prefix.with_extension("sqlite")).unwrap();
     assert!(sqlite.starts_with(b"SQLite format 3"));
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();

@@ -36,15 +36,36 @@ pub struct MassRecord {
     pub codec: String,
 }
 
+/// One proxied table-file / object-stat row collected from the bytemass stream.
+#[derive(Debug, Clone)]
+pub struct FileMass {
+    /// Table id from the stream.
+    pub id: String,
+    /// Table-relative path, when known.
+    pub path: String,
+    /// URI or filesystem path that was measured.
+    pub file: String,
+    /// Log or object size in bytes.
+    pub size: u64,
+    /// `numRecords` from Delta add stats.
+    pub num_records: Option<u64>,
+    /// Log size / num_records.
+    pub bytes_per_row: Option<f64>,
+    /// Storage class from HEAD, when known.
+    pub storage_class: Option<String>,
+    /// Hive partition values as `k=v/k=v`.
+    pub partition: String,
+}
+
 /// Write `path.sqlite` and `path.html` from the collected rows.
 ///
 /// # Errors
 /// Fails when there are no rows, the SQLite file cannot be written, or the
 /// HTML page cannot be rendered.
-pub fn write_report(prefix: &Path, rows: &[MassRecord]) -> Result<(), Error> {
+pub fn write_report(prefix: &Path, rows: &[MassRecord], files: &[FileMass]) -> Result<(), Error> {
     let sqlite = prefix.with_extension("sqlite");
     let html_path = prefix.with_extension("html");
-    write_sqlite(&sqlite, rows)?;
+    write_sqlite(&sqlite, rows, files)?;
     let bytes = std::fs::read(&sqlite)
         .map_err(|error| Error(format!("cannot read {}: {error}", sqlite.display())))?;
     let html = render_html(&bytes, &title(rows))?;
@@ -93,7 +114,7 @@ mod tests {
     fn report_writes_sqlite_and_html() {
         let directory = tempfile::tempdir().unwrap();
         let prefix = directory.path().join("masses");
-        write_report(&prefix, &[row("", "a<b>.parquet", "text", 4)]).unwrap();
+        write_report(&prefix, &[row("", "a<b>.parquet", "text", 4)], &[]).unwrap();
 
         let sqlite = std::fs::read(prefix.with_extension("sqlite")).unwrap();
         assert!(sqlite.starts_with(b"SQLite format 3"));
@@ -116,6 +137,7 @@ mod tests {
                 row("sales", "part-0.parquet", "id", 20),
                 row("sales", "part-0.parquet", "sku", 8),
             ],
+            &[],
         )
         .unwrap();
         let conn = rusqlite::Connection::open(&path).unwrap();
@@ -134,9 +156,39 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_round_trips_file_stats() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("masses.sqlite");
+        write_sqlite(
+            &path,
+            &[row("sales", "part-0.parquet", "id", 20)],
+            &[FileMass {
+                id: "sales".into(),
+                path: "year=2024/part-0.parquet".into(),
+                file: "part-0.parquet".into(),
+                size: 40,
+                num_records: Some(10),
+                bytes_per_row: Some(4.0),
+                storage_class: Some("STANDARD".into()),
+                partition: "year=2024".into(),
+            }],
+        )
+        .unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let bytes_per_row: f64 = conn
+            .query_row(
+                "SELECT bytes_per_row FROM files WHERE storage_class = 'STANDARD'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bytes_per_row, 4.0);
+    }
+
+    #[test]
     fn empty_rows_fail() {
         let directory = tempfile::tempdir().unwrap();
-        let error = write_sqlite(&directory.path().join("empty.sqlite"), &[])
+        let error = write_sqlite(&directory.path().join("empty.sqlite"), &[], &[])
             .unwrap_err()
             .to_string();
         assert!(error.contains("no bytemass rows"), "{error}");

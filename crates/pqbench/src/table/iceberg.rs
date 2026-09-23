@@ -109,6 +109,7 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         partition_columns: partition_columns(&metadata),
         log,
         files,
+        partitions: Vec::new(),
         env: request.env.clone(),
     })
 }
@@ -394,6 +395,8 @@ async fn active_files(
                 size,
                 last_modified_time: None,
                 snapshot_version: None,
+                partition_values: BTreeMap::new(),
+                stats: None,
             });
         }
     }

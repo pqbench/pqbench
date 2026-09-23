@@ -135,7 +135,10 @@ fn bytemass(
     exclude_version_before=None,
     exclude_version_after=None,
     exclude_snapshot_before=None,
-    exclude_snapshot_after=None
+    exclude_snapshot_after=None,
+    include=None,
+    exclude=None,
+    no_stats=false
 ))]
 fn table(
     py: Python<'_>,
@@ -148,8 +151,13 @@ fn table(
     exclude_version_after: Option<u64>,
     exclude_snapshot_before: Option<String>,
     exclude_snapshot_after: Option<String>,
+    include: Option<Vec<String>>,
+    exclude: Option<Vec<String>>,
+    no_stats: bool,
 ) -> PyResult<Py<PyAny>> {
     let selection = pqbench::pattern::Selection {
+        include: include.unwrap_or_default(),
+        exclude: exclude.unwrap_or_default(),
         exclude_modified_before,
         exclude_modified_after,
         exclude_version_before,
@@ -170,7 +178,9 @@ fn table(
         pqbench::table::validate_time(time).map_err(|e| PyValueError::new_err(e.to_string()))?;
     }
     let request =
-        pqbench::table::LoadRequest::new(uri, version, aws_env(env)?).with_selection(selection);
+        pqbench::table::LoadRequest::new(uri, version, aws_env(env)?)
+            .with_selection(selection)
+            .with_file_stats(!no_stats);
     let info = py
         .detach(|| block_on(pqbench::table::load(&request)))
         .map_err(runtime)?;
@@ -218,7 +228,7 @@ fn viz(py: Python<'_>, rows: Bound<'_, PyAny>, output: PathBuf) -> PyResult<Py<P
         Some("html" | "htm" | "sqlite" | "db") => output.with_extension(""),
         _ => output,
     };
-    py.detach(|| pqbench::viz::write_report(&prefix, &records))
+    py.detach(|| pqbench::viz::write_report(&prefix, &records, &[]))
         .map_err(runtime)?;
     let mut result = serde_json::Map::new();
     result.insert(

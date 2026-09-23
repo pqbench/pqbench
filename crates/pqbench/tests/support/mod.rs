@@ -69,7 +69,13 @@ impl Fixture {
             "size": fs::metadata(self.path().join(path)).unwrap().len(),
             "modificationTime": 0,
             "dataChange": true,
-            "stats": json!({"numRecords": rows}).to_string()
+            "stats": json!({
+                "numRecords": rows,
+                "minValues": {"id": 0},
+                "maxValues": {"id": rows - 1},
+                "nullCount": {"id": 0},
+                "tightBounds": true
+            }).to_string()
         }})
     }
 

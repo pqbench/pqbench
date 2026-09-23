@@ -121,7 +121,10 @@ fn from_document(input: &str) -> Result<Input, CliError> {
             Record::LakeSource(_) => {
                 return Err("a lake source lists tables; pass it to `pqbench lake` first".into());
             }
-            Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+            Record::BytemassBegin
+            | Record::BytemassFile(_)
+            | Record::BytemassRow { .. }
+            | Record::BytemassEnd => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
         }

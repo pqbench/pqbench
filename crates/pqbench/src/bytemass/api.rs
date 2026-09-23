@@ -47,6 +47,9 @@ pub struct MassRow {
     /// Object ETag or version, when the store reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
+    /// Storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
 }
 
 /// Measure the per-column byte masses of Parquet files.

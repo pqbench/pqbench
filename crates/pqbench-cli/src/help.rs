@@ -101,8 +101,9 @@ Works on compressed files (HEAD + ranged GETs on a URI).
 Inputs: parquet paths, quoted globs, s3://, a pqbench.table or loaded
 pqbench.lake, or '-' / stdin. A lake must go through `pqbench table` first.
 
-A pipe streams one `pqbench.bytemass-row` per column chunk. A TTY needs
-`-o`. `--json` is the same stream. Pipe the stream to `viz`.
+A pipe streams `pqbench.bytemass-file` (table stats as received) then one
+`pqbench.bytemass-row` per column chunk. A TTY needs `-o`. `--json` is the
+same stream. Pipe the stream to `viz`.
 
 --include / --exclude / --sample apply to file partition paths.";
 
@@ -138,7 +139,10 @@ path.
 --version is a Delta commit or Iceberg snapshot id (default: latest). Do
 not combine it with --exclude-snapshot-*. --exclude-modified-* and
 --exclude-version-* are Delta file fields (Iceberg fails). --exclude-snapshot-*
-is snapshot creation time (RFC3339 UTC) on both formats.
+is snapshot creation time (RFC3339 UTC) on both formats. --include hive
+prefixes (`year=2024/**`) are pushed into the Delta file listing.
+`--no-stats` keeps num_records / bytes_per_row and drops min/max/null maps.
+Files are written as they are resolved.
 
 Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).";
 
@@ -146,6 +150,7 @@ pub const TABLE_AFTER: &str = "\
 Examples:
   pqbench table ./delta-table -o table.ndjson.zst
   pqbench table ./delta-table | pqbench bytemass
+  pqbench table ./delta-table --include 'year=2024/**' --no-stats
   pqbench table ./iceberg-table --exclude-snapshot-after 2024-01-01T00:00:00Z
   pqbench table ./delta-table --exclude-version-before 10
 
@@ -211,10 +216,10 @@ See also:
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into SQLite and a static HTML page";
 
 pub const VIZ_LONG_ABOUT: &str = "\
-Read `pqbench.bytemass-row` lines and write `PREFIX.sqlite` plus
-`PREFIX.html`. The page loads sql.js and d3 from a CDN, queries the
-embedded database, and draws a column treemap. Does not measure files.
-`-o PREFIX` is required.";
+Read `pqbench.bytemass-file` and `pqbench.bytemass-row` lines and write
+`PREFIX.sqlite` plus `PREFIX.html`. The page loads sql.js and d3 from a
+CDN, queries the embedded database, and draws column and file treemaps.
+Does not measure files. `-o PREFIX` is required.";
 
 pub const VIZ_AFTER: &str = "\
 Examples:

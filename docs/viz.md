@@ -17,7 +17,7 @@ short summary. The HTML file embeds the database; open it without a server.
 ```mermaid
 flowchart LR
     files[Parquet / table / lake] --> bytemass[pqbench bytemass]
-    bytemass --> stream["pqbench.bytemass-row lines"]
+    bytemass --> stream["pqbench.bytemass-file + row lines"]
     stream --> viz[pqbench viz]
     viz --> sqlite[report.sqlite]
     viz --> html[report.html]
@@ -25,7 +25,13 @@ flowchart LR
 
 ## Stream
 
-Each measured column is one line:
+`bytemass` first writes the table-file stats it received:
+
+```json
+{"kind":"pqbench.bytemass-file","id":"sales/orders","path":"year=2024/part-0.parquet","file":"s3://…/part-0.parquet","size":1200,"stats":{"num_records":3000,"bytes_per_row":0.4}}
+```
+
+Each measured column is then one line:
 
 ```json
 {"kind":"pqbench.bytemass-row","id":"sales/orders","file":"part-0.parquet","size":1200,"num_rows":3000,"column":"text","compressed_bytes":80,"uncompressed_bytes":240,"codec":"ZSTD"}
@@ -49,14 +55,30 @@ Each measured column is one line:
 | `uncompressed_bytes` | encoded bytes before compression |
 | `codec` | codec recorded in the footer |
 
+`files` is one row per proxied table file (empty when the stream had only
+bare parquet paths):
+
+| column | meaning |
+| --- | --- |
+| `id` | table id from the stream |
+| `path` | table-relative path |
+| `file` | URI or filesystem path |
+| `size` | log or object size |
+| `num_records` | Delta `numRecords`, when present |
+| `bytes_per_row` | log size / num_records |
+| `storage_class` | object tier from HEAD, when known |
+| `partition` | hive `k=v/k=v` |
+
 ```sh
 sqlite3 report.sqlite 'SELECT column_path, SUM(compressed_bytes) FROM masses GROUP BY column_path'
+sqlite3 report.sqlite 'SELECT partition, SUM(size), SUM(num_records) FROM files GROUP BY partition'
 ```
 
 ## HTML
 
 The page loads [sql.js](https://sql.js.org) and the d3 modules it uses
 (hierarchy, scale, selection) from a CDN. JavaScript opens the embedded
-SQLite file, groups rows by `id`, and draws a treemap of on-disk bytes per
-row. Several tables become a list plus one treemap each. No build step, no
+SQLite file, groups rows by `id`, and draws a column treemap of on-disk
+bytes per row plus a file/partition treemap when `files` is populated.
+Several tables become a list plus one pair of maps each. No build step, no
 npm, no local server.

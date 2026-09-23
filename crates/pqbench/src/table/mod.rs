@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 
 use crate::object_store;
@@ -34,6 +35,14 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl Error {
+    /// Wrap a message as a table error.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
 
 /// On-disk table formats `pqbench table` can name. Detection runs before load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +106,55 @@ pub struct TableFile {
     /// Snapshot version that added this file, when the log records one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_version: Option<u64>,
+    /// Partition values from the Delta add action. Empty when unpartitioned.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub partition_values: BTreeMap<String, Option<String>>,
+    /// Statistics from the Delta `add.stats` JSON. Absent when the log has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<FileStats>,
+}
+
+/// Statistics copied from a Delta add action. Values are the log's claim.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
+pub struct FileStats {
+    /// `numRecords` from `add.stats`.
+    pub num_records: u64,
+    /// On-disk file size divided by [`Self::num_records`]. Absent at zero rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_row: Option<f64>,
+    /// Per-column minimum from `minValues`, JSON as stored (nested structs stay
+    /// objects).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub min_values: BTreeMap<String, Value>,
+    /// Per-column maximum from `maxValues`, JSON as stored.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub max_values: BTreeMap<String, Value>,
+    /// Per-column `nullCount`. Nested struct columns are flattened to dotted
+    /// keys (`struct.inner.x`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub null_count: BTreeMap<String, u64>,
+    /// `tightBounds` when the log sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tight_bounds: Option<bool>,
+}
+
+/// Byte mass of one partition, summed from the active files' log statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
+pub struct PartitionMass {
+    /// Partition column values. Empty for an unpartitioned table.
+    pub values: BTreeMap<String, Option<String>>,
+    /// Active files in this partition.
+    pub file_count: usize,
+    /// Sum of log file sizes, in bytes.
+    pub size: u64,
+    /// Sum of `numRecords` when every file in the partition has statistics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_records: Option<u64>,
+    /// [`Self::size`] divided by [`Self::num_records`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_row: Option<f64>,
 }
 
 impl TableFile {
@@ -109,6 +167,8 @@ impl TableFile {
             size,
             last_modified_time: None,
             snapshot_version: None,
+            partition_values: BTreeMap::new(),
+            stats: None,
         }
     }
 }
@@ -140,6 +200,10 @@ pub struct TableInfo {
     pub log: Vec<LogCommit>,
     /// Active data files after replaying the log to `snapshot_version`.
     pub files: Vec<TableFile>,
+    /// Per-partition totals from Delta add statistics. Empty for Iceberg and
+    /// for a Delta snapshot with no active files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partitions: Vec<PartitionMass>,
     /// Storage options from the producer. A pipe to `bytemass` reuses them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
@@ -168,6 +232,7 @@ impl TableInfo {
             partition_columns,
             log,
             files,
+            partitions: Vec::new(),
             env,
         }
     }
@@ -192,6 +257,11 @@ pub struct LoadRequest {
     pub env: BTreeMap<String, String>,
     /// Exclude files or snapshots by time and version.
     pub selection: Selection,
+    /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
+    pub file_stats: bool,
+    /// When false, do not retain active files on the returned document.
+    /// [`visit_load`] still emits each file; partition totals are kept.
+    pub collect_files: bool,
 }
 
 impl LoadRequest {
@@ -207,6 +277,8 @@ impl LoadRequest {
             version,
             env,
             selection: Selection::default(),
+            file_stats: true,
+            collect_files: true,
         }
     }
 
@@ -216,6 +288,35 @@ impl LoadRequest {
         self.selection = selection;
         self
     }
+
+    /// Omit heavy min/max/null maps from each file.
+    #[must_use]
+    pub fn with_file_stats(mut self, file_stats: bool) -> Self {
+        self.file_stats = file_stats;
+        self
+    }
+
+    /// Drop the file list from the returned document after visiting each file.
+    #[must_use]
+    pub fn with_collect_files(mut self, collect_files: bool) -> Self {
+        self.collect_files = collect_files;
+        self
+    }
+}
+
+/// One step of [`visit_load`]. `BEGIN` is the snapshot and log; `FILE` is
+/// each active file as it is resolved.
+pub enum LoadEvent<'a> {
+    /// Snapshot header and log. `files` is empty.
+    BEGIN {
+        /// Table document without active files.
+        info: &'a TableInfo,
+    },
+    /// One active file, in log order.
+    FILE {
+        /// File just resolved from the snapshot.
+        file: &'a TableFile,
+    },
 }
 
 /// Name the table format from well-known markers. Does not load the log.
@@ -247,29 +348,56 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
+    visit_load(request, |_| Ok(())).await
+}
+
+/// Load a table, calling `visit` as the snapshot and each file are known.
+///
+/// Delta files are visited from the add-action stream. Iceberg files are
+/// visited after the manifests are read. When [`LoadRequest::collect_files`]
+/// is false the returned document keeps partition totals and drops `files`.
+///
+/// # Errors
+/// Same as [`load`].
+pub async fn visit_load(
+    request: &LoadRequest,
+    mut visit: impl FnMut(LoadEvent<'_>) -> Result<(), Error>,
+) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     let mut info = match format {
-        TableFormat::DELTA => delta::load(request).await?,
-        TableFormat::ICEBERG => load_iceberg(request).await?,
+        TableFormat::DELTA => delta::visit_load(request, &mut visit).await?,
+        TableFormat::ICEBERG => visit_iceberg(request, &mut visit).await?,
         TableFormat::UNSPECIFIED => return Err(Error("unrecognized table format".into())),
     };
     info.selection = request.selection.clone();
-    apply_file_selection(&mut info)?;
+    if request.collect_files {
+        apply_file_selection(&mut info)?;
+        if info.format == TableFormat::DELTA {
+            info.partitions = partition_masses(&info.files)?;
+        }
+    }
     Ok(info)
 }
 
-/// Drop files excluded by modified time or add version.
+/// Drop files excluded by path, modified time, or add version.
 ///
 /// # Errors
 /// Fails when a filter is set and a file does not record that field, or when
 /// nothing remains.
 pub fn apply_file_selection(info: &mut TableInfo) -> Result<(), Error> {
     let selection = &info.selection;
-    if !selection.modified_time() && !selection.add_version() {
+    let path_filter = !selection.include.is_empty() || !selection.exclude.is_empty();
+    if !path_filter && !selection.modified_time() && !selection.add_version() {
         return Ok(());
     }
     let mut kept = Vec::new();
     for file in info.files.drain(..) {
+        if path_filter
+            && !crate::pattern::keep(&file.path, &selection.include, &selection.exclude)
+                .map_err(|error| Error(error.to_string()))?
+        {
+            continue;
+        }
         if !keep_file(&file, selection)? {
             continue;
         }
@@ -282,7 +410,82 @@ pub fn apply_file_selection(info: &mut TableInfo) -> Result<(), Error> {
     Ok(())
 }
 
-fn keep_file(file: &TableFile, selection: &Selection) -> Result<bool, Error> {
+/// Sum log sizes and `numRecords` by partition value.
+///
+/// `num_records` and `bytes_per_row` are set only when every file in the
+/// partition has add statistics. A zero record count leaves `bytes_per_row`
+/// unset.
+///
+/// # Errors
+/// Fails when a partition's record count overflows `u64`.
+pub fn partition_masses(files: &[TableFile]) -> Result<Vec<PartitionMass>, Error> {
+    let mut groups = BTreeMap::new();
+    for file in files {
+        add_partition_total(&mut groups, file)?;
+    }
+    Ok(finish_partition_masses(groups))
+}
+
+pub(crate) fn add_partition_total(
+    groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+    file: &TableFile,
+) -> Result<(), Error> {
+    let entry = groups
+        .entry(file.partition_values.clone())
+        .or_insert(PartitionTotals {
+            file_count: 0,
+            size: 0,
+            num_records: Some(0),
+        });
+    entry.file_count += 1;
+    entry.size = entry
+        .size
+        .checked_add(file.size)
+        .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.path)))?;
+    entry.num_records = match (entry.num_records, file.stats.as_ref()) {
+        (Some(sum), Some(stats)) => Some(sum.checked_add(stats.num_records).ok_or_else(|| {
+            Error(format!(
+                "partition record total overflowed for {}",
+                file.path
+            ))
+        })?),
+        _ => None,
+    };
+    Ok(())
+}
+
+pub(crate) fn finish_partition_masses(
+    groups: BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+) -> Vec<PartitionMass> {
+    groups
+        .into_iter()
+        .map(|(values, totals)| PartitionMass {
+            values,
+            file_count: totals.file_count,
+            size: totals.size,
+            bytes_per_row: totals
+                .num_records
+                .and_then(|records| bytes_per_row(totals.size, records)),
+            num_records: totals.num_records,
+        })
+        .collect()
+}
+
+pub(crate) struct PartitionTotals {
+    file_count: usize,
+    size: u64,
+    num_records: Option<u64>,
+}
+
+pub(crate) fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
+    if num_records == 0 {
+        None
+    } else {
+        Some(size as f64 / num_records as f64)
+    }
+}
+
+pub(crate) fn keep_file(file: &TableFile, selection: &Selection) -> Result<bool, Error> {
     if let Some(before) = &selection.exclude_modified_before {
         let time = file_modified_millis(file)?;
         if time < object_store::parse_rfc3339_millis(before).map_err(|e| Error(e.to_string()))? {
@@ -354,6 +557,28 @@ pub(crate) fn keep_snapshot_time(millis: i64, selection: &Selection) -> Result<b
         }
     }
     Ok(true)
+}
+
+async fn visit_iceberg(
+    request: &LoadRequest,
+    visit: &mut impl FnMut(LoadEvent<'_>) -> Result<(), Error>,
+) -> Result<TableInfo, Error> {
+    let mut info = load_iceberg(request).await?;
+    info.selection = request.selection.clone();
+    apply_file_selection(&mut info)?;
+    let files = std::mem::take(&mut info.files);
+    visit(LoadEvent::BEGIN { info: &info })?;
+    let mut groups = BTreeMap::new();
+    for file in &files {
+        add_partition_total(&mut groups, file)?;
+        visit(LoadEvent::FILE { file })?;
+    }
+    if request.collect_files {
+        info.files = files;
+    } else {
+        info.partitions = finish_partition_masses(groups);
+    }
+    Ok(info)
 }
 
 async fn load_iceberg(request: &LoadRequest) -> Result<TableInfo, Error> {

@@ -38,6 +38,8 @@ pub(crate) struct ObjectStat {
     pub last_modified_time: Option<String>,
     /// Creation time as RFC3339 UTC, when the store reports one.
     pub creation_time: Option<String>,
+    /// Storage class or tier, when HEAD/GET attributes report one.
+    pub storage_class: Option<String>,
 }
 
 /// A random-access handle to a single object (local or remote).
@@ -77,12 +79,26 @@ impl ObjectReader {
             Source::Local(path) => stat_local(path),
             #[cfg(feature = "aws")]
             Source::Remote(store, location) => {
-                let metadata = store.head(location).await.map_err(remote_error)?;
+                let result = store
+                    .get_opts(
+                        location,
+                        ::object_store::GetOptions {
+                            head: true,
+                            ..::object_store::GetOptions::default()
+                        },
+                    )
+                    .await
+                    .map_err(remote_error)?;
+                let metadata = result.meta;
                 Ok(ObjectStat {
                     size: metadata.size,
                     identity: metadata.e_tag.or(metadata.version),
                     last_modified_time: unix_timestamp_rfc3339(metadata.last_modified.timestamp()),
                     creation_time: None,
+                    storage_class: result
+                        .attributes
+                        .get(&::object_store::Attribute::StorageClass)
+                        .map(|value| value.as_ref().to_string()),
                 })
             }
         }
@@ -289,6 +305,7 @@ pub(crate) fn stat_local(path: &Path) -> Result<ObjectStat, Error> {
         identity: None,
         last_modified_time: metadata.modified().ok().and_then(system_time_rfc3339),
         creation_time: metadata.created().ok().and_then(system_time_rfc3339),
+        storage_class: None,
     })
 }
 

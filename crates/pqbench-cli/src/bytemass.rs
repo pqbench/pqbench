@@ -191,7 +191,10 @@ async fn queue_record(
                     .into(),
             );
         }
-        Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+        Record::BytemassBegin
+        | Record::BytemassFile(_)
+        | Record::BytemassRow { .. }
+        | Record::BytemassEnd => {
             return Err("a bytemass stream goes to `pqbench viz`".into());
         }
         Record::LakeBegin | Record::LakeEnd => {}
@@ -275,6 +278,7 @@ fn emit_measured(
     stats: &mut MassStats,
 ) -> Result<(), CliError> {
     let measured = done.map_err(|error| error.to_string())??;
+    write_file(emit, &measured.id, &measured.file, &measured.rows)?;
     for row in &measured.rows {
         if measured.file.size != 0 && row.size != measured.file.size {
             return Err(format!(
@@ -349,6 +353,35 @@ async fn measure(
     finish_stream(emit, &stats, args.output.as_deref())
 }
 
+fn write_file(
+    emit: &mut Emit,
+    id: &str,
+    file: &TableFile,
+    rows: &[bytemass::MassRow],
+) -> Result<(), CliError> {
+    let object = rows.first();
+    emit.write(&FileRecord {
+        kind: "pqbench.bytemass-file",
+        id,
+        path: &file.path,
+        file: &file.uri,
+        size: if file.size != 0 {
+            file.size
+        } else {
+            object.map(|row| row.size).unwrap_or(0)
+        },
+        last_modified_time: file
+            .last_modified_time
+            .as_deref()
+            .or_else(|| object.and_then(|row| row.last_modified_time.as_deref())),
+        creation_time: object.and_then(|row| row.creation_time.as_deref()),
+        etag: object.and_then(|row| row.etag.as_deref()),
+        storage_class: object.and_then(|row| row.storage_class.as_deref()),
+        partition_values: &file.partition_values,
+        stats: file.stats.as_ref(),
+    })
+}
+
 fn write_row(
     emit: &mut Emit,
     id: &str,
@@ -415,6 +448,31 @@ struct BeginRecord {
     kind: &'static str,
     version: u32,
     event: &'static str,
+}
+
+#[derive(Serialize)]
+struct FileRecord<'a> {
+    kind: &'static str,
+    id: &'a str,
+    path: &'a str,
+    file: &'a str,
+    size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_modified_time: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    creation_time: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    etag: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_class: Option<&'a str>,
+    #[serde(skip_serializing_if = "map_empty")]
+    partition_values: &'a std::collections::BTreeMap<String, Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stats: Option<&'a pqbench::table::FileStats>,
+}
+
+fn map_empty(values: &&std::collections::BTreeMap<String, Option<String>>) -> bool {
+    values.is_empty()
 }
 
 #[derive(Serialize)]

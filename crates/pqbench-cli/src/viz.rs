@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use pqbench::bytemass::MassRow;
-use pqbench::viz::{self, MassRecord};
+use pqbench::viz::{self, FileMass, MassRecord};
 
 use crate::document::{self, Record};
 use crate::CliError;
@@ -33,20 +33,22 @@ pub(crate) fn run(args: &VizArgs) -> Result<(), CliError> {
     } else {
         document::open_file(Path::new(input))?
     };
-    let rows = collect(reader)?;
-    viz::write_report(&prefix, &rows)?;
+    let (rows, files) = collect(reader)?;
+    viz::write_report(&prefix, &rows, &files)?;
     if std::io::stdout().is_terminal() {
-        print!("{}", summary(&prefix, &rows));
+        print!("{}", summary(&prefix, &rows, &files));
     }
     Ok(())
 }
 
-fn collect(reader: impl Read) -> Result<Vec<MassRecord>, CliError> {
+fn collect(reader: impl Read) -> Result<(Vec<MassRecord>, Vec<FileMass>), CliError> {
     let mut rows = Vec::new();
+    let mut files = Vec::new();
     let mut begun = false;
     document::visit_records(reader, |record| {
         match record {
             Record::BytemassBegin => begun = true,
+            Record::BytemassFile(file) => files.push(file_mass(file)),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
             Record::BytemassEnd => {}
             Record::Table(_)
@@ -76,7 +78,28 @@ fn collect(reader: impl Read) -> Result<Vec<MassRecord>, CliError> {
     if rows.is_empty() {
         return Err("bytemass stream has no rows".into());
     }
-    Ok(rows)
+    Ok((rows, files))
+}
+
+fn file_mass(file: document::BytemassFile) -> FileMass {
+    FileMass {
+        id: file.id,
+        path: file.path,
+        file: file.file,
+        size: file.size,
+        num_records: file.stats.as_ref().map(|stats| stats.num_records),
+        bytes_per_row: file.stats.as_ref().and_then(|stats| stats.bytes_per_row),
+        storage_class: file.storage_class,
+        partition: hive_partition(&file.partition_values),
+    }
+}
+
+fn hive_partition(values: &std::collections::BTreeMap<String, Option<String>>) -> String {
+    values
+        .iter()
+        .map(|(key, value)| format!("{key}={}", value.as_deref().unwrap_or("null")))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn mass_record(id: String, row: MassRow) -> MassRecord {
@@ -99,12 +122,17 @@ fn prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn summary(prefix: &Path, rows: &[MassRecord]) -> String {
-    let files = rows
+fn summary(prefix: &Path, rows: &[MassRecord], files: &[FileMass]) -> String {
+    let measured = rows
         .iter()
         .map(|row| row.file.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len();
+    let files = if files.is_empty() {
+        measured
+    } else {
+        files.len()
+    };
     format!(
         "files: {files}\ncolumns: {}\noutput: {}\noutput: {}\n",
         rows.len(),

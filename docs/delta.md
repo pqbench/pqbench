@@ -64,13 +64,19 @@ feature flag lives only in `pqbench::table::delta`.
 ## Document
 
 `pqbench.table` version 1 names the format, the JSON commits that remain on
-disk, and the active files (path, URI, log size, and log modification time /
-add version when the commit records them). Exclude files with
-`--exclude-modified-before/after` and `--exclude-version-before/after`, or
-pick a snapshot by creation time with `--exclude-snapshot-before/after`
-(not together with `--version`). `bytemass` then streams one
-`pqbench.bytemass-row` per column chunk, including object times when the
-store reports them. On a pipe that is one JSON object per line, each tagged with a table `id`:
+disk, and the active files (path, URI, log size, log modification time /
+add version when recorded, partition values, and Delta `add.stats`).
+`--include year=2024/**` is pushed into the Delta listing; other globs and
+`--exclude-*` run in the file loop so excluded files are never retained.
+`--no-stats` keeps `num_records` / `bytes_per_row` and drops the min/max/null
+maps. Nested `nullCount` objects are flattened to dotted keys; a malformed
+stats blob is omitted rather than failing the table. `end` carries per-partition
+totals. Files are written as they are resolved.
+
+`bytemass` proxies each `pqbench.table-file` as `pqbench.bytemass-file`
+(stats as received, plus object identity / storage class when HEAD reports
+them) and then one `pqbench.bytemass-row` per column chunk. `viz` stores
+both in SQLite. On a pipe that is one JSON object per line, each tagged with a table `id`:
 `begin`, then `pqbench.table-log` commits, then `pqbench.table-file` rows,
 then `end`. Lines from different ids may mix. `lake` emits `pqbench.table-ref` lines; `table --concurrency` loads them as
 they arrive. `bytemass --concurrency` measures files as they arrive.

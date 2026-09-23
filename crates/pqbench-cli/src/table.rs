@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use pqbench::pattern::Selection;
-use pqbench::table::{self, LoadRequest, TableInfo};
+use pqbench::table::{self, LoadEvent, LoadRequest, TableInfo};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -39,6 +39,15 @@ pub(crate) struct TableArgs {
     /// drop snapshots created after this RFC3339 UTC instant
     #[arg(long, value_name = "TIME")]
     exclude_snapshot_after: Option<String>,
+    /// keep files whose partition path matches this Unix glob (repeatable)
+    #[arg(long, value_name = "GLOB")]
+    include: Vec<String>,
+    /// drop files whose partition path matches this Unix glob (repeatable)
+    #[arg(long, value_name = "GLOB")]
+    exclude: Vec<String>,
+    /// omit min/max/null maps (keep num_records and bytes_per_row)
+    #[arg(long)]
+    no_stats: bool,
     /// zstd NDJSON stream (required on a terminal)
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
@@ -68,18 +77,23 @@ async fn load_one(
     env: BTreeMap<String, String>,
     args: &TableArgs,
 ) -> Result<(), CliError> {
-    let info = table::load(
-        &LoadRequest::new(uri.clone(), args.version, env).with_selection(selection(args)?),
-    )
-    .await?;
+    let request = load_request(uri.clone(), env, args)?.with_collect_files(false);
     let mut emit = Emit::open("table", args.output.as_deref())?;
-    document::write_table_records(&mut emit, &uri, &info)?;
-    emit.finish(&summary(
-        1,
-        info.files.len(),
-        file_bytes(&info),
-        args.output.as_deref(),
-    ))
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    let info = table::visit_load(&request, |event| match event {
+        LoadEvent::BEGIN { info } => document::write_table_begin(&mut emit, &uri, info)
+            .map_err(|error| table::Error::new(error.to_string())),
+        LoadEvent::FILE { file } => {
+            files += 1;
+            bytes += file.size;
+            document::write_table_file(&mut emit, &uri, file)
+                .map_err(|error| table::Error::new(error.to_string()))
+        }
+    })
+    .await?;
+    document::write_table_end(&mut emit, &uri, &info.partitions)?;
+    emit.finish(&summary(1, files, bytes, args.output.as_deref()))
 }
 
 async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
@@ -112,6 +126,7 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
     let concurrency = args.concurrency.get();
     let version = args.version;
     let selected = selection(args)?;
+    let file_stats = !args.no_stats;
 
     loop {
         tokio::select! {
@@ -135,6 +150,7 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
                             concurrency,
                             version,
                             selected.clone(),
+                            file_stats,
                         )
                         .await?;
                     }
@@ -159,6 +175,7 @@ async fn queue_record(
     concurrency: usize,
     version: Option<u64>,
     selected: Selection,
+    file_stats: bool,
 ) -> Result<(), CliError> {
     match record {
         Record::TableRef(table_ref) => {
@@ -171,6 +188,7 @@ async fn queue_record(
                 concurrency,
                 version,
                 selected,
+                file_stats,
                 table_ref,
             )
             .await
@@ -186,6 +204,7 @@ async fn queue_record(
                     concurrency,
                     version,
                     selected.clone(),
+                    file_stats,
                     TableRef {
                         id: uri.clone(),
                         uri,
@@ -200,6 +219,9 @@ async fn queue_record(
             if !selected.is_default() {
                 info.selection = selected;
                 table::apply_file_selection(&mut info)?;
+            }
+            if info.format == pqbench::table::TableFormat::DELTA {
+                info.partitions = table::partition_masses(&info.files)?;
             }
             *tables += 1;
             *files += info.files.len();
@@ -217,6 +239,7 @@ async fn queue_record(
                     concurrency,
                     version,
                     selected.clone(),
+                    file_stats,
                     TableRef {
                         id: table.name,
                         uri: table.uri,
@@ -234,9 +257,10 @@ async fn queue_record(
         Record::Begin(_) | Record::Log { .. } | Record::File { .. } | Record::End { .. } => {
             Err("a loaded table stream goes to `pqbench bytemass`, not `pqbench table`".into())
         }
-        Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
-            Err("a bytemass stream goes to `pqbench viz`".into())
-        }
+        Record::BytemassBegin
+        | Record::BytemassFile(_)
+        | Record::BytemassRow { .. }
+        | Record::BytemassEnd => Err("a bytemass stream goes to `pqbench viz`".into()),
     }
 }
 
@@ -250,6 +274,7 @@ async fn spawn_ref(
     concurrency: usize,
     version: Option<u64>,
     selected: Selection,
+    file_stats: bool,
     table_ref: TableRef,
 ) -> Result<(), CliError> {
     while set.len() >= concurrency {
@@ -259,7 +284,9 @@ async fn spawn_ref(
     }
     set.spawn(async move {
         let info = table::load(
-            &LoadRequest::new(table_ref.uri, version, table_ref.env).with_selection(selected),
+            &LoadRequest::new(table_ref.uri, version, table_ref.env)
+                .with_selection(selected)
+                .with_file_stats(file_stats),
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -288,6 +315,8 @@ fn file_bytes(info: &TableInfo) -> u64 {
 
 fn selection(args: &TableArgs) -> Result<Selection, CliError> {
     let selected = Selection {
+        include: args.include.clone(),
+        exclude: args.exclude.clone(),
         exclude_modified_before: args.exclude_modified_before.clone(),
         exclude_modified_after: args.exclude_modified_after.clone(),
         exclude_version_before: args.exclude_version_before,
@@ -308,6 +337,16 @@ fn selection(args: &TableArgs) -> Result<Selection, CliError> {
         table::validate_time(time)?;
     }
     Ok(selected)
+}
+
+fn load_request(
+    uri: String,
+    env: BTreeMap<String, String>,
+    args: &TableArgs,
+) -> Result<LoadRequest, CliError> {
+    Ok(LoadRequest::new(uri, args.version, env)
+        .with_selection(selection(args)?)
+        .with_file_stats(!args.no_stats))
 }
 
 fn summary(tables: usize, files: usize, bytes: u64, output: Option<&std::path::Path>) -> String {

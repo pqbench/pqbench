@@ -82,6 +82,7 @@ pub(super) async fn measure_inputs(
                 last_modified_time: stat.last_modified_time.clone(),
                 creation_time: stat.creation_time.clone(),
                 etag: stat.identity.clone(),
+                storage_class: stat.storage_class.clone(),
                 ..MassRow::default()
             });
         }

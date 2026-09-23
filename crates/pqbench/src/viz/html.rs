@@ -125,7 +125,38 @@ ids.forEach((id, index) => {
   section.appendChild(svg);
   maps.appendChild(section);
   draw(select(svg), tree(name, columns));
+  const files = [];
+  try {
+    const fileStmt = db.prepare(
+      "SELECT path, file, size, num_records, bytes_per_row, storage_class, partition FROM files WHERE id = ?"
+    );
+    fileStmt.bind([id]);
+    while (fileStmt.step()) files.push(fileStmt.getAsObject());
+    fileStmt.free();
+  } catch (error) {
+    return;
+  }
+  if (files.length === 0) return;
+  const fileHeading = document.createElement("h2");
+  fileHeading.textContent = name + " files";
+  const fileSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  section.appendChild(fileHeading);
+  section.appendChild(fileSvg);
+  draw(select(fileSvg), fileTree(name, files));
 });
+function fileTree(name, files) {
+  const root = branch(name);
+  for (const file of files) {
+    const parts = [];
+    if (file.partition) parts.push(...String(file.partition).split("/").filter(Boolean));
+    const leaf = String(file.path || file.file).split("/").pop() || file.file;
+    parts.push(leaf);
+    const value = file.bytes_per_row || file.size || 0;
+    insert(root, parts, value);
+  }
+  recompute(root);
+  return root;
+}
 "##;
 
 fn html_escape(text: &str) -> String {
