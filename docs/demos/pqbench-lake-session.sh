@@ -12,10 +12,10 @@ prompt() {
     sleep 1
 }
 
-prompt "pqbench lake docker/e2e-lakehouse"
-pqbench lake docker/e2e-lakehouse
+prompt "pqbench lake docker/e2e-lakehouse -o /tmp/pqbench-demo-lake.ndjson.zst"
+pqbench lake docker/e2e-lakehouse -o /tmp/pqbench-demo-lake.ndjson.zst
 sleep 2
 
 prompt "pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --json"
-pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --json
+pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --json | cat
 sleep 2
