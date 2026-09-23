@@ -31,13 +31,21 @@ named columns for the next pass.
 
 Each `pqbench.profile-column` line carries:
 
-- NDV, NDV ratio, null fraction, entropy
-- top values
-- numeric min/max/mean/stddev/quantiles and adjacent deltas
-- string length percentiles, common prefix/suffix, adjacent prefix
-- adjacent equality, run-length mean, monotonicity
+- NDV, NDV ratio, null fraction, entropy, singleton count
+- top values; full `frequency` when NDV ≤ 32
+- numeric min/max/range, mean/stddev/skew, quantiles
+- adjacent absolute-delta mean/p50/p90/p99/max and zero fraction
+- string length mean/min/p50/p90/p99/max, common prefix/suffix,
+  adjacent prefix
+- alphabet fractions (ASCII, digit, letter, hex, whitespace) and
+  unique code points
+- adjacent equality, run-length mean/p50/p90/p99/max, monotonicity
 - observed patterns: `uuid`, `integer_string`, `decimal_string`,
   `timestamp_string`, `ip`, `url`, `json`, `enum_like`
+
+Nested structs explode to `parent.child` leaves. Lists add
+`name.list_length` and `name.first` (then explode if that value is a
+struct). Maps with more than 32 keys stay as `name.map_length`.
 
 The begin record lists `capabilities` so a caller does not have to
 memorize flags.

@@ -586,6 +586,19 @@ fn field_value(field: &Field, name: &str) -> Result<Value, Error> {
             .map(Value::Number)
             .ok_or_else(|| Error(format!("column `{name}` is not a finite float"))),
         Field::Str(value) => Ok(Value::String(value.clone())),
+        Field::Bytes(value) => match std::str::from_utf8(value.data()) {
+            Ok(text) => Ok(Value::String(text.to_string())),
+            Err(_) => Ok(Value::String(hex_prefix(value.data()))),
+        },
+        Field::Date(value) => Ok(Value::from(*value)),
+        Field::TimeMillis(value) => Ok(Value::from(*value)),
+        Field::TimeMicros(value) => Ok(Value::from(*value)),
+        Field::TimestampMillis(value) => Ok(Value::from(*value)),
+        Field::TimestampMicros(value) => Ok(Value::from(*value)),
+        Field::Float16(value) => serde_json::Number::from_f64(f64::from(*value))
+            .map(Value::Number)
+            .ok_or_else(|| Error(format!("column `{name}` is not a finite float"))),
+        Field::Decimal(value) => Ok(Value::String(decimal_text(value))),
         Field::Group(row) => {
             let mut object = Map::new();
             for (child, field) in row.get_column_iter() {
@@ -593,8 +606,58 @@ fn field_value(field: &Field, name: &str) -> Result<Value, Error> {
             }
             Ok(Value::Object(object))
         }
-        other => Ok(Value::String(other.to_string())),
+        Field::ListInternal(list) => {
+            let mut items = Vec::new();
+            for field in list.elements() {
+                items.push(field_value(field, name)?);
+            }
+            Ok(Value::Array(items))
+        }
+        Field::MapInternal(map) => {
+            let mut object = Map::new();
+            for (key, field) in map.entries() {
+                let key = match field_value(key, name)? {
+                    Value::String(text) => text,
+                    other => other.to_string(),
+                };
+                object.insert(key, field_value(field, name)?);
+            }
+            Ok(Value::Object(object))
+        }
     }
+}
+
+fn decimal_text(value: &parquet::data_type::Decimal) -> String {
+    let bytes = value.data();
+    let mut padded = [0u8; 16];
+    let take = bytes.len().min(16);
+    let start = 16 - take;
+    if take > 0 && bytes[bytes.len() - take] & 0x80 != 0 {
+        padded.fill(0xff);
+    }
+    padded[start..].copy_from_slice(&bytes[bytes.len() - take..]);
+    let unscaled = i128::from_be_bytes(padded);
+    let scale = value.scale();
+    if scale <= 0 {
+        return unscaled.to_string();
+    }
+    let scale = scale as usize;
+    let digits = unscaled.unsigned_abs().to_string();
+    let sign = if unscaled < 0 { "-" } else { "" };
+    if digits.len() <= scale {
+        format!("{sign}0.{digits:0>scale$}")
+    } else {
+        let (whole, frac) = digits.split_at(digits.len() - scale);
+        format!("{sign}{whole}.{frac}")
+    }
+}
+
+fn hex_prefix(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn merge_columns(columns: &mut Vec<String>, incoming: &[String], rows: &mut [Vec<Value>]) {

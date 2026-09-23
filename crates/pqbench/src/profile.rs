@@ -83,18 +83,31 @@ pub struct ColumnProfile {
     pub entropy: f64,
     /// Most frequent non-null values.
     pub top_values: Vec<ValueCount>,
+    /// Full value counts when NDV is small (`<= 32`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub frequency: Vec<ValueCount>,
+    /// Values that appear once.
+    pub singleton_count: u64,
+    /// `singleton_count / ndv`.
+    pub singleton_fraction: f64,
     /// Minimum, when values compare.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_value: Option<String>,
     /// Maximum, when values compare.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_value: Option<String>,
+    /// `max - min`, when numeric.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<f64>,
     /// Arithmetic mean, when numeric.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mean: Option<f64>,
     /// Population standard deviation, when numeric.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stddev: Option<f64>,
+    /// Third standardized moment, when numeric and `n >= 3`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skew: Option<f64>,
     /// 50th percentile, when numeric.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quantile_p50: Option<f64>,
@@ -107,6 +120,27 @@ pub struct ColumnProfile {
     /// Mean adjacent absolute delta, when numeric.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adjacent_delta_mean: Option<f64>,
+    /// Adjacent absolute-delta p50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_delta_p50: Option<f64>,
+    /// Adjacent absolute-delta p90.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_delta_p90: Option<f64>,
+    /// Adjacent absolute-delta p99.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_delta_p99: Option<f64>,
+    /// Largest adjacent absolute delta.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_delta_max: Option<f64>,
+    /// Fraction of adjacent numeric deltas that are zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjacent_delta_zero_fraction: Option<f64>,
+    /// Mean string / binary length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length_mean: Option<f64>,
+    /// Shortest string / binary value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub length_min: Option<u64>,
     /// String / binary length p50.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub length_p50: Option<u64>,
@@ -128,10 +162,40 @@ pub struct ColumnProfile {
     /// Mean adjacent shared-prefix length.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adjacent_prefix_mean: Option<f64>,
+    /// Distinct code points seen in the string sample (capped scan).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unique_code_points: Option<u64>,
+    /// Fraction of bytes that are ASCII.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ascii_fraction: Option<f64>,
+    /// Fraction of bytes that are `0-9`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digit_fraction: Option<f64>,
+    /// Fraction of bytes that are `A-Za-z`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub letter_fraction: Option<f64>,
+    /// Fraction of bytes that are `0-9A-Fa-f`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hex_fraction: Option<f64>,
+    /// Fraction of bytes that are whitespace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub whitespace_fraction: Option<f64>,
     /// Fraction of adjacent pairs that are equal.
     pub adjacent_equal_fraction: f64,
     /// Mean run length of equal values.
     pub run_length_mean: f64,
+    /// Run-length p50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_length_p50: Option<u64>,
+    /// Run-length p90.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_length_p90: Option<u64>,
+    /// Run-length p99.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_length_p99: Option<u64>,
+    /// Longest equal run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_length_max: Option<u64>,
     /// `CONSTANT`, `INCREASING`, `DECREASING`, or `UNORDERED`.
     pub monotonic: String,
     /// Observed representations (`uuid`, `enum_like`, …).
@@ -184,17 +248,18 @@ pub fn profile(dump: &Dump, request: &ProfileRequest) -> Result<Profile, Error> 
     if dump.rows.is_empty() {
         return Err(Error("sample has no rows".into()));
     }
-    let selected = selected_columns(dump, request)?;
+    let dump = explode_nested(dump);
+    let selected = selected_columns(&dump, request)?;
     if selected.is_empty() {
         return Err(Error("no columns matched --columns".into()));
     }
     let top = request.top.max(1) as usize;
     let columns: Vec<ColumnProfile> = selected
         .iter()
-        .map(|&index| profile_column(&dump.columns[index], column_values(dump, index), top))
+        .map(|&index| profile_column(&dump.columns[index], column_values(&dump, index), top))
         .collect();
     let dependencies = if request.dependencies {
-        pair_dependencies(dump, &selected)
+        pair_dependencies(&dump, &selected)
     } else {
         Vec::new()
     };
@@ -217,7 +282,13 @@ fn capabilities() -> Vec<Capability> {
                 "null_fraction".into(),
                 "entropy".into(),
                 "top_values".into(),
+                "frequency".into(),
+                "range".into(),
                 "quantiles".into(),
+                "skew".into(),
+                "adjacent_delta".into(),
+                "run_lengths".into(),
+                "alphabet".into(),
                 "patterns".into(),
             ],
         },
@@ -232,6 +303,61 @@ fn capabilities() -> Vec<Capability> {
             ],
         },
     ]
+}
+
+fn explode_nested(dump: &Dump) -> Dump {
+    let mut columns = Vec::new();
+    let mut maps = Vec::new();
+    for row in &dump.rows {
+        let mut map = BTreeMap::new();
+        for (name, value) in dump.columns.iter().zip(row.iter()) {
+            extend_flat(&mut map, name, value);
+        }
+        for key in map.keys() {
+            if !columns.iter().any(|column| column == key) {
+                columns.push(key.clone());
+            }
+        }
+        maps.push(map);
+    }
+    let rows = maps
+        .iter()
+        .map(|map| {
+            columns
+                .iter()
+                .map(|column| map.get(column).cloned().unwrap_or(Value::Null))
+                .collect()
+        })
+        .collect();
+    Dump { columns, rows }
+}
+
+fn extend_flat(map: &mut BTreeMap<String, Value>, prefix: &str, value: &Value) {
+    match value {
+        Value::Object(fields) if !fields.is_empty() && fields.len() <= 32 => {
+            for (key, child) in fields {
+                extend_flat(map, &format!("{prefix}.{key}"), child);
+            }
+        }
+        Value::Object(fields) if !fields.is_empty() => {
+            map.insert(
+                format!("{prefix}.map_length"),
+                Value::from(fields.len() as u64),
+            );
+        }
+        Value::Array(items) => {
+            map.insert(
+                format!("{prefix}.list_length"),
+                Value::from(items.len() as u64),
+            );
+            if let Some(first) = items.first() {
+                extend_flat(map, &format!("{prefix}.first"), first);
+            }
+        }
+        other => {
+            map.insert(prefix.to_string(), other.clone());
+        }
+    }
 }
 
 fn selected_columns(dump: &Dump, request: &ProfileRequest) -> Result<Vec<usize>, Error> {
@@ -338,8 +464,20 @@ fn profile_column(name: &str, values: Vec<&Value>, top: usize) -> ColumnProfile 
     let non_null = num_values.saturating_sub(null_count);
     let ndv = counts.len() as u64;
     let entropy = shannon(&counts.values().copied().collect::<Vec<_>>());
+    let singleton_count = counts.values().filter(|count| **count == 1).count() as u64;
     let mut ranked: Vec<_> = counts.into_iter().collect();
     ranked.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+    let frequency = if ndv > 0 && ndv <= 32 {
+        ranked
+            .iter()
+            .map(|(value, count)| ValueCount {
+                value: value.clone(),
+                count: *count,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     ranked.truncate(top);
     let top_values = ranked
         .into_iter()
@@ -347,16 +485,27 @@ fn profile_column(name: &str, values: Vec<&Value>, top: usize) -> ColumnProfile 
         .collect();
 
     let (min_value, max_value) = bounds(&numbers, &texts);
+    let range = numeric_range(&numbers);
     let (mean, stddev) = moments(&numbers);
+    let skew = skewness(&numbers, mean, stddev);
     let quantile_p50 = quantile(&numbers, 0.50);
     let quantile_p90 = quantile(&numbers, 0.90);
     let quantile_p99 = quantile(&numbers, 0.99);
     let adjacent_delta_mean = mean_of(&deltas);
+    let adjacent_delta_p50 = quantile(&deltas, 0.50);
+    let adjacent_delta_p90 = quantile(&deltas, 0.90);
+    let adjacent_delta_p99 = quantile(&deltas, 0.99);
+    let adjacent_delta_max = deltas.iter().copied().reduce(f64::max);
+    let adjacent_delta_zero_fraction = if deltas.is_empty() {
+        None
+    } else {
+        Some(fraction(
+            deltas.iter().filter(|delta| **delta == 0.0).count() as u64,
+            deltas.len() as u64,
+        ))
+    };
     let lengths: Vec<u64> = texts.iter().map(|text| text.len() as u64).collect();
-    let length_p50 = quantile_u64(&lengths, 0.50);
-    let length_p90 = quantile_u64(&lengths, 0.90);
-    let length_p99 = quantile_u64(&lengths, 0.99);
-    let length_max = lengths.iter().copied().max();
+    let alphabet = alphabet_stats(&texts);
 
     ColumnProfile {
         column: name.to_string(),
@@ -368,26 +517,48 @@ fn profile_column(name: &str, values: Vec<&Value>, top: usize) -> ColumnProfile 
         ndv_ratio: fraction(ndv, non_null),
         entropy,
         top_values,
+        frequency,
+        singleton_count,
+        singleton_fraction: fraction(singleton_count, ndv),
         min_value,
         max_value,
+        range,
         mean,
         stddev,
+        skew,
         quantile_p50,
         quantile_p90,
         quantile_p99,
         adjacent_delta_mean,
-        length_p50,
-        length_p90,
-        length_p99,
-        length_max,
+        adjacent_delta_p50,
+        adjacent_delta_p90,
+        adjacent_delta_p99,
+        adjacent_delta_max,
+        adjacent_delta_zero_fraction,
+        length_mean: mean_of(&lengths.iter().map(|n| *n as f64).collect::<Vec<_>>()),
+        length_min: lengths.iter().copied().min(),
+        length_p50: quantile_u64(&lengths, 0.50),
+        length_p90: quantile_u64(&lengths, 0.90),
+        length_p99: quantile_u64(&lengths, 0.99),
+        length_max: lengths.iter().copied().max(),
         common_prefix_length: common_affix(&texts, true),
         common_suffix_length: common_affix(&texts, false),
         adjacent_prefix_mean: mean_of(
             &prefix_lengths.iter().map(|n| *n as f64).collect::<Vec<_>>(),
         ),
+        unique_code_points: alphabet.as_ref().map(|stats| stats.unique_code_points),
+        ascii_fraction: alphabet.as_ref().map(|stats| stats.ascii_fraction),
+        digit_fraction: alphabet.as_ref().map(|stats| stats.digit_fraction),
+        letter_fraction: alphabet.as_ref().map(|stats| stats.letter_fraction),
+        hex_fraction: alphabet.as_ref().map(|stats| stats.hex_fraction),
+        whitespace_fraction: alphabet.as_ref().map(|stats| stats.whitespace_fraction),
         adjacent_equal_fraction: fraction(adjacent_equal, adjacent_pairs),
         run_length_mean: mean_of(&run_lengths.iter().map(|n| *n as f64).collect::<Vec<_>>())
             .unwrap_or(0.0),
+        run_length_p50: quantile_u64(&run_lengths, 0.50),
+        run_length_p90: quantile_u64(&run_lengths, 0.90),
+        run_length_p99: quantile_u64(&run_lengths, 0.99),
+        run_length_max: run_lengths.iter().copied().max(),
         monotonic: monotonic(compared, rising, falling).to_string(),
         patterns: patterns(&texts, ndv, non_null),
     }
@@ -623,6 +794,82 @@ fn bounds(numbers: &[f64], texts: &[&str]) -> (Option<String>, Option<String>) {
     (None, None)
 }
 
+fn numeric_range(numbers: &[f64]) -> Option<f64> {
+    let min = numbers.iter().copied().reduce(f64::min)?;
+    let max = numbers.iter().copied().reduce(f64::max)?;
+    Some(max - min)
+}
+
+fn skewness(numbers: &[f64], mean: Option<f64>, stddev: Option<f64>) -> Option<f64> {
+    let mean = mean?;
+    let stddev = stddev?;
+    if numbers.len() < 3 || stddev == 0.0 {
+        return None;
+    }
+    let moment = numbers
+        .iter()
+        .map(|value| {
+            let z = (value - mean) / stddev;
+            z * z * z
+        })
+        .sum::<f64>()
+        / numbers.len() as f64;
+    Some(moment)
+}
+
+struct AlphabetStats {
+    unique_code_points: u64,
+    ascii_fraction: f64,
+    digit_fraction: f64,
+    letter_fraction: f64,
+    hex_fraction: f64,
+    whitespace_fraction: f64,
+}
+
+fn alphabet_stats(texts: &[&str]) -> Option<AlphabetStats> {
+    if texts.is_empty() {
+        return None;
+    }
+    let mut unique = BTreeMap::new();
+    let mut bytes = 0u64;
+    let mut ascii = 0u64;
+    let mut digit = 0u64;
+    let mut letter = 0u64;
+    let mut hex = 0u64;
+    let mut whitespace = 0u64;
+    for text in texts.iter().take(256) {
+        for ch in text.chars().take(256) {
+            if unique.len() < 1024 {
+                *unique.entry(ch).or_insert(0u64) += 1;
+            }
+            bytes += 1;
+            if ch.is_ascii() {
+                ascii += 1;
+            }
+            if ch.is_ascii_digit() {
+                digit += 1;
+            }
+            if ch.is_ascii_alphabetic() {
+                letter += 1;
+            }
+            if ch.is_ascii_hexdigit() {
+                hex += 1;
+            }
+            if ch.is_ascii_whitespace() {
+                whitespace += 1;
+            }
+        }
+    }
+    Some(AlphabetStats {
+        unique_code_points: unique.len() as u64,
+        ascii_fraction: fraction(ascii, bytes),
+        digit_fraction: fraction(digit, bytes),
+        letter_fraction: fraction(letter, bytes),
+        hex_fraction: fraction(hex, bytes),
+        whitespace_fraction: fraction(whitespace, bytes),
+    })
+}
+
 fn moments(numbers: &[f64]) -> (Option<f64>, Option<f64>) {
     if numbers.is_empty() {
         return (None, None);
@@ -836,5 +1083,37 @@ mod tests {
             .patterns
             .iter()
             .any(|pattern| pattern == "enum_like"));
+        assert!(!country.frequency.is_empty());
+        assert!(country.ascii_fraction.is_some());
+        assert!(id.hex_fraction.unwrap() > 0.5);
+    }
+
+    #[test]
+    fn explodes_nested_structs_and_lists() {
+        let dump = dump(
+            &["user", "tags"],
+            vec![
+                vec![json!({"city": "Berlin", "zip": 10115}), json!(["a", "b"])],
+                vec![json!({"city": "Munich", "zip": 80331}), json!(["a"])],
+            ],
+        );
+        let profile = profile(&dump, &ProfileRequest::default()).unwrap();
+        let names: Vec<_> = profile
+            .columns
+            .iter()
+            .map(|column| column.column.as_str())
+            .collect();
+        assert!(names.contains(&"user.city"));
+        assert!(names.contains(&"user.zip"));
+        assert!(names.contains(&"tags.list_length"));
+        assert!(names.contains(&"tags.first"));
+        let zip = profile
+            .columns
+            .iter()
+            .find(|column| column.column == "user.zip")
+            .unwrap();
+        assert_eq!(zip.physical_kind, "INT");
+        assert_eq!(zip.range, Some(70216.0));
+        assert!(zip.adjacent_delta_p50.is_some());
     }
 }

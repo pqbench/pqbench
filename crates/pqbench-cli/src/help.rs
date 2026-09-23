@@ -231,6 +231,9 @@ Read a Parquet sample (`pqbench dump` or a .parquet file) and emit one
 sort of the sample. `--rows first:8192` caps decode so a full file stays
 fast. `--columns` keeps named columns for the next pass.
 
+Nested structs become `parent.child` leaves. Lists add `list_length`
+and `first`.
+
 `--dependencies` adds `pqbench.profile-dependency` lines (O(columns² ·
 rows)): mutual information and functional-dependency strength. Off by
 default.

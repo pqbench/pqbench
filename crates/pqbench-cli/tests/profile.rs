@@ -56,9 +56,10 @@ fn profile_streams_column_facts() {
         .iter()
         .filter(|record| record["kind"] == "pqbench.profile-column")
         .collect();
-    assert!(columns
-        .iter()
-        .any(|record| record["column"] == "text" && record["physical_kind"] == "STRING"));
+    assert!(columns.iter().any(|record| record["column"] == "text"
+        && record["physical_kind"] == "STRING"
+        && record["ascii_fraction"].as_f64().is_some()
+        && record["length_mean"].as_f64().is_some()));
     assert!(columns
         .iter()
         .all(|record| record["ndv"].as_u64().unwrap() <= record["num_values"].as_u64().unwrap()));
