@@ -14,6 +14,7 @@ that command and links back. This file is the durable copy.
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Row sample | `pqbench dump FILE --output sample.parquet` |
 | Sample-level column facts | `pqbench dump FILE \| pqbench profile` |
+| Rewrite a sample and measure it | `pqbench dump FILE \| pqbench experiment --rewrite sort:ts --aim skipping` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
 | Codec speed on Parquet pages | `pqbench compression FILE` (NONE-compressed only) |
 
@@ -37,6 +38,7 @@ lake-source) and are not exported into the process environment.
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-file` / `pqbench.bytemass-row` | `bytemass` | `viz` |
 | `pqbench.profile` / `pqbench.profile-column` / `pqbench.profile-dependency` | `profile` | an agent / the next pass |
+| `pqbench.experiment` / `pqbench.experiment-trial` / `pqbench.experiment-column` | `experiment` | an agent / the next pass |
 
 All current documents are version `1`.
 
@@ -50,6 +52,8 @@ All current documents are version `1`.
 | `--dependencies` | On `profile`: pairwise locality analysis. Off by default (`O(pairs · rows)`). |
 | `--measures NAME` | On `profile`: request a locality measure (`pair_ndv`, `entropy`, `mutual_information`, `functional_dependency`, `null_cooccurrence`, `numeric_relationship`, `categorical_association`, `all`). Implies `--dependencies`. |
 | `--pairs LEFT,RIGHT` | On `profile`: analyze only that column pair. Implies `--dependencies`. |
+| `--rewrite SPEC` / `--trial SPEC` | On `experiment`: one empirical rewrite (`sort:A,B`, `codec:zstd@3`, …). |
+| `--aim storage\|skipping\|all` | On `experiment`: measure bytes per row, skip locality, or both. |
 | `--rows all\|first:N` | On `profile`: cap decoded rows (default `first:8192`). |
 | `--columns GLOB` | On `profile`: keep column names matching the glob. |
 | `--sample all\|every:N\|first:N` | After include/exclude, keep every file, every Nth, or the first N. |

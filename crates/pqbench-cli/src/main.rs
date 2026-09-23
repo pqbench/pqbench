@@ -9,6 +9,7 @@ mod compression;
 mod document;
 mod dump;
 mod emit;
+mod experiment;
 mod filter;
 mod help;
 mod iceberg;
@@ -88,6 +89,13 @@ enum Command {
     )]
     Profile(profile::ProfileArgs),
     #[command(
+        about = help::EXPERIMENT_ABOUT,
+        long_about = help::EXPERIMENT_LONG_ABOUT,
+        after_help = help::EXPERIMENT_AFTER,
+        after_long_help = help::EXPERIMENT_AFTER
+    )]
+    Experiment(experiment::ExperimentArgs),
+    #[command(
         about = help::VIZ_ABOUT,
         long_about = help::VIZ_LONG_ABOUT,
         after_help = help::VIZ_AFTER,
@@ -106,6 +114,7 @@ fn main() -> ExitCode {
         Command::Lake(args) => lake::run(&args),
         Command::Dump(args) => dump::run(&args),
         Command::Profile(args) => profile::run(&args),
+        Command::Experiment(args) => experiment::run(&args),
         Command::Viz(args) => viz::run(&args),
     };
     match result {

@@ -277,6 +277,57 @@ fn profile(
     dumps(py, &profile)
 }
 
+/// Run `pqbench experiment` on parquet sample paths.
+///
+/// Returns the experiment object (`aim`, `trials`).
+#[pyfunction]
+#[pyo3(signature = (*inputs, rows="first:8192", aim="storage", rewrites=None, indexes=false))]
+fn experiment(
+    py: Python<'_>,
+    inputs: Vec<String>,
+    rows: &str,
+    aim: &str,
+    rewrites: Option<Vec<String>>,
+    indexes: bool,
+) -> PyResult<Py<PyAny>> {
+    let max_rows = match pqbench::pattern::Sample::parse(rows).map_err(runtime)? {
+        pqbench::pattern::Sample::ALL => None,
+        pqbench::pattern::Sample::First(count) => Some(count as usize),
+        pqbench::pattern::Sample::Every(_) => {
+            return Err(PyValueError::new_err(
+                "rows does not support every:N; expected all or first:N",
+            ));
+        }
+    };
+    let files = inputs
+        .into_iter()
+        .map(|input| pqbench::dump::DumpFile {
+            path: input.clone(),
+            uri: input,
+            table: None,
+            env: BTreeMap::new(),
+        })
+        .collect();
+    let dump = py
+        .detach(|| {
+            block_on(pqbench::dump::sample(
+                &pqbench::dump::DumpRequest {
+                    files,
+                    row_groups: pqbench::dump::RowGroups::ALL,
+                },
+                max_rows,
+            ))
+        })
+        .map_err(runtime)?;
+    let request = pqbench::experiment::ExperimentRequest {
+        trials: rewrites.unwrap_or_default(),
+        aim: pqbench::experiment::Aim::parse(aim).map_err(runtime)?,
+        indexes,
+    };
+    let experiment = pqbench::experiment::experiment(&dump, &request).map_err(runtime)?;
+    dumps(py, &experiment)
+}
+
 /// Run `pqbench viz` on a bytemass row stream.
 ///
 /// Writes `output.sqlite` and `output.html`. Returns those paths.
@@ -311,6 +362,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(lake, module)?)?;
     module.add_function(wrap_pyfunction!(dump, module)?)?;
     module.add_function(wrap_pyfunction!(profile, module)?)?;
+    module.add_function(wrap_pyfunction!(experiment, module)?)?;
     module.add_function(wrap_pyfunction!(viz, module)?)?;
     module.add(
         "commands",
@@ -324,6 +376,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
                 "lake",
                 "dump",
                 "profile",
+                "experiment",
                 "viz",
             ],
         )?,

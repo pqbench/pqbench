@@ -154,28 +154,12 @@ pub fn read_file_masses(path: &Path, indexes: bool) -> Result<FileMass, Error> {
 }
 
 /// Read byte masses from a complete in-memory Parquet file.
+/// `indexes` loads ColumnIndex/OffsetIndex when the buffer contains them.
 ///
 /// # Errors
 /// Returns [`Error`] if `bytes` is not a readable parquet file.
-pub fn read_buffer_masses(bytes: &[u8]) -> Result<FileMass, Error> {
-    const MAGIC: usize = 4;
-    const LEN: usize = 4;
-    if bytes.len() < MAGIC + LEN + MAGIC {
-        return Err(Error("parquet buffer is too short".into()));
-    }
-    if &bytes[bytes.len() - MAGIC..] != b"PAR1" {
-        return Err(Error("parquet buffer is missing PAR1 magic".into()));
-    }
-    let meta_len = u32::from_le_bytes(
-        bytes[bytes.len() - MAGIC - LEN..bytes.len() - MAGIC]
-            .try_into()
-            .expect("footer length is 4 bytes"),
-    ) as usize;
-    let start = bytes
-        .len()
-        .checked_sub(MAGIC + LEN + meta_len)
-        .ok_or_else(|| Error("parquet footer length exceeds buffer".into()))?;
-    read_footer_masses(&bytes[start..])
+pub fn read_buffer_masses(bytes: &[u8], indexes: bool) -> Result<FileMass, Error> {
+    crate::parquet_impl::read_buffer_masses(bytes, indexes)
 }
 
 /// Lowest ColumnIndex/OffsetIndex offset recorded in `footer`, when present.

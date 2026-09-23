@@ -87,5 +87,6 @@ pass, and the measures that were computed.
 ## What this command does not do
 
 It does not recommend codecs, sort keys, or data-skipping settings.
-Those belong to a later pass that reads these facts plus the caller's
-prompt. Footer byte masses stay on `pqbench bytemass` (no value decode).
+Those belong to `pqbench experiment`, which rewrites the sample and
+measures bytes per row or skip locality. Footer byte masses stay on
+`pqbench bytemass` (no value decode).
