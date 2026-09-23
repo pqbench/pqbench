@@ -137,7 +137,8 @@ fn bytemass_reads_an_iceberg_table_document_from_stdin() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("bytemass: small_reddit_none.parquet"));
+    assert!(stdout.contains("pqbench.bytemass-row"));
+    assert!(stdout.contains("url_encoded"));
 }
 
 #[test]
