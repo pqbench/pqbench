@@ -2015,6 +2015,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -2908,6 +2909,7 @@ dependencies = [
  "lz4",
  "object_store",
  "parquet 59.3.0",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3267,6 +3269,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]

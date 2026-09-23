@@ -38,7 +38,8 @@ pub(crate) struct ObjectStat {
     pub last_modified_time: Option<String>,
     /// Creation time as RFC3339 UTC, when the store reports one.
     pub creation_time: Option<String>,
-    /// Storage class or tier, when HEAD/GET attributes report one.
+    /// Storage class or tier (`STANDARD_IA`, `GLACIER`, …), when HEAD
+    /// reports `x-amz-storage-class`. S3 omits the header for `STANDARD`.
     pub storage_class: Option<String>,
 }
 
@@ -50,12 +51,11 @@ pub(crate) struct ObjectReader {
 enum Source {
     Local(PathBuf),
     #[cfg(feature = "aws")]
-    Remote(
-        Box<dyn ::object_store::ObjectStore>,
-        ::object_store::path::Path,
-    ),
+    Remote(::object_store::aws::AmazonS3, ::object_store::path::Path),
 }
 
+#[cfg(feature = "aws")]
+use ::object_store::signer::Signer;
 #[cfg(feature = "aws")]
 use ::object_store::{GetOptions, ObjectStore, ObjectStoreExt};
 
@@ -78,29 +78,10 @@ impl ObjectReader {
         match &self.source {
             Source::Local(path) => stat_local(path),
             #[cfg(feature = "aws")]
-            Source::Remote(store, location) => {
-                let result = store
-                    .get_opts(
-                        location,
-                        ::object_store::GetOptions {
-                            head: true,
-                            ..::object_store::GetOptions::default()
-                        },
-                    )
-                    .await
-                    .map_err(remote_error)?;
-                let metadata = result.meta;
-                Ok(ObjectStat {
-                    size: metadata.size,
-                    identity: metadata.e_tag.or(metadata.version),
-                    last_modified_time: unix_timestamp_rfc3339(metadata.last_modified.timestamp()),
-                    creation_time: None,
-                    storage_class: result
-                        .attributes
-                        .get(&::object_store::Attribute::StorageClass)
-                        .map(|value| value.as_ref().to_string()),
-                })
-            }
+            Source::Remote(store, location) => match head_object(store, location).await {
+                Ok(stat) => Ok(stat),
+                Err(_) => stat_get_opts(store, location).await,
+            },
         }
     }
 
@@ -214,6 +195,144 @@ fn s3(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
     })
 }
 
+/// object_store 0.13 maps cache/content headers on HEAD but drops
+/// `x-amz-storage-class`. Sign a HEAD and read the header ourselves.
+#[cfg(feature = "aws")]
+async fn head_object(
+    store: &::object_store::aws::AmazonS3,
+    location: &::object_store::path::Path,
+) -> Result<ObjectStat, Error> {
+    let url = store
+        .signed_url(
+            reqwest::Method::HEAD,
+            location,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .map_err(remote_error)?;
+    let response = reqwest::Client::new()
+        .head(url)
+        .send()
+        .await
+        .map_err(|error| Error(format!("cannot HEAD object: {error}")))?;
+    if !response.status().is_success() {
+        return Err(Error(format!(
+            "cannot HEAD object: HTTP {}",
+            response.status()
+        )));
+    }
+    let headers: Vec<(String, String)> = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+        })
+        .collect();
+    let pairs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    head_stat(&pairs).ok_or_else(|| Error("HEAD response has no object size".into()))
+}
+
+#[cfg(feature = "aws")]
+async fn stat_get_opts(
+    store: &::object_store::aws::AmazonS3,
+    location: &::object_store::path::Path,
+) -> Result<ObjectStat, Error> {
+    let result = store
+        .get_opts(
+            location,
+            GetOptions {
+                head: true,
+                ..GetOptions::default()
+            },
+        )
+        .await
+        .map_err(remote_error)?;
+    let metadata = result.meta;
+    Ok(ObjectStat {
+        size: metadata.size,
+        identity: metadata.e_tag.or(metadata.version),
+        last_modified_time: unix_timestamp_rfc3339(metadata.last_modified.timestamp()),
+        creation_time: None,
+        storage_class: result
+            .attributes
+            .get(&::object_store::Attribute::StorageClass)
+            .map(|value| value.as_ref().to_string()),
+    })
+}
+
+/// Parse size, identity, mtime, and storage class from a HEAD response.
+fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
+    let mut size = None;
+    let mut etag = None;
+    let mut version = None;
+    let mut last_modified_time = None;
+    let mut storage_class = None;
+    for (name, value) in headers {
+        match name.to_ascii_lowercase().as_str() {
+            "content-length" => size = value.parse().ok(),
+            "etag" => etag = Some((*value).to_string()),
+            "x-amz-version-id" => version = Some((*value).to_string()),
+            "last-modified" => last_modified_time = parse_http_date(value),
+            "x-amz-storage-class" | "x-goog-storage-class" if !value.is_empty() => {
+                storage_class = Some((*value).to_string());
+            }
+            _ => {}
+        }
+    }
+    Some(ObjectStat {
+        size: size?,
+        identity: etag.or(version),
+        last_modified_time,
+        creation_time: None,
+        storage_class,
+    })
+}
+
+/// IMF-fixdate (`Wed, 23 Sep 2026 20:53:00 GMT`) to RFC3339 UTC.
+fn parse_http_date(value: &str) -> Option<String> {
+    let rest = value.split_once(", ")?.1;
+    let mut parts = rest.split_whitespace();
+    let day: u32 = parts.next()?.parse().ok()?;
+    let month = http_month(parts.next()?)?;
+    let year: i32 = parts.next()?.parse().ok()?;
+    let mut time = parts.next()?.split(':');
+    let hour: u32 = time.next()?.parse().ok()?;
+    let minute: u32 = time.next()?.parse().ok()?;
+    let second: u32 = time.next()?.parse().ok()?;
+    if parts.next() != Some("GMT") {
+        return None;
+    }
+    if !(1..=12).contains(&month) || day == 0 || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    let secs = days
+        .checked_mul(86_400)?
+        .checked_add(i64::from(hour * 3_600 + minute * 60 + second))?;
+    unix_timestamp_rfc3339(secs)
+}
+
+fn http_month(name: &str) -> Option<u32> {
+    Some(match name {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    })
+}
+
 #[cfg(feature = "aws")]
 async fn list_s3(url: &Url, options: &[(String, String)]) -> Result<PrefixListing, Error> {
     let (store, location) = s3_store(url, options)?;
@@ -241,13 +360,7 @@ async fn list_s3(url: &Url, options: &[(String, String)]) -> Result<PrefixListin
 fn s3_store(
     url: &Url,
     options: &[(String, String)],
-) -> Result<
-    (
-        Box<dyn ::object_store::ObjectStore>,
-        ::object_store::path::Path,
-    ),
-    Error,
-> {
+) -> Result<(::object_store::aws::AmazonS3, ::object_store::path::Path), Error> {
     use ::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
     // The AWS_* environment supplies the defaults (credentials, region,
@@ -263,7 +376,7 @@ fn s3_store(
     let store = builder.build().map_err(remote_error)?;
     let (_, location) =
         ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
-    Ok((Box::new(store), location))
+    Ok((store, location))
 }
 
 #[cfg(feature = "aws")]
@@ -437,5 +550,30 @@ mod tests {
             1_000_000_000_000
         );
         assert_eq!(super::parse_rfc3339_millis("1970-01-01").unwrap(), 0);
+    }
+
+    #[test]
+    fn head_reads_storage_class_and_http_date() {
+        let stat = super::head_stat(&[
+            ("Content-Length", "42"),
+            ("ETag", "\"abc\""),
+            ("Last-Modified", "Sun, 09 Sep 2001 01:46:40 GMT"),
+            ("x-amz-storage-class", "STANDARD_IA"),
+        ])
+        .unwrap();
+        assert_eq!(stat.size, 42);
+        assert_eq!(stat.identity.as_deref(), Some("\"abc\""));
+        assert_eq!(
+            stat.last_modified_time.as_deref(),
+            Some("2001-09-09T01:46:40Z")
+        );
+        assert_eq!(stat.storage_class.as_deref(), Some("STANDARD_IA"));
+    }
+
+    #[test]
+    fn head_omits_standard_when_s3_sends_no_class_header() {
+        let stat = super::head_stat(&[("content-length", "8")]).unwrap();
+        assert_eq!(stat.size, 8);
+        assert!(stat.storage_class.is_none());
     }
 }

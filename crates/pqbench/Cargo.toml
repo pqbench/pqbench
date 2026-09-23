@@ -11,7 +11,7 @@ description = "A benchmarking library for Parquet files (in-memory read/write th
 [features]
 default = []
 # S3 object reads. Without it, `s3://` fails at runtime, not at compile time.
-aws = ["dep:object_store", "object_store/aws"]
+aws = ["dep:object_store", "object_store/aws", "dep:reqwest"]
 # Delta snapshot resolution requires Rust 1.91.1 or newer.
 delta = ["dep:deltalake", "dep:buoyant_kernel_derive", "dep:futures"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
@@ -39,6 +39,9 @@ url = "2"
 # Must match delta-rs 0.32.4's ObjectStore trait version: stores cross that
 # internal boundary. Keep the pin until delta-rs upgrades its dependency.
 object_store = { version = "=0.13.2", optional = true }
+# Same reqwest object_store already compiles. Used to read `x-amz-storage-class`
+# from a signed HEAD; object_store 0.13 drops that header on GetResult.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 apache-avro = { version = "0.17", optional = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 

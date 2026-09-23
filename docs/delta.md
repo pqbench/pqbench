@@ -74,8 +74,10 @@ stats blob is omitted rather than failing the table. `end` carries per-partition
 totals. Files are written as they are resolved.
 
 `bytemass` proxies each `pqbench.table-file` as `pqbench.bytemass-file`
-(stats as received, plus object identity / storage class when HEAD reports
-them) and then one `pqbench.bytemass-row` per column chunk. `viz` stores
+(stats as received, plus object identity). On `s3://` it signs a HEAD and
+reads `x-amz-storage-class` (object_store 0.13 drops that header on its own
+HEAD/LIST). S3 omits the header for `STANDARD`. Then one
+`pqbench.bytemass-row` per column chunk. `viz` stores
 both in SQLite. On a pipe that is one JSON object per line, each tagged with a table `id`:
 `begin`, then `pqbench.table-log` commits, then `pqbench.table-file` rows,
 then `end`. Lines from different ids may mix. `lake` emits `pqbench.table-ref` lines; `table --concurrency` loads them as
