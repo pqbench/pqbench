@@ -2,7 +2,9 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
+use parquet::basic::Compression;
 use parquet::data_type::Int64Type;
+use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
@@ -48,6 +50,25 @@ fn write_groups(path: &Path, groups: &[i64]) {
     writer.close().unwrap();
 }
 
+fn write_compressed(path: &Path, compression: Compression, values: &[i64]) {
+    let schema = Arc::new(parse_message_type("message data { REQUIRED INT64 id; }").unwrap());
+    let props = Arc::new(
+        WriterProperties::builder()
+            .set_compression(compression)
+            .build(),
+    );
+    let mut writer = SerializedFileWriter::new(File::create(path).unwrap(), schema, props).unwrap();
+    let mut group = writer.next_row_group().unwrap();
+    let mut column = group.next_column().unwrap().unwrap();
+    column
+        .typed::<Int64Type>()
+        .write_batch(values, None, None)
+        .unwrap();
+    column.close().unwrap();
+    group.close().unwrap();
+    writer.close().unwrap();
+}
+
 #[tokio::test]
 async fn dump_reads_rows_from_a_local_file() {
     let dump = dump::dump(&request(
@@ -60,13 +81,40 @@ async fn dump_reads_rows_from_a_local_file() {
     assert!(dump.columns.iter().any(|column| column == "url_encoded"));
     assert_eq!(dump.rows.len(), 3000);
     assert_eq!(dump.rows[0][0], "reddit.parquet");
-    let csv = dump::render_csv(&dump);
-    assert!(csv.starts_with("_path,"));
-    assert!(csv.contains("url_encoded"));
-    let json = dump::render_json(&dump).unwrap();
-    let first: serde_json::Value = serde_json::from_str(json.lines().next().unwrap()).unwrap();
-    assert_eq!(first["_path"], "reddit.parquet");
-    assert!(first.get("url_encoded").is_some());
+}
+
+#[tokio::test]
+async fn dump_reads_zstd_and_snappy_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    for (name, compression) in [
+        ("zstd.parquet", Compression::ZSTD(Default::default())),
+        ("snappy.parquet", Compression::SNAPPY),
+    ] {
+        let path = directory.path().join(name);
+        write_compressed(&path, compression, &[1, 2, 3]);
+        let uri = path.to_string_lossy().into_owned();
+        let dump = dump::dump(&request(vec![file(name, uri.clone())], RowGroups::ALL))
+            .await
+            .unwrap();
+        assert_eq!(dump.rows.len(), 3, "{name}");
+        assert_eq!(dump.rows[0][1], 1);
+
+        let parquet = dump::write_parquet(&request(vec![file(name, uri)], RowGroups::ALL))
+            .await
+            .unwrap();
+        let copied = directory.path().join(format!("copied-{name}"));
+        std::fs::write(&copied, &parquet).unwrap();
+        let copied_dump = dump::dump(&request(
+            vec![file(
+                "copied.parquet",
+                copied.to_string_lossy().into_owned(),
+            )],
+            RowGroups::ALL,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(copied_dump.rows.len(), 3, "reread {name}");
+    }
 }
 
 #[tokio::test]

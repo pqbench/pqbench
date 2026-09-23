@@ -73,18 +73,16 @@ filter the `table` stream with `jq`, `sort`, and `head` before `bytemass` (see
 
 ### dump
 
-Write a sample from the same files `bytemass` would measure. Default output
-is Parquet (`--output` or a redirect). `--csv` and `--json` (NDJSON) are
-text. `--sample` picks files (`all`, `every:N`, `first:N`); `--row-groups
+Write a sample from the same files `bytemass` would measure. Output is
+Parquet (`--output` or a redirect); newly written columns default to zstd.
+`--sample` picks files (`all`, `every:N`, `first:N`); `--row-groups
 first:N` reads only the leading row groups of each file so a remote object
-need not be fetched whole. CSV/JSON rows carry `_path` (and `_table` from a
-lake):
+need not be fetched whole.
 
 ```sh
 pqbench dump data.parquet --output sample.parquet
 pqbench table ./delta-table | pqbench dump --row-groups first:1 --output sample.parquet
-pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 --csv
-pqbench table ./delta-table | pqbench dump --json
+pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 -o sample.parquet
 ```
 
 ### table

@@ -30,10 +30,22 @@ fn pipe(args: &[&str], stdin: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn assert_parquet(bytes: &[u8]) {
+    assert!(bytes.starts_with(b"PAR1"), "missing parquet magic");
+    assert!(bytes.ends_with(b"PAR1"), "missing parquet footer magic");
+}
+
 #[test]
-fn dump_writes_csv_from_a_parquet_file() {
+fn dump_writes_parquet_from_a_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_path = directory.path().join("sample.parquet");
     let output = pqbench()
-        .args(["dump", "--csv", parquet_fixture()])
+        .args([
+            "dump",
+            parquet_fixture(),
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(
@@ -41,15 +53,33 @@ fn dump_writes_csv_from_a_parquet_file() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let header = stdout.lines().next().unwrap();
-    assert!(header.starts_with("_path,"));
-    assert!(header.contains("url_encoded"));
-    assert!(stdout.contains('\n'));
+    let bytes = std::fs::read(&output_path).unwrap();
+    assert_parquet(&bytes);
+
+    let again = directory.path().join("again.parquet");
+    let reread = pqbench()
+        .args([
+            "dump",
+            output_path.to_str().unwrap(),
+            "--row-groups",
+            "first:1",
+            "--output",
+            again.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        reread.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&reread.stderr)
+    );
+    assert_parquet(&std::fs::read(&again).unwrap());
 }
 
 #[test]
-fn dump_writes_ndjson_from_a_table_document() {
+fn dump_writes_parquet_from_a_table_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_path = directory.path().join("sample.parquet");
     let size = std::fs::metadata(parquet_fixture()).unwrap().len();
     let document = json!({
         "kind": "pqbench.table",
@@ -61,17 +91,16 @@ fn dump_writes_ndjson_from_a_table_document() {
         "log": [],
         "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
     });
-    let output = pipe(&["dump", "--json"], &document.to_string());
+    let output = pipe(
+        &["dump", "--output", output_path.to_str().unwrap()],
+        &document.to_string(),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let first: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
-    assert_eq!(first["_path"], "small_reddit_none.parquet");
-    assert!(first.get("url_encoded").is_some());
-    assert_eq!(stdout.lines().count(), 3000);
+    assert_parquet(&std::fs::read(&output_path).unwrap());
 }
 
 #[test]
@@ -102,14 +131,16 @@ fn dump_prunes_partitions_and_samples_files() {
             file("year=2025/part-0.parquet")
         ]
     });
+    let output_path = directory.path().join("sample.parquet");
     let output = pipe(
         &[
             "dump",
-            "--json",
             "--include",
             "year=2024/**",
             "--sample",
             "first:1",
+            "--output",
+            output_path.to_str().unwrap(),
         ],
         &document.to_string(),
     );
@@ -118,20 +149,13 @@ fn dump_prunes_partitions_and_samples_files() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert_eq!(stdout.lines().count(), 3000);
-    let paths: std::collections::BTreeSet<_> = stdout
-        .lines()
-        .map(|line| {
-            serde_json::from_str::<serde_json::Value>(line).unwrap()["_path"]
-                .as_str()
-                .unwrap()
-                .to_string()
-        })
-        .collect();
-    assert_eq!(
-        paths.iter().map(String::as_str).collect::<Vec<_>>(),
-        ["year=2024/part-0.parquet"]
+    let bytes = std::fs::read(&output_path).unwrap();
+    assert_parquet(&bytes);
+    let fixture_len = std::fs::metadata(parquet_fixture()).unwrap().len();
+    assert!(
+        (bytes.len() as u64) < fixture_len.saturating_mul(2),
+        "sampled dump should keep one file, got {} bytes vs fixture {fixture_len}",
+        bytes.len()
     );
 }
 
@@ -155,29 +179,21 @@ fn dump_writes_parquet_to_output() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let bytes = std::fs::read(&output_path).unwrap();
-    assert!(bytes.starts_with(b"PAR1"));
-    assert!(bytes.ends_with(b"PAR1"));
-
-    let csv = pqbench()
-        .args(["dump", "--csv", output_path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(csv.status.success());
-    let stdout = String::from_utf8(csv.stdout).unwrap();
-    assert!(stdout.starts_with("_path,"));
-    assert!(stdout.contains("url_encoded"));
+    assert_parquet(&std::fs::read(&output_path).unwrap());
 }
 
 #[test]
 fn dump_rejects_unknown_row_groups() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_path = directory.path().join("sample.parquet");
     let output = pqbench()
         .args([
             "dump",
             parquet_fixture(),
             "--row-groups",
             "every:2",
-            "--csv",
+            "--output",
+            output_path.to_str().unwrap(),
         ])
         .output()
         .unwrap();
