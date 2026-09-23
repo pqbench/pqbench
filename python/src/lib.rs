@@ -328,6 +328,32 @@ fn experiment(
     dumps(py, &experiment)
 }
 
+/// Return a bundled skill (`pqbench skill`).
+///
+/// No name lists skills. `document` is `recipes` for the extra markdown.
+#[pyfunction]
+#[pyo3(signature = (name=None, document=""))]
+fn skill(py: Python<'_>, name: Option<&str>, document: &str) -> PyResult<Py<PyAny>> {
+    match name {
+        None => {
+            let items: Vec<Value> = pqbench::skill::skills()
+                .iter()
+                .map(|item| {
+                    let mut object = serde_json::Map::new();
+                    object.insert("name".into(), Value::String(item.name.into()));
+                    object.insert("description".into(), Value::String(item.description.into()));
+                    Value::Object(object)
+                })
+                .collect();
+            dumps(py, &items)
+        }
+        Some(name) => {
+            let markdown = pqbench::skill::document(name, document).map_err(runtime)?;
+            Ok(pyo3::types::PyString::new(py, markdown).into_any().unbind())
+        }
+    }
+}
+
 /// Run `pqbench viz` on a bytemass row stream.
 ///
 /// Writes `output.sqlite` and `output.html`. Returns those paths.
@@ -363,6 +389,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(dump, module)?)?;
     module.add_function(wrap_pyfunction!(profile, module)?)?;
     module.add_function(wrap_pyfunction!(experiment, module)?)?;
+    module.add_function(wrap_pyfunction!(skill, module)?)?;
     module.add_function(wrap_pyfunction!(viz, module)?)?;
     module.add(
         "commands",
@@ -377,6 +404,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
                 "dump",
                 "profile",
                 "experiment",
+                "skill",
                 "viz",
             ],
         )?,

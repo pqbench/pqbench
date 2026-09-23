@@ -16,6 +16,7 @@ mod iceberg;
 mod lake;
 mod lz;
 mod profile;
+mod skill;
 mod table;
 mod unity;
 mod viz;
@@ -96,6 +97,13 @@ enum Command {
     )]
     Experiment(experiment::ExperimentArgs),
     #[command(
+        about = help::SKILL_ABOUT,
+        long_about = help::SKILL_LONG_ABOUT,
+        after_help = help::SKILL_AFTER,
+        after_long_help = help::SKILL_AFTER
+    )]
+    Skill(skill::SkillArgs),
+    #[command(
         about = help::VIZ_ABOUT,
         long_about = help::VIZ_LONG_ABOUT,
         after_help = help::VIZ_AFTER,
@@ -115,6 +123,7 @@ fn main() -> ExitCode {
         Command::Dump(args) => dump::run(&args),
         Command::Profile(args) => profile::run(&args),
         Command::Experiment(args) => experiment::run(&args),
+        Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args),
     };
     match result {

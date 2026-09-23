@@ -62,6 +62,6 @@ rewrites in that trial.
 ## What this command does not do
 
 It does not recommend a sort key, codec, or page size. Those belong to
-the caller (an agent plus domain knowledge) after looking at `profile`
-facts and these trial rows. Footer masses of an existing file stay on
+`pqbench skill parquet-advisor` after looking at `profile` facts and
+these trial rows. Footer masses of an existing file stay on
 `pqbench bytemass`.
