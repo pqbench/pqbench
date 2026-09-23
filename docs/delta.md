@@ -30,8 +30,8 @@ Load the latest snapshot, or an explicit version, then measure the named files.
 Enable the feature when building, running, or testing:
 
 ```
-cargo run -p pqbench-cli --features delta -- table ./path/to/table
-cargo run -p pqbench-cli --features delta -- table ./path/to/table --version 3
+cargo run -p pqbench-cli --features delta -- table ./path/to/table -o table.ndjson.zst
+cargo run -p pqbench-cli --features delta -- table ./path/to/table --version 3 -o table.ndjson.zst
 cargo run -p pqbench-cli --features delta -- table ./path/to/table | cargo run -p pqbench-cli -- bytemass --json
 cargo test -p pqbench --features delta
 ```
@@ -63,8 +63,20 @@ feature flag lives only in `pqbench::table::delta`.
 ## Document
 
 `pqbench.table` version 1 names the format, the JSON commits that remain on
-disk, and the active files (path, URI, log size). `bytemass` compares each
-measured file size to the log and fails if they differ.
+disk, and the active files (path, URI, log size). On a pipe that is one JSON object per line, each tagged with a table `id`:
+`begin`, then `pqbench.table-log` commits, then `pqbench.table-file` rows,
+then `end`. Lines from different ids may mix. `lake` emits `pqbench.table-ref` lines; `table --concurrency` loads them as
+they arrive. `bytemass --concurrency` measures files as they arrive.
+`bytemass` measures a file when that line arrives and compares its size to
+the log. A single `pqbench.table` object is still accepted. A terminal
+prints only the summary (format, snapshot, commit count, file count, bytes)
+and requires `-o` to write a zstd stream. On a pipe `-o` is optional and
+does not delay stdout:
+
+```
+pqbench table ./path/to/table -o table.ndjson.zst | pqbench bytemass
+pqbench bytemass table.ndjson.zst
+```
 
 ## Limitations
 

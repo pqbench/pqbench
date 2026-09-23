@@ -6,6 +6,7 @@ mod bench;
 mod bytemass;
 mod compression;
 mod document;
+mod emit;
 mod lz;
 mod table;
 
@@ -24,7 +25,7 @@ Examples:
   pqbench bytemass data.parquet
   pqbench bytemass part-1.parquet part-2.parquet
   pqbench bytemass 'data/*.parquet'
-  pqbench table ./delta-table
+  pqbench table ./delta-table -o table.ndjson.zst
   pqbench table ./delta-table | pqbench bytemass
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
@@ -45,13 +46,15 @@ enum Command {
 Examples:
   pqbench bytemass data.parquet
   pqbench table ./delta-table | pqbench bytemass
+  pqbench bytemass table.ndjson.zst
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#)]
     Bytemass(bytemass::BytemassArgs),
     /// fetch table metadata (detect the format, then load the log)
     #[command(after_help = r#"Examples:
-  pqbench table ./delta-table
-  pqbench table ./delta-table | pqbench bytemass
+  pqbench table ./delta-table -o table.ndjson.zst
+  pqbench table ./delta-table --concurrency 8 | pqbench bytemass --concurrency 8
+  pqbench table ./delta-table -o table.ndjson.zst | pqbench bytemass
   producer | pqbench table | pqbench bytemass
 "#)]
     Table(table::TableArgs),

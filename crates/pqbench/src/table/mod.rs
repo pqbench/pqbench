@@ -88,6 +88,18 @@ pub struct TableFile {
     pub size: u64,
 }
 
+impl TableFile {
+    /// Assemble a table file from its parts.
+    #[must_use]
+    pub fn new(path: impl Into<String>, uri: impl Into<String>, size: u64) -> Self {
+        Self {
+            path: path.into(),
+            uri: uri.into(),
+            size,
+        }
+    }
+}
+
 /// A versioned table document: format, log, and the files the snapshot names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -112,6 +124,32 @@ pub struct TableInfo {
     /// Storage options from the producer. A pipe to `bytemass` reuses them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+}
+
+impl TableInfo {
+    /// Assemble a table document from its parts.
+    #[must_use]
+    pub fn new(
+        format: TableFormat,
+        uri: impl Into<String>,
+        snapshot_version: u64,
+        partition_columns: Vec<String>,
+        log: Vec<LogCommit>,
+        files: Vec<TableFile>,
+        env: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            kind: "pqbench.table".into(),
+            version: 1,
+            format,
+            uri: uri.into(),
+            snapshot_version,
+            partition_columns,
+            log,
+            files,
+            env,
+        }
+    }
 }
 
 /// Arguments for [`load`].

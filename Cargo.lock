@@ -2771,6 +2771,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "zstd",
 ]
 
 [[package]]

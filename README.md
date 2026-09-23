@@ -65,18 +65,23 @@ Remote reads fetch the object metadata, the Parquet trailer, and the
 serialized footer — never the data pages. `s3://` support is the `aws`
 feature; a URI whose backend is not compiled in fails at runtime with the
 missing feature named. The library entry point (`bytemass::bytemass`) is
-always available and never feature-gated.
+always available and never feature-gated. A pipe streams one NDJSON row per
+column as each file is measured; a terminal prints a short summary and
+requires `-o` (zstd NDJSON).
 
 ### table
 
 Detect the table format and load its metadata. For Delta this is the
-transaction log and the active files. A terminal pretty-prints the log; a pipe
-writes a `pqbench.table` document that `bytemass` measures:
+transaction log and the active files. A pipe writes NDJSON. Every line carries a table `id`, so `lake` can stream
+table-refs, `table` can load several at once, and `bytemass` can measure
+a file as soon as that line arrives — even if tables finish out of order. A terminal prints a short summary and requires `-o` (zstd
+NDJSON):
 
 ```sh
-pqbench table ./path/to/table
+pqbench table ./path/to/table -o table.ndjson.zst
 pqbench table ./path/to/table | pqbench bytemass
-pqbench table ./path/to/table | pqbench bytemass --d3 > treemap.html
+pqbench table ./path/to/table --concurrency 8 | pqbench bytemass --concurrency 8
+pqbench bytemass table.ndjson.zst
 ```
 
 Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
