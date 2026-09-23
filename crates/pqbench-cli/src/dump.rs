@@ -1,5 +1,6 @@
-use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::io::{IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 use pqbench::dump::{self, DumpFile, DumpRequest, RowGroups};
@@ -7,7 +8,7 @@ use pqbench::lake::Lake;
 use pqbench::pattern::{self, Sample};
 use pqbench::table::{TableFile, TableInfo};
 
-use crate::document::{self, Document};
+use crate::document::{self, Record};
 use crate::CliError;
 
 /// Arguments for `dump`.
@@ -18,12 +19,6 @@ pub(crate) struct DumpArgs {
     /// write Parquet to this path instead of standard output
     #[arg(short, long, value_name = "PATH")]
     output: Option<PathBuf>,
-    /// emit CSV instead of Parquet
-    #[arg(long, conflicts_with = "json")]
-    csv: bool,
-    /// emit NDJSON instead of Parquet
-    #[arg(long = "json")]
-    json: bool,
     /// keep files whose partition path matches this glob (repeatable)
     #[arg(long, value_name = "GLOB")]
     include: Vec<String>,
@@ -43,10 +38,14 @@ pub(crate) fn run(args: &DumpArgs) -> Result<(), CliError> {
     pattern::keep("", &args.include, &args.exclude)?;
     let _ = RowGroups::parse(&args.row_groups)?;
     let files = match resolve(args)? {
-        Input::Parquet(inputs) => parquet_files(inputs, sample, args)?,
+        Input::Parquet(inputs, env) => parquet_files(inputs, sample, args, env)?,
+        Input::Files(files) => selected_files(files, sample, args)?,
         Input::Table(info) => table_files(&info, sample, args, None)?,
         Input::Lake(lake) => lake_files(lake, sample, args)?,
     };
+    if args.output.is_none() && std::io::stdout().is_terminal() {
+        return Err("dump writes Parquet; redirect standard output or pass --output".into());
+    }
     let request = DumpRequest {
         files,
         row_groups: RowGroups::parse(&args.row_groups)?,
@@ -54,30 +53,8 @@ pub(crate) fn run(args: &DumpArgs) -> Result<(), CliError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    if args.csv {
-        let dump = runtime.block_on(dump::dump(&request))?;
-        return write_text(args, dump::render_csv(&dump));
-    }
-    if args.json {
-        let dump = runtime.block_on(dump::dump(&request))?;
-        return write_text(args, dump::render_json(&dump)?);
-    }
-    if args.output.is_none() && std::io::stdout().is_terminal() {
-        return Err("dump writes Parquet; redirect standard output or pass --output".into());
-    }
     let bytes = runtime.block_on(dump::write_parquet(&request))?;
     write_bytes(args, &bytes)
-}
-
-fn write_text(args: &DumpArgs, text: String) -> Result<(), CliError> {
-    match &args.output {
-        Some(path) => std::fs::write(path, text)
-            .map_err(|error| format!("cannot write {}: {error}", path.display()).into()),
-        None => {
-            print!("{text}");
-            Ok(())
-        }
-    }
 }
 
 fn write_bytes(args: &DumpArgs, bytes: &[u8]) -> Result<(), CliError> {
@@ -92,7 +69,8 @@ fn write_bytes(args: &DumpArgs, bytes: &[u8]) -> Result<(), CliError> {
 }
 
 enum Input {
-    Parquet(Vec<String>),
+    Parquet(Vec<String>, BTreeMap<String, String>),
+    Files(Vec<DumpFile>),
     Table(TableInfo),
     Lake(Lake),
 }
@@ -104,21 +82,60 @@ fn resolve(args: &DumpArgs) -> Result<Input, CliError> {
         }
         return from_document("-");
     }
-    if args.inputs.len() == 1 && document::looks_like_json(&args.inputs[0]) {
+    if args.inputs.len() == 1 && document::looks_like_document(&args.inputs[0]) {
         return from_document(&args.inputs[0]);
     }
-    Ok(Input::Parquet(args.inputs.clone()))
+    Ok(Input::Parquet(args.inputs.clone(), BTreeMap::new()))
 }
 
 fn from_document(input: &str) -> Result<Input, CliError> {
-    match document::read_document(input)? {
-        Document::Table(info) => Ok(Input::Table(info)),
-        Document::Lake(lake) => Ok(Input::Lake(lake)),
-        Document::LakeSource(_) => {
-            Err("a lake source lists tables; pass it to `pqbench lake` first".into())
+    let reader: Box<dyn Read> = if input == "-" {
+        Box::new(std::io::stdin())
+    } else {
+        document::open_file(Path::new(input))?
+    };
+    let mut table = None;
+    let mut lake = None;
+    let mut remote = None;
+    let mut files = Vec::new();
+    let mut envs = BTreeMap::new();
+    document::visit_records(reader, |record| {
+        match record {
+            Record::Table(info) => table = Some(info),
+            Record::Lake(listed) => lake = Some(listed),
+            Record::RemoteSource(source) => remote = Some(source),
+            Record::Begin(begin) => {
+                envs.insert(begin.id.clone(), begin.env);
+            }
+            Record::File { id, file } => files.push(DumpFile {
+                path: file.path,
+                uri: file.uri,
+                table: Some(id.clone()),
+                env: envs.get(&id).cloned().unwrap_or_default(),
+            }),
+            Record::Log { .. } | Record::End { .. } | Record::LakeBegin | Record::LakeEnd => {}
+            Record::TableRef(_) => {
+                return Err("a table-ref names a table; pass it to `pqbench table` first".into());
+            }
+            Record::LakeSource(_) => {
+                return Err("a lake source lists tables; pass it to `pqbench lake` first".into());
+            }
         }
-        Document::RemoteSource(source) => Ok(Input::Parquet(source.inputs)),
+        Ok(())
+    })?;
+    if let Some(info) = table {
+        return Ok(Input::Table(info));
     }
+    if let Some(listed) = lake {
+        return Ok(Input::Lake(listed));
+    }
+    if let Some(source) = remote {
+        return Ok(Input::Parquet(source.inputs, source.env));
+    }
+    if files.is_empty() {
+        return Err("document has no files to dump".into());
+    }
+    Ok(Input::Files(files))
 }
 
 fn lake_files(lake: Lake, sample: Sample, args: &DumpArgs) -> Result<Vec<DumpFile>, CliError> {
@@ -142,6 +159,7 @@ fn parquet_files(
     inputs: Vec<String>,
     sample: Sample,
     args: &DumpArgs,
+    env: BTreeMap<String, String>,
 ) -> Result<Vec<DumpFile>, CliError> {
     let inputs = if selecting(args) {
         pattern::select(inputs, String::as_str, &args.include, &args.exclude, sample)?
@@ -154,9 +172,29 @@ fn parquet_files(
             path: input.clone(),
             uri: input,
             table: None,
-            env: Default::default(),
+            env: env.clone(),
         })
         .collect())
+}
+
+fn selected_files(
+    files: Vec<DumpFile>,
+    sample: Sample,
+    args: &DumpArgs,
+) -> Result<Vec<DumpFile>, CliError> {
+    if files.is_empty() {
+        return Err("document has no files to dump".into());
+    }
+    if selecting(args) {
+        return Ok(pattern::select(
+            files,
+            |file| file.path.as_str(),
+            &args.include,
+            &args.exclude,
+            sample,
+        )?);
+    }
+    Ok(files)
 }
 
 fn table_files(

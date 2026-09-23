@@ -2,12 +2,15 @@
 //!
 //! File selection (include/exclude/sample) is the caller's job. This module
 //! reads the named files — optionally only the first row groups — and writes
-//! Parquet, CSV, or NDJSON. The only module that names the `parquet` crate
-//! is this one and `parquet_impl`.
+//! Parquet. Copied pages keep their source encodings; newly written columns
+//! default to zstd. The only module that names the `parquet` crate is this
+//! one and `parquet_impl`.
 
 use bytes::Bytes;
+use parquet::basic::Compression;
 use parquet::column::writer::ColumnCloseResult;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{ChunkReader, FileReader, Length, SerializedFileReader};
 use parquet::file::writer::SerializedFileWriter;
 use parquet::record::reader::RowIter;
@@ -17,6 +20,7 @@ use std::fs::File;
 use std::io::{Cursor, Read, Write};
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::object_store;
 use crate::parquet_helpers::Error;
@@ -130,7 +134,7 @@ pub async fn write_parquet(request: &DumpRequest) -> Result<Vec<u8>, Error> {
         .schema_descr_ptr()
         .root_schema_ptr();
     let mut out = Vec::new();
-    let mut writer = SerializedFileWriter::new(&mut out, schema.clone(), Default::default())
+    let mut writer = SerializedFileWriter::new(&mut out, schema.clone(), writer_properties())
         .map_err(parquet_error)?;
     append_groups(
         &mut writer,
@@ -160,36 +164,12 @@ pub async fn write_parquet(request: &DumpRequest) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// Render the dump as CSV (header, then one row per line).
-pub fn render_csv(dump: &Dump) -> String {
-    let mut out = csv_line(&dump.columns);
-    out.push('\n');
-    for row in &dump.rows {
-        let fields: Vec<String> = row.iter().map(csv_value).collect();
-        out.push_str(&csv_line(&fields));
-        out.push('\n');
-    }
-    out
-}
-
-/// Render the dump as NDJSON: one object per row.
-///
-/// # Errors
-/// Fails when a row cannot be serialized.
-pub fn render_json(dump: &Dump) -> Result<String, Error> {
-    let mut out = String::new();
-    for row in &dump.rows {
-        let mut object = Map::new();
-        for (column, value) in dump.columns.iter().zip(row) {
-            object.insert(column.clone(), value.clone());
-        }
-        out.push_str(
-            &serde_json::to_string(&Value::Object(object))
-                .map_err(|error| Error(format!("cannot serialize dump row: {error}")))?,
-        );
-        out.push('\n');
-    }
-    Ok(out)
+fn writer_properties() -> parquet::file::properties::WriterPropertiesPtr {
+    Arc::new(
+        WriterProperties::builder()
+            .set_compression(Compression::ZSTD(Default::default()))
+            .build(),
+    )
 }
 
 struct Source {
@@ -571,26 +551,4 @@ fn align(columns: &[String], file_columns: &[String], row: Vec<Value>) -> Vec<Va
                 .unwrap_or(Value::Null)
         })
         .collect()
-}
-
-fn csv_value(value: &Value) -> String {
-    match value {
-        Value::Null => String::new(),
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }
-}
-
-fn csv_line(fields: &[String]) -> String {
-    fields
-        .iter()
-        .map(|field| {
-            if field.contains([',', '"', '\n', '\r']) {
-                format!("\"{}\"", field.replace('"', "\"\""))
-            } else {
-                field.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",")
 }
