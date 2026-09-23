@@ -179,9 +179,13 @@ async fn queue_record(
                 .await?;
             }
         }
-        Record::TableRef(table) => {
-            envs.insert(table.id, table.env);
+        Record::TableRef(_) | Record::Lake(_) | Record::LakeSource(_) => {
+            return Err(
+                "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
+                    .into(),
+            );
         }
+        Record::LakeBegin | Record::LakeEnd => {}
         Record::Begin(begin) => {
             envs.insert(begin.id.clone(), begin.env);
             open.insert(begin.id);
@@ -193,12 +197,6 @@ async fn queue_record(
         Record::Log { .. } => {}
         Record::End { id } => {
             open.remove(&id);
-        }
-        Record::Lake(_) | Record::LakeSource(_) => {
-            return Err(
-                "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
-                    .into(),
-            );
         }
     }
     Ok(())
@@ -292,7 +290,6 @@ async fn measure_document_page(reader: impl Read, args: &BytemassArgs) -> Result
         match record {
             Record::RemoteSource(source) => remote = Some(source),
             Record::Table(info) => oneshot = Some(info),
-            Record::TableRef(_) => {}
             Record::Begin(begin) => {
                 env = begin.env;
                 begun = true;
@@ -302,7 +299,11 @@ async fn measure_document_page(reader: impl Read, args: &BytemassArgs) -> Result
             }
             Record::Log { .. } => {}
             Record::End { .. } => ended = true,
-            Record::Lake(_) | Record::LakeSource(_) => {
+            Record::TableRef(_)
+            | Record::Lake(_)
+            | Record::LakeSource(_)
+            | Record::LakeBegin
+            | Record::LakeEnd => {
                 return Err(
                     "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
                         .into(),

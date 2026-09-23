@@ -1,21 +1,28 @@
 //! List Delta tables from a Unity Catalog endpoint.
 //!
 //! Unity Catalog OSS and Databricks expose the same list routes. Pagination
-//! follows the Databricks REST guide: `max_results=0`, then repeat while
-//! `next_page_token` is present. An empty page can still carry a token.
+//! follows `next_page_token`. Pages are bounded (`max_results=50`). Table
+//! list requests omit columns and properties. Catalog and schema loops run
+//! concurrently up to `--concurrency`. `--include` / `--exclude` prune the
+//! walk when the leading name is a literal.
 //!
 //! https://docs.databricks.com/api/workspace/tables/list
 //! https://docs.databricks.com/aws/en/dev-tools/rest-api
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 
-use pqbench::lake::{Lake, LakeTable};
+use pqbench::lake::LakeTable;
 use serde::Deserialize;
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 
 use crate::document::LakeSource;
+use crate::filter::NameFilter;
 use crate::CliError;
 
 const PAGE_CAP: usize = 32;
+const PAGE_SIZE: u32 = 50;
 
 #[derive(Deserialize)]
 struct Named {
@@ -24,6 +31,7 @@ struct Named {
 
 #[derive(Deserialize)]
 struct CatalogsPage {
+    #[serde(default)]
     catalogs: Vec<Named>,
     #[serde(default)]
     next_page_token: Option<String>,
@@ -31,6 +39,7 @@ struct CatalogsPage {
 
 #[derive(Deserialize)]
 struct SchemasPage {
+    #[serde(default)]
     schemas: Vec<Named>,
     #[serde(default)]
     next_page_token: Option<String>,
@@ -38,6 +47,7 @@ struct SchemasPage {
 
 #[derive(Deserialize)]
 struct TablesPage {
+    #[serde(default)]
     tables: Vec<TableEntry>,
     #[serde(default)]
     next_page_token: Option<String>,
@@ -50,48 +60,140 @@ struct TableEntry {
     #[serde(default)]
     full_name: Option<String>,
     #[serde(default)]
+    table_type: Option<String>,
+    #[serde(default)]
     data_source_format: Option<String>,
     #[serde(default)]
     storage_location: Option<String>,
 }
 
-/// List every Delta table the catalog will show, in name order.
-pub(crate) fn list_tables(source: &LakeSource) -> Result<Lake, CliError> {
+/// List Delta tables, sending each as soon as its schema page arrives.
+pub(crate) async fn list_tables(
+    source: &LakeSource,
+    filter: &NameFilter,
+    concurrency: usize,
+    mut on_table: impl FnMut(LakeTable) -> Result<(), CliError>,
+) -> Result<usize, CliError> {
     let root = api_root(&source.endpoint);
-    let token = source.token.as_deref().filter(|token| !token.is_empty());
-    let mut tables = Vec::new();
-    for catalog in names::<CatalogsPage>(
-        &root,
+    let token = source.token.clone().filter(|token| !token.is_empty());
+    let env = source.env.clone();
+    let catalogs = catalogs_to_list(&root, token.as_deref(), source, filter)?;
+    let (tx, mut rx) = mpsc::unbounded_channel::<Result<LakeTable, String>>();
+    let mut set: JoinSet<Result<(), String>> = JoinSet::new();
+    let mut tables = 0usize;
+
+    for catalog in catalogs {
+        let schemas = schemas_to_list(&root, token.as_deref(), &catalog, source, filter)?;
+        for schema in schemas {
+            while set.len() >= concurrency {
+                if let Some(done) = set.join_next().await {
+                    done.map_err(|error| error.to_string())??;
+                }
+                drain_tables(&mut rx, &mut on_table, &mut tables)?;
+            }
+            let root = root.clone();
+            let token = token.clone();
+            let catalog = catalog.clone();
+            let env = env.clone();
+            let filter = filter.clone();
+            let tx = tx.clone();
+            set.spawn_blocking(move || {
+                tables_in(
+                    &root,
+                    token.as_deref(),
+                    &catalog,
+                    &schema,
+                    &env,
+                    &filter,
+                    &tx,
+                )
+            });
+        }
+    }
+    drop(tx);
+    while let Some(done) = set.join_next().await {
+        done.map_err(|error| error.to_string())??;
+        drain_tables(&mut rx, &mut on_table, &mut tables)?;
+    }
+    while let Some(item) = rx.recv().await {
+        on_table(item?)?;
+        tables += 1;
+    }
+    if tables == 0 {
+        return Err("catalog listed no Delta tables".into());
+    }
+    Ok(tables)
+}
+
+fn drain_tables(
+    rx: &mut mpsc::UnboundedReceiver<Result<LakeTable, String>>,
+    on_table: &mut impl FnMut(LakeTable) -> Result<(), CliError>,
+    tables: &mut usize,
+) -> Result<(), CliError> {
+    while let Ok(item) = rx.try_recv() {
+        on_table(item?)?;
+        *tables += 1;
+    }
+    Ok(())
+}
+
+fn catalogs_to_list(
+    root: &str,
+    token: Option<&str>,
+    source: &LakeSource,
+    filter: &NameFilter,
+) -> Result<Vec<String>, CliError> {
+    if let Some(catalog) = nonempty(&source.catalog) {
+        return Ok(vec![catalog.to_string()]);
+    }
+    if let Some(scoped) = filter.catalog_scope() {
+        return Ok(scoped
+            .into_iter()
+            .filter(|catalog| filter.keeps(catalog))
+            .collect());
+    }
+    let names = names::<CatalogsPage>(
+        root,
         token,
         "/catalogs",
         &[],
         |page| page.catalogs.iter().map(|item| item.name.clone()).collect(),
         |page| page_token(&page.next_page_token),
-    )? {
-        let schemas = names::<SchemasPage>(
-            &root,
-            token,
-            "/schemas",
-            &[("catalog_name", catalog.as_str())],
-            |page| page.schemas.iter().map(|item| item.name.clone()).collect(),
-            |page| page_token(&page.next_page_token),
-        )?;
-        for schema in schemas {
-            for table in tables_in(&root, token, &catalog, &schema, &source.env)? {
-                tables.push(table);
-            }
-        }
+    )?;
+    Ok(names
+        .into_iter()
+        .filter(|catalog| filter.keeps(catalog))
+        .collect())
+}
+
+fn schemas_to_list(
+    root: &str,
+    token: Option<&str>,
+    catalog: &str,
+    source: &LakeSource,
+    filter: &NameFilter,
+) -> Result<Vec<String>, CliError> {
+    if let Some(schema) = nonempty(&source.schema) {
+        return Ok(vec![schema.to_string()]);
     }
-    tables.sort_by(|left, right| left.name.cmp(&right.name));
-    if tables.is_empty() {
-        return Err("catalog listed no Delta tables".into());
+    if let Some(scoped) = filter.schema_scope(catalog) {
+        return Ok(scoped
+            .into_iter()
+            .filter(|schema| filter.keeps(&format!("{catalog}.{schema}")))
+            .collect());
     }
-    Ok(Lake {
-        kind: "pqbench.lake".into(),
-        version: 1,
-        name: Some(root),
-        tables,
-    })
+    let names = names::<SchemasPage>(
+        root,
+        token,
+        "/schemas",
+        &[("catalog_name", catalog)],
+        |page| page.schemas.iter().map(|item| item.name.clone()).collect(),
+        |page| page_token(&page.next_page_token),
+    )?;
+    Ok(names
+        .into_iter()
+        .filter(|schema| filter.keeps(&format!("{catalog}.{schema}")))
+        .collect())
 }
 
 fn api_root(endpoint: &str) -> String {
@@ -136,22 +238,30 @@ fn tables_in(
     catalog: &str,
     schema: &str,
     env: &BTreeMap<String, String>,
-) -> Result<Vec<LakeTable>, CliError> {
-    let mut tables = Vec::new();
+    filter: &NameFilter,
+    tx: &mpsc::UnboundedSender<Result<LakeTable, String>>,
+) -> Result<(), String> {
     for page in pages::<TablesPage>(
         root,
         token,
         "/tables",
         &[("catalog_name", catalog), ("schema_name", schema)],
         |page| page_token(&page.next_page_token),
-    )? {
+    )
+    .map_err(|error| error.to_string())?
+    {
         for item in page.tables {
-            if let Some(table) = lake_table(item, catalog, schema, env)? {
-                tables.push(table);
+            if let Some(table) =
+                lake_table(item, catalog, schema, env).map_err(|error| error.to_string())?
+            {
+                if filter.keeps(&table.name) {
+                    tx.send(Ok(table))
+                        .map_err(|_| "lake output closed".to_string())?;
+                }
             }
         }
     }
-    Ok(tables)
+    Ok(())
 }
 
 fn lake_table(
@@ -160,14 +270,20 @@ fn lake_table(
     schema: &str,
     env: &BTreeMap<String, String>,
 ) -> Result<Option<LakeTable>, CliError> {
-    let format = item.data_source_format.as_deref().unwrap_or("DELTA");
+    if let Some(kind) = item.table_type.as_deref() {
+        if !kind.eq_ignore_ascii_case("MANAGED") && !kind.eq_ignore_ascii_case("EXTERNAL") {
+            return Ok(None);
+        }
+    }
+    let Some(format) = item.data_source_format.filter(|format| !format.is_empty()) else {
+        return Ok(None);
+    };
     if !format.eq_ignore_ascii_case("DELTA") {
         return Ok(None);
     }
-    let uri = item
-        .storage_location
-        .filter(|uri| !uri.is_empty())
-        .ok_or_else(|| format!("Delta table {catalog}.{schema} is missing storage_location"))?;
+    let Some(uri) = item.storage_location.filter(|uri| !uri.is_empty()) else {
+        return Ok(None);
+    };
     let name = item
         .full_name
         .filter(|name| !name.is_empty())
@@ -202,7 +318,10 @@ fn pages<P: for<'de> Deserialize<'de>>(
         if pages.len() >= PAGE_CAP {
             return Err(format!("catalog listed more than {PAGE_CAP} pages at {path}").into());
         }
-        let mut url = format!("{root}{path}?max_results=0");
+        let mut url = format!("{root}{path}?max_results={PAGE_SIZE}");
+        if path == "/tables" {
+            url.push_str("&omit_columns=true&omit_properties=true");
+        }
         for (key, value) in query {
             url.push('&');
             url.push_str(key);
@@ -233,8 +352,10 @@ fn get_json<T: for<'de> Deserialize<'de>>(url: &str, token: Option<&str>) -> Res
         None => request,
     };
     let response = request.call().map_err(catalog_error)?;
-    let body = response
-        .into_string()
+    let mut body = String::new();
+    response
+        .into_reader()
+        .read_to_string(&mut body)
         .map_err(|error| format!("catalog response was not text: {error}"))?;
     serde_json::from_str(&body)
         .map_err(|error| format!("catalog response was not the expected document: {error}").into())
@@ -243,12 +364,8 @@ fn get_json<T: for<'de> Deserialize<'de>>(url: &str, token: Option<&str>) -> Res
 fn catalog_error(error: ureq::Error) -> CliError {
     match error {
         ureq::Error::Status(code, response) => {
-            let body = response
-                .into_string()
-                .map_err(|error| {
-                    format!("catalog returned HTTP {code} and the body could not be read: {error}")
-                })
-                .unwrap_or_else(|error| error.to_string());
+            let mut body = String::new();
+            let _ = response.into_reader().read_to_string(&mut body);
             format!("catalog returned HTTP {code}: {body}").into()
         }
         other => format!("catalog request failed: {other}").into(),
@@ -266,4 +383,8 @@ fn encode(value: &str) -> String {
         }
     }
     encoded
+}
+
+fn nonempty(value: &Option<String>) -> Option<&str> {
+    value.as_deref().filter(|value| !value.is_empty())
 }

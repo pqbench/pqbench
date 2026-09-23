@@ -7,6 +7,7 @@ mod bytemass;
 mod compression;
 mod document;
 mod emit;
+mod filter;
 mod lake;
 mod lz;
 mod table;

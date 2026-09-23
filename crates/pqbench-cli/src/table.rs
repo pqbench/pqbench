@@ -198,6 +198,7 @@ async fn queue_record(
         Record::LakeSource(_) => {
             Err("a lake source lists tables; pass it to `pqbench lake` first".into())
         }
+        Record::LakeBegin | Record::LakeEnd => Ok(()),
         Record::Begin(_) | Record::Log { .. } | Record::File { .. } | Record::End { .. } => {
             Err("a loaded table stream goes to `pqbench bytemass`, not `pqbench table`".into())
         }

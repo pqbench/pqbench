@@ -98,24 +98,27 @@ producer | pqbench table | pqbench bytemass
 
 ### lake
 
-List Delta tables and write a `pqbench.lake` document that `pqbench table` can
-load. A directory that contains `_delta_log` is one table. A
-`pqbench.lake-source` document, from a file or stdin, lists a Unity Catalog.
-The same routes serve [Unity Catalog OSS](https://docs.unitycatalog.io/) and
+List Delta tables as `pqbench.table-ref` lines. A directory that contains
+`_delta_log` is one table. A `pqbench.lake-source` document, from a file or
+stdin, lists a Unity Catalog. The same routes serve
+[Unity Catalog OSS](https://docs.unitycatalog.io/) and
 [Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
-then schemas, then tables, following `next_page_token`. `token` is the
-Databricks bearer token. `env` holds `AWS_*` storage credentials and is copied
-onto each table for the next command.
+then schemas, then tables, following `next_page_token`. `--concurrency` lists
+schemas in parallel. `--include` / `--exclude` take a glob or an exact prefix
+and prune the walk when the leading name is a literal (`--include main` does
+not list the other catalogs). `token` is the Databricks bearer token. `env`
+holds `AWS_*` storage credentials and is copied onto each table-ref.
 
 ```sh
-pqbench lake ./warehouse | pqbench table | pqbench bytemass
-pqbench lake unity.json | pqbench table | pqbench bytemass
+pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
+pqbench lake unity.json --include main --concurrency 8 | pqbench table | pqbench bytemass
 ```
 
 ```json
 {"kind": "pqbench.lake-source", "version": 1,
  "endpoint": "https://example.cloud.databricks.com",
  "token": "...",
+ "catalog": "main",
  "env": {"AWS_REGION": "us-east-1"}}
 ```
 

@@ -3,9 +3,12 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use pqbench::lake::{self, Lake};
+use pqbench::lake::{self, Lake, LakeTable};
+use serde::Serialize;
 
 use crate::document::{self, Record};
+use crate::emit::Emit;
+use crate::filter::NameFilter;
 use crate::CliError;
 
 /// Arguments for `lake`.
@@ -28,23 +31,52 @@ pub(crate) struct LakeArgs {
 }
 
 pub(crate) fn run(args: &LakeArgs) -> Result<(), CliError> {
-    let _ = (args.output.as_ref(), args.concurrency);
-    let mut lake = match &args.input {
-        None if !std::io::stdin().is_terminal() => read_document("-")?,
-        None => return Err("lake needs a directory or a document on standard input".into()),
-        Some(value) if document::looks_like_document(value) => read_document(value)?,
-        Some(path) => lake::discover(Path::new(path))?,
-    };
-    lake.tables
-        .retain(|table| selected(&table.name, &args.include, &args.exclude));
-    if lake.tables.is_empty() {
-        return Err("lake listed no tables after include/exclude".into());
-    }
-    write(&lake)
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_async(args))
 }
 
-fn read_document(input: &str) -> Result<Lake, CliError> {
+async fn run_async(args: &LakeArgs) -> Result<(), CliError> {
+    let filter = NameFilter::new(args.include.clone(), args.exclude.clone());
+    let mut emit = Emit::open("lake", args.output.as_deref())?;
+    emit.write(&BeginRecord {
+        kind: "pqbench.lake",
+        version: 1,
+        event: "begin",
+    })?;
+    let tables = match &args.input {
+        None if !std::io::stdin().is_terminal() => {
+            stream_document("-", &filter, args.concurrency.get(), &mut emit).await?
+        }
+        None => return Err("lake needs a directory or a document on standard input".into()),
+        Some(value) if document::looks_like_document(value) => {
+            stream_document(value, &filter, args.concurrency.get(), &mut emit).await?
+        }
+        Some(path) => write_discovered(Path::new(path), &filter, &mut emit)?,
+    };
+    emit.write(&EndRecord {
+        kind: "pqbench.lake",
+        event: "end",
+        table_count: tables,
+    })?;
+    emit.finish(&format!(
+        "tables: {tables}{}\n",
+        args.output
+            .as_ref()
+            .map(|path| format!("\noutput: {}", path.display()))
+            .unwrap_or_default()
+    ))
+}
+
+async fn stream_document(
+    input: &str,
+    filter: &NameFilter,
+    concurrency: usize,
+    emit: &mut Emit,
+) -> Result<usize, CliError> {
     let mut lake = None;
+    let mut source = None;
     let reader: Box<dyn std::io::Read> = if input == "-" {
         Box::new(std::io::stdin())
     } else {
@@ -55,12 +87,22 @@ fn read_document(input: &str) -> Result<Lake, CliError> {
             lake = Some(listed);
             Ok(())
         }
-        Record::LakeSource(source) => {
-            lake = Some(crate::unity::list_tables(&source)?);
+        Record::LakeSource(listed) => {
+            source = Some(listed);
             Ok(())
         }
+        Record::LakeBegin | Record::LakeEnd => Ok(()),
+        Record::TableRef(table) => write_ref(
+            emit,
+            &LakeTable {
+                name: table.id,
+                uri: table.uri,
+                env: table.env,
+                info: None,
+            },
+        )
+        .map(|_| ()),
         Record::Table(_)
-        | Record::TableRef(_)
         | Record::RemoteSource(_)
         | Record::Begin(_)
         | Record::Log { .. }
@@ -70,35 +112,70 @@ fn read_document(input: &str) -> Result<Lake, CliError> {
                 .into(),
         ),
     })?;
-    lake.ok_or_else(|| "empty lake document".into())
-}
-
-pub(crate) fn write(lake: &Lake) -> Result<(), CliError> {
-    let mut stdout = std::io::stdout().lock();
-    use std::io::Write;
-    if stdout.is_terminal() {
-        write!(stdout, "{}", lake::render_text(lake))?;
-    } else {
-        writeln!(stdout, "{}", lake::render_json(lake)?)?;
+    if let Some(source) = source {
+        return crate::unity::list_tables(&source, filter, concurrency, |table| {
+            write_ref(emit, &table).map(|_| ())
+        })
+        .await;
     }
-    Ok(())
-}
-
-fn selected(name: &str, include: &[String], exclude: &[String]) -> bool {
-    let kept = include.is_empty() || include.iter().any(|pattern| matches_name(name, pattern));
-    kept && !exclude.iter().any(|pattern| matches_name(name, pattern))
-}
-
-fn matches_name(name: &str, pattern: &str) -> bool {
-    if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
-        return glob_match(pattern, name);
+    if let Some(lake) = lake {
+        return write_lake(&lake, filter, emit);
     }
-    name == pattern || name.starts_with(&format!("{pattern}.")) || name.starts_with(&format!("{pattern}/"))
+    Err("empty lake document".into())
 }
 
-fn glob_match(pattern: &str, name: &str) -> bool {
-    let Ok(glob) = glob::Pattern::new(pattern) else {
-        return name == pattern;
-    };
-    glob.matches(name)
+fn write_discovered(root: &Path, filter: &NameFilter, emit: &mut Emit) -> Result<usize, CliError> {
+    write_lake(&lake::discover(root)?, filter, emit)
+}
+
+fn write_lake(lake: &Lake, filter: &NameFilter, emit: &mut Emit) -> Result<usize, CliError> {
+    let mut tables = 0usize;
+    for table in &lake.tables {
+        if filter.keeps(&table.name) {
+            write_ref(emit, table)?;
+            tables += 1;
+        }
+    }
+    if tables == 0 {
+        return Err("lake listed no tables after include/exclude".into());
+    }
+    Ok(tables)
+}
+
+fn write_ref(emit: &mut Emit, table: &LakeTable) -> Result<(), CliError> {
+    emit.write(&TableRefRecord {
+        kind: "pqbench.table-ref",
+        version: 1,
+        id: &table.name,
+        uri: &table.uri,
+        env: &table.env,
+    })
+}
+
+#[derive(Serialize)]
+struct BeginRecord {
+    kind: &'static str,
+    version: u32,
+    event: &'static str,
+}
+
+#[derive(Serialize)]
+struct EndRecord {
+    kind: &'static str,
+    event: &'static str,
+    table_count: usize,
+}
+
+#[derive(Serialize)]
+struct TableRefRecord<'a> {
+    kind: &'static str,
+    version: u32,
+    id: &'a str,
+    uri: &'a str,
+    #[serde(skip_serializing_if = "map_empty")]
+    env: &'a std::collections::BTreeMap<String, String>,
+}
+
+fn map_empty(env: &&std::collections::BTreeMap<String, String>) -> bool {
+    env.is_empty()
 }

@@ -34,6 +34,12 @@ pub(crate) struct LakeSource {
     pub token: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// List only this catalog. Skips `/catalogs`.
+    #[serde(default)]
+    pub catalog: Option<String>,
+    /// List only this schema. Requires `catalog`.
+    #[serde(default)]
+    pub schema: Option<String>,
 }
 
 /// A versioned document naming what an external producer resolved, plus the
@@ -65,6 +71,8 @@ pub(crate) enum Record {
     },
     Table(TableInfo),
     Lake(Lake),
+    LakeBegin,
+    LakeEnd,
     LakeSource(LakeSource),
     RemoteSource(RemoteSource),
 }
@@ -123,7 +131,10 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             let (id, file) = parse_file(value)?;
             Ok(Record::File { id, file })
         }
-        ("pqbench.lake", _) => Ok(Record::Lake(parse_lake(value)?)),
+        ("pqbench.lake", Some("begin")) => Ok(Record::LakeBegin),
+        ("pqbench.lake", Some("end")) => Ok(Record::LakeEnd),
+        ("pqbench.lake", None) => Ok(Record::Lake(parse_lake(value)?)),
+        ("pqbench.lake", Some(other)) => Err(format!("unsupported lake event `{other}`").into()),
         ("pqbench.lake-source", _) => Ok(Record::LakeSource(parse_lake_source(value)?)),
         ("pqbench.remote-source", _) => Ok(Record::RemoteSource(parse_remote(value)?)),
         (other, _) => Err(invalid_kind(other)),
@@ -257,6 +268,14 @@ fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
     }
     if source.endpoint.trim().is_empty() {
         return Err("lake source needs an endpoint".into());
+    }
+    if source
+        .schema
+        .as_deref()
+        .is_some_and(|name| !name.is_empty())
+        && source.catalog.as_deref().is_none_or(|name| name.is_empty())
+    {
+        return Err("lake source schema needs a catalog".into());
     }
     aws_env_only(&source.env)?;
     Ok(source)

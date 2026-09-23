@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
@@ -10,19 +11,34 @@ fn pqbench() -> Command {
 /// client must send; `None` is Unity OSS, which sends no Authorization header.
 struct Catalog {
     address: String,
+    seen: Arc<Mutex<Vec<String>>>,
     _thread: std::thread::JoinHandle<()>,
 }
 
 impl Catalog {
     fn spawn(expect_bearer: Option<&'static str>, tables: Vec<Value>) -> Self {
+        Self::spawn_with_catalogs(expect_bearer, vec!["main"], tables)
+    }
+
+    fn spawn_with_catalogs(
+        expect_bearer: Option<&'static str>,
+        catalogs: Vec<&'static str>,
+        tables: Vec<Value>,
+    ) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_thread = seen.clone();
         let thread = std::thread::spawn(move || {
             for stream in listener.incoming().take(64) {
                 let mut stream = stream.unwrap();
                 let mut buffer = [0u8; 4096];
                 let n = stream.read(&mut buffer).unwrap_or(0);
                 let request = String::from_utf8_lossy(&buffer[..n]);
+                seen_thread
+                    .lock()
+                    .unwrap()
+                    .push(request.lines().next().unwrap_or("").to_string());
                 if expect_bearer.is_some()
                     && !request
                         .contains(&format!("Authorization: Bearer {}", expect_bearer.unwrap()))
@@ -41,7 +57,7 @@ impl Catalog {
                 {
                     panic!("Unity OSS request must not send an Authorization header");
                 }
-                let body = catalog_body(&request, &tables);
+                let body = catalog_body(&request, &catalogs, &tables);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     body.len()
@@ -52,23 +68,39 @@ impl Catalog {
         });
         Self {
             address,
+            seen,
             _thread: thread,
         }
     }
+
+    fn requested(&self, needle: &str) -> bool {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains(needle))
+    }
 }
 
-fn catalog_body(request: &str, tables: &[Value]) -> String {
+fn catalog_body(request: &str, catalogs: &[&str], tables: &[Value]) -> String {
     let path = request.split_whitespace().nth(1).unwrap_or("");
     if path.contains("/catalogs") {
-        return r#"{"catalogs":[{"name":"main"}]}"#.into();
+        let items: Vec<Value> = catalogs.iter().map(|name| json!({"name": name})).collect();
+        return json!({"catalogs": items}).to_string();
     }
     if path.contains("/schemas") {
+        if path.contains("schema_name=empty") || path.contains("catalog_name=samples") {
+            return "{}".into();
+        }
         return r#"{"schemas":[{"name":"default"}]}"#.into();
     }
     // Databricks list tables: a page may be empty and still carry next_page_token.
     // https://docs.databricks.com/api/workspace/tables/list
     if path.contains("page_token=more") {
         return json!({"tables": tables}).to_string();
+    }
+    if path.contains("/tables") && path.contains("catalog_name=samples") {
+        return "{}".into();
     }
     json!({"tables": [], "next_page_token": "more"}).to_string()
 }
@@ -85,8 +117,24 @@ fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn ndjson(stdout: &[u8]) -> Vec<Value> {
+    stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
+        .collect()
+}
+
+fn table_refs(records: &[Value]) -> Vec<Value> {
+    records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.table-ref")
+        .cloned()
+        .collect()
+}
+
 #[test]
-fn lake_lists_delta_tables_as_json_on_a_pipe() {
+fn lake_lists_delta_tables_as_ndjson_on_a_pipe() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("sales/events/_delta_log")).unwrap();
     std::fs::create_dir_all(root.path().join("orders/_delta_log")).unwrap();
@@ -96,11 +144,42 @@ fn lake_lists_delta_tables_as_json_on_a_pipe() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let lake: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(lake["kind"], "pqbench.lake");
-    assert_eq!(lake["tables"][0]["name"], "orders");
-    assert_eq!(lake["tables"][1]["name"], "sales/events");
-    assert!(lake["tables"][0].get("info").is_none());
+    let records = ndjson(&output.stdout);
+    assert_eq!(records[0]["event"], "begin");
+    let refs = table_refs(&records);
+    assert_eq!(refs[0]["id"], "orders");
+    assert_eq!(refs[1]["id"], "sales/events");
+    assert_eq!(records.last().unwrap()["event"], "end");
+    assert_eq!(records.last().unwrap()["table_count"], 2);
+}
+
+#[test]
+fn lake_include_and_exclude_filter_directory_names() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("sales/events/_delta_log")).unwrap();
+    std::fs::create_dir_all(root.path().join("sales/tmp/_delta_log")).unwrap();
+    std::fs::create_dir_all(root.path().join("orders/_delta_log")).unwrap();
+    let output = pqbench()
+        .args([
+            "lake",
+            root.path().to_str().unwrap(),
+            "--include",
+            "sales/*",
+            "--exclude",
+            "sales/tmp",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ids: Vec<_> = table_refs(&ndjson(&output.stdout))
+        .into_iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["sales/events"]);
 }
 
 #[test]
@@ -110,6 +189,7 @@ fn unity_oss_lists_delta_tables_without_a_token() {
         "catalog_name": "main",
         "schema_name": "default",
         "full_name": "main.default.events",
+        "table_type": "EXTERNAL",
         "data_source_format": "DELTA",
         "storage_location": "s3://lakehouse/unity/events"
     });
@@ -117,6 +197,11 @@ fn unity_oss_lists_delta_tables_without_a_token() {
         None,
         vec![
             table,
+            json!({
+                "name": "view",
+                "table_type": "VIEW",
+                "data_source_format": null
+            }),
             json!({
                 "name": "files",
                 "data_source_format": "PARQUET",
@@ -139,22 +224,15 @@ fn unity_oss_lists_delta_tables_without_a_token() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let lake: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(lake["kind"], "pqbench.lake");
-    assert_eq!(lake["tables"].as_array().unwrap().len(), 1);
-    assert_eq!(lake["tables"][0]["name"], "main.default.events");
-    assert_eq!(lake["tables"][0]["uri"], "s3://lakehouse/unity/events");
-    assert_eq!(lake["tables"][0]["env"]["AWS_REGION"], "us-east-1");
-    assert!(lake["tables"][0].get("info").is_none());
+    let refs = table_refs(&ndjson(&output.stdout));
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0]["id"], "main.default.events");
+    assert_eq!(refs[0]["uri"], "s3://lakehouse/unity/events");
+    assert_eq!(refs[0]["env"]["AWS_REGION"], "us-east-1");
 }
 
 #[test]
 fn databricks_list_follows_an_empty_page_token() {
-    // The documented list response is `{tables, next_page_token}`. A page may
-    // contain zero tables while `next_page_token` is still set; the client
-    // stops only when that field is absent.
-    // https://docs.databricks.com/api/workspace/tables/list
-    // https://docs.databricks.com/aws/en/dev-tools/rest-api
     let catalog = Catalog::spawn(
         Some("dapi-example"),
         vec![json!({
@@ -183,9 +261,72 @@ fn databricks_list_follows_an_empty_page_token() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!stdout.contains("dapi-example"));
-    let lake: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(lake["tables"][0]["name"], "main.default.events");
-    assert_eq!(lake["tables"][0]["uri"], "s3://bucket/events");
+    let refs = table_refs(&ndjson(stdout.as_bytes()));
+    assert_eq!(refs[0]["id"], "main.default.events");
+    assert_eq!(refs[0]["uri"], "s3://bucket/events");
+}
+
+#[test]
+fn unity_skips_an_empty_schema_page() {
+    let catalog = Catalog::spawn_with_catalogs(
+        None,
+        vec!["main", "samples"],
+        vec![json!({
+            "name": "events",
+            "full_name": "main.default.events",
+            "table_type": "MANAGED",
+            "data_source_format": "DELTA",
+            "storage_location": "s3://bucket/events"
+        })],
+    );
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let refs = table_refs(&ndjson(&output.stdout));
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0]["id"], "main.default.events");
+}
+
+#[test]
+fn include_prefix_skips_other_catalogs() {
+    let catalog = Catalog::spawn_with_catalogs(
+        None,
+        vec!["main", "system"],
+        vec![json!({
+            "name": "events",
+            "full_name": "main.default.events",
+            "table_type": "EXTERNAL",
+            "data_source_format": "DELTA",
+            "storage_location": "s3://bucket/events"
+        })],
+    );
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address
+    });
+    let output = pipe(
+        &["lake", "--include", "main", "--concurrency", "8"],
+        source.to_string().as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!catalog.requested("/catalogs"));
+    assert!(!catalog.requested("catalog_name=system"));
+    assert!(catalog.requested("catalog_name=main"));
+    let refs = table_refs(&ndjson(&output.stdout));
+    assert_eq!(refs.len(), 1);
 }
 
 #[test]
@@ -253,11 +394,13 @@ fn lake_table_bytemass_measures_each_table() {
         "{}",
         String::from_utf8_lossy(&measured.stderr)
     );
-    let report: Value = serde_json::from_slice(&measured.stdout).unwrap();
-    assert_eq!(report["kind"], "pqbench.lake-report");
-    assert_eq!(report["tables"][0]["name"], "events");
-    assert_eq!(report["tables"][0]["num_rows"], 3000);
-    assert_eq!(report["tables"][0]["file_count"], 1);
+    let records = ndjson(&measured.stdout);
+    let end = records
+        .iter()
+        .find(|record| record["event"] == "end")
+        .unwrap();
+    assert_eq!(end["num_rows"], 3000);
+    assert_eq!(end["file_count"], 1);
 }
 
 #[test]
@@ -275,7 +418,7 @@ fn lake_source_rejects_a_non_aws_env_key() {
 }
 
 #[test]
-fn lake_rejects_a_catalog_page_without_catalogs() {
+fn lake_rejects_a_catalog_with_no_delta_tables() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     let _thread = std::thread::spawn(move || {
@@ -299,8 +442,5 @@ fn lake_rejects_a_catalog_page_without_catalogs() {
     let output = pipe(&["lake"], source.to_string().as_bytes());
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("expected document") || stderr.contains("catalog"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("no Delta tables"), "{stderr}");
 }
