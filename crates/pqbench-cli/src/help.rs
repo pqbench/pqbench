@@ -17,6 +17,7 @@ versioned JSON document the next command reads.
   bytemass →  pqbench.bytemass-row footer byte masses (one line per column)
   viz      →  PREFIX.sqlite+html   collect the bytemass stream
   dump     →  Parquet              row sample from the same files (zstd)
+  profile  →  pqbench.profile-column  sample-level column facts (cheap)
 
 A TTY prints a short summary and requires `-o` (zstd NDJSON). A pipe
 streams NDJSON. Subcommand help is local (`pqbench table --help`).
@@ -31,6 +32,7 @@ Examples:
   pqbench table ./delta-table | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
   pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
+  pqbench dump data.parquet | pqbench profile
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
 
@@ -41,6 +43,7 @@ Documents (kind + version 1):
   pqbench.table          format, snapshot, log, active files (streamed)
   pqbench.remote-source  one URI + AWS_* from a producer
   pqbench.bytemass       begin/end around pqbench.bytemass-row lines
+  pqbench.profile        begin/end around pqbench.profile-column lines
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
 for s3://. A missing feature fails at runtime and names itself.
@@ -210,12 +213,45 @@ Examples:
   pqbench dump data.parquet --output sample.parquet
   pqbench table ./delta-table | pqbench dump --row-groups first:1 --output sample.parquet
   pqbench table ./delta-table | pqbench dump --include 'year=2024/**' --sample first:1 -o sample.parquet
+  pqbench dump data.parquet | pqbench profile
 
 See also:
   pqbench table --help     name the files to dump
+  pqbench profile --help   sample-level facts from that dump
   pqbench bytemass --help  measure those files instead
   pqbench --help           auth for s3://
   docs/cli.md";
+
+pub const PROFILE_ABOUT: &str =
+    "Sample-level column facts from a dump (cheap; pairwise is --dependencies)";
+
+pub const PROFILE_LONG_ABOUT: &str = "\
+Read a Parquet sample (`pqbench dump` or a .parquet file) and emit one
+`pqbench.profile-column` line per column. Default work is one pass plus a
+sort of the sample. `--rows first:8192` caps decode so a full file stays
+fast. `--columns` keeps named columns for the next pass.
+
+`--dependencies` adds `pqbench.profile-dependency` lines (O(columns² ·
+rows)): mutual information and functional-dependency strength. Off by
+default.
+
+Facts only — no storage recommendations. The begin record lists
+capabilities so an agent can choose the next flag.
+
+A pipe streams NDJSON. A TTY needs `-o`.";
+
+pub const PROFILE_AFTER: &str = "\
+Examples:
+  pqbench dump data.parquet | pqbench profile
+  pqbench profile sample.parquet --columns 'device*'
+  pqbench profile sample.parquet --columns 'country' --columns 'city' --dependencies
+  pqbench table ./delta-table | pqbench dump --row-groups first:1 | pqbench profile
+
+See also:
+  pqbench dump --help      produce the sample this command reads
+  pqbench bytemass --help  footer byte masses (no value decode)
+  pqbench --help           documents
+  docs/profile.md  docs/cli.md";
 
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into SQLite and a static HTML page";
 

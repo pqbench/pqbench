@@ -218,6 +218,57 @@ fn dump(py: Python<'_>, inputs: Vec<Bound<'_, PyAny>>, row_groups: &str) -> PyRe
     Ok(PyBytes::new(py, &bytes).into_any().unbind())
 }
 
+/// Run `pqbench profile` on parquet sample paths.
+///
+/// Returns the profile object (`columns`, optional `dependencies`).
+#[pyfunction]
+#[pyo3(signature = (*inputs, columns=None, rows="first:8192", top=8, dependencies=false))]
+fn profile(
+    py: Python<'_>,
+    inputs: Vec<String>,
+    columns: Option<Vec<String>>,
+    rows: &str,
+    top: u32,
+    dependencies: bool,
+) -> PyResult<Py<PyAny>> {
+    let max_rows = match pqbench::pattern::Sample::parse(rows).map_err(runtime)? {
+        pqbench::pattern::Sample::ALL => None,
+        pqbench::pattern::Sample::First(count) => Some(count as usize),
+        pqbench::pattern::Sample::Every(_) => {
+            return Err(PyValueError::new_err(
+                "rows does not support every:N; expected all or first:N",
+            ));
+        }
+    };
+    let files = inputs
+        .into_iter()
+        .map(|input| pqbench::dump::DumpFile {
+            path: input.clone(),
+            uri: input,
+            table: None,
+            env: BTreeMap::new(),
+        })
+        .collect();
+    let dump = py
+        .detach(|| {
+            block_on(pqbench::dump::sample(
+                &pqbench::dump::DumpRequest {
+                    files,
+                    row_groups: pqbench::dump::RowGroups::ALL,
+                },
+                max_rows,
+            ))
+        })
+        .map_err(runtime)?;
+    let request = pqbench::profile::ProfileRequest {
+        columns: columns.unwrap_or_default(),
+        top,
+        dependencies,
+    };
+    let profile = pqbench::profile::profile(&dump, &request).map_err(runtime)?;
+    dumps(py, &profile)
+}
+
 /// Run `pqbench viz` on a bytemass row stream.
 ///
 /// Writes `output.sqlite` and `output.html`. Returns those paths.
@@ -251,6 +302,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(table, module)?)?;
     module.add_function(wrap_pyfunction!(lake, module)?)?;
     module.add_function(wrap_pyfunction!(dump, module)?)?;
+    module.add_function(wrap_pyfunction!(profile, module)?)?;
     module.add_function(wrap_pyfunction!(viz, module)?)?;
     module.add(
         "commands",
@@ -263,6 +315,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
                 "table",
                 "lake",
                 "dump",
+                "profile",
                 "viz",
             ],
         )?,

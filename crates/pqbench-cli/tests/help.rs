@@ -52,6 +52,15 @@ fn bytemass_help_points_at_table_and_viz() {
 }
 
 #[test]
+fn profile_help_points_at_dump() {
+    let stdout = help(&["profile", "--help"]);
+    assert!(stdout.contains("--dependencies"), "{stdout}");
+    assert!(stdout.contains("pqbench dump --help"), "{stdout}");
+    assert!(stdout.contains("pqbench --help"), "{stdout}");
+    assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
+}
+
+#[test]
 fn lake_help_names_catalog_env_and_points_at_table() {
     let stdout = help(&["lake", "--help"]);
     assert!(stdout.contains("DATABRICKS_HOST"), "{stdout}");

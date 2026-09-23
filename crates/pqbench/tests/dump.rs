@@ -163,6 +163,26 @@ async fn dump_reads_the_first_row_groups() {
     assert_eq!(reader.metadata().file_metadata().num_rows(), 4);
 }
 
+#[tokio::test]
+async fn sample_omits_path_columns_and_caps_rows() {
+    let dump = dump::sample(
+        &request(
+            vec![file("reddit.parquet", parquet_fixture())],
+            RowGroups::ALL,
+        ),
+        Some(10),
+    )
+    .await
+    .unwrap();
+    assert!(!dump.columns.iter().any(|column| column == "_path"));
+    assert!(dump.columns.iter().any(|column| column == "text"));
+    assert_eq!(dump.rows.len(), 10);
+    let bytes = std::fs::read(parquet_fixture()).unwrap();
+    let from_bytes = dump::sample_bytes(&bytes, Some(3)).unwrap();
+    assert_eq!(from_bytes.rows.len(), 3);
+    assert_eq!(from_bytes.columns, dump.columns);
+}
+
 #[test]
 fn row_groups_parses_all_or_first() {
     assert_eq!(RowGroups::parse("all").unwrap(), RowGroups::ALL);

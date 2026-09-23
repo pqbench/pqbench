@@ -18,7 +18,7 @@ class BindingsTest(unittest.TestCase):
     def test_commands_match_the_cli(self) -> None:
         self.assertEqual(
             pqbench.commands,
-            ("lz", "compression", "bytemass", "table", "lake", "dump", "viz"),
+            ("lz", "compression", "bytemass", "table", "lake", "dump", "profile", "viz"),
         )
         for name in pqbench.commands:
             self.assertTrue(callable(getattr(pqbench, name)))
@@ -123,6 +123,20 @@ class BindingsTest(unittest.TestCase):
         }
         blob = pqbench.dump(info, row_groups="first:1")
         self.assertTrue(blob.startswith(b"PAR1"))
+
+    def test_profile_reads_a_parquet_sample(self) -> None:
+        info = pqbench.profile(str(_PARQUET), rows="first:16")
+        self.assertGreaterEqual(info["num_rows"], 1)
+        self.assertTrue(any(column["column"] == "text" for column in info["columns"]))
+        self.assertEqual(info["dependencies"], [])
+        narrowed = pqbench.profile(
+            str(_PARQUET),
+            columns=["text", "label"],
+            rows="first:16",
+            dependencies=True,
+        )
+        self.assertEqual(len(narrowed["columns"]), 2)
+        self.assertEqual(len(narrowed["dependencies"]), 1)
 
     def test_dump_rejects_a_lake_that_has_not_been_loaded(self) -> None:
         lake = pqbench.lake(str(_LAKE))

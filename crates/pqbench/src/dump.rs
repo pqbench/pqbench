@@ -108,12 +108,58 @@ pub async fn dump(request: &DumpRequest) -> Result<Dump, Error> {
     for file in &files {
         let source = open_source(file, request.row_groups).await?;
         let keep = request.row_groups.keep(source.metadata.num_row_groups());
-        let (file_columns, file_rows) = read_rows(file, &source, keep)?;
+        let (file_columns, file_rows) = read_rows(file, &source, keep, true, None)?;
         merge_columns(&mut columns, &file_columns, &mut rows);
         for row in file_rows {
             rows.push(align(&columns, &file_columns, row));
         }
     }
+    Ok(Dump { columns, rows })
+}
+
+/// Read data columns only (no `_path` / `_table`). Stops after `max_rows`.
+///
+/// # Errors
+/// Fails when there are no files, a file cannot be read, or a row cannot be
+/// decoded.
+pub async fn sample(request: &DumpRequest, max_rows: Option<usize>) -> Result<Dump, Error> {
+    let files = expand_files(&request.files)?;
+    if files.is_empty() {
+        return Err(Error("no files".into()));
+    }
+    let mut columns = Vec::new();
+    let mut rows = Vec::new();
+    for file in &files {
+        if max_rows.is_some_and(|limit| rows.len() >= limit) {
+            break;
+        }
+        let remaining = max_rows.map(|limit| limit.saturating_sub(rows.len()));
+        let source = open_source(file, request.row_groups).await?;
+        let keep = request.row_groups.keep(source.metadata.num_row_groups());
+        let (file_columns, file_rows) = read_rows(file, &source, keep, false, remaining)?;
+        merge_columns(&mut columns, &file_columns, &mut rows);
+        for row in file_rows {
+            rows.push(align(&columns, &file_columns, row));
+        }
+    }
+    Ok(Dump { columns, rows })
+}
+
+/// Read data columns from an in-memory Parquet file. Stops after `max_rows`.
+///
+/// # Errors
+/// Fails when `bytes` is not a readable Parquet file.
+pub fn sample_bytes(bytes: &[u8], max_rows: Option<usize>) -> Result<Dump, Error> {
+    let reader = SerializedFileReader::new(bytes::Bytes::copy_from_slice(bytes))
+        .map_err(|error| Error(error.to_string()))?;
+    let file = DumpFile {
+        path: "-".into(),
+        uri: "-".into(),
+        table: None,
+        env: Default::default(),
+    };
+    let keep = reader.num_row_groups();
+    let (columns, rows) = read_from_reader(&file, &reader, keep, false, max_rows)?;
     Ok(Dump { columns, rows })
 }
 
@@ -403,30 +449,52 @@ fn read_rows(
     file: &DumpFile,
     source: &Source,
     keep: usize,
+    path_columns: bool,
+    max_rows: Option<usize>,
 ) -> Result<(Vec<String>, Vec<Vec<Value>>), Error> {
     let reader = SerializedFileReader::new(clone_reader(&source.reader)?)
         .map_err(|error| Error(format!("{}: {error}", file.uri)))?;
+    read_from_reader(file, &reader, keep, path_columns, max_rows)
+}
+
+fn read_from_reader(
+    file: &DumpFile,
+    reader: &SerializedFileReader<impl ChunkReader + 'static>,
+    keep: usize,
+    path_columns: bool,
+    max_rows: Option<usize>,
+) -> Result<(Vec<String>, Vec<Vec<Value>>), Error> {
     let mut columns = Vec::new();
-    if file.table.is_some() {
-        columns.push("_table".into());
+    if path_columns {
+        if file.table.is_some() {
+            columns.push("_table".into());
+        }
+        columns.push("_path".into());
     }
-    columns.push("_path".into());
     let mut rows = Vec::new();
     for index in 0..keep {
+        if max_rows.is_some_and(|limit| rows.len() >= limit) {
+            break;
+        }
         let group = reader
             .get_row_group(index)
             .map_err(|error| Error(format!("{}: {error}", file.uri)))?;
         for record in RowIter::from_row_group(None, group.as_ref())
             .map_err(|error| Error(format!("{}: {error}", file.uri)))?
         {
+            if max_rows.is_some_and(|limit| rows.len() >= limit) {
+                break;
+            }
             let record = record.map_err(|error| Error(format!("{}: {error}", file.uri)))?;
             let mut values = Vec::new();
-            if let Some(table) = &file.table {
-                values.push(Value::String(table.clone()));
+            if path_columns {
+                if let Some(table) = &file.table {
+                    values.push(Value::String(table.clone()));
+                }
+                values.push(Value::String(file.path.clone()));
             }
-            values.push(Value::String(file.path.clone()));
             for (name, field) in record.get_column_iter() {
-                if name == "_path" || name == "_table" {
+                if path_columns && (name == "_path" || name == "_table") {
                     return Err(Error(format!(
                         "{} already has a `{name}` column; dump will not replace it",
                         file.uri
