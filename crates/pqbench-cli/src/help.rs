@@ -104,7 +104,7 @@ pqbench.lake, or '-' / stdin. A lake must go through `pqbench table` first.
 A pipe streams one `pqbench.bytemass-row` per column chunk. A TTY needs
 `-o`. `--json` is the same stream. Pipe the stream to `viz`.
 
---include / --exclude / --sample apply to file partition paths."
+--include / --exclude / --sample apply to file partition paths.";
 
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
