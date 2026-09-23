@@ -40,6 +40,7 @@ url = "2"
 # internal boundary. Keep the pin until delta-rs upgrades its dependency.
 object_store = { version = "=0.13.2", optional = true }
 apache-avro = { version = "0.17", optional = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

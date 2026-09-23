@@ -139,10 +139,11 @@ analogy, convention, or precedent:
 ## Repo layout
 
 - `crates/pqbench/` — the library (bench, bytemass, codecs, compression, dump,
-  lz, parquet, report, stats)
+  lz, parquet, report, stats, viz)
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
 - `scripts/` — build / sample / smoke-test helpers
-- `docs/` — user documentation (`demo.md`, `delta.md`, `iceberg.md`, `docker.md`)
+- `docs/` — user documentation (`demo.md`, `delta.md`, `iceberg.md`, `docker.md`,
+  `viz.md`)
 - `Makefile` + pre-commit hook — the gate
 
 ## References

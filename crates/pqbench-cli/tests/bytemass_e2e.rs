@@ -79,24 +79,3 @@ fn bytemass_json_is_the_stream() {
         .any(|record| record["kind"] == "pqbench.bytemass-row"));
     assert!(!out.stdout.windows(10).any(|w| w == b"\"children\""));
 }
-
-/// End-to-end: `--d3` prints a self-contained treemap page.
-#[test]
-fn bytemass_d3_page_end_to_end() {
-    let exe = env!("CARGO_BIN_EXE_pqbench");
-    let out = Command::new(exe)
-        .args(["bytemass", parquet_fixture(), "--d3"])
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8(out.stdout).unwrap();
-
-    assert!(stdout.starts_with("<!DOCTYPE html>"));
-    assert!(stdout.contains("<title>small_reddit_none.parquet</title>"));
-    assert!(stdout.contains("d3-hierarchy@3"));
-    assert!(stdout.contains("bytes per row"));
-}

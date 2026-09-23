@@ -1,12 +1,11 @@
 //! The `bytemass` command: one typed request in, one table out.
 //!
 //! The table is a `Vec<MassRow>`: one row per (file, column chunk), each row
-//! self-contained. The CLI owns the rendering decision: it awaits [`bytemass`]
-//! and calls `render_text`, `render_json`, or `render_html` on the rows.
+//! self-contained. The CLI streams those rows; `pqbench viz` collects them.
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::parquet_helpers::Error;
 
@@ -22,7 +21,7 @@ pub struct BytemassRequest {
 }
 
 /// One column chunk's measured byte mass: a row of the `bytemass` table.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MassRow {
     /// Input path or URI as given.
@@ -45,8 +44,8 @@ pub struct MassRow {
 ///
 /// Inputs are local paths or storage URIs, each possibly a glob mask for local
 /// files. Only file footers are read. The result is one [`MassRow`] per column
-/// chunk, in input order; call `render_text`, `render_json`, `render_html`, or
-/// `aggregate` on it to present or fold it.
+/// chunk, in input order; call `render_text`, `render_json`, or `aggregate`
+/// on it, or pipe the stream to `viz`.
 ///
 /// # Errors
 /// Fails when there are no inputs, a mask matches no files, an input cannot be

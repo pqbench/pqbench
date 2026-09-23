@@ -202,6 +202,9 @@ async fn queue_record(
         Record::Begin(_) | Record::Log { .. } | Record::File { .. } | Record::End { .. } => {
             Err("a loaded table stream goes to `pqbench bytemass`, not `pqbench table`".into())
         }
+        Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+            Err("a bytemass stream goes to `pqbench viz`".into())
+        }
     }
 }
 

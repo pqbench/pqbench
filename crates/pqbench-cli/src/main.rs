@@ -15,6 +15,7 @@ mod lake;
 mod lz;
 mod table;
 mod unity;
+mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.
@@ -36,7 +37,7 @@ Examples:
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
   pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
-  pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
+  pqbench bytemass data.parquet | pqbench viz -o report && xdg-open report.html
 "#
 )]
 struct Cli {
@@ -58,7 +59,7 @@ Examples:
   pqbench table ./delta-table | pqbench bytemass --include 'year=2024/**' --sample first:10
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench bytemass table.ndjson.zst
-  pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
+  pqbench bytemass data.parquet | pqbench viz -o report && xdg-open report.html
 "#)]
     Bytemass(bytemass::BytemassArgs),
     /// fetch table metadata (detect the format, then load the log)
@@ -86,6 +87,14 @@ Examples:
   pqbench lake ./warehouse | pqbench table | pqbench dump -o sample.parquet
 "#)]
     Dump(dump::DumpArgs),
+    /// collect a bytemass stream into sqlite and a static HTML page
+    #[command(after_help = r#"Examples:
+  pqbench bytemass data.parquet | pqbench viz -o report
+  pqbench table ./delta-table | pqbench bytemass | pqbench viz -o report
+  pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
+  xdg-open report.html
+"#)]
+    Viz(viz::VizArgs),
 }
 
 fn main() -> ExitCode {
@@ -97,6 +106,7 @@ fn main() -> ExitCode {
         Command::Table(args) => table::run(&args),
         Command::Lake(args) => lake::run(&args),
         Command::Dump(args) => dump::run(&args),
+        Command::Viz(args) => viz::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

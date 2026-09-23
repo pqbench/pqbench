@@ -2,7 +2,8 @@
 //!
 //! A producer resolves a lake or a table and pqbench measures bytes. Known
 //! kinds are `pqbench.lake`, `pqbench.lake-source`, `pqbench.table`,
-//! `pqbench.table-ref`, and `pqbench.remote-source`. A pipe writes NDJSON;
+//! `pqbench.table-ref`, `pqbench.remote-source`, `pqbench.bytemass`, and
+//! `pqbench.bytemass-row`. A pipe writes NDJSON;
 //! every record carries a table `id` so many tables can mix. A terminal prints
 //! a short summary and requires `-o` (zstd NDJSON). A single `pqbench.table`
 //! object is still accepted. Credentials stay on the document so a pipe can
@@ -15,6 +16,7 @@ use std::path::Path;
 
 use crate::emit::Emit;
 
+use pqbench::bytemass::MassRow;
 use pqbench::lake::Lake;
 use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
 use serde::{Deserialize, Serialize};
@@ -77,6 +79,12 @@ pub(crate) enum Record {
     LakeEnd,
     LakeSource(LakeSource),
     RemoteSource(RemoteSource),
+    BytemassBegin,
+    BytemassRow {
+        id: String,
+        row: MassRow,
+    },
+    BytemassEnd,
 }
 
 /// One table name for `table` to load. `id` tags every later line.
@@ -139,6 +147,16 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         ("pqbench.lake", Some(other)) => Err(format!("unsupported lake event `{other}`").into()),
         ("pqbench.lake-source", _) => Ok(Record::LakeSource(parse_lake_source(value)?)),
         ("pqbench.remote-source", _) => Ok(Record::RemoteSource(parse_remote(value)?)),
+        ("pqbench.bytemass", Some("begin")) => Ok(Record::BytemassBegin),
+        ("pqbench.bytemass", Some("end")) => Ok(Record::BytemassEnd),
+        ("pqbench.bytemass", Some(other)) => {
+            Err(format!("unsupported bytemass event `{other}`").into())
+        }
+        ("pqbench.bytemass", None) => Err("a bytemass stream needs begin/end events".into()),
+        ("pqbench.bytemass-row", _) => {
+            let (id, row) = parse_mass_row(value)?;
+            Ok(Record::BytemassRow { id, row })
+        }
         (other, _) => Err(invalid_kind(other)),
     }
 }
@@ -227,6 +245,18 @@ fn parse_log(value: serde_json::Value) -> Result<(String, LogCommit), CliError> 
     }
     let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
     Ok((wire.id, wire.commit))
+}
+
+fn parse_mass_row(value: serde_json::Value) -> Result<(String, MassRow), CliError> {
+    #[derive(Deserialize)]
+    struct Wire {
+        #[serde(default)]
+        id: String,
+        #[serde(flatten)]
+        row: MassRow,
+    }
+    let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
+    Ok((wire.id, wire.row))
 }
 
 fn parse_file(value: serde_json::Value) -> Result<(String, TableFile), CliError> {
@@ -434,6 +464,6 @@ fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_kind(kind: &str) -> CliError {
-    format!("unsupported document kind `{kind}`; expected pqbench.lake, pqbench.lake-source, pqbench.table, pqbench.table-ref, or pqbench.remote-source")
+    format!("unsupported document kind `{kind}`; expected pqbench.lake, pqbench.lake-source, pqbench.table, pqbench.table-ref, pqbench.remote-source, or pqbench.bytemass")
         .into()
 }

@@ -1,6 +1,5 @@
 #!/bin/sh
-# One still of `table | bytemass --d3`. This is not a lake click-through;
-# --d3 on this branch takes one pqbench.table document.
+# One still of `table | bytemass | viz`. This is not a lake click-through.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -21,9 +20,10 @@ test -x "$bin" || cargo build -p pqbench-cli --features delta
 
 html=.docker-data/pqbench-table.html
 frames=.docker-data/table-frames
-mkdir -p "$frames"
+mkdir -p "$frames" .docker-data
 "$bin" table docker/e2e-lakehouse/table |
-    "$bin" bytemass --d3 >"$html"
+    "$bin" bytemass |
+    "$bin" viz -o .docker-data/pqbench-table
 
 "$chrome" --headless=new --disable-gpu --hide-scrollbars \
     --screenshot="$frames/frame-0.png" --window-size=1440,900 \

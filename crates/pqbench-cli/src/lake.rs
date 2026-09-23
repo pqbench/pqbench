@@ -119,7 +119,10 @@ async fn stream_document(
         | Record::Begin(_)
         | Record::Log { .. }
         | Record::File { .. }
-        | Record::End { .. } => Err(
+        | Record::End { .. }
+        | Record::BytemassBegin
+        | Record::BytemassRow { .. }
+        | Record::BytemassEnd => Err(
             "pqbench lake reads a directory, a URI, a pqbench.lake document, or a pqbench.lake-source"
                 .into(),
         ),
