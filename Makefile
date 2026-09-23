@@ -10,11 +10,12 @@
 CARGO ?= cargo
 CARGO_FEATURES ?=
 TEST_FLAGS ?=
+PYTHON ?= python3
 LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse \
 	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity lakehouse-seed-iceberg \
-	check clean
+	check check-python clean
 
 all: fmt build test lint
 
@@ -65,6 +66,16 @@ lakehouse-seed-unity: lakehouse-up
 # Depends on seed-s3 so the lakehouse bucket exists on a fresh stand.
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
+
+# python/ is its own crate (not a workspace member); share the repo target
+# dir so it does not grow python/target. Local to python/.venv for PEP 668.
+check-python:
+	$(CARGO) fmt --manifest-path python/Cargo.toml -- --check
+	CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" $(CARGO) clippy --manifest-path python/Cargo.toml --all-targets -- -D warnings
+	test -d python/.venv || $(PYTHON) -m venv python/.venv
+	python/.venv/bin/python -m pip install -q maturin
+	. python/.venv/bin/activate && CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" maturin develop --manifest-path python/Cargo.toml
+	python/.venv/bin/python -m unittest discover -s python/tests
 
 check: fmt-check lint test
 

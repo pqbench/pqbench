@@ -25,6 +25,8 @@ docker run --rm -v "$PWD:/tmp:ro" pqbench:local compression /tmp/uncompressed.pa
 - Built with `--no-default-features` (core): the `aws`, `delta` and `delta-s3`
   features are not included, so `s3://` inputs and Delta tables are unavailable
   in the container.
+- The image is the CLI only. Python bindings (`python/`, `make check-python`)
+  are not copied into the build and are not installed in the runtime image.
 
 ## Smoke tests
 

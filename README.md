@@ -163,12 +163,26 @@ pqbench lake unity.json --include main --concurrency 8 | pqbench table | pqbench
   naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
 - [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
+- [Visualization](docs/viz.md) — `pqbench viz`, SQLite + static HTML
+- [Python bindings](python/README.md) — install the wheel and call every command
 - [Docker](docs/docker.md) — build, run, and publish a container image
+
+## Python
+
+[`python/`](python/README.md) is a PyO3 wheel. Each CLI command is a function
+that calls the library in-process:
+
+```python
+import pqbench
+
+rows = pqbench.bytemass("data.parquet")
+pqbench.viz(rows, output="report")
+```
 
 ## Contributing
 
 PRs welcome. The gate is `make check` (`fmt-check` + `clippy -D warnings` +
-`test`) and every change must pass it. See [CONTRIBUTING.md](CONTRIBUTING.md)
+`test`). The PyO3 wheel is `make check-python`. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for the loop, style, and naming rules.
 
 ## License

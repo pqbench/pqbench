@@ -125,7 +125,9 @@ analogy, convention, or precedent:
 ## Build / check workflow
 
 - Format: `make fmt`
-- Gate (pre-commit): `make check` = `fmt-check` + `clippy -D warnings` + `test`
+- Gate (pre-commit): `make check` = `fmt-check` + `clippy -D warnings` + `test`.
+  `make check-python` builds the PyO3 wheel and runs its tests; CI runs it,
+  the local gate does not (it compiles libpython and the delta feature).
 - Features: pass `CARGO_FEATURES` to any target (quote values with a space),
   e.g. `make check CARGO_FEATURES=--all-features`,
   `make test CARGO_FEATURES="--features aws"`.
@@ -141,6 +143,9 @@ analogy, convention, or precedent:
 - `crates/pqbench/` — the library (bench, bytemass, codecs, compression, dump,
   lz, parquet, report, stats, viz)
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
+- `python/` — PyO3 wheel (`pqbench-py`); one function per CLI command. Not a
+  workspace member (Docker builds the CLI only). `make check-python` builds
+  and tests it
 - `scripts/` — build / sample / smoke-test helpers
 - `docs/` — user documentation (`demo.md`, `delta.md`, `iceberg.md`, `docker.md`,
   `viz.md`)

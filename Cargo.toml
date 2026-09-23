@@ -4,6 +4,7 @@ members = [
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
+exclude = ["python"]
 default-members = [
     "crates/pqbench",
     "crates/pqbench-cli",

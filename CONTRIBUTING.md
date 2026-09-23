@@ -41,6 +41,9 @@ make check        # = fmt-check + clippy -D warnings + test
 ```
 
 - `make check` is the gate and runs automatically in the pre-commit hook.
+- `make check-python` builds the PyO3 extension with maturin and runs its
+  tests. It is separate from the gate because it compiles the delta feature.
+  CI runs it on every pull request.
 - Feature sets are exercised through the same targets:
   `make check CARGO_FEATURES=--all-features` (or `CARGO_FEATURES="--features aws"`,
   `CARGO_FEATURES="--features delta"`). CI runs one clippy over
