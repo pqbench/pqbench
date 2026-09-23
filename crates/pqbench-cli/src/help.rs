@@ -18,6 +18,7 @@ versioned JSON document the next command reads.
   viz      →  PREFIX.sqlite+html   collect the bytemass stream
   dump     →  Parquet              row sample from the same files (zstd)
   profile  →  pqbench.profile-column  sample-level column facts (cheap)
+  experiment → pqbench.experiment-trial  rewrite a sample and measure it
 
 A TTY prints a short summary and requires `-o` (zstd NDJSON). A pipe
 streams NDJSON. Subcommand help is local (`pqbench table --help`).
@@ -33,6 +34,7 @@ Examples:
   pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
   pqbench table ./delta-table | pqbench dump --row-groups first:1 -o sample.parquet
   pqbench dump data.parquet | pqbench profile
+  pqbench dump data.parquet | pqbench experiment --rewrite sort:country --aim skipping
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
 
@@ -44,6 +46,7 @@ Documents (kind + version 1):
   pqbench.remote-source  one URI + AWS_* from a producer
   pqbench.bytemass       begin/end around pqbench.bytemass-row lines
   pqbench.profile        begin/end around pqbench.profile-column lines
+  pqbench.experiment     begin/end around pqbench.experiment-trial lines
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
 for s3://. A missing feature fails at runtime and names itself.
@@ -264,6 +267,46 @@ See also:
   pqbench bytemass --help  footer byte masses (no value decode)
   pqbench --help           documents
   docs/profile.md  docs/cli.md";
+
+pub const EXPERIMENT_ABOUT: &str =
+    "Rewrite a dump sample and measure storage or data-skipping (empirical)";
+
+pub const EXPERIMENT_LONG_ABOUT: &str = "\
+Read a Parquet sample (`pqbench dump` or a .parquet file), apply requested
+rewrites, and measure the rewritten file. Verify empirically instead of
+predicting compression.
+
+`--aim storage` (default) reports file bytes, bytes per row, and per-column
+mass versus a control rewrite (same writer, no layout change). `--aim
+skipping` reports row-group min/max locality (`skip_span_ratio`,
+`skip_point_equal_fraction`). `--aim all` does both. Skipping splits the
+sample into several row groups unless `--rewrite row-group-size:N` says
+otherwise.
+
+`--rewrite SPEC` is one trial. Repeat it to compare SORT(A) vs SORT(A,B)
+vs a codec change. Semicolons compose rewrites in one trial:
+`sort:country,city;codec:zstd@3;page-size:8192`.
+
+Specs: `sort:A,B`, `zorder:A,B`, `hilbert:A,B` (two columns),
+`codec:zstd@3`, `dictionary:on|off|BYTES`, `encoding:plain|delta|rle|…`,
+`page-size:BYTES`, `row-group-size:ROWS`, `cast:COL:int64|double|string`,
+`drop:COL`.
+
+Facts only — no recommendations. A pipe streams NDJSON. A TTY needs `-o`.";
+
+pub const EXPERIMENT_AFTER: &str = "\
+Examples:
+  pqbench dump data.parquet | pqbench experiment --rewrite sort:ts --aim skipping
+  pqbench experiment sample.parquet --rewrite 'sort:country,city' --rewrite 'zorder:lat,lon' --aim all
+  pqbench experiment sample.parquet --rewrite codec:snappy --rewrite 'dictionary:off' --aim storage
+  pqbench experiment sample.parquet --rewrite 'cast:id:int64;codec:zstd@3'
+
+See also:
+  pqbench dump --help      produce the sample this command reads
+  pqbench profile --help   cheap facts that suggest which rewrite to try
+  pqbench bytemass --help  footer masses of an existing file
+  pqbench --help           documents
+  docs/experiment.md  docs/cli.md";
 
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into SQLite and a static HTML page";
 

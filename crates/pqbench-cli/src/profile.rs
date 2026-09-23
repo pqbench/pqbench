@@ -136,7 +136,7 @@ fn file_masses(files: &[DumpFile]) -> BTreeMap<String, u64> {
 
 fn buffer_masses(bytes: &[u8]) -> BTreeMap<String, u64> {
     let mut masses = BTreeMap::new();
-    if let Ok(file_mass) = parquet_helpers::read_buffer_masses(bytes) {
+    if let Ok(file_mass) = parquet_helpers::read_buffer_masses(bytes, false) {
         add_masses(&mut masses, &file_mass);
     }
     masses

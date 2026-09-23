@@ -52,6 +52,17 @@ fn bytemass_help_points_at_table_and_viz() {
 }
 
 #[test]
+fn experiment_help_points_at_dump_and_profile() {
+    let stdout = help(&["experiment", "--help"]);
+    assert!(stdout.contains("--rewrite"), "{stdout}");
+    assert!(stdout.contains("--aim"), "{stdout}");
+    assert!(stdout.contains("skipping"), "{stdout}");
+    assert!(stdout.contains("pqbench dump --help"), "{stdout}");
+    assert!(stdout.contains("pqbench profile --help"), "{stdout}");
+    assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
+}
+
+#[test]
 fn profile_help_points_at_dump() {
     let stdout = help(&["profile", "--help"]);
     assert!(stdout.contains("--dependencies"), "{stdout}");

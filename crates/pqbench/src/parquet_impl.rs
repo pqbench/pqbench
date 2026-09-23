@@ -102,6 +102,18 @@ fn index_start(metadata: &ParquetMetaData) -> Option<u64> {
 /// Read byte masses from a local file. `indexes` loads ColumnIndex/OffsetIndex.
 pub(crate) fn read_file_masses(path: &Path, indexes: bool) -> Result<FileMass, Error> {
     let file = std::fs::File::open(path).map_err(|error| Error(error.to_string()))?;
+    masses_from_reader(&file, indexes)
+}
+
+/// Read byte masses from a complete in-memory Parquet file.
+pub(crate) fn read_buffer_masses(bytes: &[u8], indexes: bool) -> Result<FileMass, Error> {
+    masses_from_reader(&bytes::Bytes::copy_from_slice(bytes), indexes)
+}
+
+fn masses_from_reader<R: parquet::file::reader::ChunkReader>(
+    reader: &R,
+    indexes: bool,
+) -> Result<FileMass, Error> {
     let policy = if indexes {
         PageIndexPolicy::Optional
     } else {
@@ -109,7 +121,7 @@ pub(crate) fn read_file_masses(path: &Path, indexes: bool) -> Result<FileMass, E
     };
     let metadata = ParquetMetaDataReader::new()
         .with_page_index_policy(policy)
-        .parse_and_finish(&file)?;
+        .parse_and_finish(reader)?;
     masses_from_metadata(&metadata)
 }
 

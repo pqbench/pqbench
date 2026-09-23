@@ -18,7 +18,7 @@ class BindingsTest(unittest.TestCase):
     def test_commands_match_the_cli(self) -> None:
         self.assertEqual(
             pqbench.commands,
-            ("lz", "compression", "bytemass", "table", "lake", "dump", "profile", "viz"),
+            ("lz", "compression", "bytemass", "table", "lake", "dump", "profile", "experiment", "viz"),
         )
         for name in pqbench.commands:
             self.assertTrue(callable(getattr(pqbench, name)))
@@ -137,6 +137,14 @@ class BindingsTest(unittest.TestCase):
         )
         self.assertEqual(len(narrowed["columns"]), 2)
         self.assertEqual(len(narrowed["dependencies"]), 1)
+
+    def test_experiment_rewrites_a_parquet_sample(self) -> None:
+        info = pqbench.experiment(str(_PARQUET), rows="first:16", rewrites=["codec:snappy"])
+        self.assertGreaterEqual(info["num_rows"], 1)
+        self.assertEqual(info["aim"], "storage")
+        names = [trial["name"] for trial in info["trials"]]
+        self.assertIn("control", names)
+        self.assertIn("codec:snappy", names)
 
     def test_dump_rejects_a_lake_that_has_not_been_loaded(self) -> None:
         lake = pqbench.lake(str(_LAKE))
