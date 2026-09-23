@@ -105,6 +105,9 @@ async fn from_document(input: &str) -> Result<Vec<Entry>, CliError> {
                 return Err("a lake source lists tables; pass it to `pqbench lake` first".into());
             }
             Record::Commit { .. } | Record::End { .. } | Record::LakeBegin | Record::LakeEnd => {}
+            Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+                return Err("a bytemass stream goes to `pqbench viz`".into());
+            }
         }
         Ok(())
     })

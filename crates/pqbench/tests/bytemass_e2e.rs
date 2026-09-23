@@ -1,8 +1,7 @@
 //! Blackbox end-to-end tests of the public `bytemass` command.
 
-use pqbench::bytemass::{
-    aggregate, bytemass, render_html, render_json, render_text, BytemassRequest,
-};
+use pqbench::bytemass::{aggregate, bytemass, render_json, render_text, BytemassRequest};
+use pqbench::viz::{self, MassRecord};
 
 fn fixture(name: &str) -> String {
     format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
@@ -60,16 +59,30 @@ async fn emits_composable_json_per_column() {
 }
 
 #[tokio::test]
-async fn emits_a_self_contained_d3_page() {
+async fn viz_collects_measured_rows() {
     let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
         .await
         .unwrap();
-    let page = render_html(&rows).unwrap();
-
-    assert!(page.starts_with("<!DOCTYPE html>"));
-    assert!(page.contains("<title>small_snappy.parquet</title>"));
-    assert!(page.contains("d3-hierarchy@3"));
-    assert!(page.contains("\"name\": \"small_snappy.parquet\""));
+    let records: Vec<MassRecord> = rows
+        .into_iter()
+        .map(|row| MassRecord {
+            id: String::new(),
+            file: row.uri,
+            size: row.size_bytes,
+            row_count: row.row_count,
+            column: row.column,
+            compressed_bytes: row.compressed_bytes,
+            uncompressed_bytes: row.uncompressed_bytes,
+            codec: row.codec,
+        })
+        .collect();
+    let directory = tempfile::tempdir().unwrap();
+    let prefix = directory.path().join("report");
+    viz::write_report(&prefix, &records).unwrap();
+    let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
+    assert!(html.starts_with("<!DOCTYPE html>"));
+    assert!(html.contains("d3-hierarchy@3"));
+    assert!(html.contains("small_snappy.parquet"));
 }
 
 #[tokio::test]

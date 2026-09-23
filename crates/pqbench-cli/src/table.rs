@@ -98,6 +98,9 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
                     "a loaded table stream goes to `pqbench bytemass`, not `pqbench table`".into(),
                 );
             }
+            Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+                return Err("a bytemass stream goes to `pqbench viz`".into());
+            }
         }
         Ok(())
     })

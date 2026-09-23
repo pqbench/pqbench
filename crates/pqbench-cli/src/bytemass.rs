@@ -8,7 +8,7 @@ use pqbench::table::TableFile;
 use serde::Serialize;
 
 use crate::document::{self, Record};
-use crate::emit::{self, Emitter};
+use crate::emit::Emitter;
 use crate::CliError;
 
 /// Arguments for `bytemass`.
@@ -20,11 +20,8 @@ pub(crate) struct BytemassArgs {
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
     /// stream NDJSON (same as a pipe; kept for scripts)
-    #[arg(long = "json", conflicts_with = "d3")]
+    #[arg(long = "json")]
     json: bool,
-    /// emit a self-contained d3 treemap HTML instead of the stream
-    #[arg(long = "d3")]
-    d3: bool,
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
@@ -43,9 +40,6 @@ pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
 }
 
 async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliError> {
-    if args.d3 {
-        return measure_document_page(input, args).await;
-    }
     let mut emit = Emitter::open("bytemass", args.output.as_deref())?;
     let mut stats = MassStats::default();
     let mut envs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
@@ -88,6 +82,9 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                     "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
                         .into(),
                 );
+            }
+            Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+                return Err("a bytemass stream goes to `pqbench viz`".into());
             }
         }
         Ok(())
@@ -134,62 +131,11 @@ async fn measure_input(
     measure_file(emit, stats, id, TableFile::new(uri.clone(), uri, 0), env).await
 }
 
-async fn measure_document_page(input: &str, args: &BytemassArgs) -> Result<(), CliError> {
-    let mut rows = Vec::new();
-    let mut env = BTreeMap::new();
-    let mut begun = false;
-    let mut ended = false;
-    let mut remote = None;
-    let mut oneshot = None;
-    document::visit_input(input, async |record| {
-        if remote.is_some() || oneshot.is_some() {
-            return Err("document contains more than one value".into());
-        }
-        match record {
-            Record::RemoteSource(source) => remote = Some(source),
-            Record::Table(info) => oneshot = Some(info),
-            Record::TableRef(_) => {}
-            Record::Begin(begin) => {
-                env = begin.env;
-                begun = true;
-            }
-            Record::File { file, .. } => {
-                rows.push(file.uri);
-            }
-            Record::Commit { .. } => {}
-            Record::End { .. } => ended = true,
-            Record::Lake(_) | Record::LakeSource(_) | Record::LakeBegin | Record::LakeEnd => {
-                return Err(
-                    "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
-                        .into(),
-                );
-            }
-        }
-        Ok(())
-    })
-    .await?;
-    let inputs = if let Some(source) = remote {
-        source.inputs
-    } else if let Some(info) = oneshot {
-        info.files.into_iter().map(|file| file.uri).collect()
-    } else if !begun || !ended {
-        return Err("table stream ended without end".into());
-    } else {
-        rows
-    };
-    let measured = bytemass::bytemass(&bytemass::BytemassRequest { inputs, env }).await?;
-    write_page(&measured, args).await
-}
-
 async fn measure(
     inputs: Vec<String>,
     env: BTreeMap<String, String>,
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
-    if args.d3 {
-        let rows = bytemass::bytemass(&bytemass::BytemassRequest { inputs, env }).await?;
-        return write_page(&rows, args).await;
-    }
     let mut emit = Emitter::open("bytemass", args.output.as_deref())?;
     let mut stats = MassStats::default();
     emit.write(&BeginRecord {
@@ -230,25 +176,6 @@ fn finish_stream(
         column_count: stats.column_count,
     })?;
     emit.finish(&stats.summary(output))
-}
-
-async fn write_page(rows: &[bytemass::MassRow], args: &BytemassArgs) -> Result<(), CliError> {
-    let html = bytemass::render_html(rows)?;
-    let tty = std::io::stdout().is_terminal();
-    if tty && args.output.is_none() {
-        return Err("bytemass --d3 on a terminal needs -o <file>".into());
-    }
-    if let Some(path) = &args.output {
-        tokio::fs::write(path, &html).await?;
-    }
-    if tty {
-        let mut summary = format!("d3: {} column(s)\n", rows.len());
-        if let Some(path) = &args.output {
-            summary.push_str(&format!("output: {}\n", path.display()));
-        }
-        return emit::write_stdout(&summary);
-    }
-    emit::write_stdout(&html)
 }
 
 #[derive(Default)]

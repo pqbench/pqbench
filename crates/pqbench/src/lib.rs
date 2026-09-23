@@ -13,3 +13,4 @@ pub mod stats;
 pub mod table;
 mod text;
 pub mod third_party;
+pub mod viz;

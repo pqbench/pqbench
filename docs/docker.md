@@ -8,7 +8,7 @@ docker build -t pqbench:local .
 docker run --rm pqbench:local --help
 docker run --rm -v "$PWD:/tmp:ro" pqbench:local bytemass /tmp/file.parquet
 docker run --rm -v "$PWD:/tmp:ro" pqbench:local bytemass /tmp/file.parquet --json > masses.json
-docker run --rm -v "$PWD:/tmp:ro" pqbench:local bytemass /tmp/file.parquet --d3 > treemap.html
+docker run --rm -v "$PWD:/tmp" pqbench:local bytemass /tmp/file.parquet | docker run --rm -i -v "$PWD:/tmp" pqbench:local viz -o /tmp/report
 docker run --rm -v "$PWD:/tmp:ro" pqbench:local lz /tmp/file.bin -c zstd@3
 docker run --rm -v "$PWD:/tmp:ro" pqbench:local compression /tmp/uncompressed.parquet --per-column
 ```
