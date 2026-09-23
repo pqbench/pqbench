@@ -222,7 +222,8 @@ fn dump(py: Python<'_>, inputs: Vec<Bound<'_, PyAny>>, row_groups: &str) -> PyRe
 ///
 /// Returns the profile object (`columns`, optional `dependencies`).
 #[pyfunction]
-#[pyo3(signature = (*inputs, columns=None, rows="first:8192", top=8, dependencies=false))]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (*inputs, columns=None, rows="first:8192", top=8, dependencies=false, measures=None, pairs=None))]
 fn profile(
     py: Python<'_>,
     inputs: Vec<String>,
@@ -230,6 +231,8 @@ fn profile(
     rows: &str,
     top: u32,
     dependencies: bool,
+    measures: Option<Vec<String>>,
+    pairs: Option<Vec<(String, String)>>,
 ) -> PyResult<Py<PyAny>> {
     let max_rows = match pqbench::pattern::Sample::parse(rows).map_err(runtime)? {
         pqbench::pattern::Sample::ALL => None,
@@ -260,10 +263,15 @@ fn profile(
             ))
         })
         .map_err(runtime)?;
+    let pairs = pairs.unwrap_or_default();
+    let measures = measures.unwrap_or_default();
     let request = pqbench::profile::ProfileRequest {
         columns: columns.unwrap_or_default(),
         top,
-        dependencies,
+        dependencies: dependencies || !measures.is_empty() || !pairs.is_empty(),
+        pairs,
+        measures,
+        masses: BTreeMap::new(),
     };
     let profile = pqbench::profile::profile(&dump, &request).map_err(runtime)?;
     dumps(py, &profile)

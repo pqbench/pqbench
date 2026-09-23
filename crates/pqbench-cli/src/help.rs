@@ -234,9 +234,17 @@ fast. `--columns` keeps named columns for the next pass.
 Nested structs become `parent.child` leaves. Lists add `list_length`
 and `first`.
 
-`--dependencies` adds `pqbench.profile-dependency` lines (O(columns² ·
-rows)): mutual information and functional-dependency strength. Off by
-default.
+`--dependencies` adds `pqbench.profile-dependency` lines
+(`O(pairs · rows)`). Off by default. Without `--pairs` or a narrow
+`--columns`, L0 footer mass plus L2 column facts pick promising
+columns first (unique IDs are skipped). This is locality analysis,
+not Pearson-only correlation.
+
+Request measures with `--measures NAME` (repeatable): `pair_ndv`,
+`entropy`, `mutual_information`, `functional_dependency`,
+`null_cooccurrence`, `numeric_relationship`,
+`categorical_association`, or `all`. `--pairs LEFT,RIGHT` analyzes
+only those columns. Either flag implies `--dependencies`.
 
 Facts only — no storage recommendations. The begin record lists
 capabilities so an agent can choose the next flag.
@@ -248,6 +256,7 @@ Examples:
   pqbench dump data.parquet | pqbench profile
   pqbench profile sample.parquet --columns 'device*'
   pqbench profile sample.parquet --columns 'country' --columns 'city' --dependencies
+  pqbench profile sample.parquet --pairs country,city --measures functional_dependency
   pqbench table ./delta-table | pqbench dump --row-groups first:1 | pqbench profile
 
 See also:

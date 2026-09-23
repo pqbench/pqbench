@@ -3,12 +3,14 @@
 `dump` writes a Parquet sample. `pqbench profile` decodes those rows and
 emits sample-level facts. Measurement stays cheap by default so an agent
 can look at the stream, add domain knowledge, and only then spend budget
-on `--columns` or `--dependencies`.
+on `--columns`, `--pairs`, `--measures`, or `--dependencies`.
 
 ```sh
 pqbench dump data.parquet | pqbench profile
 pqbench profile sample.parquet --columns 'device*'
 pqbench profile sample.parquet --columns country --columns city --dependencies
+pqbench profile sample.parquet --pairs country,city --measures functional_dependency
+pqbench profile sample.parquet --measures null_cooccurrence --measures categorical_association
 ```
 
 A pipe streams NDJSON. A TTY needs `-o`.
@@ -20,7 +22,7 @@ flowchart LR
     sample --> profile[pqbench profile]
     profile --> facts[pqbench.profile-column]
     facts --> agent[agent + domain knowledge]
-    agent --> next["profile --columns / --dependencies"]
+    agent --> next["profile --pairs / --measures"]
 ```
 
 ## Default (cheap)
@@ -50,13 +52,37 @@ struct). Maps with more than 32 keys stay as `name.map_length`.
 The begin record lists `capabilities` so a caller does not have to
 memorize flags.
 
-## `--dependencies` (medium)
+## `--dependencies` (medium, locality)
 
-Pairwise facts, `O(columns² · rows)`, off by default. Narrow with
-`--columns` first.
+Pairwise facts, `O(pairs · rows)`, off by default. This is
+dependency / locality analysis — not a Pearson-only correlation
+sweep. Pearson misses categorical dependencies and most of the
+signals that matter for compression.
 
-Each `pqbench.profile-dependency` line carries joint NDV, entropies,
-mutual information, and functional-dependency strength.
+`--pairs LEFT,RIGHT` (repeatable) and `--measures NAME` (repeatable)
+are the request surface. Either implies `--dependencies`. Valid
+measures: `pair_ndv`, `entropy`, `mutual_information`,
+`functional_dependency`, `null_cooccurrence`,
+`numeric_relationship`, `categorical_association`, `all`.
+
+Without `--pairs`, a narrow `--columns` list is paired as requested.
+Otherwise L0 footer byte mass (from the sample) plus L2 column facts
+select at most eight promising columns before pairing. Unique-like
+IDs (high NDV ratio, no heavy mass) are dropped.
+
+Each `pqbench.profile-dependency` line can carry:
+
+- NDV(A), NDV(B), NDV(A,B), mean/max conditional NDV
+- H(A), H(B), H(A,B), H(B|A), H(A|B)
+- mutual information and normalized mutual information
+- functional-dependency strength both ways
+- null co-occurrence (2×2 counts and Jaccard)
+- numeric relationship (Pearson, Spearman, same-sign deltas)
+- categorical association (Cramér's V)
+
+The begin record's `locality` object names the selection
+(`requested` or `promising`), the columns that entered the pairwise
+pass, and the measures that were computed.
 
 ## What this command does not do
 

@@ -47,7 +47,9 @@ All current documents are version `1`.
 | `--include GLOB` / `--exclude GLOB` | Unix globs (`*`, `?`, `**`). On `lake` they match table names; on `table` / `bytemass` / `dump` they match file partition paths. Hive prefixes on `table` (`year=2024/**`) are pushed into the Delta listing. |
 | `--no-stats` | On `table`: keep `num_records` / `bytes_per_row`, drop min/max/null maps. |
 | `--indexes` | On `bytemass`: also load ColumnIndex/OffsetIndex (one extra range). Off by default. |
-| `--dependencies` | On `profile`: pairwise mutual information. Off by default (`O(columns² · rows)`). |
+| `--dependencies` | On `profile`: pairwise locality analysis. Off by default (`O(pairs · rows)`). |
+| `--measures NAME` | On `profile`: request a locality measure (`pair_ndv`, `entropy`, `mutual_information`, `functional_dependency`, `null_cooccurrence`, `numeric_relationship`, `categorical_association`, `all`). Implies `--dependencies`. |
+| `--pairs LEFT,RIGHT` | On `profile`: analyze only that column pair. Implies `--dependencies`. |
 | `--rows all\|first:N` | On `profile`: cap decoded rows (default `first:8192`). |
 | `--columns GLOB` | On `profile`: keep column names matching the glob. |
 | `--sample all\|every:N\|first:N` | After include/exclude, keep every file, every Nth, or the first N. |

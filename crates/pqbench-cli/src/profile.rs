@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use clap::Args;
 use pqbench::dump::{self, DumpFile, DumpRequest, RowGroups};
+use pqbench::parquet_helpers;
 use pqbench::profile::{self, Profile, ProfileRequest};
 use serde::Serialize;
 
@@ -32,24 +34,35 @@ pub(crate) struct ProfileArgs {
     /// heavy-hitter values to keep per column
     #[arg(long, default_value = "8", value_name = "N")]
     top: u32,
-    /// also emit pairwise dependency facts (O(columns² · rows))
+    /// pairwise locality analysis (O(pairs · rows); off by default)
     #[arg(long)]
     dependencies: bool,
+    /// locality measure to compute (repeatable). Implies --dependencies.
+    #[arg(long, value_name = "NAME")]
+    measures: Vec<String>,
+    /// column pair LEFT,RIGHT (repeatable). Implies --dependencies.
+    #[arg(long, value_name = "LEFT,RIGHT")]
+    pairs: Vec<String>,
 }
 
 pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
     let _ = args.json;
     let max_rows = parse_rows(&args.rows)?;
     let row_groups = RowGroups::parse(&args.row_groups)?;
+    let pairs = parse_pairs(&args.pairs)?;
     let request = ProfileRequest {
         columns: args.columns.clone(),
         top: args.top.max(1),
-        dependencies: args.dependencies,
+        dependencies: args.dependencies || !args.measures.is_empty() || !pairs.is_empty(),
+        pairs,
+        measures: args.measures.clone(),
+        masses: BTreeMap::new(),
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let dump = runtime.block_on(load_sample(args, row_groups, max_rows))?;
+    let (dump, masses) = runtime.block_on(load_sample(args, row_groups, max_rows))?;
+    let request = ProfileRequest { masses, ..request };
     let profile = profile::profile(&dump, &request)?;
     write_profile(args, &profile)
 }
@@ -58,7 +71,7 @@ async fn load_sample(
     args: &ProfileArgs,
     row_groups: RowGroups,
     max_rows: Option<usize>,
-) -> Result<pqbench::dump::Dump, CliError> {
+) -> Result<(pqbench::dump::Dump, BTreeMap<String, u64>), CliError> {
     if args.inputs.is_empty() {
         if std::io::stdin().is_terminal() {
             return Err("profile needs a parquet sample or a dump on standard input".into());
@@ -68,7 +81,7 @@ async fn load_sample(
     if args.inputs.len() == 1 && args.inputs[0] == "-" {
         return read_stdin(max_rows);
     }
-    let files = args
+    let files: Vec<DumpFile> = args
         .inputs
         .iter()
         .map(|input| DumpFile {
@@ -78,10 +91,14 @@ async fn load_sample(
             env: Default::default(),
         })
         .collect();
-    Ok(dump::sample(&DumpRequest { files, row_groups }, max_rows).await?)
+    let masses = file_masses(&files);
+    let dump = dump::sample(&DumpRequest { files, row_groups }, max_rows).await?;
+    Ok((dump, masses))
 }
 
-fn read_stdin(max_rows: Option<usize>) -> Result<pqbench::dump::Dump, CliError> {
+fn read_stdin(
+    max_rows: Option<usize>,
+) -> Result<(pqbench::dump::Dump, BTreeMap<String, u64>), CliError> {
     let mut bytes = Vec::new();
     std::io::stdin().read_to_end(&mut bytes)?;
     if looks_like_json(&bytes) {
@@ -89,7 +106,46 @@ fn read_stdin(max_rows: Option<usize>) -> Result<pqbench::dump::Dump, CliError> 
             "profile reads a Parquet sample; pipe `pqbench dump` or pass a .parquet file".into(),
         );
     }
-    Ok(dump::sample_bytes(&bytes, max_rows)?)
+    let masses = buffer_masses(&bytes);
+    Ok((dump::sample_bytes(&bytes, max_rows)?, masses))
+}
+
+fn parse_pairs(values: &[String]) -> Result<Vec<(String, String)>, CliError> {
+    let mut pairs = Vec::new();
+    for value in values {
+        let (left, right) = value
+            .split_once(',')
+            .ok_or_else(|| format!("pair `{value}` must be LEFT,RIGHT"))?;
+        if right.contains(',') || left.is_empty() || right.is_empty() {
+            return Err(format!("pair `{value}` must be LEFT,RIGHT").into());
+        }
+        pairs.push((left.to_string(), right.to_string()));
+    }
+    Ok(pairs)
+}
+
+fn file_masses(files: &[DumpFile]) -> BTreeMap<String, u64> {
+    let mut masses = BTreeMap::new();
+    for file in files {
+        if let Ok(file_mass) = parquet_helpers::read_file_masses(Path::new(&file.path), false) {
+            add_masses(&mut masses, &file_mass);
+        }
+    }
+    masses
+}
+
+fn buffer_masses(bytes: &[u8]) -> BTreeMap<String, u64> {
+    let mut masses = BTreeMap::new();
+    if let Ok(file_mass) = parquet_helpers::read_buffer_masses(bytes) {
+        add_masses(&mut masses, &file_mass);
+    }
+    masses
+}
+
+fn add_masses(masses: &mut BTreeMap<String, u64>, file: &pqbench::parquet_helpers::FileMass) {
+    for column in &file.columns {
+        *masses.entry(column.path.clone()).or_insert(0) += column.bytes;
+    }
 }
 
 fn looks_like_json(bytes: &[u8]) -> bool {
@@ -115,6 +171,7 @@ fn write_profile(args: &ProfileArgs, profile: &Profile) -> Result<(), CliError> 
         event: "begin",
         num_rows: profile.num_rows,
         capabilities: &profile.capabilities,
+        locality: profile.locality.as_ref(),
     })?;
     for column in &profile.columns {
         emit.write(&ColumnRecord {
@@ -160,6 +217,8 @@ struct BeginRecord<'a> {
     event: &'static str,
     num_rows: u64,
     capabilities: &'a [pqbench::profile::Capability],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locality: Option<&'a pqbench::profile::Locality>,
 }
 
 #[derive(Serialize)]

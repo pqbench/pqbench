@@ -50,8 +50,9 @@ fn profile_streams_column_facts() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|capability| capability["name"] == "dependencies"
-            && capability["flag"] == "--dependencies"));
+        .any(
+            |capability| capability["name"] == "locality" && capability["flag"] == "--dependencies"
+        ));
     let columns: Vec<_> = records
         .iter()
         .filter(|record| record["kind"] == "pqbench.profile-column")
@@ -128,7 +129,63 @@ fn dependencies_are_opt_in() {
         record["kind"] == "pqbench.profile-dependency"
             && ((record["left"] == "label" && record["right"] == "text")
                 || (record["left"] == "text" && record["right"] == "label"))
+            && record["functional_dependency_right"].as_f64().is_some()
+            && record["null_jaccard"].as_f64().is_some()
     }));
+    assert_eq!(records[0]["locality"]["selection"], "requested");
+}
+
+#[test]
+fn measures_and_pairs_are_requestable() {
+    let output = pqbench()
+        .args([
+            "profile",
+            parquet_fixture(),
+            "--rows",
+            "first:16",
+            "--pairs",
+            "text,label",
+            "--measures",
+            "functional_dependency",
+            "--measures",
+            "pair_ndv",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson_records(&output.stdout);
+    let pair = records
+        .iter()
+        .find(|record| record["kind"] == "pqbench.profile-dependency")
+        .unwrap();
+    assert_eq!(pair["left"], "text");
+    assert_eq!(pair["right"], "label");
+    assert!(pair["functional_dependency_right"].as_f64().is_some());
+    assert!(pair["ndv_pair"].as_u64().is_some());
+    assert!(pair.get("mutual_information").is_none());
+    assert!(pair.get("null_jaccard").is_none());
+}
+
+#[test]
+fn unknown_measure_fails() {
+    let output = pqbench()
+        .args([
+            "profile",
+            parquet_fixture(),
+            "--rows",
+            "first:8",
+            "--measures",
+            "pearson",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("locality measure"), "{stderr}");
 }
 
 #[test]
