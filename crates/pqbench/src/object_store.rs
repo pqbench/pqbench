@@ -264,6 +264,7 @@ async fn stat_get_opts(
 }
 
 /// Parse size, identity, mtime, and storage class from a HEAD response.
+#[cfg(any(test, feature = "aws"))]
 fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
     let mut size = None;
     let mut etag = None;
@@ -292,6 +293,7 @@ fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
 }
 
 /// IMF-fixdate (`Wed, 23 Sep 2026 20:53:00 GMT`) to RFC3339 UTC.
+#[cfg(any(test, feature = "aws"))]
 fn parse_http_date(value: &str) -> Option<String> {
     let rest = value.split_once(", ")?.1;
     let mut parts = rest.split_whitespace();
@@ -315,6 +317,7 @@ fn parse_http_date(value: &str) -> Option<String> {
     unix_timestamp_rfc3339(secs)
 }
 
+#[cfg(any(test, feature = "aws"))]
 fn http_month(name: &str) -> Option<u32> {
     Some(match name {
         "Jan" => 1,

@@ -54,6 +54,14 @@ Each measured column is then one line:
 | `compressed_bytes` | on-disk bytes for the chunk |
 | `uncompressed_bytes` | encoded bytes before compression |
 | `codec` | codec recorded in the footer |
+| `encodings` | encodings listed on the chunk |
+| `num_values` | values in the chunk (including nulls) |
+| `dictionary` | 1 when a dictionary page offset is present |
+| `null_count` / `distinct_count` | footer statistics, when present |
+| `physical_type` | leaf physical type |
+| `row_group` / `row_group_rows` | chunk's row group |
+| `compressed_bytes_per_row` | compressed bytes / row-group rows |
+| `page_count` | OffsetIndex pages, when `bytemass --indexes` |
 
 `files` is one row per proxied table file (empty when the stream had only
 bare parquet paths):

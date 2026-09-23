@@ -52,14 +52,17 @@ mod tests {
                     bytes: 40,
                     uncompressed_bytes: 80,
                     codec: "SNAPPY".into(),
+                    ..ColumnMass::default()
                 },
                 ColumnMass {
                     path: "a.b".into(),
                     bytes: 60,
                     uncompressed_bytes: 120,
                     codec: "SNAPPY".into(),
+                    ..ColumnMass::default()
                 },
             ],
+            ..FileMass::default()
         };
         let raw = read(&mass);
         assert_eq!(raw.num_rows, 100);

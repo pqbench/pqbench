@@ -16,7 +16,7 @@ pub use html::render_html;
 pub use sqlite::write_sqlite;
 
 /// One collected bytemass row, tagged with the stream `id`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MassRecord {
     /// Table id from the stream, or empty for a bare parquet input.
     pub id: String,
@@ -34,6 +34,26 @@ pub struct MassRecord {
     pub uncompressed_bytes: u64,
     /// Compression codec recorded in the column chunk metadata.
     pub codec: String,
+    /// Encodings listed on the column chunk, comma-joined.
+    pub encodings: String,
+    /// Values in this chunk (including nulls).
+    pub num_values: u64,
+    /// Dictionary page offset is present.
+    pub dictionary: bool,
+    /// Footer `null_count`, when statistics exist.
+    pub null_count: Option<u64>,
+    /// Footer `distinct_count`, when statistics exist.
+    pub distinct_count: Option<u64>,
+    /// Physical type of the leaf column.
+    pub physical_type: String,
+    /// Row-group index (0-based).
+    pub row_group: u32,
+    /// Rows in this row group.
+    pub row_group_rows: u64,
+    /// Compressed bytes / row-group rows.
+    pub compressed_bytes_per_row: Option<f64>,
+    /// Data pages in the OffsetIndex, when `--indexes` loaded one.
+    pub page_count: Option<u64>,
 }
 
 /// One proxied table-file / object-stat row collected from the bytemass stream.
@@ -107,6 +127,7 @@ mod tests {
             compressed_bytes: bytes,
             uncompressed_bytes: bytes,
             codec: "ZSTD".into(),
+            ..MassRecord::default()
         }
     }
 

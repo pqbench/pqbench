@@ -105,6 +105,10 @@ A pipe streams `pqbench.bytemass-file` (table stats as received) then one
 `pqbench.bytemass-row` per column chunk. A TTY needs `-o`. `--json` is the
 same stream. Pipe the stream to `viz`.
 
+Rows include footer facts (encodings, physical type, dictionary, stats)
+with no extra I/O. `--indexes` also loads ColumnIndex/OffsetIndex (one
+extra range per file) for page_count / page_compressed_bytes.
+
 --include / --exclude / --sample apply to file partition paths.";
 
 pub const BYTEMASS_AFTER: &str = "\

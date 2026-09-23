@@ -44,6 +44,7 @@ fn table_help_stays_local_and_points_at_neighbors() {
 fn bytemass_help_points_at_table_and_viz() {
     let stdout = help(&["bytemass", "--help"]);
     assert!(stdout.contains("every:N"), "{stdout}");
+    assert!(stdout.contains("--indexes"), "{stdout}");
     assert!(stdout.contains("pqbench table --help"), "{stdout}");
     assert!(stdout.contains("pqbench viz --help"), "{stdout}");
     assert!(stdout.contains("pqbench --help"), "{stdout}");

@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::parquet_helpers::{
-    default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
-};
+use crate::parquet_helpers::{read_file_masses, ColumnMass, Error, FileMass};
 
 use super::api::MassRow;
 use super::remote;
@@ -52,8 +50,10 @@ impl MassSummary {
                     bytes: column.compressed_bytes,
                     uncompressed_bytes: column.uncompressed_bytes,
                     codec: column.codecs.iter().cloned().collect::<Vec<_>>().join(","),
+                    ..ColumnMass::default()
                 })
                 .collect(),
+            ..FileMass::default()
         }
     }
 }
@@ -63,31 +63,62 @@ impl MassSummary {
 pub(super) async fn measure_inputs(
     inputs: &[String],
     env: &BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<Vec<MassRow>, Error> {
     let paths = expand_inputs(inputs)?;
     let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
-        let (stat, mass) = read_input(&input, env).await?;
+        let (stat, mass) = read_input(&input, env, indexes).await?;
         let num_rows = mass.num_rows;
         for column in mass.columns {
-            rows.push(MassRow {
-                file: input.clone(),
-                size: stat.size,
-                num_rows,
-                column: column.path,
-                compressed_bytes: column.bytes,
-                uncompressed_bytes: column.uncompressed_bytes,
-                codec: column.codec,
-                last_modified_time: stat.last_modified_time.clone(),
-                creation_time: stat.creation_time.clone(),
-                etag: stat.identity.clone(),
-                storage_class: stat.storage_class.clone(),
-                ..MassRow::default()
-            });
+            rows.push(mass_row(&input, &stat, num_rows, column));
         }
     }
     Ok(rows)
+}
+
+fn mass_row(
+    input: &str,
+    stat: &crate::object_store::ObjectStat,
+    num_rows: u64,
+    column: ColumnMass,
+) -> MassRow {
+    MassRow {
+        file: input.to_string(),
+        size: stat.size,
+        num_rows,
+        column: column.path,
+        compressed_bytes: column.bytes,
+        uncompressed_bytes: column.uncompressed_bytes,
+        codec: column.codec,
+        last_modified_time: stat.last_modified_time.clone(),
+        creation_time: stat.creation_time.clone(),
+        etag: stat.identity.clone(),
+        storage_class: stat.storage_class.clone(),
+        encodings: column.encodings,
+        num_values: column.num_values,
+        dictionary: column.dictionary,
+        null_count: column.null_count,
+        distinct_count: column.distinct_count,
+        min_value: column.min_value,
+        max_value: column.max_value,
+        physical_type: column.physical_type,
+        row_group: column.row_group,
+        row_group_rows: column.row_group_rows,
+        compressed_bytes_per_row: per_row(column.bytes, column.row_group_rows),
+        uncompressed_bytes_per_row: per_row(column.uncompressed_bytes, column.row_group_rows),
+        compression_ratio: per_row(column.uncompressed_bytes, column.bytes),
+        null_fraction: column
+            .null_count
+            .and_then(|count| per_row(count, column.num_values)),
+        page_count: column.page_count,
+        page_compressed_bytes: column.page_compressed_bytes,
+    }
+}
+
+fn per_row(bytes: u64, rows: u64) -> Option<f64> {
+    (rows > 0).then(|| bytes as f64 / rows as f64)
 }
 
 fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, Error> {
@@ -123,16 +154,17 @@ fn escape_literal_brackets(input: &str) -> String {
 async fn read_input(
     input: &str,
     env: &BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<(crate::object_store::ObjectStat, FileMass), Error> {
     if input.contains("://") {
         return remote::read_remote_with_options(
             input,
             env.iter().map(|(key, value)| (key.clone(), value.clone())),
+            indexes,
         )
         .await;
     }
     let path = Path::new(input);
     let stat = crate::object_store::stat_local(path).map_err(|e| Error(e.to_string()))?;
-    let mass = default_metadata_parser().read_masses(path)?;
-    Ok((stat, mass))
+    Ok((stat, read_file_masses(path, indexes)?))
 }

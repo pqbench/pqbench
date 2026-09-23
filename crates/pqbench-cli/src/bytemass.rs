@@ -39,6 +39,9 @@ pub(crate) struct BytemassArgs {
     /// file sample after include/exclude: all, every:N, first:N
     #[arg(long, value_name = "METHOD", default_value = "all")]
     sample: String,
+    /// also load ColumnIndex/OffsetIndex (one extra range per file)
+    #[arg(long)]
+    indexes: bool,
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
@@ -167,6 +170,7 @@ async fn queue_record(
                     uri.clone(),
                     uri,
                     source.env.clone(),
+                    args.indexes,
                 )
                 .await?;
             }
@@ -181,6 +185,7 @@ async fn queue_record(
                     info.uri.clone(),
                     file,
                     info.env.clone(),
+                    args.indexes,
                 )
                 .await?;
             }
@@ -207,7 +212,7 @@ async fn queue_record(
                 return Ok(());
             }
             let env = envs.get(&id).cloned().unwrap_or_default();
-            spawn_file(set, emit, stats, concurrency, id, file, env).await?;
+            spawn_file(set, emit, stats, concurrency, id, file, env, args.indexes).await?;
         }
         Record::Log { .. } => {}
         Record::End { id } => {
@@ -217,6 +222,7 @@ async fn queue_record(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_file(
     set: &mut JoinSet<Result<Measured, String>>,
     emit: &mut Emit,
@@ -225,6 +231,7 @@ async fn spawn_file(
     id: String,
     file: TableFile,
     env: BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<(), CliError> {
     while set.len() >= concurrency {
         if let Some(done) = set.join_next().await {
@@ -235,6 +242,7 @@ async fn spawn_file(
         let rows = bytemass::bytemass(&bytemass::BytemassRequest {
             inputs: vec![file.uri.clone()],
             env,
+            indexes,
         })
         .await
         .map_err(|error| error.to_string())?;
@@ -251,6 +259,7 @@ async fn spawn_file(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_input(
     set: &mut JoinSet<Result<Measured, String>>,
     emit: &mut Emit,
@@ -259,6 +268,7 @@ async fn spawn_input(
     id: String,
     uri: String,
     env: BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<(), CliError> {
     spawn_file(
         set,
@@ -268,6 +278,7 @@ async fn spawn_input(
         id,
         TableFile::new(uri.clone(), uri, 0),
         env,
+        indexes,
     )
     .await
 }
@@ -344,6 +355,7 @@ async fn measure(
             input.clone(),
             input,
             env.clone(),
+            args.indexes,
         )
         .await?;
     }

@@ -79,3 +79,48 @@ fn bytemass_json_is_the_stream() {
         .any(|record| record["kind"] == "pqbench.bytemass-row"));
     assert!(!out.stdout.windows(10).any(|w| w == b"\"children\""));
 }
+
+#[test]
+fn bytemass_rows_include_footer_facts() {
+    let exe = env!("CARGO_BIN_EXE_pqbench");
+    let out = Command::new(exe)
+        .args(["bytemass", parquet_fixture()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows: Vec<_> = ndjson_records(&out.stdout)
+        .into_iter()
+        .filter(|record| record["kind"] == "pqbench.bytemass-row")
+        .collect();
+    assert!(!rows.is_empty());
+    assert!(rows
+        .iter()
+        .all(|row| !row["physical_type"].as_str().unwrap().is_empty()));
+    assert!(rows
+        .iter()
+        .all(|row| !row["encodings"].as_array().unwrap().is_empty()));
+    assert!(rows
+        .iter()
+        .all(|row| row["num_values"].as_u64().unwrap() > 0));
+}
+
+#[test]
+fn bytemass_indexes_does_not_fail() {
+    let exe = env!("CARGO_BIN_EXE_pqbench");
+    let out = Command::new(exe)
+        .args(["bytemass", parquet_fixture(), "--indexes"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(ndjson_records(&out.stdout)
+        .iter()
+        .any(|record| record["kind"] == "pqbench.bytemass-row"));
+}

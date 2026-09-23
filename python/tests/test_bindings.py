@@ -68,7 +68,14 @@ class BindingsTest(unittest.TestCase):
         self.assertGreaterEqual(len(rows), 1)
         self.assertIn("column", rows[0])
         self.assertIn("compressed_bytes", rows[0])
+        self.assertIn("physical_type", rows[0])
+        self.assertTrue(rows[0]["encodings"])
         self.assertTrue(any(row["column"] == "text" for row in rows))
+
+    def test_bytemass_indexes_is_optional(self) -> None:
+        rows = pqbench.bytemass(str(_PARQUET), indexes=True)
+        self.assertGreaterEqual(len(rows), 1)
+        self.assertIn("physical_type", rows[0])
 
     def test_bytemass_requires_an_input(self) -> None:
         with self.assertRaises(RuntimeError):

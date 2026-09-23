@@ -24,7 +24,17 @@ pub fn write_sqlite(path: &Path, rows: &[MassRecord], files: &[FileMass]) -> Res
             column_path TEXT NOT NULL,
             compressed_bytes INTEGER NOT NULL,
             uncompressed_bytes INTEGER NOT NULL,
-            codec TEXT NOT NULL
+            codec TEXT NOT NULL,
+            encodings TEXT NOT NULL,
+            num_values INTEGER NOT NULL,
+            dictionary INTEGER NOT NULL,
+            null_count INTEGER,
+            distinct_count INTEGER,
+            physical_type TEXT NOT NULL,
+            row_group INTEGER NOT NULL,
+            row_group_rows INTEGER NOT NULL,
+            compressed_bytes_per_row REAL,
+            page_count INTEGER
         );
         CREATE TABLE files (
             id TEXT NOT NULL,
@@ -42,8 +52,11 @@ pub fn write_sqlite(path: &Path, rows: &[MassRecord], files: &[FileMass]) -> Res
         .prepare(
             "INSERT INTO masses (
                 id, file, size, num_rows, column_path,
-                compressed_bytes, uncompressed_bytes, codec
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                compressed_bytes, uncompressed_bytes, codec,
+                encodings, num_values, dictionary, null_count, distinct_count,
+                physical_type, row_group, row_group_rows,
+                compressed_bytes_per_row, page_count
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         )
         .map_err(sqlite_error)?;
     for row in rows {
@@ -57,6 +70,16 @@ pub fn write_sqlite(path: &Path, rows: &[MassRecord], files: &[FileMass]) -> Res
                 row.compressed_bytes,
                 row.uncompressed_bytes,
                 row.codec,
+                row.encodings,
+                row.num_values,
+                row.dictionary,
+                row.null_count,
+                row.distinct_count,
+                row.physical_type,
+                row.row_group,
+                row.row_group_rows,
+                row.compressed_bytes_per_row,
+                row.page_count,
             ])
             .map_err(sqlite_error)?;
     }
