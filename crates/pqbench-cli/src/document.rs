@@ -34,10 +34,11 @@ pub(crate) struct LakeSource {
     pub token: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// List only this catalog. Skips `/catalogs`.
+    /// List this catalog, or a catalog-name glob. A literal skips `/catalogs`.
     #[serde(default)]
     pub catalog: Option<String>,
-    /// List only this schema. Requires `catalog`.
+    /// List this schema, or a schema-name glob. A literal skips `/schemas`.
+    /// Requires `catalog`.
     #[serde(default)]
     pub schema: Option<String>,
 }

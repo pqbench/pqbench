@@ -22,10 +22,10 @@ pub(crate) struct LakeArgs {
     /// catalogs, schemas, or tables to list at once
     #[arg(long, default_value = "4", value_name = "N")]
     concurrency: NonZeroUsize,
-    /// keep names that match a glob or an exact prefix (`catalog`, `catalog.schema`)
+    /// keep FQNs that match a glob or prefix (`main`, `main.default`, `main.default.events`)
     #[arg(long = "include", value_name = "PATTERN")]
     include: Vec<String>,
-    /// drop names that match a glob or an exact prefix
+    /// drop FQNs that match a glob or prefix
     #[arg(long = "exclude", value_name = "PATTERN")]
     exclude: Vec<String>,
 }

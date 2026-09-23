@@ -104,9 +104,10 @@ stdin, lists a Unity Catalog. The same routes serve
 [Unity Catalog OSS](https://docs.unitycatalog.io/) and
 [Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
 then schemas, then tables, following `next_page_token`. `--concurrency` lists
-schemas in parallel. `--include` / `--exclude` take a glob or an exact prefix
-and prune the walk when the leading name is a literal (`--include main` does
-not list the other catalogs). `token` is the Databricks bearer token. `env`
+schemas in parallel. `--include` / `--exclude` match a Unity FQN (`main`,
+`main.default`, `main.default.events`) as a glob or a prefix, and prune the
+walk when the leading name is a literal (`--include main.default.events`
+does not list the other catalogs). `token` is the Databricks bearer token. `env`
 holds `AWS_*` storage credentials and is copied onto each table-ref.
 
 ```sh

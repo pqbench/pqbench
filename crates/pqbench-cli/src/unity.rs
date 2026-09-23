@@ -144,13 +144,20 @@ fn catalogs_to_list(
     filter: &NameFilter,
 ) -> Result<Vec<String>, CliError> {
     if let Some(catalog) = nonempty(&source.catalog) {
-        return Ok(vec![catalog.to_string()]);
+        if !crate::filter::is_glob(catalog) {
+            return Ok(vec![catalog.to_string()]
+                .into_iter()
+                .filter(|name| filter.keeps_prefix(name))
+                .collect());
+        }
     }
-    if let Some(scoped) = filter.catalog_scope() {
-        return Ok(scoped
-            .into_iter()
-            .filter(|catalog| filter.keeps(catalog))
-            .collect());
+    if source.catalog.is_none() {
+        if let Some(scoped) = filter.catalog_scope() {
+            return Ok(scoped
+                .into_iter()
+                .filter(|catalog| filter.keeps_prefix(catalog))
+                .collect());
+        }
     }
     let names = names::<CatalogsPage>(
         root,
@@ -162,7 +169,16 @@ fn catalogs_to_list(
     )?;
     Ok(names
         .into_iter()
-        .filter(|catalog| filter.keeps(catalog))
+        .filter(|catalog| {
+            source
+                .catalog
+                .as_deref()
+                .filter(|pattern| crate::filter::is_glob(pattern))
+                .is_none_or(|pattern| {
+                    glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(catalog))
+                })
+                && filter.keeps_prefix(catalog)
+        })
         .collect())
 }
 
@@ -174,13 +190,22 @@ fn schemas_to_list(
     filter: &NameFilter,
 ) -> Result<Vec<String>, CliError> {
     if let Some(schema) = nonempty(&source.schema) {
-        return Ok(vec![schema.to_string()]);
+        if !crate::filter::is_glob(schema) {
+            let fqn = format!("{catalog}.{schema}");
+            return Ok(if filter.keeps_prefix(&fqn) {
+                vec![schema.to_string()]
+            } else {
+                Vec::new()
+            });
+        }
     }
-    if let Some(scoped) = filter.schema_scope(catalog) {
-        return Ok(scoped
-            .into_iter()
-            .filter(|schema| filter.keeps(&format!("{catalog}.{schema}")))
-            .collect());
+    if source.schema.is_none() {
+        if let Some(scoped) = filter.schema_scope(catalog) {
+            return Ok(scoped
+                .into_iter()
+                .filter(|schema| filter.keeps_prefix(&format!("{catalog}.{schema}")))
+                .collect());
+        }
     }
     let names = names::<SchemasPage>(
         root,
@@ -192,7 +217,17 @@ fn schemas_to_list(
     )?;
     Ok(names
         .into_iter()
-        .filter(|schema| filter.keeps(&format!("{catalog}.{schema}")))
+        .filter(|schema| {
+            let fqn = format!("{catalog}.{schema}");
+            source
+                .schema
+                .as_deref()
+                .filter(|pattern| crate::filter::is_glob(pattern))
+                .is_none_or(|pattern| {
+                    glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(schema))
+                })
+                && filter.keeps_prefix(&fqn)
+        })
         .collect())
 }
 

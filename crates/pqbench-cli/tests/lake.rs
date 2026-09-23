@@ -296,6 +296,90 @@ fn unity_skips_an_empty_schema_page() {
 }
 
 #[test]
+fn include_and_exclude_match_table_fqn() {
+    let catalog = Catalog::spawn(
+        None,
+        vec![
+            json!({
+                "name": "events",
+                "full_name": "main.default.events",
+                "table_type": "EXTERNAL",
+                "data_source_format": "DELTA",
+                "storage_location": "s3://bucket/events"
+            }),
+            json!({
+                "name": "tmp",
+                "full_name": "main.default.tmp",
+                "table_type": "EXTERNAL",
+                "data_source_format": "DELTA",
+                "storage_location": "s3://bucket/tmp"
+            }),
+        ],
+    );
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address
+    });
+    let output = pipe(
+        &[
+            "lake",
+            "--include",
+            "main.default.*",
+            "--exclude",
+            "main.default.tmp",
+        ],
+        source.to_string().as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ids: Vec<_> = table_refs(&ndjson(&output.stdout))
+        .into_iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["main.default.events"]);
+}
+
+#[test]
+fn include_table_fqn_skips_other_catalogs() {
+    let catalog = Catalog::spawn_with_catalogs(
+        None,
+        vec!["main", "system"],
+        vec![json!({
+            "name": "events",
+            "full_name": "main.default.events",
+            "table_type": "EXTERNAL",
+            "data_source_format": "DELTA",
+            "storage_location": "s3://bucket/events"
+        })],
+    );
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address
+    });
+    let output = pipe(
+        &["lake", "--include", "main.default.events"],
+        source.to_string().as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!catalog.requested("/catalogs"));
+    assert!(!catalog.requested("catalog_name=system"));
+    let ids: Vec<_> = table_refs(&ndjson(&output.stdout))
+        .into_iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["main.default.events"]);
+}
+
+#[test]
 fn include_prefix_skips_other_catalogs() {
     let catalog = Catalog::spawn_with_catalogs(
         None,

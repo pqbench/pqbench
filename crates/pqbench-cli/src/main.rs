@@ -67,6 +67,7 @@ Examples:
     #[command(after_help = r#"Examples:
   pqbench lake ./warehouse
   pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
+  pqbench lake creds.json --include 'main.default.*' --exclude 'main.default.tmp*'
   pqbench lake creds.json --concurrency 8 | pqbench table | pqbench bytemass
 "#)]
     Lake(lake::LakeArgs),
