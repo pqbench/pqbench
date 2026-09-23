@@ -118,8 +118,11 @@ check() {
                 AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
         "$bin" table |
         "$bin" bytemass --json |
-        jq -e '.num_rows == 3 and .file_count == 1
-            and ([.columns[].path] | sort) == ["id", "label"]' > /dev/null
+        jq -es '
+            (map(select(.event == "end")) | first
+                | .num_rows == 3 and .file_count == 1)
+            and ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort)
+                == ["id", "label"]' > /dev/null
     echo "Unity Catalog ready: $unity/tables/pqbench.demo.events (storage $storage)"
 }
 
