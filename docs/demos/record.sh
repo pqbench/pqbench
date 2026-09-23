@@ -24,13 +24,13 @@ $CARGO build -p pqbench-cli --features delta
 export PQBENCH="${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
 test -x "$PQBENCH"
 
-asciinema rec --headless --overwrite --return --window-size 100x28 \
+asciinema rec --overwrite --window-size 100x28 \
     --command "sh docs/demos/pqbench-lake-session.sh" \
     /tmp/pqbench-lake.cast
-asciinema rec --headless --overwrite --return --window-size 100x28 \
+asciinema rec --overwrite --window-size 100x28 \
     --command "sh docs/demos/pqbench-bytemass-session.sh" \
     /tmp/pqbench-bytemass.cast
-asciinema rec --headless --overwrite --return --window-size 100x28 \
+asciinema rec --overwrite --window-size 100x28 \
     --command "sh docs/demos/pqbench-delta-session.sh" \
     /tmp/pqbench-delta.cast
 

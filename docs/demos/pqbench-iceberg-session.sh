@@ -12,12 +12,12 @@ prompt() {
     sleep 1
 }
 
-prompt "pqbench lake docker/e2e-lakehouse/iceberg"
-pqbench lake docker/e2e-lakehouse/iceberg
+prompt "pqbench lake docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.ndjson.zst"
+pqbench lake docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.ndjson.zst
 sleep 2
 
 if [ "${PQBENCH_LAKEHOUSE:-}" = "1" ]; then
     prompt "pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass --json"
-    pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass --json
+    pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass --json | cat
     sleep 2
 fi
