@@ -17,34 +17,10 @@ use crate::emit::Emitter;
 
 use pqbench::lake::Lake;
 use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
+use pqbench::third_party::unity::LakeSource;
 use serde::{Deserialize, Serialize};
 
 use crate::CliError;
-
-/// Credentials for listing a Unity Catalog, OSS or Databricks. `endpoint` is
-/// the server origin (`http://localhost:8080` or
-/// `https://example.cloud.databricks.com`). `token` is the Databricks bearer
-/// token; Unity OSS often has none. `env` is copied onto each listed table so
-/// `pqbench table` can read its files.
-#[derive(Deserialize)]
-pub(crate) struct LakeSource {
-    pub version: u32,
-    pub endpoint: String,
-    #[cfg(feature = "unity")]
-    #[serde(default)]
-    pub token: Option<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-    /// List this catalog, or a catalog-name glob. A literal skips `/catalogs`.
-    #[cfg(feature = "unity")]
-    #[serde(default)]
-    pub catalog: Option<String>,
-    /// List this schema, or a schema-name glob. A literal skips `/schemas`.
-    /// Requires `catalog`.
-    #[cfg(feature = "unity")]
-    #[serde(default)]
-    pub schema: Option<String>,
-}
 
 /// A versioned document naming what an external producer resolved, plus the
 /// storage environment to read it with.
@@ -324,7 +300,6 @@ fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
     if source.endpoint.trim().is_empty() {
         return Err("lake source needs an endpoint".into());
     }
-    #[cfg(feature = "unity")]
     if source
         .schema
         .as_deref()

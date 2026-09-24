@@ -27,8 +27,8 @@ pub use text::render_text;
 mod tests {
     use super::*;
     use crate::codecs::Codec;
-    use crate::parquet_helpers::{ColumnChunk, Page, ParquetFile};
     use crate::stats::{Config, Mode};
+    use crate::third_party::parquet::api::{ColumnChunk, Page, ParquetFile};
 
     fn fake_file() -> ParquetFile {
         let mk = |s: &str, n: usize| Page {

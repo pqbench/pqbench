@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use pqbench::lake::{self, Lake, LakeTable};
+use pqbench::third_party::unity::{self, NameFilter};
 use serde::Serialize;
 
 use crate::document::{self, Record};
 use crate::emit::Emitter;
-use crate::filter::NameFilter;
 use crate::CliError;
 
 /// Arguments for `lake`.
@@ -99,13 +99,11 @@ async fn stream_document(
         Ok(())
     })
     .await?;
-    #[cfg(feature = "unity")]
     if let Some(source) = source {
-        tables += crate::unity::list_tables(&source, filter, |table| write_ref(emit, &table))?;
-    }
-    #[cfg(not(feature = "unity"))]
-    if source.is_some() {
-        return Err("this build cannot list a Unity Catalog; rebuild with --features unity".into());
+        for table in unity::list_tables(&source, filter).await? {
+            write_ref(emit, &table)?;
+            tables += 1;
+        }
     }
     if let Some(lake) = lake {
         tables += write_lake(&lake, filter, emit)?;

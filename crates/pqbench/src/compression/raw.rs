@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use crate::codecs::{bench_pages, Codec, Error, PageSamples};
-use crate::parquet_helpers::ParquetFile;
+use crate::third_party::parquet::api::ParquetFile;
 
 /// One page's raw measurement for one codec×level.
 pub struct PageResult {
@@ -41,7 +41,7 @@ pub struct RawRow {
 
 /// Bench every config over an already-parsed file's page payloads.
 ///
-/// The file must be NONE-compressed (see `parquet_helpers`); each page payload
+/// The file must be NONE-compressed (see `crate::third_party::parquet`); each page payload
 /// is the encoded byte blob the codec actually compresses. Each chunk is swept
 /// independently (per-column measurements), so chunk times are independent and
 /// compose into a file measurement in the analytics layer.

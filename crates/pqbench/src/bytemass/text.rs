@@ -5,7 +5,7 @@
 //! composable data and the browser picture come from [`super::json`] and
 //! [`super::d3`].
 
-use crate::parquet_helpers::Error;
+use crate::third_party::parquet::api::Error;
 
 use super::aggregate::tree;
 use super::analytics::MassNode;

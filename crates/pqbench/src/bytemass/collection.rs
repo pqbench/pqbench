@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::parquet_helpers::{
+use crate::third_party::parquet::api::{
     default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
 };
 

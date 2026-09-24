@@ -12,7 +12,7 @@ description = "Command line frontend for pqbench."
 default = []
 delta = ["pqbench/delta"]
 aws = ["pqbench/aws"]
-unity = ["dep:ureq"]
+unity = ["pqbench/unity"]
 delta-s3 = ["delta", "pqbench/delta-s3", "aws"]
 
 [[bin]]
@@ -22,11 +22,9 @@ path = "src/main.rs"
 [dependencies]
 pqbench = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-glob = "0.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "fs"] }
-ureq = { version = "2.12", default-features = false, features = ["tls"], optional = true }
 zstd = "0.13"
 
 [dev-dependencies]

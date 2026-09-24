@@ -1,11 +1,11 @@
 //! Footer-only Parquet object reads.
 //!
-//! Storage access goes through [`crate::object_store::ObjectReader`], so no
+//! Storage access goes through [`crate::third_party::object_store::api::ObjectReader`], so no
 //! third-party storage type appears here and there are no feature flags: a URI
 //! whose backend is not compiled in fails at runtime through the reader.
 
-use crate::object_store;
-use crate::parquet_helpers::{read_footer_masses, Error, FileMass};
+use crate::third_party::object_store;
+use crate::third_party::parquet::api::{read_footer_masses, Error, FileMass};
 
 const PARQUET_FOOTER_SIZE: u64 = 8;
 
@@ -71,7 +71,7 @@ fn storage_error(error: object_store::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::read_remote;
-    use crate::parquet_helpers::{default_metadata_parser, MetadataParser};
+    use crate::third_party::parquet::api::{default_metadata_parser, MetadataParser};
 
     #[tokio::test]
     async fn reads_a_parquet_uri_through_the_public_api() {

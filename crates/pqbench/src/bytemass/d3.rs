@@ -10,7 +10,7 @@
 
 use super::aggregate::{label, tree};
 use super::api::MassRow;
-use crate::parquet_helpers::Error;
+use crate::third_party::parquet::api::Error;
 
 /// The d3 treemap page, as a self-contained HTML string.
 ///

@@ -14,15 +14,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::object_store;
-
-pub mod delta;
-#[cfg(feature = "delta")]
-mod delta_helpers;
+use crate::third_party::delta;
+use crate::third_party::object_store;
 
 /// Errors detecting a table format or loading its metadata.
 #[derive(Debug)]
-pub struct Error(String);
+pub struct Error(pub(crate) String);
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

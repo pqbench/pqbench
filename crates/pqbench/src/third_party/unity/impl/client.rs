@@ -1,26 +1,23 @@
-//! List Delta tables from a Unity Catalog endpoint.
+//! The async HTTP client behind [`super::super::api::list_tables`].
 //!
-//! Unity Catalog OSS and Databricks expose the same list routes. Pagination
-//! follows `next_page_token`. Pages are bounded (`max_results=50`). Table
-//! list requests omit columns and properties. `--include` / `--exclude` prune
-//! the walk when the leading name is a literal. Listing is sequential: the
-//! caller runs one table per later process, not one thread per table.
-//!
-//! https://docs.databricks.com/api/workspace/tables/list
-//! https://docs.databricks.com/aws/en/dev-tools/rest-api
+//! This is the only module that names the third-party `reqwest` crate. It is
+//! compiled only with the `unity` feature.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::time::Duration;
 
-use pqbench::lake::LakeTable;
+use reqwest::Client;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-use crate::document::LakeSource;
-use crate::filter::NameFilter;
-use crate::CliError;
+use crate::third_party::unity::api::{is_glob, Error, LakeSource, NameFilter};
+
+use super::filter;
+use crate::lake::LakeTable;
 
 const PAGE_CAP: usize = 32;
 const PAGE_SIZE: u32 = 50;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize)]
 struct Named {
@@ -65,90 +62,101 @@ struct TableEntry {
     storage_location: Option<String>,
 }
 
-/// List Delta tables, sending each to `on_table` as it is found.
-pub(crate) fn list_tables(
+pub(crate) async fn list_tables(
     source: &LakeSource,
     filter: &NameFilter,
-    mut on_table: impl FnMut(LakeTable) -> Result<(), CliError>,
-) -> Result<usize, CliError> {
+) -> Result<Vec<LakeTable>, Error> {
+    let client = Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|error| Error::from(format!("catalog client: {error}")))?;
     let root = api_root(&source.endpoint);
     let token = source.token.clone().filter(|token| !token.is_empty());
-    let mut tables = 0usize;
-    for catalog in list_catalogs(&root, token.as_deref(), source, filter)? {
-        for schema in list_schemas(&root, token.as_deref(), &catalog, source, filter)? {
-            tables += list_schema_tables(
-                &root,
-                token.as_deref(),
-                &catalog,
-                &schema,
-                &source.env,
-                filter,
-                &mut on_table,
-            )?;
+    let mut tables = Vec::new();
+    for catalog in list_catalogs(&client, &root, token.as_deref(), source, filter).await? {
+        for schema in
+            list_schemas(&client, &root, token.as_deref(), &catalog, source, filter).await?
+        {
+            tables.extend(
+                list_schema_tables(
+                    &client,
+                    &root,
+                    token.as_deref(),
+                    &catalog,
+                    &schema,
+                    &source.env,
+                    filter,
+                )
+                .await?,
+            );
         }
     }
-    if tables == 0 {
-        return Err("catalog listed no Delta tables".into());
+    if tables.is_empty() {
+        return Err(Error::from("catalog listed no Delta tables".to_string()));
     }
     Ok(tables)
 }
 
-fn list_catalogs(
+async fn list_catalogs(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     source: &LakeSource,
     filter: &NameFilter,
-) -> Result<Vec<String>, CliError> {
+) -> Result<Vec<String>, Error> {
     if let Some(catalog) = nonempty(&source.catalog) {
-        if !crate::filter::is_glob(catalog) {
+        if !is_glob(catalog) {
             return Ok(vec![catalog.to_string()]
                 .into_iter()
-                .filter(|name| filter.keeps_prefix(name))
+                .filter(|name| filter::keeps_prefix(filter, name))
                 .collect());
         }
     }
     if source.catalog.is_none() {
-        if let Some(scoped) = filter.catalog_scope() {
+        if let Some(scoped) = filter::catalog_scope(filter) {
             return Ok(scoped
                 .into_iter()
-                .filter(|catalog| filter.keeps_prefix(catalog))
+                .filter(|catalog| filter::keeps_prefix(filter, catalog))
                 .collect());
         }
     }
     let names = names::<CatalogsPage>(
+        client,
         root,
         token,
         "/catalogs",
         &[],
         |page| page.catalogs.iter().map(|item| item.name.clone()).collect(),
         |page| page_token(&page.next_page_token),
-    )?;
+    )
+    .await?;
     Ok(names
         .into_iter()
         .filter(|catalog| {
             source
                 .catalog
                 .as_deref()
-                .filter(|pattern| crate::filter::is_glob(pattern))
+                .filter(|pattern| is_glob(pattern))
                 .is_none_or(|pattern| {
                     glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(catalog))
                 })
-                && filter.keeps_prefix(catalog)
+                && filter::keeps_prefix(filter, catalog)
         })
         .collect())
 }
 
-fn list_schemas(
+async fn list_schemas(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     catalog: &str,
     source: &LakeSource,
     filter: &NameFilter,
-) -> Result<Vec<String>, CliError> {
+) -> Result<Vec<String>, Error> {
     if let Some(schema) = nonempty(&source.schema) {
-        if !crate::filter::is_glob(schema) {
+        if !is_glob(schema) {
             let fqn = format!("{catalog}.{schema}");
-            return Ok(if filter.keeps_prefix(&fqn) {
+            return Ok(if filter::keeps_prefix(filter, &fqn) {
                 vec![schema.to_string()]
             } else {
                 Vec::new()
@@ -156,21 +164,23 @@ fn list_schemas(
         }
     }
     if source.schema.is_none() {
-        if let Some(scoped) = filter.schema_scope(catalog) {
+        if let Some(scoped) = filter::schema_scope(filter, catalog) {
             return Ok(scoped
                 .into_iter()
-                .filter(|schema| filter.keeps_prefix(&format!("{catalog}.{schema}")))
+                .filter(|schema| filter::keeps_prefix(filter, &format!("{catalog}.{schema}")))
                 .collect());
         }
     }
     let names = names::<SchemasPage>(
+        client,
         root,
         token,
         "/schemas",
         &[("catalog_name", catalog)],
         |page| page.schemas.iter().map(|item| item.name.clone()).collect(),
         |page| page_token(&page.next_page_token),
-    )?;
+    )
+    .await?;
     Ok(names
         .into_iter()
         .filter(|schema| {
@@ -178,11 +188,11 @@ fn list_schemas(
             source
                 .schema
                 .as_deref()
-                .filter(|pattern| crate::filter::is_glob(pattern))
+                .filter(|pattern| is_glob(pattern))
                 .is_none_or(|pattern| {
                     glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(schema))
                 })
-                && filter.keeps_prefix(&fqn)
+                && filter::keeps_prefix(filter, &fqn)
         })
         .collect())
 }
@@ -196,16 +206,17 @@ fn api_root(endpoint: &str) -> String {
     }
 }
 
-fn names<P: for<'de> Deserialize<'de>>(
+async fn names<P: DeserializeOwned>(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     path: &str,
     query: &[(&str, &str)],
     field: fn(&P) -> Vec<String>,
     next: fn(&P) -> Option<String>,
-) -> Result<Vec<String>, CliError> {
+) -> Result<Vec<String>, Error> {
     let mut names = Vec::new();
-    for page in pages::<P>(root, token, path, query, next)? {
+    for page in pages::<P>(client, root, token, path, query, next).await? {
         for name in field(&page) {
             if name.is_empty() {
                 return Err(format!("{path} listed a nameless entry").into());
@@ -223,28 +234,30 @@ fn page_token(token: &Option<String>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn list_schema_tables(
+async fn list_schema_tables(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     catalog: &str,
     schema: &str,
     env: &BTreeMap<String, String>,
     filter: &NameFilter,
-    on_table: &mut impl FnMut(LakeTable) -> Result<(), CliError>,
-) -> Result<usize, CliError> {
-    let mut tables = 0usize;
+) -> Result<Vec<LakeTable>, Error> {
+    let mut tables = Vec::new();
     for page in pages::<TablesPage>(
+        client,
         root,
         token,
         "/tables",
         &[("catalog_name", catalog), ("schema_name", schema)],
         |page| page_token(&page.next_page_token),
-    )? {
+    )
+    .await?
+    {
         for item in page.tables {
             if let Some(table) = lake_table(item, catalog, schema, env)? {
                 if filter.keeps(&table.name) {
-                    on_table(table)?;
-                    tables += 1;
+                    tables.push(table);
                 }
             }
         }
@@ -257,7 +270,7 @@ fn lake_table(
     catalog: &str,
     schema: &str,
     env: &BTreeMap<String, String>,
-) -> Result<Option<LakeTable>, CliError> {
+) -> Result<Option<LakeTable>, Error> {
     if let Some(kind) = item.table_type.as_deref() {
         if !kind.eq_ignore_ascii_case("MANAGED") && !kind.eq_ignore_ascii_case("EXTERNAL") {
             return Ok(None);
@@ -283,7 +296,7 @@ fn lake_table(
                 format!("{catalog}.{schema}.{name}")
             }
         })
-        .ok_or_else(|| format!("Delta table at {uri} has no name"))?;
+        .ok_or_else(|| Error::from(format!("Delta table at {uri} has no name")))?;
     Ok(Some(LakeTable {
         name,
         uri,
@@ -292,13 +305,14 @@ fn lake_table(
     }))
 }
 
-fn pages<P: for<'de> Deserialize<'de>>(
+async fn pages<P: DeserializeOwned>(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     path: &str,
     query: &[(&str, &str)],
     next: fn(&P) -> Option<String>,
-) -> Result<Vec<P>, CliError> {
+) -> Result<Vec<P>, Error> {
     let mut page_token: Option<String> = None;
     let mut seen = BTreeSet::new();
     let mut pages = Vec::new();
@@ -320,7 +334,7 @@ fn pages<P: for<'de> Deserialize<'de>>(
             url.push_str("&page_token=");
             url.push_str(&encode(token));
         }
-        let page: P = get_json(&url, token)?;
+        let page: P = get_json(client, &url, token).await?;
         let next = next(&page);
         pages.push(page);
         let Some(next) = next else {
@@ -333,31 +347,31 @@ fn pages<P: for<'de> Deserialize<'de>>(
     }
 }
 
-fn get_json<T: for<'de> Deserialize<'de>>(url: &str, token: Option<&str>) -> Result<T, CliError> {
-    let request = ureq::get(url);
-    let request = match token {
-        Some(token) => request.set("Authorization", &format!("Bearer {token}")),
-        None => request,
-    };
-    let response = request.call().map_err(catalog_error)?;
-    let mut body = String::new();
-    response
-        .into_reader()
-        .read_to_string(&mut body)
-        .map_err(|error| format!("catalog response was not text: {error}"))?;
-    serde_json::from_str(&body)
-        .map_err(|error| format!("catalog response was not the expected document: {error}").into())
-}
-
-fn catalog_error(error: ureq::Error) -> CliError {
-    match error {
-        ureq::Error::Status(code, response) => {
-            let mut body = String::new();
-            let _ = response.into_reader().read_to_string(&mut body);
-            format!("catalog returned HTTP {code}: {body}").into()
-        }
-        other => format!("catalog request failed: {other}").into(),
+async fn get_json<T: DeserializeOwned>(
+    client: &Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<T, Error> {
+    let mut request = client.get(url);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
     }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::from(format!(
+            "catalog returned HTTP {status}: {body}"
+        )));
+    }
+    response.json::<T>().await.map_err(|error| {
+        Error::from(format!(
+            "catalog response was not the expected document: {error}"
+        ))
+    })
 }
 
 fn encode(value: &str) -> String {

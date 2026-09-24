@@ -152,12 +152,45 @@ jobs:
           # The gate: exit non-zero if any finding remains.
           ./target/release/aipnaming crates/ > /dev/null
 
+  # The `third_party` wrappers must keep their feature flags in `impl.rs`; an
+  # `api.rs` always compiles and fails at runtime without its feature. A plain
+  # textual check (no build or cache needed) that renders findings as inline
+  # annotations and a job summary, and fails the job on any leak.
+  isolation:
+    name: isolation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check third_party isolation
+        run: |
+          # Annotations land inline on the PR diff.
+          if ./scripts/check_isolation.sh --github > annotations.txt; then
+            status=ok
+          else
+            status=leak
+          fi
+          cat annotations.txt
+          {
+            echo '### isolation'
+            echo
+            if [ "$status" = leak ]; then
+              echo 'Feature flags leaked into an `api.rs`.'
+              echo '```'
+              cat annotations.txt
+              echo '```'
+            else
+              echo 'No findings.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The gate: non-zero if any api.rs carries a feature flag.
+          [ "$status" = ok ]
+
   # Single required status: fails if any upstream job failed, was cancelled or
   # was skipped, so branch protection only has to require `CI`.
   ci:
     name: CI
     if: always()
-    needs: [fmt, clippy, test, aipnaming]
+    needs: [fmt, clippy, test, aipnaming, isolation]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a required job did not succeed

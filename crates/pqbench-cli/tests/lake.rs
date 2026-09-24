@@ -45,10 +45,16 @@ impl Catalog {
                     .lock()
                     .unwrap()
                     .push(request.lines().next().unwrap_or("").to_string());
-                if expect_bearer.is_some()
-                    && !request
-                        .contains(&format!("Authorization: Bearer {}", expect_bearer.unwrap()))
-                {
+                // Header names are case-insensitive; reqwest sends them lowercased.
+                let authorization = request
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                    .and_then(|line| line.split_once(':').map(|(_, value)| value.trim()));
+                // A request must carry exactly the credential the endpoint
+                // expects: a bearer token for Databricks, and none for Unity
+                // OSS, where any Authorization header is rejected.
+                let expected = expect_bearer.map(|token| format!("Bearer {token}"));
+                if authorization != expected.as_deref() {
                     let body = b"unauthorized";
                     let response = format!(
                         "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -57,11 +63,6 @@ impl Catalog {
                     let _ = stream.write_all(response.as_bytes());
                     let _ = stream.write_all(body);
                     continue;
-                }
-                if expect_bearer.is_none()
-                    && request.to_ascii_lowercase().contains("authorization:")
-                {
-                    panic!("Unity OSS request must not send an Authorization header");
                 }
                 let body = catalog_body(&request, &catalogs, &tables);
                 let response = format!(

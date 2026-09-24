@@ -13,7 +13,7 @@ TEST_FLAGS ?=
 LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse \
-	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity check clean
+	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity check isolation clean
 
 all: fmt build test lint
 
@@ -59,7 +59,13 @@ lakehouse-seed-s3: lakehouse-up
 lakehouse-seed-unity: lakehouse-up
 	$(LAKEHOUSE) seed-unity
 
-check: fmt-check lint test
+check: fmt-check lint isolation test
+
+# `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
+# ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
+ISOLATION_FLAGS ?=
+isolation:
+	./scripts/check_isolation.sh $(ISOLATION_FLAGS)
 
 clean:
 	$(CARGO) clean

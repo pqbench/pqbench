@@ -8,7 +8,7 @@ use serde_json;
 
 use super::aggregate::aggregate;
 use super::api::MassRow;
-use crate::parquet_helpers::Error;
+use crate::third_party::parquet::api::Error;
 
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {

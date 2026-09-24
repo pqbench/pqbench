@@ -12,7 +12,7 @@ use deltalake::{DeltaTable, DeltaTableBuilder};
 use futures::TryStreamExt;
 use url::Url;
 
-use super::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::table::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
 
 /// Errors resolving a snapshot through delta-rs.
 #[derive(Debug)]
