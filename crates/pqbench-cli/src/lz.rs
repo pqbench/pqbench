@@ -2,7 +2,7 @@ use pqbench::lz::{self, LzRequest};
 use serde::Serialize;
 
 use crate::bench::BenchArgs;
-use crate::emit::Emit;
+use crate::emit::Emitter;
 use crate::CliError;
 
 pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
@@ -15,7 +15,7 @@ pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
         mode: args.mode.into(),
     };
     let report = lz::lz(&request)?;
-    let mut emit = Emit::open("lz", args.output.as_deref())?;
+    let mut emit = Emitter::open("lz", args.output.as_deref())?;
     emit.write(&BeginRecord {
         kind: "pqbench.lz",
         version: 1,

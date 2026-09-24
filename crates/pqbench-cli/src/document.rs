@@ -12,7 +12,7 @@ use std::ops::AsyncFnMut;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-use crate::emit::Emit;
+use crate::emit::Emitter;
 
 use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub(crate) enum Record {
     TableRef(TableRef),
     Begin(Begin),
     #[allow(dead_code)]
-    Log {
+    Commit {
         id: String,
         commit: LogCommit,
     },
@@ -149,7 +149,7 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         ("pqbench.table-ref", _) => Ok(Record::TableRef(parse_table_ref(value)?)),
         ("pqbench.table-log", _) => {
             let (id, commit) = parse_log(value)?;
-            Ok(Record::Log { id, commit })
+            Ok(Record::Commit { id, commit })
         }
         ("pqbench.table-file", _) => {
             let (id, file) = parse_file(value)?;
@@ -187,7 +187,7 @@ fn parse_begin(value: serde_json::Value) -> Result<Begin, CliError> {
     if wire.version != 1 {
         return Err("unsupported table document; expected kind `pqbench.table` version 1".into());
     }
-    aws_env_only(&wire.env)?;
+    ensure_aws_env(&wire.env)?;
     let id = if wire.id.is_empty() {
         wire.uri.clone()
     } else {
@@ -212,7 +212,7 @@ fn parse_table_ref(value: serde_json::Value) -> Result<TableRef, CliError> {
             "unsupported table-ref document; expected kind `pqbench.table-ref` version 1".into(),
         );
     }
-    aws_env_only(&wire.env)?;
+    ensure_aws_env(&wire.env)?;
     let id = if wire.id.is_empty() {
         wire.uri.clone()
     } else {
@@ -227,10 +227,10 @@ fn parse_table_ref(value: serde_json::Value) -> Result<TableRef, CliError> {
 
 fn parse_table(value: serde_json::Value) -> Result<TableInfo, CliError> {
     let table: TableInfo = serde_json::from_value(value).map_err(invalid_json)?;
-    if table.version != 1 {
+    if table.document_version != 1 {
         return Err("unsupported table document; expected kind `pqbench.table` version 1".into());
     }
-    aws_env_only(&table.env)?;
+    ensure_aws_env(&table.env)?;
     Ok(table)
 }
 
@@ -268,11 +268,11 @@ fn parse_remote(value: serde_json::Value) -> Result<RemoteSource, CliError> {
     if source.inputs.is_empty() {
         return Err("source document contains no inputs".into());
     }
-    aws_env_only(&source.env)?;
+    ensure_aws_env(&source.env)?;
     Ok(source)
 }
 
-fn aws_env_only(env: &BTreeMap<String, String>) -> Result<(), CliError> {
+fn ensure_aws_env(env: &BTreeMap<String, String>) -> Result<(), CliError> {
     if let Some(key) = env.keys().find(|key| !key.starts_with("AWS_")) {
         return Err(format!("document may only set AWS_* variables, not `{key}`").into());
     }
@@ -282,7 +282,7 @@ fn aws_env_only(env: &BTreeMap<String, String>) -> Result<(), CliError> {
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Whether a path is `-`, JSON (`{`), or a zstd frame.
-pub(crate) async fn looks_like_document(path: &str) -> bool {
+pub(crate) async fn is_document(path: &str) -> bool {
     if path == "-" {
         return true;
     }
@@ -305,7 +305,7 @@ pub(crate) async fn looks_like_document(path: &str) -> bool {
 
 /// Write one table's records, tagged with `id`.
 pub(crate) fn write_table_records(
-    emit: &mut Emit,
+    emit: &mut Emitter,
     id: &str,
     info: &TableInfo,
 ) -> Result<(), CliError> {
@@ -321,14 +321,14 @@ pub(crate) fn write_table_records(
         env: &info.env,
     })?;
     for commit in &info.log {
-        emit.write(&KindCommit {
+        emit.write(&CommitRecord {
             kind: "pqbench.table-log",
             id,
             commit,
         })?;
     }
     for file in &info.files {
-        emit.write(&KindFile {
+        emit.write(&FileRecord {
             kind: "pqbench.table-file",
             id,
             file,
@@ -351,16 +351,16 @@ struct BeginRecord<'a> {
     uri: &'a str,
     snapshot_version: u64,
     partition_columns: &'a [String],
-    #[serde(skip_serializing_if = "map_empty")]
+    #[serde(skip_serializing_if = "is_empty_map")]
     env: &'a BTreeMap<String, String>,
 }
 
-fn map_empty(env: &&BTreeMap<String, String>) -> bool {
+fn is_empty_map(env: &&BTreeMap<String, String>) -> bool {
     env.is_empty()
 }
 
 #[derive(Serialize)]
-struct KindCommit<'a> {
+struct CommitRecord<'a> {
     kind: &'static str,
     id: &'a str,
     #[serde(flatten)]
@@ -368,7 +368,7 @@ struct KindCommit<'a> {
 }
 
 #[derive(Serialize)]
-struct KindFile<'a> {
+struct FileRecord<'a> {
     kind: &'static str,
     id: &'a str,
     #[serde(flatten)]

@@ -3,7 +3,7 @@ use pqbench::compression::{self, CompressionRequest};
 use serde::Serialize;
 
 use crate::bench::BenchArgs;
-use crate::emit::Emit;
+use crate::emit::Emitter;
 use crate::CliError;
 
 /// Arguments for `compression`: the shared sweep arguments plus the
@@ -28,7 +28,7 @@ pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
         per_column: args.per_column,
     };
     let report = compression::compression(&request)?;
-    let mut emit = Emit::open("compression", args.bench.output.as_deref())?;
+    let mut emit = Emitter::open("compression", args.bench.output.as_deref())?;
     emit.write(&BeginRecord {
         kind: "pqbench.compression",
         version: 1,

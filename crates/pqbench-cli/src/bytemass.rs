@@ -8,7 +8,7 @@ use pqbench::table::TableFile;
 use serde::Serialize;
 
 use crate::document::{self, Record};
-use crate::emit::{self, Emit};
+use crate::emit::{self, Emitter};
 use crate::CliError;
 
 /// Arguments for `bytemass`.
@@ -36,7 +36,7 @@ pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
         }
         return measure_document("-", args).await;
     }
-    if args.inputs.len() == 1 && document::looks_like_document(&args.inputs[0]).await {
+    if args.inputs.len() == 1 && document::is_document(&args.inputs[0]).await {
         return measure_document(&args.inputs[0], args).await;
     }
     measure(args.inputs.clone(), BTreeMap::new(), args).await
@@ -46,7 +46,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
     if args.d3 {
         return measure_document_page(input, args).await;
     }
-    let mut emit = Emit::open("bytemass", args.output.as_deref())?;
+    let mut emit = Emitter::open("bytemass", args.output.as_deref())?;
     let mut stats = MassStats::default();
     let mut envs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut open: BTreeSet<String> = BTreeSet::new();
@@ -79,7 +79,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                 let env = envs.get(&id).cloned().unwrap_or_default();
                 measure_file(&mut emit, &mut stats, &id, file, env).await?;
             }
-            Record::Log { .. } => {}
+            Record::Commit { .. } => {}
             Record::End { id } => {
                 open.remove(&id);
             }
@@ -94,7 +94,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
 }
 
 async fn measure_file(
-    emit: &mut Emit,
+    emit: &mut Emitter,
     stats: &mut MassStats,
     id: &str,
     file: TableFile,
@@ -119,7 +119,7 @@ async fn measure_file(
 }
 
 async fn measure_input(
-    emit: &mut Emit,
+    emit: &mut Emitter,
     stats: &mut MassStats,
     id: &str,
     uri: String,
@@ -150,7 +150,7 @@ async fn measure_document_page(input: &str, args: &BytemassArgs) -> Result<(), C
             Record::File { file, .. } => {
                 rows.push(file.uri);
             }
-            Record::Log { .. } => {}
+            Record::Commit { .. } => {}
             Record::End { .. } => ended = true,
         }
         Ok(())
@@ -166,7 +166,7 @@ async fn measure_document_page(input: &str, args: &BytemassArgs) -> Result<(), C
         rows
     };
     let measured = bytemass::bytemass(&bytemass::BytemassRequest { inputs, env }).await?;
-    write_page(&measured, args)
+    write_page(&measured, args).await
 }
 
 async fn measure(
@@ -176,9 +176,9 @@ async fn measure(
 ) -> Result<(), CliError> {
     if args.d3 {
         let rows = bytemass::bytemass(&bytemass::BytemassRequest { inputs, env }).await?;
-        return write_page(&rows, args);
+        return write_page(&rows, args).await;
     }
-    let mut emit = Emit::open("bytemass", args.output.as_deref())?;
+    let mut emit = Emitter::open("bytemass", args.output.as_deref())?;
     let mut stats = MassStats::default();
     emit.write(&BeginRecord {
         kind: "pqbench.bytemass",
@@ -192,7 +192,7 @@ async fn measure(
 }
 
 fn write_row(
-    emit: &mut Emit,
+    emit: &mut Emitter,
     id: &str,
     row: &bytemass::MassRow,
     stats: &mut MassStats,
@@ -206,7 +206,7 @@ fn write_row(
 }
 
 fn finish_stream(
-    mut emit: Emit,
+    mut emit: Emitter,
     stats: &MassStats,
     output: Option<&std::path::Path>,
 ) -> Result<(), CliError> {
@@ -215,19 +215,19 @@ fn finish_stream(
         event: "end",
         file_count: stats.file_rows.len(),
         num_rows: stats.num_rows(),
-        column_count: stats.columns,
+        column_count: stats.column_count,
     })?;
     emit.finish(&stats.summary(output))
 }
 
-fn write_page(rows: &[bytemass::MassRow], args: &BytemassArgs) -> Result<(), CliError> {
+async fn write_page(rows: &[bytemass::MassRow], args: &BytemassArgs) -> Result<(), CliError> {
     let html = bytemass::render_html(rows)?;
     let tty = std::io::stdout().is_terminal();
     if tty && args.output.is_none() {
         return Err("bytemass --d3 on a terminal needs -o <file>".into());
     }
     if let Some(path) = &args.output {
-        std::fs::write(path, &html)?;
+        tokio::fs::write(path, &html).await?;
     }
     if tty {
         let mut summary = format!("d3: {} column(s)\n", rows.len());
@@ -242,13 +242,13 @@ fn write_page(rows: &[bytemass::MassRow], args: &BytemassArgs) -> Result<(), Cli
 #[derive(Default)]
 struct MassStats {
     file_rows: BTreeMap<String, u64>,
-    columns: usize,
+    column_count: usize,
 }
 
 impl MassStats {
     fn add(&mut self, row: &bytemass::MassRow) {
         self.file_rows.insert(row.file.clone(), row.num_rows);
-        self.columns += 1;
+        self.column_count += 1;
     }
 
     fn num_rows(&self) -> u64 {
@@ -260,7 +260,7 @@ impl MassStats {
             "files: {}\nrows: {}\ncolumns: {}\n",
             self.file_rows.len(),
             self.num_rows(),
-            self.columns
+            self.column_count
         );
         if let Some(path) = output {
             out.push_str(&format!("output: {}\n", path.display()));

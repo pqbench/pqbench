@@ -14,13 +14,13 @@ use serde::Serialize;
 use crate::CliError;
 
 /// Destination for one command's stream.
-pub(crate) struct Emit {
+pub(crate) struct Emitter {
     pipe: bool,
     closed: bool,
     file: Option<zstd::Encoder<'static, File>>,
 }
 
-impl Emit {
+impl Emitter {
     /// Open stdout and optional `-o`. A terminal without `-o` is an error.
     pub(crate) fn open(command: &str, output: Option<&Path>) -> Result<Self, CliError> {
         let tty = std::io::stdout().is_terminal();
