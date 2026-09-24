@@ -83,17 +83,17 @@ seed_unity() {
         200 | 204 | 404) ;;
         *) echo "DELETE tables/pqbench.demo.events failed: HTTP $delete" >&2; exit 1 ;;
     esac
-    register tables '{
-        "catalog_name": "pqbench", "schema_name": "demo", "name": "events",
-        "table_type": "EXTERNAL", "data_source_format": "DELTA",
-        "storage_location": "'"$table_location"'",
-        "columns": [
-            {"name": "id", "type_name": "LONG", "type_text": "long", "position": 0,
-             "nullable": true,
-             "type_json": "{\"name\": \"id\", \"type\": \"long\", \"nullable\": true, \"metadata\": {}}"},
-            {"name": "label", "type_name": "STRING", "type_text": "string", "position": 1,
-             "nullable": true,
-             "type_json": "{\"name\": \"label\", \"type\": \"string\", \"nullable\": true, \"metadata\": {}}"}]}'
+    register tables "$(jq -nc --arg location "$table_location" '{
+        catalog_name: "pqbench", schema_name: "demo", name: "events",
+        table_type: "EXTERNAL", data_source_format: "DELTA",
+        storage_location: $location,
+        columns: [
+            {name: "id", type_name: "LONG", type_text: "long", position: 0,
+             nullable: true,
+             type_json: ({name: "id", type: "long", nullable: true, metadata: {}} | tojson)},
+            {name: "label", type_name: "STRING", type_text: "string", position: 1,
+             nullable: true,
+             type_json: ({name: "label", type: "string", nullable: true, metadata: {}} | tojson)}]}')"
 }
 
 # The README's pipe, so the stand is seen to answer the question it exists for.
