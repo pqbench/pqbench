@@ -53,6 +53,20 @@ fn flags_long_words_with_common_abbreviations() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].rule, "aip-140/abbreviations");
     assert_eq!(found[0].help.as_deref(), Some("`config`"));
+
+    let found = findings("struct Bench { pub cfg: Config }");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].help.as_deref(), Some("`config`"));
+}
+
+#[test]
+fn flags_prepositions_in_methods_but_skips_tests() {
+    assert!(rules("impl Codec { pub fn impl_of(&self) -> u8 { 0 } }")
+        .contains(&"aip-136/method-prepositions"));
+    assert!(
+        rules("impl Codec { #[test] fn reads_a_uri_through_the_api() {} }").is_empty(),
+        "test functions are not API surface"
+    );
 }
 
 #[test]
@@ -62,9 +76,13 @@ fn flags_reserved_words_in_fields() {
 
 #[test]
 fn flags_wrong_casing_per_kind() {
+    let found = rules("pub struct report_row { pub TotalBytes: usize }");
     assert_eq!(
-        rules("pub struct report_row { pub TotalBytes: usize }"),
-        ["aip-190/casing", "aip-190/casing"]
+        found
+            .iter()
+            .filter(|rule| **rule == "aip-190/casing")
+            .count(),
+        2
     );
     assert!(rules("pub struct ReportRow { pub total_bytes: usize }").is_empty());
 }
@@ -120,6 +138,54 @@ fn honors_inline_allow_directives() {
 struct Page { pub is_dictionary: bool }
 ";
     assert!(rules(source).is_empty());
+}
+
+#[test]
+fn agrees_singular_and_plural_with_collections() {
+    assert!(rules("struct Shelf { pub books: Vec<Book> }").is_empty());
+    assert!(rules("struct Shelf { pub book: Book }").is_empty());
+    assert!(rules("struct Shelf { pub data: Vec<u8> }").is_empty());
+    assert!(rules("struct Shelf { pub books: Option<Book> }").is_empty());
+
+    let found = findings("struct Shelf { pub book: Vec<Book> }");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].rule, "aip-140/plural");
+
+    let found = findings("struct Shelf { pub books: Book }");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].rule, "aip-140/plural");
+}
+
+#[test]
+fn flags_abbreviated_units_and_count_prefixes() {
+    assert!(rules("struct Report { pub throughput_mbps: f64 }").contains(&"aip-141/units"));
+    assert!(rules("struct Report { pub width_px: f64 }").is_empty());
+
+    let found = findings("struct Report { pub num_rows: usize }");
+    let count: Vec<_> = found
+        .iter()
+        .filter(|finding| finding.rule == "aip-141/count-suffix")
+        .collect();
+    assert_eq!(count.len(), 1);
+    assert_eq!(count[0].help.as_deref(), Some("row_count"));
+}
+
+#[test]
+fn flags_british_spellings() {
+    let found = findings("struct Palette { pub colour: String }");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].rule, "aip-190/american-english");
+    assert_eq!(found[0].help.as_deref(), Some("color"));
+    assert!(rules("struct Palette { pub color: String }").is_empty());
+}
+
+#[test]
+fn flags_async_in_names_but_not_test_names() {
+    let found = findings("fn read_remote_async() {}");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].rule, "aip-136/async-name");
+    assert_eq!(found[0].severity, Severity::ERROR);
+    assert!(rules("#[test] fn reads_async() {}").is_empty());
 }
 
 #[test]

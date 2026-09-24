@@ -180,6 +180,10 @@ impl Extract<'_> {
     ) {
         let start = name.start_position();
         let docs = self.has_docs(item);
+        let test = matches!(
+            kind,
+            DeclKind::Function | DeclKind::Method | DeclKind::AssociatedFunction
+        ) && self.has_test_attribute(item);
         let raw_name = self.text(name);
         let name_text = raw_name.strip_prefix("r#").unwrap_or(raw_name);
         self.out.push(Declaration {
@@ -191,11 +195,38 @@ impl Extract<'_> {
             column: start.column + 1,
             name_range: name.start_byte()..name.end_byte(),
             docs,
+            test,
         });
     }
 
     fn text(&self, node: Node) -> &str {
         node.utf8_text(self.source.as_bytes()).unwrap_or("")
+    }
+
+    /// Whether a `#[test]` or `#[cfg(test)]` attribute sits on the item or
+    /// directly before it.
+    fn has_test_attribute(&self, item: Node) -> bool {
+        let mut cursor = item.walk();
+        let child_has_test = item
+            .children(&mut cursor)
+            .any(|child| child.kind() == "attribute_item" && self.text(child).contains("test"));
+        if child_has_test {
+            return true;
+        }
+        let mut sibling = item.prev_sibling();
+        while let Some(node) = sibling {
+            match node.kind() {
+                "attribute_item" => {
+                    if self.text(node).contains("test") {
+                        return true;
+                    }
+                    sibling = node.prev_sibling();
+                }
+                "line_comment" | "block_comment" => sibling = node.prev_sibling(),
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Whether a doc comment is attached to the item.

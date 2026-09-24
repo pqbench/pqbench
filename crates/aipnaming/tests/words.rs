@@ -49,9 +49,11 @@ fn marks_the_head_noun_plural() {
 fn only_unambiguous_verbs_count_as_imperative() {
     assert!(imperative_verb("collect"));
     assert!(imperative_verb("render"));
+    assert!(imperative_verb("disable"));
     assert!(!imperative_verb("report"));
     assert!(!imperative_verb("filter"));
     assert!(!imperative_verb("count"));
+    assert!(!imperative_verb("compress"));
 }
 
 #[test]
@@ -79,9 +81,12 @@ fn plural_and_singular_agree_with_ambiguity_silence() {
     assert!(is_plural("bytes"));
     assert!(is_plural("people"));
     assert!(is_plural("entries"));
+    assert!(is_plural("configs"));
     assert!(!is_plural("status"));
     assert!(is_singular("byte"));
     assert!(is_singular("index"));
     assert!(!is_plural("data"));
     assert!(!is_singular("data"));
+    assert!(!is_plural("payload"));
+    assert!(!is_singular("payload"));
 }

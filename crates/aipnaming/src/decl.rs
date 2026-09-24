@@ -55,6 +55,9 @@ pub struct Declaration {
     pub name_range: Range<usize>,
     /// Whether a doc comment (`///`, `//!`, `/**`, or `#[doc]`) precedes it.
     pub docs: bool,
+    /// Whether a test attribute (`#[test]`, `#[cfg(test)]`) precedes a
+    /// function. Test code is behavior documentation, not API surface.
+    pub test: bool,
 }
 
 impl Declaration {

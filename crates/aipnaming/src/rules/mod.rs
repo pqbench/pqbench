@@ -9,8 +9,11 @@ use crate::lint::Finding;
 
 pub(crate) mod enums;
 pub(crate) mod naming;
+pub(crate) mod plural;
 pub(crate) mod ranges;
+pub(crate) mod spelling;
 pub(crate) mod time;
+pub(crate) mod units;
 
 /// What a rule sees: the declarations of one file.
 pub(crate) struct Context<'a> {
@@ -42,6 +45,10 @@ pub(crate) const RULES: &[Rule] = &[
         check: naming::prepositions,
     },
     Rule {
+        id: "aip-136/method-prepositions",
+        check: naming::method_prepositions,
+    },
+    Rule {
         id: "aip-140/verbs",
         check: naming::verbs,
     },
@@ -52,6 +59,22 @@ pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: "aip-140/reserved-words",
         check: naming::reserved_words,
+    },
+    Rule {
+        id: "aip-136/async-name",
+        check: naming::async_name,
+    },
+    Rule {
+        id: "aip-140/plural",
+        check: plural::agreement,
+    },
+    Rule {
+        id: "aip-141/units",
+        check: units::units,
+    },
+    Rule {
+        id: "aip-190/american-english",
+        check: spelling::american_english,
     },
     Rule {
         id: "aip-142/time-field-names",

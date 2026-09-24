@@ -73,7 +73,8 @@ pub(super) fn underscores(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     }
 }
 
-/// Ported from api-linter `core::0140::abbreviations`.
+/// Ported from api-linter `core::0140::abbreviations`, with the Rust-local
+/// `cfg` -> `config` added: AIP-140 names `config` the well-known abbreviation.
 pub(super) fn abbreviations(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     const ABBREVIATIONS: &[(&str, &str)] = &[
         ("configuration", "config"),
@@ -82,6 +83,7 @@ pub(super) fn abbreviations(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
         ("specification", "spec"),
         ("statistics", "stats"),
     ];
+    const LOCAL_ABBREVIATIONS: &[(&str, &str)] = &[("cfg", "config")];
     for decl in ctx.decls {
         for word in split_identifier(&decl.name) {
             let lower = word.to_ascii_lowercase();
@@ -96,54 +98,69 @@ pub(super) fn abbreviations(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
                     Some(format!("`{suggestion}`")),
                 );
             }
+            if let Some((local, standard)) = LOCAL_ABBREVIATIONS
+                .iter()
+                .find(|(local, _)| *local == lower)
+            {
+                let suggestion = decl.name.replacen(word, standard, 1);
+                report(
+                    findings,
+                    "aip-140/abbreviations",
+                    Severity::WARNING,
+                    decl,
+                    format!("Use `{standard}` rather than the abbreviation `{local}`."),
+                    Some(format!("`{suggestion}`")),
+                );
+            }
         }
     }
 }
 
-/// Ported from api-linter `core::0140::prepositions`, widened to functions and
-/// types (AIP-136 and AIP-190 forbid prepositions there too).
+/// Ported from api-linter `core::0140::prepositions`: field names avoid
+/// prepositions. Method names are the sibling rule below.
 pub(super) fn prepositions(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    check_prepositions(ctx, findings, &[DeclKind::Field]);
+}
+
+/// AIP-136 read of the same examples for function and type names. Test
+/// functions and test modules are skipped: they are documentation of behavior,
+/// not API surface. Conversion prefixes `from_`/`to_`/`into_`/`as_` are Rust's
+/// required idiom and stay allowed.
+pub(super) fn method_prepositions(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    const KINDS: &[DeclKind] = &[
+        DeclKind::Function,
+        DeclKind::Method,
+        DeclKind::AssociatedFunction,
+        DeclKind::Struct,
+        DeclKind::Enum,
+        DeclKind::Union,
+        DeclKind::Trait,
+        DeclKind::Alias,
+    ];
+    check_prepositions(ctx, findings, KINDS);
+}
+
+fn check_prepositions(ctx: &Context<'_>, findings: &mut Vec<Finding>, kinds: &[DeclKind]) {
     const FIELD_EXCEPTIONS: &[&str] = &["order_by", "group_by", "hour_of_day", "day_of_week"];
     const CONVERSION_PREFIXES: &[&str] = &["from", "to", "into", "as"];
-
-    for decl in ctx.decls {
-        let in_scope = matches!(
-            decl.kind,
-            DeclKind::Field
-                | DeclKind::Function
-                | DeclKind::Method
-                | DeclKind::AssociatedFunction
-                | DeclKind::Struct
-                | DeclKind::Enum
-                | DeclKind::Union
-                | DeclKind::Trait
-                | DeclKind::Alias
-        );
-        if !in_scope || FIELD_EXCEPTIONS.contains(&decl.name.as_str()) {
+    for decl in ctx.decls.iter().filter(|decl| kinds.contains(&decl.kind)) {
+        if decl.kind == DeclKind::Field && FIELD_EXCEPTIONS.contains(&decl.name.as_str()) {
             continue;
         }
-        let conversion = matches!(
-            decl.kind,
-            DeclKind::Function
-                | DeclKind::Method
-                | DeclKind::AssociatedFunction
-                | DeclKind::Struct
-                | DeclKind::Enum
-                | DeclKind::Union
-                | DeclKind::Trait
-                | DeclKind::Alias
-        );
+        if decl.test {
+            continue;
+        }
         for (index, word) in split_identifier(&decl.name).iter().enumerate() {
             let lower = word.to_ascii_lowercase();
             if !crate::words::classify(&lower).eq(&crate::words::WordKind::Preposition) {
                 continue;
             }
-            if conversion && index == 0 && CONVERSION_PREFIXES.contains(&lower.as_str()) {
+            if index == 0 && CONVERSION_PREFIXES.contains(&lower.as_str()) {
                 continue;
             }
             report(
                 findings,
-                "aip-140/prepositions",
+                preposition_rule(decl.kind),
                 Severity::WARNING,
                 decl,
                 format!("Avoid using `{lower}` in {} names.", kind_noun(decl.kind)),
@@ -153,22 +170,33 @@ pub(super) fn prepositions(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     }
 }
 
-/// AIP-140: fields state what is, not what to do. Flag a leading imperative
-/// verb (`collect_items`) but keep noun modifiers (`report_row`) and
-/// participles (`collected_items`).
+fn preposition_rule(kind: DeclKind) -> &'static str {
+    match kind {
+        DeclKind::Field => "aip-140/prepositions",
+        _ => "aip-136/method-prepositions",
+    }
+}
+
+/// AIP-140: fields state what is, not what to do. Flags a bare imperative verb
+/// (`disable`) or a verb followed by its object (`collect_items`); a
+/// verb/noun like `compress_durations` reads as state and stays quiet, since
+/// the same letters can be an attributive noun.
 pub(super) fn verbs(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     for decl in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
         let words = split_identifier(&decl.name);
-        if words.len() < 2 {
+        let Some(first) = words.first() else {
             continue;
-        }
-        let first = words[0].to_ascii_lowercase();
+        };
+        let first = first.to_ascii_lowercase();
         if !imperative_verb(&first) {
             continue;
         }
-        let participle = participle(first.as_str());
-        let rest = words[1..].join("_").to_ascii_lowercase();
-        let suggestion = format!("{participle}_{rest}");
+        let participle = participle(&first);
+        let suggestion = if words.len() == 1 {
+            participle
+        } else {
+            format!("{participle}_{}", words[1..].join("_").to_ascii_lowercase())
+        };
         report(
             findings,
             "aip-140/verbs",
@@ -229,6 +257,31 @@ pub(super) fn reserved_words(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
                     "`{}` is a reserved word in a common language and should not be used.",
                     decl.name
                 ),
+                None,
+            );
+        }
+    }
+}
+
+/// AIP-136: names never contain `async`; use `LongRunning` when an immediate
+/// and a long-running variant must be told apart.
+pub(super) fn async_name(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    for decl in ctx.decls.iter().filter(|decl| {
+        matches!(
+            decl.kind,
+            DeclKind::Function | DeclKind::Method | DeclKind::AssociatedFunction
+        ) && !decl.test
+    }) {
+        if split_identifier(&decl.name)
+            .iter()
+            .any(|word| word.eq_ignore_ascii_case("async"))
+        {
+            report(
+                findings,
+                "aip-136/async-name",
+                Severity::ERROR,
+                decl,
+                "Names never contain `async`; use `LongRunning` if two variants must be told apart.",
                 None,
             );
         }

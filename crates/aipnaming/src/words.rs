@@ -46,45 +46,38 @@ pub struct Word<'a> {
     pub plural: bool,
 }
 
-/// Whether a word is a verb that is rarely also the noun it acts on, so a
-/// leading occurrence in an identifier reads as an imperative instruction
-/// (`collect_items`) rather than a noun modifier (`report_row`).
+/// Whether a word is an unambiguous action verb: rarely also a noun in code,
+/// so a leading or bare occurrence reads as an instruction (`collect_items`,
+/// `disable`) rather than a state (`compress_durations`, `report_row`).
 pub fn imperative_verb(word: &str) -> bool {
     matches!(
         word.to_ascii_lowercase().as_str(),
         "aggregate"
-            | "allocate"
             | "calculate"
             | "collect"
-            | "compress"
             | "compute"
             | "concatenate"
-            | "consume"
             | "convert"
             | "decode"
-            | "decompress"
-            | "dispatch"
             | "deserialize"
+            | "disable"
+            | "dispatch"
+            | "enable"
             | "encode"
             | "escape"
             | "execute"
             | "flatten"
             | "generate"
             | "initialize"
-            | "increment"
-            | "decrement"
             | "iterate"
             | "marshal"
-            | "measure"
             | "normalize"
             | "notify"
             | "optimize"
             | "parse"
             | "produce"
-            | "read"
             | "render"
             | "serialize"
-            | "synchronize"
             | "transform"
             | "translate"
             | "traverse"
@@ -92,7 +85,6 @@ pub fn imperative_verb(word: &str) -> bool {
             | "unmarshal"
             | "validate"
             | "verify"
-            | "write"
     )
 }
 
@@ -892,7 +884,6 @@ fn is_uncountable(word: &str) -> bool {
             | "air"
             | "audio"
             | "cash"
-            | "config"
             | "content"
             | "data"
             | "equipment"
@@ -907,6 +898,7 @@ fn is_uncountable(word: &str) -> bool {
             | "metadata"
             | "moose"
             | "news"
+            | "payload"
             | "research"
             | "series"
             | "sheep"
