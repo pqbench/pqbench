@@ -1,4 +1,4 @@
-//! The Unity Catalog list client behind [`super::api::list_tables`].
+//! The Unity Catalog list client behind [`super::super::api::list_tables`].
 //!
 //! Compiled only with the `unity` feature; it names `reqwest`, as does
 //! [`super::http`], which holds the shared page walk.

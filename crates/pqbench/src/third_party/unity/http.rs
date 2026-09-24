@@ -11,7 +11,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 
-use super::api::Error;
+use super::super::api::Error;
 
 pub(super) const PAGE_CAP: usize = 32;
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

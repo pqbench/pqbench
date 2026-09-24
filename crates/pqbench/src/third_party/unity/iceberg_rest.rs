@@ -6,8 +6,8 @@
 //! is sequential: the caller runs one table per later process. `--include` /
 //! `--exclude` prune the walk when the leading name is a literal.
 //!
-//! `GET /v1/config` picked this protocol (see [`super::protocol`]); this module
-//! names `reqwest` and is compiled only with the `unity` feature.
+//! `GET /v1/config` picked this protocol (see [`super::super::protocol`]); this
+//! module names `reqwest` and is compiled only with the `unity` feature.
 //!
 //! https://iceberg.apache.org/docs/latest/rest-catalog-spec/
 
