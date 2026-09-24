@@ -33,7 +33,7 @@ mod tests {
     fn fake_file() -> ParquetFile {
         let mk = |s: &str, n: usize| Page {
             payload: s.as_bytes().repeat(n),
-            num_values: n as u32,
+            value_count: n as u32,
             dictionary: false,
         };
         ParquetFile {

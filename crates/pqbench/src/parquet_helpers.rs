@@ -18,7 +18,7 @@ pub struct Page {
     /// The encoded values for this page (uncompressed; NONE input).
     pub payload: Vec<u8>,
     /// Number of values in this page.
-    pub num_values: u32,
+    pub value_count: u32,
     /// True for a dictionary page (first page of a dictionary-encoded chunk).
     pub dictionary: bool,
 }
@@ -82,7 +82,7 @@ pub struct ColumnMass {
 #[derive(Debug, Clone, Serialize)]
 pub struct FileMass {
     /// Number of rows in the file (shared denominator for per-row mass).
-    pub num_rows: u64,
+    pub row_count: u64,
     /// One entry per column chunk (per row group), in file order.
     pub columns: Vec<ColumnMass>,
 }
@@ -169,7 +169,7 @@ mod tests {
         let mass = default_metadata_parser()
             .read_masses(Path::new(path))
             .unwrap();
-        assert!(mass.num_rows > 0);
+        assert!(mass.row_count > 0);
         assert!(!mass.columns.is_empty());
         assert!(
             mass.columns.iter().all(|c| c.compressed_bytes > 0),

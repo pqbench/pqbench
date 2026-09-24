@@ -30,7 +30,7 @@ pub struct MassRow {
     /// On-disk file size in bytes.
     pub size_bytes: u64,
     /// Number of rows in the file (denominator for the per-row measure).
-    pub num_rows: u64,
+    pub row_count: u64,
     /// Column path in schema form, e.g. `content` or `a.b`.
     pub column: String,
     /// On-disk (compressed) bytes for this column chunk.

@@ -101,6 +101,9 @@ directional and conflicts with idiomatic Rust, **Rust casing wins**.
 - Enums: prefer `UpperCamelCase` variants (idiomatic Rust), even though AIP-126
   says `UPPER_SNAKE_CASE` — that rule is directional.
 
+`make check` also runs the `aipnaming` linter's tests; when editing its word
+data or rules, see `crates/aipnaming/README.md`.
+
 ## 5. Update AGENTS.md
 
 `AGENTS.md` is the source of truth for agents. If you change the gate, the loop,

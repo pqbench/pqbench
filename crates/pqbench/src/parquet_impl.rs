@@ -52,7 +52,7 @@ impl MetadataParser for ParquetRsParser {
     /// fine, and large files aren't loaded into memory.
     fn read_masses(&self, path: &Path) -> Result<FileMass, Error> {
         let reader = SerializedFileReader::try_from(path)?;
-        masses_from_metadata(reader.metadata())
+        create_masses(reader.metadata())
     }
 }
 
@@ -60,14 +60,14 @@ impl MetadataParser for ParquetRsParser {
 pub(crate) fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
     let metadata =
         ParquetMetaDataReader::new().parse_and_finish(&bytes::Bytes::copy_from_slice(footer))?;
-    masses_from_metadata(&metadata)
+    create_masses(&metadata)
 }
 
-fn masses_from_metadata(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
-    let mut num_rows = 0i64;
+fn create_masses(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
+    let mut row_count = 0i64;
     let mut columns = Vec::new();
     for row_group in metadata.row_groups() {
-        num_rows += row_group.num_rows();
+        row_count += row_group.num_rows();
         for meta in row_group.columns() {
             columns.push(ColumnMass {
                 column: meta.column_path().string(),
@@ -78,7 +78,7 @@ fn masses_from_metadata(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
         }
     }
     Ok(FileMass {
-        num_rows: u64::try_from(num_rows).unwrap_or(0),
+        row_count: u64::try_from(row_count).unwrap_or(0),
         columns,
     })
 }
@@ -87,15 +87,15 @@ fn collect_pages(reader: Box<dyn PageReader>) -> Result<Vec<Page>, Error> {
     let mut out = Vec::new();
     for page in reader {
         let page = page?;
-        out.push(page_from_parquet(page));
+        out.push(create_page(page));
     }
     Ok(out)
 }
 
-fn page_from_parquet(page: ParquetPage) -> Page {
+fn create_page(page: ParquetPage) -> Page {
     Page {
         payload: page.buffer().to_vec(),
-        num_values: page.num_values(),
+        value_count: page.num_values(),
         dictionary: page.is_dictionary_page(),
     }
 }

@@ -127,7 +127,7 @@ check() {
     measured=$(jq -rs '
         (map(select(.event == "end")) | first) as $end
         | ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort) as $columns
-        | "\($end.num_rows) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"' <<< "$measurement")
+        | "\($end.row_count) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"' <<< "$measurement")
     [ "$measured" = "3 rows, 1 file(s), columns [id, label]" ] || {
         echo "check failed: expected 3 rows, 1 file(s), columns [id, label]; measured $measured" >&2
         exit 1

@@ -24,11 +24,11 @@ async fn measures_the_redset_sample_anonymously() {
 
     let summary = aggregate(&rows).unwrap();
     assert_eq!(summary.file_count, 1);
-    assert!(summary.num_rows > 0);
+    assert!(summary.row_count > 0);
     assert!(!summary.columns.is_empty());
 
     assert!(rows.iter().all(|row| row.uri == REDSET_SAMPLE_0_001));
-    assert_eq!(rows[0].num_rows, summary.num_rows);
+    assert_eq!(rows[0].row_count, summary.row_count);
     assert_eq!(rows.len(), summary.columns.len());
 
     print!("{}", render_text(&rows).unwrap());

@@ -44,6 +44,9 @@ Follow Google AIP conventions for the public surface (AIP-121/122/190/136/140/14
 - **Time fields** — `_time` for instants, `_duration`/`_durations` for spans
   (AIP-142); no bare `time`.
 
+`crates/aipnaming` enforces these; its own docs (`crates/aipnaming/README.md`)
+describe how.
+
 ## Tidyings (Tidy First?)
 
 - Apply Kent Beck's tidyings to make a change safe and reviewable, and run them
@@ -141,6 +144,8 @@ analogy, convention, or precedent:
 - `crates/pqbench/` — the library (bench, bytemass, codecs, compression, lz,
   parquet, report, stats)
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
+- `crates/aipnaming/`, `crates/aipnaming-cli/` — the AIP naming linter and its
+  `aipnaming` binary
 - `scripts/` — build / sample / smoke-test helpers
 - `docs/` — user documentation (e.g. `docker.md`)
 - `Makefile` + pre-commit hook — the gate

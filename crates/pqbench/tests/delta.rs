@@ -35,7 +35,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     .await
     .unwrap();
     let summary = pqbench::bytemass::aggregate(&rows).unwrap();
-    assert_eq!(summary.num_rows, 14);
+    assert_eq!(summary.row_count, 14);
     assert_eq!(summary.file_count, 2);
 }
 
@@ -72,7 +72,7 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
         uncompressed += mass.columns[0].uncompressed_bytes;
         file_bytes += std::fs::metadata(path).unwrap().len();
     }
-    assert_eq!(summary.num_rows, 14);
+    assert_eq!(summary.row_count, 14);
     assert_eq!(summary.file_count, 2);
     assert_eq!(summary.columns.len(), 1);
     assert_eq!(summary.columns[0].column, "id");
@@ -119,7 +119,7 @@ async fn load_ignores_tombstoned_and_untracked_files() {
     })
     .await
     .unwrap();
-    assert_eq!(pqbench::bytemass::aggregate(&rows).unwrap().num_rows, 14);
+    assert_eq!(pqbench::bytemass::aggregate(&rows).unwrap().row_count, 14);
     let previous = table::load(&load_request(fixture.path().to_string_lossy(), Some(0)))
         .await
         .unwrap();

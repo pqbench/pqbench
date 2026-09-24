@@ -17,7 +17,7 @@ pub(super) struct RawColumn {
 /// A file's raw column masses, plus the row count that normalizes them.
 pub(super) struct FileRaw {
     /// Number of rows in the file (shared denominator for per-row mass).
-    pub num_rows: u64,
+    pub row_count: u64,
     /// One entry per column chunk, in file order.
     pub columns: Vec<RawColumn>,
 }
@@ -25,7 +25,7 @@ pub(super) struct FileRaw {
 /// Lift parsed metadata into the raw per-chunk masses.
 pub(super) fn read(mass: &FileMass) -> FileRaw {
     FileRaw {
-        num_rows: mass.num_rows,
+        row_count: mass.row_count,
         columns: mass
             .columns
             .iter()
@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn read_carries_per_chunk_bytes_and_rows() {
         let mass = FileMass {
-            num_rows: 100,
+            row_count: 100,
             columns: vec![
                 ColumnMass {
                     column: "text".into(),
@@ -62,7 +62,7 @@ mod tests {
             ],
         };
         let raw = read(&mass);
-        assert_eq!(raw.num_rows, 100);
+        assert_eq!(raw.row_count, 100);
         assert_eq!(raw.columns.len(), 2);
         assert_eq!(raw.columns[0].column, "text");
         assert_eq!(raw.columns[0].compressed_bytes, 40);

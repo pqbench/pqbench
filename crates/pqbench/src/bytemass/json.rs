@@ -35,7 +35,7 @@ mod tests {
             .map(|(column, bytes)| MassRow {
                 uri: "f".into(),
                 size_bytes: 0,
-                num_rows: 10,
+                row_count: 10,
                 column: (*column).into(),
                 compressed_bytes: *bytes,
                 uncompressed_bytes: *bytes,
@@ -49,7 +49,7 @@ mod tests {
         let json = render_json(&rows(&[("a.b", 20), ("text", 10)])).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(value["file_count"], 1);
-        assert_eq!(value["num_rows"], 10);
+        assert_eq!(value["row_count"], 10);
         let columns = value["columns"].as_array().unwrap();
         assert_eq!(columns.len(), 2);
         assert_eq!(columns[0]["column"], "a.b");

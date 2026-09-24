@@ -56,7 +56,7 @@ fn bytemass_streams_column_rows() {
     let end = records.last().unwrap();
     assert_eq!(end["event"], "end");
     assert_eq!(end["file_count"], 1);
-    assert_eq!(end["num_rows"], 3000);
+    assert_eq!(end["row_count"], 3000);
 }
 
 /// End-to-end: `--json` is the same NDJSON stream.
