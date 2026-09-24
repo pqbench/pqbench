@@ -213,7 +213,7 @@ fn finish_stream(
     emit.write(&EndRecord {
         kind: "pqbench.bytemass",
         event: "end",
-        file_count: stats.files.len(),
+        file_count: stats.file_rows.len(),
         num_rows: stats.num_rows(),
         column_count: stats.columns,
     })?;
@@ -241,14 +241,12 @@ fn write_page(rows: &[bytemass::MassRow], args: &BytemassArgs) -> Result<(), Cli
 
 #[derive(Default)]
 struct MassStats {
-    files: BTreeSet<String>,
     file_rows: BTreeMap<String, u64>,
     columns: usize,
 }
 
 impl MassStats {
     fn add(&mut self, row: &bytemass::MassRow) {
-        self.files.insert(row.file.clone());
         self.file_rows.insert(row.file.clone(), row.num_rows);
         self.columns += 1;
     }
@@ -260,7 +258,7 @@ impl MassStats {
     fn summary(&self, output: Option<&std::path::Path>) -> String {
         let mut out = format!(
             "files: {}\nrows: {}\ncolumns: {}\n",
-            self.files.len(),
+            self.file_rows.len(),
             self.num_rows(),
             self.columns
         );
