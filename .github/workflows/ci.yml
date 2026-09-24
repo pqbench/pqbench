@@ -125,3 +125,32 @@ jobs:
       - name: Fail if a required job did not succeed
         run: exit 1
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+
+  # The Unity Catalog stand end to end: rustfs, Unity, and the table pipe this
+  # PR adds. Runs after `ci` (the required gate), on arm64 (the images are
+  # multi-arch), and is deliberately not required so a flaky catalog never
+  # blocks a merge; it fails loudly when it does run. Skipped on fork PRs,
+  # whose secrets and Docker Hub access are not ours to rely on.
+  lakehouse-stand:
+    name: Unity stand (arm64)
+    needs: [ci]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    env:
+      # The stand builds pqbench with `--features delta-s3`; drop the cache dir
+      # so that build lands in the default target/ that lakehouse.sh expects.
+      CARGO_TARGET_DIR: ""
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The stand's Delta table is LFS-typed (see .gitattributes).
+          lfs: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: arm64-delta-s3-stand
+      - name: Bring the Unity Catalog stand up and check it
+        run: make lakehouse
