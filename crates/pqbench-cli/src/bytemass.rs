@@ -214,7 +214,7 @@ fn finish_stream(
         kind: "pqbench.bytemass",
         event: "end",
         file_count: stats.file_rows.len(),
-        num_rows: stats.num_rows(),
+        row_count: stats.row_count(),
         column_count: stats.column_count,
     })?;
     emit.finish(&stats.summary(output))
@@ -247,11 +247,11 @@ struct MassStats {
 
 impl MassStats {
     fn add(&mut self, row: &bytemass::MassRow) {
-        self.file_rows.insert(row.uri.clone(), row.num_rows);
+        self.file_rows.insert(row.uri.clone(), row.row_count);
         self.column_count += 1;
     }
 
-    fn num_rows(&self) -> u64 {
+    fn row_count(&self) -> u64 {
         self.file_rows.values().sum()
     }
 
@@ -259,7 +259,7 @@ impl MassStats {
         let mut out = format!(
             "files: {}\nrows: {}\ncolumns: {}\n",
             self.file_rows.len(),
-            self.num_rows(),
+            self.row_count(),
             self.column_count
         );
         if let Some(path) = output {
@@ -289,6 +289,6 @@ struct EndRecord {
     kind: &'static str,
     event: &'static str,
     file_count: usize,
-    num_rows: u64,
+    row_count: u64,
     column_count: usize,
 }

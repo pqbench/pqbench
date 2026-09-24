@@ -33,7 +33,7 @@ pub struct MassSummary {
     /// Number of physical Parquet files included in the summary.
     pub file_count: usize,
     /// Total physical rows across all files.
-    pub num_rows: u64,
+    pub row_count: u64,
     /// Per-column byte totals and codecs.
     pub columns: Vec<ColumnMassSummary>,
 }
@@ -43,7 +43,7 @@ impl MassSummary {
     #[must_use]
     pub(super) fn file_mass(&self) -> FileMass {
         FileMass {
-            num_rows: self.num_rows,
+            row_count: self.row_count,
             columns: self
                 .columns
                 .iter()
@@ -69,12 +69,12 @@ pub(super) async fn measure_inputs(
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
         let (size, mass) = read_input(&input, env).await?;
-        let num_rows = mass.num_rows;
+        let row_count = mass.row_count;
         for column in mass.columns {
             rows.push(MassRow {
                 uri: input.clone(),
                 size_bytes: size,
-                num_rows,
+                row_count,
                 column: column.column,
                 compressed_bytes: column.compressed_bytes,
                 uncompressed_bytes: column.uncompressed_bytes,

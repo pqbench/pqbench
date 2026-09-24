@@ -65,7 +65,7 @@ with open(sys.argv[1]) as stream:
 end = next(record for record in records if record.get("event") == "end")
 rows = [record for record in records if record.get("kind") == "pqbench.bytemass-row"]
 assert end["file_count"] == 1, f"file_count is {end.get('file_count')!r}"
-assert end["num_rows"] > 0, f"num_rows is {end.get('num_rows')!r}"
+assert end["row_count"] > 0, f"row_count is {end.get('row_count')!r}"
 assert rows, "no bytemass-row records"
 assert all("column" in row and "compressed_bytes" in row for row in rows)
 PY

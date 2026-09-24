@@ -28,9 +28,9 @@ async fn measures_a_local_file_from_its_footer() {
 
     let summary = aggregate(&rows).unwrap();
     assert_eq!(summary.file_count, 1);
-    assert!(summary.num_rows > 0);
+    assert!(summary.row_count > 0);
     assert!(!summary.columns.is_empty());
-    assert_eq!(rows[0].num_rows, summary.num_rows);
+    assert_eq!(rows[0].row_count, summary.row_count);
     assert!(rows[0].size_bytes > 0);
 
     let text = render_text(&rows).unwrap();
@@ -50,7 +50,7 @@ async fn emits_composable_json_per_column() {
 
     let summary: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(summary["file_count"], 1);
-    assert!(summary["num_rows"].as_u64().unwrap() > 0);
+    assert!(summary["row_count"].as_u64().unwrap() > 0);
     let columns = summary["columns"].as_array().unwrap();
     assert!(!columns.is_empty());
     assert!(columns[0]["column"].is_string());

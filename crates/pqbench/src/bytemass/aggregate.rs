@@ -16,9 +16,9 @@ use super::raw;
 /// Returns [`Error`] if a row or byte total exceeds its integer type.
 pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
     let runs = file_runs(rows);
-    let mut num_rows = 0;
+    let mut row_count = 0;
     for run in &runs {
-        num_rows = checked_sum(num_rows, run.num_rows)?;
+        row_count = checked_sum(row_count, run.row_count)?;
     }
     let mut columns: BTreeMap<String, ColumnMassSummary> = BTreeMap::new();
     for row in rows {
@@ -36,7 +36,7 @@ pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
     }
     Ok(MassSummary {
         file_count: runs.len(),
-        num_rows,
+        row_count,
         columns: columns.into_values().collect(),
     })
 }
@@ -90,7 +90,7 @@ mod tests {
         MassRow {
             uri: uri.into(),
             size_bytes: 1,
-            num_rows: 3,
+            row_count: 3,
             column: column.into(),
             compressed_bytes: 12,
             uncompressed_bytes: 24,
@@ -103,7 +103,7 @@ mod tests {
         let rows = vec![row("a", "value", "SNAPPY"), row("b", "value", "SNAPPY")];
         let summary = aggregate(&rows).unwrap();
         assert_eq!(summary.file_count, 2);
-        assert_eq!(summary.num_rows, 6);
+        assert_eq!(summary.row_count, 6);
         assert_eq!(summary.columns[0].compressed_bytes, 24);
         assert_eq!(summary.columns[0].uncompressed_bytes, 48);
         assert_eq!(summary.columns[0].codecs, BTreeSet::from(["SNAPPY".into()]));
@@ -115,6 +115,6 @@ mod tests {
         let rows = vec![row("a", "value", "ZSTD"), row("a", "value", "SNAPPY")];
         let mass = aggregate(&rows).unwrap().file_mass();
         assert_eq!(mass.columns[0].codec, "SNAPPY,ZSTD");
-        assert_eq!(mass.num_rows, 3);
+        assert_eq!(mass.row_count, 3);
     }
 }

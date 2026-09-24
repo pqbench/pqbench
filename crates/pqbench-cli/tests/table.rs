@@ -97,7 +97,7 @@ fn table_detects_delta_and_pipes_the_log_to_bytemass() {
         .find(|record| record["event"] == "end")
         .expect("bytemass end");
     assert_eq!(end["file_count"], 1);
-    assert_eq!(end["num_rows"], 3000);
+    assert_eq!(end["row_count"], 3000);
 }
 
 #[cfg(not(feature = "delta"))]

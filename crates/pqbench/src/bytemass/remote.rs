@@ -83,7 +83,7 @@ mod tests {
         let uri = url::Url::from_file_path(path).unwrap();
         let (size, actual) = read_remote_with_options(uri.as_str(), []).await.unwrap();
         assert_eq!(size, std::fs::metadata(path).unwrap().len());
-        assert_eq!(actual.num_rows, expected.num_rows);
+        assert_eq!(actual.row_count, expected.row_count);
         assert_eq!(actual.columns.len(), expected.columns.len());
     }
 }

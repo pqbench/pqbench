@@ -31,7 +31,7 @@ pub(super) fn aggregate(file: &FileRaw) -> MassNode {
     for c in &file.columns {
         *totals.entry(c.column.as_str()).or_insert(0) += c.compressed_bytes;
     }
-    let denom = file.num_rows.max(1) as f64;
+    let denom = file.row_count.max(1) as f64;
     let mut root = branch("file");
     for (path, bytes) in totals {
         let value = bytes as f64 / denom;
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn aggregate_nests_by_path_and_sums_across_row_groups() {
         let file = FileRaw {
-            num_rows: 100,
+            row_count: 100,
             columns: vec![
                 RawColumn {
                     column: "text".into(),
