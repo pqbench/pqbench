@@ -63,6 +63,54 @@ async fn open(
     load_local_table(&local_root(Path::new(uri))?, version, env).await
 }
 
+fn local_root(path: &Path) -> Result<PathBuf, Error> {
+    let root = path
+        .canonicalize()
+        .map_err(|e| Error(format!("cannot open table {}: {e}", path.display())))?;
+    if !root.join("_delta_log").is_dir() {
+        return Err(Error(format!("missing _delta_log in {}", root.display())));
+    }
+    Ok(root)
+}
+
+async fn load_local_table(
+    root: &Path,
+    version: Option<u64>,
+    env: &BTreeMap<String, String>,
+) -> Result<DeltaTable, Error> {
+    let url = Url::from_directory_path(root)
+        .map_err(|()| Error("cannot convert table path to a local file URL".into()))?;
+    load_table(url, version, env).await
+}
+
+async fn load_table(
+    url: Url,
+    version: Option<u64>,
+    env: &BTreeMap<String, String>,
+) -> Result<DeltaTable, Error> {
+    let mut builder = DeltaTableBuilder::from_url(url).map_err(delta_error)?;
+    if !env.is_empty() {
+        builder = builder.with_storage_options(env.clone().into_iter().collect());
+    }
+    if let Some(version) = version {
+        builder = builder.with_version(version);
+    }
+    builder.load().await.map_err(delta_error)
+}
+
+struct SnapshotInfo {
+    version: u64,
+    partition_columns: Vec<String>,
+}
+
+fn snapshot_info(table: &DeltaTable) -> Result<SnapshotInfo, Error> {
+    let snapshot = table.snapshot().map_err(delta_error)?;
+    Ok(SnapshotInfo {
+        version: snapshot.version(),
+        partition_columns: snapshot.metadata().partition_columns().to_vec(),
+    })
+}
+
 async fn read_log(table: &DeltaTable, last_version: u64) -> Result<Vec<LogCommit>, Error> {
     let store = table.log_store();
     let mut commits = Vec::new();
@@ -107,54 +155,6 @@ fn parse_action(line: &str, version: u64) -> Result<LogAction, Error> {
             .get("path")
             .and_then(|path| path.as_str())
             .map(str::to_owned),
-    })
-}
-
-struct SnapshotInfo {
-    version: u64,
-    partition_columns: Vec<String>,
-}
-
-fn local_root(path: &Path) -> Result<PathBuf, Error> {
-    let root = path
-        .canonicalize()
-        .map_err(|e| Error(format!("cannot open table {}: {e}", path.display())))?;
-    if !root.join("_delta_log").is_dir() {
-        return Err(Error(format!("missing _delta_log in {}", root.display())));
-    }
-    Ok(root)
-}
-
-async fn load_local_table(
-    root: &Path,
-    version: Option<u64>,
-    env: &BTreeMap<String, String>,
-) -> Result<DeltaTable, Error> {
-    let url = Url::from_directory_path(root)
-        .map_err(|()| Error("cannot convert table path to a local file URL".into()))?;
-    load_table(url, version, env).await
-}
-
-async fn load_table(
-    url: Url,
-    version: Option<u64>,
-    env: &BTreeMap<String, String>,
-) -> Result<DeltaTable, Error> {
-    let mut builder = DeltaTableBuilder::from_url(url).map_err(delta_error)?;
-    if !env.is_empty() {
-        builder = builder.with_storage_options(env.clone().into_iter().collect());
-    }
-    if let Some(version) = version {
-        builder = builder.with_version(version);
-    }
-    builder.load().await.map_err(delta_error)
-}
-
-fn snapshot_info(table: &DeltaTable) -> Result<SnapshotInfo, Error> {
-    let snapshot = table.snapshot().map_err(delta_error)?;
-    Ok(SnapshotInfo {
-        version: snapshot.version(),
-        partition_columns: snapshot.metadata().partition_columns().to_vec(),
     })
 }
 
