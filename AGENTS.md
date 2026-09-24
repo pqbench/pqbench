@@ -133,7 +133,7 @@ analogy, convention, or precedent:
   e.g. `make check CARGO_FEATURES=--all-features`,
   `make test CARGO_FEATURES="--features aws"`.
 - CI (`.github/workflows/ci.yml`) runs fmt, one clippy over `--all-features`,
-  and a test matrix over default/aws/delta/all-features (default and
+  and a test matrix over default/aws/delta/iceberg/all-features (default and
   all-features also on arm64). Ignored e2e run via `TEST_FLAGS=--include-ignored`.
 - CI overrides `CXXFLAGS` with a portable baseline (no `-march=native`) so cached
   codec objects are valid on any runner. Do not remove it: native-tuned objects

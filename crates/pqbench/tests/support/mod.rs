@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
@@ -85,6 +87,7 @@ impl Fixture {
         .unwrap();
     }
 
+    #[cfg(feature = "delta")]
     pub async fn checkpoint(&self) {
         let url = url::Url::from_directory_path(self.path()).unwrap();
         let table = deltalake::DeltaTableBuilder::from_url(url)

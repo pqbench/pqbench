@@ -13,7 +13,9 @@ default = []
 delta = ["pqbench/delta"]
 aws = ["pqbench/aws"]
 unity = ["pqbench/unity"]
-delta-s3 = ["delta", "pqbench/delta-s3", "aws"]
+iceberg = ["pqbench/iceberg"]
+delta-s3 = ["pqbench/delta-s3"]
+iceberg-s3 = ["pqbench/iceberg-s3"]
 
 [[bin]]
 name = "pqbench"

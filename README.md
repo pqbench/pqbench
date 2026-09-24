@@ -72,7 +72,12 @@ requires `-o` (zstd NDJSON).
 ### table
 
 Detect the table format and load its metadata. For Delta this is the
-transaction log and the active files. A pipe writes NDJSON. Every line carries a table `id` so `bytemass` can attribute rows. One `table` process loads one table at a time — a table is the work unit, so scan a catalog by running one process per table and let the shell fan out (`xargs -P`). A terminal prints a short summary and requires `-o` (zstd
+transaction log and the active files. For Iceberg it is the metadata JSON and
+Avro manifests. A pipe writes NDJSON. Every line carries a table `id` so
+`bytemass` can attribute rows. One `table` process loads one table at a time
+— a table is the work unit, so scan a catalog by running one process per
+table and let the shell fan out (`xargs -P`). A terminal prints a short
+summary and requires `-o` (zstd
 NDJSON):
 
 ```sh
@@ -82,8 +87,8 @@ pqbench bytemass table.ndjson.zst
 ```
 
 Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
-is Iceberg). Iceberg is recognized and rejected until a loader exists. Delta
-needs `--features delta` (`delta-s3` for `s3://`).
+or `.metadata.json` is Iceberg). Delta needs `--features delta` (`delta-s3` for
+`s3://`); Iceberg needs `iceberg` (`iceberg-s3` for `s3://`).
 
 A producer can hand `table` a `pqbench.remote-source` document — one table URI
 plus optional `AWS_*` credentials — and the table document carries those
@@ -126,6 +131,7 @@ pqbench lake unity.json | pqbench table | pqbench bytemass
 - [Unity Catalog E2E example](docker/e2e-lakehouse/README.md) — a catalog vending
   expiring credentials into `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
+- [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
 - [Docker](docs/docker.md) — build, run, and publish a container image
 
 ## Contributing

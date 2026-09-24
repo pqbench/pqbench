@@ -19,6 +19,10 @@ delta-s3 = ["delta", "deltalake/s3", "aws"]
 # still compiles but `unity::list_tables` fails at runtime.
 unity = ["dep:reqwest"]
 
+# Iceberg snapshot planning reads metadata JSON and Avro manifests.
+iceberg = ["dep:apache-avro"]
+iceberg-s3 = ["iceberg", "aws"]
+
 [dependencies]
 snappy_src = "0.2.5"
 zstd = "0.13"
@@ -41,6 +45,7 @@ url = "2"
 # Must match delta-rs 0.32.4's ObjectStore trait version: stores cross that
 # internal boundary. Keep the pin until delta-rs upgrades its dependency.
 object_store = { version = "=0.13.2", optional = true }
+apache-avro = { version = "0.17", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
