@@ -114,12 +114,38 @@ jobs:
           key: ${{ matrix.arch }}-${{ matrix.features || 'default' }}
       - run: make test CARGO_FEATURES="${{ matrix.cargo_flags }}" TEST_FLAGS="${{ matrix.test_flags }}"
 
+  # Build the naming linter and run it over the workspace, printing findings to
+  # the log. Informational for now: the rule pack is still being tuned, so
+  # findings must not fail the build yet (the semantic rules overfire on valid
+  # Rust). Flip to a gate once `aipnaming .` is clean on main.
+  aipnaming:
+    name: aipnaming
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aipnaming
+      - name: Build the linter
+        run: cargo build --release -p aipnaming-cli
+      - name: Lint the workspace (informational)
+        run: |
+          set +e
+          ./target/release/aipnaming crates/ > findings.txt
+          status=$?
+          cat findings.txt
+          echo "aipnaming: $(wc -l < findings.txt) finding(s), exit $status"
+          echo "Findings are informational while the rule pack is tuned; this step does not fail the job."
+
   # Single required status: fails if any upstream job failed, was cancelled or
   # was skipped, so branch protection only has to require `CI`.
   ci:
     name: CI
     if: always()
-    needs: [fmt, clippy, test]
+    needs: [fmt, clippy, test, aipnaming]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a required job did not succeed
