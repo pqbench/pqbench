@@ -137,10 +137,6 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
-    env:
-      # The stand builds pqbench with `--features delta-s3`; drop the cache dir
-      # so that build lands in the default target/ that lakehouse.sh expects.
-      CARGO_TARGET_DIR: ""
     steps:
       - uses: actions/checkout@v6
         with:
