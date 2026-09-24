@@ -2,7 +2,7 @@
 //!
 //! A producer resolves a table and pqbench measures bytes. Known kinds are
 //! `pqbench.table`, `pqbench.table-ref`, and `pqbench.remote-source`. A pipe
-//! writes NDJSON; every record carries a table `id` so many tables can mix.
+//! writes NDJSON; every record carries a table `id` so rows stay attributable.
 //! A terminal prints a short summary and requires `-o` (zstd NDJSON).
 //! A single `pqbench.table` object is still accepted. Credentials stay on
 //! the document so a pipe can carry them between processes.
@@ -31,7 +31,7 @@ pub(crate) struct RemoteSource {
 
 /// One JSON value from a table stream or a one-object document.
 pub(crate) enum Record {
-    /// A table to load (`lake` emits these; `table` fans them out).
+    /// A table to load (`lake` emits these; `table` loads them one at a time).
     TableRef(TableRef),
     Begin(Begin),
     #[allow(dead_code)]
@@ -68,36 +68,52 @@ pub(crate) struct Begin {
 ///
 /// `-` streams standard input line by line. A path is read whole — documents
 /// are metadata, not data — and a zstd frame is decoded first.
-pub(crate) async fn visit_input<F>(input: &str, mut visit: F) -> Result<(), CliError>
+pub(crate) async fn visit_input<F>(input: &str, visit: F) -> Result<(), CliError>
 where
     F: AsyncFnMut(Record) -> Result<(), CliError>,
 {
     if input == "-" {
-        let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-        let mut buffer = String::new();
-        let mut empty = true;
-        while let Some(line) = lines.next_line().await? {
-            buffer.push_str(&line);
-            buffer.push('\n');
-            match serde_json::from_str::<serde_json::Value>(&buffer) {
-                Ok(value) => {
-                    empty = false;
-                    visit(classify(value)?).await?;
-                    buffer.clear();
-                }
-                Err(error) if error.is_eof() => {}
-                Err(error) => return Err(invalid_json(error)),
-            }
-        }
-        if !buffer.trim().is_empty() {
-            return Err("incomplete document".into());
-        }
-        if empty {
-            return Err("empty document".into());
-        }
-        return Ok(());
+        visit_stdin(visit).await
+    } else {
+        visit_file(input, visit).await
     }
+}
 
+/// Read NDJSON from standard input, one value at a time.
+async fn visit_stdin<F>(mut visit: F) -> Result<(), CliError>
+where
+    F: AsyncFnMut(Record) -> Result<(), CliError>,
+{
+    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    let mut buffer = String::new();
+    let mut empty = true;
+    while let Some(line) = lines.next_line().await? {
+        buffer.push_str(&line);
+        buffer.push('\n');
+        match serde_json::from_str::<serde_json::Value>(&buffer) {
+            Ok(value) => {
+                empty = false;
+                visit(classify(value)?).await?;
+                buffer.clear();
+            }
+            Err(error) if error.is_eof() => {}
+            Err(error) => return Err(invalid_json(error)),
+        }
+    }
+    if !buffer.trim().is_empty() {
+        return Err("incomplete document".into());
+    }
+    if empty {
+        return Err("empty document".into());
+    }
+    Ok(())
+}
+
+/// Read a document file whole, decoding a zstd frame first.
+async fn visit_file<F>(input: &str, mut visit: F) -> Result<(), CliError>
+where
+    F: AsyncFnMut(Record) -> Result<(), CliError>,
+{
     let bytes = tokio::fs::read(input).await?;
     let bytes = if bytes.starts_with(&ZSTD_MAGIC) {
         zstd::decode_all(&bytes[..])?
@@ -287,8 +303,7 @@ pub(crate) async fn looks_like_document(path: &str) -> bool {
         == Some(b'{')
 }
 
-/// Write one table's records, tagged with `id`. Safe to call for many tables
-/// on the same sink; lines from different ids may mix.
+/// Write one table's records, tagged with `id`.
 pub(crate) fn write_table_records(
     emit: &mut Emit,
     id: &str,
