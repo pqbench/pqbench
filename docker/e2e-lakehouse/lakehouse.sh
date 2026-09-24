@@ -83,10 +83,10 @@ seed_unity() {
     register schemas '{"catalog_name": "pqbench", "name": "demo"}'
     # Unity cannot migrate a table definition, so replace it. The table is
     # EXTERNAL: dropping it leaves the objects alone.
-    delete=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$unity_catalog/tables/pqbench.demo.events")
-    case "$delete" in
+    delete_status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$unity_catalog/tables/pqbench.demo.events")
+    case "$delete_status" in
         200 | 204 | 404) ;;
-        *) echo "DELETE tables/pqbench.demo.events failed: HTTP $delete" >&2; exit 1 ;;
+        *) echo "DELETE tables/pqbench.demo.events failed: HTTP $delete_status" >&2; exit 1 ;;
     esac
     register tables "$(jq -nc --arg location "$table_location" '{
         catalog_name: "pqbench", schema_name: "demo", name: "events",
