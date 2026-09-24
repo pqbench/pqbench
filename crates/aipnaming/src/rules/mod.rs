@@ -7,7 +7,6 @@
 use crate::decl::{DeclKind, Declaration};
 use crate::lint::Finding;
 
-pub(crate) mod enums;
 pub(crate) mod naming;
 pub(crate) mod plural;
 pub(crate) mod ranges;
@@ -83,10 +82,6 @@ pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: "aip-142/duration-offset-comment",
         check: time::offset_comment,
-    },
-    Rule {
-        id: "aip-126/unspecified",
-        check: enums::unspecified,
     },
     Rule {
         id: "aip-145/ranges",

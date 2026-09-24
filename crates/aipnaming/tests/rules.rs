@@ -113,14 +113,6 @@ fn accepts_both_rust_enum_value_styles() {
 }
 
 #[test]
-fn flags_enum_without_a_zero_value() {
-    let found = findings("enum Codec { Snappy, Zstd }");
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].rule, "aip-126/unspecified");
-    assert_eq!(found[0].help.as_deref(), Some("CODEC_UNSPECIFIED"));
-}
-
-#[test]
 fn flags_non_imperative_and_wrong_suffixed_time_fields() {
     let found =
         rules("struct Book { pub created_at: u64, pub published_time: u64, pub timestamp: u64 }");
