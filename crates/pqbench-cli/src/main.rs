@@ -53,20 +53,21 @@ Examples:
     /// fetch table metadata (detect the format, then load the log)
     #[command(after_help = r#"Examples:
   pqbench table ./delta-table -o table.ndjson.zst
-  pqbench table ./delta-table --concurrency 8 | pqbench bytemass --concurrency 8
+  pqbench table ./delta-table | pqbench bytemass
   pqbench table ./delta-table -o table.ndjson.zst | pqbench bytemass
   producer | pqbench table | pqbench bytemass
 "#)]
     Table(table::TableArgs),
 }
 
-fn main() -> ExitCode {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Lz(args) => lz::run(&args),
         Command::Compression(args) => compression::run(&args),
-        Command::Bytemass(args) => bytemass::run(&args),
-        Command::Table(args) => table::run(&args),
+        Command::Bytemass(args) => bytemass::run(&args).await,
+        Command::Table(args) => table::run(&args).await,
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

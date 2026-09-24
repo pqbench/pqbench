@@ -8,9 +8,9 @@
 //! the document so a pipe can carry them between processes.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
+use std::ops::AsyncFnMut;
+
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
 use crate::emit::Emit;
 
@@ -65,15 +65,50 @@ pub(crate) struct Begin {
 }
 
 /// Call `visit` once per JSON value, as soon as that value is complete.
-pub(crate) fn visit_records(
-    reader: impl Read,
-    mut visit: impl FnMut(Record) -> Result<(), CliError>,
-) -> Result<(), CliError> {
-    let de = serde_json::Deserializer::from_reader(reader);
+///
+/// `-` streams standard input line by line. A path is read whole — documents
+/// are metadata, not data — and a zstd frame is decoded first.
+pub(crate) async fn visit_input<F>(input: &str, mut visit: F) -> Result<(), CliError>
+where
+    F: AsyncFnMut(Record) -> Result<(), CliError>,
+{
+    if input == "-" {
+        let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+        let mut buffer = String::new();
+        let mut empty = true;
+        while let Some(line) = lines.next_line().await? {
+            buffer.push_str(&line);
+            buffer.push('\n');
+            match serde_json::from_str::<serde_json::Value>(&buffer) {
+                Ok(value) => {
+                    empty = false;
+                    visit(classify(value)?).await?;
+                    buffer.clear();
+                }
+                Err(error) if error.is_eof() => {}
+                Err(error) => return Err(invalid_json(error)),
+            }
+        }
+        if !buffer.trim().is_empty() {
+            return Err("incomplete document".into());
+        }
+        if empty {
+            return Err("empty document".into());
+        }
+        return Ok(());
+    }
+
+    let bytes = tokio::fs::read(input).await?;
+    let bytes = if bytes.starts_with(&ZSTD_MAGIC) {
+        zstd::decode_all(&bytes[..])?
+    } else {
+        bytes
+    };
+    let values = serde_json::Deserializer::from_reader(std::io::Cursor::new(bytes));
     let mut empty = true;
-    for value in de.into_iter::<serde_json::Value>() {
+    for value in values.into_iter::<serde_json::Value>() {
         empty = false;
-        visit(classify(value.map_err(invalid_json)?)?)?;
+        visit(classify(value.map_err(invalid_json)?)?).await?;
     }
     if empty {
         return Err("empty document".into());
@@ -231,19 +266,15 @@ fn aws_env_only(env: &BTreeMap<String, String>) -> Result<(), CliError> {
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Whether a path is `-`, JSON (`{`), or a zstd frame.
-pub(crate) fn looks_like_document(path: &str) -> bool {
+pub(crate) async fn looks_like_document(path: &str) -> bool {
     if path == "-" {
         return true;
     }
-    let path = Path::new(path);
-    if !path.is_file() {
-        return false;
-    }
-    let Ok(mut file) = File::open(path) else {
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
         return false;
     };
     let mut buf = [0u8; 64];
-    let Ok(n) = file.read(&mut buf) else {
+    let Ok(n) = file.read(&mut buf).await else {
         return false;
     };
     if n >= 4 && buf[..4] == ZSTD_MAGIC {
@@ -254,18 +285,6 @@ pub(crate) fn looks_like_document(path: &str) -> bool {
         .copied()
         .find(|byte| !byte.is_ascii_whitespace())
         == Some(b'{')
-}
-
-/// Open a JSON or zstd document file.
-pub(crate) fn open_file(path: &Path) -> Result<Box<dyn Read>, CliError> {
-    let mut file = File::open(path)?;
-    let mut magic = [0u8; 4];
-    let n = file.read(&mut magic)?;
-    let rest = std::io::Cursor::new(magic[..n].to_vec()).chain(file);
-    if n == 4 && magic == ZSTD_MAGIC {
-        return Ok(Box::new(zstd::Decoder::new(rest)?));
-    }
-    Ok(Box::new(rest))
 }
 
 /// Write one table's records, tagged with `id`. Safe to call for many tables

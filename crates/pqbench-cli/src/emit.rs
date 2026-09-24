@@ -2,6 +2,8 @@
 //!
 //! A terminal prints only a short summary and requires `-o`. A pipe writes
 //! each record as it is produced so the next command can start immediately.
+//! A reader that closes early ends the stdout sink, not the command: the
+//! `-o` file still finishes.
 
 use std::fs::File;
 use std::io::{IsTerminal, Write};
@@ -14,6 +16,7 @@ use crate::CliError;
 /// Destination for one command's stream.
 pub(crate) struct Emit {
     pipe: bool,
+    closed: bool,
     file: Option<zstd::Encoder<'static, File>>,
 }
 
@@ -30,13 +33,22 @@ impl Emit {
             Some(path) => Some(open_zstd(path)?),
             None => None,
         };
-        Ok(Self { pipe: !tty, file })
+        Ok(Self {
+            pipe: !tty,
+            closed: false,
+            file,
+        })
     }
 
-    /// Write one JSON value as a line and flush both sinks.
+    /// Write one JSON value as a line and flush both sinks. A closed stdout
+    /// reader stops the stdout sink; an `-o` file keeps receiving records.
     pub(crate) fn write(&mut self, value: &impl Serialize) -> Result<(), CliError> {
-        if self.pipe {
-            write_record(&mut std::io::stdout(), value)?;
+        if self.pipe && !self.closed {
+            match write_record(&mut std::io::stdout(), value) {
+                Ok(()) => {}
+                Err(error) if closed_pipe(&error) => self.closed = true,
+                Err(error) => return Err(error),
+            }
         }
         if let Some(file) = &mut self.file {
             write_record(file, value)?;
@@ -52,10 +64,25 @@ impl Emit {
                 .map_err(|error| format!("cannot finish output: {error}"))?;
         }
         if !self.pipe {
-            print!("{summary}");
+            write_stdout(summary)?;
         }
         Ok(())
     }
+}
+
+/// Write plain text to stdout. A closed reader is not an error.
+pub(crate) fn write_stdout(text: &str) -> Result<(), CliError> {
+    match std::io::stdout().write_all(text.as_bytes()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn closed_pipe(error: &CliError) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe)
 }
 
 fn open_zstd(path: &Path) -> Result<zstd::Encoder<'static, File>, CliError> {
@@ -66,9 +93,9 @@ fn open_zstd(path: &Path) -> Result<zstd::Encoder<'static, File>, CliError> {
 }
 
 fn write_record(writer: &mut impl Write, value: &impl Serialize) -> Result<(), CliError> {
-    serde_json::to_writer(&mut *writer, value)
+    let line = serde_json::to_string(value)
         .map_err(|error| format!("cannot serialize output: {error}"))?;
-    writeln!(writer)?;
+    writeln!(writer, "{line}")?;
     writer.flush()?;
     Ok(())
 }

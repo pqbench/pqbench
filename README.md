@@ -72,15 +72,12 @@ requires `-o` (zstd NDJSON).
 ### table
 
 Detect the table format and load its metadata. For Delta this is the
-transaction log and the active files. A pipe writes NDJSON. Every line carries a table `id`, so `lake` can stream
-table-refs, `table` can load several at once, and `bytemass` can measure
-a file as soon as that line arrives — even if tables finish out of order. A terminal prints a short summary and requires `-o` (zstd
+transaction log and the active files. A pipe writes NDJSON. Every line carries a table `id` so `bytemass` can attribute rows. One `table` process loads one table at a time — a table is the work unit, so scan a catalog by running one process per table and let the shell fan out (`xargs -P`). A terminal prints a short summary and requires `-o` (zstd
 NDJSON):
 
 ```sh
 pqbench table ./path/to/table -o table.ndjson.zst
 pqbench table ./path/to/table | pqbench bytemass
-pqbench table ./path/to/table --concurrency 8 | pqbench bytemass --concurrency 8
 pqbench bytemass table.ndjson.zst
 ```
 

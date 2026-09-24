@@ -70,7 +70,7 @@ fn table_detects_delta_and_pipes_the_log_to_bytemass() {
     let records = ndjson_records(&table.stdout);
     assert_eq!(records[0]["kind"], "pqbench.table");
     assert_eq!(records[0]["event"], "begin");
-    assert!(records[0]["id"].as_str().unwrap().contains("tmp") || records[0]["id"].is_string());
+    assert_eq!(records[0]["id"], fixture.path.to_str().unwrap());
     assert_eq!(records[0]["format"], "delta");
     assert_eq!(records[0]["snapshot_version"], 0);
     assert_eq!(
@@ -424,4 +424,65 @@ fn delta_fixture() -> DeltaFixture {
         _directory: directory,
         path: root,
     }
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn table_exits_cleanly_when_stdout_is_closed() {
+    let fixture = delta_fixture();
+    let mut child = pqbench()
+        .args(["table", fixture.path.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn table_reports_a_failed_snapshot_without_dependency_panics() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("_delta_log")).unwrap();
+    let commit = json!([
+        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
+        {"metaData": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
+            "partitionColumns": ["part"],
+            "configuration": {},
+            "createdTime": 0
+        }}
+    ]);
+    let text = commit
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(root.join("_delta_log/00000000000000000000.json"), text).unwrap();
+
+    let output = pqbench()
+        .args(["table", root.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Partition column"), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }

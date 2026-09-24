@@ -58,17 +58,21 @@ S3 support is compiled behind the `aws` feature inside `pqbench::object_store`
 (the only module that names the `object_store` crate). A URI whose backend is
 not compiled in fails at runtime with a message naming the missing feature.
 Adding another scheme is one arm in the factory plus one feature. The `delta`
-feature flag lives only in `pqbench::table::delta`.
+feature flag gates the loader; its private `delta_helpers` module is the only
+code that names the `deltalake` crate and is plain async. `pqbench table` drives
+a load on a current-thread runtime, so delta-rs selects its own executor instead
+of borrowing the caller's.
 
 ## Document
 
 `pqbench.table` version 1 names the format, the JSON commits that remain on
 disk, and the active files (path, URI, log size). On a pipe that is one JSON object per line, each tagged with a table `id`:
 `begin`, then `pqbench.table-log` commits, then `pqbench.table-file` rows,
-then `end`. Lines from different ids may mix. `lake` emits `pqbench.table-ref` lines; `table --concurrency` loads them as
-they arrive. `bytemass --concurrency` measures files as they arrive.
-`bytemass` measures a file when that line arrives and compares its size to
-the log. A single `pqbench.table` object is still accepted. A terminal
+then `end`. `lake` emits `pqbench.table-ref` lines; `table` loads them one at a
+time. A table is the work unit: scan a catalog by running one `table` process
+per table and letting the shell fan out (`xargs -P`). `bytemass` measures each
+file as its line arrives and compares its size to the log. A single
+`pqbench.table` object is still accepted. A terminal
 prints only the summary (format, snapshot, commit count, file count, bytes)
 and requires `-o` to write a zstd stream. On a pipe `-o` is optional and
 does not delay stdout:

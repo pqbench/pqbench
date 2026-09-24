@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 // `small_reddit_none.parquet` is a 3000-row NONE-compressed subset of the
 // MIT-licensed reddit_dataset_90 (goldentraversy07/reddit_dataset_90).
@@ -99,4 +99,31 @@ fn bytemass_d3_page_end_to_end() {
     assert!(stdout.contains("<title>small_reddit_none.parquet</title>"));
     assert!(stdout.contains("d3-hierarchy@3"));
     assert!(stdout.contains("bytes per row"));
+}
+
+/// End-to-end: a reader that closes early ends the stream, not the command.
+#[test]
+fn bytemass_exits_cleanly_when_stdout_is_closed() {
+    for extra in [None, Some("--d3")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pqbench"));
+        command
+            .arg("bytemass")
+            .arg(parquet_fixture())
+            .args(extra)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        drop(child.stdout.take());
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stderr.is_empty(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
