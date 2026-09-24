@@ -129,15 +129,7 @@ async fn load_ignores_tombstoned_and_untracked_files() {
 #[tokio::test]
 async fn load_resolves_checkpoint_after_old_json_is_removed() {
     let fixture = Fixture::new();
-    let url = url::Url::from_directory_path(fixture.path()).unwrap();
-    let table = deltalake::DeltaTableBuilder::from_url(url)
-        .unwrap()
-        .load()
-        .await
-        .unwrap();
-    deltalake::protocol::checkpoints::create_checkpoint(&table, None)
-        .await
-        .unwrap();
+    fixture.checkpoint().await;
     std::fs::remove_file(fixture.path().join("_delta_log/00000000000000000000.json")).unwrap();
     let info = table::load(&load_request(fixture.path().to_string_lossy(), Some(1)))
         .await
@@ -183,7 +175,7 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
         ..Default::default()
     })
     .await;
-    assert!(rows.is_err() || rows.unwrap().iter().any(|row| row.size != expected));
+    assert!(rows.is_err(), "changed file should not measure");
     std::fs::remove_file(path).unwrap();
     let info = table::load(&load_request(fixture.path().to_string_lossy(), None))
         .await
@@ -231,8 +223,9 @@ async fn load_rejects_missing_versions_and_non_tables() {
 async fn load_does_not_treat_column_mapping_as_byte_mass() {
     let fixture = Fixture::new();
     fixture.commit(2, &[metadata(json!({"delta.columnMapping.mode": "name"}))]);
-    if let Err(error) = table::load(&load_request(fixture.path().to_string_lossy(), None)).await {
-        assert!(!error.to_string().contains("byte-mass"), "{error}");
+    match table::load(&load_request(fixture.path().to_string_lossy(), None)).await {
+        Ok(info) => assert_eq!(info.files.len(), 2),
+        Err(error) => assert!(!error.to_string().contains("byte-mass"), "{error}"),
     }
 }
 
