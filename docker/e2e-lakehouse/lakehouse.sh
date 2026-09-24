@@ -12,15 +12,10 @@ unity="http://localhost:${UNITY_CATALOG_PORT:-8080}/api/2.1/unity-catalog"
 storage="http://localhost:${RUSTFS_PORT:-9000}"
 location="s3://lakehouse/unity/events"
 vended="local/lakehouse/vended.env"
-
-pqbench_bin() {
-    echo "${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
-}
+pqbench_bin="${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
 
 ensure_pqbench() {
-    local bin
-    bin=$(pqbench_bin)
-    [ -x "$bin" ] || $CARGO build -p pqbench-cli --features delta-s3
+    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3
 }
 
 # Create, or accept that a previous run already did.
@@ -103,8 +98,6 @@ seed_unity() {
 # The README's pipe, so the stand is seen to answer the question it exists for.
 check() {
     ensure_pqbench
-    local bin
-    bin=$(pqbench_bin)
     curl -sS -X POST "$unity/temporary-table-credentials" \
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity/tables/pqbench.demo.events" |
@@ -116,8 +109,8 @@ check() {
                 AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
                 AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
                 AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
-        "$bin" table |
-        "$bin" bytemass --json |
+        "$pqbench_bin" table |
+        "$pqbench_bin" bytemass --json |
         jq -es '
             (map(select(.event == "end")) | first
                 | .num_rows == 3 and .file_count == 1)
