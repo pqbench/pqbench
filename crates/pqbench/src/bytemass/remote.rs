@@ -16,7 +16,7 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 ///
 /// # Errors
 /// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
-pub(super) async fn read_remote_with_options(
+pub(super) async fn read_remote(
     uri: &str,
     options: impl IntoIterator<Item = (String, String)>,
 ) -> Result<(u64, FileMass), Error> {
@@ -70,7 +70,7 @@ fn storage_error(error: object_store::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::read_remote_with_options;
+    use super::read_remote;
     use crate::parquet_helpers::{default_metadata_parser, MetadataParser};
 
     #[tokio::test]
@@ -81,7 +81,7 @@ mod tests {
         ));
         let expected = default_metadata_parser().read_masses(path).unwrap();
         let uri = url::Url::from_file_path(path).unwrap();
-        let (size, actual) = read_remote_with_options(uri.as_str(), []).await.unwrap();
+        let (size, actual) = read_remote(uri.as_str(), []).await.unwrap();
         assert_eq!(size, std::fs::metadata(path).unwrap().len());
         assert_eq!(actual.row_count, expected.row_count);
         assert_eq!(actual.columns.len(), expected.columns.len());

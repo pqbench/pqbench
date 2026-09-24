@@ -76,10 +76,12 @@ pub(super) fn underscores(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
 
 /// Ported from api-linter `core::0140::abbreviations`, with the Rust-local
 /// `cfg` -> `config` added: AIP-140 names `config` the well-known abbreviation.
+/// AIP-140 governs field names, so this stays on fields; method and type names
+/// are AIP-190's concern and keep their longer, often more precise, words.
 pub(super) fn abbreviations(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     let abbreviations = data::pairs("abbreviations");
     let local = data::pairs("local-abbreviations");
-    for decl in ctx.decls {
+    for decl in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
         for word in split_identifier(&decl.name) {
             let lower = word.to_ascii_lowercase();
             if let Some((long, short)) = abbreviations.iter().find(|(long, _)| *long == lower) {
@@ -258,7 +260,7 @@ pub(super) fn reserved_words(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
 
 /// AIP-136: names never contain `async`; use `LongRunning` when an immediate
 /// and a long-running variant must be told apart.
-pub(super) fn async_name(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+pub(super) fn long_running_name(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     for decl in ctx.decls.iter().filter(|decl| {
         matches!(
             decl.kind,

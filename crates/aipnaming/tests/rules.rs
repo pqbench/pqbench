@@ -150,6 +150,24 @@ struct Page { pub is_dictionary: bool }
 }
 
 #[test]
+fn honors_a_single_line_allow_directive() {
+    let source = "\
+struct Fixture {
+    // aipnaming: allow(aip-140/underscores)
+    _directory: String,
+}
+";
+    assert!(
+        rules(source).is_empty(),
+        "directive covers the line below it"
+    );
+    assert!(
+        rules("struct Fixture { pub _directory: String }").contains(&"aip-140/underscores"),
+        "without the directive the finding stands"
+    );
+}
+
+#[test]
 fn agrees_singular_and_plural_with_collections() {
     assert!(rules("struct Shelf { pub books: Vec<Book> }").is_empty());
     assert!(rules("struct Shelf { pub book: Book }").is_empty());

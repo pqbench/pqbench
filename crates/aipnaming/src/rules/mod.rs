@@ -61,7 +61,7 @@ pub(crate) const RULES: &[Rule] = &[
     },
     Rule {
         id: "aip-136/async-name",
-        check: naming::async_name,
+        check: naming::long_running_name,
     },
     Rule {
         id: "aip-140/plural",
@@ -98,7 +98,10 @@ pub(crate) fn lower_words(name: &str) -> Vec<String> {
 }
 
 /// Declarations of one kind, grouped by owner in first-seen order.
-pub(crate) fn by_owner(decls: &[Declaration], kind: DeclKind) -> Vec<(&str, Vec<&Declaration>)> {
+pub(crate) fn collect_owner_map(
+    decls: &[Declaration],
+    kind: DeclKind,
+) -> Vec<(&str, Vec<&Declaration>)> {
     let mut groups: Vec<(&str, Vec<&Declaration>)> = Vec::new();
     for decl in decls.iter().filter(|decl| decl.kind == kind) {
         let Some(owner) = decl.owner.as_deref() else {

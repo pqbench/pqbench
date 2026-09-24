@@ -6,12 +6,12 @@ use crate::decl::{DeclKind, Declaration};
 use crate::lint::{report, Finding, Severity};
 use crate::words::split_identifier;
 
-use super::{by_owner, Context};
+use super::{collect_owner_map, Context};
 
 /// A field pair like `min_level`/`max_level` reads as a range; AIP-145 names
 /// its bounds `first`/`last`.
 pub(super) fn first_last(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
-    for (_, fields) in by_owner(ctx.decls, DeclKind::Field) {
+    for (_, fields) in collect_owner_map(ctx.decls, DeclKind::Field) {
         let mut mins: BTreeMap<String, &Declaration> = BTreeMap::new();
         let mut maxs: BTreeMap<String, &Declaration> = BTreeMap::new();
         for field in fields {
@@ -19,10 +19,10 @@ pub(super) fn first_last(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
                 .iter()
                 .map(|word| word.to_ascii_lowercase())
                 .collect();
-            if let Some(key) = key_without(&words, "min") {
+            if let Some(key) = strip_marker(&words, "min") {
                 mins.insert(key, field);
             }
-            if let Some(key) = key_without(&words, "max") {
+            if let Some(key) = strip_marker(&words, "max") {
                 maxs.insert(key, field);
             }
         }
@@ -52,7 +52,7 @@ pub(super) fn first_last(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
 
 /// The remaining words after removing the `min`/`max` marker, or `None` when
 /// the marker is absent.
-fn key_without(words: &[String], marker: &str) -> Option<String> {
+fn strip_marker(words: &[String], marker: &str) -> Option<String> {
     let index = words.iter().position(|word| word == marker)?;
     let rest: Vec<&str> = words
         .iter()

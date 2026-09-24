@@ -117,7 +117,7 @@ fn escape_literal_brackets(input: &str) -> String {
 
 async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64, FileMass), Error> {
     if input.contains("://") {
-        return remote::read_remote_with_options(
+        return remote::read_remote(
             input,
             env.iter().map(|(key, value)| (key.clone(), value.clone())),
         )

@@ -75,7 +75,7 @@ pub enum Codec {
 
 impl Codec {
     /// The concrete implementation backing this variant (the registry).
-    pub fn impl_of(&self) -> &'static dyn CodecImpl {
+    pub fn implementation(&self) -> &'static dyn CodecImpl {
         match self {
             Codec::Snappy => &Snappy,
             Codec::Zstd => &Zstd,
@@ -119,21 +119,21 @@ pub trait CodecImpl {
 
 impl CodecImpl for Codec {
     fn name(&self) -> &'static str {
-        self.impl_of().name()
+        self.implementation().name()
     }
 
     fn level_range(&self) -> LevelRange {
-        self.impl_of().level_range()
+        self.implementation().level_range()
     }
 
     fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
         check_level(self, level)?;
-        self.impl_of().compress(level, src)
+        self.implementation().compress(level, src)
     }
 
     fn decompress(&self, level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
         check_level(self, level)?;
-        self.impl_of().decompress(level, src, out_cap)
+        self.implementation().decompress(level, src, out_cap)
     }
 }
 

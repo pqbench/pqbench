@@ -381,6 +381,8 @@ fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
 
 #[cfg(feature = "delta")]
 struct DeltaFixture {
+    // Held only to keep the temporary directory alive for the test's duration.
+    // aipnaming: allow(aip-140/underscores)
     _directory: tempfile::TempDir,
     path: std::path::PathBuf,
 }
