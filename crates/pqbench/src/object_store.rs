@@ -37,10 +37,10 @@ pub(crate) struct ObjectStat {
 
 /// A random-access handle to a single object (local or remote).
 pub(crate) struct ObjectReader {
-    source: Source,
+    source: ObjectSource,
 }
 
-enum Source {
+enum ObjectSource {
     Local(PathBuf),
     #[cfg(feature = "aws")]
     Remote(
@@ -56,9 +56,9 @@ impl ObjectReader {
     /// Whether the object exists. A missing object is `Ok(false)`.
     pub(crate) async fn exists(&self) -> Result<bool, Error> {
         match &self.source {
-            Source::Local(path) => Ok(path.exists()),
+            ObjectSource::Local(path) => Ok(tokio::fs::metadata(path).await.is_ok()),
             #[cfg(feature = "aws")]
-            Source::Remote(store, location) => match store.head(location).await {
+            ObjectSource::Remote(store, location) => match store.head(location).await {
                 Ok(_) => Ok(true),
                 Err(::object_store::Error::NotFound { .. }) => Ok(false),
                 Err(error) => Err(remote_error(error)),
@@ -69,8 +69,9 @@ impl ObjectReader {
     /// Report the object's size and identity.
     pub(crate) async fn stat(&self) -> Result<ObjectStat, Error> {
         match &self.source {
-            Source::Local(path) => {
-                let metadata = std::fs::metadata(path)
+            ObjectSource::Local(path) => {
+                let metadata = tokio::fs::metadata(path)
+                    .await
                     .map_err(|e| Error(format!("cannot stat {}: {e}", path.display())))?;
                 Ok(ObjectStat {
                     size: metadata.len(),
@@ -78,7 +79,7 @@ impl ObjectReader {
                 })
             }
             #[cfg(feature = "aws")]
-            Source::Remote(store, location) => {
+            ObjectSource::Remote(store, location) => {
                 let metadata = store.head(location).await.map_err(remote_error)?;
                 Ok(ObjectStat {
                     size: metadata.size,
@@ -94,11 +95,12 @@ impl ObjectReader {
         range: Range<u64>,
         identity: Option<&str>,
     ) -> Result<Vec<u8>, Error> {
+        #[cfg(not(feature = "aws"))]
         let _ = identity;
         match &self.source {
-            Source::Local(path) => read_local(path, range),
+            ObjectSource::Local(path) => read_local(path, range).await,
             #[cfg(feature = "aws")]
-            Source::Remote(store, location) => {
+            ObjectSource::Remote(store, location) => {
                 let options = GetOptions::default()
                     .with_range(Some(range))
                     .with_if_match(identity.map(str::to_owned));
@@ -128,7 +130,7 @@ pub(crate) fn open(uri: &str, options: &[(String, String)]) -> Result<ObjectRead
                 .to_file_path()
                 .map_err(|()| Error(format!("invalid local file URI: {uri}")))?;
             Ok(ObjectReader {
-                source: Source::Local(path),
+                source: ObjectSource::Local(path),
             })
         }
         "s3" | "s3a" => s3(&url, options),
@@ -156,7 +158,7 @@ fn s3(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
     let (_, location) =
         ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
     Ok(ObjectReader {
-        source: Source::Remote(Box::new(store), location),
+        source: ObjectSource::Remote(Box::new(store), location),
     })
 }
 
@@ -172,17 +174,22 @@ fn remote_error(error: ::object_store::Error) -> Error {
     Error(error.to_string())
 }
 
-fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Error> {
-    use std::io::{Read, Seek, SeekFrom};
+async fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Error> {
+    use std::io::SeekFrom;
 
-    let mut file = std::fs::File::open(path)
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let mut file = tokio::fs::File::open(path)
+        .await
         .map_err(|e| Error(format!("cannot open {}: {e}", path.display())))?;
     file.seek(SeekFrom::Start(range.start))
+        .await
         .map_err(|e| Error(format!("cannot seek {}: {e}", path.display())))?;
     let length = usize::try_from(range.end.saturating_sub(range.start))
         .map_err(|_| Error(format!("range too large for {}", path.display())))?;
     let mut buffer = vec![0; length];
     file.read_exact(&mut buffer)
+        .await
         .map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
     Ok(buffer)
 }
@@ -198,7 +205,7 @@ mod tests {
     use ::object_store::ObjectStoreExt;
     use tokio::task::JoinSet;
 
-    use super::{ObjectReader, Source};
+    use super::{ObjectReader, ObjectSource};
 
     /// Same-region S3 per-request latency: p50 ~25 ms (topicpartition.io 2025
     /// measured 26 ms; AWS CloudWatch percentiles ~25 ms), p99 ~100 ms.
@@ -221,7 +228,7 @@ mod tests {
             .await
             .unwrap();
         ObjectReader {
-            source: Source::Remote(Box::new(store), path),
+            source: ObjectSource::Remote(Box::new(store), path),
         }
     }
 

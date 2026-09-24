@@ -35,6 +35,7 @@ impl std::error::Error for Error {}
 /// On-disk table formats `pqbench table` can name. Detection runs before load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum TableFormat {
     /// Zero value; not a detected format.
     #[serde(rename = "unspecified")]
@@ -43,18 +44,6 @@ pub enum TableFormat {
     DELTA,
     #[serde(rename = "iceberg")]
     ICEBERG,
-}
-
-impl TableFormat {
-    /// Wire name of the format (`delta`, `iceberg`).
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::UNSPECIFIED => "unspecified",
-            Self::DELTA => "delta",
-            Self::ICEBERG => "iceberg",
-        }
-    }
 }
 
 /// One action from a commit file, in file order.
@@ -109,7 +98,8 @@ pub struct TableInfo {
     /// Document kind; always `pqbench.table`.
     pub kind: String,
     /// Document version; currently `1`.
-    pub version: u32,
+    #[serde(rename = "version")]
+    pub document_version: u32,
     /// Detected table format.
     pub format: TableFormat,
     /// Table root as given (path or URI).
@@ -142,7 +132,7 @@ impl TableInfo {
     ) -> Self {
         Self {
             kind: "pqbench.table".into(),
-            version: 1,
+            document_version: 1,
             format,
             uri: uri.into(),
             snapshot_version,

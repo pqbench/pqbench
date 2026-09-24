@@ -29,20 +29,18 @@ impl std::error::Error for Error {}
 /// Resolve the transaction log and the active files of a Delta table.
 pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     let table = open(&request.uri, request.version, &request.env).await?;
-    let snapshot = snapshot_info(&table)?;
+    let snapshot = snapshot_meta(&table)?;
     let files = active_files(&table).await?;
     let log = read_log(&table, snapshot.version).await?;
-    Ok(TableInfo {
-        kind: "pqbench.table".into(),
-        version: 1,
-        format: TableFormat::DELTA,
-        uri: request.uri.clone(),
-        snapshot_version: snapshot.version,
-        partition_columns: snapshot.partition_columns,
+    Ok(TableInfo::new(
+        TableFormat::DELTA,
+        request.uri.clone(),
+        snapshot.version,
+        snapshot.partition_columns,
         log,
         files,
-        env: request.env.clone(),
-    })
+        request.env.clone(),
+    ))
 }
 
 async fn open(
@@ -98,14 +96,14 @@ async fn load_table(
     builder.load().await.map_err(delta_error)
 }
 
-struct SnapshotInfo {
+struct SnapshotMeta {
     version: u64,
     partition_columns: Vec<String>,
 }
 
-fn snapshot_info(table: &DeltaTable) -> Result<SnapshotInfo, Error> {
+fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
     let snapshot = table.snapshot().map_err(delta_error)?;
-    Ok(SnapshotInfo {
+    Ok(SnapshotMeta {
         version: snapshot.version(),
         partition_columns: snapshot.metadata().partition_columns().to_vec(),
     })
