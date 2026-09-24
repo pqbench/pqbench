@@ -7,7 +7,7 @@
 //! when the leading name is a literal. Listing is sequential: the caller runs
 //! one table per later process, not one thread per table.
 //!
-//! All `ureq` interaction lives in the private `unity_helpers` module. The
+//! All `reqwest` interaction lives in the private `unity_helpers` module. The
 //! `unity` feature compiles the client and that module; without it
 //! [`list_tables`] fails and names the feature. There are no feature flags
 //! outside these two modules.
@@ -67,10 +67,13 @@ impl From<String> for Error {
 /// # Errors
 /// Fails when the `unity` feature is off, the endpoint cannot be reached, a
 /// catalog page is malformed, or no Delta table is found.
-pub fn list_tables(source: &LakeSource, filter: &NameFilter) -> Result<Vec<LakeTable>, Error> {
+pub async fn list_tables(
+    source: &LakeSource,
+    filter: &NameFilter,
+) -> Result<Vec<LakeTable>, Error> {
     #[cfg(feature = "unity")]
     {
-        crate::unity_helpers::list_tables(source, filter)
+        crate::unity_helpers::list_tables(source, filter).await
     }
     #[cfg(not(feature = "unity"))]
     {

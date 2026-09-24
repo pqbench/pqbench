@@ -101,7 +101,7 @@ async fn stream_document(
     })
     .await?;
     if let Some(source) = source {
-        for table in unity::list_tables(&source, filter)? {
+        for table in unity::list_tables(&source, filter).await? {
             write_ref(emit, &table)?;
             tables += 1;
         }

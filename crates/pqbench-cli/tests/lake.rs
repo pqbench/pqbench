@@ -45,9 +45,15 @@ impl Catalog {
                     .lock()
                     .unwrap()
                     .push(request.lines().next().unwrap_or("").to_string());
-                if expect_bearer.is_some()
-                    && !request
-                        .contains(&format!("Authorization: Bearer {}", expect_bearer.unwrap()))
+                // Header names are case-insensitive; reqwest sends them lowercased.
+                let authorization = request
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                    .and_then(|line| line.split_once(':').map(|(_, value)| value.trim()));
+                let expected = expect_bearer.map(|token| format!("Bearer {token}"));
+                if expected
+                    .as_deref()
+                    .is_some_and(|expected| authorization != Some(expected))
                 {
                     let body = b"unauthorized";
                     let response = format!(
@@ -58,9 +64,7 @@ impl Catalog {
                     let _ = stream.write_all(body);
                     continue;
                 }
-                if expect_bearer.is_none()
-                    && request.to_ascii_lowercase().contains("authorization:")
-                {
+                if expected.is_none() && authorization.is_some() {
                     panic!("Unity OSS request must not send an Authorization header");
                 }
                 let body = catalog_body(&request, &catalogs, &tables);

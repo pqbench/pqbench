@@ -1,15 +1,18 @@
-//! The HTTP client behind [`crate::unity::list_tables`].
+//! The async HTTP client behind [`crate::unity::list_tables`].
 //!
-//! This is the only module that names the third-party `ureq` crate. It is
+//! This is the only module that names the third-party `reqwest` crate. It is
 //! compiled only with the `unity` feature; without it [`crate::unity`] fails
-//! before reaching here.
+//! before reaching here. Requests are sequential (one page at a time) on the
+//! caller's event loop, which stays free while a page is in flight.
 //!
 //! https://docs.databricks.com/api/workspace/tables/list
 //! https://docs.databricks.com/aws/en/dev-tools/rest-api
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::time::Duration;
 
+use reqwest::Client;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use crate::lake::filter::{is_glob, NameFilter};
@@ -18,6 +21,7 @@ use crate::unity::{Error, LakeSource};
 
 const PAGE_CAP: usize = 32;
 const PAGE_SIZE: u32 = 50;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize)]
 struct Named {
@@ -62,23 +66,33 @@ struct TableEntry {
     storage_location: Option<String>,
 }
 
-pub(crate) fn list_tables(
+pub(crate) async fn list_tables(
     source: &LakeSource,
     filter: &NameFilter,
 ) -> Result<Vec<LakeTable>, Error> {
+    let client = Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|error| Error::from(format!("catalog client: {error}")))?;
     let root = api_root(&source.endpoint);
     let token = source.token.clone().filter(|token| !token.is_empty());
     let mut tables = Vec::new();
-    for catalog in list_catalogs(&root, token.as_deref(), source, filter)? {
-        for schema in list_schemas(&root, token.as_deref(), &catalog, source, filter)? {
-            tables.extend(list_schema_tables(
-                &root,
-                token.as_deref(),
-                &catalog,
-                &schema,
-                &source.env,
-                filter,
-            )?);
+    for catalog in list_catalogs(&client, &root, token.as_deref(), source, filter).await? {
+        for schema in
+            list_schemas(&client, &root, token.as_deref(), &catalog, source, filter).await?
+        {
+            tables.extend(
+                list_schema_tables(
+                    &client,
+                    &root,
+                    token.as_deref(),
+                    &catalog,
+                    &schema,
+                    &source.env,
+                    filter,
+                )
+                .await?,
+            );
         }
     }
     if tables.is_empty() {
@@ -87,7 +101,8 @@ pub(crate) fn list_tables(
     Ok(tables)
 }
 
-fn list_catalogs(
+async fn list_catalogs(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     source: &LakeSource,
@@ -110,13 +125,15 @@ fn list_catalogs(
         }
     }
     let names = names::<CatalogsPage>(
+        client,
         root,
         token,
         "/catalogs",
         &[],
         |page| page.catalogs.iter().map(|item| item.name.clone()).collect(),
         |page| page_token(&page.next_page_token),
-    )?;
+    )
+    .await?;
     Ok(names
         .into_iter()
         .filter(|catalog| {
@@ -132,7 +149,8 @@ fn list_catalogs(
         .collect())
 }
 
-fn list_schemas(
+async fn list_schemas(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     catalog: &str,
@@ -158,13 +176,15 @@ fn list_schemas(
         }
     }
     let names = names::<SchemasPage>(
+        client,
         root,
         token,
         "/schemas",
         &[("catalog_name", catalog)],
         |page| page.schemas.iter().map(|item| item.name.clone()).collect(),
         |page| page_token(&page.next_page_token),
-    )?;
+    )
+    .await?;
     Ok(names
         .into_iter()
         .filter(|schema| {
@@ -190,7 +210,8 @@ fn api_root(endpoint: &str) -> String {
     }
 }
 
-fn names<P: for<'de> Deserialize<'de>>(
+async fn names<P: DeserializeOwned>(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     path: &str,
@@ -199,7 +220,7 @@ fn names<P: for<'de> Deserialize<'de>>(
     next: fn(&P) -> Option<String>,
 ) -> Result<Vec<String>, Error> {
     let mut names = Vec::new();
-    for page in pages::<P>(root, token, path, query, next)? {
+    for page in pages::<P>(client, root, token, path, query, next).await? {
         for name in field(&page) {
             if name.is_empty() {
                 return Err(format!("{path} listed a nameless entry").into());
@@ -217,7 +238,8 @@ fn page_token(token: &Option<String>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn list_schema_tables(
+async fn list_schema_tables(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     catalog: &str,
@@ -227,12 +249,15 @@ fn list_schema_tables(
 ) -> Result<Vec<LakeTable>, Error> {
     let mut tables = Vec::new();
     for page in pages::<TablesPage>(
+        client,
         root,
         token,
         "/tables",
         &[("catalog_name", catalog), ("schema_name", schema)],
         |page| page_token(&page.next_page_token),
-    )? {
+    )
+    .await?
+    {
         for item in page.tables {
             if let Some(table) = lake_table(item, catalog, schema, env)? {
                 if filter.keeps(&table.name) {
@@ -284,7 +309,8 @@ fn lake_table(
     }))
 }
 
-fn pages<P: for<'de> Deserialize<'de>>(
+async fn pages<P: DeserializeOwned>(
+    client: &Client,
     root: &str,
     token: Option<&str>,
     path: &str,
@@ -312,7 +338,7 @@ fn pages<P: for<'de> Deserialize<'de>>(
             url.push_str("&page_token=");
             url.push_str(&encode(token));
         }
-        let page: P = get_json(&url, token)?;
+        let page: P = get_json(client, &url, token).await?;
         let next = next(&page);
         pages.push(page);
         let Some(next) = next else {
@@ -325,34 +351,31 @@ fn pages<P: for<'de> Deserialize<'de>>(
     }
 }
 
-fn get_json<T: for<'de> Deserialize<'de>>(url: &str, token: Option<&str>) -> Result<T, Error> {
-    let request = ureq::get(url);
-    let request = match token {
-        Some(token) => request.set("Authorization", &format!("Bearer {token}")),
-        None => request,
-    };
-    let response = request.call().map_err(catalog_error)?;
-    let mut body = String::new();
-    response
-        .into_reader()
-        .read_to_string(&mut body)
-        .map_err(|error| Error::from(format!("catalog response was not text: {error}")))?;
-    serde_json::from_str(&body).map_err(|error| {
+async fn get_json<T: DeserializeOwned>(
+    client: &Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<T, Error> {
+    let mut request = client.get(url);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::from(format!(
+            "catalog returned HTTP {status}: {body}"
+        )));
+    }
+    response.json::<T>().await.map_err(|error| {
         Error::from(format!(
             "catalog response was not the expected document: {error}"
         ))
     })
-}
-
-fn catalog_error(error: ureq::Error) -> Error {
-    match error {
-        ureq::Error::Status(code, response) => {
-            let mut body = String::new();
-            let _ = response.into_reader().read_to_string(&mut body);
-            Error::from(format!("catalog returned HTTP {code}: {body}"))
-        }
-        other => Error::from(format!("catalog request failed: {other}")),
-    }
 }
 
 fn encode(value: &str) -> String {

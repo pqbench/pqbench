@@ -17,7 +17,7 @@ delta = ["dep:deltalake", "dep:buoyant_kernel_derive", "dep:futures"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
 # Listing a Unity Catalog / Databricks lake over HTTP. Without it the client
 # still compiles but `unity::list_tables` fails at runtime.
-unity = ["dep:ureq"]
+unity = ["dep:reqwest"]
 
 [dependencies]
 snappy_src = "0.2.5"
@@ -26,7 +26,7 @@ lz4 = "1"
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
 glob = "0.3"
 parquet = { version = "59", default-features = false }
-ureq = { version = "2.12", default-features = false, features = ["tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
 bytes = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
