@@ -49,6 +49,18 @@ EOF
     chmod 0600 "$vended_env"
 }
 
+# A started JVM is not an available API.
+wait_for_unity() {
+    local attempts=60 poll_interval_seconds=2 attempt
+    for attempt in $(seq "$attempts"); do
+        curl -fsS "$unity_catalog/catalogs" -o /dev/null 2> /dev/null && return
+        [ "$attempt" -lt "$attempts" ] || break
+        sleep "$poll_interval_seconds"
+    done
+    echo "Unity Catalog did not answer at $unity_catalog" >&2
+    exit 1
+}
+
 up() {
     # Storage first: Unity starts with a credential rustfs has to mint.
     compose up -d --wait rustfs
@@ -57,14 +69,7 @@ up() {
     . "$vended_env"
     set +a
     compose up -d --wait unity-catalog
-    # A started JVM is not an available API.
-    for attempt in $(seq 60); do
-        curl -fsS "$unity_catalog/catalogs" -o /dev/null 2> /dev/null && return
-        [ "$attempt" -lt 60 ] || break
-        sleep 2
-    done
-    echo "Unity Catalog did not answer at $unity_catalog" >&2
-    exit 1
+    wait_for_unity
 }
 
 seed_s3() {
