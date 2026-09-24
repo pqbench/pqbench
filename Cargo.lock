@@ -34,6 +34,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aipnaming-cli"
+version = "0.0.1"
+dependencies = [
+ "aipnaming",
+ "clap",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
