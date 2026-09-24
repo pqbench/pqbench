@@ -2775,6 +2775,7 @@ dependencies = [
  "snappy_src",
  "tempfile",
  "tokio",
+ "ureq",
  "url",
  "zstd",
 ]
@@ -2784,13 +2785,11 @@ name = "pqbench-cli"
 version = "0.0.1"
 dependencies = [
  "clap",
- "glob",
  "pqbench",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "ureq",
  "zstd",
 ]
 

@@ -7,12 +7,9 @@ mod bytemass;
 mod compression;
 mod document;
 mod emit;
-mod filter;
 mod lake;
 mod lz;
 mod table;
-#[cfg(feature = "unity")]
-mod unity;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.

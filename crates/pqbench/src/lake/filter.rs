@@ -6,24 +6,23 @@
 
 /// Keep names that match `--include` and do not match `--exclude`.
 #[derive(Clone, Default)]
-pub(crate) struct NameFilter {
+pub struct NameFilter {
     include: Vec<String>,
     exclude: Vec<String>,
 }
 
 impl NameFilter {
-    pub(crate) fn new(include: Vec<String>, exclude: Vec<String>) -> Self {
+    pub fn new(include: Vec<String>, exclude: Vec<String>) -> Self {
         Self { include, exclude }
     }
 
     /// A complete table FQN, or a directory lake name.
-    pub(crate) fn keeps(&self, name: &str) -> bool {
+    pub fn keeps(&self, name: &str) -> bool {
         self.included(name) && !self.excluded(name)
     }
 
     /// A catalog or `catalog.schema` still worth walking.
-    #[cfg(feature = "unity")]
-    pub(crate) fn keeps_prefix(&self, name: &str) -> bool {
+    pub fn keeps_prefix(&self, name: &str) -> bool {
         let included =
             self.include.is_empty() || self.include.iter().any(|pattern| can_reach(name, pattern));
         included
@@ -34,14 +33,12 @@ impl NameFilter {
     }
 
     /// Catalogs `--include` can name without walking `/catalogs`.
-    #[cfg(feature = "unity")]
-    pub(crate) fn catalog_scope(&self) -> Option<Vec<String>> {
+    pub fn catalog_scope(&self) -> Option<Vec<String>> {
         literal_heads(&self.include, 0)
     }
 
     /// Schemas `--include` can name inside `catalog` without walking `/schemas`.
-    #[cfg(feature = "unity")]
-    pub(crate) fn schema_scope(&self, catalog: &str) -> Option<Vec<String>> {
+    pub fn schema_scope(&self, catalog: &str) -> Option<Vec<String>> {
         let patterns: Vec<String> = self
             .include
             .iter()
@@ -69,7 +66,7 @@ impl NameFilter {
     }
 }
 
-pub(crate) fn is_glob(pattern: &str) -> bool {
+pub fn is_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
@@ -85,7 +82,6 @@ fn matches_fqn(name: &str, pattern: &str) -> bool {
         || name.starts_with(&format!("{pattern}/"))
 }
 
-#[cfg(feature = "unity")]
 fn can_reach(prefix: &str, pattern: &str) -> bool {
     if is_glob(pattern) && glob_matches(pattern, prefix) {
         return true;
@@ -93,7 +89,6 @@ fn can_reach(prefix: &str, pattern: &str) -> bool {
     components_match(prefix, pattern, true)
 }
 
-#[cfg(feature = "unity")]
 fn prunes_prefix(prefix: &str, pattern: &str) -> bool {
     let prefix_parts = split_fqn(prefix);
     let pattern_parts = split_fqn(pattern);
@@ -140,7 +135,6 @@ fn split_fqn(name: &str) -> Vec<&str> {
         .collect()
 }
 
-#[cfg(feature = "unity")]
 fn literal_heads(patterns: &[String], index: usize) -> Option<Vec<String>> {
     if patterns.is_empty() {
         return None;
