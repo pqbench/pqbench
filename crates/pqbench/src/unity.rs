@@ -19,8 +19,8 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::lake::filter::NameFilter;
 use crate::lake::LakeTable;
+use crate::lake::NameFilter;
 
 /// Credentials for listing a Unity Catalog, OSS or Databricks. `endpoint` is
 /// the server origin (`http://localhost:8080` or
