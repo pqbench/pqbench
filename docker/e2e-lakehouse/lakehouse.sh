@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# The local stand behind `make lakehouse`: object storage holding a Delta table,
+# and a Unity Catalog that vends expiring credentials for it. Each verb is also
+# useful on its own; see docker/e2e-lakehouse/README.md.
+set -euo pipefail
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$root"
+CARGO=${CARGO:-cargo}
+run_compose() { docker compose -f "$root/docker/e2e-lakehouse/compose.yaml" "$@"; }
+run_aws_cli() { run_compose run --rm -T aws-cli "$@"; }
+unity_catalog="http://localhost:${UNITY_CATALOG_PORT:-8080}/api/2.1/unity-catalog"
+s3_endpoint="http://localhost:${RUSTFS_PORT:-9000}"
+table_location="s3://lakehouse/unity/events"
+vended_env="local/lakehouse/vended.env"
+pqbench_bin="${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
+
+ensure_pqbench() {
+    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3
+}
+
+# Create, or accept that a previous run already did.
+register() {
+    local resource=$1 record=$2 response
+    response=$(curl -sS -X POST "$unity_catalog/$resource" \
+        -H 'Content-Type: application/json' -d "$record")
+    case "$(jq -r '.error_code // empty' <<< "$response")" in
+        "" | *_ALREADY_EXISTS) ;;
+        *) echo "$response" >&2; exit 1 ;;
+    esac
+}
+
+# Unity cannot send AssumeRole to an S3-compatible endpoint
+# (unitycatalog/unitycatalog#43), so the stand mints the session itself and
+# configures Unity to vend exactly this one. Reuse it while it is valid: Unity's
+# environment then stays put and Compose has no reason to recreate it.
+mint_credential() {
+    # Reuse the session for 11 of its 12 hours, then mint a fresh one.
+    local credential_lifetime_seconds=43200 credential_reuse_minutes=660
+    [ -n "$(find "$vended_env" -mmin "-$credential_reuse_minutes" 2> /dev/null)" ] && return
+    local key secret token
+    read -r key secret token < <(run_aws_cli sts assume-role \
+        --role-arn arn:aws:iam::000000000000:role/pqbench-read \
+        --role-session-name pqbench-stand \
+        --duration-seconds "$credential_lifetime_seconds" \
+        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+    mkdir -p "$(dirname "$vended_env")"
+    cat > "$vended_env" <<EOF
+VENDED_ACCESS_KEY_ID=$key
+VENDED_SECRET_ACCESS_KEY=$secret
+VENDED_SESSION_TOKEN=$token
+EOF
+    chmod 0600 "$vended_env"
+}
+
+# A started JVM is not an available API.
+wait_for_unity() {
+    local attempts=60 poll_interval_seconds=2 attempt
+    for attempt in $(seq "$attempts"); do
+        curl -fsS "$unity_catalog/catalogs" -o /dev/null 2> /dev/null && return
+        [ "$attempt" -lt "$attempts" ] || break
+        sleep "$poll_interval_seconds"
+    done
+    echo "Unity Catalog did not answer at $unity_catalog" >&2
+    exit 1
+}
+
+up() {
+    # Storage first: Unity starts with a credential rustfs has to mint.
+    run_compose up -d --wait rustfs
+    mint_credential
+    set -a
+    . "$vended_env"
+    set +a
+    run_compose up -d --wait unity-catalog
+    wait_for_unity
+}
+
+seed_s3() {
+    run_aws_cli s3api head-bucket --bucket lakehouse 2> /dev/null ||
+        run_aws_cli s3api create-bucket --bucket lakehouse > /dev/null
+    run_aws_cli s3 sync --delete /table "$table_location" > /dev/null
+}
+
+seed_unity() {
+    register catalogs '{"name": "pqbench"}'
+    register schemas '{"catalog_name": "pqbench", "name": "demo"}'
+    # Unity cannot migrate a table definition, so replace it. The table is
+    # EXTERNAL: dropping it leaves the objects alone.
+    delete_status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$unity_catalog/tables/pqbench.demo.events")
+    case "$delete_status" in
+        200 | 204 | 404) ;;
+        *) echo "DELETE tables/pqbench.demo.events failed: HTTP $delete_status" >&2; exit 1 ;;
+    esac
+    register tables "$(jq -nc --arg location "$table_location" '{
+        catalog_name: "pqbench", schema_name: "demo", name: "events",
+        table_type: "EXTERNAL", data_source_format: "DELTA",
+        storage_location: $location,
+        columns: [
+            {name: "id", type_name: "LONG", type_text: "long", position: 0,
+             nullable: true,
+             type_json: ({name: "id", type: "long", nullable: true, metadata: {}} | tojson)},
+            {name: "label", type_name: "STRING", type_text: "string", position: 1,
+             nullable: true,
+             type_json: ({name: "label", type: "string", nullable: true, metadata: {}} | tojson)}]}')"
+}
+
+# The README's pipe, so the stand is seen to answer the question it exists for.
+check() {
+    ensure_pqbench
+    local measurement measured
+    measurement=$(curl -sS -X POST "$unity_catalog/temporary-table-credentials" \
+            -H 'Content-Type: application/json' \
+            -d "$(curl -sS "$unity_catalog/tables/pqbench.demo.events" |
+                jq -c '{table_id, operation: "READ"}')" |
+        jq -c --arg s3 "$s3_endpoint" --arg table "$table_location" \
+            '{kind: "pqbench.remote-source", version: 1, inputs: [$table],
+            env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
+                AWS_SECRET_ACCESS_KEY: .secret_access_key,
+                AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
+                AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
+                AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
+        "$pqbench_bin" table |
+        "$pqbench_bin" bytemass --json) || {
+        echo "check failed: the table pipe produced no measurement" >&2
+        exit 1
+    }
+    measured=$(jq -rs '
+        (map(select(.event == "end")) | first) as $end
+        | ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort) as $columns
+        | "\($end.num_rows) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"' <<< "$measurement")
+    [ "$measured" = "3 rows, 1 file(s), columns [id, label]" ] || {
+        echo "check failed: expected 3 rows, 1 file(s), columns [id, label]; measured $measured" >&2
+        exit 1
+    }
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured"
+}
+
+case "${1:-}" in
+    up) up ;;
+    seed-s3) seed_s3 ;;
+    seed-unity) seed_unity ;;
+    check) check ;;
+    *) echo "usage: ${0##*/} up|seed-s3|seed-unity|check" >&2; exit 64 ;;
+esac

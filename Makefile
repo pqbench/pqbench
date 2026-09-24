@@ -10,8 +10,10 @@
 CARGO ?= cargo
 CARGO_FEATURES ?=
 TEST_FLAGS ?=
+LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
-.PHONY: all fmt fmt-check build test lint cache-stats samples check clean
+.PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse \
+	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity check clean
 
 all: fmt build test lint
 
@@ -40,6 +42,22 @@ cache-stats:
 # Fetch open-dataset sample parquet files into local/samples/ for local testing.
 samples:
 	./scripts/fetch_samples.sh
+
+# Local Unity Catalog, ready to query: see docker/e2e-lakehouse/README.md.
+lakehouse: lakehouse-seed-s3 lakehouse-seed-unity
+	$(LAKEHOUSE) check
+
+# Storage, a credential for Unity to vend, and Unity answering.
+lakehouse-up:
+	$(LAKEHOUSE) up
+
+# The Delta table in docker/e2e-lakehouse/table/, uploaded to the object store.
+lakehouse-seed-s3: lakehouse-up
+	$(LAKEHOUSE) seed-s3
+
+# That table, registered as an external Delta table in Unity Catalog.
+lakehouse-seed-unity: lakehouse-up
+	$(LAKEHOUSE) seed-unity
 
 check: fmt-check lint test
 
