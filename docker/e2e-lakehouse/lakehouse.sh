@@ -6,8 +6,8 @@ set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 CARGO=${CARGO:-cargo}
-compose() { docker compose -f "$root/docker/e2e-lakehouse/compose.yaml" "$@"; }
-aws_cli() { compose run --rm -T aws-cli "$@"; }
+run_compose() { docker compose -f "$root/docker/e2e-lakehouse/compose.yaml" "$@"; }
+run_aws_cli() { run_compose run --rm -T aws-cli "$@"; }
 unity_catalog="http://localhost:${UNITY_CATALOG_PORT:-8080}/api/2.1/unity-catalog"
 s3_endpoint="http://localhost:${RUSTFS_PORT:-9000}"
 table_location="s3://lakehouse/unity/events"
@@ -36,7 +36,7 @@ register() {
 mint_credential() {
     [ -n "$(find "$vended_env" -mmin -660 2> /dev/null)" ] && return
     local key secret token
-    read -r key secret token < <(aws_cli sts assume-role \
+    read -r key secret token < <(run_aws_cli sts assume-role \
         --role-arn arn:aws:iam::000000000000:role/pqbench-read \
         --role-session-name pqbench-stand --duration-seconds 43200 \
         --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
@@ -63,19 +63,19 @@ wait_for_unity() {
 
 up() {
     # Storage first: Unity starts with a credential rustfs has to mint.
-    compose up -d --wait rustfs
+    run_compose up -d --wait rustfs
     mint_credential
     set -a
     . "$vended_env"
     set +a
-    compose up -d --wait unity-catalog
+    run_compose up -d --wait unity-catalog
     wait_for_unity
 }
 
 seed_s3() {
-    aws_cli s3api head-bucket --bucket lakehouse 2> /dev/null ||
-        aws_cli s3api create-bucket --bucket lakehouse > /dev/null
-    aws_cli s3 sync --delete /table "$table_location" > /dev/null
+    run_aws_cli s3api head-bucket --bucket lakehouse 2> /dev/null ||
+        run_aws_cli s3api create-bucket --bucket lakehouse > /dev/null
+    run_aws_cli s3 sync --delete /table "$table_location" > /dev/null
 }
 
 seed_unity() {
