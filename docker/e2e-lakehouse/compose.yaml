@@ -21,6 +21,22 @@ services:
       timeout: 3s
       retries: 30
 
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:1.10.0@sha256:df2e9dd421928b7aab01557678ce8e2bb73064d0e253baebd72adad3439ffc2e
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://lakehouse/iceberg
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://rustfs:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "127.0.0.1:${ICEBERG_REST_PORT:-8181}:8181"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+
   # This service is intentionally server-only: no UI and no external database.
   # Its own metadata is persisted in the named volume below. Catalog entries can
   # point at the same S3-compatible storage used by the other services.
@@ -59,6 +75,7 @@ services:
       AWS_ENDPOINT_URL: http://rustfs:9000
     volumes:
       - ./table:/table:ro
+      - ./iceberg:/iceberg:ro
 
 volumes:
   rustfs-data:
