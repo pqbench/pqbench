@@ -107,7 +107,8 @@ seed_unity() {
 # The README's pipe, so the stand is seen to answer the question it exists for.
 check() {
     ensure_pqbench
-    curl -sS -X POST "$unity_catalog/temporary-table-credentials" \
+    local measurement measured
+    measurement=$(curl -sS -X POST "$unity_catalog/temporary-table-credentials" \
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity_catalog/tables/pqbench.demo.events" |
                 jq -c '{table_id, operation: "READ"}')" |
@@ -119,13 +120,19 @@ check() {
                 AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
                 AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
         "$pqbench_bin" table |
-        "$pqbench_bin" bytemass --json |
-        jq -es '
-            (map(select(.event == "end")) | first
-                | .num_rows == 3 and .file_count == 1)
-            and ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort)
-                == ["id", "label"]' > /dev/null
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint)"
+        "$pqbench_bin" bytemass --json) || {
+        echo "check failed: the table pipe produced no measurement" >&2
+        exit 1
+    }
+    measured=$(jq -rs '
+        (map(select(.event == "end")) | first) as $end
+        | ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort) as $columns
+        | "\($end.num_rows) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"' <<< "$measurement")
+    [ "$measured" = "3 rows, 1 file(s), columns [id, label]" ] || {
+        echo "check failed: expected 3 rows, 1 file(s), columns [id, label]; measured $measured" >&2
+        exit 1
+    }
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured"
 }
 
 case "${1:-}" in
