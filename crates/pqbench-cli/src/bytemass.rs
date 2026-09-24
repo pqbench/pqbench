@@ -83,6 +83,12 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
             Record::End { id } => {
                 open.remove(&id);
             }
+            Record::Lake(_) | Record::LakeSource(_) | Record::LakeBegin | Record::LakeEnd => {
+                return Err(
+                    "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
+                        .into(),
+                );
+            }
         }
         Ok(())
     })
@@ -152,6 +158,12 @@ async fn measure_document_page(input: &str, args: &BytemassArgs) -> Result<(), C
             }
             Record::Commit { .. } => {}
             Record::End { .. } => ended = true,
+            Record::Lake(_) | Record::LakeSource(_) | Record::LakeBegin | Record::LakeEnd => {
+                return Err(
+                    "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
+                        .into(),
+                );
+            }
         }
         Ok(())
     })
