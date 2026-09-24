@@ -2,9 +2,6 @@
 //! or Parquet footers. `pqbench table` loads each table, and `pqbench bytemass`
 //! measures the files.
 
-pub(crate) mod filter;
-pub use filter::NameFilter;
-
 use std::collections::BTreeMap;
 use std::path::Path;
 

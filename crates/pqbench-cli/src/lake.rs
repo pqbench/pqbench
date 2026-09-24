@@ -3,8 +3,8 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use pqbench::lake::{self, Lake, LakeTable, NameFilter};
-use pqbench::unity;
+use pqbench::lake::{self, Lake, LakeTable};
+use pqbench::unity::{self, NameFilter};
 use serde::Serialize;
 
 use crate::document::{self, Record};

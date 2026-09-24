@@ -15,9 +15,8 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-use crate::lake::filter::{is_glob, NameFilter};
 use crate::lake::LakeTable;
-use crate::unity::{Error, LakeSource};
+use crate::unity::{is_glob, Error, LakeSource, NameFilter};
 
 const PAGE_CAP: usize = 32;
 const PAGE_SIZE: u32 = 50;
