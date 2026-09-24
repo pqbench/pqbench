@@ -5,14 +5,13 @@
 //! `bytemass`. Delete files are named in the log and omitted from `files`.
 
 use std::collections::BTreeMap;
-use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 
-use apache_avro::{from_value, Reader};
 use serde::Deserialize;
 use url::Url;
 
 use super::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 
 /// Errors resolving an Iceberg snapshot.
@@ -318,12 +317,14 @@ async fn active_files(
 ) -> Result<(Vec<TableFile>, Vec<String>), Error> {
     let root = table_root(table_location)?;
     let bytes = read_location(manifest_list, options).await?;
-    let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list")?;
+    let manifests: Vec<ManifestFile> =
+        read_avro(&bytes, "manifest list").map_err(|e| Error(e.to_string()))?;
     let mut files = Vec::new();
     let mut deletes = Vec::new();
     for manifest in manifests {
         let bytes = read_location(&manifest.manifest_path, options).await?;
-        let entries: Vec<ManifestEntry> = read_avro(&bytes, "manifest")?;
+        let entries: Vec<ManifestEntry> =
+            read_avro(&bytes, "manifest").map_err(|e| Error(e.to_string()))?;
         for entry in entries {
             if entry.status == STATUS_DELETED {
                 continue;
@@ -354,17 +355,6 @@ async fn active_files(
         }
     }
     Ok((files, deletes))
-}
-
-fn read_avro<T: for<'de> Deserialize<'de>>(bytes: &[u8], kind: &str) -> Result<Vec<T>, Error> {
-    let reader = Reader::new(Cursor::new(bytes))
-        .map_err(|e| Error(format!("cannot read Iceberg {kind}: {e}")))?;
-    reader
-        .map(|value| {
-            let value = value.map_err(|e| Error(format!("cannot read Iceberg {kind}: {e}")))?;
-            from_value::<T>(&value).map_err(|e| Error(format!("cannot parse Iceberg {kind}: {e}")))
-        })
-        .collect()
 }
 
 enum TableRoot {
