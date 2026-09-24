@@ -1,18 +1,22 @@
-//! List Delta tables from a Unity Catalog endpoint.
+//! List tables from a catalog endpoint: Unity Catalog or Iceberg REST.
 //!
-//! [`list_tables`] is the only entry point. Unity Catalog OSS and Databricks
-//! expose the same list routes: catalogs, then schemas, then tables, following
-//! `next_page_token`. Pages are bounded (`max_results=50`), table list requests
-//! omit columns and properties, and `--include` / `--exclude` prune the walk
-//! when the leading name is a literal. Listing is sequential: the caller runs
-//! one table per later process, not one thread per table.
+//! [`list_tables`] is the only entry point. `GET {endpoint}/v1/config` chooses
+//! the dialect: a 200 with a `defaults` object is Iceberg REST; a 200 without
+//! `defaults`, or a 404, is Unity. Unity Catalog OSS and Databricks expose the
+//! same list routes (catalogs, then schemas, then tables, following
+//! `next_page_token`); an Iceberg REST catalog lists namespaces and tables,
+//! then `loadTable` for each metadata location. Pages are bounded, and
+//! `--include` / `--exclude` prune the walk when the leading name is a literal.
+//! Listing is sequential: the caller runs one table per later process, not one
+//! thread per table.
 //!
-//! All `reqwest` interaction lives in the private `impl` module. The `unity`
-//! feature compiles it; without it [`list_tables`] fails and names the feature.
-//! There are no feature flags outside this folder.
+//! All HTTP interaction lives in the private `impl` module. The `unity` feature
+//! compiles it; without it [`list_tables`] fails and names the feature. There
+//! are no feature flags outside this folder.
 //!
 //! https://docs.databricks.com/api/workspace/tables/list
 //! https://docs.databricks.com/aws/en/dev-tools/rest-api
+//! https://iceberg.apache.org/docs/latest/rest-catalog-spec/
 
 use std::collections::BTreeMap;
 
@@ -20,11 +24,11 @@ use serde::Deserialize;
 
 use crate::lake::LakeTable;
 
-/// Credentials for listing a Unity Catalog, OSS or Databricks. `endpoint` is
-/// the server origin (`http://localhost:8080` or
-/// `https://example.cloud.databricks.com`). `token` is the Databricks bearer
-/// token; Unity OSS often has none. `env` is copied onto each listed table so
-/// `pqbench table` can read its files.
+/// Credentials for listing a catalog. `endpoint` is the server origin
+/// (`http://localhost:8080` for Unity, `http://localhost:8181` for Iceberg
+/// REST, or `https://example.cloud.databricks.com`). `GET /v1/config` chooses
+/// the dialect. `token` is the bearer token; Unity OSS often has none. `env` is
+/// copied onto each listed table so `pqbench table` can read its files.
 #[derive(Deserialize)]
 pub struct LakeSource {
     pub version: u32,
@@ -34,15 +38,16 @@ pub struct LakeSource {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// List this catalog, or a catalog-name glob. A literal skips `/catalogs`.
+    /// Unity only; Iceberg REST lists every namespace at `endpoint`.
     #[serde(default)]
     pub catalog: Option<String>,
     /// List this schema, or a schema-name glob. A literal skips `/schemas`.
-    /// Requires `catalog`.
+    /// Requires `catalog`. Unity only.
     #[serde(default)]
     pub schema: Option<String>,
 }
 
-/// Errors listing a Unity Catalog.
+/// Errors listing a catalog.
 #[derive(Debug)]
 pub struct Error(String);
 
