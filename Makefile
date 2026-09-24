@@ -62,8 +62,10 @@ lakehouse-seed-unity: lakehouse-up
 check: fmt-check lint isolation test
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
+# ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
+ISOLATION_FLAGS ?=
 isolation:
-	./scripts/check_isolation.sh
+	./scripts/check_isolation.sh $(ISOLATION_FLAGS)
 
 clean:
 	$(CARGO) clean
