@@ -48,8 +48,8 @@ for arg in "$@"; do
 done
 [ -n "${GITHUB_ACTIONS:-}" ] && format=github
 
-command -v rg >/dev/null 2>&1 || {
-    echo "FAIL: ripgrep (rg) is required" >&2
+command -v grep >/dev/null 2>&1 || {
+    echo "FAIL: grep is required" >&2
     exit 1
 }
 
@@ -60,16 +60,18 @@ command -v rg >/dev/null 2>&1 || {
 
 # The leak lines of one api.rs, as `line:col:text`.
 #
-# Matches that sit after a `//` comment marker are prose, not a leak.
+# Matches that sit after a `//` comment marker are prose, not a leak. The 1-based
+# column is the byte offset of the `cfg` token, matching rustc's diagnostic.
 leaks_in() {
-    rg -n --no-heading --column 'cfg(\(|!\().*feature[[:space:]]*=' "$1" \
+    grep -nE 'cfg(\(|!\().*feature[[:space:]]*=' "$1" \
         | while IFS= read -r hit; do
-            after_line=${hit#*:}
-            text=${after_line#*:}
+            line=${hit%%:*}
+            text=${hit#*:}
             case $text in
                 *//*) [ "${text%%//*}" = "$text" ] || continue ;;
             esac
-            printf '%s\n' "$hit"
+            col=$(awk -v line="$text" 'BEGIN { print index(line, "cfg") }')
+            printf '%s:%s:%s\n' "$line" "$col" "$text"
         done
 }
 
