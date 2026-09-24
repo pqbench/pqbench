@@ -1,4 +1,4 @@
-//! The async HTTP client behind [`super::super::api::list_tables`].
+//! The async HTTP client behind [`super::api::list_tables`].
 //!
 //! This is the only module that names the third-party `reqwest` crate. It is
 //! compiled only with the `unity` feature.

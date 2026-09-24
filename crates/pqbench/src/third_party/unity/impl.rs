@@ -7,15 +7,6 @@
 use super::api::{Error, LakeSource, NameFilter};
 use crate::lake::LakeTable;
 
-#[cfg(feature = "unity")]
-mod client;
-#[cfg(feature = "unity")]
-mod filter;
-#[cfg(feature = "unity")]
-mod iceberg_rest;
-#[cfg(feature = "unity")]
-mod protocol;
-
 pub(crate) async fn list_tables(
     source: &LakeSource,
     filter: &NameFilter,
@@ -23,9 +14,11 @@ pub(crate) async fn list_tables(
     #[cfg(feature = "unity")]
     {
         let token = source.token.as_deref().filter(|token| !token.is_empty());
-        match protocol::select(&source.endpoint, token).await? {
-            protocol::Protocol::IcebergRest => iceberg_rest::list_tables(source, filter).await,
-            protocol::Protocol::Unity => client::list_tables(source, filter).await,
+        match super::protocol::select(&source.endpoint, token).await? {
+            super::protocol::Protocol::IcebergRest => {
+                super::iceberg_rest::list_tables(source, filter).await
+            }
+            super::protocol::Protocol::Unity => super::client::list_tables(source, filter).await,
         }
     }
     #[cfg(not(feature = "unity"))]
