@@ -29,6 +29,23 @@ fn keeps_is_new_for_reserved_words() {
 }
 
 #[test]
+fn catches_the_historical_is_prefix_renames() {
+    let source = "struct Bench {\n    pub is_json: bool,\n    pub is_d3: bool,\n    pub is_per_column: bool,\n}";
+    let found = findings(source);
+    assert_eq!(found.len(), 3);
+    assert!(found
+        .iter()
+        .all(|finding| finding.rule == "aip-140/booleans"));
+    let helps: Vec<&str> = found
+        .iter()
+        .filter_map(|finding| finding.help.as_deref())
+        .collect();
+    assert!(helps.contains(&"json"));
+    assert!(helps.contains(&"d3"));
+    assert!(helps.contains(&"per_column"));
+}
+
+#[test]
 fn flags_prepositions_but_allows_conversion_prefixes() {
     assert!(rules("struct Book { pub reason_for_error: String }").contains(&"aip-140/prepositions"));
     assert!(
