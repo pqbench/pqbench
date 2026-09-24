@@ -99,9 +99,15 @@ async fn stream_document(
         Ok(())
     })
     .await?;
+    #[cfg(feature = "unity")]
     if let Some(source) = source {
         tables += crate::unity::list_tables(&source, filter, |table| write_ref(emit, &table))?;
-    } else if let Some(lake) = lake {
+    }
+    #[cfg(not(feature = "unity"))]
+    if source.is_some() {
+        return Err("this build cannot list a Unity Catalog; rebuild with --features unity".into());
+    }
+    if let Some(lake) = lake {
         tables += write_lake(&lake, filter, emit)?;
     }
     if tables == 0 {

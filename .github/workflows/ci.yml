@@ -185,6 +185,6 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: arm64-delta-s3-stand
+          key: arm64-delta-s3-unity-stand
       - name: Bring the Unity Catalog stand up and check it
         run: make lakehouse

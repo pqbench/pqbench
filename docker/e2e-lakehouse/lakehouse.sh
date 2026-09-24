@@ -15,7 +15,7 @@ vended_env="local/lakehouse/vended.env"
 pqbench_bin="${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
 
 ensure_pqbench() {
-    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3
+    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3,unity
 }
 
 # Create, or accept that a previous run already did.
@@ -104,10 +104,24 @@ seed_unity() {
              type_json: ({name: "label", type: "string", nullable: true, metadata: {}} | tojson)}]}')"
 }
 
-# The README's pipe, so the stand is seen to answer the question it exists for.
+# The README's shape: rows, file count, and column names from the bytemass end.
+measurement_shape() {
+    jq -rs '
+        (map(select(.event == "end")) | first) as $end
+        | ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort) as $columns
+        | "\($end.row_count) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"'
+}
+
+# The README's pipes, so the stand is seen to answer the question it exists for.
 check() {
     ensure_pqbench
+    set -a
+    . "$vended_env"
+    set +a
+    local expected="3 rows, 1 file(s), columns [id, label]"
     local measurement measured
+
+    # Unity vends a temporary credential as a pqbench.remote-source.
     measurement=$(curl -sS -X POST "$unity_catalog/temporary-table-credentials" \
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity_catalog/tables/pqbench.demo.events" |
@@ -124,14 +138,34 @@ check() {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
     }
-    measured=$(jq -rs '
-        (map(select(.event == "end")) | first) as $end
-        | ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort) as $columns
-        | "\($end.row_count) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"' <<< "$measurement")
-    [ "$measured" = "3 rows, 1 file(s), columns [id, label]" ] || {
-        echo "check failed: expected 3 rows, 1 file(s), columns [id, label]; measured $measured" >&2
+    measured=$(measurement_shape <<< "$measurement")
+    [ "$measured" = "$expected" ] || {
+        echo "check failed: expected $expected; measured $measured" >&2
         exit 1
     }
+
+    # `lake` lists the same table from Unity, then the same table | bytemass pipe.
+    local lake_source="local/lakehouse/lake-source.json"
+    jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
+        --arg key "$VENDED_ACCESS_KEY_ID" --arg secret "$VENDED_SECRET_ACCESS_KEY" \
+        --arg token "$VENDED_SESSION_TOKEN" \
+        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
+        env: {AWS_ACCESS_KEY_ID: $key, AWS_SECRET_ACCESS_KEY: $secret,
+            AWS_SESSION_TOKEN: $token, AWS_REGION: "us-east-1",
+            AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
+            AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' > "$lake_source"
+    measurement=$("$pqbench_bin" lake "$lake_source" --include pqbench.demo.events |
+        "$pqbench_bin" table |
+        "$pqbench_bin" bytemass --json) || {
+        echo "check failed: the lake pipe produced no measurement" >&2
+        exit 1
+    }
+    measured=$(measurement_shape <<< "$measurement")
+    [ "$measured" = "$expected" ] || {
+        echo "check failed: expected $expected; measured $measured" >&2
+        exit 1
+    }
+
     echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured"
 }
 

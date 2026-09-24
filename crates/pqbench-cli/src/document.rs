@@ -30,15 +30,18 @@ use crate::CliError;
 pub(crate) struct LakeSource {
     pub version: u32,
     pub endpoint: String,
+    #[cfg(feature = "unity")]
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// List this catalog, or a catalog-name glob. A literal skips `/catalogs`.
+    #[cfg(feature = "unity")]
     #[serde(default)]
     pub catalog: Option<String>,
     /// List this schema, or a schema-name glob. A literal skips `/schemas`.
     /// Requires `catalog`.
+    #[cfg(feature = "unity")]
     #[serde(default)]
     pub schema: Option<String>,
 }
@@ -321,6 +324,7 @@ fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
     if source.endpoint.trim().is_empty() {
         return Err("lake source needs an endpoint".into());
     }
+    #[cfg(feature = "unity")]
     if source
         .schema
         .as_deref()

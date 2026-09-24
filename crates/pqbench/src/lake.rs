@@ -24,7 +24,8 @@ impl std::error::Error for Error {}
 /// One table in a lake. `info` is filled in by `pqbench table`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LakeTable {
-    /// Name relative to the lake root.
+    /// Name `pqbench table` reports this table under: a path relative to the
+    /// lake root for a directory, or the Unity FQN `catalog.schema.table`.
     pub name: String,
     /// Table root `pqbench table` should load.
     pub uri: String,

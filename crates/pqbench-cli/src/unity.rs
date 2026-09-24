@@ -208,7 +208,7 @@ fn names<P: for<'de> Deserialize<'de>>(
     for page in pages::<P>(root, token, path, query, next)? {
         for name in field(&page) {
             if name.is_empty() {
-                return Err(format!("catalog {path} listed a nameless entry").into());
+                return Err(format!("{path} listed a nameless entry").into());
             }
             names.push(name);
         }

@@ -1,6 +1,9 @@
 use serde_json::{json, Value};
-use std::io::{Read, Write};
+#[cfg(feature = "unity")]
+use std::io::Read;
+use std::io::Write;
 use std::process::{Command, Stdio};
+#[cfg(feature = "unity")]
 use std::sync::{Arc, Mutex};
 
 fn pqbench() -> Command {
@@ -9,12 +12,14 @@ fn pqbench() -> Command {
 
 /// One Unity Catalog list server. `expect_bearer` is the Databricks token the
 /// client must send; `None` is Unity OSS, which sends no Authorization header.
+#[cfg(feature = "unity")]
 struct Catalog {
     address: String,
     seen: Arc<Mutex<Vec<String>>>,
     _thread: std::thread::JoinHandle<()>,
 }
 
+#[cfg(feature = "unity")]
 impl Catalog {
     fn spawn(expect_bearer: Option<&'static str>, tables: Vec<Value>) -> Self {
         Self::spawn_with_catalogs(expect_bearer, vec!["main"], tables)
@@ -82,6 +87,7 @@ impl Catalog {
     }
 }
 
+#[cfg(feature = "unity")]
 fn catalog_body(request: &str, catalogs: &[&str], tables: &[Value]) -> String {
     let path = request.split_whitespace().nth(1).unwrap_or("");
     if path.contains("/catalogs") {
@@ -182,6 +188,7 @@ fn lake_include_and_exclude_filter_directory_names() {
     assert_eq!(ids, ["sales/events"]);
 }
 
+#[cfg(feature = "unity")]
 #[test]
 fn unity_oss_lists_delta_tables_without_a_token() {
     let table = json!({
@@ -231,6 +238,7 @@ fn unity_oss_lists_delta_tables_without_a_token() {
     assert_eq!(refs[0]["env"]["AWS_REGION"], "us-east-1");
 }
 
+#[cfg(feature = "unity")]
 #[test]
 fn databricks_list_follows_an_empty_page_token() {
     let catalog = Catalog::spawn(
@@ -266,6 +274,7 @@ fn databricks_list_follows_an_empty_page_token() {
     assert_eq!(refs[0]["uri"], "s3://bucket/events");
 }
 
+#[cfg(feature = "unity")]
 #[test]
 fn unity_skips_an_empty_schema_page() {
     let catalog = Catalog::spawn_with_catalogs(
@@ -295,6 +304,7 @@ fn unity_skips_an_empty_schema_page() {
     assert_eq!(refs[0]["id"], "main.default.events");
 }
 
+#[cfg(feature = "unity")]
 #[test]
 fn include_and_exclude_match_table_fqn() {
     let catalog = Catalog::spawn(
@@ -343,6 +353,7 @@ fn include_and_exclude_match_table_fqn() {
     assert_eq!(ids, ["main.default.events"]);
 }
 
+#[cfg(feature = "unity")]
 #[test]
 fn include_table_fqn_skips_other_catalogs() {
     let catalog = Catalog::spawn_with_catalogs(
@@ -379,6 +390,7 @@ fn include_table_fqn_skips_other_catalogs() {
     assert_eq!(ids, ["main.default.events"]);
 }
 
+#[cfg(feature = "unity")]
 #[test]
 fn include_prefix_skips_other_catalogs() {
     let catalog = Catalog::spawn_with_catalogs(
@@ -501,6 +513,7 @@ fn lake_source_rejects_a_non_aws_env_key() {
     assert!(stderr.contains("AWS_*"), "{stderr}");
 }
 
+#[cfg(feature = "unity")]
 #[test]
 fn lake_rejects_a_catalog_with_no_delta_tables() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
