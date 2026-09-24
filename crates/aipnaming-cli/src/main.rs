@@ -1,15 +1,17 @@
 //! `aipnaming` — lint Rust names against the AIP naming conventions.
 //!
-//! Output is one line per finding, or one JSON object per finding with
-//! `--json`, so the stream composes with the usual text tools. Exit status is
-//! 0 when clean, 1 when findings exist, and 2 for usage or io errors.
+//! Output is one line per finding by default. `--output-format json` emits one
+//! object per finding and `--output-format github` emits workflow commands that
+//! GitHub renders as inline annotations on a pull request. Exit status is 0
+//! when clean, 1 when findings exist, and 2 for usage or io errors.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
-use aipnaming::lint::{rule_ids, Options, Severity};
+use aipnaming::lint::{rule_ids, Finding, Options, Severity};
 
 mod walk;
 
@@ -21,17 +23,26 @@ mod walk;
 Rules follow Google's AIPs (126/136/140/141/142/145/190), seeded from
 api-linter. Findings print as file:line:column: severity[rule]: message.
 
+Output formats:
+  text    file:line:column: severity[rule]: message (default)
+  json    one JSON object per finding, for jq and friends
+  github  ::error/::warning workflow commands, annotated inline in a PR
+
 Examples:
   aipnaming crates/pqbench/src
-  aipnaming --rule aip-140/booleans --rule aip-140/prepositions src
-  aipnaming --json . | jq -r 'select(.severity == "error") | .rule'
+  aipnaming --rule aip-140/booleans --statistics crates/
+  aipnaming --output-format github crates/
+  aipnaming --output-format json . | jq -r 'select(.severity == "error") | .rule'
 "#
 )]
 struct Cli {
     /// Files or directories to lint (default: the current directory).
     paths: Vec<PathBuf>,
-    /// Emit one JSON object per finding.
-    #[arg(long)]
+    /// How to render findings.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    output_format: OutputFormat,
+    /// Shorthand for `--output-format json`.
+    #[arg(long, hide = true)]
     json: bool,
     /// Restrict the run to a rule id (repeatable).
     #[arg(long = "rule", value_name = "ID")]
@@ -42,9 +53,22 @@ struct Cli {
     /// Drop findings below this severity.
     #[arg(long, value_enum)]
     min_severity: Option<SeverityArg>,
+    /// Print a per-rule count after the findings.
+    #[arg(long = "statistics")]
+    stats: bool,
+    /// Always exit 0, even when findings exist.
+    #[arg(long)]
+    exit_zero: bool,
     /// List the rule ids and exit.
     #[arg(long)]
     list_rules: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OutputFormat {
+    Text,
+    Json,
+    Github,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -85,12 +109,20 @@ fn main() -> ExitCode {
     };
     let report = walk::lint_files(&files, options);
 
+    let format = if cli.json {
+        OutputFormat::Json
+    } else {
+        cli.output_format
+    };
     for (path, finding) in &report.findings {
-        if cli.json {
-            println!("{}", render_json(path, finding));
-        } else {
-            println!("{}", render_text(path, finding));
+        match format {
+            OutputFormat::Text => println!("{}", render_text(path, finding)),
+            OutputFormat::Json => println!("{}", render_json(path, finding)),
+            OutputFormat::Github => println!("{}", render_github(path, finding)),
         }
+    }
+    if cli.stats {
+        print_stats(&report.findings);
     }
     for (path, error) in &report.read_errors {
         eprintln!("aipnaming: cannot read {}: {error}", path.display());
@@ -98,14 +130,14 @@ fn main() -> ExitCode {
 
     if !report.read_errors.is_empty() {
         ExitCode::from(2)
-    } else if report.findings.is_empty() {
+    } else if report.findings.is_empty() || cli.exit_zero {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
     }
 }
 
-fn render_text(path: &std::path::Path, finding: &aipnaming::lint::Finding) -> String {
+fn render_text(path: &Path, finding: &Finding) -> String {
     let help = finding
         .help
         .as_deref()
@@ -122,7 +154,7 @@ fn render_text(path: &std::path::Path, finding: &aipnaming::lint::Finding) -> St
     )
 }
 
-fn render_json(path: &std::path::Path, finding: &aipnaming::lint::Finding) -> String {
+fn render_json(path: &Path, finding: &Finding) -> String {
     serde_json::json!({
         "path": path.display().to_string(),
         "line": finding.line,
@@ -134,4 +166,50 @@ fn render_json(path: &std::path::Path, finding: &aipnaming::lint::Finding) -> St
         "help": finding.help,
     })
     .to_string()
+}
+
+/// A GitHub Actions workflow command, rendered inline on the PR diff.
+///
+/// `::error file=...,line=...,col=...::message` is the annotation protocol; the
+/// rule id goes in `title` so the check name and the message stay readable.
+fn render_github(path: &Path, finding: &Finding) -> String {
+    let level = match finding.severity {
+        Severity::ERROR => "error",
+        Severity::WARNING => "warning",
+    };
+    let help = finding
+        .help
+        .as_deref()
+        .map(|help| format!(" (help: {help})"))
+        .unwrap_or_default();
+    let message = escape_github(&format!("{}{help}", finding.message));
+    format!(
+        "::{level} file={},line={},col={},title=aipnaming {rule}::{message}",
+        path.display(),
+        finding.line,
+        finding.column,
+        rule = finding.rule,
+    )
+}
+
+/// Workflow-command data escapes `%`, `\r`, and `\n`; the message is a single
+/// line, but `%` and newlines in help text must still be escaped.
+fn escape_github(text: &str) -> String {
+    text.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+fn print_stats(findings: &[(PathBuf, Finding)]) {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for (_, finding) in findings {
+        *counts.entry(finding.rule).or_default() += 1;
+    }
+    if counts.is_empty() {
+        return;
+    }
+    eprintln!("aipnaming: {} finding(s)", findings.len());
+    for (rule, count) in counts {
+        eprintln!("{count:>4}  {rule}");
+    }
 }

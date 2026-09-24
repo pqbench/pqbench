@@ -70,6 +70,60 @@ fn json_output_is_one_object_per_finding() {
 }
 
 #[test]
+fn github_format_emits_annotations() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(
+        temp.path(),
+        "page.rs",
+        "pub struct Page {\n    pub is_dictionary: bool,\n}\n",
+    );
+
+    let output = run(&["--output-format", "github", temp.path().to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    assert!(
+        stdout.contains("::error file=") && stdout.contains("line=2,col=9"),
+        "stdout was: {stdout}"
+    );
+    assert!(
+        stdout.contains("title=aipnaming aip-140/booleans"),
+        "stdout was: {stdout}"
+    );
+}
+
+#[test]
+fn statistics_summarize_by_rule() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(
+        temp.path(),
+        "page.rs",
+        "pub struct Page {\n    pub is_dictionary: bool,\n    pub is_json: bool,\n}\n",
+    );
+
+    let output = run(&["--statistics", temp.path().to_str().unwrap()]);
+    let stderr = String::from_utf8(output.stderr).expect("utf8");
+    assert!(stderr.contains("2 finding(s)"), "stderr was: {stderr}");
+    assert!(
+        stderr.contains("2  aip-140/booleans"),
+        "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn exit_zero_suppresses_the_failure_code() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write(
+        temp.path(),
+        "page.rs",
+        "pub struct Page {\n    pub is_dictionary: bool,\n}\n",
+    );
+
+    let output = run(&["--exit-zero", temp.path().to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!output.stdout.is_empty(), "findings still print");
+}
+
+#[test]
 fn lists_rules_without_linting() {
     let output = run(&["--list-rules"]);
     assert_eq!(output.status.code(), Some(0));

@@ -114,10 +114,11 @@ jobs:
           key: ${{ matrix.arch }}-${{ matrix.features || 'default' }}
       - run: make test CARGO_FEATURES="${{ matrix.cargo_flags }}" TEST_FLAGS="${{ matrix.test_flags }}"
 
-  # Build the naming linter and run it over the workspace, printing findings to
-  # the log. Informational for now: the rule pack is still being tuned, so
-  # findings must not fail the build yet (the semantic rules overfire on valid
-  # Rust). Flip to a gate once `aipnaming .` is clean on main.
+  # Build the naming linter and run it over the workspace. Findings render as
+  # inline annotations on the PR diff (the `github` output format) and a
+  # per-rule breakdown lands in the job summary; any finding fails the job, so
+  # the check is a real gate. Like `clippy`, the fix for the author is to
+  # rename (or, for a deliberate exception, add `// aipnaming: allow(...)`).
   aipnaming:
     name: aipnaming
     runs-on: ubuntu-24.04
@@ -131,14 +132,25 @@ jobs:
           key: aipnaming
       - name: Build the linter
         run: cargo build --release -p aipnaming-cli
-      - name: Lint the workspace (informational)
+      - name: Lint the workspace
         run: |
-          set +e
-          ./target/release/aipnaming crates/ > findings.txt
-          status=$?
-          cat findings.txt
-          echo "aipnaming: $(wc -l < findings.txt) finding(s), exit $status"
-          echo "Findings are informational while the rule pack is tuned; this step does not fail the job."
+          # Annotations land inline on the PR diff.
+          ./target/release/aipnaming --output-format github crates/
+          # Full list plus a per-rule breakdown, for the log and the summary.
+          ./target/release/aipnaming --statistics crates/ 2> stats.txt | tee findings.txt || true
+          {
+            echo '### aipnaming'
+            echo
+            if [ -s findings.txt ]; then
+              echo '```'
+              cat stats.txt
+              echo '```'
+            else
+              echo 'No findings.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The gate: exit non-zero if any finding remains.
+          ./target/release/aipnaming crates/ > /dev/null
 
   # Single required status: fails if any upstream job failed, was cancelled or
   # was skipped, so branch protection only has to require `CI`.
