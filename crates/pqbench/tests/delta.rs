@@ -291,3 +291,27 @@ async fn load_copies_env_onto_the_document() {
     .unwrap();
     assert_eq!(info.env, env);
 }
+
+#[tokio::test]
+async fn load_reports_a_broken_snapshot() {
+    let fixture = Fixture::new();
+    fixture.commit(
+        2,
+        &[json!({"metaData": {
+            "id": "967e1749-2635-481d-a114-897e027d7000",
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": json!({"type": "struct", "fields": [
+                {"name": "id", "type": "long", "nullable": false, "metadata": {}}
+            ]}).to_string(),
+            "partitionColumns": ["part"],
+            "configuration": {},
+            "createdTime": 0
+        }})],
+    );
+    let error = table::load(&load_request(fixture.path().to_string_lossy(), None))
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("Partition column"), "{error}");
+}

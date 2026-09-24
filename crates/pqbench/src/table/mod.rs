@@ -17,6 +17,8 @@ use url::Url;
 use crate::object_store;
 
 pub mod delta;
+#[cfg(feature = "delta")]
+mod delta_helpers;
 
 /// Errors detecting a table format or loading its metadata.
 #[derive(Debug)]
