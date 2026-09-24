@@ -18,6 +18,7 @@ async fn measures_the_redset_sample_anonymously() {
     std::env::set_var("AWS_SKIP_SIGNATURE", "true");
     let request = BytemassRequest {
         inputs: vec![REDSET_SAMPLE_0_001.to_string()],
+        ..Default::default()
     };
     let rows = bytemass(&request).await.unwrap();
 
@@ -26,7 +27,7 @@ async fn measures_the_redset_sample_anonymously() {
     assert!(summary.num_rows > 0);
     assert!(!summary.columns.is_empty());
 
-    assert!(rows.iter().all(|row| row.file == REDSET_SAMPLE_0_001));
+    assert!(rows.iter().all(|row| row.uri == REDSET_SAMPLE_0_001));
     assert_eq!(rows[0].num_rows, summary.num_rows);
     assert_eq!(rows.len(), summary.columns.len());
 

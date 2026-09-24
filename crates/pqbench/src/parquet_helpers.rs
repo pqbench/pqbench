@@ -69,9 +69,9 @@ pub fn default_parser() -> impl PageParser {
 #[derive(Debug, Clone, Serialize)]
 pub struct ColumnMass {
     /// Column path in schema form, e.g. `content` or `a.b`.
-    pub path: String,
+    pub column: String,
     /// On-disk (compressed) bytes for this column chunk.
-    pub bytes: u64,
+    pub compressed_bytes: u64,
     /// Encoded bytes before compression (including page headers).
     pub uncompressed_bytes: u64,
     /// Compression codec recorded in the column chunk metadata.
@@ -172,7 +172,7 @@ mod tests {
         assert!(mass.num_rows > 0);
         assert!(!mass.columns.is_empty());
         assert!(
-            mass.columns.iter().all(|c| c.bytes > 0),
+            mass.columns.iter().all(|c| c.compressed_bytes > 0),
             "expected positive on-disk column bytes"
         );
     }

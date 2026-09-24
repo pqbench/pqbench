@@ -12,27 +12,18 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 /// Read an individual Parquet object's size and byte masses from a URI.
 ///
 /// Only the trailer and serialized footer metadata are fetched, never data
-/// pages or indexes. Backend configuration comes from the environment; use
-/// [`read_remote_with_options`] to pass explicit backend options.
+/// pages or indexes. `options` override process-environment backend defaults.
 ///
 /// # Errors
 /// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
-pub(super) async fn read_remote(uri: &str) -> Result<(u64, FileMass), Error> {
-    read_remote_with_options(uri, []).await
-}
-
-/// Read a Parquet object using backend-specific configuration options.
-///
-/// # Errors
-/// As [`read_remote`].
-async fn read_remote_with_options(
+pub(super) async fn read_remote_with_options(
     uri: &str,
     options: impl IntoIterator<Item = (String, String)>,
 ) -> Result<(u64, FileMass), Error> {
     let options: Vec<(String, String)> = options.into_iter().collect();
     let reader = object_store::open(uri, &options).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
-    let size = stat.size;
+    let size = stat.size_bytes;
     if size < PARQUET_FOOTER_SIZE {
         return Err(Error(format!(
             "object {uri} is too small to be a Parquet file: {size} bytes"
@@ -79,7 +70,7 @@ fn storage_error(error: object_store::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::read_remote;
+    use super::read_remote_with_options;
     use crate::parquet_helpers::{default_metadata_parser, MetadataParser};
 
     #[tokio::test]
@@ -90,7 +81,7 @@ mod tests {
         ));
         let expected = default_metadata_parser().read_masses(path).unwrap();
         let uri = url::Url::from_file_path(path).unwrap();
-        let (size, actual) = read_remote(uri.as_str()).await.unwrap();
+        let (size, actual) = read_remote_with_options(uri.as_str(), []).await.unwrap();
         assert_eq!(size, std::fs::metadata(path).unwrap().len());
         assert_eq!(actual.num_rows, expected.num_rows);
         assert_eq!(actual.columns.len(), expected.columns.len());

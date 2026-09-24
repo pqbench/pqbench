@@ -4,6 +4,8 @@
 //! self-contained. The CLI owns the rendering decision: it awaits [`bytemass`]
 //! and calls `render_text`, `render_json`, or `render_html` on the rows.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::parquet_helpers::Error;
@@ -11,10 +13,12 @@ use crate::parquet_helpers::Error;
 use super::collection;
 
 /// Arguments for the `bytemass` command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BytemassRequest {
     /// Parquet paths or glob masks; quote masks to prevent shell expansion.
     pub inputs: Vec<String>,
+    /// Storage options (`AWS_*` names) for remote inputs.
+    pub env: BTreeMap<String, String>,
 }
 
 /// One column chunk's measured byte mass: a row of the `bytemass` table.
@@ -22,9 +26,9 @@ pub struct BytemassRequest {
 #[non_exhaustive]
 pub struct MassRow {
     /// Input path or URI as given.
-    pub file: String,
+    pub uri: String,
     /// On-disk file size in bytes.
-    pub size: u64,
+    pub size_bytes: u64,
     /// Number of rows in the file (denominator for the per-row measure).
     pub num_rows: u64,
     /// Column path in schema form, e.g. `content` or `a.b`.
@@ -51,5 +55,5 @@ pub async fn bytemass(request: &BytemassRequest) -> Result<Vec<MassRow>, Error> 
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_inputs(&request.inputs).await
+    collection::measure_inputs(&request.inputs, &request.env).await
 }

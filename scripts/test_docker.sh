@@ -61,11 +61,13 @@ python3 - "$scratch/mass.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1]) as stream:
-    report = json.load(stream)
-assert report["file_count"] == 1, f"file_count is {report.get('file_count')!r}"
-assert report["num_rows"] > 0, f"num_rows is {report.get('num_rows')!r}"
-assert report["columns"], "no columns in report"
-assert all("path" in column and "compressed_bytes" in column for column in report["columns"])
+    records = [json.loads(line) for line in stream if line.strip()]
+end = next(record for record in records if record.get("event") == "end")
+rows = [record for record in records if record.get("kind") == "pqbench.bytemass-row"]
+assert end["file_count"] == 1, f"file_count is {end.get('file_count')!r}"
+assert end["num_rows"] > 0, f"num_rows is {end.get('num_rows')!r}"
+assert rows, "no bytemass-row records"
+assert all("column" in row and "compressed_bytes" in row for row in rows)
 PY
 ok "bytemass produced a valid byte-mass JSON report"
 

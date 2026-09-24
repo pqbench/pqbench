@@ -1,29 +1,44 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 // `small_reddit_none.parquet` is a 3000-row NONE-compressed subset of the
 // MIT-licensed reddit_dataset_90 (goldentraversy07/reddit_dataset_90).
 
-/// End-to-end: run the `pqbench bytemass` CLI and verify the text (tui) stats
-/// it prints for a real parquet file.
-#[test]
-fn bytemass_text_stats_end_to_end() {
-    let exe = env!("CARGO_BIN_EXE_pqbench");
-    let file = concat!(
+fn parquet_fixture() -> &'static str {
+    concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/small_reddit_none.parquet"
-    );
-    let out = Command::new(exe).args(["bytemass", file]).output().unwrap();
+    )
+}
+
+fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
+    stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
+        .collect()
+}
+
+/// End-to-end: a pipe streams one NDJSON row per column.
+#[test]
+fn bytemass_streams_column_rows() {
+    let exe = env!("CARGO_BIN_EXE_pqbench");
+    let out = Command::new(exe)
+        .args(["bytemass", parquet_fixture()])
+        .output()
+        .unwrap();
     assert!(
         out.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let stdout = String::from_utf8(out.stdout).unwrap();
-
-    assert!(stdout.contains("bytemass: small_reddit_none.parquet"));
-    assert!(stdout.contains("column"));
-    assert!(stdout.contains("bytes/row"));
-
+    let records = ndjson_records(&out.stdout);
+    assert_eq!(records[0]["kind"], "pqbench.bytemass");
+    assert_eq!(records[0]["event"], "begin");
+    let columns: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.bytemass-row")
+        .map(|record| record["column"].as_str().unwrap().to_string())
+        .collect();
     for column in [
         "url_encoded",
         "text",
@@ -33,28 +48,23 @@ fn bytemass_text_stats_end_to_end() {
         "dataType",
         "datetime",
     ] {
-        assert!(stdout.contains(column), "missing column {column}");
+        assert!(
+            columns.iter().any(|name| name == column),
+            "missing {column}"
+        );
     }
-
-    // Sorted descending by bytes/row: url_encoded > text > username_encoded.
-    let url = stdout.find("url_encoded").unwrap();
-    let text = stdout.find("text").unwrap();
-    let username = stdout.find("username_encoded").unwrap();
-    assert!(url < text && text < username, "columns not sorted by value");
-
-    assert!(stdout.lines().any(|l| l.trim_start().starts_with("total")));
+    let end = records.last().unwrap();
+    assert_eq!(end["event"], "end");
+    assert_eq!(end["file_count"], 1);
+    assert_eq!(end["num_rows"], 3000);
 }
 
-/// End-to-end: `--json` prints a flat per-column JSON table.
+/// End-to-end: `--json` is the same NDJSON stream.
 #[test]
-fn bytemass_json_end_to_end() {
+fn bytemass_json_is_the_stream() {
     let exe = env!("CARGO_BIN_EXE_pqbench");
-    let file = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/small_reddit_none.parquet"
-    );
     let out = Command::new(exe)
-        .args(["bytemass", file, "--json"])
+        .args(["bytemass", parquet_fixture(), "--json"])
         .output()
         .unwrap();
     assert!(
@@ -62,25 +72,20 @@ fn bytemass_json_end_to_end() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let stdout = String::from_utf8(out.stdout).unwrap();
-
-    assert!(stdout.trim_start().starts_with('{'));
-    assert!(stdout.contains("\"file_count\": 1"));
-    assert!(stdout.contains("\"columns\""));
-    assert!(stdout.contains("\"path\""));
-    assert!(!stdout.contains("\"children\""));
+    let records = ndjson_records(&out.stdout);
+    assert_eq!(records[0]["event"], "begin");
+    assert!(records
+        .iter()
+        .any(|record| record["kind"] == "pqbench.bytemass-row"));
+    assert!(!out.stdout.windows(10).any(|w| w == b"\"children\""));
 }
 
 /// End-to-end: `--d3` prints a self-contained treemap page.
 #[test]
 fn bytemass_d3_page_end_to_end() {
     let exe = env!("CARGO_BIN_EXE_pqbench");
-    let file = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/small_reddit_none.parquet"
-    );
     let out = Command::new(exe)
-        .args(["bytemass", file, "--d3"])
+        .args(["bytemass", parquet_fixture(), "--d3"])
         .output()
         .unwrap();
     assert!(
@@ -94,4 +99,31 @@ fn bytemass_d3_page_end_to_end() {
     assert!(stdout.contains("<title>small_reddit_none.parquet</title>"));
     assert!(stdout.contains("d3-hierarchy@3"));
     assert!(stdout.contains("bytes per row"));
+}
+
+/// End-to-end: a reader that closes early ends the stream, not the command.
+#[test]
+fn bytemass_exits_cleanly_when_stdout_is_closed() {
+    for extra in [None, Some("--d3")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pqbench"));
+        command
+            .arg("bytemass")
+            .arg(parquet_fixture())
+            .args(extra)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        drop(child.stdout.take());
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stderr.is_empty(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

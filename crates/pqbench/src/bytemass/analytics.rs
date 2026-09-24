@@ -29,7 +29,7 @@ pub(super) struct MassNode {
 pub(super) fn aggregate(file: &FileRaw) -> MassNode {
     let mut totals: BTreeMap<&str, u64> = BTreeMap::new();
     for c in &file.columns {
-        *totals.entry(c.path.as_str()).or_insert(0) += c.bytes;
+        *totals.entry(c.column.as_str()).or_insert(0) += c.compressed_bytes;
     }
     let denom = file.num_rows.max(1) as f64;
     let mut root = branch("file");
@@ -87,16 +87,16 @@ mod tests {
             num_rows: 100,
             columns: vec![
                 RawColumn {
-                    path: "text".into(),
-                    bytes: 40,
+                    column: "text".into(),
+                    compressed_bytes: 40,
                 },
                 RawColumn {
-                    path: "text".into(),
-                    bytes: 60,
+                    column: "text".into(),
+                    compressed_bytes: 60,
                 },
                 RawColumn {
-                    path: "a.b".into(),
-                    bytes: 100,
+                    column: "a.b".into(),
+                    compressed_bytes: 100,
                 },
             ],
         };

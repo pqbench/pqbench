@@ -20,9 +20,12 @@ pub(crate) struct BenchArgs {
     /// how to reduce the samples: fastest = mean over the best pass, mean = mean over all
     #[arg(long, value_enum, default_value_t = BenchMode::Fastest)]
     pub(crate) mode: BenchMode,
-    /// emit the report as JSON (composable) instead of a text table
+    /// stream NDJSON (same as a pipe; kept for scripts)
     #[arg(long = "json")]
     pub(crate) json: bool,
+    /// write the zstd NDJSON stream (required on a terminal)
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub(crate) output: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

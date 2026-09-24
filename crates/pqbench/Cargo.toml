@@ -32,6 +32,7 @@ deltalake = { version = "=0.32.4", default-features = false, features = ["rustls
 # buoyant_kernel 0.22.2. Keep this direct pin until delta-rs updates the range.
 buoyant_kernel_derive = { version = "=1.0.0", optional = true }
 futures = { version = "0.3", optional = true }
+tokio = { version = "1", features = ["fs", "rt", "io-util"] }
 url = "2"
 # Must match delta-rs 0.32.4's ObjectStore trait version: stores cross that
 # internal boundary. Keep the pin until delta-rs upgrades its dependency.
@@ -39,4 +40,4 @@ object_store = { version = "=0.13.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt", "macros"] }

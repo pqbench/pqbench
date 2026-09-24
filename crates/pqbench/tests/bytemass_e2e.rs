@@ -9,7 +9,10 @@ fn fixture(name: &str) -> String {
 }
 
 fn request(inputs: Vec<String>) -> BytemassRequest {
-    BytemassRequest { inputs }
+    BytemassRequest {
+        inputs,
+        ..Default::default()
+    }
 }
 
 #[tokio::test]
@@ -21,14 +24,14 @@ async fn measures_a_local_file_from_its_footer() {
     assert!(!rows.is_empty());
     assert!(rows
         .iter()
-        .all(|row| row.file == fixture("small_snappy.parquet")));
+        .all(|row| row.uri == fixture("small_snappy.parquet")));
 
     let summary = aggregate(&rows).unwrap();
     assert_eq!(summary.file_count, 1);
     assert!(summary.num_rows > 0);
     assert!(!summary.columns.is_empty());
     assert_eq!(rows[0].num_rows, summary.num_rows);
-    assert!(rows[0].size > 0);
+    assert!(rows[0].size_bytes > 0);
 
     let text = render_text(&rows).unwrap();
     assert!(text.contains("bytemass: small_snappy.parquet"));
@@ -50,7 +53,7 @@ async fn emits_composable_json_per_column() {
     assert!(summary["num_rows"].as_u64().unwrap() > 0);
     let columns = summary["columns"].as_array().unwrap();
     assert!(!columns.is_empty());
-    assert!(columns[0]["path"].is_string());
+    assert!(columns[0]["column"].is_string());
     assert!(columns[0]["compressed_bytes"].is_number());
     // The JSON is a flat table, not a d3 treemap hierarchy.
     assert!(summary.get("children").is_none());

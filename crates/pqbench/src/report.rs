@@ -19,7 +19,9 @@ pub struct ReportRow {
     pub decompress_estimate: Estimate,
     pub compressed_bytes: usize,
     pub uncompressed_bytes: usize,
-    /// compressed/uncompressed; 1.0 means no compression.
+    /// Compressed bytes over uncompressed bytes; the lzbench "ratio" column,
+    /// i.e. the inverse of the canonical compression ratio
+    /// (uncompressed/compressed). 1.0 means no compression.
     pub ratio: f64,
 }
 
@@ -55,7 +57,9 @@ pub struct ColumnRow {
     pub decompress_estimate: Estimate,
     pub compressed_bytes: usize,
     pub uncompressed_bytes: usize,
-    /// compressed/uncompressed; 1.0 means no compression.
+    /// Compressed bytes over uncompressed bytes; the lzbench "ratio" column,
+    /// i.e. the inverse of the canonical compression ratio
+    /// (uncompressed/compressed). 1.0 means no compression.
     pub ratio: f64,
 }
 

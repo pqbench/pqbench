@@ -1,6 +1,6 @@
 //! Aggregate byte-mass metadata across multiple physical Parquet files.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -17,7 +17,7 @@ use super::remote;
 #[non_exhaustive]
 pub struct ColumnMassSummary {
     /// Column path in schema form, e.g. `content` or `a.b`.
-    pub path: String,
+    pub column: String,
     /// Total on-disk bytes across all physical files.
     pub compressed_bytes: u64,
     /// Total encoded bytes before compression across all physical files.
@@ -48,8 +48,8 @@ impl MassSummary {
                 .columns
                 .iter()
                 .map(|column| ColumnMass {
-                    path: column.path.clone(),
-                    bytes: column.compressed_bytes,
+                    column: column.column.clone(),
+                    compressed_bytes: column.compressed_bytes,
                     uncompressed_bytes: column.uncompressed_bytes,
                     codec: column.codecs.iter().cloned().collect::<Vec<_>>().join(","),
                 })
@@ -60,20 +60,23 @@ impl MassSummary {
 
 /// Expand the inputs, measure each file's footer, and flatten the collection
 /// into one row per column chunk.
-pub(super) async fn measure_inputs(inputs: &[String]) -> Result<Vec<MassRow>, Error> {
+pub(super) async fn measure_inputs(
+    inputs: &[String],
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<MassRow>, Error> {
     let paths = expand_inputs(inputs)?;
     let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
-        let (size, mass) = read_input(&input).await?;
+        let (size, mass) = read_input(&input, env).await?;
         let num_rows = mass.num_rows;
         for column in mass.columns {
             rows.push(MassRow {
-                file: input.clone(),
-                size,
+                uri: input.clone(),
+                size_bytes: size,
                 num_rows,
-                column: column.path,
-                compressed_bytes: column.bytes,
+                column: column.column,
+                compressed_bytes: column.compressed_bytes,
                 uncompressed_bytes: column.uncompressed_bytes,
                 codec: column.codec,
             });
@@ -112,9 +115,13 @@ fn escape_literal_brackets(input: &str) -> String {
     input.replace('[', "[[]")
 }
 
-async fn read_input(input: &str) -> Result<(u64, FileMass), Error> {
+async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64, FileMass), Error> {
     if input.contains("://") {
-        return remote::read_remote(input).await;
+        return remote::read_remote_with_options(
+            input,
+            env.iter().map(|(key, value)| (key.clone(), value.clone())),
+        )
+        .await;
     }
     let path = Path::new(input);
     let size = std::fs::metadata(path)

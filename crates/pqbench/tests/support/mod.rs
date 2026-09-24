@@ -84,6 +84,18 @@ impl Fixture {
         )
         .unwrap();
     }
+
+    pub async fn checkpoint(&self) {
+        let url = url::Url::from_directory_path(self.path()).unwrap();
+        let table = deltalake::DeltaTableBuilder::from_url(url)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+        deltalake::protocol::checkpoints::create_checkpoint(&table, None)
+            .await
+            .unwrap();
+    }
 }
 
 pub fn metadata(configuration: Value) -> Value {
