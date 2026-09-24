@@ -261,7 +261,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     assert_eq!(previous.format, TableFormat::ICEBERG);
     assert_eq!(previous.snapshot_version, 0);
     assert_eq!(previous.files.len(), 1);
-    assert_eq!(previous.files[0].size, fixture.first_size);
+    assert_eq!(previous.files[0].size_bytes, fixture.first_size);
     assert_eq!(previous.log.len(), 1);
 
     let latest = table::load(&load_request(fixture.root.to_string_lossy(), None))
@@ -269,7 +269,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
         .unwrap();
     assert_eq!(latest.snapshot_version, 1);
     assert_eq!(latest.files.len(), 2);
-    let mut sizes: Vec<_> = latest.files.iter().map(|file| file.size).collect();
+    let mut sizes: Vec<_> = latest.files.iter().map(|file| file.size_bytes).collect();
     sizes.sort_unstable();
     assert_eq!(sizes, [fixture.first_size, fixture.second_size]);
     let selected = latest
@@ -298,13 +298,13 @@ async fn load_then_bytemass_matches_footer_totals() {
     .unwrap();
     let summary = pqbench::bytemass::aggregate(&rows).unwrap();
     assert_eq!(summary.file_count, 2);
-    assert_eq!(summary.num_rows, 8);
+    assert_eq!(summary.row_count, 8);
     let mut expected_bytes = 0;
     for relative in ["data/first.parquet", "data/second.parquet"] {
         let mass = default_metadata_parser()
             .read_masses(&fixture.root.join(relative))
             .unwrap();
-        expected_bytes += mass.columns[0].bytes;
+        expected_bytes += mass.columns[0].compressed_bytes;
     }
     assert_eq!(summary.columns[0].compressed_bytes, expected_bytes);
 }
@@ -323,7 +323,7 @@ async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
     let info = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
         .await
         .unwrap();
-    assert_eq!(info.files[0].size, fixture.first_size);
+    assert_eq!(info.files[0].size_bytes, fixture.first_size);
     assert_ne!(fs::metadata(&first).unwrap().len(), fixture.first_size);
 
     write_parquet(&first, 3);

@@ -128,7 +128,7 @@ fn bytemass_reads_an_iceberg_table_document_from_stdin() {
         "snapshot_version": 1,
         "partition_columns": [],
         "log": [{"version": 1, "actions": [{"kind": "snapshot"}]}],
-        "files": [{"path": "data/small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
+        "files": [{"path": "data/small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
     });
     let output = pipe(&["bytemass"], &document.to_string());
     assert!(

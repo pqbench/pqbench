@@ -48,7 +48,7 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             metadata.format_version
         )));
     }
-    let requested = request.version.map(i64_from_u64).transpose()?;
+    let requested = request.snapshot_version.map(i64_from_u64).transpose()?;
     let selected = select_snapshot(&metadata, requested)?;
     let snapshot_version = selected
         .as_ref()
@@ -90,17 +90,15 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             });
         }
     }
-    Ok(TableInfo {
-        kind: "pqbench.table".into(),
-        version: 1,
-        format: TableFormat::ICEBERG,
-        uri: request.uri.clone(),
+    Ok(TableInfo::new(
+        TableFormat::ICEBERG,
+        request.uri.clone(),
         snapshot_version,
-        partition_columns: partition_columns(&metadata),
+        partition_columns(&metadata),
         log,
         files,
-        env: request.env.clone(),
-    })
+        request.env.clone(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -351,11 +349,7 @@ async fn active_files(
                 ))
             })?;
             let uri = resolve_data_file(&root, &entry.data_file.file_path)?;
-            files.push(TableFile {
-                path: entry.data_file.file_path,
-                uri,
-                size,
-            });
+            files.push(TableFile::new(entry.data_file.file_path, uri, size));
         }
     }
     Ok((files, deletes))
@@ -496,7 +490,7 @@ async fn read_location(location: &str, options: &[(String, String)]) -> Result<V
         let reader = object_store::open(location, options).map_err(|e| Error(e.to_string()))?;
         let stat = reader.stat().await.map_err(|e| Error(e.to_string()))?;
         reader
-            .read_range(0..stat.size, stat.identity.as_deref())
+            .read_range(0..stat.size_bytes, stat.identity.as_deref())
             .await
             .map_err(|e| Error(e.to_string()))
     } else {
