@@ -1,0 +1,21 @@
+[package]
+name = "aipnaming-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Command line frontend for the AIP naming linter."
+
+[[bin]]
+name = "aipnaming"
+path = "src/main.rs"
+
+[dependencies]
+aipnaming = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3"

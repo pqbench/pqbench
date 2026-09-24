@@ -2,11 +2,13 @@
 resolver = "2"
 members = [
     "crates/aipnaming",
+    "crates/aipnaming-cli",
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
 default-members = [
     "crates/aipnaming",
+    "crates/aipnaming-cli",
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
