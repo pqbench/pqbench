@@ -15,3 +15,5 @@ pub mod stats;
 pub mod table;
 mod text;
 pub mod unity;
+#[cfg(feature = "unity")]
+mod unity_helpers;
