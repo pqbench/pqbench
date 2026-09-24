@@ -37,7 +37,7 @@ for arg in "$@"; do
     case $arg in
         --github) format=github ;;
         -h | --help)
-            sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '/^# Usage:/q; 2,$p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -58,18 +58,32 @@ command -v rg >/dev/null 2>&1 || {
     exit 1
 }
 
+# The leak lines of one api.rs, as `line:col:text`.
+#
+# Matches that sit after a `//` comment marker are prose, not a leak.
+leaks_in() {
+    rg -n --no-heading --column 'cfg(\(|!\().*feature[[:space:]]*=' "$1" \
+        | while IFS= read -r hit; do
+            after_line=${hit#*:}
+            text=${after_line#*:}
+            case $text in
+                *//*) [ "${text%%//*}" = "$text" ] || continue ;;
+            esac
+            printf '%s\n' "$hit"
+        done
+}
+
 # Workflow-command data escapes `%`, `\r`, and `\n`.
 escape() {
     printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g'
 }
 
-# The annotation for one hit line, `file:line:col:text`, in the chosen format.
+# One annotation for `line:col:text` about `rel`, in the chosen format.
 emit() {
-    line=${1%%:*}
-    rest=${1#*:}
+    rel=$1
+    line=${2%%:*}
+    rest=${2#*:}
     col=${rest%%:*}
-    text=${rest#*:}
-    rel=${api#"$root"/}
     message="feature flag in the isolated api.rs; move it to impl.rs"
     case $format in
         github)
@@ -83,31 +97,21 @@ emit() {
     esac
 }
 
-fail=0
 count=0
 leaks=0
 
 for api in "$dir"/*/api.rs; do
     [ -e "$api" ] || continue
     count=$((count + 1))
-    # Skip matches that sit after a `//` comment marker on the line; a doc or
-    # prose mention of the rule is not a leak.
-    hits=$(
-        rg -n --no-heading --column 'cfg(\(|!\().*feature[[:space:]]*=' "$api" \
-            | while IFS= read -r hit; do
-                # hit is `line:col:text`
-                after_line=${hit#*:}
-                text=${after_line#*:}
-                case $text in
-                    *//*) [ "${text%%//*}" = "$text" ] || continue ;;
-                esac
-                printf '%s\n' "$hit"
-            done
-    )
+    rel=${api#"$root"/}
+    hits=$(leaks_in "$api")
     [ -n "$hits" ] || continue
-    fail=1
-    echo "$hits" | while IFS= read -r hit; do emit "$hit"; done
-    leaks=$((leaks + $(printf '%s\n' "$hits" | wc -l)))
+    while IFS= read -r hit; do
+        emit "$rel" "$hit"
+        leaks=$((leaks + 1))
+    done <<EOF
+$hits
+EOF
 done
 
 if [ "$count" -eq 0 ]; then
@@ -115,7 +119,7 @@ if [ "$count" -eq 0 ]; then
     exit 1
 fi
 
-if [ "$fail" -ne 0 ]; then
+if [ "$leaks" -ne 0 ]; then
     echo "isolation: $leaks feature flag(s) leaked into an api.rs" >&2
     exit 1
 fi
