@@ -120,22 +120,21 @@ seed_unity() {
 # is a down or 5xx catalog and must fail.
 iceberg_http() {
     local method=$1 path=$2 body=${3:-}
-    local tmp code
-    tmp=$(mktemp)
+    local response code
     if [ -n "$body" ]; then
-        code=$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$iceberg_rest$path" \
+        response=$(curl -sS -w '\n%{http_code}' -X "$method" "$iceberg_rest$path" \
             -H 'Content-Type: application/json' -d "$body")
     else
-        code=$(curl -sS -o "$tmp" -w '%{http_code}' -X "$method" "$iceberg_rest$path")
+        response=$(curl -sS -w '\n%{http_code}' -X "$method" "$iceberg_rest$path")
     fi
+    code=${response##*$'\n'}
+    response=${response%$'\n'*}
     case "$method:$code" in
         POST:200 | POST:201 | POST:409 | DELETE:200 | DELETE:204 | DELETE:404)
-            cat "$tmp"
-            rm -f "$tmp"
+            printf '%s' "$response"
             ;;
         *)
-            echo "$method $path failed: HTTP $code $(cat "$tmp")" >&2
-            rm -f "$tmp"
+            echo "$method $path failed: HTTP $code $response" >&2
             exit 1
             ;;
     esac
@@ -251,5 +250,5 @@ case "${1:-}" in
     check) check ;;
     check-unity) check_unity ;;
     check-iceberg) check_iceberg ;;
-    *) echo "usage: ${0##*/} up|seed-s3|seed-unity|seed-iceberg|check" >&2; exit 64 ;;
+    *) echo "usage: ${0##*/} up|seed-s3|seed-unity|seed-iceberg|check|check-unity|check-iceberg" >&2; exit 64 ;;
 esac
