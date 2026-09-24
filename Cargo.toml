@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/aipnaming",
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
 default-members = [
+    "crates/aipnaming",
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
@@ -18,6 +20,7 @@ authors = ["pqbench contributors"]
 repository = "https://github.com/pqbench/pqbench"
 
 [workspace.dependencies]
+aipnaming = { version = "0.0.1", path = "crates/aipnaming" }
 pqbench = { version = "0.0.1", path = "crates/pqbench" }
 
 [profile.dev]

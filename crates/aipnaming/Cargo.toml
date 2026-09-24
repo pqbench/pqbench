@@ -1,0 +1,13 @@
+[package]
+name = "aipnaming"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "AIP naming linter for Rust source: a fast tree-sitter front end over a backend-neutral declaration model."
+
+[dependencies]
+tree-sitter = "0.27"
+tree-sitter-rust = "0.24"
