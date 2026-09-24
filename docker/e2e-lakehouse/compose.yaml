@@ -49,7 +49,7 @@ services:
 
   # A one-off S3 client, not a server: it uploads `table/` and mints the session
   # credential Unity vends. `make lakehouse` runs it; nothing else needs it.
-  aws:
+  aws-cli:
     profiles: [tools]
     image: amazon/aws-cli:2.36.49@sha256:f42bf088cb1456ba9e179ce71fdeb22cc46ff64ea1e3aeae8251ff81391f5bb1
     environment:

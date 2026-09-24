@@ -7,7 +7,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 CARGO=${CARGO:-cargo}
 compose() { docker compose -f "$root/docker/e2e-lakehouse/compose.yaml" "$@"; }
-aws_cli() { compose run --rm -T aws "$@"; }
+aws_cli() { compose run --rm -T aws-cli "$@"; }
 unity_catalog="http://localhost:${UNITY_CATALOG_PORT:-8080}/api/2.1/unity-catalog"
 s3_endpoint="http://localhost:${RUSTFS_PORT:-9000}"
 table_location="s3://lakehouse/unity/events"
