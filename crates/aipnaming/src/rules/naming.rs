@@ -1,0 +1,374 @@
+//! Name-shape rules: casing, underscores, prepositions, verbs, booleans,
+//! abbreviations, and reserved words.
+//!
+//! These are seeded from Google's `api-linter` `aip0140` rules; the Rust
+//! additions are noted per check.
+
+use crate::decl::DeclKind;
+use crate::lint::{report, Finding, Severity};
+use crate::words::{imperative_verb, split_identifier};
+
+use super::Context;
+
+/// Casing per Rust RFC 430, with the AIP-126 enum-value style accepted
+/// alongside it.
+///
+/// AIP-126 asks for `UPPER_SNAKE_CASE` enum values; existing Rust code (and
+/// this workspace's own crates) use `UpperCamelCase`, and protobuf's rationale
+/// for the rule — hoisted values in generated namespaces — does not apply to
+/// Rust enums. Both readings are accepted so the rule never lies about a
+/// deliberate, working convention.
+pub(super) fn casing(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    for decl in ctx.decls {
+        let (ok, expected) = match decl.kind {
+            DeclKind::Struct
+            | DeclKind::Enum
+            | DeclKind::Union
+            | DeclKind::Trait
+            | DeclKind::Alias => (is_upper_camel(&decl.name), "UpperCamelCase"),
+            DeclKind::Function
+            | DeclKind::Method
+            | DeclKind::AssociatedFunction
+            | DeclKind::Field
+            | DeclKind::Module
+            | DeclKind::Macro => (is_snake_case(&decl.name), "snake_case"),
+            DeclKind::Constant | DeclKind::Static => {
+                (is_upper_snake(&decl.name), "UPPER_SNAKE_CASE")
+            }
+            DeclKind::Variant => (
+                is_upper_camel(&decl.name) || is_upper_snake(&decl.name),
+                "UpperCamelCase or UPPER_SNAKE_CASE",
+            ),
+        };
+        if !ok {
+            report(
+                findings,
+                "aip-190/casing",
+                Severity::ERROR,
+                decl,
+                format!("`{}` should use {expected}.", decl.name),
+                None,
+            );
+        }
+    }
+}
+
+/// Ported from api-linter `core::0140::underscores`: no leading, trailing, or
+/// adjacent underscores. Fields only, matching the linter's scope.
+pub(super) fn underscores(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    for decl in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
+        if decl.name.starts_with('_') || decl.name.ends_with('_') || decl.name.contains("__") {
+            report(
+                findings,
+                "aip-140/underscores",
+                Severity::WARNING,
+                decl,
+                format!(
+                    "`{}` must not begin or end with an underscore, or use adjacent underscores.",
+                    decl.name
+                ),
+                None,
+            );
+        }
+    }
+}
+
+/// Ported from api-linter `core::0140::abbreviations`.
+pub(super) fn abbreviations(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    const ABBREVIATIONS: &[(&str, &str)] = &[
+        ("configuration", "config"),
+        ("identifier", "id"),
+        ("information", "info"),
+        ("specification", "spec"),
+        ("statistics", "stats"),
+    ];
+    for decl in ctx.decls {
+        for word in split_identifier(&decl.name) {
+            let lower = word.to_ascii_lowercase();
+            if let Some((long, short)) = ABBREVIATIONS.iter().find(|(long, _)| *long == lower) {
+                let suggestion = decl.name.replacen(word, short, 1);
+                report(
+                    findings,
+                    "aip-140/abbreviations",
+                    Severity::WARNING,
+                    decl,
+                    format!("Use the common abbreviation `{short}` instead of `{long}`."),
+                    Some(format!("`{suggestion}`")),
+                );
+            }
+        }
+    }
+}
+
+/// Ported from api-linter `core::0140::prepositions`, widened to functions and
+/// types (AIP-136 and AIP-190 forbid prepositions there too).
+pub(super) fn prepositions(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    const FIELD_EXCEPTIONS: &[&str] = &["order_by", "group_by", "hour_of_day", "day_of_week"];
+    const CONVERSION_PREFIXES: &[&str] = &["from", "to", "into", "as"];
+
+    for decl in ctx.decls {
+        let in_scope = matches!(
+            decl.kind,
+            DeclKind::Field
+                | DeclKind::Function
+                | DeclKind::Method
+                | DeclKind::AssociatedFunction
+                | DeclKind::Struct
+                | DeclKind::Enum
+                | DeclKind::Union
+                | DeclKind::Trait
+                | DeclKind::Alias
+        );
+        if !in_scope || FIELD_EXCEPTIONS.contains(&decl.name.as_str()) {
+            continue;
+        }
+        let conversion = matches!(
+            decl.kind,
+            DeclKind::Function
+                | DeclKind::Method
+                | DeclKind::AssociatedFunction
+                | DeclKind::Struct
+                | DeclKind::Enum
+                | DeclKind::Union
+                | DeclKind::Trait
+                | DeclKind::Alias
+        );
+        for (index, word) in split_identifier(&decl.name).iter().enumerate() {
+            let lower = word.to_ascii_lowercase();
+            if !crate::words::classify(&lower).eq(&crate::words::WordKind::Preposition) {
+                continue;
+            }
+            if conversion && index == 0 && CONVERSION_PREFIXES.contains(&lower.as_str()) {
+                continue;
+            }
+            report(
+                findings,
+                "aip-140/prepositions",
+                Severity::WARNING,
+                decl,
+                format!("Avoid using `{lower}` in {} names.", kind_noun(decl.kind)),
+                None,
+            );
+        }
+    }
+}
+
+/// AIP-140: fields state what is, not what to do. Flag a leading imperative
+/// verb (`collect_items`) but keep noun modifiers (`report_row`) and
+/// participles (`collected_items`).
+pub(super) fn verbs(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    for decl in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
+        let words = split_identifier(&decl.name);
+        if words.len() < 2 {
+            continue;
+        }
+        let first = words[0].to_ascii_lowercase();
+        if !imperative_verb(&first) {
+            continue;
+        }
+        let participle = participle(first.as_str());
+        let rest = words[1..].join("_").to_ascii_lowercase();
+        let suggestion = format!("{participle}_{rest}");
+        report(
+            findings,
+            "aip-140/verbs",
+            Severity::WARNING,
+            decl,
+            format!(
+                "Fields describe state: prefer `{suggestion}` to `{}`.",
+                decl.name
+            ),
+            Some(suggestion),
+        );
+    }
+}
+
+/// AIP-140: booleans omit the verb prefix. Needs the written `bool` type; an
+/// alias or `Option<bool>` is left alone.
+pub(super) fn booleans(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    const PREFIXES: &[&str] = &[
+        "is", "has", "can", "should", "was", "were", "does", "did", "will", "would",
+    ];
+    for decl in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
+        if !decl.is_bool() {
+            continue;
+        }
+        let Some((prefix, stripped)) = decl.name.split_once('_') else {
+            continue;
+        };
+        if !PREFIXES.contains(&prefix) || stripped.is_empty() {
+            continue;
+        }
+        if reserved_word(stripped) {
+            continue;
+        }
+        report(
+            findings,
+            "aip-140/booleans",
+            Severity::ERROR,
+            decl,
+            format!(
+                "Booleans omit the verb prefix: use `{stripped}`, not `{}`.",
+                decl.name
+            ),
+            Some(stripped.to_owned()),
+        );
+    }
+}
+
+/// Ported from api-linter `core::0140::reserved-words`, applied to fields.
+pub(super) fn reserved_words(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
+    for decl in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
+        if reserved_word(&decl.name) {
+            report(
+                findings,
+                "aip-140/reserved-words",
+                Severity::WARNING,
+                decl,
+                format!(
+                    "`{}` is a reserved word in a common language and should not be used.",
+                    decl.name
+                ),
+                None,
+            );
+        }
+    }
+}
+
+const RESERVED_WORDS: &[&str] = &[
+    "abstract",
+    "and",
+    "arguments",
+    "as",
+    "assert",
+    "async",
+    "await",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "crate",
+    "debugger",
+    "def",
+    "default",
+    "del",
+    "delete",
+    "do",
+    "double",
+    "elif",
+    "else",
+    "enum",
+    "eval",
+    "except",
+    "export",
+    "extends",
+    "false",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "from",
+    "function",
+    "global",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "int",
+    "interface",
+    "is",
+    "lambda",
+    "let",
+    "long",
+    "native",
+    "new",
+    "nonlocal",
+    "not",
+    "null",
+    "or",
+    "package",
+    "pass",
+    "private",
+    "protected",
+    "public",
+    "raise",
+    "return",
+    "self",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "true",
+    "try",
+    "type",
+    "typeof",
+    "var",
+    "void",
+    "volatile",
+    "while",
+    "with",
+    "yield",
+];
+
+fn reserved_word(name: &str) -> bool {
+    RESERVED_WORDS.contains(&name)
+}
+
+fn kind_noun(kind: DeclKind) -> &'static str {
+    match kind {
+        DeclKind::Field => "field",
+        DeclKind::Variant => "enum variant",
+        DeclKind::Constant | DeclKind::Static => "constant",
+        DeclKind::Struct | DeclKind::Enum | DeclKind::Union | DeclKind::Trait | DeclKind::Alias => {
+            "type"
+        }
+        DeclKind::Module => "module",
+        DeclKind::Macro => "macro",
+        _ => "function",
+    }
+}
+
+fn participle(verb: &str) -> String {
+    if let Some(stem) = verb.strip_suffix('e') {
+        return format!("{stem}ed");
+    }
+    if verb.len() > 1 && verb.ends_with('y') {
+        return format!("{}ied", &verb[..verb.len() - 1]);
+    }
+    format!("{verb}ed")
+}
+
+fn is_upper_camel(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && name.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn is_snake_case(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && name.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+fn is_upper_snake(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && name.chars().any(|c| c.is_ascii_alphabetic())
+}

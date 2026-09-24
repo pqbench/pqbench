@@ -179,9 +179,11 @@ impl Extract<'_> {
         item: Node,
     ) {
         let start = name.start_position();
-        let docs = self.has_docs(item.start_byte());
+        let docs = self.has_docs(item);
+        let raw_name = self.text(name);
+        let name_text = raw_name.strip_prefix("r#").unwrap_or(raw_name);
         self.out.push(Declaration {
-            name: self.text(name).to_owned(),
+            name: name_text.to_owned(),
             kind,
             owner: owner.map(str::to_owned),
             type_name,
@@ -196,22 +198,34 @@ impl Extract<'_> {
         node.utf8_text(self.source.as_bytes()).unwrap_or("")
     }
 
-    /// Whether a doc comment sits above `start`, allowing attribute lines
-    /// between the comment and the declaration.
-    fn has_docs(&self, start: usize) -> bool {
-        let mut lines = self.source[..start].split('\n').rev();
+    /// Whether a doc comment is attached to the item.
+    ///
+    /// tree-sitter attaches a leading comment either to the item itself (then
+    /// the item's start byte points at the comment) or as the item's previous
+    /// sibling; both shapes are checked, and attribute lines in between are
+    /// skipped.
+    fn has_docs(&self, item: Node) -> bool {
+        if is_doc_text(self.source[item.start_byte()..].trim_start()) {
+            return true;
+        }
+        let mut sibling = item.prev_sibling();
+        while let Some(node) = sibling {
+            match node.kind() {
+                "line_comment" | "block_comment" => {
+                    return is_doc_text(self.text(node).trim_start());
+                }
+                "attribute_item" => sibling = node.prev_sibling(),
+                _ => break,
+            }
+        }
+        let mut lines = self.source[..item.start_byte()].split('\n').rev();
         let _same_line = lines.next();
         for line in lines.take(64) {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            if line.starts_with("///")
-                || line.starts_with("//!")
-                || line.starts_with("/**")
-                || line.starts_with("#[doc")
-                || line.ends_with("*/")
-            {
+            if is_doc_text(line) || line.ends_with("*/") {
                 return true;
             }
             if line.starts_with("#[") {
@@ -221,4 +235,12 @@ impl Extract<'_> {
         }
         false
     }
+}
+
+/// Whether a comment line is a doc comment.
+fn is_doc_text(text: &str) -> bool {
+    text.starts_with("///")
+        || text.starts_with("//!")
+        || text.starts_with("/**")
+        || text.starts_with("/*!")
 }

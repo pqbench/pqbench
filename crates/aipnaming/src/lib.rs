@@ -18,5 +18,7 @@
 //! fields behind aliases) are advisory by design.
 
 pub mod decl;
+pub mod lint;
+mod rules;
 pub mod rust;
 pub mod words;
