@@ -1,7 +1,7 @@
-//! The async HTTP client behind [`crate::unity::list_tables`].
+//! The async HTTP client behind [`super::api::list_tables`].
 //!
 //! This is the only module that names the third-party `reqwest` crate. It is
-//! compiled only with the `unity` feature; without it [`crate::unity`] fails
+//! compiled only with the `unity` feature; without it [`super::api`] fails
 //! before reaching here. Requests are sequential (one page at a time) on the
 //! caller's event loop, which stays free while a page is in flight.
 //!
@@ -15,8 +15,8 @@ use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use super::api::{is_glob, Error, LakeSource, NameFilter};
 use crate::lake::LakeTable;
-use crate::unity::{is_glob, Error, LakeSource, NameFilter};
 
 const PAGE_CAP: usize = 32;
 const PAGE_SIZE: u32 = 50;

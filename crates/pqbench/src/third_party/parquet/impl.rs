@@ -1,7 +1,7 @@
 //! The bundled `PageParser` implementation, backed by parquet-rs.
 //!
 //! This module is private (`lib.rs` doesn't `pub mod` it); the only thing the
-//! crate exposes is [`crate::parquet_helpers::default_parser`]. Tool code never
+//! crate exposes is [`super::api::default_parser`]. Tool code never
 //! imports `parquet` directly.
 
 use std::path::Path;
@@ -11,7 +11,7 @@ use parquet::column::page::{Page as ParquetPage, PageReader};
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
-use crate::parquet_helpers::{
+use super::api::{
     ColumnChunk, ColumnMass, Error, FileMass, MetadataParser, Page, PageParser, ParquetFile,
 };
 

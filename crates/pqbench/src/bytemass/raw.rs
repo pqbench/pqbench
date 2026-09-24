@@ -1,10 +1,10 @@
 //! Raw layer: carry a file's per-column byte masses, read from metadata.
 //!
-//! `read` is a thin seam over [`crate::parquet_helpers::FileMass`]: the file's
+//! `read` is a thin seam over [`crate::third_party::parquet::api::FileMass`]: the file's
 //! per-chunk (path, on-disk bytes) entries, un-aggregated. `analytics` sums
 //! chunks across row groups and derives the per-row measure.
 
-use crate::parquet_helpers::FileMass;
+use crate::third_party::parquet::api::FileMass;
 
 /// One column chunk's raw on-disk byte mass.
 pub(super) struct RawColumn {
@@ -40,7 +40,7 @@ pub(super) fn read(mass: &FileMass) -> FileRaw {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parquet_helpers::ColumnMass;
+    use crate::third_party::parquet::api::ColumnMass;
 
     #[test]
     fn read_carries_per_chunk_bytes_and_rows() {

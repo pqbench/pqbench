@@ -2,8 +2,8 @@
 
 mod support;
 
-use pqbench::parquet_helpers::{default_metadata_parser, MetadataParser};
 use pqbench::table::{self, LoadRequest, TableFormat};
+use pqbench::third_party::parquet::api::{default_metadata_parser, MetadataParser};
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
 

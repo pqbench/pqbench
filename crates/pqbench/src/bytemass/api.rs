@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::parquet_helpers::Error;
+use crate::third_party::parquet::api::Error;
 
 use super::collection;
 

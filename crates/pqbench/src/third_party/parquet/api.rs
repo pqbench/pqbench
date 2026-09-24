@@ -60,9 +60,9 @@ pub trait PageParser {
 }
 
 /// The bundled page parser. Backed by parquet-rs; see the private
-/// `parquet_impl` module for the implementation.
+/// `impl` module for the implementation.
 pub fn default_parser() -> impl PageParser {
-    crate::parquet_impl::ParquetRsParser
+    super::r#impl::ParquetRsParser
 }
 
 /// A column's byte mass, read from parquet metadata (no page decoding).
@@ -101,7 +101,7 @@ pub trait MetadataParser {
 
 /// The bundled metadata parser. Backed by parquet-rs.
 pub fn default_metadata_parser() -> impl MetadataParser {
-    crate::parquet_impl::ParquetRsParser
+    super::r#impl::ParquetRsParser
 }
 
 /// Read byte masses from a complete Parquet footer.
@@ -113,7 +113,7 @@ pub fn default_metadata_parser() -> impl MetadataParser {
 /// # Errors
 /// Returns [`Error`] if `footer` is not a valid Parquet footer.
 pub fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
-    crate::parquet_impl::read_footer_masses(footer)
+    super::r#impl::read_footer_masses(footer)
 }
 
 #[cfg(test)]

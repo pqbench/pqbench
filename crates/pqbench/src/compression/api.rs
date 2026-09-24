@@ -7,9 +7,9 @@
 use std::path::PathBuf;
 
 use crate::bench::{self, Error};
-use crate::parquet_helpers::{default_parser, PageParser};
 use crate::report;
 use crate::stats;
+use crate::third_party::parquet::api::{default_parser, PageParser};
 
 /// Arguments for the `compression` command.
 #[derive(Debug, Clone)]

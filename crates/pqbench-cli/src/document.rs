@@ -17,7 +17,7 @@ use crate::emit::Emitter;
 
 use pqbench::lake::Lake;
 use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
-use pqbench::unity::LakeSource;
+use pqbench::third_party::unity::LakeSource;
 use serde::{Deserialize, Serialize};
 
 use crate::CliError;

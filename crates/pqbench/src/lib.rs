@@ -7,13 +7,8 @@ pub mod codecs;
 pub mod compression;
 pub mod lake;
 pub mod lz;
-mod object_store;
-pub mod parquet_helpers;
-mod parquet_impl;
 pub mod report;
 pub mod stats;
 pub mod table;
 mod text;
-pub mod unity;
-#[cfg(feature = "unity")]
-mod unity_helpers;
+pub mod third_party;

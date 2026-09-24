@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::parquet_helpers::Error;
+use crate::third_party::parquet::api::Error;
 
 use super::analytics::{self, MassNode};
 use super::api::MassRow;

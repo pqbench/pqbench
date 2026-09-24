@@ -45,7 +45,7 @@ pub enum Error {
     /// The codec layer failed.
     Codec(CodecError),
     /// The parquet layer failed.
-    Parquet(crate::parquet_helpers::Error),
+    Parquet(crate::third_party::parquet::api::Error),
     /// A renderer could not serialize its output.
     Json(serde_json::Error),
 }
@@ -69,8 +69,8 @@ impl From<CodecError> for Error {
     }
 }
 
-impl From<crate::parquet_helpers::Error> for Error {
-    fn from(e: crate::parquet_helpers::Error) -> Self {
+impl From<crate::third_party::parquet::api::Error> for Error {
+    fn from(e: crate::third_party::parquet::api::Error) -> Self {
         Error::Parquet(e)
     }
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use pqbench::lake::{self, Lake, LakeTable};
-use pqbench::unity::{self, NameFilter};
+use pqbench::third_party::unity::{self, NameFilter};
 use serde::Serialize;
 
 use crate::document::{self, Record};

@@ -7,10 +7,9 @@
 //! when the leading name is a literal. Listing is sequential: the caller runs
 //! one table per later process, not one thread per table.
 //!
-//! All `reqwest` interaction lives in the private `unity_helpers` module. The
-//! `unity` feature compiles the client and that module; without it
-//! [`list_tables`] fails and names the feature. There are no feature flags
-//! outside these two modules.
+//! All `reqwest` interaction lives in the private `impl` module. The `unity`
+//! feature compiles it; without it [`list_tables`] fails and names the
+//! feature. There are no feature flags outside this folder.
 //!
 //! https://docs.databricks.com/api/workspace/tables/list
 //! https://docs.databricks.com/aws/en/dev-tools/rest-api
@@ -241,7 +240,7 @@ pub async fn list_tables(
 ) -> Result<Vec<LakeTable>, Error> {
     #[cfg(feature = "unity")]
     {
-        crate::unity_helpers::list_tables(source, filter).await
+        super::r#impl::list_tables(source, filter).await
     }
     #[cfg(not(feature = "unity"))]
     {
