@@ -93,6 +93,34 @@ credentials to `bytemass`:
 producer | pqbench table | pqbench bytemass
 ```
 
+### lake
+
+List Delta tables as `pqbench.table-ref` lines, one line per table for the
+shell to fan out (`xargs -P`). A directory that contains `_delta_log` is one
+table. A `pqbench.lake-source` document, from a file or stdin, lists a Unity
+Catalog. The same routes serve
+[Unity Catalog OSS](https://docs.unitycatalog.io/) and
+[Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
+then schemas, then tables, following `next_page_token`. `--include` /
+`--exclude` match a Unity FQN (`main`, `main.default`, `main.default.events`)
+as a glob or a prefix, and prune the walk when the leading name is a literal
+(`--include main.default.events` does not list the other catalogs). `token` is
+the Databricks bearer token. `env` holds `AWS_*` storage credentials and is
+copied onto each table-ref.
+
+```sh
+pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
+pqbench lake unity.json | pqbench table | pqbench bytemass
+```
+
+```json
+{"kind": "pqbench.lake-source", "version": 1,
+ "endpoint": "https://example.cloud.databricks.com",
+ "token": "...",
+ "catalog": "main",
+ "env": {"AWS_REGION": "us-east-1"}}
+```
+
 ## Documentation
 
 - [Unity Catalog E2E example](docker/e2e-lakehouse/README.md) — a catalog vending

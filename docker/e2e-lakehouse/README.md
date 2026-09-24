@@ -28,7 +28,7 @@ That reaches a stand you can query, in three steps you can also run alone:
 | `make lakehouse-up` | starts rustfs, mints the session credential Unity will vend, waits for the catalog API to answer |
 | `make lakehouse-seed-s3` | uploads [`table/`](table) to `s3://lakehouse/unity/events` |
 | `make lakehouse-seed-unity` | registers `pqbench.demo.events` as an external Delta table |
-| `make lakehouse` | all three, then the credential-vending check below |
+| `make lakehouse` | all three, then the table and lake checks below |
 
 Every step is idempotent, and the minted credential is cached in
 `local/lakehouse/vended.env` for its 12-hour life, so a rerun neither mints a new
@@ -84,9 +84,11 @@ id                                      22.00
 total                                   46.00
 ```
 
-`make lakehouse` runs exactly this pipe as its last step. Pass `--d3` to
-`bytemass` to get a treemap, or stop after `pqbench table` and pipe to `jq .`
-to read the log document itself.
+`make lakehouse` runs exactly this pipe as its last step, then lists the same
+table with `pqbench lake` (a `pqbench.lake-source` document for the endpoint)
+and pipes it through `table | bytemass` again, so the catalog-listing path is
+seen to work too. Pass `--d3` to `bytemass` to get a treemap, or stop after
+`pqbench table` and pipe to `jq .` to read the log document itself.
 
 The document is `{"kind": "pqbench.remote-source", "version": 1, "inputs": [...],
 "env": {...}}`. The producer answers *which table*, `pqbench table` detects

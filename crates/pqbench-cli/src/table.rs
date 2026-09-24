@@ -79,6 +79,17 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
                 add(&info, &mut tables, &mut files, &mut bytes);
                 document::write_table_records(&mut emit, &info.uri, &info)?;
             }
+            Record::Lake(lake) => {
+                for table in lake.tables {
+                    let info = load_info(table.uri, table.env, args.version).await?;
+                    add(&info, &mut tables, &mut files, &mut bytes);
+                    document::write_table_records(&mut emit, &table.name, &info)?;
+                }
+            }
+            Record::LakeSource(_) => {
+                return Err("a lake source lists tables; pass it to `pqbench lake` first".into());
+            }
+            Record::LakeBegin | Record::LakeEnd => {}
             Record::Begin(_) | Record::Commit { .. } | Record::File { .. } | Record::End { .. } => {
                 return Err(
                     "a loaded table stream goes to `pqbench bytemass`, not `pqbench table`".into(),
