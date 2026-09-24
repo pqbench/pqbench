@@ -13,8 +13,9 @@ three rows, two columns (`id`, `label`). It is committed as data in
 
 ## Run it
 
-Needs Docker Compose v2, a Rust toolchain for this branch, Bash, `curl`, and
-`jq`. From the repository root:
+Needs Docker Compose v2, a Rust toolchain for this branch (the stand builds
+`pqbench` with `--features delta-s3`), Bash, `curl`, and `jq`. From the
+repository root:
 
 ```bash
 make lakehouse
@@ -39,6 +40,7 @@ override it: `UNITY_CATALOG_PORT=18080 make lakehouse`.
 ```bash
 UC=http://localhost:8080/api/2.1/unity-catalog
 S3=http://localhost:9000
+BIN=${CARGO_TARGET_DIR:-target}/debug/pqbench
 
 # What the catalog holds:
 curl -s $UC/tables/pqbench.demo.events |
@@ -69,8 +71,8 @@ curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/js
         AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
         AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
         AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
-  target/debug/pqbench table |
-  target/debug/pqbench bytemass
+  "$BIN" table |
+  "$BIN" bytemass
 ```
 
 ```text
