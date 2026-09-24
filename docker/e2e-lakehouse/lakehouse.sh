@@ -108,8 +108,8 @@ check() {
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity_catalog/tables/pqbench.demo.events" |
                 jq -c '{table_id, operation: "READ"}')" |
-        jq -c --arg s3 "$s3_endpoint" '{kind: "pqbench.remote-source", version: 1,
-            inputs: ["'"$table_location"'"],
+        jq -c --arg s3 "$s3_endpoint" --arg table "$table_location" \
+            '{kind: "pqbench.remote-source", version: 1, inputs: [$table],
             env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
                 AWS_SECRET_ACCESS_KEY: .secret_access_key,
                 AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
