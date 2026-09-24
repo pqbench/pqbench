@@ -74,9 +74,9 @@ pub(crate) fn list_tables(
     let root = api_root(&source.endpoint);
     let token = source.token.clone().filter(|token| !token.is_empty());
     let mut tables = 0usize;
-    for catalog in catalogs_to_list(&root, token.as_deref(), source, filter)? {
-        for schema in schemas_to_list(&root, token.as_deref(), &catalog, source, filter)? {
-            tables += tables_in(
+    for catalog in list_catalogs(&root, token.as_deref(), source, filter)? {
+        for schema in list_schemas(&root, token.as_deref(), &catalog, source, filter)? {
+            tables += list_schema_tables(
                 &root,
                 token.as_deref(),
                 &catalog,
@@ -93,7 +93,7 @@ pub(crate) fn list_tables(
     Ok(tables)
 }
 
-fn catalogs_to_list(
+fn list_catalogs(
     root: &str,
     token: Option<&str>,
     source: &LakeSource,
@@ -138,7 +138,7 @@ fn catalogs_to_list(
         .collect())
 }
 
-fn schemas_to_list(
+fn list_schemas(
     root: &str,
     token: Option<&str>,
     catalog: &str,
@@ -223,7 +223,7 @@ fn page_token(token: &Option<String>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn tables_in(
+fn list_schema_tables(
     root: &str,
     token: Option<&str>,
     catalog: &str,

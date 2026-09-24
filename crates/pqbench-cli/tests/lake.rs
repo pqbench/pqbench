@@ -16,16 +16,17 @@ fn pqbench() -> Command {
 struct Catalog {
     address: String,
     seen: Arc<Mutex<Vec<String>>>,
-    _thread: std::thread::JoinHandle<()>,
+    #[allow(dead_code)]
+    thread: std::thread::JoinHandle<()>,
 }
 
 #[cfg(feature = "unity")]
 impl Catalog {
     fn spawn(expect_bearer: Option<&'static str>, tables: Vec<Value>) -> Self {
-        Self::spawn_with_catalogs(expect_bearer, vec!["main"], tables)
+        Self::spawn_catalogs(expect_bearer, vec!["main"], tables)
     }
 
-    fn spawn_with_catalogs(
+    fn spawn_catalogs(
         expect_bearer: Option<&'static str>,
         catalogs: Vec<&'static str>,
         tables: Vec<Value>,
@@ -74,7 +75,7 @@ impl Catalog {
         Self {
             address,
             seen,
-            _thread: thread,
+            thread,
         }
     }
 
@@ -277,7 +278,7 @@ fn databricks_list_follows_an_empty_page_token() {
 #[cfg(feature = "unity")]
 #[test]
 fn unity_skips_an_empty_schema_page() {
-    let catalog = Catalog::spawn_with_catalogs(
+    let catalog = Catalog::spawn_catalogs(
         None,
         vec!["main", "samples"],
         vec![json!({
@@ -356,7 +357,7 @@ fn include_and_exclude_match_table_fqn() {
 #[cfg(feature = "unity")]
 #[test]
 fn include_table_fqn_skips_other_catalogs() {
-    let catalog = Catalog::spawn_with_catalogs(
+    let catalog = Catalog::spawn_catalogs(
         None,
         vec!["main", "system"],
         vec![json!({
@@ -393,7 +394,7 @@ fn include_table_fqn_skips_other_catalogs() {
 #[cfg(feature = "unity")]
 #[test]
 fn include_prefix_skips_other_catalogs() {
-    let catalog = Catalog::spawn_with_catalogs(
+    let catalog = Catalog::spawn_catalogs(
         None,
         vec!["main", "system"],
         vec![json!({
@@ -495,7 +496,7 @@ fn lake_table_bytemass_measures_each_table() {
         .iter()
         .find(|record| record["event"] == "end")
         .unwrap();
-    assert_eq!(end["num_rows"], 3000);
+    assert_eq!(end["row_count"], 3000);
     assert_eq!(end["file_count"], 1);
 }
 
