@@ -17,10 +17,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::third_party::delta;
+use crate::third_party::iceberg;
 use crate::third_party::object_store;
-
-#[cfg(feature = "iceberg")]
-pub mod iceberg;
 
 /// Errors detecting a table format or loading its metadata.
 #[derive(Debug)]
@@ -206,24 +204,8 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     match format {
         TableFormat::DELTA => delta::load(request).await,
-        TableFormat::ICEBERG => load_iceberg(request).await,
+        TableFormat::ICEBERG => iceberg::load(request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
-    }
-}
-
-async fn load_iceberg(request: &LoadRequest) -> Result<TableInfo, Error> {
-    #[cfg(feature = "iceberg")]
-    {
-        iceberg::load(request)
-            .await
-            .map_err(|error| Error(error.to_string()))
-    }
-    #[cfg(not(feature = "iceberg"))]
-    {
-        let _ = request;
-        Err(Error(
-            "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
-        ))
     }
 }
 

@@ -5,6 +5,7 @@
 
 pub mod avro;
 pub mod delta;
+pub mod iceberg;
 pub(crate) mod object_store;
 pub mod parquet;
 pub mod unity;

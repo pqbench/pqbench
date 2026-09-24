@@ -1,4 +1,4 @@
-//! Iceberg metadata loader.
+//! Iceberg metadata loader: the only module that reads Iceberg metadata.
 //!
 //! [`load`] reads the metadata JSON and Avro manifests and returns a
 //! [`TableInfo`]. It does not measure Parquet footers; pipe the document to
@@ -10,13 +10,13 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use url::Url;
 
-use super::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::table::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 
 /// Errors resolving an Iceberg snapshot.
 #[derive(Debug)]
-pub struct Error(String);
+pub(super) struct Error(String);
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,7 +35,7 @@ impl std::error::Error for Error {}
 /// # Errors
 /// Fails for invalid metadata, missing snapshots, non-Parquet data files, or
 /// data paths outside the table location.
-pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
+pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     let options = env_options(&request.env);
     let metadata_location = resolve_metadata_location(&request.uri, &options).await?;
     let metadata_bytes = read_location(&metadata_location, &options).await?;
