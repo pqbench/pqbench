@@ -8,8 +8,8 @@
 //! one table per later process, not one thread per table.
 //!
 //! All `reqwest` interaction lives in the private `impl` module. The `unity`
-//! feature compiles it; without it [`list_tables`] fails and names the
-//! feature. There are no feature flags outside this folder.
+//! feature compiles it; without it [`list_tables`] fails and names the feature.
+//! There are no feature flags outside this folder.
 //!
 //! https://docs.databricks.com/api/workspace/tables/list
 //! https://docs.databricks.com/aws/en/dev-tools/rest-api
@@ -68,8 +68,8 @@ impl From<String> for Error {
 /// (`catalog.schema.table`) or a lake-relative directory path.
 #[derive(Clone, Default)]
 pub struct NameFilter {
-    include: Vec<String>,
-    exclude: Vec<String>,
+    pub(crate) include: Vec<String>,
+    pub(crate) exclude: Vec<String>,
 }
 
 impl NameFilter {
@@ -83,39 +83,6 @@ impl NameFilter {
     #[must_use]
     pub fn keeps(&self, name: &str) -> bool {
         self.included(name) && !self.excluded(name)
-    }
-
-    /// A catalog or `catalog.schema` still worth walking.
-    #[cfg(feature = "unity")]
-    pub(crate) fn keeps_prefix(&self, name: &str) -> bool {
-        let included =
-            self.include.is_empty() || self.include.iter().any(|pattern| can_reach(name, pattern));
-        included
-            && !self
-                .exclude
-                .iter()
-                .any(|pattern| prunes_prefix(name, pattern))
-    }
-
-    /// Catalogs `--include` can name without walking `/catalogs`.
-    #[cfg(feature = "unity")]
-    pub(crate) fn catalog_scope(&self) -> Option<Vec<String>> {
-        literal_heads(&self.include, 0)
-    }
-
-    /// Schemas `--include` can name inside `catalog` without walking `/schemas`.
-    #[cfg(feature = "unity")]
-    pub(crate) fn schema_scope(&self, catalog: &str) -> Option<Vec<String>> {
-        let patterns: Vec<String> = self
-            .include
-            .iter()
-            .filter(|pattern| can_reach(catalog, pattern))
-            .cloned()
-            .collect();
-        if patterns.is_empty() {
-            return None;
-        }
-        literal_heads(&patterns, 1)
     }
 
     fn included(&self, name: &str) -> bool {
@@ -137,7 +104,7 @@ pub(crate) fn is_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
-fn matches_fqn(name: &str, pattern: &str) -> bool {
+pub(crate) fn matches_fqn(name: &str, pattern: &str) -> bool {
     if is_glob(pattern) {
         if glob_matches(pattern, name) {
             return true;
@@ -149,25 +116,7 @@ fn matches_fqn(name: &str, pattern: &str) -> bool {
         || name.starts_with(&format!("{pattern}/"))
 }
 
-#[cfg(feature = "unity")]
-fn can_reach(prefix: &str, pattern: &str) -> bool {
-    if is_glob(pattern) && glob_matches(pattern, prefix) {
-        return true;
-    }
-    components_match(prefix, pattern, true)
-}
-
-#[cfg(feature = "unity")]
-fn prunes_prefix(prefix: &str, pattern: &str) -> bool {
-    let prefix_parts = split_fqn(prefix);
-    let pattern_parts = split_fqn(pattern);
-    if pattern_parts.len() > prefix_parts.len() {
-        return false;
-    }
-    matches_fqn(prefix, pattern)
-}
-
-fn components_match(name: &str, pattern: &str, prefix: bool) -> bool {
+pub(crate) fn components_match(name: &str, pattern: &str, prefix: bool) -> bool {
     let name_parts = split_fqn(name);
     let pattern_parts = split_fqn(pattern);
     if name_parts.is_empty() || pattern_parts.is_empty() {
@@ -192,41 +141,16 @@ fn component_matches(name: &str, pattern: &str) -> bool {
     }
 }
 
-fn glob_matches(pattern: &str, name: &str) -> bool {
+pub(crate) fn glob_matches(pattern: &str, name: &str) -> bool {
     glob::Pattern::new(pattern)
         .map(|glob| glob.matches(name))
         .unwrap_or(false)
 }
 
-fn split_fqn(name: &str) -> Vec<&str> {
+pub(crate) fn split_fqn(name: &str) -> Vec<&str> {
     name.split(['.', '/'])
         .filter(|part| !part.is_empty())
         .collect()
-}
-
-#[cfg(feature = "unity")]
-fn literal_heads(patterns: &[String], index: usize) -> Option<Vec<String>> {
-    if patterns.is_empty() {
-        return None;
-    }
-    let mut heads = Vec::new();
-    for pattern in patterns {
-        let parts = split_fqn(pattern);
-        let Some(part) = parts.get(index) else {
-            continue;
-        };
-        if is_glob(part) {
-            return None;
-        }
-        if !heads.iter().any(|have| have == part) {
-            heads.push((*part).to_string());
-        }
-    }
-    if heads.is_empty() {
-        None
-    } else {
-        Some(heads)
-    }
 }
 
 /// List the Delta tables the source names, in catalog, schema, table order.
@@ -238,16 +162,5 @@ pub async fn list_tables(
     source: &LakeSource,
     filter: &NameFilter,
 ) -> Result<Vec<LakeTable>, Error> {
-    #[cfg(feature = "unity")]
-    {
-        super::r#impl::list_tables(source, filter).await
-    }
-    #[cfg(not(feature = "unity"))]
-    {
-        let _ = (source, filter);
-        Err(Error::from(
-            "this build lists directories only; rebuild with --features unity for a Unity Catalog"
-                .to_string(),
-        ))
-    }
+    super::r#impl::list_tables(source, filter).await
 }

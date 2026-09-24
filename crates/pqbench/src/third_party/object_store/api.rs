@@ -6,11 +6,9 @@
 //! The factory [`open`] dispatches on the URI scheme; a scheme whose backend is
 //! not compiled in fails at runtime with a message naming the missing feature.
 
-#[cfg(feature = "aws")]
 use std::future::Future;
 use std::ops::Range;
 use std::path::PathBuf;
-#[cfg(feature = "aws")]
 use std::pin::Pin;
 
 use url::Url;
@@ -18,13 +16,6 @@ use url::Url;
 /// Errors from the object-storage layer.
 #[derive(Debug)]
 pub(crate) struct Error(pub(crate) String);
-
-impl Error {
-    #[cfg(feature = "aws")]
-    pub(crate) fn new(message: String) -> Self {
-        Self(message)
-    }
-}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,7 +35,10 @@ pub(crate) struct ObjectStat {
 
 /// A remote backend. Implemented by the private `impl` module over the
 /// third-party store; the trait names no third-party type.
-#[cfg(feature = "aws")]
+///
+/// Unused until a backend is compiled in; kept here so the api never sees a
+/// feature flag.
+#[allow(dead_code)]
 pub(crate) trait Remote: Send + Sync {
     fn exists<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>>;
     fn stat<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<ObjectStat, Error>> + Send + 'a>>;
@@ -62,13 +56,12 @@ pub(crate) struct ObjectReader {
 
 enum ObjectSource {
     Local(PathBuf),
-    #[cfg(feature = "aws")]
     Remote(Box<dyn Remote>),
 }
 
 impl ObjectReader {
     /// Wrap a remote backend. Called by the private `impl` module.
-    #[cfg(feature = "aws")]
+    #[allow(dead_code)]
     pub(crate) fn from_remote(remote: Box<dyn Remote>) -> Self {
         Self {
             source: ObjectSource::Remote(remote),
@@ -79,7 +72,6 @@ impl ObjectReader {
     pub(crate) async fn exists(&self) -> Result<bool, Error> {
         match &self.source {
             ObjectSource::Local(path) => Ok(tokio::fs::metadata(path).await.is_ok()),
-            #[cfg(feature = "aws")]
             ObjectSource::Remote(remote) => remote.exists().await,
         }
     }
@@ -96,7 +88,6 @@ impl ObjectReader {
                     identity: None,
                 })
             }
-            #[cfg(feature = "aws")]
             ObjectSource::Remote(remote) => remote.stat().await,
         }
     }
@@ -107,11 +98,8 @@ impl ObjectReader {
         range: Range<u64>,
         identity: Option<&str>,
     ) -> Result<Vec<u8>, Error> {
-        #[cfg(not(feature = "aws"))]
-        let _ = identity;
         match &self.source {
             ObjectSource::Local(path) => read_local(path, range).await,
-            #[cfg(feature = "aws")]
             ObjectSource::Remote(remote) => {
                 remote.read_range(range, identity.map(str::to_owned)).await
             }
@@ -134,19 +122,7 @@ pub(crate) fn open(uri: &str, options: &[(String, String)]) -> Result<ObjectRead
                 source: ObjectSource::Local(path),
             })
         }
-        "s3" | "s3a" => {
-            #[cfg(feature = "aws")]
-            {
-                super::r#impl::open_remote(&url, options)
-            }
-            #[cfg(not(feature = "aws"))]
-            {
-                let _ = (&url, options);
-                Err(Error(
-                    "object URI scheme `s3` requires the `aws` feature".into(),
-                ))
-            }
-        }
+        "s3" | "s3a" => super::r#impl::open_remote(&url, options),
         scheme => Err(Error(format!(
             "unsupported object URI scheme `{scheme}`; supported schemes are file and s3"
         ))),

@@ -4,7 +4,6 @@
 //! that names the `deltalake` crate.
 
 pub mod api;
-#[cfg(feature = "delta")]
 mod r#impl;
 
 pub use api::load;
