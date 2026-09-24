@@ -18,40 +18,12 @@ impl CodecImpl for Snappy {
     }
 
     fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        let max_len = unsafe { snappy_src::snappy_max_compressed_length(src.len()) };
-        let mut dst = Vec::with_capacity(max_len);
-        let mut len = max_len;
-        let status = unsafe {
-            snappy_src::snappy_compress(
-                src.as_ptr().cast(),
-                src.len(),
-                dst.spare_capacity_mut().as_mut_ptr().cast(),
-                &mut len,
-            )
-        };
-        if status != snappy_src::snappy_status_SNAPPY_OK {
-            return Err(Error::Codec("snappy compress failed".to_string()));
-        }
-        unsafe { dst.set_len(len) };
-        Ok(dst)
+        crate::third_party::snappy::compress(src).map_err(|e| Error::Codec(e.to_string()))
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        let mut dst = Vec::with_capacity(out_cap);
-        let mut len = out_cap;
-        let status = unsafe {
-            snappy_src::snappy_uncompress(
-                src.as_ptr().cast(),
-                src.len(),
-                dst.spare_capacity_mut().as_mut_ptr().cast(),
-                &mut len,
-            )
-        };
-        if status != snappy_src::snappy_status_SNAPPY_OK {
-            return Err(Error::Codec("snappy decompress failed".to_string()));
-        }
-        unsafe { dst.set_len(len) };
-        Ok(dst)
+        crate::third_party::snappy::decompress(src, out_cap)
+            .map_err(|e| Error::Codec(e.to_string()))
     }
 }
 

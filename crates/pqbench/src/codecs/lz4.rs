@@ -18,12 +18,11 @@ impl CodecImpl for Lz4 {
     }
 
     fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        lz4::block::compress(src, None, false).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::lz4::compress(src).map_err(|e| Error::Codec(e.to_string()))
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        lz4::block::decompress(src, Some(i32::try_from(out_cap).unwrap_or(i32::MAX)))
-            .map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::lz4::decompress(src, out_cap).map_err(|e| Error::Codec(e.to_string()))
     }
 }
 

@@ -1,7 +1,5 @@
 //! GZIP codec (gzip format, RFC 1952, via flate2 + C zlib).
 
-use std::io::{Read, Write};
-
 use super::{CodecImpl, Error, LevelRange};
 
 /// The gzip codec (gzip format, RFC 1952, via flate2 + C zlib).
@@ -20,20 +18,12 @@ impl CodecImpl for Gzip {
     }
 
     fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        let mut enc =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(u32::from(level)));
-        enc.write_all(src)
-            .map_err(|e| Error::Codec(e.to_string()))?;
-        enc.finish().map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::flate2::compress(src, level).map_err(|e| Error::Codec(e.to_string()))
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        let mut out = Vec::with_capacity(out_cap);
-        flate2::read::GzDecoder::new(src)
-            .take(out_cap as u64)
-            .read_to_end(&mut out)
-            .map_err(|e| Error::Codec(e.to_string()))?;
-        Ok(out)
+        crate::third_party::flate2::decompress(src, out_cap)
+            .map_err(|e| Error::Codec(e.to_string()))
     }
 }
 

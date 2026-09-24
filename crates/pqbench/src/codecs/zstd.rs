@@ -18,11 +18,11 @@ impl CodecImpl for Zstd {
     }
 
     fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        zstd::bulk::compress(src, level as i32).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::zstd::compress(src, level).map_err(|e| Error::Codec(e.to_string()))
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        zstd::bulk::decompress(src, out_cap).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::zstd::decompress(src, out_cap).map_err(|e| Error::Codec(e.to_string()))
     }
 }
 
