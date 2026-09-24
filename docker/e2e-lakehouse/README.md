@@ -96,26 +96,26 @@ table with `pqbench lake` (a `pqbench.lake-source` document for the endpoint)
 and pipes it through `table | bytemass` again, so the catalog-listing path is
 seen to work too.
 
-Iceberg REST does not vend credentials. `loadTable` returns the metadata JSON
-location; `pqbench table` reads that and the manifests:
+Iceberg REST does not vend credentials. `pqbench lake` lists namespaces and
+tables, then `loadTable` for each metadata location:
 
 ```bash
 ICEBERG=http://localhost:8181
 S3=http://localhost:9000
 BIN=${CARGO_TARGET_DIR:-target}/debug/pqbench
 
-curl -s $ICEBERG/v1/namespaces/demo/tables/events |
-  jq -c --arg s3 "$S3" '{kind: "pqbench.remote-source", version: 1,
-    inputs: [."metadata-location"],
+jq -n --arg endpoint "$ICEBERG" --arg s3 "$S3" \
+  '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
     env: {AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
       AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
       AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' |
+  "$BIN" lake |
   "$BIN" table |
   "$BIN" bytemass
 ```
 
 `make lakehouse` runs the Unity table pipe, the Unity lake pipe, and this
-Iceberg pipe. Pass `--d3` to `bytemass` to get a treemap, or stop after
+Iceberg lake pipe. Pass `--d3` to `bytemass` to get a treemap, or stop after
 `pqbench table` and pipe to `jq .` to read the log document itself.
 
 The document is `{"kind": "pqbench.remote-source", "version": 1, "inputs": [...],

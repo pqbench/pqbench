@@ -92,6 +92,10 @@ impl Catalog {
 #[cfg(feature = "unity")]
 fn catalog_body(request: &str, catalogs: &[&str], tables: &[Value]) -> String {
     let path = request.split_whitespace().nth(1).unwrap_or("");
+    // 200 without `defaults` is Unity; Iceberg REST answers with a defaults object.
+    if path.contains("/v1/config") {
+        return "{}".into();
+    }
     if path.contains("/catalogs") {
         let items: Vec<Value> = catalogs.iter().map(|name| json!({"name": name})).collect();
         return json!({"catalogs": items}).to_string();
@@ -427,6 +431,179 @@ fn include_prefix_skips_other_catalogs() {
     assert_eq!(refs.len(), 1);
 }
 
+#[cfg(feature = "unity")]
+#[test]
+fn iceberg_rest_lists_tables_from_metadata_location() {
+    let catalog = IcebergCatalog::spawn();
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address,
+        "env": {"AWS_REGION": "us-east-1"}
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let refs = table_refs(&ndjson(&output.stdout));
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0]["id"], "demo.events");
+    assert_eq!(
+        refs[0]["uri"],
+        "s3://lakehouse/iceberg/demo/events/metadata/v1.metadata.json"
+    );
+    assert_eq!(refs[0]["env"]["AWS_REGION"], "us-east-1");
+    assert!(refs[0].get("info").is_none());
+}
+
+#[cfg(feature = "unity")]
+#[test]
+fn iceberg_rest_rejects_a_table_without_metadata_location() {
+    let catalog = IcebergCatalog::spawn_load("{}");
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("metadata-location") || stderr.contains("expected document"),
+        "{stderr}"
+    );
+}
+
+#[cfg(feature = "unity")]
+#[test]
+fn iceberg_rest_rejects_a_namespace_page_without_namespaces() {
+    let catalog = IcebergCatalog::spawn_namespaces("{}");
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected document") || stderr.contains("namespaces"),
+        "{stderr}"
+    );
+}
+
+#[cfg(feature = "unity")]
+#[test]
+fn iceberg_rest_rejects_an_identifier_without_a_name() {
+    let catalog = IcebergCatalog::spawn_identifiers(r#"{"identifiers":[{}]}"#);
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": catalog.address
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("expected document") || stderr.contains("name"),
+        "{stderr}"
+    );
+}
+
+#[cfg(feature = "unity")]
+#[test]
+fn lake_source_rejects_a_catalog_that_does_not_answer() {
+    let source = json!({
+        "kind": "pqbench.lake-source",
+        "version": 1,
+        "endpoint": "http://127.0.0.1:1"
+    });
+    let output = pipe(&["lake"], source.to_string().as_bytes());
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("catalog request failed") || stderr.contains("catalog"),
+        "{stderr}"
+    );
+}
+
+/// One Iceberg REST list server: `/v1/config` reports the defaults object that
+/// selects this dialect, then namespaces, tables, and `loadTable`.
+#[cfg(feature = "unity")]
+struct IcebergCatalog {
+    address: String,
+    // Held only to keep the mock catalog thread alive for the test's duration.
+    #[allow(dead_code)]
+    thread: std::thread::JoinHandle<()>,
+}
+
+#[cfg(feature = "unity")]
+impl IcebergCatalog {
+    fn spawn() -> Self {
+        Self::serve(None, None, None)
+    }
+
+    fn spawn_namespaces(namespaces: &'static str) -> Self {
+        Self::serve(Some(namespaces), None, None)
+    }
+
+    fn spawn_identifiers(identifiers: &'static str) -> Self {
+        Self::serve(None, Some(identifiers), None)
+    }
+
+    fn spawn_load(loaded: &'static str) -> Self {
+        Self::serve(None, None, Some(loaded))
+    }
+
+    fn serve(
+        namespaces: Option<&'static str>,
+        identifiers: Option<&'static str>,
+        loaded: Option<&'static str>,
+    ) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let thread = std::thread::spawn(move || {
+            for stream in listener.incoming().take(8) {
+                let mut stream = stream.unwrap();
+                let mut buffer = [0u8; 4096];
+                let n = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..n]);
+                let path = request.split_whitespace().nth(1).unwrap_or("");
+                let body = if path.starts_with("/v1/config") {
+                    json!({"defaults": {}, "overrides": {}}).to_string()
+                } else if path.starts_with("/v1/namespaces/demo/tables/events") {
+                    loaded.map(str::to_string).unwrap_or_else(|| {
+                        json!({
+                            "metadata-location":
+                                "s3://lakehouse/iceberg/demo/events/metadata/v1.metadata.json"
+                        })
+                        .to_string()
+                    })
+                } else if path.starts_with("/v1/namespaces/demo/tables") {
+                    identifiers.map(str::to_string).unwrap_or_else(|| {
+                        json!({"identifiers":[{"namespace":["demo"],"name":"events"}]}).to_string()
+                    })
+                } else if path.starts_with("/v1/namespaces") {
+                    namespaces
+                        .map(str::to_string)
+                        .unwrap_or_else(|| json!({"namespaces":[["demo"]]}).to_string())
+                } else {
+                    json!({"error": path}).to_string()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        Self { address, thread }
+    }
+}
+
 #[test]
 fn bytemass_rejects_a_lake_that_has_not_been_loaded() {
     let document = json!({
@@ -521,7 +698,9 @@ fn lake_rejects_a_catalog_with_no_delta_tables() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     let _thread = std::thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
+        // Probe is GET /v1/config (200 without defaults → Unity), then catalogs.
+        for stream in listener.incoming().take(2) {
+            let mut stream = stream.unwrap();
             let mut buffer = [0u8; 1024];
             let _ = stream.read(&mut buffer);
             let body = b"{}";

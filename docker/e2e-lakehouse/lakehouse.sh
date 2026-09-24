@@ -223,17 +223,16 @@ check_unity() {
 
 check_iceberg() {
     ensure_pqbench
-    local metadata measurement measured
-    metadata=$(curl -sS "$iceberg_rest/v1/namespaces/demo/tables/events" |
-        jq -er '."metadata-location" // .metadata."metadata-location"')
-    measurement=$(jq -c -n --arg metadata "$metadata" --argjson env "$(storage_env)" \
-        '{kind: "pqbench.remote-source", version: 1, inputs: [$metadata], env: $env}' |
+    local measurement measured
+    measurement=$(jq -c -n --arg endpoint "$iceberg_rest" --argjson env "$(storage_env)" \
+        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
+        "$pqbench_bin" lake |
         "$pqbench_bin" table |
         "$pqbench_bin" bytemass --json) || {
-        echo "check failed: the Iceberg table pipe produced no measurement" >&2
+        echo "check failed: the Iceberg lake pipe produced no measurement" >&2
         exit 1
     }
-    measured=$(expect_events "iceberg table" "$measurement")
+    measured=$(expect_events "iceberg lake" "$measurement")
     echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured"
 }
 
