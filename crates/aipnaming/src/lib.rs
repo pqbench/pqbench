@@ -17,6 +17,7 @@
 //! type checker, so rules that would need a full type (repeated fields, bool
 //! fields behind aliases) are advisory by design.
 
+mod data;
 pub mod decl;
 pub mod lint;
 mod rules;

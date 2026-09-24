@@ -6,49 +6,12 @@
 //! head, or a plain singular type with a regular plural head. Opaque wrappers
 //! (`Option`, maps, sets) and uncountable words stay quiet.
 
+use crate::data;
 use crate::decl::{DeclKind, Declaration};
 use crate::lint::{report, Finding, Severity};
 use crate::words::{is_plural, is_singular, split_identifier};
 
 use super::Context;
-
-/// Types that hold zero or more elements of the named kind.
-const SEQUENCES: &[&str] = &[
-    "Vec",
-    "VecDeque",
-    "BinaryHeap",
-    "SmallVec",
-    "ArrayVec",
-    "LinkedList",
-];
-
-/// Wrappers whose shape does not decide singular vs plural.
-const OPAQUE: &[&str] = &[
-    "Option",
-    "Result",
-    "Cow",
-    "Box",
-    "Rc",
-    "Arc",
-    "RefCell",
-    "Cell",
-    "Mutex",
-    "RwLock",
-    "HashMap",
-    "BTreeMap",
-    "IndexMap",
-    "HashSet",
-    "BTreeSet",
-    "IndexSet",
-    "PhantomData",
-];
-
-/// Scalar types where a plural name is a quantity (`total_bytes: u64`), not a
-/// repeated field.
-const SCALARS: &[&str] = &[
-    "bool", "char", "str", "String", "OsStr", "f32", "f64", "u8", "u16", "u32", "u64", "u128",
-    "usize", "i8", "i16", "i32", "i64", "i128", "isize",
-];
 
 pub(super) fn agreement(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     for field in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
@@ -96,7 +59,7 @@ pub(super) fn agreement(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
 
 fn is_sequence(field: &Declaration) -> bool {
     if let Some(constructor) = field.type_constructor_name() {
-        return SEQUENCES.contains(&constructor);
+        return data::set("sequence-types").contains(constructor);
     }
     field
         .type_name
@@ -107,12 +70,12 @@ fn is_sequence(field: &Declaration) -> bool {
 fn is_opaque(field: &Declaration) -> bool {
     field
         .type_constructor_name()
-        .is_some_and(|constructor| OPAQUE.contains(&constructor))
+        .is_some_and(|constructor| data::set("opaque-types").contains(constructor))
 }
 
 fn is_scalar(field: &Declaration) -> bool {
     field
         .type_name
         .as_deref()
-        .is_some_and(|ty| SCALARS.contains(&ty.trim()))
+        .is_some_and(|ty| data::set("scalar-types").contains(ty.trim()))
 }

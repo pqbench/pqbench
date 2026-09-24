@@ -1,0 +1,287 @@
+// The smaller vocabularies the individual checks use. Edit here, not in the
+// rule modules.
+
+# set:reserved-words
+abstract
+and
+arguments
+as
+assert
+async
+await
+boolean
+break
+byte
+case
+catch
+char
+class
+const
+continue
+crate
+debugger
+def
+default
+del
+delete
+do
+double
+elif
+else
+enum
+eval
+except
+export
+extends
+false
+final
+finally
+float
+for
+from
+function
+global
+goto
+if
+implements
+import
+in
+instanceof
+int
+interface
+is
+lambda
+let
+long
+native
+new
+nonlocal
+not
+null
+or
+package
+pass
+private
+protected
+public
+raise
+return
+self
+short
+static
+strictfp
+super
+switch
+synchronized
+this
+throw
+throws
+transient
+true
+try
+type
+typeof
+var
+void
+volatile
+while
+with
+yield
+
+# pairs:abbreviations
+configuration config
+identifier id
+information info
+specification spec
+statistics stats
+
+# pairs:local-abbreviations
+cfg config
+
+# set:field-exceptions
+order_by
+group_by
+hour_of_day
+day_of_week
+
+# set:sequence-types
+Vec
+VecDeque
+BinaryHeap
+SmallVec
+ArrayVec
+LinkedList
+
+# set:opaque-types
+Option
+Result
+Cow
+Box
+Rc
+Arc
+RefCell
+Cell
+Mutex
+RwLock
+HashMap
+BTreeMap
+IndexMap
+HashSet
+BTreeSet
+IndexSet
+PhantomData
+
+# set:scalar-types
+bool
+char
+str
+String
+OsStr
+f32
+f64
+u8
+u16
+u32
+u64
+u128
+usize
+i8
+i16
+i32
+i64
+i128
+isize
+
+# pairs:time-imperatives
+created create_time
+creation create_time
+expired expire_time
+modified update_time
+published publish_time
+purged purge_time
+updated update_time
+
+# set:time-tokens
+time
+times
+at
+date
+timestamp
+
+# set:time-types
+SystemTime
+Instant
+Duration
+DateTime
+NaiveDateTime
+OffsetDateTime
+StdDuration
+Timestamp
+
+# set:rate-tokens
+mbps
+kbps
+gbps
+tbps
+
+# set:unit-tokens
+mb
+kb
+gb
+tb
+mib
+kib
+gib
+tib
+
+# set:legacy-time-units
+ms
+sec
+secs
+min
+mins
+hr
+hrs
+
+# set:integer-types
+u8
+u16
+u32
+u64
+u128
+usize
+i8
+i16
+i32
+i64
+i128
+isize
+
+# set:duration-types
+Duration
+StdDuration
+
+# pairs:british-american
+aluminium aluminum
+analyse analyze
+analysed analyzed
+analyses analyzes
+analysing analyzing
+artefact artifact
+behaviour behavior
+behaviours behaviors
+cancelled canceled
+cancelling canceling
+catalogue catalog
+catalogued cataloged
+catalogues catalogs
+centres centers
+centred centered
+centrepiece centerpiece
+colour color
+colours colors
+coloured colored
+defence defense
+dialogue dialog
+favour favor
+favours favors
+favoured favored
+fibre fiber
+fibres fibers
+finalise finalize
+finalised finalized
+grey gray
+honour honor
+initialise initialize
+initialised initialized
+initialisation initialization
+labelled labeled
+labelling labeling
+licence license
+litre liter
+litres liters
+metre meter
+metres meters
+modelled modeled
+modelling modeling
+normalise normalize
+normalised normalized
+normalisation normalization
+offence offense
+optimise optimize
+optimised optimized
+optimisation optimization
+organise organize
+organised organized
+organisation organization
+recognise recognize
+recognised recognized
+sceptic skeptic
+serialise serialize
+serialised serialized
+serialisation serialization
+theatre theater
+travelled traveled
+travelling traveling
+utilise utilize
+utilised utilized

@@ -4,6 +4,7 @@
 //! These are seeded from Google's `api-linter` `aip0140` rules; the Rust
 //! additions are noted per check.
 
+use crate::data;
 use crate::decl::DeclKind;
 use crate::lint::{report, Finding, Severity};
 use crate::words::{imperative_verb, split_identifier};
@@ -76,18 +77,12 @@ pub(super) fn underscores(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
 /// Ported from api-linter `core::0140::abbreviations`, with the Rust-local
 /// `cfg` -> `config` added: AIP-140 names `config` the well-known abbreviation.
 pub(super) fn abbreviations(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
-    const ABBREVIATIONS: &[(&str, &str)] = &[
-        ("configuration", "config"),
-        ("identifier", "id"),
-        ("information", "info"),
-        ("specification", "spec"),
-        ("statistics", "stats"),
-    ];
-    const LOCAL_ABBREVIATIONS: &[(&str, &str)] = &[("cfg", "config")];
+    let abbreviations = data::pairs("abbreviations");
+    let local = data::pairs("local-abbreviations");
     for decl in ctx.decls {
         for word in split_identifier(&decl.name) {
             let lower = word.to_ascii_lowercase();
-            if let Some((long, short)) = ABBREVIATIONS.iter().find(|(long, _)| *long == lower) {
+            if let Some((long, short)) = abbreviations.iter().find(|(long, _)| *long == lower) {
                 let suggestion = decl.name.replacen(word, short, 1);
                 report(
                     findings,
@@ -98,10 +93,7 @@ pub(super) fn abbreviations(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
                     Some(format!("`{suggestion}`")),
                 );
             }
-            if let Some((local, standard)) = LOCAL_ABBREVIATIONS
-                .iter()
-                .find(|(local, _)| *local == lower)
-            {
+            if let Some((local, standard)) = local.iter().find(|(local, _)| *local == lower) {
                 let suggestion = decl.name.replacen(word, standard, 1);
                 report(
                     findings,
@@ -141,10 +133,11 @@ pub(super) fn method_prepositions(ctx: &Context<'_>, findings: &mut Vec<Finding>
 }
 
 fn check_prepositions(ctx: &Context<'_>, findings: &mut Vec<Finding>, kinds: &[DeclKind]) {
-    const FIELD_EXCEPTIONS: &[&str] = &["order_by", "group_by", "hour_of_day", "day_of_week"];
     const CONVERSION_PREFIXES: &[&str] = &["from", "to", "into", "as"];
     for decl in ctx.decls.iter().filter(|decl| kinds.contains(&decl.kind)) {
-        if decl.kind == DeclKind::Field && FIELD_EXCEPTIONS.contains(&decl.name.as_str()) {
+        if decl.kind == DeclKind::Field
+            && data::set("field-exceptions").contains(&decl.name.as_str())
+        {
             continue;
         }
         if decl.test {
@@ -288,96 +281,8 @@ pub(super) fn async_name(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     }
 }
 
-const RESERVED_WORDS: &[&str] = &[
-    "abstract",
-    "and",
-    "arguments",
-    "as",
-    "assert",
-    "async",
-    "await",
-    "boolean",
-    "break",
-    "byte",
-    "case",
-    "catch",
-    "char",
-    "class",
-    "const",
-    "continue",
-    "crate",
-    "debugger",
-    "def",
-    "default",
-    "del",
-    "delete",
-    "do",
-    "double",
-    "elif",
-    "else",
-    "enum",
-    "eval",
-    "except",
-    "export",
-    "extends",
-    "false",
-    "final",
-    "finally",
-    "float",
-    "for",
-    "from",
-    "function",
-    "global",
-    "goto",
-    "if",
-    "implements",
-    "import",
-    "in",
-    "instanceof",
-    "int",
-    "interface",
-    "is",
-    "lambda",
-    "let",
-    "long",
-    "native",
-    "new",
-    "nonlocal",
-    "not",
-    "null",
-    "or",
-    "package",
-    "pass",
-    "private",
-    "protected",
-    "public",
-    "raise",
-    "return",
-    "self",
-    "short",
-    "static",
-    "strictfp",
-    "super",
-    "switch",
-    "synchronized",
-    "this",
-    "throw",
-    "throws",
-    "transient",
-    "true",
-    "try",
-    "type",
-    "typeof",
-    "var",
-    "void",
-    "volatile",
-    "while",
-    "with",
-    "yield",
-];
-
 fn reserved_word(name: &str) -> bool {
-    RESERVED_WORDS.contains(&name)
+    data::set("reserved-words").contains(name)
 }
 
 fn kind_noun(kind: DeclKind) -> &'static str {

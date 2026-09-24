@@ -1,35 +1,22 @@
 //! AIP-142 time and duration field names.
 
+use crate::data;
 use crate::decl::{DeclKind, Declaration};
 use crate::lint::{report, Finding, Severity};
 
 use super::{lower_words, Context};
 
-/// Ported from api-linter `core::0142::time-field-names`, plus the imperative
-/// list from the AIP text (`publish_time`, not `published_time`).
-const MISTAKES: &[(&str, &str)] = &[
-    ("created", "create_time"),
-    ("creation", "create_time"),
-    ("expired", "expire_time"),
-    ("modified", "update_time"),
-    ("published", "publish_time"),
-    ("purged", "purge_time"),
-    ("updated", "update_time"),
-];
-
 pub(super) fn field_names(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
     for decl in ctx.decls.iter().filter(|decl| decl.kind == DeclKind::Field) {
         let words = lower_words(&decl.name);
-        let timeish = words.iter().any(|word| {
-            matches!(
-                word.as_str(),
-                "time" | "times" | "at" | "date" | "timestamp"
-            )
-        }) || type_is_time(decl);
+        let timeish = words
+            .iter()
+            .any(|word| data::set("time-tokens").contains(word.as_str()))
+            || type_is_time(decl);
         let ends_at = decl.name.ends_with("_at");
 
         if timeish && !ends_at {
-            for (mistake, imperative) in MISTAKES {
+            for (mistake, imperative) in data::pairs("time-imperatives") {
                 if words.iter().any(|word| word == mistake) {
                     report(
                         findings,
@@ -98,17 +85,6 @@ pub(super) fn offset_comment(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
 }
 
 fn type_is_time(decl: &Declaration) -> bool {
-    matches!(
-        decl.type_constructor_name(),
-        Some(
-            "SystemTime"
-                | "Instant"
-                | "Duration"
-                | "DateTime"
-                | "NaiveDateTime"
-                | "OffsetDateTime"
-                | "StdDuration"
-                | "Timestamp"
-        )
-    )
+    decl.type_constructor_name()
+        .is_some_and(|name| data::set("time-types").contains(name))
 }
