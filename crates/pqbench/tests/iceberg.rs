@@ -37,7 +37,8 @@ struct ManifestDataFile {
     file_format: String,
     partition: EmptyPartition,
     record_count: i64,
-    file_size_in_bytes: i64,
+    #[serde(rename = "file_size_in_bytes")]
+    file_size_bytes: i64,
 }
 
 #[derive(Serialize)]
@@ -75,6 +76,8 @@ const MANIFEST_SCHEMA: &str = r#"{
 }"#;
 
 struct Fixture {
+    // Held only to keep the temporary directory alive for the test's duration.
+    // aipnaming: allow(aip-140/underscores)
     _directory: tempfile::TempDir,
     root: std::path::PathBuf,
     metadata: std::path::PathBuf,
@@ -178,7 +181,7 @@ fn data_entry(path: String, size: u64, rows: i64, content: i32) -> ManifestRow {
             file_format: "PARQUET".into(),
             partition: EmptyPartition {},
             record_count: rows,
-            file_size_in_bytes: i64::try_from(size).unwrap(),
+            file_size_bytes: i64::try_from(size).unwrap(),
         },
     }
 }

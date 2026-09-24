@@ -48,11 +48,11 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             metadata.format_version
         )));
     }
-    let requested = request.snapshot_version.map(i64_from_u64).transpose()?;
+    let requested = request.snapshot_version.map(create_i64).transpose()?;
     let selected = select_snapshot(&metadata, requested)?;
     let snapshot_version = selected
         .as_ref()
-        .map(|snapshot| u64_from_i64(snapshot.snapshot_id))
+        .map(|snapshot| create_u64(snapshot.snapshot_id))
         .transpose()?
         .unwrap_or(0);
     let (files, deletes) = match selected {
@@ -65,7 +65,7 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         .into_iter()
         .map(|snapshot| {
             Ok(LogCommit {
-                version: u64_from_i64(snapshot.snapshot_id)?,
+                version: create_u64(snapshot.snapshot_id)?,
                 actions: vec![LogAction {
                     kind: "snapshot".into(),
                     path: Some(snapshot.manifest_list.clone()),
@@ -158,7 +158,8 @@ struct DataFile {
     content: i32,
     file_path: String,
     file_format: String,
-    file_size_in_bytes: i64,
+    #[serde(rename = "file_size_in_bytes")]
+    file_size_bytes: i64,
 }
 
 const STATUS_DELETED: i32 = 2;
@@ -342,7 +343,7 @@ async fn active_files(
                     entry.data_file.file_path
                 )));
             }
-            let size = u64::try_from(entry.data_file.file_size_in_bytes).map_err(|_| {
+            let size = u64::try_from(entry.data_file.file_size_bytes).map_err(|_| {
                 Error(format!(
                     "invalid file size in manifest: {}",
                     entry.data_file.file_path
@@ -535,10 +536,10 @@ fn looks_like_uri(value: &str) -> bool {
     value.contains("://")
 }
 
-fn u64_from_i64(value: i64) -> Result<u64, Error> {
+fn create_u64(value: i64) -> Result<u64, Error> {
     u64::try_from(value).map_err(|_| Error(format!("Iceberg snapshot id is negative: {value}")))
 }
 
-fn i64_from_u64(value: u64) -> Result<i64, Error> {
+fn create_i64(value: u64) -> Result<i64, Error> {
     i64::try_from(value).map_err(|_| Error(format!("Iceberg snapshot id is too large: {value}")))
 }
