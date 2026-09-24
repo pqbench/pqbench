@@ -71,6 +71,25 @@ enum OutputFormat {
     Github,
 }
 
+impl OutputFormat {
+    /// The selected format, with `--json` overriding when it was passed.
+    fn resolve(self, json: bool) -> Self {
+        if json {
+            OutputFormat::Json
+        } else {
+            self
+        }
+    }
+
+    fn render(self, path: &Path, finding: &Finding) -> String {
+        match self {
+            OutputFormat::Text => render_text(path, finding),
+            OutputFormat::Json => render_json(path, finding),
+            OutputFormat::Github => render_github(path, finding),
+        }
+    }
+}
+
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum SeverityArg {
     Error,
@@ -109,17 +128,9 @@ fn main() -> ExitCode {
     };
     let report = walk::lint_files(&files, options);
 
-    let format = if cli.json {
-        OutputFormat::Json
-    } else {
-        cli.output_format
-    };
+    let format = cli.output_format.resolve(cli.json);
     for (path, finding) in &report.findings {
-        match format {
-            OutputFormat::Text => println!("{}", render_text(path, finding)),
-            OutputFormat::Json => println!("{}", render_json(path, finding)),
-            OutputFormat::Github => println!("{}", render_github(path, finding)),
-        }
+        println!("{}", format.render(path, finding));
     }
     if cli.stats {
         print_stats(&report.findings);
