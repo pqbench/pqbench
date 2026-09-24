@@ -62,27 +62,22 @@ impl From<String> for Error {
     }
 }
 
-/// List Delta tables, sending each to `on_table` as it is found.
+/// List the Delta tables the source names, in catalog, schema, table order.
 ///
 /// # Errors
-/// Fails when the `unity` feature is off, the endpoint cannot be reached, or a
-/// catalog page is malformed.
-pub fn list_tables<E: From<Error>>(
-    source: &LakeSource,
-    filter: &NameFilter,
-    on_table: impl FnMut(LakeTable) -> Result<(), E>,
-) -> Result<usize, E> {
+/// Fails when the `unity` feature is off, the endpoint cannot be reached, a
+/// catalog page is malformed, or no Delta table is found.
+pub fn list_tables(source: &LakeSource, filter: &NameFilter) -> Result<Vec<LakeTable>, Error> {
     #[cfg(feature = "unity")]
     {
-        crate::unity_helpers::list_tables(source, filter, on_table)
+        crate::unity_helpers::list_tables(source, filter)
     }
     #[cfg(not(feature = "unity"))]
     {
-        let _ = (source, filter, on_table);
+        let _ = (source, filter);
         Err(Error::from(
             "this build lists directories only; rebuild with --features unity for a Unity Catalog"
                 .to_string(),
-        )
-        .into())
+        ))
     }
 }

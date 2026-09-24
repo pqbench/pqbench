@@ -62,31 +62,27 @@ struct TableEntry {
     storage_location: Option<String>,
 }
 
-pub(crate) fn list_tables<E: From<Error>>(
+pub(crate) fn list_tables(
     source: &LakeSource,
     filter: &NameFilter,
-    mut on_table: impl FnMut(LakeTable) -> Result<(), E>,
-) -> Result<usize, E> {
+) -> Result<Vec<LakeTable>, Error> {
     let root = api_root(&source.endpoint);
     let token = source.token.clone().filter(|token| !token.is_empty());
-    let mut tables = 0usize;
+    let mut tables = Vec::new();
     for catalog in list_catalogs(&root, token.as_deref(), source, filter)? {
         for schema in list_schemas(&root, token.as_deref(), &catalog, source, filter)? {
-            for table in list_schema_tables(
+            tables.extend(list_schema_tables(
                 &root,
                 token.as_deref(),
                 &catalog,
                 &schema,
                 &source.env,
                 filter,
-            )? {
-                on_table(table)?;
-                tables += 1;
-            }
+            )?);
         }
     }
-    if tables == 0 {
-        return Err(Error::from("catalog listed no Delta tables".to_string()).into());
+    if tables.is_empty() {
+        return Err(Error::from("catalog listed no Delta tables".to_string()));
     }
     Ok(tables)
 }
