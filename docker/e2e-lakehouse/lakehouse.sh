@@ -34,11 +34,14 @@ register() {
 # configures Unity to vend exactly this one. Reuse it while it is valid: Unity's
 # environment then stays put and Compose has no reason to recreate it.
 mint_credential() {
-    [ -n "$(find "$vended_env" -mmin -660 2> /dev/null)" ] && return
+    # Reuse the session for 11 of its 12 hours, then mint a fresh one.
+    local credential_lifetime_seconds=43200 credential_reuse_minutes=660
+    [ -n "$(find "$vended_env" -mmin "-$credential_reuse_minutes" 2> /dev/null)" ] && return
     local key secret token
     read -r key secret token < <(run_aws_cli sts assume-role \
         --role-arn arn:aws:iam::000000000000:role/pqbench-read \
-        --role-session-name pqbench-stand --duration-seconds 43200 \
+        --role-session-name pqbench-stand \
+        --duration-seconds "$credential_lifetime_seconds" \
         --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
     mkdir -p "$(dirname "$vended_env")"
     cat > "$vended_env" <<EOF
