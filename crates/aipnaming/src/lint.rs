@@ -55,14 +55,14 @@ pub struct Options {
     /// Restrict the run to these rule ids; empty selects every rule.
     pub rules: Vec<String>,
     /// Silence these rule ids.
-    pub allow: Vec<String>,
+    pub allowed_rules: Vec<String>,
     /// Drop findings below this severity.
     pub min_severity: Option<Severity>,
 }
 
 impl Options {
     fn enabled(&self, rule: &str) -> bool {
-        if self.allow.iter().any(|allowed| allowed == rule) {
+        if self.allowed_rules.iter().any(|allowed| allowed == rule) {
             return false;
         }
         self.rules.is_empty() || self.rules.iter().any(|selected| selected == rule)

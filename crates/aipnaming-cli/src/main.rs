@@ -38,7 +38,7 @@ struct Cli {
     rules: Vec<String>,
     /// Silence a rule id (repeatable).
     #[arg(long = "allow", value_name = "ID")]
-    allow: Vec<String>,
+    allowed_rules: Vec<String>,
     /// Drop findings below this severity.
     #[arg(long, value_enum)]
     min_severity: Option<SeverityArg>,
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
 
     let options = Options {
         rules: cli.rules,
-        allow: cli.allow,
+        allowed_rules: cli.allowed_rules,
         min_severity: cli.min_severity.map(SeverityArg::severity),
     };
     let files = match walk::rust_files(&cli.paths) {

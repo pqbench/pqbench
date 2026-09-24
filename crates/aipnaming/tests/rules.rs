@@ -166,6 +166,14 @@ fn agrees_singular_and_plural_with_collections() {
 }
 
 #[test]
+fn keeps_collective_nouns_and_type_named_fields_quiet() {
+    // `log` reads the same in both numbers (AIP-144); `options: Options`
+    // follows its own type name.
+    assert!(rules("struct Table { pub log: Vec<Commit> }").is_empty());
+    assert!(rules("struct Linter { pub options: Options }").is_empty());
+}
+
+#[test]
 fn flags_abbreviated_units_and_count_prefixes() {
     assert!(rules("struct Report { pub throughput_mbps: f64 }").contains(&"aip-141/units"));
     assert!(rules("struct Report { pub width_px: f64 }").is_empty());
@@ -207,7 +215,7 @@ fn options_can_select_and_allow_rules() {
     assert_eq!(lint_source(source, &selected).len(), 1);
 
     let allowed = Options {
-        allow: vec!["aip-140/booleans".to_owned()],
+        allowed_rules: vec!["aip-140/booleans".to_owned()],
         ..Options::default()
     };
     assert!(lint_source(source, &allowed)

@@ -537,6 +537,7 @@ health
 info
 information
 knowledge
+log
 media
 metadata
 moose

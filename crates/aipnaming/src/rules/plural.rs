@@ -9,7 +9,7 @@
 use crate::data;
 use crate::decl::{DeclKind, Declaration};
 use crate::lint::{report, Finding, Severity};
-use crate::words::{is_plural, is_singular, split_identifier};
+use crate::words::{classify, is_plural, is_singular, split_identifier, WordKind};
 
 use super::Context;
 
@@ -21,8 +21,14 @@ pub(super) fn agreement(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
         else {
             continue;
         };
+        // `log: Vec<LogCommit>` and other collective nouns read the same in
+        // both numbers, and `options: Options` follows its type name; both are
+        // legitimate, not agreement errors.
+        if is_uncountable(&head) || matches_type_name(field, &head) {
+            continue;
+        }
         if is_sequence(field) {
-            if is_singular(&head) {
+            if is_singular(&head) && classify(&head) != WordKind::Verb {
                 report(
                     findings,
                     "aip-140/plural",
@@ -71,6 +77,18 @@ fn is_opaque(field: &Declaration) -> bool {
     field
         .type_constructor_name()
         .is_some_and(|constructor| data::set("opaque-types").contains(constructor))
+}
+
+fn is_uncountable(head: &str) -> bool {
+    data::set("uncountables").contains(head)
+}
+
+/// Whether the field shares its name with its type (`options: Options`): the
+/// field then follows the type name rather than describing a collection.
+fn matches_type_name(field: &Declaration, head: &str) -> bool {
+    field
+        .type_constructor_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(head))
 }
 
 fn is_scalar(field: &Declaration) -> bool {
