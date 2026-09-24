@@ -11,20 +11,16 @@
 //!
 //! https://iceberg.apache.org/docs/latest/rest-catalog-spec/
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::collections::BTreeMap;
 
 use reqwest::Client;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use crate::third_party::unity::api::{Error, LakeSource, NameFilter};
 
 use super::filter;
+use super::http::{self, encode, get_json, page_token, REQUEST_TIMEOUT};
 use crate::lake::LakeTable;
-
-const PAGE_CAP: usize = 32;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize)]
 struct NamespacesPage {
@@ -88,9 +84,12 @@ async fn list_namespaces(
     filter: &NameFilter,
 ) -> Result<Vec<Vec<String>>, Error> {
     let mut namespaces = Vec::new();
-    for page in pages::<NamespacesPage>(client, root, token, "/v1/namespaces", |page| {
-        page_token(&page.next_page_token)
-    })
+    for page in http::pages::<NamespacesPage>(
+        client,
+        token,
+        |page_token| root_path(root, "/v1/namespaces", page_token),
+        |page| page_token(&page.next_page_token),
+    )
     .await?
     {
         for parts in page.namespaces {
@@ -117,11 +116,16 @@ async fn list_namespace_tables(
 ) -> Result<Vec<LakeTable>, Error> {
     let encoded = encoded_namespace(namespace);
     let mut tables = Vec::new();
-    for page in pages::<TablesPage>(
+    for page in http::pages::<TablesPage>(
         client,
-        root,
         token,
-        &format!("/v1/namespaces/{encoded}/tables"),
+        |page_token| {
+            root_path(
+                root,
+                &format!("/v1/namespaces/{encoded}/tables"),
+                page_token,
+            )
+        },
         |page| page_token(&page.next_page_token),
     )
     .await?
@@ -183,81 +187,11 @@ fn encoded_namespace(namespace: &[String]) -> String {
     encode(&namespace.join("\u{1f}"))
 }
 
-fn page_token(token: &Option<String>) -> Option<String> {
-    token
-        .as_deref()
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-}
-
-async fn pages<P: DeserializeOwned>(
-    client: &Client,
-    root: &str,
-    token: Option<&str>,
-    path: &str,
-    next: fn(&P) -> Option<String>,
-) -> Result<Vec<P>, Error> {
-    let mut page_token: Option<String> = None;
-    let mut seen = BTreeSet::new();
-    let mut pages = Vec::new();
-    loop {
-        if pages.len() >= PAGE_CAP {
-            return Err(format!("catalog listed more than {PAGE_CAP} pages at {path}").into());
-        }
-        let mut url = format!("{root}{path}");
-        if let Some(token) = &page_token {
-            url.push_str("?pageToken=");
-            url.push_str(&encode(token));
-        }
-        let page: P = get_json(client, &url, token).await?;
-        let next = next(&page);
-        pages.push(page);
-        let Some(next) = next else {
-            return Ok(pages);
-        };
-        if !seen.insert(next.clone()) {
-            return Err(format!("catalog repeated page token at {path}").into());
-        }
-        page_token = Some(next);
+fn root_path(root: &str, path: &str, page_token: Option<&str>) -> String {
+    let mut url = format!("{root}{path}");
+    if let Some(token) = page_token {
+        url.push_str("?pageToken=");
+        url.push_str(&encode(token));
     }
-}
-
-async fn get_json<T: DeserializeOwned>(
-    client: &Client,
-    url: &str,
-    token: Option<&str>,
-) -> Result<T, Error> {
-    let mut request = client.get(url);
-    if let Some(token) = token {
-        request = request.bearer_auth(token);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(Error::from(format!(
-            "catalog returned HTTP {status}: {body}"
-        )));
-    }
-    response.json::<T>().await.map_err(|error| {
-        Error::from(format!(
-            "catalog response was not the expected document: {error}"
-        ))
-    })
-}
-
-fn encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
+    url
 }

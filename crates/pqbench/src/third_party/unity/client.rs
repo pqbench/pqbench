@@ -1,10 +1,9 @@
-//! The async HTTP client behind [`super::api::list_tables`].
+//! The Unity Catalog list client behind [`super::api::list_tables`].
 //!
-//! This is the only module that names the third-party `reqwest` crate. It is
-//! compiled only with the `unity` feature.
+//! Compiled only with the `unity` feature; it names `reqwest`, as does
+//! [`super::http`], which holds the shared page walk.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::collections::BTreeMap;
 
 use reqwest::Client;
 use serde::de::DeserializeOwned;
@@ -13,11 +12,10 @@ use serde::Deserialize;
 use crate::third_party::unity::api::{is_glob, Error, LakeSource, NameFilter};
 
 use super::filter;
+use super::http::{self, encode, page_token, REQUEST_TIMEOUT};
 use crate::lake::LakeTable;
 
-const PAGE_CAP: usize = 32;
 const PAGE_SIZE: u32 = 50;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Deserialize)]
 struct Named {
@@ -216,7 +214,14 @@ async fn names<P: DeserializeOwned>(
     next: fn(&P) -> Option<String>,
 ) -> Result<Vec<String>, Error> {
     let mut names = Vec::new();
-    for page in pages::<P>(client, root, token, path, query, next).await? {
+    for page in http::pages::<P>(
+        client,
+        token,
+        |page_token| unity_path(root, path, query, page_token),
+        next,
+    )
+    .await?
+    {
         for name in field(&page) {
             if name.is_empty() {
                 return Err(format!("{path} listed a nameless entry").into());
@@ -227,11 +232,22 @@ async fn names<P: DeserializeOwned>(
     Ok(names)
 }
 
-fn page_token(token: &Option<String>) -> Option<String> {
-    token
-        .as_deref()
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
+fn unity_path(root: &str, path: &str, query: &[(&str, &str)], page_token: Option<&str>) -> String {
+    let mut url = format!("{root}{path}?max_results={PAGE_SIZE}");
+    if path == "/tables" {
+        url.push_str("&omit_columns=true&omit_properties=true");
+    }
+    for (key, value) in query {
+        url.push('&');
+        url.push_str(key);
+        url.push('=');
+        url.push_str(&encode(value));
+    }
+    if let Some(token) = page_token {
+        url.push_str("&page_token=");
+        url.push_str(&encode(token));
+    }
+    url
 }
 
 async fn list_schema_tables(
@@ -244,12 +260,11 @@ async fn list_schema_tables(
     filter: &NameFilter,
 ) -> Result<Vec<LakeTable>, Error> {
     let mut tables = Vec::new();
-    for page in pages::<TablesPage>(
+    let query = [("catalog_name", catalog), ("schema_name", schema)];
+    for page in http::pages::<TablesPage>(
         client,
-        root,
         token,
-        "/tables",
-        &[("catalog_name", catalog), ("schema_name", schema)],
+        |page_token| unity_path(root, "/tables", &query, page_token),
         |page| page_token(&page.next_page_token),
     )
     .await?
@@ -303,88 +318,6 @@ fn lake_table(
         env: env.clone(),
         info: None,
     }))
-}
-
-async fn pages<P: DeserializeOwned>(
-    client: &Client,
-    root: &str,
-    token: Option<&str>,
-    path: &str,
-    query: &[(&str, &str)],
-    next: fn(&P) -> Option<String>,
-) -> Result<Vec<P>, Error> {
-    let mut page_token: Option<String> = None;
-    let mut seen = BTreeSet::new();
-    let mut pages = Vec::new();
-    loop {
-        if pages.len() >= PAGE_CAP {
-            return Err(format!("catalog listed more than {PAGE_CAP} pages at {path}").into());
-        }
-        let mut url = format!("{root}{path}?max_results={PAGE_SIZE}");
-        if path == "/tables" {
-            url.push_str("&omit_columns=true&omit_properties=true");
-        }
-        for (key, value) in query {
-            url.push('&');
-            url.push_str(key);
-            url.push('=');
-            url.push_str(&encode(value));
-        }
-        if let Some(token) = &page_token {
-            url.push_str("&page_token=");
-            url.push_str(&encode(token));
-        }
-        let page: P = get_json(client, &url, token).await?;
-        let next = next(&page);
-        pages.push(page);
-        let Some(next) = next else {
-            return Ok(pages);
-        };
-        if !seen.insert(next.clone()) {
-            return Err(format!("catalog repeated page token at {path}").into());
-        }
-        page_token = Some(next);
-    }
-}
-
-async fn get_json<T: DeserializeOwned>(
-    client: &Client,
-    url: &str,
-    token: Option<&str>,
-) -> Result<T, Error> {
-    let mut request = client.get(url);
-    if let Some(token) = token {
-        request = request.bearer_auth(token);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(Error::from(format!(
-            "catalog returned HTTP {status}: {body}"
-        )));
-    }
-    response.json::<T>().await.map_err(|error| {
-        Error::from(format!(
-            "catalog response was not the expected document: {error}"
-        ))
-    })
-}
-
-fn encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
 
 fn nonempty(value: &Option<String>) -> Option<&str> {
