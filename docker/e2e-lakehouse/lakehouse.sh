@@ -20,8 +20,9 @@ ensure_pqbench() {
 
 # Create, or accept that a previous run already did.
 register() {
-    local response
-    response=$(curl -sS -X POST "$unity_catalog/$1" -H 'Content-Type: application/json' -d "$2")
+    local resource=$1 record=$2 response
+    response=$(curl -sS -X POST "$unity_catalog/$resource" \
+        -H 'Content-Type: application/json' -d "$record")
     case "$(jq -r '.error_code // empty' <<< "$response")" in
         "" | *_ALREADY_EXISTS) ;;
         *) echo "$response" >&2; exit 1 ;;
