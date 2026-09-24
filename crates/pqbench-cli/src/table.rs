@@ -98,7 +98,7 @@ fn add(info: &TableInfo, tables: &mut usize, files: &mut usize, bytes: &mut u64)
 }
 
 fn file_bytes(info: &TableInfo) -> u64 {
-    info.files.iter().map(|file| file.size).sum()
+    info.files.iter().map(|file| file.size_bytes).sum()
 }
 
 fn summary(tables: usize, files: usize, bytes: u64, output: Option<&std::path::Path>) -> String {

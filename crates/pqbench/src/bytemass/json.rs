@@ -33,8 +33,8 @@ mod tests {
         columns
             .iter()
             .map(|(column, bytes)| MassRow {
-                file: "f".into(),
-                size: 0,
+                uri: "f".into(),
+                size_bytes: 0,
                 num_rows: 10,
                 column: (*column).into(),
                 compressed_bytes: *bytes,
@@ -52,7 +52,7 @@ mod tests {
         assert_eq!(value["num_rows"], 10);
         let columns = value["columns"].as_array().unwrap();
         assert_eq!(columns.len(), 2);
-        assert_eq!(columns[0]["path"], "a.b");
+        assert_eq!(columns[0]["column"], "a.b");
         assert_eq!(columns[0]["compressed_bytes"], 20);
         assert_eq!(columns[0]["codecs"], serde_json::json!(["SNAPPY"]));
         // The JSON is a flat table, not a d3 treemap hierarchy.

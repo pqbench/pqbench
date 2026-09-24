@@ -26,9 +26,9 @@ pub struct BytemassRequest {
 #[non_exhaustive]
 pub struct MassRow {
     /// Input path or URI as given.
-    pub file: String,
+    pub uri: String,
     /// On-disk file size in bytes.
-    pub size: u64,
+    pub size_bytes: u64,
     /// Number of rows in the file (denominator for the per-row measure).
     pub num_rows: u64,
     /// Column path in schema form, e.g. `content` or `a.b`.

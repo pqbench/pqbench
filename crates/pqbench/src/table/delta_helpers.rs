@@ -28,7 +28,7 @@ impl std::error::Error for Error {}
 
 /// Resolve the transaction log and the active files of a Delta table.
 pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
-    let table = open(&request.uri, request.version, &request.env).await?;
+    let table = open(&request.uri, request.snapshot_version, &request.env).await?;
     let snapshot = snapshot_meta(&table)?;
     let files = active_files(&table).await?;
     let log = read_log(&table, snapshot.version).await?;
@@ -181,7 +181,7 @@ async fn active_files(table: &DeltaTable) -> Result<Vec<TableFile>, Error> {
         active.push(TableFile {
             path: relative,
             uri,
-            size,
+            size_bytes: size,
         });
     }
     Ok(active)

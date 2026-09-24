@@ -23,7 +23,7 @@ pub(super) async fn read_remote_with_options(
     let options: Vec<(String, String)> = options.into_iter().collect();
     let reader = object_store::open(uri, &options).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
-    let size = stat.size;
+    let size = stat.size_bytes;
     if size < PARQUET_FOOTER_SIZE {
         return Err(Error(format!(
             "object {uri} is too small to be a Parquet file: {size} bytes"

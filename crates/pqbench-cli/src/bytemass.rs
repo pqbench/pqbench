@@ -106,10 +106,10 @@ async fn measure_file(
     })
     .await?;
     for row in &rows {
-        if file.size != 0 && row.size != file.size {
+        if file.size_bytes != 0 && row.size_bytes != file.size_bytes {
             return Err(format!(
                 "active file size differs from log: {} (expected {}, found {})",
-                file.path, file.size, row.size
+                file.path, file.size_bytes, row.size_bytes
             )
             .into());
         }
@@ -247,7 +247,7 @@ struct MassStats {
 
 impl MassStats {
     fn add(&mut self, row: &bytemass::MassRow) {
-        self.file_rows.insert(row.file.clone(), row.num_rows);
+        self.file_rows.insert(row.uri.clone(), row.num_rows);
         self.column_count += 1;
     }
 

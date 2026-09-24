@@ -68,16 +68,16 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     for relative in ["part=b/kept.parquet", "part=a/added.parquet"] {
         let path = fixture.path().join(relative);
         let mass = default_metadata_parser().read_masses(&path).unwrap();
-        bytes += mass.columns[0].bytes;
+        bytes += mass.columns[0].compressed_bytes;
         uncompressed += mass.columns[0].uncompressed_bytes;
         file_bytes += std::fs::metadata(path).unwrap().len();
     }
     assert_eq!(summary.num_rows, 14);
     assert_eq!(summary.file_count, 2);
     assert_eq!(summary.columns.len(), 1);
-    assert_eq!(summary.columns[0].path, "id");
+    assert_eq!(summary.columns[0].column, "id");
     assert_eq!(
-        latest.files.iter().map(|file| file.size).sum::<u64>(),
+        latest.files.iter().map(|file| file.size_bytes).sum::<u64>(),
         file_bytes
     );
     assert_eq!(summary.columns[0].compressed_bytes, bytes);
@@ -169,7 +169,7 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
         .iter()
         .find(|file| file.path == "part=a/added.parquet")
         .unwrap();
-    assert_eq!(added.size, expected);
+    assert_eq!(added.size_bytes, expected);
     let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
         inputs: vec![added.uri.clone()],
         ..Default::default()

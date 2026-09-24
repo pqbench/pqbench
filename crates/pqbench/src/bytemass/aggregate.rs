@@ -25,7 +25,7 @@ pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
         let total = columns
             .entry(row.column.clone())
             .or_insert_with(|| ColumnMassSummary {
-                path: row.column.clone(),
+                column: row.column.clone(),
                 compressed_bytes: 0,
                 uncompressed_bytes: 0,
                 codecs: BTreeSet::new(),
@@ -48,7 +48,7 @@ pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
 fn file_runs(rows: &[MassRow]) -> Vec<&MassRow> {
     let mut runs: Vec<&MassRow> = Vec::new();
     for row in rows {
-        if runs.last().is_none_or(|last| last.file != row.file) {
+        if runs.last().is_none_or(|last| last.uri != row.uri) {
             runs.push(row);
         }
     }
@@ -68,7 +68,7 @@ pub(super) fn label(rows: &[MassRow]) -> String {
     let files = file_runs(rows);
     match files.as_slice() {
         [] => "file".into(),
-        [file] => Path::new(file.file.as_str())
+        [file] => Path::new(file.uri.as_str())
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "file".into()),
@@ -86,10 +86,10 @@ mod tests {
     use super::super::api::MassRow;
     use super::*;
 
-    fn row(file: &str, column: &str, codec: &str) -> MassRow {
+    fn row(uri: &str, column: &str, codec: &str) -> MassRow {
         MassRow {
-            file: file.into(),
-            size: 1,
+            uri: uri.into(),
+            size_bytes: 1,
             num_rows: 3,
             column: column.into(),
             compressed_bytes: 12,

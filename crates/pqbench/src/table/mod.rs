@@ -76,17 +76,17 @@ pub struct TableFile {
     /// URI or filesystem path `bytemass` should read.
     pub uri: String,
     /// Size the log claims, in bytes.
-    pub size: u64,
+    pub size_bytes: u64,
 }
 
 impl TableFile {
     /// Assemble a table file from its parts.
     #[must_use]
-    pub fn new(path: impl Into<String>, uri: impl Into<String>, size: u64) -> Self {
+    pub fn new(path: impl Into<String>, uri: impl Into<String>, size_bytes: u64) -> Self {
         Self {
             path: path.into(),
             uri: uri.into(),
-            size,
+            size_bytes,
         }
     }
 }
@@ -151,7 +151,7 @@ pub struct LoadRequest {
     /// Local table directory or table URI (`file://`, `s3://`, ...).
     pub uri: String,
     /// Snapshot version; `None` selects the latest.
-    pub version: Option<u64>,
+    pub snapshot_version: Option<u64>,
     /// Storage options (`AWS_*` names), copied onto the document.
     pub env: BTreeMap<String, String>,
 }
@@ -161,12 +161,12 @@ impl LoadRequest {
     #[must_use]
     pub fn new(
         uri: impl Into<String>,
-        version: Option<u64>,
+        snapshot_version: Option<u64>,
         env: BTreeMap<String, String>,
     ) -> Self {
         Self {
             uri: uri.into(),
-            version,
+            snapshot_version,
             env,
         }
     }

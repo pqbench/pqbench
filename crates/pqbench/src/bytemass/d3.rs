@@ -103,8 +103,8 @@ mod tests {
         columns
             .iter()
             .map(|(column, bytes)| MassRow {
-                file: "sample.parquet".into(),
-                size: 0,
+                uri: "sample.parquet".into(),
+                size_bytes: 0,
                 num_rows: 1,
                 column: (*column).into(),
                 compressed_bytes: *bytes,

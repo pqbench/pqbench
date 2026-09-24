@@ -30,7 +30,7 @@ impl std::error::Error for Error {}
 /// What one object lookup reports before any bytes are read.
 pub(crate) struct ObjectStat {
     /// Object size in bytes.
-    pub size: u64,
+    pub size_bytes: u64,
     /// Backend ETag or version, used to pin range reads to one revision.
     pub identity: Option<String>,
 }
@@ -74,7 +74,7 @@ impl ObjectReader {
                     .await
                     .map_err(|e| Error(format!("cannot stat {}: {e}", path.display())))?;
                 Ok(ObjectStat {
-                    size: metadata.len(),
+                    size_bytes: metadata.len(),
                     identity: None,
                 })
             }
@@ -82,7 +82,7 @@ impl ObjectReader {
             ObjectSource::Remote(store, location) => {
                 let metadata = store.head(location).await.map_err(remote_error)?;
                 Ok(ObjectStat {
-                    size: metadata.size,
+                    size_bytes: metadata.size,
                     identity: metadata.e_tag.or(metadata.version),
                 })
             }
@@ -239,7 +239,7 @@ mod tests {
         let start = Instant::now();
         let stat = reader.stat().await.unwrap();
         let stat_elapsed = start.elapsed();
-        assert_eq!(stat.size, 20);
+        assert_eq!(stat.size_bytes, 20);
         assert!(stat_elapsed >= S3_LATENCY, "stat took {stat_elapsed:?}");
 
         let start = Instant::now();

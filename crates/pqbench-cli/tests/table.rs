@@ -41,7 +41,7 @@ fn bytemass_reads_a_table_document_from_stdin() {
         "snapshot_version": 0,
         "partition_columns": [],
         "log": [{"version": 0, "actions": [{"kind": "add", "path": "small_reddit_none.parquet"}]}],
-        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
+        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
     });
     let output = pipe(&["bytemass"], &document.to_string());
     assert!(
@@ -153,7 +153,7 @@ fn bytemass_rejects_a_size_mismatch_on_a_table_document() {
         "snapshot_version": 0,
         "partition_columns": [],
         "log": [],
-        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": 1}]
+        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": 1}]
     });
     let output = pipe(&["bytemass"], &document.to_string());
     assert!(!output.status.success());
@@ -172,7 +172,7 @@ fn table_rewrites_a_table_document_as_ndjson() {
         "snapshot_version": 0,
         "partition_columns": [],
         "log": [{"version": 0, "actions": [{"kind": "add", "path": "small_reddit_none.parquet"}]}],
-        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
+        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
     });
     let output = pipe(&["table"], &document.to_string());
     assert!(
@@ -200,7 +200,7 @@ fn table_writes_a_zstd_stream_to_output() {
         "snapshot_version": 0,
         "partition_columns": [],
         "log": [],
-        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
+        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
     });
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("table.ndjson.zst");
@@ -249,7 +249,7 @@ fn bytemass_reads_a_table_stream_from_stdin() {
         "id": "t1",
         "path": "small_reddit_none.parquet",
         "uri": parquet_fixture(),
-        "size": size
+        "size_bytes": size
     });
     let end = json!({"kind": "pqbench.table", "event": "end", "id": "t1"});
     let document = format!("{begin}\n{file}\n{end}\n");
@@ -282,7 +282,7 @@ fn bytemass_rejects_a_truncated_table_stream() {
         "id": "t1",
         "path": "small_reddit_none.parquet",
         "uri": parquet_fixture(),
-        "size": size
+        "size_bytes": size
     });
     let document = format!("{begin}\n{file}\n");
     let output = pipe(&["bytemass"], &document);
@@ -308,7 +308,7 @@ fn bytemass_rejects_a_size_mismatch_on_a_table_stream() {
         "id": "t1",
         "path": "small_reddit_none.parquet",
         "uri": parquet_fixture(),
-        "size": 1
+        "size_bytes": 1
     });
     let end = json!({"kind": "pqbench.table", "event": "end", "id": "t1"});
     let output = pipe(&["bytemass"], &format!("{begin}\n{file}\n{end}\n"));
@@ -344,7 +344,7 @@ fn bytemass_measures_mixed_table_ids() {
         "kind": "pqbench.table-file",
         "path": "small_reddit_none.parquet",
         "uri": parquet_fixture(),
-        "size": size
+        "size_bytes": size
     });
     let mut file_b = file.clone();
     file_b["id"] = json!("b");

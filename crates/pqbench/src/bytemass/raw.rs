@@ -9,9 +9,9 @@ use crate::parquet_helpers::FileMass;
 /// One column chunk's raw on-disk byte mass.
 pub(super) struct RawColumn {
     /// Column path in schema form, e.g. `content` or `a.b`.
-    pub path: String,
+    pub column: String,
     /// On-disk (compressed) bytes for this column chunk.
-    pub bytes: u64,
+    pub compressed_bytes: u64,
 }
 
 /// A file's raw column masses, plus the row count that normalizes them.
@@ -30,8 +30,8 @@ pub(super) fn read(mass: &FileMass) -> FileRaw {
             .columns
             .iter()
             .map(|c| RawColumn {
-                path: c.path.clone(),
-                bytes: c.bytes,
+                column: c.column.clone(),
+                compressed_bytes: c.compressed_bytes,
             })
             .collect(),
     }
@@ -48,14 +48,14 @@ mod tests {
             num_rows: 100,
             columns: vec![
                 ColumnMass {
-                    path: "text".into(),
-                    bytes: 40,
+                    column: "text".into(),
+                    compressed_bytes: 40,
                     uncompressed_bytes: 80,
                     codec: "SNAPPY".into(),
                 },
                 ColumnMass {
-                    path: "a.b".into(),
-                    bytes: 60,
+                    column: "a.b".into(),
+                    compressed_bytes: 60,
                     uncompressed_bytes: 120,
                     codec: "SNAPPY".into(),
                 },
@@ -64,9 +64,9 @@ mod tests {
         let raw = read(&mass);
         assert_eq!(raw.num_rows, 100);
         assert_eq!(raw.columns.len(), 2);
-        assert_eq!(raw.columns[0].path, "text");
-        assert_eq!(raw.columns[0].bytes, 40);
-        assert_eq!(raw.columns[1].path, "a.b");
-        assert_eq!(raw.columns[1].bytes, 60);
+        assert_eq!(raw.columns[0].column, "text");
+        assert_eq!(raw.columns[0].compressed_bytes, 40);
+        assert_eq!(raw.columns[1].column, "a.b");
+        assert_eq!(raw.columns[1].compressed_bytes, 60);
     }
 }

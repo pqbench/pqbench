@@ -17,7 +17,7 @@ use super::remote;
 #[non_exhaustive]
 pub struct ColumnMassSummary {
     /// Column path in schema form, e.g. `content` or `a.b`.
-    pub path: String,
+    pub column: String,
     /// Total on-disk bytes across all physical files.
     pub compressed_bytes: u64,
     /// Total encoded bytes before compression across all physical files.
@@ -48,8 +48,8 @@ impl MassSummary {
                 .columns
                 .iter()
                 .map(|column| ColumnMass {
-                    path: column.path.clone(),
-                    bytes: column.compressed_bytes,
+                    column: column.column.clone(),
+                    compressed_bytes: column.compressed_bytes,
                     uncompressed_bytes: column.uncompressed_bytes,
                     codec: column.codecs.iter().cloned().collect::<Vec<_>>().join(","),
                 })
@@ -72,11 +72,11 @@ pub(super) async fn measure_inputs(
         let num_rows = mass.num_rows;
         for column in mass.columns {
             rows.push(MassRow {
-                file: input.clone(),
-                size,
+                uri: input.clone(),
+                size_bytes: size,
                 num_rows,
-                column: column.path,
-                compressed_bytes: column.bytes,
+                column: column.column,
+                compressed_bytes: column.compressed_bytes,
                 uncompressed_bytes: column.uncompressed_bytes,
                 codec: column.codec,
             });
