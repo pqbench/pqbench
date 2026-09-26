@@ -1,20 +1,12 @@
 //! Codec wiring + lzbench-style single-buffer benchmark core.
 //!
-//! Each codec lives in its own file (`snappy.rs`, `zstd.rs`, `lz4.rs`) as a type
-//! implementing `CodecImpl`, with its own tests. The `Codec` enum is the closed
-//! Parquet codec set and dispatches to the per-codec impls. `bench_buffer` is the
-//! lzbench core loop reimplemented over the trait: warmup, iterate until the
-//! min-time floor, keep the fastest time, verify round-trip.
-
-mod gzip;
-mod lz4;
-mod snappy;
-mod zstd;
-
-pub use gzip::Gzip;
-pub use lz4::Lz4;
-pub use snappy::Snappy;
-pub use zstd::Zstd;
+//! Each codec is a unit struct implementing the [`CodecImpl`] common interface,
+//! delegating to a domain-independent [`crate::third_party`] wrapper (buffer in,
+//! buffer out, never a crate type). The [`Codec`] enum is the closed Parquet
+//! codec set, parses CLI names via [`Codec::from_name`], and dispatches to the
+//! per-codec impls. [`bench_buffer`] is the lzbench core loop reimplemented over
+//! the trait: warmup, iterate until the min-time floor, keep the fastest time,
+//! verify round-trip.
 
 use std::fmt;
 use std::hint::black_box;
@@ -63,6 +55,120 @@ impl From<std::io::Error> for Error {
     }
 }
 
+/// A codec's valid compression levels, inclusive (AIP-145: levels are a
+/// colloquially-inclusive range, so `first_`/`last_` rather than half-open).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelRange {
+    pub first_level: u32,
+    pub last_level: u32,
+}
+
+/// The uniform interface every codec implements.
+pub trait CodecImpl {
+    fn name(&self) -> &'static str;
+    fn level_range(&self) -> LevelRange;
+    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error>;
+    fn decompress(&self, level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error>;
+}
+
+/// Snappy codec (C snappy 1.2.2 via `snappy_src`).
+pub struct Snappy;
+
+impl CodecImpl for Snappy {
+    fn name(&self) -> &'static str {
+        "snappy"
+    }
+
+    fn level_range(&self) -> LevelRange {
+        LevelRange {
+            first_level: 1,
+            last_level: 1,
+        }
+    }
+
+    fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
+        crate::third_party::snappy::compress(src).map_err(|e| Error::Codec(e.to_string()))
+    }
+
+    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
+        crate::third_party::snappy::decompress(src, out_cap)
+            .map_err(|e| Error::Codec(e.to_string()))
+    }
+}
+
+/// Zstandard codec (libzstd 1.5.7 via the `zstd` crate).
+pub struct Zstd;
+
+impl CodecImpl for Zstd {
+    fn name(&self) -> &'static str {
+        "zstd"
+    }
+
+    fn level_range(&self) -> LevelRange {
+        LevelRange {
+            first_level: 1,
+            last_level: 22,
+        }
+    }
+
+    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
+        crate::third_party::zstd::compress(src, level).map_err(|e| Error::Codec(e.to_string()))
+    }
+
+    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
+        crate::third_party::zstd::decompress(src, out_cap).map_err(|e| Error::Codec(e.to_string()))
+    }
+}
+
+/// LZ4 codec (raw block format via the `lz4` crate).
+pub struct Lz4;
+
+impl CodecImpl for Lz4 {
+    fn name(&self) -> &'static str {
+        "lz4"
+    }
+
+    fn level_range(&self) -> LevelRange {
+        LevelRange {
+            first_level: 1,
+            last_level: 1,
+        }
+    }
+
+    fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
+        crate::third_party::lz4::compress(src).map_err(|e| Error::Codec(e.to_string()))
+    }
+
+    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
+        crate::third_party::lz4::decompress(src, out_cap).map_err(|e| Error::Codec(e.to_string()))
+    }
+}
+
+/// GZIP codec (gzip format, RFC 1952, via flate2 + C zlib).
+pub struct Gzip;
+
+impl CodecImpl for Gzip {
+    fn name(&self) -> &'static str {
+        "gzip"
+    }
+
+    fn level_range(&self) -> LevelRange {
+        LevelRange {
+            first_level: 1,
+            last_level: 9,
+        }
+    }
+
+    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
+        crate::third_party::flate2::compress(src, level).map_err(|e| Error::Codec(e.to_string()))
+    }
+
+    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
+        crate::third_party::flate2::decompress(src, out_cap)
+            .map_err(|e| Error::Codec(e.to_string()))
+    }
+}
+
 /// The closed set of Parquet compression codecs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -93,28 +199,6 @@ impl Codec {
     pub fn all() -> impl Iterator<Item = Codec> {
         [Codec::Snappy, Codec::Zstd, Codec::Lz4, Codec::Gzip].into_iter()
     }
-}
-
-impl fmt::Display for Codec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-/// A codec's valid compression levels, inclusive (AIP-145: levels are a
-/// colloquially-inclusive range, so `first_`/`last_` rather than half-open).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LevelRange {
-    pub first_level: u32,
-    pub last_level: u32,
-}
-
-/// The uniform interface every codec implements.
-pub trait CodecImpl {
-    fn name(&self) -> &'static str;
-    fn level_range(&self) -> LevelRange;
-    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error>;
-    fn decompress(&self, level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error>;
 }
 
 impl CodecImpl for Codec {
@@ -148,6 +232,12 @@ fn check_level(codec: &Codec, level: u8) -> Result<(), Error> {
         });
     }
     Ok(())
+}
+
+impl fmt::Display for Codec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
 }
 
 /// Raw per-pass timings for one codec×level over a set of page buffers. The
@@ -309,5 +399,74 @@ mod tests {
             Codec::Zstd.compress(0, b"x"),
             Err(Error::Level { .. })
         ));
+    }
+
+    #[test]
+    fn snappy_round_trip_one_mb() {
+        let src = one_mb_sample();
+        let c = Snappy.compress(1, &src).unwrap();
+        let d = Snappy.decompress(1, &c, src.len()).unwrap();
+        assert_eq!(d, src);
+    }
+
+    #[test]
+    fn snappy_compressible_input_shrinks() {
+        let src = b"the quick brown fox jumps over the lazy dog ".repeat(16 * 1024);
+        let c = Snappy.compress(1, &src).unwrap();
+        assert!(c.len() < src.len());
+    }
+
+    #[test]
+    fn snappy_level_is_ignored() {
+        let src = b"hello, world! ".repeat(1000);
+        let a = Snappy.compress(1, &src).unwrap();
+        let b = Snappy.compress(99, &src).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn zstd_round_trip_one_mb() {
+        let src = one_mb_sample();
+        let c = Zstd.compress(3, &src).unwrap();
+        let d = Zstd.decompress(3, &c, src.len()).unwrap();
+        assert_eq!(d, src);
+    }
+
+    #[test]
+    fn zstd_higher_level_compresses_smaller() {
+        let src = one_mb_sample();
+        let c1 = Zstd.compress(1, &src).unwrap();
+        let c3 = Zstd.compress(3, &src).unwrap();
+        assert!(c3.len() <= c1.len(), "zstd-3 should be <= zstd-1 size");
+    }
+
+    #[test]
+    fn lz4_round_trip_one_mb() {
+        let src = one_mb_sample();
+        let c = Lz4.compress(1, &src).unwrap();
+        let d = Lz4.decompress(1, &c, src.len()).unwrap();
+        assert_eq!(d, src);
+    }
+
+    #[test]
+    fn lz4_compressible_input_shrinks() {
+        let src = b"the quick brown fox jumps over the lazy dog ".repeat(16 * 1024);
+        let c = Lz4.compress(1, &src).unwrap();
+        assert!(c.len() < src.len());
+    }
+
+    #[test]
+    fn gzip_round_trip_one_mb() {
+        let src = one_mb_sample();
+        let c = Gzip.compress(6, &src).unwrap();
+        let d = Gzip.decompress(6, &c, src.len()).unwrap();
+        assert_eq!(d, src);
+    }
+
+    #[test]
+    fn gzip_compressible_input_shrinks() {
+        let src = one_mb_sample();
+        let c = Gzip.compress(6, &src).unwrap();
+        assert!(c.len() < src.len());
     }
 }
