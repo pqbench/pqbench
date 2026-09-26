@@ -2,7 +2,7 @@
 //!
 //! A command example only becomes a test when it lives in a `console` fence, so
 //! a `pqbench` example written as `sh` (or a bare fence) would silently go
-//! untested. [`pqbench_outside_console`] finds those blocks so the caller can
+//! untested. [`untested_pqbench_blocks`] finds those blocks so the caller can
 //! fail the run.
 
 use crate::model::Block;
@@ -58,7 +58,7 @@ fn is_assignment(token: &str) -> bool {
 }
 
 /// Blocks that invoke `pqbench` but whose fence is not `console`.
-pub fn pqbench_outside_console(blocks: &[Block]) -> Vec<&Block> {
+pub fn untested_pqbench_blocks(blocks: &[Block]) -> Vec<&Block> {
     blocks
         .iter()
         .filter(|block| block.language() != Some("console") && invokes_pqbench(&block.body))

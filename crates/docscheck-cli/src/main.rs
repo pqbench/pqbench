@@ -120,7 +120,7 @@ fn run_sync(args: Args, check_only: bool) -> ExitCode {
         }
     };
 
-    if let Err(error) = reject_pqbench_outside_console(&files) {
+    if let Err(error) = reject_untested_pqbench_blocks(&files) {
         eprintln!("docscheck: {error}");
         return ExitCode::from(2);
     }
@@ -157,14 +157,14 @@ fn run_sync(args: Args, check_only: bool) -> ExitCode {
 /// A command example only becomes a test inside a `console` fence, so a
 /// `pqbench` example written as `sh` or a bare fence would silently go
 /// untested. Report every offender with its file and line.
-fn reject_pqbench_outside_console(files: &[PathBuf]) -> Result<(), String> {
+fn reject_untested_pqbench_blocks(files: &[PathBuf]) -> Result<(), String> {
     let mut parser = MarkdownParser::new();
     let mut problems = Vec::new();
     for path in files {
         let source = fs::read_to_string(path)
             .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         let blocks = parser.parse(&source);
-        for block in docscheck::pqbench_outside_console(&blocks) {
+        for block in docscheck::untested_pqbench_blocks(&blocks) {
             problems.push(format!(
                 "{}:{}: `pqbench` example in a `{}` block; use a ```console fence",
                 path.display(),

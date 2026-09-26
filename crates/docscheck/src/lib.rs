@@ -32,7 +32,7 @@ pub mod markdown;
 pub mod model;
 pub mod plan;
 
-pub use console::{invokes_pqbench, pqbench_outside_console};
+pub use console::{invokes_pqbench, untested_pqbench_blocks};
 pub use generate::{generate, has_runnable};
 pub use markdown::MarkdownParser;
 pub use model::{Block, BlockInfo, Directive};
