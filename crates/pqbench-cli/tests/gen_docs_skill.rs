@@ -7,8 +7,14 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn agent_skills() {
-    // agent_skills, from line 7
-    support::run("pqbench skill", 8, Some(&[r#"{"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}"#]));
-    support::run("pqbench skill parquet-advisor", 10, None);
-    support::run("pqbench skill parquet-advisor recipes", 11, None);
+    // agent_skills, from line 10
+    support::run("pqbench skill", 11, Some(&[r#"{"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}"#]));
+}
+
+#[rustfmt::skip]
+#[test]
+fn agent_skills_2() {
+    // agent_skills_2, from line 15
+    support::run("pqbench skill parquet-advisor | head -1", 16, Some(&["---"]));
+    support::run("pqbench skill parquet-advisor recipes | head -1", 18, None);
 }

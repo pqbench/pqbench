@@ -44,29 +44,3 @@ fn a_sh_block_with_a_pqbench_command_is_reported() {
     assert_eq!(offenders.len(), 1);
     assert_eq!(offenders[0].language(), Some("sh"));
 }
-
-#[test]
-fn diag_actual_lines() {
-    for line in [
-        "pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report",
-        "AWS_PROFILE=analytics pqbench bytemass s3://bucket/table/part-0.parquet",
-    ] {
-        eprintln!("{line:?} -> {}", invokes_pqbench(line));
-    }
-}
-
-#[test]
-fn diag_docs_readme() {
-    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/README.md"))
-        .unwrap();
-    let blocks = parse_source(&src);
-    for b in &blocks {
-        eprintln!(
-            "lang={:?} line={} pq={} :: {:?}",
-            b.language(),
-            b.line,
-            invokes_pqbench(&b.body),
-            b.body.lines().next()
-        );
-    }
-}

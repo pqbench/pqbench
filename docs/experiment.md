@@ -8,12 +8,39 @@ instead of predicting its compression.
 ## Usage
 
 ```console run
-$ pqbench experiment examples/quickstart.parquet | tail -1
-{"kind":"pqbench.experiment","event":"end","trial_count":1,"row_count":8}
-$ pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all | tail -1
-{"kind":"pqbench.experiment","event":"end","trial_count":2,"row_count":8}
-$ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy | tail -1
-{"kind":"pqbench.experiment","event":"end","trial_count":3,"row_count":8}
+$ pqbench experiment examples/quickstart.parquet --format table
+trial    bytes  bytes/row  row_groups  ratio
+-------  -----  ---------  ----------  -----
+control    600      75.00           1      -
+
+trial    column  codec               bytes  bytes/row  dictionary
+-------  ------  ------------------  -----  ---------  ----------
+control  id      ZSTD(ZstdLevel(1))     90      11.25  true
+control  year    ZSTD(ZstdLevel(1))     95      11.88  true
+rows: 8
+aim: storage
+trials: 1
+$ pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all --format table
+trial    bytes  bytes/row  row_groups  ratio
+-------  -----  ---------  ----------  -----
+control    600      75.00           1      -
+
+trial    column  codec               bytes  bytes/row  dictionary
+-------  ------  ------------------  -----  ---------  ----------
+control  id      ZSTD(ZstdLevel(1))     90      11.25  true
+control  year    ZSTD(ZstdLevel(1))     95      11.88  true
+
+trial    bytes  bytes/row  row_groups  ratio
+-------  -----  ---------  ----------  -----
+sort:id    607      75.88           1   1.01
+
+trial    column  codec               bytes  bytes/row  dictionary
+-------  ------  ------------------  -----  ---------  ----------
+sort:id  id      ZSTD(ZstdLevel(1))     90      11.25  true
+sort:id  year    ZSTD(ZstdLevel(1))     95      11.88  true
+rows: 8
+aim: all
+trials: 2
 $ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst
 ```
 

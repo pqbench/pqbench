@@ -7,11 +7,20 @@ data — `profile` reads row values and decodes them.
 ## Usage
 
 ```console run
-$ pqbench profile examples/quickstart.parquet | head -1
-{"kind":"pqbench.profile","version":1,"event":"begin"}
-$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 | head -1
-{"kind":"pqbench.profile","version":1,"event":"begin"}
-$ pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst
+$ pqbench profile examples/quickstart.parquet --format table
+id                           column  kind     values  nulls  ndv
+---------------------------  ------  -------  ------  -----  ---
+examples/quickstart.parquet  id      integer       8      0    8
+examples/quickstart.parquet  year    integer       8      0    8
+files: 1
+rows: 8
+columns: 2
+$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/profile.ndjson.zst
+```
+
+The stream is the explicit machine output, useful for the next command:
+
+```console run json
 $ pqbench profile examples/quickstart.parquet --rows all --json | head -1
 {"kind":"pqbench.profile","version":1,"event":"begin"}
 ```

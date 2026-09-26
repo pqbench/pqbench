@@ -139,6 +139,12 @@ analogy, convention, or precedent:
   fence carries `run` (e.g. ` ```console run `, or
   ` ```console run delta ` to gate the test on a cargo feature); a `$ ` line is
   a command and the lines under it are its expected output, matched exactly.
+  Two gates run before generation. A `pqbench` example outside a `console` fence
+  fails, so a command example cannot silently go untested. A transcript that
+  documents an NDJSON line (`{"kind":"pqbench`) also fails — the docs show the
+  human table; a block whose example is *about* the machine output opts in with
+  ` ```console run json ` (the `json` word is not a cargo feature). Stabilize
+  varying output in the shell (`head`, `awk`, `sed`), never a wildcard.
 - Features: pass `CARGO_FEATURES` to any target (quote values with a space),
   e.g. `make check CARGO_FEATURES=--all-features`,
   `make test CARGO_FEATURES="--features aws"`.

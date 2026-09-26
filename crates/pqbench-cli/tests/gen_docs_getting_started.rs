@@ -23,12 +23,12 @@ fn measure_one_file_2() {
 #[test]
 fn the_lake_pipeline() {
     // the_lake_pipeline, from line 67
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | tail -1", 68, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table", 68, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn draw_the_result() {
-    // draw_the_result, from line 81
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 82, None);
+    // draw_the_result, from line 87
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 88, None);
 }

@@ -9,6 +9,12 @@ mod support;
 fn parquet_advisor() {
     // parquet_advisor, from line 15
     support::run("pqbench skill", 16, Some(&[r#"{"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}"#]));
-    support::run("pqbench skill parquet-advisor | head -1", 18, Some(&["---"]));
-    support::run("pqbench skill parquet-advisor recipes | head -1", 20, None);
+}
+
+#[rustfmt::skip]
+#[test]
+fn parquet_advisor_2() {
+    // parquet_advisor_2, from line 20
+    support::run("pqbench skill parquet-advisor | head -1", 21, Some(&["---"]));
+    support::run("pqbench skill parquet-advisor recipes | head -1", 23, None);
 }

@@ -51,16 +51,23 @@ make check        # = fmt-check + check-docs + clippy -D warnings + test
   expected output:
   ````md
   ```console run
-  $ pqbench bytemass examples/quickstart.parquet --json | head -2
-  {"kind":"pqbench.bytemass","version":1,"event":"begin"}
-  {"kind":"pqbench.bytemass-file","id":"examples/quickstart.parquet","path":"examples/quickstart.parquet","file":"examples/quickstart.parquet","size":541}
+  $ pqbench bytemass examples/quickstart.parquet --format table
+  column  type   codec         encodings                 bytes  values
+  ------  -----  ------------  ------------------------  -----  ------
+  id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+  files: 1
   ```
   ````
-  The output is matched exactly, so bound anything that varies with `head`,
-  `tail`, or `jq`. Add a feature word (` ```console run delta `) to gate the
-  test on a cargo feature. After editing a doc block, run `make sync-docs`;
-  `check-docs` (part of `make check`, hence the pre-commit hook) fails when the
-  generated files are stale. Never edit `tests/gen_*.rs` by hand.
+  The output is matched exactly, so stabilize anything that varies with `head`,
+  `awk`, or `sed`. `docscheck` gates two things before generating: a `pqbench`
+  example must be in a `console` fence, and a transcript must document the human
+  table, not NDJSON. A `{"kind":"pqbench` output line fails unless the fence
+  opts in with ` ```console run json ` (the `json` word marks a machine-output
+  example; it is not a cargo feature). Add a feature word
+  (` ```console run delta `) to gate the test on a cargo feature. After editing
+  a doc block, run `make sync-docs`; `check-docs` (part of `make check`, hence
+  the pre-commit hook) fails when the generated files are stale. Never edit
+  `tests/gen_*.rs` by hand.
 - Feature sets are exercised through the same targets:
   `make check CARGO_FEATURES=--all-features` (or `CARGO_FEATURES="--features aws"`,
   `CARGO_FEATURES="--features delta"`). CI runs one clippy over

@@ -125,12 +125,14 @@ listed tables. A PAT does not open `s3://`.
 }
 ```
 
-List a catalog with a document from a file:
+List a catalog with a document from a file; a terminal prints the tables:
 
 ```console run
-$ pqbench lake docs/demos/lake.json | tail -2
-{"kind":"pqbench.table-ref","version":1,"id":"unity/events","uri":"docker/e2e-lakehouse/table"}
-{"kind":"pqbench.lake","event":"end","table_count":1}
+$ pqbench lake docs/demos/lake.json --format table
+name          uri
+------------  --------------------------
+unity/events  docker/e2e-lakehouse/table
+tables: 1
 ```
 
 ### Databricks-governed tables

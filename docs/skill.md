@@ -4,15 +4,22 @@
 agent loads it the same way it loads `--help`: run the command, read
 the markdown.
 
-```console run
+`pqbench skill` with no argument lists the bundled skills as JSON lines (this
+is the command's explicit machine output). A named skill prints raw markdown:
+
+```console run json
 $ pqbench skill
 {"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}
-$ pqbench skill parquet-advisor
-$ pqbench skill parquet-advisor recipes
 ```
 
-No `-o` on a TTY. A list is one `pqbench.skill` JSON line per skill.
-A named skill is raw markdown.
+```console run
+$ pqbench skill parquet-advisor | head -1
+---
+$ pqbench skill parquet-advisor recipes | head -1
+# Recipes: write path, DDL, compression levels
+```
+
+No `-o` on a TTY. A named skill is raw markdown.
 
 ## parquet-advisor
 

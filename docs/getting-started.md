@@ -65,8 +65,14 @@ A *lake* is a list of tables. A *table* is one snapshot's log and active files.
 The same pipe walks that hierarchy to byte masses:
 
 ```console run delta
-$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | tail -1
-{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
 Loading a Delta or Iceberg log needs its cargo feature (`delta` / `iceberg`;

@@ -16,5 +16,5 @@ fn what_to_run() {
 #[test]
 fn catalog_list_unity_databricks_iceberg_rest() {
     // catalog_list_unity_databricks_iceberg_rest, from line 130
-    support::run("pqbench lake docs/demos/lake.json | tail -2", 131, Some(&[r#"{"kind":"pqbench.table-ref","version":1,"id":"unity/events","uri":"docker/e2e-lakehouse/table"}"#, r#"{"kind":"pqbench.lake","event":"end","table_count":1}"#]));
+    support::run("pqbench lake docs/demos/lake.json --format table", 131, Some(&["name          uri", "------------  --------------------------", "unity/events  docker/e2e-lakehouse/table", "tables: 1"]));
 }

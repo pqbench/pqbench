@@ -30,7 +30,7 @@ fixture in the test suite. Catalog pipes need `make lakehouse`.
 decision. The stream is one JSON record per line, so `jq` prunes file records
 by `path`, and `sort`, `head`, or `awk` sample by name:
 
-```console run delta
+```console run delta json
 # one file: keep the begin/end records, drop the file records
 $ pqbench table docker/e2e-lakehouse/table \
 >   | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("part-")))' \
