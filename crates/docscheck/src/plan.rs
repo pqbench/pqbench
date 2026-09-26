@@ -1,10 +1,19 @@
-//! Turn runnable blocks into steps, and a plan of many blocks.
+//! Turn runnable `console` blocks into steps, and a plan of many blocks.
 //!
-//! A block body is a shell script, but each command is split at top-level
-//! newlines, honoring backslash continuations and pipes onto a following line,
-//! so a generated test can attribute a failure to a `file:line` and run each
-//! command in its own process. A leading `#` comment line is either a
-//! [`Directive`] or is dropped; other comment lines stay with the command below.
+//! A runnable block is a `console` transcript: a `$ `-prefixed line is a
+//! command, and the lines that follow, up to the next `$ ` or a blank line, are
+//! that command's expected stdout. A `> `-prefixed line continues the command
+//! (a shell line continuation), so long pipes stay readable.
+//!
+//! ```text
+//! $ pqbench bytemass examples/quickstart.parquet --json
+//! {"kind":"pqbench.bytemass","version":1,"event":"begin"}
+//! ...
+//! ```
+//!
+//! Each command becomes a [`Step`] carrying its expected output, so a generated
+//! test can run it and compare. A line equal to `...` in the expected output
+//! matches any run of lines, for values that vary (timings, sizes).
 
 use crate::model::{Block, Directive};
 
@@ -15,17 +24,28 @@ pub struct Step {
     pub command: String,
     /// 1-based line in the source document where the command starts.
     pub line: usize,
+    /// The documented stdout, one entry per line. A lone `...` entry matches
+    /// any number of lines. Empty means the test only checks the exit status.
+    pub expected: Vec<String>,
     /// Working directory relative to the repository root, or `None` for the root.
     pub directory: Option<String>,
     /// Environment variables from directives, in order.
     pub variables: Vec<(String, String)>,
 }
 
+impl Step {
+    /// Whether the step documents its output.
+    pub fn has_expected(&self) -> bool {
+        !self.expected.is_empty()
+    }
+}
+
 /// The steps of a runnable block, in order.
 ///
-/// Returns an empty vector when the block is not marked `run`.
+/// Returns an empty vector when the block is not marked `run` or is not a
+/// `console` transcript.
 pub fn block_steps(block: &Block) -> Vec<Step> {
-    if !block.is_runnable() {
+    if !block.is_runnable() || block.language() != Some("console") {
         return Vec::new();
     }
     split_steps(block)
@@ -67,74 +87,85 @@ impl Plan {
     }
 }
 
-/// Split a runnable block into steps, applying its directives.
+/// Split a runnable transcript into steps, applying its directives.
 fn split_steps(block: &Block) -> Vec<Step> {
     let mut directory = None;
     let mut variables = Vec::new();
-    let mut steps = Vec::new();
-    let mut pending: Option<(String, usize)> = None;
+    let mut steps: Vec<Step> = Vec::new();
+    // The command being built: its text, source line, and expected output.
+    let mut pending: Option<Pending> = None;
 
     for (offset, raw_line) in block.body.lines().enumerate() {
         let line_number = block.body_line + offset;
-        let trimmed = raw_line.trim();
 
         if let Some(directive) = Directive::parse(raw_line) {
             apply(&mut directory, &mut variables, directive);
             continue;
         }
-        if trimmed.is_empty() {
+
+        if let Some(rest) = raw_line.strip_prefix("$ ") {
+            finish(&mut pending, &mut steps, &directory, &variables);
+            pending = Some(Pending {
+                command: rest.to_owned(),
+                line: line_number,
+                expected: Vec::new(),
+            });
             continue;
         }
-        if trimmed.starts_with('#') && pending.is_none() {
+        if let Some(rest) = raw_line.strip_prefix("> ") {
+            if let Some(pending) = &mut pending {
+                pending.command.push('\n');
+                pending.command.push_str(rest);
+            }
             continue;
         }
 
-        match &mut pending {
-            Some((command, _)) => {
-                // Continuations keep their leading indentation, so a joined
-                // command matches what the reader sees.
-                command.push('\n');
-                command.push_str(raw_line.trim_end());
-                if !continues(trimmed) {
-                    let (command, line) = pending.take().expect("pending command");
-                    steps.push(Step {
-                        command,
-                        line,
-                        directory: directory.clone(),
-                        variables: variables.clone(),
-                    });
-                }
-            }
-            None => {
-                let line = line_number;
-                if continues(trimmed) {
-                    pending = Some((trimmed.to_owned(), line));
-                } else {
-                    steps.push(Step {
-                        command: trimmed.to_owned(),
-                        line,
-                        directory: directory.clone(),
-                        variables: variables.clone(),
-                    });
-                }
-            }
+        // A `#` line is a note (or a directive, handled above), never output.
+        if raw_line.trim_start().starts_with('#') {
+            continue;
+        }
+
+        // Inside a transcript entry: a plain line is expected output.
+        if let Some(pending) = &mut pending {
+            pending.expected.push(raw_line.to_owned());
         }
     }
 
-    if let Some((command, line)) = pending {
-        steps.push(Step {
-            command,
-            line,
-            directory,
-            variables,
-        });
-    }
+    finish(&mut pending, &mut steps, &directory, &variables);
     steps
 }
 
-/// A line that ends in `\` or a pipe continues onto the next line.
-fn continues(line: &str) -> bool {
-    line.ends_with('\\') || line.ends_with('|')
+/// A `$ ` command being built, with the output lines documented under it.
+struct Pending {
+    command: String,
+    line: usize,
+    expected: Vec<String>,
+}
+
+/// Push the pending command as a step, dropping trailing blank output lines.
+fn finish(
+    pending: &mut Option<Pending>,
+    steps: &mut Vec<Step>,
+    directory: &Option<String>,
+    variables: &[(String, String)],
+) {
+    let Some(mut pending) = pending.take() else {
+        return;
+    };
+    while pending
+        .expected
+        .last()
+        .is_some_and(|line| line.trim().is_empty())
+    {
+        pending.expected.pop();
+    }
+    steps.push(Step {
+        command: pending.command,
+        line: pending.line,
+        expected: pending.expected,
+        directory: directory.clone(),
+        variables: variables.to_vec(),
+    });
 }
 
 fn apply(

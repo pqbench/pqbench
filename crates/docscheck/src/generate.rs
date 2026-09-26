@@ -135,11 +135,21 @@ fn render_step(step: &Step) -> String {
         out.push_str(&format!("    // env {name}={value}\n"));
     }
     out.push_str(&format!(
-        "    support::run({}, {});\n",
+        "    support::run({}, {}, {});\n",
         rust_string(&step.command),
-        step.line
+        step.line,
+        expected_literal(&step.expected)
     ));
     out
+}
+
+/// The expected-output argument: `None`, or `Some(&[...])` of the lines.
+fn expected_literal(expected: &[String]) -> String {
+    if expected.is_empty() {
+        return "None".to_owned();
+    }
+    let lines: Vec<String> = expected.iter().map(|line| rust_string(line)).collect();
+    format!("Some(&[{}])", lines.join(", "))
 }
 
 /// A Rust string literal (raw when it carries quotes or backslashes).

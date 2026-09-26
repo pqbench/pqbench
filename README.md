@@ -23,8 +23,11 @@ The published image is a portable baseline build; see
 
 lzbench-style compression benchmark over raw file bytes:
 
-```sh run
-pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0
+```console run
+$ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 | jq -c 'del(.compress_estimate,.decompress_estimate)'
+{"kind":"pqbench.lz","version":1,"event":"begin","file":"examples/quickstart.parquet"}
+{"kind":"pqbench.lz-row","codec":"zstd","level":3,"compressed_bytes":343,"uncompressed_bytes":541,"ratio":0.634011090573013}
+{"kind":"pqbench.lz","event":"end","row_count":1}
 ```
 
 `--json` emits the same report as composable JSON.
@@ -34,8 +37,11 @@ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations
 The same codec sweep over the encoded pages of a **NONE-compressed** parquet
 file:
 
-```sh run
-pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0
+```console run
+$ pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0 | jq -c 'del(.compress_estimate,.decompress_estimate)' | head -3
+{"kind":"pqbench.compression","version":1,"event":"begin","file":"examples/quickstart.parquet"}
+{"kind":"pqbench.compression-row","codec":"lz4","level":1,"compressed_bytes":83,"uncompressed_bytes":106,"ratio":0.7830188679245284}
+{"kind":"pqbench.compression-row","codec":"snappy","level":1,"compressed_bytes":90,"uncompressed_bytes":106,"ratio":0.8490566037735849}
 ```
 
 `--json` emits the same report as composable JSON (the per-column rows are
@@ -48,9 +54,13 @@ Reads only the footer metadata, so it works on any file regardless of
 compression. Multiple paths, quoted glob masks, and storage URIs are
 aggregated:
 
-```sh run
-pqbench bytemass examples/quickstart.parquet
-pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet
+```console run
+$ pqbench bytemass examples/quickstart.parquet --json | head -2
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+{"kind":"pqbench.bytemass-file","id":"examples/quickstart.parquet","path":"examples/quickstart.parquet","file":"examples/quickstart.parquet","size":541}
+$ pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet | head -2
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+{"kind":"pqbench.bytemass-file","id":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","path":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","file":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","size":2107406}
 ```
 
 An `s3://` URI is the same command with the `aws` feature:
@@ -77,10 +87,14 @@ table and let the shell fan out (`xargs -P`). A terminal prints a short
 summary and requires `-o` (zstd
 NDJSON):
 
-```sh run delta
-pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
-pqbench table docker/e2e-lakehouse/table | pqbench bytemass
-pqbench bytemass /tmp/table.ndjson.zst
+```console run delta
+$ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | head -2
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}
+$ pqbench bytemass /tmp/table.ndjson.zst | head -2
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}
 ```
 
 Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
@@ -119,9 +133,13 @@ namespaces and tables, then `loadTable` for each metadata location.
 leading name is a literal. `token` is the Databricks bearer token. `env`
 holds `AWS_*` storage credentials and is copied onto each table-ref.
 
-```sh run delta
-pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*'
-pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass
+```console run delta
+$ pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' | head -2
+{"kind":"pqbench.lake","version":1,"event":"begin"}
+{"kind":"pqbench.table-ref","version":1,"id":"table","uri":"file://<root>/docker/e2e-lakehouse/table"}
+$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | head -2
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+{"kind":"pqbench.bytemass-file","id":"table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}
 ```
 
 The committed fixture tree also holds an Iceberg table under
@@ -144,9 +162,9 @@ Collect a bytemass stream into a static HTML page. The page embeds the
 measured rows and loads the d3 modules it uses from a CDN, drawing one
 treemap per table id. Open the HTML in a browser; no server is needed.
 
-```sh run delta
-pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
-pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
+```console run delta
+$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
@@ -156,8 +174,9 @@ The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
 Copy the Parquet files a table names to a local directory — an `aws s3 cp`-style
 fetch for a Delta or Iceberg table, local or remote:
 
-```sh run delta
-pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample
+```console run delta
+$ pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample
+dump: 1 file(s), 796 bytes -> /tmp/sample
 ```
 
 `pqbench dump /tmp/sample s3://bucket/table` fetches from S3 (needs the `aws`

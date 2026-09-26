@@ -26,7 +26,11 @@ fn write(dir: &Path, name: &str, source: &str) {
 #[test]
 fn sync_writes_a_test_file_and_support_module() {
     let temp = tempfile::tempdir().expect("tempdir");
-    write(temp.path(), "doc.md", "## lz\n\n```sh run\necho hi\n```\n");
+    write(
+        temp.path(),
+        "doc.md",
+        "## lz\n\n```console run\n$ echo hi\n```\n",
+    );
 
     let output = invoke(temp.path(), &["sync", "doc.md", "--out", "gen"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -38,7 +42,7 @@ fn sync_writes_a_test_file_and_support_module() {
 #[test]
 fn a_nested_path_becomes_an_underscored_file_name() {
     let temp = tempfile::tempdir().expect("tempdir");
-    write(temp.path(), "docs/demo.md", "```sh run\none\n```\n");
+    write(temp.path(), "docs/demo.md", "```console run\n$ one\n```\n");
 
     invoke(temp.path(), &["sync", "docs", "--out", "gen"]);
     assert!(temp.path().join("gen/gen_docs_demo.rs").exists());
@@ -47,7 +51,7 @@ fn a_nested_path_becomes_an_underscored_file_name() {
 #[test]
 fn check_passes_right_after_a_sync() {
     let temp = tempfile::tempdir().expect("tempdir");
-    write(temp.path(), "doc.md", "```sh run\necho hi\n```\n");
+    write(temp.path(), "doc.md", "```console run\n$ echo hi\n```\n");
 
     invoke(temp.path(), &["sync", "doc.md", "--out", "gen"]);
     let output = invoke(temp.path(), &["check", "doc.md", "--out", "gen"]);
@@ -57,7 +61,7 @@ fn check_passes_right_after_a_sync() {
 #[test]
 fn check_fails_when_the_generated_file_is_missing() {
     let temp = tempfile::tempdir().expect("tempdir");
-    write(temp.path(), "doc.md", "```sh run\necho hi\n```\n");
+    write(temp.path(), "doc.md", "```console run\n$ echo hi\n```\n");
 
     let output = invoke(temp.path(), &["check", "doc.md", "--out", "gen"]);
     assert_eq!(output.status.code(), Some(1));
@@ -68,10 +72,18 @@ fn check_fails_when_the_generated_file_is_missing() {
 #[test]
 fn check_fails_when_the_document_changed() {
     let temp = tempfile::tempdir().expect("tempdir");
-    fs::write(temp.path().join("doc.md"), "```sh run\necho hi\n```\n").expect("write");
+    fs::write(
+        temp.path().join("doc.md"),
+        "```console run\n$ echo hi\n```\n",
+    )
+    .expect("write");
     invoke(temp.path(), &["sync", "doc.md", "--out", "gen"]);
 
-    fs::write(temp.path().join("doc.md"), "```sh run\necho changed\n```\n").expect("rewrite");
+    fs::write(
+        temp.path().join("doc.md"),
+        "```console run\n$ echo changed\n```\n",
+    )
+    .expect("rewrite");
     let output = invoke(temp.path(), &["check", "doc.md", "--out", "gen"]);
     assert_eq!(output.status.code(), Some(1));
 }
@@ -79,7 +91,11 @@ fn check_fails_when_the_document_changed() {
 #[test]
 fn emit_prints_and_writes_nothing() {
     let temp = tempfile::tempdir().expect("tempdir");
-    write(temp.path(), "doc.md", "## lz\n\n```sh run\necho hi\n```\n");
+    write(
+        temp.path(),
+        "doc.md",
+        "## lz\n\n```console run\n$ echo hi\n```\n",
+    );
 
     let output = invoke(temp.path(), &["emit", "doc.md"]);
     assert_eq!(output.status.code(), Some(0));
@@ -90,11 +106,15 @@ fn emit_prints_and_writes_nothing() {
 #[test]
 fn sync_removes_a_generated_file_whose_document_lost_its_run_blocks() {
     let temp = tempfile::tempdir().expect("tempdir");
-    fs::write(temp.path().join("doc.md"), "```sh run\necho hi\n```\n").expect("write");
+    fs::write(
+        temp.path().join("doc.md"),
+        "```console run\n$ echo hi\n```\n",
+    )
+    .expect("write");
     invoke(temp.path(), &["sync", "doc.md", "--out", "gen"]);
     assert!(temp.path().join("gen/gen_doc.rs").exists());
 
-    fs::write(temp.path().join("doc.md"), "```sh\necho hi\n```\n").expect("rewrite");
+    fs::write(temp.path().join("doc.md"), "```console\n$ echo hi\n```\n").expect("rewrite");
     invoke(temp.path(), &["sync", "doc.md", "--out", "gen"]);
     assert!(!temp.path().join("gen/gen_doc.rs").exists());
     assert!(temp.path().join("gen/gen_support.rs").exists());
@@ -103,7 +123,11 @@ fn sync_removes_a_generated_file_whose_document_lost_its_run_blocks() {
 #[test]
 fn sync_leaves_hand_written_tests_alone() {
     let temp = tempfile::tempdir().expect("tempdir");
-    fs::write(temp.path().join("doc.md"), "```sh run\necho hi\n```\n").expect("write");
+    fs::write(
+        temp.path().join("doc.md"),
+        "```console run\n$ echo hi\n```\n",
+    )
+    .expect("write");
     write(temp.path(), "gen/bytemass.rs", "// hand-written\n");
     invoke(temp.path(), &["sync", "doc.md", "--out", "gen"]);
     assert!(temp.path().join("gen/bytemass.rs").exists());

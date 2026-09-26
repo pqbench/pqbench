@@ -131,11 +131,13 @@ analogy, convention, or precedent:
 - Gate (pre-commit): `make check` = `fmt-check` + `clippy -D warnings` + `test`.
   `make check-python` builds the PyO3 wheel and runs its tests; CI runs it,
   the local gate does not (it compiles libpython and the delta feature).
-- Docs: the runnable `pqbench ...` commands in the Markdown are generated into
+- Docs: the `console` transcripts in the Markdown are generated into
   `crates/pqbench-cli/tests/gen_*.rs` and run by `make test`. Edit a doc block,
   run `make sync-docs`; `make check-docs` fails when the generated files are
-  stale. A block runs only when its fence carries `run` (e.g. ` ```sh run `,
-  or ` ```sh run delta ` to gate the test on a cargo feature).
+  stale. A block runs only when its fence carries `run` (e.g. ` ```console run `,
+  or ` ```console run delta ` to gate the test on a cargo feature); a `$ ` line
+  is a command and the lines under it are its expected output, with a lone `...`
+  matching any run of lines.
 - Features: pass `CARGO_FEATURES` to any target (quote values with a space),
   e.g. `make check CARGO_FEATURES=--all-features`,
   `make test CARGO_FEATURES="--features aws"`.

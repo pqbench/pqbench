@@ -4,10 +4,11 @@
 agent loads it the same way it loads `--help`: run the command, read
 the markdown.
 
-```sh run
-pqbench skill
-pqbench skill parquet-advisor
-pqbench skill parquet-advisor recipes
+```console run
+$ pqbench skill
+{"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}
+$ pqbench skill parquet-advisor
+$ pqbench skill parquet-advisor recipes
 ```
 
 No `-o` on a TTY. A list is one `pqbench.skill` JSON line per skill.
