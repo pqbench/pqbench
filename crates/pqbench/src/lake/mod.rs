@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 use crate::table::{self, TableInfo};
 use crate::third_party::object_store::{self, PrefixListing};
 
+/// Directory whose presence marks a Delta table.
+const DELTA_LOG: &str = "_delta_log";
+/// Directory that holds Iceberg metadata.
+const ICEBERG_METADATA: &str = "metadata";
+/// Iceberg version file inside [`ICEBERG_METADATA`].
+const ICEBERG_VERSION_HINT: &str = "version-hint.text";
+/// Suffix of an Iceberg metadata JSON file.
+const ICEBERG_METADATA_SUFFIX: &str = ".metadata.json";
+
 /// Errors discovering a lake.
 #[derive(Debug)]
 pub struct Error(String);
@@ -193,7 +202,7 @@ async fn discover_listed(
             if prefix.starts_with('.') || prefix.is_empty() {
                 continue;
             }
-            if prefix == "_delta_log" || prefix == "metadata" {
+            if prefix == DELTA_LOG || prefix == ICEBERG_METADATA {
                 continue;
             }
             pending.push((join_uri(&dir, &prefix), depth + 1));
@@ -220,7 +229,7 @@ async fn is_listed_table(
 }
 
 fn listing_is_delta(listing: &PrefixListing) -> bool {
-    listing.prefixes.iter().any(|name| name == "_delta_log")
+    listing.prefixes.iter().any(|name| name == DELTA_LOG)
 }
 
 async fn listing_is_iceberg(
@@ -228,10 +237,10 @@ async fn listing_is_iceberg(
     dir: &str,
     options: &[(String, String)],
 ) -> Result<bool, Error> {
-    if !listing.prefixes.iter().any(|name| name == "metadata") {
+    if !listing.prefixes.iter().any(|name| name == ICEBERG_METADATA) {
         return Ok(false);
     }
-    let metadata = object_store::list_prefix(&join_uri(dir, "metadata"), options)
+    let metadata = object_store::list_prefix(&join_uri(dir, ICEBERG_METADATA), options)
         .await
         .map_err(|e| Error(e.to_string()))?;
     Ok(metadata
@@ -241,9 +250,13 @@ async fn listing_is_iceberg(
 }
 
 fn is_iceberg_metadata(name: &str) -> bool {
-    !name.contains('/')
-        && (name == "version-hint.text"
-            || (name.ends_with(".metadata.json") && name != ".metadata.json"))
+    if name.contains('/') {
+        return false;
+    }
+    if name == ICEBERG_VERSION_HINT {
+        return true;
+    }
+    name.ends_with(ICEBERG_METADATA_SUFFIX) && name != ICEBERG_METADATA_SUFFIX
 }
 
 fn remote_table_name(root: &str, dir: &str) -> String {
