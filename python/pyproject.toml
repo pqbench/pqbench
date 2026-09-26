@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "pqbench"
+dynamic = ["version"]
+description = "Python bindings for the pqbench command line."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "pqbench contributors" }]
+keywords = ["parquet", "compression", "benchmark"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[project.urls]
+Homepage = "https://github.com/pqbench/pqbench"
+Repository = "https://github.com/pqbench/pqbench"
+Documentation = "https://github.com/pqbench/pqbench/tree/main/python"
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "pqbench._native"
+python-packages = ["pqbench"]
+features = ["delta"]

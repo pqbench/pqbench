@@ -17,7 +17,7 @@ experiments.md
 # Local/benchmark data (large parquet files, not committed)
 /local
 
-# Generated treemap HTML samples (regenerable via `pqbench ... --d3`)
+# Generated treemap HTML samples (regenerable via `pqbench bytemass | pqbench viz`)
 /samples
 
 # Scratch/temp files (survive sandbox restarts; /tmp is wiped each restart)
@@ -31,3 +31,13 @@ decisions/
 
 # Agent skills / tooling config (not part of the library/CLI)
 /.opencode
+
+# Python package build (python/ is its own crate, not a workspace member)
+__pycache__/
+*.py[cod]
+*.egg-info/
+/python/dist/
+/python/.venv/
+/python/target/
+/python/Cargo.lock
+/python/pqbench/*.so
