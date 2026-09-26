@@ -2,8 +2,8 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use pqbench::bytemass::MassRow;
-use pqbench::viz::{self, FileMass, MassRecord};
+use pqbench::bytemass::{FileStat, MassRow};
+use pqbench::viz::{self, MassRecord};
 
 use crate::document::{self, Record};
 use crate::CliError;
@@ -36,14 +36,14 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileMass>), CliError> {
+async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliError> {
     let mut rows = Vec::new();
     let mut files = Vec::new();
     let mut begun = false;
     document::visit_input(input, async |record| {
         match record {
             Record::BytemassBegin => begun = true,
-            Record::BytemassFile(file) => files.push(file_mass(file)),
+            Record::BytemassFile(file) => files.push(file),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
             Record::BytemassEnd => {}
             Record::Table(_)
@@ -77,27 +77,6 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileMass>), CliErr
     Ok((rows, files))
 }
 
-fn file_mass(file: document::BytemassFile) -> FileMass {
-    FileMass {
-        id: file.id,
-        path: file.path,
-        file: file.file,
-        size: file.size,
-        num_records: file.stats.as_ref().map(|stats| stats.num_records),
-        bytes_per_row: file.stats.as_ref().and_then(|stats| stats.bytes_per_row),
-        storage_class: file.storage_class,
-        partition: hive_partition(&file.partition_values),
-    }
-}
-
-fn hive_partition(values: &std::collections::BTreeMap<String, Option<String>>) -> String {
-    values
-        .iter()
-        .map(|(key, value)| format!("{key}={}", value.as_deref().unwrap_or("null")))
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 fn mass_record(id: String, row: MassRow) -> MassRecord {
     MassRecord {
         id,
@@ -128,7 +107,7 @@ fn prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn summary(prefix: &Path, rows: &[MassRecord], files: &[FileMass]) -> String {
+fn summary(prefix: &Path, rows: &[MassRecord], files: &[FileStat]) -> String {
     let measured = rows
         .iter()
         .map(|row| row.file.as_str())

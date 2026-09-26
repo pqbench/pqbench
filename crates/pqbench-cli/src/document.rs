@@ -58,29 +58,12 @@ pub(crate) enum Record {
     LakeSource(LakeSource),
     RemoteSource(RemoteSource),
     BytemassBegin,
-    BytemassFile(BytemassFile),
+    BytemassFile(pqbench::bytemass::FileStat),
     BytemassRow {
         id: String,
         row: MassRow,
     },
     BytemassEnd,
-}
-
-/// Table stats proxied through a bytemass stream.
-#[derive(Debug, Deserialize)]
-pub(crate) struct BytemassFile {
-    #[serde(default)]
-    pub id: String,
-    #[serde(default)]
-    pub path: String,
-    pub file: String,
-    pub size: u64,
-    #[serde(default)]
-    pub storage_class: Option<String>,
-    #[serde(default)]
-    pub partition_values: BTreeMap<String, Option<String>>,
-    #[serde(default)]
-    pub stats: Option<pqbench::table::FileStats>,
 }
 
 /// One table name for `table` to load. `id` tags every later line.
@@ -200,7 +183,9 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             Err(format!("unsupported bytemass event `{other}`").into())
         }
         ("pqbench.bytemass", None) => Err("a bytemass stream needs begin/end events".into()),
-        ("pqbench.bytemass-file", _) => Ok(Record::BytemassFile(parse_bytemass_file(value)?)),
+        ("pqbench.bytemass-file", _) => Ok(Record::BytemassFile(
+            serde_json::from_value(value).map_err(invalid_json)?,
+        )),
         ("pqbench.bytemass-row", _) => {
             let (id, row) = parse_mass_row(value)?;
             Ok(Record::BytemassRow { id, row })
@@ -293,10 +278,6 @@ fn parse_log(value: serde_json::Value) -> Result<(String, LogCommit), CliError> 
     }
     let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
     Ok((wire.id, wire.commit))
-}
-
-fn parse_bytemass_file(value: serde_json::Value) -> Result<BytemassFile, CliError> {
-    serde_json::from_value(value).map_err(invalid_json)
 }
 
 fn parse_mass_row(value: serde_json::Value) -> Result<(String, MassRow), CliError> {

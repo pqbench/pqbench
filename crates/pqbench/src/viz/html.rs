@@ -1,13 +1,14 @@
 //! Static HTML: the embedded bytemass rows are drawn as a d3 treemap.
 
+use crate::bytemass::FileStat;
 use crate::third_party::parquet::api::Error;
-use crate::viz::{FileMass, MassRecord};
+use crate::viz::MassRecord;
 
 /// Self-contained page that groups the embedded rows and draws a d3 treemap.
 ///
 /// # Errors
 /// Fails when there are no rows or the rows cannot be encoded into the page.
-pub fn render_html(rows: &[MassRecord], files: &[FileMass], title: &str) -> Result<String, Error> {
+pub fn render_html(rows: &[MassRecord], files: &[FileStat], title: &str) -> Result<String, Error> {
     if rows.is_empty() {
         return Err(Error("html needs bytemass rows".into()));
     }
@@ -135,10 +136,13 @@ function fileTree(name, files) {
   const root = branch(name);
   for (const file of files) {
     const parts = [];
-    if (file.partition) parts.push(...String(file.partition).split("/").filter(Boolean));
-    const leaf = String(file.path || file.file).split("/").pop() || file.file;
+    const values = file.partition_values || {};
+    for (const key of Object.keys(values)) parts.push(`${key}=${values[key] ?? "null"}`);
+    let leaf = String(file.path || file.file).split("/").pop() || file.file;
+    if (file.storage_class) leaf += ` [${file.storage_class}]`;
     parts.push(leaf);
-    const value = file.bytes_per_row || file.size || 0;
+    const stats = file.stats || {};
+    const value = stats.bytes_per_row || file.size || 0;
     insert(root, parts, value);
   }
   recompute(root);

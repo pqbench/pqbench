@@ -8,6 +8,7 @@ mod html;
 
 use std::path::Path;
 
+use crate::bytemass::FileStat;
 use crate::third_party::parquet::api::Error;
 
 pub use html::render_html;
@@ -54,33 +55,11 @@ pub struct MassRecord {
     pub page_count: Option<u64>,
 }
 
-/// One proxied table-file / object-stat row collected from the bytemass stream.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FileMass {
-    /// Table id from the stream.
-    pub id: String,
-    /// Table-relative path, when known.
-    pub path: String,
-    /// URI or filesystem path that was measured.
-    pub file: String,
-    /// Log or object size in bytes.
-    pub size: u64,
-    /// `numRecords` from Delta add stats.
-    // aipnaming: allow(aip-141/count-suffix)
-    pub num_records: Option<u64>,
-    /// Log size / num_records.
-    pub bytes_per_row: Option<f64>,
-    /// Storage class from HEAD, when known.
-    pub storage_class: Option<String>,
-    /// Hive partition values as `k=v/k=v`.
-    pub partition: String,
-}
-
 /// Write `path.html` from the collected rows and proxied file stats.
 ///
 /// # Errors
 /// Fails when there are no rows or the HTML page cannot be written.
-pub fn write_report(prefix: &Path, rows: &[MassRecord], files: &[FileMass]) -> Result<(), Error> {
+pub fn write_report(prefix: &Path, rows: &[MassRecord], files: &[FileStat]) -> Result<(), Error> {
     let html_path = prefix.with_extension("html");
     let html = render_html(rows, files, &title(rows))?;
     std::fs::write(&html_path, html)
@@ -146,15 +125,18 @@ mod tests {
         write_report(
             &prefix,
             &[row("sales", "part-0.parquet", "id", 20)],
-            &[FileMass {
+            &[FileStat {
                 id: "sales".into(),
                 path: "year=2024/part-0.parquet".into(),
                 file: "part-0.parquet".into(),
                 size: 40,
-                num_records: Some(10),
-                bytes_per_row: Some(4.0),
                 storage_class: Some("STANDARD".into()),
-                partition: "year=2024".into(),
+                partition_values: [("year".to_string(), Some("2024".to_string()))].into(),
+                stats: Some(crate::table::FileStats {
+                    num_records: 10,
+                    bytes_per_row: Some(4.0),
+                    ..Default::default()
+                }),
             }],
         )
         .unwrap();

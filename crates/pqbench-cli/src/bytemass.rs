@@ -173,19 +173,18 @@ fn write_file(
     rows: &[bytemass::MassRow],
 ) -> Result<(), CliError> {
     let object = rows.first();
+    let size = if file.size_bytes != 0 {
+        file.size_bytes
+    } else {
+        object.map_or(0, |row| row.size_bytes)
+    };
+    let mut stat = bytemass::FileStat::new(id, file.path.clone(), file.uri.clone(), size);
+    stat.storage_class = object.and_then(|row| row.storage_class.clone());
+    stat.partition_values = file.partition_values.clone();
+    stat.stats = file.stats.clone();
     emit.write(&FileRecord {
         kind: "pqbench.bytemass-file",
-        id,
-        path: &file.path,
-        file: &file.uri,
-        size: if file.size_bytes != 0 {
-            file.size_bytes
-        } else {
-            object.map(|row| row.size_bytes).unwrap_or(0)
-        },
-        storage_class: object.and_then(|row| row.storage_class.as_deref()),
-        partition_values: &file.partition_values,
-        stats: file.stats.as_ref(),
+        file: &stat,
     })
 }
 
@@ -284,20 +283,8 @@ struct BeginRecord {
 #[derive(Serialize)]
 struct FileRecord<'a> {
     kind: &'static str,
-    id: &'a str,
-    path: &'a str,
-    file: &'a str,
-    size: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    storage_class: Option<&'a str>,
-    #[serde(skip_serializing_if = "map_empty")]
-    partition_values: &'a std::collections::BTreeMap<String, Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stats: Option<&'a pqbench::table::FileStats>,
-}
-
-fn map_empty(values: &&std::collections::BTreeMap<String, Option<String>>) -> bool {
-    values.is_empty()
+    #[serde(flatten)]
+    file: &'a bytemass::FileStat,
 }
 
 #[derive(Serialize)]

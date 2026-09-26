@@ -7,9 +7,60 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::table::FileStats;
 use crate::third_party::parquet::api::Error;
 
 use super::collection;
+
+/// A measured file's identity and the table-log statistics proxied with it.
+///
+/// One `pqbench.bytemass-file` record: the object identity (path, URI, size,
+/// storage class) plus the Delta add action's partition values and statistics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct FileStat {
+    /// Table id from the stream, or empty for a bare parquet input.
+    #[serde(default)]
+    pub id: String,
+    /// Table-relative path, when known.
+    #[serde(default)]
+    pub path: String,
+    /// URI or filesystem path that was measured.
+    pub file: String,
+    /// Log or object size in bytes.
+    pub size: u64,
+    /// Storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
+    /// Hive partition values from the Delta add action.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub partition_values: BTreeMap<String, Option<String>>,
+    /// Delta `add.stats` proxied with the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<FileStats>,
+}
+
+impl FileStat {
+    /// Assemble a file record from its identity; stats and storage class are
+    /// filled in when known.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        path: impl Into<String>,
+        file: impl Into<String>,
+        size: u64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            path: path.into(),
+            file: file.into(),
+            size,
+            storage_class: None,
+            partition_values: BTreeMap::new(),
+            stats: None,
+        }
+    }
+}
 
 /// Arguments for the `bytemass` command.
 #[derive(Debug, Clone, Default)]

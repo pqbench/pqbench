@@ -109,7 +109,7 @@ impl TableFile {
 }
 
 /// Statistics copied from a Delta add action. Values are the log's claim.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
 pub struct FileStats {
     /// `numRecords` from `add.stats`.
