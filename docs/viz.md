@@ -4,10 +4,10 @@
 those lines into a static HTML page. Measurement and presentation are separate
 commands so either end can change without the other.
 
-```sh run delta
-pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
-pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
-pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report
+```console run delta
+$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 `-o report` writes `report.html` (here `/tmp/report.html`). A terminal prints a

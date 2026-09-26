@@ -7,11 +7,14 @@ instead of predicting its compression.
 
 ## Usage
 
-```sh run
-pqbench experiment examples/quickstart.parquet
-pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all
-pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy
-pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst
+```console run
+$ pqbench experiment examples/quickstart.parquet | tail -1
+{"kind":"pqbench.experiment","event":"end","trial_count":1,"row_count":8}
+$ pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all | tail -1
+{"kind":"pqbench.experiment","event":"end","trial_count":2,"row_count":8}
+$ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy | tail -1
+{"kind":"pqbench.experiment","event":"end","trial_count":3,"row_count":8}
+$ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst
 ```
 
 | Flag | Meaning |

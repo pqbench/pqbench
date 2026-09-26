@@ -8,7 +8,7 @@ mod support;
 #[test]
 fn agent_skills() {
     // agent_skills, from line 7
-    support::run("pqbench skill", 8);
-    support::run("pqbench skill parquet-advisor", 9);
-    support::run("pqbench skill parquet-advisor recipes", 10);
+    support::run("pqbench skill", 8, Some(&[r#"{"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}"#]));
+    support::run("pqbench skill parquet-advisor", 10, None);
+    support::run("pqbench skill parquet-advisor recipes", 11, None);
 }

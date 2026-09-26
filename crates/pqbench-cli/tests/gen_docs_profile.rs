@@ -8,8 +8,8 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 9
-    support::run("pqbench profile examples/quickstart.parquet", 10);
-    support::run("pqbench profile examples/quickstart.parquet --columns 'id' --top 5", 11);
-    support::run("pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst", 12);
-    support::run("pqbench profile examples/quickstart.parquet --rows all --json", 13);
+    support::run("pqbench profile examples/quickstart.parquet | head -1", 10, Some(&[r#"{"kind":"pqbench.profile","version":1,"event":"begin"}"#]));
+    support::run("pqbench profile examples/quickstart.parquet --columns 'id' --top 5 | head -1", 12, Some(&[r#"{"kind":"pqbench.profile","version":1,"event":"begin"}"#]));
+    support::run("pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst", 14, None);
+    support::run("pqbench profile examples/quickstart.parquet --rows all --json | head -1", 15, Some(&[r#"{"kind":"pqbench.profile","version":1,"event":"begin"}"#]));
 }

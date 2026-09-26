@@ -9,5 +9,5 @@ mod support;
 #[test]
 fn what_to_run() {
     // what_to_run, from line 24
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 25);
+    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 25, None);
 }
