@@ -9,9 +9,10 @@ pub const ROOT_ABOUT: &str =
 pub const ROOT_LONG_ABOUT: &str = "\
 pqbench measures how Parquet files spend bytes (bytemass), how well codecs
 compress them (lz, compression), what a Delta or Iceberg snapshot
-currently stores (table, lake), and what a decoded row sample holds
-(profile). Commands compose on pipes: each writes a versioned JSON
-document the next command reads.
+currently stores (table, lake), what a decoded row sample holds
+(profile), and how a rewritten sample would store (experiment).
+Commands compose on pipes: each writes a versioned JSON document the
+next command reads.
 
   lake     →  pqbench.table-ref    list tables (or a catalog)
   table    →  pqbench.table        load one snapshot's log and files
@@ -35,8 +36,10 @@ Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
+  pqbench experiment data.parquet --rewrite sort:text --aim all
 
 Documents (kind + version 1):
+  pqbench.experiment     begin/end around trial and column lines
   pqbench.profile        begin/end around pqbench.profile-column lines
   pqbench.lake-source    catalog endpoint + token; lake lists it
   pqbench.lake           tables (name, uri, env); table loads each log
@@ -291,3 +294,39 @@ See also:
   pqbench compression --help  codec sweep over encoded pages
   pqbench --help
   docs/profile.md  docs/cli.md";
+
+pub const EXPERIMENT_ABOUT: &str =
+    "Rewrite a decoded row sample and measure storage and skip locality";
+
+pub const EXPERIMENT_LONG_ABOUT: &str = "\
+Read up to --rows leading rows, then for each --rewrite SPEC write the sample
+back to Parquet and measure it. A control trial (zstd, dictionary on) is
+always measured first; trial ratios are versus that control, not the source
+file's original encodings.
+
+--rewrite / --trial is repeatable and each value is one trial; semicolons
+compose rewrites (sort:a;codec:zstd@3;dictionary:off;row-group-size:2048).
+Supported rewrites: sort:A / sort:A,B (numeric or bytewise), codec:NAME[@LEVEL]
+(uncompressed, snappy, gzip, lz4, zstd), dictionary:on|off, row-group-size:N.
+
+--aim chooses what to measure: storage (bytes, bytes per row), skipping
+(row-group min/max locality), or all. skipping/all splits the sample into row
+groups of 2048 rows unless a trial sets row-group-size.
+
+A pipe streams one `pqbench.experiment-trial` per trial and one
+`pqbench.experiment-column` per column. A TTY needs -o. --json is the same
+stream. This command does not do zorder, hilbert, cast, drop, encoding,
+page-size, or indexes.";
+
+pub const EXPERIMENT_AFTER: &str = "\
+Examples:
+  pqbench experiment data.parquet
+  pqbench experiment data.parquet --rewrite sort:text --aim all
+  pqbench experiment data.parquet --rewrite 'sort:country,city' --rewrite codec:snappy
+  pqbench experiment data.parquet --rewrite 'sort:id;dictionary:off' -o trials.ndjson.zst
+
+See also:
+  pqbench profile --help  facts to choose a rewrite from
+  pqbench bytemass --help  footer byte masses of an existing file
+  pqbench --help
+  docs/experiment.md  docs/cli.md";

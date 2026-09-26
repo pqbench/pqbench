@@ -8,11 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use pqbench::dump::DumpFile;
+use pqbench::experiment::{Aim, ExperimentRequest};
 use pqbench::lake::Lake;
 use pqbench::profile::ProfileRequest;
 use pqbench::stats;
 use pqbench::table::{LoadRequest, TableInfo};
-use pqbench::third_party::parquet::api::read_sample;
+use pqbench::third_party::parquet::api::{read_sample, read_typed_sample};
 use pqbench::viz::MassRecord;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -162,6 +163,44 @@ fn profile(
     dumps(py, &records)
 }
 
+/// Run `pqbench experiment`: rewrite a decoded sample and measure it.
+///
+/// `rewrite` and `trial` are repeatable specs; `aim` is `storage`, `skipping`,
+/// or `all`. `rows` is `all` or `first:N`. Returns the stream of
+/// `pqbench.experiment-trial` objects (the control first).
+#[pyfunction]
+#[pyo3(signature = (path, *, rewrite=None, trial=None, aim="storage", rows="first:8192"))]
+fn experiment(
+    py: Python<'_>,
+    path: PathBuf,
+    rewrite: Option<Vec<String>>,
+    trial: Option<Vec<String>>,
+    aim: &str,
+    rows: &str,
+) -> PyResult<Py<PyAny>> {
+    let max_rows = parse_profile_rows(rows)?;
+    let mut trials = rewrite.unwrap_or_default();
+    trials.extend(trial.unwrap_or_default());
+    let request = ExperimentRequest {
+        trials,
+        aim: Aim::parse(aim).map_err(runtime)?,
+    };
+    let sample = py
+        .detach(|| read_typed_sample(&path, max_rows))
+        .map_err(runtime)?;
+    let report = pqbench::experiment::experiment(&sample, &request).map_err(runtime)?;
+    let mut records: Vec<Value> = Vec::new();
+    for trial in report.trials {
+        let mut object = serde_json::Map::new();
+        object.insert("kind".into(), Value::from("pqbench.experiment-trial"));
+        if let Value::Object(fields) = serde_json::to_value(&trial).map_err(runtime)? {
+            object.extend(fields);
+        }
+        records.push(Value::Object(object));
+    }
+    dumps(py, &records)
+}
+
 /// Run `pqbench table`: detect the format and load one snapshot.
 ///
 /// Returns the `pqbench.table` document.
@@ -264,6 +303,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(lake, module)?)?;
     module.add_function(wrap_pyfunction!(dump, module)?)?;
     module.add_function(wrap_pyfunction!(profile, module)?)?;
+    module.add_function(wrap_pyfunction!(experiment, module)?)?;
     module.add_function(wrap_pyfunction!(viz, module)?)?;
     module.add(
         "commands",
@@ -277,6 +317,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
                 "lake",
                 "dump",
                 "profile",
+                "experiment",
                 "viz",
             ],
         )?,

@@ -5,17 +5,26 @@
 //! imports `parquet` directly.
 
 use std::path::Path;
+use std::sync::Arc;
 
-use parquet::basic::Compression;
+use parquet::basic::{
+    Compression, Encoding, GzipLevel, Repetition, Type as PhysicalType, ZstdLevel,
+};
 use parquet::column::page::{Page as ParquetPage, PageReader};
-use parquet::data_type::AsBytes;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use parquet::data_type::{AsBytes, BoolType, ByteArray, ByteArrayType, DoubleType, Int64Type};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, SortingColumn,
+};
+use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
+use parquet::file::writer::{SerializedColumnWriter, SerializedFileWriter};
 use parquet::record::Field;
+use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, MetadataParser, Page, PageParser, ParquetFile, Sample,
+    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
+    Sample, TypedColumn, TypedSample, Value, WriteOptions,
 };
 
 /// The parquet-rs-backed page parser.
@@ -112,6 +121,387 @@ fn field_text(field: &Field) -> Option<String> {
         Field::Bytes(value) => Some(String::from_utf8_lossy(value.data()).into_owned()),
         other => Some(other.to_string()),
     }
+}
+
+/// Decode up to `max_rows` leading rows of a local file into typed cells.
+pub(crate) fn read_typed_sample(
+    path: &Path,
+    max_rows: Option<usize>,
+) -> Result<TypedSample, Error> {
+    let file = std::fs::File::open(path).map_err(|error| Error(error.to_string()))?;
+    let reader = SerializedFileReader::new(file)?;
+    let mut sample = TypedSample::default();
+    let mut kinds: Vec<Option<Kind>> = Vec::new();
+    for row in reader.get_row_iter(None)? {
+        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
+            break;
+        }
+        let row = row?;
+        if sample.columns.is_empty() {
+            sample.columns = row
+                .get_column_iter()
+                .map(|(name, field)| TypedColumn {
+                    name: name.clone(),
+                    kind: field_kind(field).unwrap_or(Kind::Bytes),
+                })
+                .collect();
+            kinds = vec![None; sample.columns.len()];
+        }
+        for (index, (_, field)) in row.get_column_iter().enumerate() {
+            if kinds.get(index).is_some_and(Option::is_none) {
+                kinds[index] = field_kind(field);
+            }
+        }
+        sample.rows.push(
+            row.get_column_iter()
+                .map(|(_, field)| field_value(field))
+                .collect(),
+        );
+    }
+    for (column, kind) in sample.columns.iter_mut().zip(kinds.iter()) {
+        column.kind = kind.unwrap_or(Kind::Bytes);
+    }
+    Ok(sample)
+}
+
+/// The typed kind of a decoded value; nulls have none.
+fn field_kind(field: &Field) -> Option<Kind> {
+    match field {
+        Field::Null => None,
+        Field::Bool(_) => Some(Kind::Boolean),
+        Field::Byte(_)
+        | Field::Short(_)
+        | Field::Int(_)
+        | Field::Long(_)
+        | Field::UByte(_)
+        | Field::UShort(_)
+        | Field::UInt(_)
+        | Field::ULong(_)
+        | Field::Date(_)
+        | Field::TimeMillis(_)
+        | Field::TimeMicros(_)
+        | Field::TimestampMillis(_)
+        | Field::TimestampMicros(_) => Some(Kind::Integer),
+        Field::Float16(_) | Field::Float(_) | Field::Double(_) | Field::Decimal(_) => {
+            Some(Kind::Number)
+        }
+        Field::Str(_)
+        | Field::Bytes(_)
+        | Field::Group(_)
+        | Field::ListInternal(_)
+        | Field::MapInternal(_) => Some(Kind::Bytes),
+    }
+}
+
+/// The typed cell of a decoded value.
+fn field_value(field: &Field) -> Value {
+    match field {
+        Field::Null => Value::Null,
+        Field::Bool(value) => Value::Boolean(*value),
+        Field::Byte(value) => Value::Integer(i64::from(*value)),
+        Field::Short(value) => Value::Integer(i64::from(*value)),
+        Field::Int(value) => Value::Integer(i64::from(*value)),
+        Field::Long(value) => Value::Integer(*value),
+        Field::UByte(value) => Value::Integer(i64::from(*value)),
+        Field::UShort(value) => Value::Integer(i64::from(*value)),
+        Field::UInt(value) => Value::Integer(i64::from(*value)),
+        Field::ULong(value) => Value::Integer(i64::try_from(*value).unwrap_or(i64::MAX)),
+        Field::Date(value) => Value::Integer(i64::from(*value)),
+        Field::TimeMillis(value) => Value::Integer(i64::from(*value)),
+        Field::TimeMicros(value) => Value::Integer(*value),
+        Field::TimestampMillis(value) => Value::Integer(*value),
+        Field::TimestampMicros(value) => Value::Integer(*value),
+        Field::Float16(value) => Value::Number(value.to_f64()),
+        Field::Float(value) => Value::Number(f64::from(*value)),
+        Field::Double(value) => Value::Number(*value),
+        Field::Decimal(_) => Value::Number(field.to_string().parse().unwrap_or(0.0)),
+        Field::Str(value) => Value::Bytes(value.clone().into_bytes()),
+        Field::Bytes(value) => Value::Bytes(value.data().to_vec()),
+        Field::Group(_) | Field::ListInternal(_) | Field::MapInternal(_) => {
+            Value::Bytes(field.to_string().into_bytes())
+        }
+    }
+}
+
+/// Write typed columns and rows to an in-memory Parquet file.
+pub(crate) fn write_parquet(
+    columns: &[TypedColumn],
+    rows: &[Vec<Value>],
+    options: &WriteOptions,
+) -> Result<Vec<u8>, Error> {
+    if columns.is_empty() {
+        return Err(Error("no columns to write".into()));
+    }
+    let schema = schema_from_columns(columns)?;
+    let mut builder = WriterProperties::builder()
+        .set_compression(parse_compression(&options.compression, options.level)?)
+        .set_dictionary_enabled(options.dictionary);
+    if let Some(bytes) = options.dictionary_bytes {
+        builder = builder.set_dictionary_page_size_limit(bytes);
+    }
+    if let Some(encoding) = &options.encoding {
+        let mut applied = 0usize;
+        for column in columns {
+            if let Some(encoding) = compatible_encoding(encoding, column.kind)? {
+                builder =
+                    builder.set_column_encoding(ColumnPath::from(column.name.clone()), encoding);
+                applied += 1;
+            }
+        }
+        if applied == 0 {
+            return Err(Error(format!(
+                "encoding `{encoding}` applies to no column in the sample"
+            )));
+        }
+    }
+    if let Some(page_size) = options.page_size {
+        builder = builder.set_data_page_size_limit(page_size);
+    }
+    if !options.sorting_columns.is_empty() {
+        let sorting = options
+            .sorting_columns
+            .iter()
+            .map(|name| {
+                let index = columns
+                    .iter()
+                    .position(|column| &column.name == name)
+                    .ok_or_else(|| {
+                        Error(format!("sorting column `{name}` is not in the sample"))
+                    })?;
+                Ok(SortingColumn {
+                    column_idx: i32::try_from(index).unwrap_or(0),
+                    descending: false,
+                    nulls_first: false,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        builder = builder.set_sorting_columns(Some(sorting));
+    }
+    let properties = builder.build();
+    let group_rows = if options.row_group_size == 0 {
+        rows.len().max(1)
+    } else {
+        options.row_group_size
+    };
+    let mut out = Vec::new();
+    let mut writer = SerializedFileWriter::new(&mut out, schema, Arc::new(properties))?;
+    for chunk in rows.chunks(group_rows) {
+        let mut group = writer.next_row_group()?;
+        for (index, column) in columns.iter().enumerate() {
+            let mut writer = group
+                .next_column()?
+                .ok_or_else(|| Error("writer ran out of columns".into()))?;
+            let values: Vec<&Value> = chunk
+                .iter()
+                .map(|row| row.get(index).unwrap_or(&Value::Null))
+                .collect();
+            write_column(&mut writer, column.kind, &values)?;
+            writer.close()?;
+        }
+        group.close()?;
+    }
+    writer.close()?;
+    Ok(out)
+}
+
+// aipnaming: allow(aip-136/method-prepositions)
+/// Build a Parquet schema from typed columns (all optional).
+fn schema_from_columns(columns: &[TypedColumn]) -> Result<Arc<Type>, Error> {
+    let fields = columns
+        .iter()
+        .map(|column| {
+            let physical = match column.kind {
+                Kind::Boolean => PhysicalType::BOOLEAN,
+                Kind::Integer => PhysicalType::INT64,
+                Kind::Number => PhysicalType::DOUBLE,
+                Kind::Bytes => PhysicalType::BYTE_ARRAY,
+            };
+            Type::primitive_type_builder(&column.name, physical)
+                .with_repetition(Repetition::OPTIONAL)
+                .build()
+                .map(Arc::new)
+                .map_err(|error| Error(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Type::group_type_builder("schema")
+        .with_fields(fields)
+        .build()
+        .map(Arc::new)
+        .map_err(|error| Error(error.to_string()))
+}
+
+/// Parse a codec name and optional level into a Parquet `Compression`.
+fn parse_compression(name: &str, level: Option<i32>) -> Result<Compression, Error> {
+    match name {
+        "uncompressed" | "none" => Ok(Compression::UNCOMPRESSED),
+        "snappy" => Ok(Compression::SNAPPY),
+        "gzip" => {
+            let level = u32::try_from(level.unwrap_or(6))
+                .map_err(|_| Error("gzip level must be non-negative".into()))?;
+            GzipLevel::try_new(level)
+                .map(Compression::GZIP)
+                .map_err(|error| Error(error.to_string()))
+        }
+        "lz4" => Ok(Compression::LZ4_RAW),
+        "zstd" => ZstdLevel::try_new(level.unwrap_or(3))
+            .map(Compression::ZSTD)
+            .map_err(|error| Error(error.to_string())),
+        other => Err(Error(format!(
+            "unknown codec `{other}`; expected uncompressed, snappy, gzip, lz4, zstd"
+        ))),
+    }
+}
+
+/// The encoding for a column, or `None` when the name does not apply to its
+/// kind. Parquet encodings are type-specific, so an incompatible pairing is
+/// skipped rather than applied globally (which would panic in parquet-rs).
+fn compatible_encoding(name: &str, kind: Kind) -> Result<Option<Encoding>, Error> {
+    let encoding = match name {
+        "plain" => Some(Encoding::PLAIN),
+        "delta" if kind == Kind::Integer => Some(Encoding::DELTA_BINARY_PACKED),
+        "rle" if kind == Kind::Boolean => Some(Encoding::RLE),
+        "delta_length" if kind == Kind::Bytes => Some(Encoding::DELTA_LENGTH_BYTE_ARRAY),
+        "delta_byte_array" if kind == Kind::Bytes => Some(Encoding::DELTA_BYTE_ARRAY),
+        "byte_stream_split" if kind == Kind::Number => Some(Encoding::BYTE_STREAM_SPLIT),
+        "delta" | "rle" | "delta_length" | "delta_byte_array" | "byte_stream_split" => None,
+        other => {
+            return Err(Error(format!(
+                "unknown encoding `{other}`; expected plain, delta, rle, delta_length, delta_byte_array, byte_stream_split"
+            )));
+        }
+    };
+    Ok(encoding)
+}
+
+/// Write one column's typed values, marking nulls with definition levels.
+fn write_column(
+    writer: &mut SerializedColumnWriter<'_>,
+    kind: Kind,
+    values: &[&Value],
+) -> Result<(), Error> {
+    match kind {
+        Kind::Boolean => {
+            let (data, def) = collect_bool(values);
+            writer
+                .typed::<BoolType>()
+                .write_batch(&data, Some(&def), None)?;
+        }
+        Kind::Integer => {
+            let (data, def) = collect_i64(values);
+            writer
+                .typed::<Int64Type>()
+                .write_batch(&data, Some(&def), None)?;
+        }
+        Kind::Number => {
+            let (data, def) = collect_f64(values);
+            writer
+                .typed::<DoubleType>()
+                .write_batch(&data, Some(&def), None)?;
+        }
+        Kind::Bytes => {
+            let (data, def) = collect_bytes(values);
+            writer
+                .typed::<ByteArrayType>()
+                .write_batch(&data, Some(&def), None)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_bool(values: &[&Value]) -> (Vec<bool>, Vec<i16>) {
+    let mut data = Vec::new();
+    let mut def = Vec::new();
+    for value in values {
+        match value {
+            Value::Boolean(flag) => {
+                data.push(*flag);
+                def.push(1);
+            }
+            _ => def.push(0),
+        }
+    }
+    (data, def)
+}
+
+fn collect_i64(values: &[&Value]) -> (Vec<i64>, Vec<i16>) {
+    let mut data = Vec::new();
+    let mut def = Vec::new();
+    for value in values {
+        match value {
+            Value::Integer(number) => {
+                data.push(*number);
+                def.push(1);
+            }
+            Value::Number(number) if number.fract() == 0.0 => {
+                data.push(*number as i64);
+                def.push(1);
+            }
+            _ => def.push(0),
+        }
+    }
+    (data, def)
+}
+
+fn collect_f64(values: &[&Value]) -> (Vec<f64>, Vec<i16>) {
+    let mut data = Vec::new();
+    let mut def = Vec::new();
+    for value in values {
+        match value {
+            Value::Number(number) => {
+                data.push(*number);
+                def.push(1);
+            }
+            Value::Integer(number) => {
+                data.push(*number as f64);
+                def.push(1);
+            }
+            _ => def.push(0),
+        }
+    }
+    (data, def)
+}
+
+fn collect_bytes(values: &[&Value]) -> (Vec<ByteArray>, Vec<i16>) {
+    let mut data = Vec::new();
+    let mut def = Vec::new();
+    for value in values {
+        match value {
+            Value::Bytes(bytes) => {
+                data.push(ByteArray::from(bytes.as_slice()));
+                def.push(1);
+            }
+            Value::Null => def.push(0),
+            other => {
+                data.push(ByteArray::from(value_text(other).as_bytes()));
+                def.push(1);
+            }
+        }
+    }
+    (data, def)
+}
+
+/// The display text of a typed value.
+fn value_text(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Boolean(flag) => flag.to_string(),
+        Value::Integer(number) => number.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// Read byte masses from an in-memory Parquet file.
+pub(crate) fn read_buffer_masses(bytes: &[u8], indexes: bool) -> Result<FileMass, Error> {
+    let policy = if indexes {
+        PageIndexPolicy::Optional
+    } else {
+        PageIndexPolicy::Skip
+    };
+    let metadata = ParquetMetaDataReader::new()
+        .with_page_index_policy(policy)
+        .parse_and_finish(&bytes::Bytes::copy_from_slice(bytes))?;
+    create_masses(&metadata)
 }
 
 fn index_start(metadata: &ParquetMetaData) -> Option<u64> {

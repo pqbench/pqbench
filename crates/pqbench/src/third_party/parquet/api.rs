@@ -44,6 +44,62 @@ pub struct Sample {
     pub rows: Vec<Vec<Option<String>>>,
 }
 
+/// The physical kind of a typed column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Boolean,
+    Integer,
+    Number,
+    Bytes,
+}
+
+/// One typed cell: a null, bool, integer, float, or byte string.
+#[derive(Debug, Clone)]
+pub enum Value {
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Number(f64),
+    Bytes(Vec<u8>),
+}
+
+/// A named column and its kind.
+#[derive(Debug, Clone)]
+pub struct TypedColumn {
+    pub name: String,
+    pub kind: Kind,
+}
+
+/// A decoded typed row sample: columns (with kinds) and nullable cells.
+#[derive(Debug, Clone, Default)]
+pub struct TypedSample {
+    pub columns: Vec<TypedColumn>,
+    pub rows: Vec<Vec<Value>>,
+}
+
+/// How to write a typed sample back to Parquet bytes.
+#[derive(Debug, Clone)]
+pub struct WriteOptions {
+    /// `uncompressed`, `snappy`, `gzip`, `lz4`, or `zstd`.
+    pub compression: String,
+    /// Codec level, when the codec takes one.
+    pub level: Option<i32>,
+    /// Enable dictionary encoding.
+    pub dictionary: bool,
+    /// Dictionary page size limit, when set.
+    pub dictionary_bytes: Option<usize>,
+    /// Default encoding for every column: `plain`, `delta`, `rle`,
+    /// `delta_length`, `delta_byte_array`, or `byte_stream_split`.
+    pub encoding: Option<String>,
+    /// Data page size limit, when set.
+    pub page_size: Option<usize>,
+    /// Column names to record as the file's sorting columns.
+    pub sorting_columns: Vec<String>,
+    /// Rows per row group; 0 writes every row into one group.
+    pub row_group_size: usize,
+}
+
 /// Errors from the parquet layer.
 #[derive(Debug)]
 pub struct Error(pub String);
@@ -190,6 +246,37 @@ pub fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error
     super::r#impl::read_sample(path, max_rows)
 }
 
+/// Read up to `max_rows` leading rows of a local Parquet file as typed cells.
+/// `None` reads all rows. A column's kind comes from its first non-null value.
+///
+/// # Errors
+/// Returns [`Error`] if `path` is not a readable Parquet file or decoding a
+/// value fails.
+pub fn read_typed_sample(path: &Path, max_rows: Option<usize>) -> Result<TypedSample, Error> {
+    super::r#impl::read_typed_sample(path, max_rows)
+}
+
+/// Write typed columns and rows to an in-memory Parquet file.
+///
+/// # Errors
+/// Returns [`Error`] if the schema, codec, or writer fails.
+pub fn write_parquet(
+    columns: &[TypedColumn],
+    rows: &[Vec<Value>],
+    options: &WriteOptions,
+) -> Result<Vec<u8>, Error> {
+    super::r#impl::write_parquet(columns, rows, options)
+}
+
+/// Read byte masses from an in-memory Parquet file. `indexes` loads
+/// ColumnIndex/OffsetIndex. Default callers pass `false`.
+///
+/// # Errors
+/// Returns [`Error`] if `bytes` is not a valid Parquet file.
+pub fn read_buffer_masses(bytes: &[u8], indexes: bool) -> Result<FileMass, Error> {
+    super::r#impl::read_buffer_masses(bytes, indexes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +392,88 @@ mod tests {
             .columns
             .iter()
             .all(|column| column.page_count.is_none()));
+    }
+
+    #[test]
+    fn read_typed_sample_populates_columns_and_kinds() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/small_reddit_none.parquet"
+        ));
+        let sample = read_typed_sample(path, Some(16)).unwrap();
+        assert_eq!(sample.columns.len(), 7);
+        assert_eq!(sample.rows.len(), 16);
+        for row in &sample.rows {
+            assert_eq!(row.len(), 7);
+        }
+        let text = sample
+            .columns
+            .iter()
+            .find(|column| column.name == "text")
+            .expect("text column");
+        assert_eq!(text.kind, Kind::Bytes);
+        assert!(matches!(sample.rows[0][0], Value::Bytes(_)));
+    }
+
+    #[test]
+    fn write_and_read_buffer_masses_round_trip() {
+        let columns = vec![
+            TypedColumn {
+                name: "id".into(),
+                kind: Kind::Integer,
+            },
+            TypedColumn {
+                name: "score".into(),
+                kind: Kind::Number,
+            },
+            TypedColumn {
+                name: "tag".into(),
+                kind: Kind::Bytes,
+            },
+            TypedColumn {
+                name: "flag".into(),
+                kind: Kind::Boolean,
+            },
+        ];
+        let rows: Vec<Vec<Value>> = (0..16)
+            .map(|n| {
+                vec![
+                    Value::Integer(n),
+                    Value::Number(n as f64 / 2.0),
+                    Value::Bytes(format!("row-{n}").into_bytes()),
+                    Value::Boolean(n % 2 == 0),
+                ]
+            })
+            .collect();
+        let options = WriteOptions {
+            compression: "zstd".into(),
+            level: None,
+            dictionary: true,
+            dictionary_bytes: None,
+            encoding: None,
+            page_size: None,
+            sorting_columns: Vec::new(),
+            row_group_size: 8,
+        };
+        let bytes = write_parquet(&columns, &rows, &options).unwrap();
+        let mass = read_buffer_masses(&bytes, false).unwrap();
+        assert_eq!(mass.row_count, 16);
+        assert_eq!(mass.row_group_count, 2);
+        assert_eq!(mass.columns.len(), 8);
+        assert!(mass
+            .columns
+            .iter()
+            .all(|column| column.compressed_bytes > 0));
+    }
+
+    #[test]
+    fn read_typed_sample_decodes_a_compressed_file() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/small_snappy.parquet"
+        ));
+        let sample = read_typed_sample(path, None).unwrap();
+        assert_eq!(sample.columns.len(), 1);
+        assert_eq!(sample.rows.len(), 500);
     }
 }

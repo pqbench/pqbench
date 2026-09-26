@@ -26,6 +26,7 @@ class BindingsTest(unittest.TestCase):
                 "lake",
                 "dump",
                 "profile",
+                "experiment",
                 "viz",
             ),
         )
@@ -110,6 +111,25 @@ class BindingsTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             pqbench.profile(str(_PARQUET), rows="last:5")
         self.assertIn("rows", str(caught.exception))
+
+    def test_experiment_streams_trials(self) -> None:
+        trials = pqbench.experiment(
+            str(_PARQUET),
+            rewrite=["sort:text"],
+            rows="first:512",
+        )
+        self.assertIsInstance(trials, list)
+        self.assertGreaterEqual(len(trials), 2)
+        names = [trial["name"] for trial in trials]
+        self.assertEqual(names[0], "control")
+        self.assertIn("sort:text", names)
+        self.assertIn("bytes", trials[0])
+        self.assertIn("columns", trials[0])
+
+    def test_experiment_rejects_an_unknown_rewrite(self) -> None:
+        with self.assertRaises(RuntimeError) as caught:
+            pqbench.experiment(str(_PARQUET), rewrite=["correlate:text"])
+        self.assertIn("rewrite", str(caught.exception))
 
     def test_table_loads_a_delta_snapshot(self) -> None:
         info = pqbench.table(str(_TABLE))

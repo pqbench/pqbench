@@ -16,6 +16,7 @@ that command and links back. This file is the durable copy.
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
 | Codec speed on Parquet pages | `pqbench compression FILE` (NONE-compressed only) |
 | Column facts from row values | `pqbench profile FILE` |
+| Rewrite a sample and measure it | `pqbench experiment FILE --rewrite sort:text --aim all` |
 
 The usual lake pipe:
 
@@ -37,6 +38,7 @@ lake-source) and are not exported into the process environment.
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
 | `pqbench.profile` / `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
+| `pqbench.experiment` / `pqbench.experiment-trial` / `pqbench.experiment-column` | `experiment` | humans / scripts (`--json`) |
 
 All current documents are version `1`.
 
@@ -152,4 +154,4 @@ Read these when the input is a Parquet file or a table format:
 - AWS default credentials: <https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html>
 
 Repo docs: [delta.md](delta.md), [iceberg.md](iceberg.md), [viz.md](viz.md),
-[profile.md](profile.md), [demo.md](demo.md).
+[profile.md](profile.md), [experiment.md](experiment.md), [demo.md](demo.md).
