@@ -8,7 +8,7 @@ fixtures). Clone, build, and try the bundled sample:
 ```sh
 git clone https://github.com/pqbench/pqbench.git
 cd pqbench
-make check   # fmt-check + clippy -D warnings + test
+make check   # fmt-check + check-docs + clippy -D warnings + test
 cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
 ```
 
@@ -37,7 +37,7 @@ Keep behavior changes separate from tidyings.
 
 ```
 make fmt
-make check        # = fmt-check + clippy -D warnings + test
+make check        # = fmt-check + check-docs + clippy -D warnings + test
 ```
 
 - `make check` is the gate and runs automatically in the pre-commit hook.
@@ -51,15 +51,16 @@ make check        # = fmt-check + clippy -D warnings + test
   expected output:
   ````md
   ```console run
-  $ pqbench bytemass examples/quickstart.parquet --json
+  $ pqbench bytemass examples/quickstart.parquet --json | head -2
   {"kind":"pqbench.bytemass","version":1,"event":"begin"}
-  ...
+  {"kind":"pqbench.bytemass-file","id":"examples/quickstart.parquet","path":"examples/quickstart.parquet","file":"examples/quickstart.parquet","size":541}
   ```
   ````
-  A lone `...` line matches any run of output lines, for values that vary. Add a
-  feature word (` ```console run delta `) to gate the test on a cargo feature.
-  After editing a doc block, run `make sync-docs`; `make check-docs` fails in CI
-  when the generated files are stale. Never edit `tests/gen_*.rs` by hand.
+  The output is matched exactly, so bound anything that varies with `head`,
+  `tail`, or `jq`. Add a feature word (` ```console run delta `) to gate the
+  test on a cargo feature. After editing a doc block, run `make sync-docs`;
+  `check-docs` (part of `make check`, hence the pre-commit hook) fails when the
+  generated files are stale. Never edit `tests/gen_*.rs` by hand.
 - Feature sets are exercised through the same targets:
   `make check CARGO_FEATURES=--all-features` (or `CARGO_FEATURES="--features aws"`,
   `CARGO_FEATURES="--features delta"`). CI runs one clippy over

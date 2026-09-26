@@ -67,7 +67,7 @@ lakehouse-seed-unity: lakehouse-up
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
-check: fmt-check lint isolation lfs-check test
+check: fmt-check check-docs lint isolation lfs-check test
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
