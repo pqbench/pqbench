@@ -47,31 +47,44 @@ pub fn aggregate(raw: &[RawRow], cfg: &stats::Config, per_column: bool) -> repor
     let mut rows = Vec::with_capacity(raw.len());
     let mut columns = Vec::new();
     for r in raw {
-        let (compress, decompress) = file_measure(r, cfg);
-        let (compressed_bytes, uncompressed_bytes) = file_bytes(r);
-        rows.push(report::ReportRow::new(
-            r.codec,
-            r.level,
-            compress,
-            decompress,
-            compressed_bytes,
-            uncompressed_bytes,
-        ));
+        rows.push(file_row(r, cfg));
         if per_column {
-            for chunk in &r.chunks {
-                let (cc, cd) = chunk_measure(chunk, cfg);
-                let (compressed_bytes, uncompressed_bytes) = chunk_bytes(chunk);
-                columns.push(report::ColumnRow::new(
-                    r.codec,
-                    r.level,
-                    chunk.column.clone(),
-                    cc,
-                    cd,
-                    compressed_bytes,
-                    uncompressed_bytes,
-                ));
-            }
+            columns.extend(column_rows(r, cfg));
         }
     }
     report::into_report(rows, columns)
+}
+
+/// The file-level row for one codec×level.
+fn file_row(row: &RawRow, cfg: &stats::Config) -> report::ReportRow {
+    let (compress, decompress) = file_measure(row, cfg);
+    let (compressed_bytes, uncompressed_bytes) = file_bytes(row);
+    report::ReportRow::new(
+        row.codec,
+        row.level,
+        compress,
+        decompress,
+        compressed_bytes,
+        uncompressed_bytes,
+    )
+}
+
+/// The per-column rows for one codec×level.
+fn column_rows(row: &RawRow, cfg: &stats::Config) -> Vec<report::ColumnRow> {
+    row.chunks
+        .iter()
+        .map(|chunk| {
+            let (compress, decompress) = chunk_measure(chunk, cfg);
+            let (compressed_bytes, uncompressed_bytes) = chunk_bytes(chunk);
+            report::ColumnRow::new(
+                row.codec,
+                row.level,
+                chunk.column.clone(),
+                compress,
+                decompress,
+                compressed_bytes,
+                uncompressed_bytes,
+            )
+        })
+        .collect()
 }

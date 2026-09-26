@@ -34,8 +34,7 @@ pub(super) async fn read_remote(
             "object {uri} is too small to be a Parquet file: {size} bytes"
         )));
     }
-    let identity = stat.identity.clone();
-    let identity = identity.as_deref();
+    let identity = stat.identity.as_deref();
 
     let trailer = reader
         .read_range(size - PARQUET_FOOTER_SIZE..size, identity)
@@ -70,10 +69,8 @@ pub(super) async fn read_remote(
     if !indexes {
         return Ok((stat, read_footer_masses(&footer)?));
     }
-    Ok((
-        stat,
-        read_remote_indexes(&reader, uri, &footer, metadata_start, size, identity).await?,
-    ))
+    let masses = read_remote_indexes(&reader, uri, &footer, metadata_start, size, identity).await?;
+    Ok((stat, masses))
 }
 
 async fn read_remote_indexes(
@@ -84,12 +81,10 @@ async fn read_remote_indexes(
     size: u64,
     identity: Option<&str>,
 ) -> Result<FileMass, Error> {
-    let Some(start) = page_index_start(footer)? else {
+    let start = page_index_start(footer)?.filter(|start| *start < metadata_start);
+    let Some(start) = start else {
         return read_footer_masses(footer);
     };
-    if start >= metadata_start {
-        return read_footer_masses(footer);
-    }
     let index_bytes = reader
         .read_range(start..metadata_start, identity)
         .await
