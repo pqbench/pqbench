@@ -16,7 +16,6 @@ const DELTA_LOG: &str = "_delta_log";
 const ICEBERG_METADATA: &str = "metadata";
 /// Iceberg version file inside [`ICEBERG_METADATA`].
 const ICEBERG_VERSION_HINT: &str = "version-hint.text";
-/// Suffix of an Iceberg metadata JSON file.
 const ICEBERG_METADATA_SUFFIX: &str = ".metadata.json";
 
 /// Errors discovering a lake.
