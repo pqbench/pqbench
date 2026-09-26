@@ -307,7 +307,14 @@ fn hint_names(version: u64) -> [String; 3] {
 fn metadata_json_version(name: &str) -> Option<u64> {
     let stem = name.strip_suffix(".metadata.json")?;
     let stem = stem.strip_prefix('v').unwrap_or(stem);
-    stem.parse().ok()
+    // Iceberg writes `v1.metadata.json`, `1.metadata.json`, and the
+    // `00001-<uuid>.metadata.json` form; only the leading version is the sort
+    // key, and a bare `<uuid>.metadata.json` has none.
+    let version = stem.split('-').next()?;
+    if version.is_empty() || !version.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    version.parse().ok()
 }
 
 async fn active_files(

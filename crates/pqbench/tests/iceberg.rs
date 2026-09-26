@@ -243,6 +243,20 @@ async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
 }
 
 #[tokio::test]
+async fn load_resolves_uuid_named_metadata_without_a_hint() {
+    let fixture = Fixture::new();
+    let metadata = fixture.metadata.parent().unwrap();
+    let named = metadata.join("00001-22222222-2222-2222-2222-222222222222.metadata.json");
+    fs::rename(&fixture.metadata, &named).unwrap();
+    fs::remove_file(metadata.join("version-hint.text")).unwrap();
+    let info = table::load(&load_request(fixture.root.to_string_lossy(), None))
+        .await
+        .unwrap();
+    assert_eq!(info.snapshot_version, 1);
+    assert!(!info.files.is_empty());
+}
+
+#[tokio::test]
 async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
     let fixture = Fixture::new();
     fs::create_dir(fixture.root.join("_delta_log")).unwrap();
