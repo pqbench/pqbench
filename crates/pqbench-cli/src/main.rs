@@ -94,7 +94,7 @@ async fn main() -> ExitCode {
         Command::Bytemass(args) => bytemass::run(&args).await,
         Command::Table(args) => table::run(&args).await,
         Command::Lake(args) => lake::run(&args).await,
-        Command::Dump(args) => dump::run(&args),
+        Command::Dump(args) => dump::run(&args).await,
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

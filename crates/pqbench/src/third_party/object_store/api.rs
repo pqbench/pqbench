@@ -25,6 +25,14 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Whether `uri` names a remote backend (`s3://`) rather than a local path.
+///
+/// A bare filesystem path and a `file://` URI are local.
+#[must_use]
+pub fn is_remote(uri: &str) -> bool {
+    uri.contains("://") && !uri.starts_with("file://")
+}
+
 /// What one object lookup reports before any bytes are read.
 pub struct ObjectStat {
     /// Object size in bytes.

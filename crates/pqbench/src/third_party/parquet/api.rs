@@ -11,6 +11,7 @@
 use std::path::Path;
 
 use serde::Serialize;
+use serde_json::Value;
 
 /// One encoded page: the payload a codec compresses, plus its metadata.
 #[derive(Debug, Clone)]
@@ -114,6 +115,51 @@ pub fn default_metadata_parser() -> impl MetadataParser {
 /// Returns [`Error`] if `footer` is not a valid Parquet footer.
 pub fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
     super::r#impl::read_footer_masses(footer)
+}
+
+/// One Parquet object to read or copy: a URI/path and its storage options.
+#[derive(Debug, Clone, Copy)]
+pub struct Source<'a> {
+    /// URI or filesystem path to the Parquet object.
+    pub uri: &'a str,
+    /// Storage options (`AWS_*`); ignored for a local path.
+    pub env: &'a [(String, String)],
+}
+
+/// Rows read from one Parquet file: column names and one value list per row.
+#[derive(Debug, Clone)]
+pub struct FileRows {
+    /// Column names, in file order.
+    pub columns: Vec<String>,
+    /// Row values aligned to [`FileRows::columns`].
+    pub rows: Vec<Vec<Value>>,
+}
+
+/// Read rows from one Parquet object, keeping at most the first `row_groups`.
+///
+/// `None` reads every row group. Local objects are seeked; `s3://` objects
+/// fetch only the footer and the selected row groups and need the `aws`
+/// feature.
+///
+/// # Errors
+/// Fails when the object cannot be read or a row cannot be decoded.
+pub async fn read_rows(source: &Source<'_>, row_groups: Option<usize>) -> Result<FileRows, Error> {
+    super::r#impl::read_rows(source, row_groups).await
+}
+
+/// Copy the selected row groups of `sources` into one Parquet buffer.
+///
+/// Copied pages keep their source encodings; newly written columns default to
+/// zstd.
+///
+/// # Errors
+/// Fails when there are no sources, a source cannot be read, schemas differ, or
+/// the writer cannot emit the file.
+pub async fn write_parquet(
+    sources: &[Source<'_>],
+    row_groups: Option<usize>,
+) -> Result<Vec<u8>, Error> {
+    super::r#impl::write_parquet(sources, row_groups).await
 }
 
 #[cfg(test)]

@@ -89,7 +89,7 @@ fn dump_writes_parquet_from_a_table_document() {
         "snapshot_version": 0,
         "partition_columns": [],
         "log": [],
-        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size": size}]
+        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
     });
     let output = pipe(
         &["dump", "--output", output_path.to_str().unwrap()],
@@ -113,7 +113,7 @@ fn dump_prunes_partitions_and_samples_files() {
         json!({
             "path": path,
             "uri": uri,
-            "size": size
+            "size_bytes": size
         })
     };
     let document = json!({

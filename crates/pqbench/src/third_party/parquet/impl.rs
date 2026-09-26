@@ -15,6 +15,9 @@ use super::api::{
     ColumnChunk, ColumnMass, Error, FileMass, MetadataParser, Page, PageParser, ParquetFile,
 };
 
+mod dump;
+pub(crate) use dump::{read_rows, write_parquet};
+
 /// The parquet-rs-backed page parser.
 pub struct ParquetRsParser;
 

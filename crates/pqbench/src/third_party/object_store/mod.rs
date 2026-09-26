@@ -7,4 +7,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{list_prefix, open, Error, PrefixListing};
+pub use api::{is_remote, list_prefix, open, Error, PrefixListing};
