@@ -167,6 +167,7 @@ feature.
   naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
 - [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
+- [CLI guide](docs/cli.md) — `pqbench --help` copy: auth, documents, flags
 - [Visualization](docs/viz.md) — `pqbench viz`, a static HTML treemap
 - [Python bindings](python/README.md) — install the wheel and call every command
 - [Docker](docs/docker.md) — build, run, and publish a container image
