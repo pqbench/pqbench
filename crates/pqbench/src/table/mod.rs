@@ -222,10 +222,11 @@ pub(crate) fn local_format(path: &Path) -> Result<Option<TableFormat>, Error> {
     if path.join("_delta_log").is_dir() {
         return Ok(Some(TableFormat::DELTA));
     }
-    if path.join("metadata").join("version-hint.text").is_file() {
+    let metadata = path.join("metadata");
+    if metadata.join("version-hint.text").is_file() {
         return Ok(Some(TableFormat::ICEBERG));
     }
-    if has_metadata_json(&path.join("metadata"))? {
+    if has_metadata_json(&metadata)? {
         return Ok(Some(TableFormat::ICEBERG));
     }
     Ok(None)
