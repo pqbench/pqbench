@@ -32,8 +32,9 @@ pub(crate) async fn list_tables(
 ) -> Result<Vec<LakeTable>, Error> {
     #[cfg(feature = "unity")]
     {
-        let token = source.token.as_deref().filter(|token| !token.is_empty());
-        match protocol::select(&source.endpoint, token).await? {
+        let endpoint = source.catalog_endpoint()?;
+        let token = source.catalog_token();
+        match protocol::select(&endpoint, token.as_deref()).await? {
             protocol::Protocol::IcebergRest => iceberg_rest::list_tables(source, filter).await,
             protocol::Protocol::Unity => client::list_tables(source, filter).await,
         }

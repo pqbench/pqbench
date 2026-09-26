@@ -55,8 +55,8 @@ pub(crate) async fn list_tables(
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|error| Error::from(format!("catalog client: {error}")))?;
-    let root = source.endpoint.trim_end_matches('/').to_string();
-    let token = source.token.clone().filter(|token| !token.is_empty());
+    let root = source.catalog_endpoint()?.trim_end_matches('/').to_string();
+    let token = source.catalog_token();
     let mut tables = Vec::new();
     for namespace in list_namespaces(&client, &root, token.as_deref(), filter).await? {
         tables.extend(
@@ -65,7 +65,7 @@ pub(crate) async fn list_tables(
                 &root,
                 token.as_deref(),
                 &namespace,
-                &source.env,
+                &source.storage_env(),
                 filter,
             )
             .await?,

@@ -19,7 +19,7 @@ use crate::emit::Emitter;
 use pqbench::bytemass::MassRow;
 use pqbench::lake::Lake;
 use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
-use pqbench::third_party::unity::LakeSource;
+use pqbench::third_party::unity::{self, LakeSource};
 use serde::{Deserialize, Serialize};
 
 use crate::CliError;
@@ -327,9 +327,6 @@ fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
             "unsupported lake source; expected kind `pqbench.lake-source` version 1".into(),
         );
     }
-    if source.endpoint.trim().is_empty() {
-        return Err("lake source needs an endpoint".into());
-    }
     if source
         .schema
         .as_deref()
@@ -338,7 +335,16 @@ fn parse_lake_source(value: serde_json::Value) -> Result<LakeSource, CliError> {
     {
         return Err("lake source schema needs a catalog".into());
     }
-    ensure_aws_env(&source.env)?;
+    if let Some(key) = source
+        .env
+        .keys()
+        .find(|key| !key.starts_with("AWS_") && !unity::is_catalog_env_key(key))
+    {
+        return Err(format!(
+            "lake source env may only contain AWS_* or catalog names, not `{key}`"
+        )
+        .into());
+    }
     Ok(source)
 }
 

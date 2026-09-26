@@ -8,4 +8,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{list_tables, Error, LakeSource, NameFilter};
+pub use api::{is_catalog_env_key, list_tables, Error, LakeSource, NameFilter};

@@ -205,10 +205,11 @@ check_unity() {
     jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
         --arg key "$VENDED_ACCESS_KEY_ID" --arg secret "$VENDED_SECRET_ACCESS_KEY" \
         --arg token "$VENDED_SESSION_TOKEN" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
-        env: {AWS_ACCESS_KEY_ID: $key, AWS_SECRET_ACCESS_KEY: $secret,
-            AWS_SESSION_TOKEN: $token, AWS_REGION: "us-east-1",
-            AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
+        '{kind: "pqbench.lake-source", version: 1,
+        env: {DATABRICKS_HOST: $endpoint, AWS_ACCESS_KEY_ID: $key,
+            AWS_SECRET_ACCESS_KEY: $secret, AWS_SESSION_TOKEN: $token,
+            AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
+            AWS_ALLOW_HTTP: "true",
             AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' > "$lake_source"
     measurement=$("$pqbench_bin" lake "$lake_source" --include pqbench.demo.events |
         "$pqbench_bin" table |
@@ -225,7 +226,8 @@ check_iceberg() {
     ensure_pqbench
     local measurement measured
     measurement=$(jq -c -n --arg endpoint "$iceberg_rest" --argjson env "$(storage_env)" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
+        '{kind: "pqbench.lake-source", version: 1,
+          env: ($env + {CATALOG_ENDPOINT: $endpoint})}' |
         "$pqbench_bin" lake |
         "$pqbench_bin" table |
         "$pqbench_bin" bytemass --json) || {

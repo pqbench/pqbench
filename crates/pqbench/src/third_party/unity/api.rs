@@ -24,27 +24,88 @@ use serde::Deserialize;
 
 use crate::lake::LakeTable;
 
-/// Credentials for listing a catalog. `endpoint` is the server origin
-/// (`http://localhost:8080` for Unity, `http://localhost:8181` for Iceberg
-/// REST, or `https://example.cloud.databricks.com`). `GET /v1/config` chooses
-/// the dialect. `token` is the bearer token; Unity OSS often has none. `env` is
-/// copied onto each listed table so `pqbench table` can read its files.
+/// Credentials for listing a catalog.
+///
+/// Catalog host and token live in `env` (or the process environment), the same
+/// way storage options do: `DATABRICKS_HOST` / `DATABRICKS_TOKEN`, or
+/// `CATALOG_ENDPOINT` / `CATALOG_TOKEN`. `GET /v1/config` chooses the dialect.
+/// Unity OSS often has no token. Only `AWS_*` is copied onto listed tables.
 #[derive(Deserialize)]
 pub struct LakeSource {
     pub version: u32,
-    pub endpoint: String,
-    #[serde(default)]
-    pub token: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// List this catalog, or a catalog-name glob. A literal skips `/catalogs`.
-    /// Unity only; Iceberg REST lists every namespace at `endpoint`.
+    /// Unity only; Iceberg REST lists every namespace.
     #[serde(default)]
     pub catalog: Option<String>,
     /// List this schema, or a schema-name glob. A literal skips `/schemas`.
     /// Requires `catalog`. Unity only.
     #[serde(default)]
     pub schema: Option<String>,
+}
+
+/// `env` keys that name the catalog host, in priority order.
+const CATALOG_ENDPOINT_KEYS: &[&str] = &["DATABRICKS_HOST", "CATALOG_ENDPOINT"];
+/// `env` keys that name the catalog bearer token, in priority order.
+const CATALOG_TOKEN_KEYS: &[&str] = &["DATABRICKS_TOKEN", "CATALOG_TOKEN"];
+
+impl LakeSource {
+    /// Catalog origin from `env`, then the process environment.
+    ///
+    /// # Errors
+    /// Fails when neither host key is set.
+    pub fn catalog_endpoint(&self) -> Result<String, Error> {
+        env_value(&self.env, CATALOG_ENDPOINT_KEYS).ok_or_else(|| {
+            Error::from(
+                "lake source needs DATABRICKS_HOST or CATALOG_ENDPOINT (in env or the process environment)"
+                    .to_string(),
+            )
+        })
+    }
+
+    /// Bearer token from `env`, then the process environment. Empty is none.
+    #[must_use]
+    pub fn catalog_token(&self) -> Option<String> {
+        env_value(&self.env, CATALOG_TOKEN_KEYS)
+    }
+
+    /// Storage options copied onto each listed table (`AWS_*` only).
+    #[must_use]
+    pub fn storage_env(&self) -> BTreeMap<String, String> {
+        self.env
+            .iter()
+            .filter(|(key, _)| key.starts_with("AWS_"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+}
+
+/// Whether `key` names the catalog host or token rather than a storage option.
+#[must_use]
+pub fn is_catalog_env_key(key: &str) -> bool {
+    CATALOG_ENDPOINT_KEYS.contains(&key) || CATALOG_TOKEN_KEYS.contains(&key)
+}
+
+fn env_value(env: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = env
+            .get(*key)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
+        }
+    }
+    for key in keys {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Errors listing a catalog.

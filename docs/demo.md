@@ -83,7 +83,9 @@ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o rep
 
 ## Catalogs
 
-A `pqbench.lake-source` lists a catalog. `GET /v1/config` with a `defaults`
+A `pqbench.lake-source` lists a catalog. Host and token live in `env` (or
+the process environment): `DATABRICKS_HOST` / `DATABRICKS_TOKEN`, or
+`CATALOG_ENDPOINT` / `CATALOG_TOKEN`. `GET /v1/config` with a `defaults`
 object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity.
 
 ```sh

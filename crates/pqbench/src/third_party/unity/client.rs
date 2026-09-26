@@ -68,8 +68,8 @@ pub(crate) async fn list_tables(
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|error| Error::from(format!("catalog client: {error}")))?;
-    let root = api_root(&source.endpoint);
-    let token = source.token.clone().filter(|token| !token.is_empty());
+    let root = api_root(&source.catalog_endpoint()?);
+    let token = source.catalog_token();
     let mut tables = Vec::new();
     for catalog in list_catalogs(&client, &root, token.as_deref(), source, filter).await? {
         for schema in
@@ -82,7 +82,7 @@ pub(crate) async fn list_tables(
                     token.as_deref(),
                     &catalog,
                     &schema,
-                    &source.env,
+                    &source.storage_env(),
                     filter,
                 )
                 .await?,
