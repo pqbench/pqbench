@@ -5,12 +5,14 @@
 //! produce.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pqbench::dump::DumpFile;
 use pqbench::lake::Lake;
+use pqbench::profile::ProfileRequest;
 use pqbench::stats;
 use pqbench::table::{LoadRequest, TableInfo};
+use pqbench::third_party::parquet::api::read_sample;
 use pqbench::viz::MassRecord;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -122,6 +124,44 @@ fn bytemass(
     dumps(py, &rows)
 }
 
+/// Run `pqbench profile`: decode a bounded row sample into per-column facts.
+///
+/// `columns` is a list of column-name globs (default: all). `rows` is `all` or
+/// `first:N`. Returns the stream of `pqbench.profile-column` objects (one dict
+/// per column, carrying the input path as `id`).
+#[pyfunction]
+#[pyo3(signature = (*inputs, columns=None, rows="first:8192", top=8))]
+fn profile(
+    py: Python<'_>,
+    inputs: Vec<String>,
+    columns: Option<Vec<String>>,
+    rows: &str,
+    top: u32,
+) -> PyResult<Py<PyAny>> {
+    let max_rows = parse_profile_rows(rows)?;
+    let request = ProfileRequest {
+        columns: columns.unwrap_or_default(),
+        top,
+    };
+    let mut records: Vec<Value> = Vec::new();
+    for input in &inputs {
+        let sample = py
+            .detach(|| read_sample(Path::new(input), max_rows))
+            .map_err(runtime)?;
+        let report = pqbench::profile::profile(&sample, &request).map_err(runtime)?;
+        for column in report.columns {
+            let mut object = serde_json::Map::new();
+            object.insert("kind".into(), Value::from("pqbench.profile-column"));
+            object.insert("id".into(), Value::from(input.clone()));
+            if let Value::Object(fields) = serde_json::to_value(&column).map_err(runtime)? {
+                object.extend(fields);
+            }
+            records.push(Value::Object(object));
+        }
+    }
+    dumps(py, &records)
+}
+
 /// Run `pqbench table`: detect the format and load one snapshot.
 ///
 /// Returns the `pqbench.table` document.
@@ -223,6 +263,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(table, module)?)?;
     module.add_function(wrap_pyfunction!(lake, module)?)?;
     module.add_function(wrap_pyfunction!(dump, module)?)?;
+    module.add_function(wrap_pyfunction!(profile, module)?)?;
     module.add_function(wrap_pyfunction!(viz, module)?)?;
     module.add(
         "commands",
@@ -235,6 +276,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
                 "table",
                 "lake",
                 "dump",
+                "profile",
                 "viz",
             ],
         )?,
@@ -251,6 +293,27 @@ fn parse_mode(mode: &str) -> PyResult<stats::Mode> {
             "invalid mode {other:?}; expected fastest or mean"
         ))),
     }
+}
+
+/// Parse `rows`: `all` reads every row, `first:N` reads N (N >= 1).
+fn parse_profile_rows(method: &str) -> PyResult<Option<usize>> {
+    if method == "all" {
+        return Ok(None);
+    }
+    if let Some(rest) = method.strip_prefix("first:") {
+        let rows: usize = rest.parse().map_err(|_| {
+            PyValueError::new_err(format!("bad rows {method:?}; expected `all` or `first:N`"))
+        })?;
+        if rows == 0 {
+            return Err(PyValueError::new_err(
+                "bad rows `first:0`; N must be at least 1",
+            ));
+        }
+        return Ok(Some(rows));
+    }
+    Err(PyValueError::new_err(format!(
+        "bad rows {method:?}; expected `all` or `first:N`"
+    )))
 }
 
 fn aws_env(env: Option<BTreeMap<String, String>>) -> PyResult<BTreeMap<String, String>> {

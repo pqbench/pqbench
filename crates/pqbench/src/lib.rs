@@ -8,6 +8,7 @@ pub mod compression;
 pub mod dump;
 pub mod lake;
 pub mod lz;
+pub mod profile;
 pub mod report;
 pub mod stats;
 pub mod table;

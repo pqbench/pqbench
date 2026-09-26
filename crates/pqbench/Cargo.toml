@@ -30,7 +30,9 @@ zstd = "0.13"
 lz4 = "1"
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
 glob = "0.3"
-parquet = { version = "59", default-features = false }
+# Codecs are enabled so `read_sample` can decode compressed files; without
+# them parquet-rs fails at runtime (`Disabled feature at compile time`).
+parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
 bytes = "1"
 serde = { version = "1.0.229", features = ["derive"] }

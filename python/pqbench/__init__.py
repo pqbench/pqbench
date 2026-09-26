@@ -13,6 +13,7 @@ from pqbench._native import (
     dump,
     lake,
     lz,
+    profile,
     table,
     viz,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "dump",
     "lake",
     "lz",
+    "profile",
     "table",
     "viz",
 ]
