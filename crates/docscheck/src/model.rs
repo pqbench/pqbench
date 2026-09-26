@@ -6,7 +6,7 @@
 /// A fenced code block lifted out of a Markdown document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
-    /// The fence info string as written, e.g. `sh run` or `json`.
+    /// The fence info string as written, e.g. `console run` or `json`.
     pub info: BlockInfo,
     /// The block body, without the fences, verbatim.
     pub body: String,
@@ -36,8 +36,8 @@ impl Block {
 ///
 /// The first word is the language; the words after it are options. `run` marks
 /// the block executable, `no-run` keeps an otherwise-likely block out, and any
-/// other word is a cargo feature the generated test is gated on (`sh run delta`
-/// emits `#[cfg(feature = "delta")]`).
+/// other word is a cargo feature the generated test is gated on (`console run
+/// delta` emits `#[cfg(feature = "delta")]`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BlockInfo {
     /// The language tag, or `None` for a bare fence.

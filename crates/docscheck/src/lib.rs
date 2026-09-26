@@ -5,22 +5,25 @@
 //! ([`generate`]) turns that model into Rust integration tests, one file per
 //! Markdown document.
 //!
-//! A block is generated only when its opening fence carries the `run` word, so
-//! illustrative examples with placeholder paths stay documentation:
+//! A block is generated only when it is a `console` transcript whose fence
+//! carries the `run` word, so prose examples with placeholder paths stay
+//! documentation. A `$ ` line is a command; the lines under it are its expected
+//! stdout, and a lone `...` matches any run of lines:
 //!
 //! ~~~text
-//! ```sh run
-//! pqbench bytemass examples/quickstart.parquet
+//! ```console run
+//! $ pqbench bytemass examples/quickstart.parquet --json
+//! {"kind":"pqbench.bytemass","version":1,"event":"begin"}
+//! ...
 //! ```
 //! ~~~
 //!
-//! The fence's first word is the language (`sh`, `bash`); a later word may be
-//! `run` or `no-run`. Directives on a leading `#`-comment line set the working
-//! directory (`# docscheck: cd: PATH`) or the environment
-//! (`# docscheck: env: KEY=VALUE`).
+//! A further word gates the test on a cargo feature (` ```console run delta `).
+//! Directives on a leading `#`-comment line set the working directory
+//! (`# docscheck: cd: PATH`) or the environment (`# docscheck: env: KEY=VALUE`).
 //!
-//! The generated tests live in `crates/pqbench-cli/tests/gen/` and call a
-//! committed `support.rs` that resolves `pqbench` to the built binary, so
+//! The generated tests live in `crates/pqbench-cli/tests/gen_*.rs` and call a
+//! committed `gen_support.rs` that resolves `pqbench` to the built binary, so
 //! `cargo test` runs them like any other integration test.
 
 pub mod generate;

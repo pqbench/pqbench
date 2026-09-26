@@ -8,8 +8,8 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 10
-    support::run("pqbench experiment examples/quickstart.parquet", 11);
-    support::run("pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all", 12);
-    support::run("pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy", 13);
-    support::run("pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst", 14);
+    support::run("pqbench experiment examples/quickstart.parquet", 11, Some(&["...", r#"{"kind":"pqbench.experiment","event":"end","trial_count":1,"row_count":8}"#]));
+    support::run("pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all", 14, Some(&["...", r#"{"kind":"pqbench.experiment","event":"end","trial_count":2,"row_count":8}"#]));
+    support::run("pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy", 17, Some(&["...", r#"{"kind":"pqbench.experiment","event":"end","trial_count":3,"row_count":8}"#]));
+    support::run("pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst", 20, None);
 }

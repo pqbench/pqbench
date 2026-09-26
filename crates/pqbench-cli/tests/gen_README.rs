@@ -8,56 +8,56 @@ mod support;
 #[test]
 fn lz() {
     // lz, from line 26
-    support::run("pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0", 27);
+    support::run("pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0", 27, Some(&[r#"{"kind":"pqbench.lz","version":1,"event":"begin","file":"examples/quickstart.parquet"}"#, "...", r#"{"kind":"pqbench.lz","event":"end","row_count":1}"#]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn compression() {
-    // compression, from line 37
-    support::run("pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0", 38);
+    // compression, from line 40
+    support::run("pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0", 41, Some(&[r#"{"kind":"pqbench.compression","version":1,"event":"begin","file":"examples/quickstart.parquet"}"#, "...", r#"{"kind":"pqbench.compression","event":"end","row_count":4,"column_count":8}"#]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn bytemass() {
-    // bytemass, from line 51
-    support::run("pqbench bytemass examples/quickstart.parquet", 52);
-    support::run("pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet", 53);
+    // bytemass, from line 57
+    support::run("pqbench bytemass examples/quickstart.parquet --json", 58, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":8,"column_count":2}"#]));
+    support::run("pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet", 62, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.bytemass","event":"end","file_count":2,"row_count":3500,"column_count":8}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn table() {
-    // table, from line 80
-    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 81);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass", 82);
-    support::run("pqbench bytemass /tmp/table.ndjson.zst", 83);
+    // table, from line 92
+    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 93, None);
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass", 94, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
+    support::run("pqbench bytemass /tmp/table.ndjson.zst", 98, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn lake() {
-    // lake, from line 122
-    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*'", 123);
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass", 124);
+    // lake, from line 140
+    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*'", 141, Some(&[r#"{"kind":"pqbench.lake","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.lake","event":"end","table_count":1}"#]));
+    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass", 145, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 147
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 148);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 149);
+    // viz, from line 171
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 172, None);
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 173, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn dump() {
-    // dump, from line 159
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 160);
+    // dump, from line 183
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 184, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
 }

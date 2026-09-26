@@ -44,16 +44,20 @@ make check        # = fmt-check + clippy -D warnings + test
 - `make check-python` builds the PyO3 extension with maturin and runs its
   tests. It is separate from the gate because it compiles the delta feature.
   CI runs it on every pull request.
-- **Documented commands are tests.** The runnable `pqbench ...` blocks in
-  `README.md`, `docs/`, and `skills/` are generated into
-  `crates/pqbench-cli/tests/gen_*.rs` by `docscheck` and run by `make test`. A
-  block runs only when its fence carries `run`:
+- **Documented commands are tests.** The `console` blocks in `README.md`,
+  `docs/`, and `skills/` are generated into `crates/pqbench-cli/tests/gen_*.rs`
+  by `docscheck` and run by `make test`. A block runs only when its fence
+  carries `run`; a `$ ` line is a command and the lines under it are its
+  expected output:
   ````md
-  ```sh run
-  pqbench bytemass examples/quickstart.parquet
+  ```console run
+  $ pqbench bytemass examples/quickstart.parquet --json
+  {"kind":"pqbench.bytemass","version":1,"event":"begin"}
+  ...
   ```
   ````
-  Add a feature word (` ```sh run delta `) to gate the test on a cargo feature.
+  A lone `...` line matches any run of output lines, for values that vary. Add a
+  feature word (` ```console run delta `) to gate the test on a cargo feature.
   After editing a doc block, run `make sync-docs`; `make check-docs` fails in CI
   when the generated files are stale. Never edit `tests/gen_*.rs` by hand.
 - Feature sets are exercised through the same targets:

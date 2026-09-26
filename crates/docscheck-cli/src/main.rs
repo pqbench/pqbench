@@ -6,10 +6,12 @@
 //! exits non-zero when they are not, so CI can gate on the generated tests
 //! matching the docs.
 //!
-//! A fenced block becomes a test only when its info string carries `run`:
+//! A `console` block becomes a test only when its info string carries `run`:
 //!
-//! ```sh run
-//! pqbench bytemass examples/quickstart.parquet
+//! ```console run
+//! $ pqbench bytemass examples/quickstart.parquet
+//! {"kind":"pqbench.bytemass","version":1,"event":"begin"}
+//! ...
 //! ```
 
 use std::collections::BTreeSet;
@@ -35,17 +37,21 @@ const SUPPORT_NAME: &str = "gen_support.rs";
     name = "docscheck",
     about = "Turn the commands in Markdown into Rust tests",
     after_help = r#"
-A fenced block is generated only when its info string carries `run`:
+A `console` transcript is generated only when its info string carries `run`:
 
-    ```sh run
-    pqbench bytemass examples/quickstart.parquet
+    ```console run
+    $ pqbench bytemass examples/quickstart.parquet
+    {"kind":"pqbench.bytemass","version":1,"event":"begin"}
+    ...
     ```
 
-The first info word is the language (sh, bash); a later word may be `run` or
-`no-run`. One block becomes one `#[test]`; the test runs the block's commands
-through a shared `support` module that resolves `pqbench` to the binary under
-test. A `# docscheck: cd: PATH` or `# docscheck: env: KEY=VALUE` line on the
-first body line sets the directory or environment.
+Each `$ ` line is a command; the lines under it are its expected stdout, and a
+lone `...` matches any run of lines. A later info word gates the test on a cargo
+feature (```console run delta```), and `no-run` opts a block out. One block
+becomes one `#[test]`; the test runs the commands through a shared `support`
+module that resolves `pqbench` to the binary under test. A
+`# docscheck: cd: PATH` or `# docscheck: env: KEY=VALUE` line on its own body
+line sets the directory or environment.
 
 Examples:
   docscheck sync README.md docs/

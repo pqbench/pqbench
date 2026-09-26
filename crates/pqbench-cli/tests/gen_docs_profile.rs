@@ -8,8 +8,8 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 9
-    support::run("pqbench profile examples/quickstart.parquet", 10);
-    support::run("pqbench profile examples/quickstart.parquet --columns 'id' --top 5", 11);
-    support::run("pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst", 12);
-    support::run("pqbench profile examples/quickstart.parquet --rows all --json", 13);
+    support::run("pqbench profile examples/quickstart.parquet", 10, Some(&[r#"{"kind":"pqbench.profile","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.profile","event":"end","file_count":1,"row_count":8,"column_count":2}"#]));
+    support::run("pqbench profile examples/quickstart.parquet --columns 'id' --top 5", 14, Some(&[r#"{"kind":"pqbench.profile","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.profile","event":"end","file_count":1,"row_count":8,"column_count":1}"#]));
+    support::run("pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst", 18, None);
+    support::run("pqbench profile examples/quickstart.parquet --rows all --json", 19, Some(&[r#"{"kind":"pqbench.profile","version":1,"event":"begin"}"#, "...", r#"{"kind":"pqbench.profile","event":"end","file_count":1,"row_count":8,"column_count":2}"#]));
 }

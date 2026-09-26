@@ -21,8 +21,8 @@ that command and links back. This file is the durable copy.
 
 The usual lake pipe:
 
-```sh run delta
-pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report
+```console run delta
+$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 A TTY prints a short summary and requires `-o`. A pipe streams NDJSON.

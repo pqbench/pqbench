@@ -23,8 +23,11 @@ The published image is a portable baseline build; see
 
 lzbench-style compression benchmark over raw file bytes:
 
-```sh run
-pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0
+```console run
+$ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0
+{"kind":"pqbench.lz","version":1,"event":"begin","file":"examples/quickstart.parquet"}
+...
+{"kind":"pqbench.lz","event":"end","row_count":1}
 ```
 
 `--json` emits the same report as composable JSON.
@@ -34,8 +37,11 @@ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations
 The same codec sweep over the encoded pages of a **NONE-compressed** parquet
 file:
 
-```sh run
-pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0
+```console run
+$ pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0
+{"kind":"pqbench.compression","version":1,"event":"begin","file":"examples/quickstart.parquet"}
+...
+{"kind":"pqbench.compression","event":"end","row_count":4,"column_count":8}
 ```
 
 `--json` emits the same report as composable JSON (the per-column rows are
@@ -48,9 +54,15 @@ Reads only the footer metadata, so it works on any file regardless of
 compression. Multiple paths, quoted glob masks, and storage URIs are
 aggregated:
 
-```sh run
-pqbench bytemass examples/quickstart.parquet
-pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet
+```console run
+$ pqbench bytemass examples/quickstart.parquet --json
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+...
+{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":8,"column_count":2}
+$ pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+...
+{"kind":"pqbench.bytemass","event":"end","file_count":2,"row_count":3500,"column_count":8}
 ```
 
 An `s3://` URI is the same command with the `aws` feature:
@@ -77,10 +89,16 @@ table and let the shell fan out (`xargs -P`). A terminal prints a short
 summary and requires `-o` (zstd
 NDJSON):
 
-```sh run delta
-pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
-pqbench table docker/e2e-lakehouse/table | pqbench bytemass
-pqbench bytemass /tmp/table.ndjson.zst
+```console run delta
+$ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+...
+{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
+$ pqbench bytemass /tmp/table.ndjson.zst
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+...
+{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
 ```
 
 Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
@@ -119,9 +137,15 @@ namespaces and tables, then `loadTable` for each metadata location.
 leading name is a literal. `token` is the Databricks bearer token. `env`
 holds `AWS_*` storage credentials and is copied onto each table-ref.
 
-```sh run delta
-pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*'
-pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass
+```console run delta
+$ pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*'
+{"kind":"pqbench.lake","version":1,"event":"begin"}
+...
+{"kind":"pqbench.lake","event":"end","table_count":1}
+$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass
+{"kind":"pqbench.bytemass","version":1,"event":"begin"}
+...
+{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
 ```
 
 The committed fixture tree also holds an Iceberg table under
@@ -144,9 +168,9 @@ Collect a bytemass stream into a static HTML page. The page embeds the
 measured rows and loads the d3 modules it uses from a CDN, drawing one
 treemap per table id. Open the HTML in a browser; no server is needed.
 
-```sh run delta
-pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
-pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
+```console run delta
+$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
@@ -156,8 +180,9 @@ The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
 Copy the Parquet files a table names to a local directory — an `aws s3 cp`-style
 fetch for a Delta or Iceberg table, local or remote:
 
-```sh run delta
-pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample
+```console run delta
+$ pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample
+dump: 1 file(s), 796 bytes -> /tmp/sample
 ```
 
 `pqbench dump /tmp/sample s3://bucket/table` fetches from S3 (needs the `aws`

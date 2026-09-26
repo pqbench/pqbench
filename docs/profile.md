@@ -6,11 +6,20 @@ data — `profile` reads row values and decodes them.
 
 ## Usage
 
-```sh run
-pqbench profile examples/quickstart.parquet
-pqbench profile examples/quickstart.parquet --columns 'id' --top 5
-pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst
-pqbench profile examples/quickstart.parquet --rows all --json
+```console run
+$ pqbench profile examples/quickstart.parquet
+{"kind":"pqbench.profile","version":1,"event":"begin"}
+...
+{"kind":"pqbench.profile","event":"end","file_count":1,"row_count":8,"column_count":2}
+$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5
+{"kind":"pqbench.profile","version":1,"event":"begin"}
+...
+{"kind":"pqbench.profile","event":"end","file_count":1,"row_count":8,"column_count":1}
+$ pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst
+$ pqbench profile examples/quickstart.parquet --rows all --json
+{"kind":"pqbench.profile","version":1,"event":"begin"}
+...
+{"kind":"pqbench.profile","event":"end","file_count":1,"row_count":8,"column_count":2}
 ```
 
 Inputs are local Parquet files. Each file is opened, up to `--rows` leading
