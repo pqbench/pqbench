@@ -127,11 +127,11 @@ async fn write_discovered(
     max_depth: usize,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    write_lake(
-        &lake::discover_bounded(uri, &BTreeMap::new(), Some(max_depth)).await?,
-        filter,
-        emit,
-    )
+    let discovered = lake::discover_bounded(uri, &BTreeMap::new(), Some(max_depth), |name| {
+        filter.keeps_prefix(name)
+    })
+    .await?;
+    write_lake(&discovered, filter, emit)
 }
 
 fn write_lake(lake: &Lake, filter: &NameFilter, emit: &mut Emitter) -> Result<usize, CliError> {

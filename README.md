@@ -67,7 +67,9 @@ feature; a URI whose backend is not compiled in fails at runtime with the
 missing feature named. The library entry point (`bytemass::bytemass`) is
 always available and never feature-gated. A pipe streams one NDJSON row per
 column as each file is measured; a terminal prints a short summary and
-requires `-o` (zstd NDJSON).
+requires `-o` (zstd NDJSON). Selecting which files to measure is a shell job:
+filter the `table` stream with `jq`, `sort`, and `head` before `bytemass` (see
+[docs/demo.md](docs/demo.md)).
 
 ### table
 

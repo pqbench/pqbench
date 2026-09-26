@@ -154,6 +154,23 @@ fn table_rejects_an_unrecognized_directory() {
 }
 
 #[test]
+fn table_reads_a_metadata_json_path_not_a_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let metadata = directory.path().join("metadata");
+    std::fs::create_dir_all(&metadata).unwrap();
+    let file = metadata.join("00001-22222222-2222-2222-2222-222222222222.metadata.json");
+    std::fs::write(&file, "{}").unwrap();
+    let output = pqbench()
+        .args(["table", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("iceberg"), "{stderr}");
+    assert!(!stderr.contains("unsupported document kind"), "{stderr}");
+}
+
+#[test]
 fn bytemass_rejects_a_non_aws_env_key() {
     let document = json!({
         "kind": "pqbench.remote-source",

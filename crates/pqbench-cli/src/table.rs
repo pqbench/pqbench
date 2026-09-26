@@ -27,7 +27,10 @@ pub(crate) async fn run(args: &TableArgs) -> Result<(), CliError> {
         None if !std::io::stdin().is_terminal() => stream("-", args).await,
         None => Err("table needs a URI or a document on standard input".into()),
         Some(value) => {
-            if document::is_document(value).await {
+            // An Iceberg `.metadata.json` is JSON on disk but names a table,
+            // not a pqbench document; keep it on the table path.
+            let metadata_json = value.ends_with(".metadata.json");
+            if !metadata_json && document::is_document(value).await {
                 stream(value, args).await
             } else {
                 load_path(value, args).await

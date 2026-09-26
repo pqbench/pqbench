@@ -87,7 +87,8 @@ pqbench bytemass table.ndjson.zst
 
 Data paths must stay inside the table root (no URIs, no `..`). A missing
 `delta` feature fails at runtime and names the feature. Iceberg is detected
-from `metadata/version-hint.text` and rejected until a loader exists.
+from `metadata/version-hint.text` or `metadata/*.metadata.json` and has its own
+loader ([docs/iceberg.md](iceberg.md)).
 
 ## Dependencies
 

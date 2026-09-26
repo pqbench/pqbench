@@ -71,11 +71,14 @@ pub struct Lake {
 /// Fails when the location cannot be opened, listing fails, or it contains no
 /// tables.
 pub async fn discover(uri: &str, env: &BTreeMap<String, String>) -> Result<Lake, Error> {
-    discover_bounded(uri, env, None).await
+    discover_bounded(uri, env, None, |_| true).await
 }
 
 /// Find every table under `uri`, stopping after `max_depth` path components
-/// below the root. `None` walks until a marker.
+/// below the root. `None` walks until a marker. `keep` decides whether a
+/// directory prefix can still yield a kept table name; a prefix it rejects is
+/// neither listed nor descended into, so `--include`/`--exclude` prune the walk
+/// instead of filtering its result.
 ///
 /// # Errors
 /// As [`discover`].
@@ -83,6 +86,7 @@ pub async fn discover_bounded(
     uri: &str,
     env: &BTreeMap<String, String>,
     max_depth: Option<usize>,
+    keep: impl Fn(&str) -> bool,
 ) -> Result<Lake, Error> {
     let root = root_uri(uri)?;
     let options = env_options(env);
@@ -105,8 +109,12 @@ pub async fn discover_bounded(
             continue;
         }
         for prefix in listing.prefixes {
-            if is_walkable_prefix(&prefix) {
-                pending.push((join_uri(&dir, &prefix)?, depth + 1));
+            if !is_walkable_prefix(&prefix) {
+                continue;
+            }
+            let child = join_uri(&dir, &prefix)?;
+            if keep(&table_name(&root, &child)) {
+                pending.push((child, depth + 1));
             }
         }
     }

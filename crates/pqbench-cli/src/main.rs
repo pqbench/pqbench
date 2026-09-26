@@ -50,6 +50,7 @@ enum Command {
 Examples:
   pqbench bytemass data.parquet
   pqbench table ./delta-table | pqbench bytemass
+  pqbench table ./delta-table | jq -c 'select(.kind!="pqbench.table-file" or (.path|startswith("year=2024/")))' | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench bytemass table.ndjson.zst
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html

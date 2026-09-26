@@ -103,6 +103,38 @@ impl NameFilter {
             .iter()
             .any(|pattern| matches_fqn(name, pattern))
     }
+
+    /// Whether a partial `catalog`/`catalog.schema` name — or a directory
+    /// prefix below a lake root — can still lead to a kept table FQN. False
+    /// means the prefix and everything under it can be skipped.
+    #[must_use]
+    pub fn keeps_prefix(&self, name: &str) -> bool {
+        let included =
+            self.include.is_empty() || self.include.iter().any(|pattern| can_reach(name, pattern));
+        included
+            && !self
+                .exclude
+                .iter()
+                .any(|pattern| prunes_prefix(name, pattern))
+    }
+}
+
+/// Whether `pattern` can still match `prefix` or something below it.
+pub(crate) fn can_reach(prefix: &str, pattern: &str) -> bool {
+    if is_glob(pattern) && glob_matches(pattern, prefix) {
+        return true;
+    }
+    components_match(prefix, pattern, true)
+}
+
+/// Whether `pattern` (a literal or a prefix) drops `prefix` entirely.
+pub(crate) fn prunes_prefix(prefix: &str, pattern: &str) -> bool {
+    let prefix_parts = split_fqn(prefix);
+    let pattern_parts = split_fqn(pattern);
+    if pattern_parts.len() > prefix_parts.len() {
+        return false;
+    }
+    matches_fqn(prefix, pattern)
 }
 
 pub(crate) fn is_glob(pattern: &str) -> bool {
