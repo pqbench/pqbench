@@ -8,7 +8,8 @@
 //! A block is generated only when it is a `console` transcript whose fence
 //! carries the `run` word, so prose examples with placeholder paths stay
 //! documentation. A `$ ` line is a command and the lines under it are its
-//! expected stdout, matched exactly:
+//! expected stdout, matched token by token (a `±`-prefixed token or a dash run
+//! is a tolerance marker):
 //!
 //! ~~~text
 //! ```console run

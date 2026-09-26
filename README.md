@@ -24,17 +24,17 @@ The published image is a portable baseline build; see
 lzbench-style compression benchmark over raw file bytes:
 
 ```console run
-$ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table | awk 'NR <= 2 || $1 ~ /:$/ { print; next } { printf "%-5s  %5s  %13s  %15s  %5s\n", $1, $2, "varies", "varies", $NF }'
+$ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table
 codec  level  compress MB/s  decompress MB/s  ratio
 -----  -----  -------------  ---------------  -----
-zstd       3         varies           varies   0.63
+zstd       3          ±12.5            ±31.8   0.63
 file: examples/quickstart.parquet
 rows: 1
 ```
 
-`awk` blanks the two speed columns — they vary run to run — so the transcript is
-reproducible. `--format json` (or `--json`) emits the same report as composable
-NDJSON.
+The speeds vary run to run; a `±`-prefixed number is a placeholder the docs
+check tolerates. `--format json` (or `--json`) emits the same report as
+composable NDJSON.
 
 ### compression
 
@@ -42,22 +42,22 @@ The same codec sweep over the encoded pages of a **NONE-compressed** parquet
 file:
 
 ```console run
-$ pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table | awk 'NR <= 2 || $1 ~ /:$/ { print; next } { printf "%-6s  %5s  %13s  %15s  %5s\n", $1, $2, "varies", "varies", $NF }'
+$ pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
-lz4         1         varies           varies   0.78
-snappy      1         varies           varies   0.85
-zstd        1         varies           varies   1.01
-gzip        1         varies           varies   1.26
+lz4         1          ±71.0            ±89.0   0.78
+snappy      1          ±20.0            ±40.0   0.85
+zstd        1          ±12.0            ±28.0   1.01
+gzip        1           ±0.6             ±4.0   1.26
 file: examples/quickstart.parquet
 rows: 4
 columns: 0
 ```
 
-`awk` blanks the two speed columns — they vary run to run — so the transcript is
-reproducible. The codec rows are one per codec, and `--per-column` adds a second
-table per column. `--format json` (or `--json`) emits the same report as
-composable NDJSON.
+Rows are ordered by compression ratio, which is a property of the data, so the
+order is reproducible; a `±`-prefixed number marks the speeds that are not. The
+codec rows are one per codec, and `--per-column` adds a second table per column.
+`--format json` (or `--json`) emits the same report as composable NDJSON.
 
 ### bytemass
 
@@ -164,7 +164,7 @@ holds `AWS_*` storage credentials and is copied onto each table-ref.
 ```console run delta
 $ pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table
 name   uri
------  -----------------------------------------------------------------------
+-----  ----------------------------------------
 table  file://<root>/docker/e2e-lakehouse/table
 tables: 1
 $ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table

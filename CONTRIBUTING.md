@@ -58,8 +58,10 @@ make check        # = fmt-check + check-docs + clippy -D warnings + test
   files: 1
   ```
   ````
-  The output is matched exactly, so stabilize anything that varies with `head`,
-  `awk`, or `sed`. `docscheck` gates two things before generating: a `pqbench`
+  The output is matched token by token; a documented token that starts with `±`
+  (a measured speed) or is a run of dashes (a table separator) matches any
+  actual token, so a value that varies is marked rather than filtered in the
+  shell. `docscheck` gates two things before generating: a `pqbench`
   example must be in a `console` fence, and a transcript must document the human
   table, not NDJSON. A `{"kind":"pqbench` output line fails unless the fence
   opts in with ` ```console run json ` (the `json` word marks a machine-output

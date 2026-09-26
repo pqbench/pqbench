@@ -8,14 +8,14 @@ mod support;
 #[test]
 fn lz() {
     // lz, from line 26
-    support::run(r#"pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table | awk 'NR <= 2 || $1 ~ /:$/ { print; next } { printf "%-5s  %5s  %13s  %15s  %5s\n", $1, $2, "varies", "varies", $NF }'"#, 27, Some(&["codec  level  compress MB/s  decompress MB/s  ratio", "-----  -----  -------------  ---------------  -----", "zstd       3         varies           varies   0.63", "file: examples/quickstart.parquet", "rows: 1"]));
+    support::run("pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table", 27, Some(&["codec  level  compress MB/s  decompress MB/s  ratio", "-----  -----  -------------  ---------------  -----", "zstd       3          ±12.5            ±31.8   0.63", "file: examples/quickstart.parquet", "rows: 1"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn compression() {
     // compression, from line 44
-    support::run(r#"pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table | awk 'NR <= 2 || $1 ~ /:$/ { print; next } { printf "%-6s  %5s  %13s  %15s  %5s\n", $1, $2, "varies", "varies", $NF }'"#, 45, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "lz4         1         varies           varies   0.78", "snappy      1         varies           varies   0.85", "zstd        1         varies           varies   1.01", "gzip        1         varies           varies   1.26", "file: examples/quickstart.parquet", "rows: 4", "columns: 0"]));
+    support::run("pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table", 45, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "lz4         1          ±71.0            ±89.0   0.78", "snappy      1          ±20.0            ±40.0   0.85", "zstd        1          ±12.0            ±28.0   1.01", "gzip        1           ±0.6             ±4.0   1.26", "file: examples/quickstart.parquet", "rows: 4", "columns: 0"]));
 }
 
 #[rustfmt::skip]
@@ -48,7 +48,7 @@ fn table_2() {
 #[test]
 fn lake() {
     // lake, from line 164
-    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table", 165, Some(&["name   uri", "-----  -----------------------------------------------------------------------", "table  file://<root>/docker/e2e-lakehouse/table", "tables: 1"]));
+    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table", 165, Some(&["name   uri", "-----  ----------------------------------------", "table  file://<root>/docker/e2e-lakehouse/table", "tables: 1"]));
     support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table", 170, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 

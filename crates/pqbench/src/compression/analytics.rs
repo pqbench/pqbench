@@ -41,7 +41,7 @@ fn file_bytes(row: &RawRow) -> (usize, usize) {
     })
 }
 
-/// Aggregate raw measurements into a report sorted by compress speed. When
+/// Aggregate raw measurements into a report sorted by compression ratio. When
 /// `per_column` is set, the report also carries one row per column chunk.
 pub fn aggregate(raw: &[RawRow], cfg: &stats::Config, per_column: bool) -> report::Report {
     let mut rows = Vec::with_capacity(raw.len());

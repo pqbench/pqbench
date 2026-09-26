@@ -68,12 +68,43 @@ pub fn run(command: &str, line: usize, expected: Option<&[&str]>) {
     );
     let actual = normalize(&combined);
     assert!(
-        actual.len() == expected.len()
-            && actual.iter().zip(expected).all(|(line, want)| line == want),
+        matches(&actual, expected),
         "line {line}: `{command}` output did not match the docs\n--- documented ---\n{documented}\n--- actual ---\n{actual}",
         documented = expected.join("\n"),
         actual = actual.join("\n"),
     );
+}
+
+/// Whether every documented line matches the corresponding actual line.
+fn matches(actual: &[String], expected: &[&str]) -> bool {
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .all(|(line, want)| line_matches(line, want))
+}
+
+/// Whether one documented line matches one actual line, token by token.
+///
+/// Comparing tokens rather than whole strings keeps a transcript insensitive to
+/// column padding. A documented token stands for a value that varies when it
+/// starts with `±` (a measured speed) or is a run of dashes (a separator whose
+/// width follows the data); either matches any actual token.
+fn line_matches(actual: &str, documented: &str) -> bool {
+    let mut actual = actual.split_whitespace();
+    let mut documented = documented.split_whitespace();
+    loop {
+        match (documented.next(), actual.next()) {
+            (None, None) => return true,
+            (Some(want), Some(got)) if tolerant(want) || want == got => {}
+            _ => return false,
+        }
+    }
+}
+
+/// Whether a documented token stands for a value that varies run to run.
+fn tolerant(token: &str) -> bool {
+    token.starts_with('±') || token.chars().all(|ch| ch == '-')
 }
 
 /// Normalize captured output: drop trailing whitespace per line, the final

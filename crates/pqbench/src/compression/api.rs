@@ -35,7 +35,7 @@ pub struct CompressionRequest {
 /// The file is read and parsed into per-column page buffers once; each codec×
 /// level then compresses and decompresses every page payload, verifying each
 /// round-trip. The result is one [`report::ReportRow`] per config, ordered by
-/// compress speed, plus per-column rows when `per_column` is set.
+/// compression ratio, plus per-column rows when `per_column` is set.
 ///
 /// # Errors
 /// Fails when a `codec@level` spec is malformed, the file cannot be read or

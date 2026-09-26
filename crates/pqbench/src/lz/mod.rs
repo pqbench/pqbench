@@ -7,7 +7,7 @@
 //! Split by layer: `raw` (`bench_file`) loads the file once and records raw
 //! per-pass times per config; `analytics` (`aggregate`) reduces the samples
 //! (warmup/mode) into a shared [`crate::report::ReportRow`] and orders the rows
-//! by compress speed.
+//! by compression ratio.
 
 mod analytics;
 mod api;

@@ -95,7 +95,7 @@ fn ratio(compressed_bytes: usize, uncompressed_bytes: usize) -> f64 {
     compressed_bytes as f64 / uncompressed_bytes as f64
 }
 
-/// A sweep's result: file-level rows ordered by compress speed, plus the
+/// A sweep's result: file-level rows ordered by compression ratio, plus the
 /// per-column breakdown (empty unless requested).
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
@@ -105,15 +105,15 @@ pub struct Report {
     pub columns: Vec<ColumnRow>,
 }
 
-/// Sort the rows by compress speed (fastest first) and wrap them in a [`Report`].
+/// Sort the rows by compression ratio (smallest first) and wrap them in a
+/// [`Report`].
+///
+/// Ratio is a property of the data, so the order is reproducible; speeds are
+/// not. Ties keep their input order ([`slice::sort_by`] is stable).
 pub fn into_report(mut rows: Vec<ReportRow>, columns: Vec<ColumnRow>) -> Report {
     rows.sort_by(|a, b| {
-        b.compress_estimate
-            .megabytes_per_second(b.uncompressed_bytes as u64)
-            .partial_cmp(
-                &a.compress_estimate
-                    .megabytes_per_second(a.uncompressed_bytes as u64),
-            )
+        a.ratio
+            .partial_cmp(&b.ratio)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     Report { rows, columns }

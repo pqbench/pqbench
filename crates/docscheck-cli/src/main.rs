@@ -50,7 +50,9 @@ A `console` transcript is generated only when its info string carries `run`:
     ```
 
 Each `$ ` line is a command; the lines under it are its expected stdout, matched
-exactly. A later info word gates the test on a cargo feature
+token by token. A `±`-prefixed token (a measured value) or a run of dashes (a
+table separator) is a tolerance marker and matches any actual token. A later info
+word gates the test on a cargo feature
 (```console run delta```), and `no-run` opts a block out. One block becomes one
 `#[test]`; the test runs the commands through a shared `support` module that
 resolves `pqbench` to the binary under test. A `# docscheck: cd: PATH` or
