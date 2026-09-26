@@ -149,6 +149,10 @@ fn list_file(url: &Url) -> Result<PrefixListing, Error> {
         if name.starts_with('.') {
             continue;
         }
+        // A symlinked directory is not walked, so a listing cannot loop.
+        if entry.path().is_symlink() && entry.path().is_dir() {
+            continue;
+        }
         if entry.path().is_dir() {
             prefixes.push(name);
         } else {

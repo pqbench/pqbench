@@ -3,11 +3,11 @@
 //! measures the files.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::table::{self, TableInfo};
+use crate::table::TableInfo;
 use crate::third_party::object_store::{self, PrefixListing};
 
 /// Directory whose presence marks a Delta table.
@@ -61,171 +61,108 @@ pub struct Lake {
     pub tables: Vec<LakeTable>,
 }
 
-/// Find every Delta or Iceberg table under `root`. A directory that contains
-/// `_delta_log`, `metadata/version-hint.text`, or `metadata/*.metadata.json`
-/// is a table, and its children are not searched. Delta wins when both markers
-/// are present (UniForm).
+/// Find every Delta or Iceberg table under `uri`. A bare path or `file://`
+/// URI lists the filesystem; `s3://` (with the `aws` feature) lists object
+/// storage. A directory that contains `_delta_log`,
+/// `metadata/version-hint.text`, or `metadata/*.metadata.json` is a table, and
+/// its children are not searched. Delta wins when both markers are present
+/// (UniForm).
 ///
 /// # Errors
-/// Fails when `root` cannot be opened or it contains no tables.
-pub fn discover(root: &Path) -> Result<Lake, Error> {
-    discover_bounded(root, None)
+/// Fails when the location cannot be opened, listing fails, or it contains no
+/// tables.
+pub async fn discover(uri: &str, env: &BTreeMap<String, String>) -> Result<Lake, Error> {
+    discover_bounded(uri, env, None).await
 }
 
-/// Find every Delta or Iceberg table under `root`, stopping after
-/// `max_depth` path components below the root. `None` walks until a marker.
+/// Find every table under `uri`, stopping after `max_depth` path components
+/// below the root. `None` walks until a marker.
 ///
 /// # Errors
-/// Fails when `root` cannot be opened or it contains no tables.
-pub fn discover_bounded(root: &Path, max_depth: Option<usize>) -> Result<Lake, Error> {
-    let root = root
-        .canonicalize()
-        .map_err(|e| Error(format!("cannot open lake {}: {e}", root.display())))?;
-    if !root.is_dir() {
-        return Err(Error(format!("{} is not a directory", root.display())));
-    }
-    let mut tables = Vec::new();
-    walk(&root, &root, 0, max_depth, &mut tables)?;
-    let name = root
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned());
-    finish(name, tables, root.display())
-}
-
-/// Find every Delta or Iceberg table under `uri`. A local path or `file://`
-/// URI walks the filesystem. An `s3://` prefix lists one level at a time until
-/// a table marker, and requires the `aws` feature.
-///
-/// # Errors
-/// Fails when the location cannot be opened, listing fails, or no tables are
-/// found.
-pub async fn discover_uri(uri: &str, env: &BTreeMap<String, String>) -> Result<Lake, Error> {
-    discover_uri_bounded(uri, env, None).await
-}
-
-/// Find every table under `uri`. `max_depth` is path components below the
-/// walk root; `None` is unbounded.
-///
-/// # Errors
-/// Fails when the location cannot be opened, listing fails, or no tables are
-/// found.
-pub async fn discover_uri_bounded(
+/// As [`discover`].
+pub async fn discover_bounded(
     uri: &str,
     env: &BTreeMap<String, String>,
     max_depth: Option<usize>,
 ) -> Result<Lake, Error> {
-    if is_local(uri) {
-        return discover_bounded(&local_path(uri)?, max_depth);
-    }
-    discover_listed(uri, env, max_depth).await
-}
-
-fn walk(
-    root: &Path,
-    dir: &Path,
-    depth: usize,
-    max_depth: Option<usize>,
-    tables: &mut Vec<LakeTable>,
-) -> Result<(), Error> {
-    if is_table(dir)? {
-        tables.push(LakeTable {
-            name: table_name(root, dir)?,
-            uri: dir.to_string_lossy().into_owned(),
-            env: BTreeMap::new(),
-            info: None,
-        });
-        return Ok(());
-    }
-    if max_depth.is_some_and(|max| depth >= max) {
-        return Ok(());
-    }
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| Error(format!("cannot read {}: {e}", dir.display())))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| Error(format!("cannot read {}: {e}", dir.display())))?;
-        let path = entry.path();
-        if path.is_symlink() || !path.is_dir() {
-            continue;
-        }
-        if entry.file_name().to_string_lossy().starts_with('.') {
-            continue;
-        }
-        walk(root, &path, depth + 1, max_depth, tables)?;
-    }
-    Ok(())
-}
-
-fn is_table(dir: &Path) -> Result<bool, Error> {
-    table::local_format(dir)
-        .map(|format| format.is_some())
-        .map_err(|error| Error(error.to_string()))
-}
-
-fn table_name(root: &Path, dir: &Path) -> Result<String, Error> {
-    if dir == root {
-        return Ok(dir
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "table".into()));
-    }
-    Ok(dir
-        .strip_prefix(root)
-        .map_err(|e| Error(e.to_string()))?
-        .to_string_lossy()
-        .replace('\\', "/"))
-}
-
-async fn discover_listed(
-    uri: &str,
-    env: &BTreeMap<String, String>,
-    max_depth: Option<usize>,
-) -> Result<Lake, Error> {
-    let options: Vec<(String, String)> = env
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let root = uri.trim_end_matches('/').to_string();
+    let root = root_uri(uri)?;
+    let options = env_options(env);
     let mut tables = Vec::new();
     let mut pending = vec![(root.clone(), 0usize)];
     while let Some((dir, depth)) = pending.pop() {
         let listing = object_store::list_prefix(&dir, &options)
             .await
             .map_err(|e| Error(e.to_string()))?;
-        if is_listed_table(&listing, &dir, &options).await? {
-            tables.push(listed_table(&root, &dir, env));
+        if is_table(&listing, &dir, &options).await? {
+            tables.push(LakeTable {
+                name: table_name(&root, &dir),
+                uri: dir.trim_end_matches('/').to_string(),
+                env: env.clone(),
+                info: None,
+            });
             continue;
         }
         if max_depth.is_some_and(|max| depth >= max) {
             continue;
         }
         for prefix in listing.prefixes {
-            if prefix.starts_with('.') || prefix.is_empty() {
-                continue;
+            if is_walkable_prefix(&prefix) {
+                pending.push((join_uri(&dir, &prefix)?, depth + 1));
             }
-            if prefix == DELTA_LOG || prefix == ICEBERG_METADATA {
-                continue;
-            }
-            pending.push((join_uri(&dir, &prefix), depth + 1));
         }
     }
     finish(uri_name(&root), tables, &root)
 }
 
-fn listed_table(root: &str, dir: &str, env: &BTreeMap<String, String>) -> LakeTable {
-    LakeTable {
-        name: remote_table_name(root, dir),
-        uri: dir.to_string(),
-        env: env.clone(),
-        info: None,
-    }
+fn env_options(env: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    env.iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
-async fn is_listed_table(
+/// Normalize a walk root to a URI: a bare path becomes a canonical `file://`
+/// URL, an object URI keeps its scheme.
+fn root_uri(uri: &str) -> Result<String, Error> {
+    if !is_local(uri) {
+        return Ok(uri.trim_end_matches('/').to_string());
+    }
+    let path = local_path(uri)?;
+    let path = path
+        .canonicalize()
+        .map_err(|e| Error(format!("cannot open lake {}: {e}", path.display())))?;
+    if !path.is_dir() {
+        return Err(Error(format!("{} is not a directory", path.display())));
+    }
+    url::Url::from_directory_path(&path)
+        .map(String::from)
+        .map_err(|()| Error(format!("invalid local lake path {}", path.display())))
+}
+
+async fn is_table(
     listing: &PrefixListing,
     dir: &str,
     options: &[(String, String)],
 ) -> Result<bool, Error> {
     Ok(listing_is_delta(listing) || listing_is_iceberg(listing, dir, options).await?)
+}
+
+fn is_walkable_prefix(prefix: &str) -> bool {
+    !prefix.is_empty()
+        && !prefix.starts_with('.')
+        && prefix != DELTA_LOG
+        && prefix != ICEBERG_METADATA
+}
+
+fn table_name(root: &str, dir: &str) -> String {
+    let root = root.trim_end_matches('/');
+    let dir = dir.trim_end_matches('/');
+    if dir == root {
+        return uri_name(dir).unwrap_or_else(|| "table".into());
+    }
+    dir.strip_prefix(root)
+        .unwrap_or(dir)
+        .trim_start_matches('/')
+        .to_string()
 }
 
 fn listing_is_delta(listing: &PrefixListing) -> bool {
@@ -240,7 +177,7 @@ async fn listing_is_iceberg(
     if !listing.prefixes.iter().any(|name| name == ICEBERG_METADATA) {
         return Ok(false);
     }
-    let metadata = object_store::list_prefix(&join_uri(dir, ICEBERG_METADATA), options)
+    let metadata = object_store::list_prefix(&join_uri(dir, ICEBERG_METADATA)?, options)
         .await
         .map_err(|e| Error(e.to_string()))?;
     Ok(metadata
@@ -259,20 +196,16 @@ fn is_iceberg_metadata(name: &str) -> bool {
     name.ends_with(ICEBERG_METADATA_SUFFIX) && name != ICEBERG_METADATA_SUFFIX
 }
 
-fn remote_table_name(root: &str, dir: &str) -> String {
-    let root = root.trim_end_matches('/');
-    let dir = dir.trim_end_matches('/');
-    if dir == root {
-        return uri_name(dir).unwrap_or_else(|| "table".into());
+fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
+    let mut url =
+        url::Url::parse(base).map_err(|e| Error(format!("invalid lake URI {base}: {e}")))?;
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
     }
-    dir.strip_prefix(root)
-        .unwrap_or(dir)
-        .trim_start_matches('/')
-        .to_string()
-}
-
-fn join_uri(base: &str, relative: &str) -> String {
-    format!("{}/{relative}", base.trim_end_matches('/'))
+    Ok(url
+        .join(relative)
+        .map_err(|e| Error(format!("invalid lake path {relative}: {e}")))?
+        .into())
 }
 
 fn uri_name(uri: &str) -> Option<String> {
@@ -286,14 +219,14 @@ fn is_local(uri: &str) -> bool {
     !uri.contains("://") || uri.starts_with("file://")
 }
 
-fn local_path(uri: &str) -> Result<std::path::PathBuf, Error> {
+fn local_path(uri: &str) -> Result<PathBuf, Error> {
     if uri.starts_with("file://") {
         return url::Url::parse(uri)
             .ok()
             .and_then(|url| url.to_file_path().ok())
             .ok_or_else(|| Error("invalid local lake URI".into()));
     }
-    Ok(std::path::PathBuf::from(uri))
+    Ok(PathBuf::from(uri))
 }
 
 fn finish(

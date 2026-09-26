@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Args;
 use pqbench::lake::{self, Lake, LakeTable};
@@ -49,10 +49,8 @@ pub(crate) async fn run(args: &LakeArgs) -> Result<(), CliError> {
         Some(value) => {
             if document::is_document(value).await {
                 stream_document(value, &filter, &mut emit).await?
-            } else if value.contains("://") {
-                write_discovered_uri(value, &filter, max_depth, &mut emit).await?
             } else {
-                write_discovered(Path::new(value), &filter, max_depth, &mut emit)?
+                write_discovered(value, &filter, max_depth, &mut emit).await?
             }
         }
     };
@@ -123,27 +121,14 @@ async fn stream_document(
     Ok(tables)
 }
 
-fn write_discovered(
-    root: &Path,
-    filter: &NameFilter,
-    max_depth: usize,
-    emit: &mut Emitter,
-) -> Result<usize, CliError> {
-    write_lake(
-        &lake::discover_bounded(root, Some(max_depth))?,
-        filter,
-        emit,
-    )
-}
-
-async fn write_discovered_uri(
+async fn write_discovered(
     uri: &str,
     filter: &NameFilter,
     max_depth: usize,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
     write_lake(
-        &lake::discover_uri_bounded(uri, &BTreeMap::new(), Some(max_depth)).await?,
+        &lake::discover_bounded(uri, &BTreeMap::new(), Some(max_depth)).await?,
         filter,
         emit,
     )
