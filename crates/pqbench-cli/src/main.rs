@@ -11,6 +11,7 @@ mod emit;
 mod lake;
 mod lz;
 mod table;
+mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.
@@ -33,7 +34,7 @@ Examples:
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
   pqbench table ./delta-table | jq -c 'select(.kind!="pqbench.table-file" or (.path|startswith("year=2024/")))' | pqbench dump ./sample
-  pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
+  pqbench bytemass data.parquet | pqbench viz -o report && xdg-open report.html
 "#
 )]
 struct Cli {
@@ -55,7 +56,7 @@ Examples:
   pqbench table ./delta-table | jq -c 'select(.kind!="pqbench.table-file" or (.path|startswith("year=2024/")))' | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
   pqbench bytemass table.ndjson.zst
-  pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
+  pqbench bytemass data.parquet | pqbench viz -o report && xdg-open report.html
 "#)]
     Bytemass(bytemass::BytemassArgs),
     /// fetch table metadata (detect the format, then load the log)
@@ -83,6 +84,14 @@ Examples:
   pqbench lake ./warehouse | pqbench table | pqbench dump ./mirror
 "#)]
     Dump(dump::DumpArgs),
+    /// collect a bytemass stream into a static HTML treemap
+    #[command(after_help = r#"Examples:
+  pqbench bytemass data.parquet | pqbench viz -o report
+  pqbench table ./delta-table | pqbench bytemass | pqbench viz -o report
+  pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
+  xdg-open report.html
+"#)]
+    Viz(viz::VizArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -95,6 +104,7 @@ async fn main() -> ExitCode {
         Command::Table(args) => table::run(&args).await,
         Command::Lake(args) => lake::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
+        Command::Viz(args) => viz::run(&args).await,
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

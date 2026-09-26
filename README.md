@@ -54,13 +54,6 @@ pqbench bytemass 'data/part-*.parquet'
 pqbench bytemass s3://bucket/table/part-0.parquet   # requires --features aws
 ```
 
-`--json` emits a flat per-column JSON table (file/row counts plus one record
-per column); `--d3` emits a self-contained HTML treemap:
-
-```sh
-pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
-```
-
 Remote reads fetch the object metadata, the Parquet trailer, and the
 serialized footer — never the data pages. `s3://` support is the `aws`
 feature; a URI whose backend is not compiled in fails at runtime with the
@@ -136,6 +129,18 @@ pqbench lake unity.json | pqbench table | pqbench bytemass
  "token": "...",
  "catalog": "main",
  "env": {"AWS_REGION": "us-east-1"}}
+```
+
+### viz
+
+Collect a bytemass stream into a static HTML page. The page embeds the
+measured rows and loads the d3 modules it uses from a CDN, drawing one
+treemap per table id. Open the HTML in a browser; no server is needed.
+
+```sh
+pqbench bytemass data.parquet | pqbench viz -o report
+pqbench table ./delta-table | pqbench bytemass | pqbench viz -o report
+xdg-open report.html
 ```
 
 ### dump
