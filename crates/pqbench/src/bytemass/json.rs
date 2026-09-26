@@ -4,8 +4,6 @@
 //! its on-disk byte totals and codecs. The `d3` page builder folds the same rows
 //! into its own treemap hierarchy, so the JSON carries no treemap shape.
 
-use serde_json;
-
 use super::aggregate::aggregate;
 use super::api::MassRow;
 use crate::third_party::parquet::api::Error;

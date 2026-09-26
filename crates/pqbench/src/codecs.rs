@@ -55,6 +55,11 @@ impl From<std::io::Error> for Error {
     }
 }
 
+/// Wrap a codec backend's error.
+fn codec_error(e: impl fmt::Display) -> Error {
+    Error::Codec(e.to_string())
+}
+
 /// A codec's valid compression levels, inclusive (AIP-145: levels are a
 /// colloquially-inclusive range, so `first_`/`last_` rather than half-open).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,12 +92,11 @@ impl CodecImpl for Snappy {
     }
 
     fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::snappy::compress(src).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::snappy::compress(src).map_err(codec_error)
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::snappy::decompress(src, out_cap)
-            .map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::snappy::decompress(src, out_cap).map_err(codec_error)
     }
 }
 
@@ -112,11 +116,11 @@ impl CodecImpl for Zstd {
     }
 
     fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::zstd::compress(src, level).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::zstd::compress(src, level).map_err(codec_error)
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::zstd::decompress(src, out_cap).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::zstd::decompress(src, out_cap).map_err(codec_error)
     }
 }
 
@@ -136,11 +140,11 @@ impl CodecImpl for Lz4 {
     }
 
     fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::lz4::compress(src).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::lz4::compress(src).map_err(codec_error)
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::lz4::decompress(src, out_cap).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::lz4::decompress(src, out_cap).map_err(codec_error)
     }
 }
 
@@ -160,12 +164,11 @@ impl CodecImpl for Gzip {
     }
 
     fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::flate2::compress(src, level).map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::flate2::compress(src, level).map_err(codec_error)
     }
 
     fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::flate2::decompress(src, out_cap)
-            .map_err(|e| Error::Codec(e.to_string()))
+        crate::third_party::flate2::decompress(src, out_cap).map_err(codec_error)
     }
 }
 

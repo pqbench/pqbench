@@ -106,17 +106,25 @@ pub struct Report {
 }
 
 /// Sort the rows by compress speed (fastest first) and wrap them in a [`Report`].
-pub fn into_report(mut rows: Vec<ReportRow>, columns: Vec<ColumnRow>) -> Report {
-    rows.sort_by(|a, b| {
-        b.compress_estimate
-            .megabytes_per_second(b.uncompressed_bytes as u64)
-            .partial_cmp(
-                &a.compress_estimate
-                    .megabytes_per_second(a.uncompressed_bytes as u64),
-            )
+pub fn into_report(rows: Vec<ReportRow>, columns: Vec<ColumnRow>) -> Report {
+    let mut ranked: Vec<(f64, ReportRow)> = rows
+        .into_iter()
+        .map(|row| (compress_speed(&row), row))
+        .collect();
+    ranked.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let rows = ranked.into_iter().map(|(_, row)| row).collect();
     Report { rows, columns }
+}
+
+/// The row's compress speed in megabytes per second.
+fn compress_speed(row: &ReportRow) -> f64 {
+    row.compress_estimate
+        .megabytes_per_second(row.uncompressed_bytes as u64)
 }
 
 #[cfg(test)]

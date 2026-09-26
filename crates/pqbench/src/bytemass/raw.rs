@@ -22,15 +22,15 @@ pub(super) struct FileRaw {
     pub columns: Vec<RawColumn>,
 }
 
-/// Lift parsed metadata into the raw per-chunk masses.
-pub(super) fn read(mass: &FileMass) -> FileRaw {
+/// Lift parsed metadata into the raw per-chunk masses, taking the column paths.
+pub(super) fn read(mass: FileMass) -> FileRaw {
     FileRaw {
         row_count: mass.row_count,
         columns: mass
             .columns
-            .iter()
+            .into_iter()
             .map(|c| RawColumn {
-                column: c.column.clone(),
+                column: c.column,
                 compressed_bytes: c.compressed_bytes,
             })
             .collect(),
@@ -64,7 +64,7 @@ mod tests {
             ],
             ..FileMass::default()
         };
-        let raw = read(&mass);
+        let raw = read(mass);
         assert_eq!(raw.row_count, 100);
         assert_eq!(raw.columns.len(), 2);
         assert_eq!(raw.columns[0].column, "text");
