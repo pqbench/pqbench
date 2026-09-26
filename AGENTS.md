@@ -147,7 +147,7 @@ analogy, convention, or precedent:
 - `crates/aipnaming/`, `crates/aipnaming-cli/` — the AIP naming linter and its
   `aipnaming` binary
 - `scripts/` — build / sample / smoke-test helpers
-- `docs/` — user documentation (e.g. `docker.md`)
+- `docs/` — user documentation (`demo.md`, `delta.md`, `iceberg.md`, `docker.md`)
 - `Makefile` + pre-commit hook — the gate
 
 ## References
