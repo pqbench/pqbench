@@ -69,8 +69,8 @@ pub struct DumpFile {
 pub struct DumpRequest {
     /// Files to read, in dump order.
     pub files: Vec<DumpFile>,
-    /// Row groups to take from each file.
-    pub row_groups: RowGroups,
+    /// Which row groups to take from each file.
+    pub row_group: RowGroups,
 }
 
 /// Rows from one dump: a column list and one record per row.
@@ -82,7 +82,7 @@ pub struct Dump {
     pub rows: Vec<Vec<Value>>,
 }
 
-/// Read rows from the named files, limited to [`DumpRequest::row_groups`].
+/// Read rows from the named files, limited to [`DumpRequest::row_group`].
 ///
 /// Local files are seeked. `s3://` URIs fetch the footer and the selected row
 /// groups, not the rest of the object, and need the `aws` feature.
@@ -95,7 +95,7 @@ pub async fn dump(request: &DumpRequest) -> Result<Dump, Error> {
     if files.is_empty() {
         return Err(Error("no files".into()));
     }
-    let limit = request.row_groups.limit();
+    let limit = request.row_group.limit();
     let mut columns = Vec::new();
     let mut rows = Vec::new();
     for file in &files {
@@ -133,7 +133,7 @@ pub async fn write_parquet(request: &DumpRequest) -> Result<Vec<u8>, Error> {
             env,
         })
         .collect();
-    parquet::write_parquet(&sources, request.row_groups.limit()).await
+    parquet::write_parquet(&sources, request.row_group.limit()).await
 }
 
 /// Prepend the `_table` / `_path` columns to one file's rows.

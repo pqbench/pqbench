@@ -163,7 +163,7 @@ impl Length for PartialFile {
 }
 
 impl PartialFile {
-    fn part_from(&self, start: u64) -> parquet::errors::Result<Bytes> {
+    fn part_bytes(&self, start: u64) -> parquet::errors::Result<Bytes> {
         for (offset, bytes) in &self.parts {
             let end = *offset + bytes.len() as u64;
             if start >= *offset && start < end {
@@ -180,11 +180,11 @@ impl ChunkReader for PartialFile {
     type T = Cursor<Bytes>;
 
     fn get_read(&self, start: u64) -> parquet::errors::Result<Self::T> {
-        Ok(Cursor::new(self.part_from(start)?))
+        Ok(Cursor::new(self.part_bytes(start)?))
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> parquet::errors::Result<Bytes> {
-        let bytes = self.part_from(start)?;
+        let bytes = self.part_bytes(start)?;
         if bytes.len() < length {
             return Err(parquet::errors::ParquetError::General(format!(
                 "byte range {start}+{length} was not fetched"

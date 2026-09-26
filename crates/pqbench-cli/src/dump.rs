@@ -47,7 +47,7 @@ pub(crate) async fn run(args: &DumpArgs) -> Result<(), CliError> {
     }
     let request = DumpRequest {
         files,
-        row_groups: RowGroups::parse(&args.row_groups)?,
+        row_group: RowGroups::parse(&args.row_groups)?,
     };
     let bytes = dump::write_parquet(&request).await?;
     write_bytes(args, &bytes)

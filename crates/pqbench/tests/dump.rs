@@ -18,7 +18,10 @@ fn parquet_fixture() -> String {
 }
 
 fn request(files: Vec<DumpFile>, row_groups: RowGroups) -> DumpRequest {
-    DumpRequest { files, row_groups }
+    DumpRequest {
+        files,
+        row_group: row_groups,
+    }
 }
 
 fn file(path: &str, uri: String) -> DumpFile {
