@@ -7,30 +7,30 @@
 use crate::third_party::parquet::api::FileMass;
 
 /// One column chunk's raw on-disk byte mass.
-pub(super) struct RawColumn {
+pub(super) struct RawColumn<'a> {
     /// Column path in schema form, e.g. `content` or `a.b`.
-    pub column: String,
+    pub column: &'a str,
     /// On-disk (compressed) bytes for this column chunk.
     pub compressed_bytes: u64,
 }
 
 /// A file's raw column masses, plus the row count that normalizes them.
-pub(super) struct FileRaw {
+pub(super) struct FileRaw<'a> {
     /// Number of rows in the file (shared denominator for per-row mass).
     pub row_count: u64,
     /// One entry per column chunk, in file order.
-    pub columns: Vec<RawColumn>,
+    pub columns: Vec<RawColumn<'a>>,
 }
 
 /// Lift parsed metadata into the raw per-chunk masses.
-pub(super) fn read(mass: &FileMass) -> FileRaw {
+pub(super) fn read(mass: &FileMass) -> FileRaw<'_> {
     FileRaw {
         row_count: mass.row_count,
         columns: mass
             .columns
             .iter()
             .map(|c| RawColumn {
-                column: c.column.clone(),
+                column: c.column.as_str(),
                 compressed_bytes: c.compressed_bytes,
             })
             .collect(),

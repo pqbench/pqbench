@@ -15,30 +15,51 @@ use super::raw;
 /// # Errors
 /// Returns [`Error`] if a row or byte total exceeds its integer type.
 pub fn aggregate(rows: &[MassRow]) -> Result<MassSummary, Error> {
-    let runs = file_runs(rows);
+    summarize(rows, &file_runs(rows))
+}
+
+/// Fold the rows into the summary, reusing the caller's per-file runs.
+///
+/// # Errors
+/// Returns [`Error`] if a row or byte total exceeds its integer type.
+fn summarize(rows: &[MassRow], runs: &[&MassRow]) -> Result<MassSummary, Error> {
     let mut row_count = 0;
-    for run in &runs {
+    for run in runs {
         row_count = checked_sum(row_count, run.row_count)?;
     }
     let mut columns: BTreeMap<String, ColumnMassSummary> = BTreeMap::new();
     for row in rows {
-        let total = columns
-            .entry(row.column.clone())
-            .or_insert_with(|| ColumnMassSummary {
-                column: row.column.clone(),
-                compressed_bytes: 0,
-                uncompressed_bytes: 0,
-                codecs: BTreeSet::new(),
-            });
-        total.compressed_bytes = checked_sum(total.compressed_bytes, row.compressed_bytes)?;
-        total.uncompressed_bytes = checked_sum(total.uncompressed_bytes, row.uncompressed_bytes)?;
-        total.codecs.insert(row.codec.clone());
+        if let Some(total) = columns.get_mut(&row.column) {
+            add_row(total, row)?;
+            continue;
+        }
+        let mut total = ColumnMassSummary {
+            column: row.column.clone(),
+            compressed_bytes: 0,
+            uncompressed_bytes: 0,
+            codecs: BTreeSet::new(),
+        };
+        add_row(&mut total, row)?;
+        columns.insert(row.column.clone(), total);
     }
     Ok(MassSummary {
         file_count: runs.len(),
         row_count,
         columns: columns.into_values().collect(),
     })
+}
+
+/// Fold one row's bytes and codec into a column's running total.
+fn add_row(total: &mut ColumnMassSummary, row: &MassRow) -> Result<(), Error> {
+    total.compressed_bytes = checked_sum(total.compressed_bytes, row.compressed_bytes)?;
+    total.uncompressed_bytes = checked_sum(total.uncompressed_bytes, row.uncompressed_bytes)?;
+    total.codecs.insert(row.codec.clone());
+    Ok(())
+}
+
+fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
+    left.checked_add(right)
+        .ok_or_else(|| Error("metadata totals exceed u64".into()))
 }
 
 /// One entry per contiguous run of rows from the same file: the run's first row.
@@ -57,16 +78,17 @@ fn file_runs(rows: &[MassRow]) -> Vec<&MassRow> {
 
 /// Build the byte-mass tree that text, JSON, and d3 render.
 pub(super) fn tree(rows: &[MassRow]) -> Result<MassNode, Error> {
-    let summary = aggregate(rows)?;
-    let mut tree = analytics::aggregate(&raw::read(&summary.file_mass()));
-    tree.label = label(rows);
+    let runs = file_runs(rows);
+    let summary = summarize(rows, &runs)?;
+    let mass = summary.file_mass();
+    let mut tree = analytics::aggregate(&raw::read(&mass));
+    tree.label = label(&runs);
     Ok(tree)
 }
 
 /// The root label: one file's name, or `N parquet files` for a collection.
-pub(super) fn label(rows: &[MassRow]) -> String {
-    let files = file_runs(rows);
-    match files.as_slice() {
+pub(super) fn label(runs: &[&MassRow]) -> String {
+    match runs {
         [] => "file".into(),
         [file] => Path::new(file.uri.as_str())
             .file_name()
@@ -74,11 +96,6 @@ pub(super) fn label(rows: &[MassRow]) -> String {
             .unwrap_or_else(|| "file".into()),
         files => format!("{} parquet files", files.len()),
     }
-}
-
-fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
-    left.checked_add(right)
-        .ok_or_else(|| Error("metadata totals exceed u64".into()))
 }
 
 #[cfg(test)]

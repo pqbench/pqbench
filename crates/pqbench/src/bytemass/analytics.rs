@@ -26,10 +26,10 @@ pub(super) struct MassNode {
 /// Chunks for the same column path are summed across row groups; the leaf
 /// value is that total divided by the file's row count (on-disk bytes per
 /// row). The hierarchy nests by the column path's `.`-separated segments.
-pub(super) fn aggregate(file: &FileRaw) -> MassNode {
+pub(super) fn aggregate(file: &FileRaw<'_>) -> MassNode {
     let mut totals: BTreeMap<&str, u64> = BTreeMap::new();
     for c in &file.columns {
-        *totals.entry(c.column.as_str()).or_insert(0) += c.compressed_bytes;
+        *totals.entry(c.column).or_insert(0) += c.compressed_bytes;
     }
     let denom = file.row_count.max(1) as f64;
     let mut root = branch("file");
@@ -87,15 +87,15 @@ mod tests {
             row_count: 100,
             columns: vec![
                 RawColumn {
-                    column: "text".into(),
+                    column: "text",
                     compressed_bytes: 40,
                 },
                 RawColumn {
-                    column: "text".into(),
+                    column: "text",
                     compressed_bytes: 60,
                 },
                 RawColumn {
-                    column: "a.b".into(),
+                    column: "a.b",
                     compressed_bytes: 100,
                 },
             ],
