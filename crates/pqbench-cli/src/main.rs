@@ -11,6 +11,7 @@ mod emit;
 mod help;
 mod lake;
 mod lz;
+mod profile;
 mod table;
 mod viz;
 
@@ -76,6 +77,13 @@ enum Command {
     )]
     Dump(dump::DumpArgs),
     #[command(
+        about = help::PROFILE_ABOUT,
+        long_about = help::PROFILE_LONG_ABOUT,
+        after_help = help::PROFILE_AFTER,
+        after_long_help = help::PROFILE_AFTER
+    )]
+    Profile(profile::ProfileArgs),
+    #[command(
         about = help::VIZ_ABOUT,
         long_about = help::VIZ_LONG_ABOUT,
         after_help = help::VIZ_AFTER,
@@ -94,6 +102,7 @@ async fn main() -> ExitCode {
         Command::Table(args) => table::run(&args).await,
         Command::Lake(args) => lake::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
+        Command::Profile(args) => profile::run(&args),
         Command::Viz(args) => viz::run(&args).await,
     };
     match result {

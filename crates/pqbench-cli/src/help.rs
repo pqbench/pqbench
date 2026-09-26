@@ -8,9 +8,10 @@ pub const ROOT_ABOUT: &str =
 /// Full summary for `pqbench --help`.
 pub const ROOT_LONG_ABOUT: &str = "\
 pqbench measures how Parquet files spend bytes (bytemass), how well codecs
-compress them (lz, compression), and what a Delta or Iceberg snapshot
-currently stores (table, lake). Commands compose on pipes: each writes a
-versioned JSON document the next command reads.
+compress them (lz, compression), what a Delta or Iceberg snapshot
+currently stores (table, lake), and what a decoded row sample holds
+(profile). Commands compose on pipes: each writes a versioned JSON
+document the next command reads.
 
   lake     →  pqbench.table-ref    list tables (or a catalog)
   table    →  pqbench.table        load one snapshot's log and files
@@ -33,8 +34,10 @@ Examples:
   pqbench table ./delta-table | pqbench dump ./sample
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
+  pqbench profile data.parquet --columns 'text' --top 5
 
 Documents (kind + version 1):
+  pqbench.profile        begin/end around pqbench.profile-column lines
   pqbench.lake-source    catalog endpoint + token; lake lists it
   pqbench.lake           tables (name, uri, env); table loads each log
   pqbench.table-ref      one table name + uri + env
@@ -257,3 +260,32 @@ See also:
   pqbench bytemass --help  on-disk bytes without a codec sweep
   pqbench --help
   docs/cli.md";
+
+pub const PROFILE_ABOUT: &str =
+    "Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)";
+
+pub const PROFILE_LONG_ABOUT: &str = "\
+Read up to --rows leading rows and decode every value, then report one
+column's nulls, distinct values, entropy, top values, lexical min/max,
+string lengths, runs, and monotonicity. Unlike bytemass (footer only),
+this decodes data and reads row values.
+
+--columns GLOB is repeatable and matches whole column names; the default
+keeps every column. --rows is `all` or `first:N` (default first:8192).
+--top bounds top_values per column (default 8).
+
+A pipe streams one `pqbench.profile-column` per column between begin and
+end. A TTY needs -o. --json is the same stream.";
+
+pub const PROFILE_AFTER: &str = "\
+Examples:
+  pqbench profile data.parquet
+  pqbench profile data.parquet --columns 'text' --top 5
+  pqbench profile data.parquet --rows first:1024 -o profile.ndjson.zst
+  pqbench profile data.parquet --rows all --json
+
+See also:
+  pqbench bytemass --help  footer byte masses without decoding rows
+  pqbench compression --help  codec sweep over encoded pages
+  pqbench --help
+  docs/profile.md  docs/cli.md";

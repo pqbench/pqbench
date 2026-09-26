@@ -12,9 +12,10 @@ use parquet::data_type::AsBytes;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
+use parquet::record::Field;
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, MetadataParser, Page, PageParser, ParquetFile,
+    ColumnChunk, ColumnMass, Error, FileMass, MetadataParser, Page, PageParser, ParquetFile, Sample,
 };
 
 /// The parquet-rs-backed page parser.
@@ -76,6 +77,41 @@ pub(crate) fn read_tail_masses(tail: &[u8], file_size: u64) -> Result<FileMass, 
     let mut reader = ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Optional);
     reader.try_parse_sized(&bytes::Bytes::copy_from_slice(tail), file_size)?;
     create_masses(&reader.finish()?)
+}
+
+/// Decode up to `max_rows` leading rows of a local file into stringified cells.
+pub(crate) fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error> {
+    let file = std::fs::File::open(path).map_err(|error| Error(error.to_string()))?;
+    let reader = SerializedFileReader::new(file)?;
+    let mut sample = Sample::default();
+    for row in reader.get_row_iter(None)? {
+        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
+            break;
+        }
+        let row = row?;
+        if sample.columns.is_empty() {
+            sample.columns = row
+                .get_column_iter()
+                .map(|(name, _)| name.clone())
+                .collect();
+        }
+        sample.rows.push(
+            row.get_column_iter()
+                .map(|(_, field)| field_text(field))
+                .collect(),
+        );
+    }
+    Ok(sample)
+}
+
+/// The display text of one decoded value; nulls have none.
+fn field_text(field: &Field) -> Option<String> {
+    match field {
+        Field::Null => None,
+        Field::Str(value) => Some(value.clone()),
+        Field::Bytes(value) => Some(String::from_utf8_lossy(value.data()).into_owned()),
+        other => Some(other.to_string()),
+    }
 }
 
 fn index_start(metadata: &ParquetMetaData) -> Option<u64> {
