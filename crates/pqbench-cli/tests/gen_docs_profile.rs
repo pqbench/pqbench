@@ -4,20 +4,12 @@
 #[path = "gen_support.rs"]
 mod support;
 
+#[rustfmt::skip]
 #[test]
 fn usage() {
     // usage, from line 9
     support::run("pqbench profile examples/quickstart.parquet", 10);
-    support::run(
-        "pqbench profile examples/quickstart.parquet --columns 'id' --top 5",
-        11,
-    );
-    support::run(
-        "pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst",
-        12,
-    );
-    support::run(
-        "pqbench profile examples/quickstart.parquet --rows all --json",
-        13,
-    );
+    support::run("pqbench profile examples/quickstart.parquet --columns 'id' --top 5", 11);
+    support::run("pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst", 12);
+    support::run("pqbench profile examples/quickstart.parquet --rows all --json", 13);
 }

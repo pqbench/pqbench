@@ -18,7 +18,7 @@ pub struct Step {
     /// Working directory relative to the repository root, or `None` for the root.
     pub directory: Option<String>,
     /// Environment variables from directives, in order.
-    pub environment: Vec<(String, String)>,
+    pub variables: Vec<(String, String)>,
 }
 
 /// The steps of a runnable block, in order.
@@ -28,7 +28,7 @@ pub fn block_steps(block: &Block) -> Vec<Step> {
     if !block.is_runnable() {
         return Vec::new();
     }
-    steps_of(block)
+    split_steps(block)
 }
 
 /// A whole-document plan: the runnable steps and the skipped blocks.
@@ -61,16 +61,16 @@ impl Plan {
                 });
                 continue;
             }
-            plan.steps.extend(steps_of(block));
+            plan.steps.extend(split_steps(block));
         }
         plan
     }
 }
 
 /// Split a runnable block into steps, applying its directives.
-fn steps_of(block: &Block) -> Vec<Step> {
+fn split_steps(block: &Block) -> Vec<Step> {
     let mut directory = None;
-    let mut environment = Vec::new();
+    let mut variables = Vec::new();
     let mut steps = Vec::new();
     let mut pending: Option<(String, usize)> = None;
 
@@ -79,7 +79,7 @@ fn steps_of(block: &Block) -> Vec<Step> {
         let trimmed = raw_line.trim();
 
         if let Some(directive) = Directive::parse(raw_line) {
-            apply(&mut directory, &mut environment, directive);
+            apply(&mut directory, &mut variables, directive);
             continue;
         }
         if trimmed.is_empty() {
@@ -101,7 +101,7 @@ fn steps_of(block: &Block) -> Vec<Step> {
                         command,
                         line,
                         directory: directory.clone(),
-                        environment: environment.clone(),
+                        variables: variables.clone(),
                     });
                 }
             }
@@ -114,7 +114,7 @@ fn steps_of(block: &Block) -> Vec<Step> {
                         command: trimmed.to_owned(),
                         line,
                         directory: directory.clone(),
-                        environment: environment.clone(),
+                        variables: variables.clone(),
                     });
                 }
             }
@@ -126,7 +126,7 @@ fn steps_of(block: &Block) -> Vec<Step> {
             command,
             line,
             directory,
-            environment,
+            variables,
         });
     }
     steps
@@ -139,11 +139,11 @@ fn continues(line: &str) -> bool {
 
 fn apply(
     directory: &mut Option<String>,
-    environment: &mut Vec<(String, String)>,
+    variables: &mut Vec<(String, String)>,
     directive: Directive,
 ) {
     match directive {
         Directive::Directory(path) => *directory = Some(path),
-        Directive::Environment { name, value } => environment.push((name, value)),
+        Directive::Environment { name, value } => variables.push((name, value)),
     }
 }

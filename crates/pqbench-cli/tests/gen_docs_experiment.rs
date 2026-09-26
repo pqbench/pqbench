@@ -4,17 +4,12 @@
 #[path = "gen_support.rs"]
 mod support;
 
+#[rustfmt::skip]
 #[test]
 fn usage() {
     // usage, from line 10
     support::run("pqbench experiment examples/quickstart.parquet", 11);
-    support::run(
-        "pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all",
-        12,
-    );
-    support::run(
-        "pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy",
-        13,
-    );
+    support::run("pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all", 12);
+    support::run("pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy", 13);
     support::run("pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst", 14);
 }

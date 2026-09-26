@@ -47,6 +47,11 @@ pub fn generate(source_name: &str, blocks: &[Block]) -> String {
     for test in tests {
         out.push_str(&test);
     }
+    // End with exactly one newline: rustfmt drops a trailing blank line even
+    // when the items above are `#[rustfmt::skip]`ed.
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
     out
 }
 
@@ -94,6 +99,9 @@ fn render_test(name: &str, line: usize, steps: &[Step], features: &[String]) -> 
     // token under `src/`; spell the attribute from parts so the emitted source
     // carries it without tripping the textual check.
     let cfg = "cfg";
+    // `#[rustfmt::skip]` keeps rustfmt from reformatting generated items, so
+    // the committed files match the generator byte-for-byte and the freshness
+    // check stays independent of the local rustfmt version.
     match features {
         [] => {}
         [feature] => out.push_str(&format!("#[{cfg}(feature = \"{feature}\")]\n")),
@@ -105,6 +113,7 @@ fn render_test(name: &str, line: usize, steps: &[Step], features: &[String]) -> 
             out.push_str(&format!("#[{cfg}(all({}))]\n", list.join(", ")));
         }
     }
+    out.push_str("#[rustfmt::skip]\n");
     out.push_str(&format!("#[test]\nfn {name}() {{\n"));
     if line > 0 {
         out.push_str(&format!("    // {name}, from line {line}\n"));
@@ -122,7 +131,7 @@ fn render_step(step: &Step) -> String {
     if let Some(directory) = &step.directory {
         out.push_str(&format!("    // in {directory}\n"));
     }
-    for (name, value) in &step.environment {
+    for (name, value) in &step.variables {
         out.push_str(&format!("    // env {name}={value}\n"));
     }
     out.push_str(&format!(

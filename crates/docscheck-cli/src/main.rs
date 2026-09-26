@@ -187,7 +187,7 @@ fn output_name(path: &Path) -> String {
 /// the docs.
 fn write_all(out: &Path, generated: &[Generated]) -> io::Result<()> {
     fs::create_dir_all(out)?;
-    fs::write(out.join(SUPPORT_NAME), formatted(SUPPORT))?;
+    fs::write(out.join(SUPPORT_NAME), SUPPORT)?;
     let keep: BTreeSet<&str> = generated.iter().map(|file| file.name.as_str()).collect();
     for entry in fs::read_dir(out)? {
         let entry = entry?;
@@ -200,47 +200,9 @@ fn write_all(out: &Path, generated: &[Generated]) -> io::Result<()> {
         }
     }
     for file in generated {
-        fs::write(out.join(&file.name), formatted(&file.contents))?;
+        fs::write(out.join(&file.name), &file.contents)?;
     }
     Ok(())
-}
-
-/// Format generated source with `rustfmt`, so `make fmt-check` is a no-op.
-///
-/// The emitted source is valid Rust already; rustfmt makes it canonical (line
-/// wrapping, argument layout) without the generator tracking rustfmt's rules.
-/// A missing or failing `rustfmt` returns the source unchanged.
-fn formatted(source: &str) -> String {
-    use std::io::Write as _;
-    use std::process::{Command, Stdio};
-
-    let Ok(mut child) = Command::new("rustfmt")
-        .arg("--edition")
-        .arg("2021")
-        .arg("--emit")
-        .arg("stdout")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return source.to_owned();
-    };
-    if child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(source.as_bytes())
-        .is_err()
-    {
-        return source.to_owned();
-    }
-    match child.wait_with_output() {
-        Ok(output) if output.status.success() => {
-            String::from_utf8(output.stdout).unwrap_or_else(|_| source.to_owned())
-        }
-        _ => source.to_owned(),
-    }
 }
 
 /// Whether a file name looks like one of ours: `gen_*.rs`.
@@ -251,10 +213,10 @@ fn is_generated(name: &str) -> bool {
 /// Whether the on-disk files match what generation would write.
 fn check_freshness(out: &Path, generated: &[Generated]) -> ExitCode {
     let mut stale = Vec::new();
-    compare(&mut stale, out, SUPPORT_NAME, &formatted(SUPPORT));
+    compare(&mut stale, out, SUPPORT_NAME, SUPPORT);
     let keep: BTreeSet<&str> = generated.iter().map(|file| file.name.as_str()).collect();
     for file in generated {
-        compare(&mut stale, out, &file.name, &formatted(&file.contents));
+        compare(&mut stale, out, &file.name, &file.contents);
     }
     if let Ok(entries) = fs::read_dir(out) {
         for entry in entries.flatten() {
@@ -298,7 +260,7 @@ fn run_emit(path: &Path) -> ExitCode {
     let blocks = MarkdownParser::new().parse(&source);
     print!(
         "{}",
-        formatted(&docscheck::generate(&path.display().to_string(), &blocks))
+        docscheck::generate(&path.display().to_string(), &blocks)
     );
     ExitCode::SUCCESS
 }

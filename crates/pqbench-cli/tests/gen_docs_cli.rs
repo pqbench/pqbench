@@ -5,6 +5,7 @@
 mod support;
 
 #[cfg(feature = "delta")]
+#[rustfmt::skip]
 #[test]
 fn what_to_run() {
     // what_to_run, from line 24

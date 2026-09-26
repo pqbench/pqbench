@@ -69,7 +69,7 @@ fn a_cd_directive_applies_to_later_steps() {
 fn env_directives_accumulate() {
     let plan = plan("```sh run\n# docscheck: env: A=1\n# docscheck: env: B=2\necho $A$B\n```\n");
     assert_eq!(
-        plan.steps[0].environment,
+        plan.steps[0].variables,
         vec![
             ("A".to_owned(), "1".to_owned()),
             ("B".to_owned(), "2".to_owned()),

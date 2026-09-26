@@ -62,7 +62,7 @@ struct Extract<'a> {
 
 impl Extract<'_> {
     fn walk(&mut self, node: Node) {
-        self.walk_with_heading(node, None);
+        self.walk_tagged(node, None);
     }
 
     /// Walk a node, carrying the heading text of the enclosing section.
@@ -70,7 +70,7 @@ impl Extract<'_> {
     /// tree-sitter nests a heading and everything under it in a `section`, so a
     /// heading applies to every block until the next heading at the same or a
     /// shallower level; the recursion passes the latest heading down.
-    fn walk_with_heading(&mut self, node: Node, heading: Option<String>) {
+    fn walk_tagged(&mut self, node: Node, heading: Option<String>) {
         let mut cursor = node.walk();
         let mut children: Vec<Node> = node.children(&mut cursor).collect();
 
@@ -88,11 +88,11 @@ impl Extract<'_> {
 
         for child in children.drain(..) {
             if child.kind() == "section" {
-                self.walk_with_heading(child, current.clone());
+                self.walk_tagged(child, current.clone());
             } else if child.kind() == "fenced_code_block" {
                 self.record(child, current.clone());
             } else {
-                self.walk_with_heading(child, current.clone());
+                self.walk_tagged(child, current.clone());
             }
         }
     }

@@ -4,6 +4,7 @@
 #[path = "gen_support.rs"]
 mod support;
 
+#[rustfmt::skip]
 #[test]
 fn agent_skills() {
     // agent_skills, from line 7
