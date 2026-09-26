@@ -157,6 +157,23 @@ jobs:
           # The gate: exit non-zero if any finding remains.
           ./target/release/aipnaming crates/ > /dev/null
 
+  # The documented `pqbench ...` commands are generated into
+  # `crates/pqbench-cli/tests/gen_*.rs` and run by `make test` like any other
+  # integration test. This job only checks the generated files match the
+  # Markdown: edit a doc block and forget to `make sync-docs`, and it fails.
+  docs:
+    name: docs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: docs
+      - run: make check-docs
+
   # The `third_party` wrappers must keep their feature flags in `impl.rs`; an
   # `api.rs` always compiles and fails at runtime without its feature. A plain
   # textual check (no build or cache needed) that renders findings as inline
@@ -227,7 +244,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [fmt, clippy, test, aipnaming, isolation, lfs, python]
+    needs: [fmt, clippy, test, aipnaming, docs, isolation, lfs, python]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a required job did not succeed

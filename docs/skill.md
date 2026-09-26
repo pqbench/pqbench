@@ -4,7 +4,7 @@
 agent loads it the same way it loads `--help`: run the command, read
 the markdown.
 
-```sh
+```sh run
 pqbench skill
 pqbench skill parquet-advisor
 pqbench skill parquet-advisor recipes

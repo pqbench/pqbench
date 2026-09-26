@@ -131,12 +131,18 @@ analogy, convention, or precedent:
 - Gate (pre-commit): `make check` = `fmt-check` + `clippy -D warnings` + `test`.
   `make check-python` builds the PyO3 wheel and runs its tests; CI runs it,
   the local gate does not (it compiles libpython and the delta feature).
+- Docs: the runnable `pqbench ...` commands in the Markdown are generated into
+  `crates/pqbench-cli/tests/gen_*.rs` and run by `make test`. Edit a doc block,
+  run `make sync-docs`; `make check-docs` fails when the generated files are
+  stale. A block runs only when its fence carries `run` (e.g. ` ```sh run `,
+  or ` ```sh run delta ` to gate the test on a cargo feature).
 - Features: pass `CARGO_FEATURES` to any target (quote values with a space),
   e.g. `make check CARGO_FEATURES=--all-features`,
   `make test CARGO_FEATURES="--features aws"`.
 - CI (`.github/workflows/ci.yml`) runs fmt, one clippy over `--all-features`,
   and a test matrix over default/aws/delta/iceberg/all-features (default and
-  all-features also on arm64). Ignored e2e run via `TEST_FLAGS=--include-ignored`.
+  all-features also on arm64), plus a `docs` job that runs `make check-docs`.
+  Ignored e2e run via `TEST_FLAGS=--include-ignored`.
 - CI overrides `CXXFLAGS` with a portable baseline (no `-march=native`) so cached
   codec objects are valid on any runner. Do not remove it: native-tuned objects
   restored from another runner's cache caused SIGILL.
@@ -148,6 +154,10 @@ analogy, convention, or precedent:
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
 - `crates/aipnaming/`, `crates/aipnaming-cli/` — the AIP naming linter and its
   `aipnaming` binary
+- `crates/docscheck/`, `crates/docscheck-cli/` — generate Rust tests from the
+  runnable Markdown blocks; `docscheck sync` writes `tests/gen_*.rs`
+- `crates/pqbench-cli/tests/gen_*.rs` — generated documentation tests (do not
+  edit by hand; `make sync-docs`)
 - `python/` — PyO3 wheel (`pqbench-py`); one function per CLI command. Not a
   workspace member (Docker builds the CLI only). `make check-python` builds
   and tests it

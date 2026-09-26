@@ -6,11 +6,11 @@ data — `profile` reads row values and decodes them.
 
 ## Usage
 
-```sh
-pqbench profile FILE...
-pqbench profile data.parquet --columns 'text' --top 5
-pqbench profile data.parquet --rows first:1024 -o profile.ndjson.zst
-pqbench profile data.parquet --rows all --json
+```sh run
+pqbench profile examples/quickstart.parquet
+pqbench profile examples/quickstart.parquet --columns 'id' --top 5
+pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst
+pqbench profile examples/quickstart.parquet --rows all --json
 ```
 
 Inputs are local Parquet files. Each file is opened, up to `--rows` leading

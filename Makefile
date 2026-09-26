@@ -15,7 +15,7 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse \
 	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity lakehouse-seed-iceberg \
-	check isolation lfs-check check-python clean
+	check isolation lfs-check check-python sync-docs check-docs clean
 
 all: fmt build test lint
 
@@ -91,6 +91,15 @@ check-python:
 	python/.venv/bin/python -m pip install -q maturin
 	. python/.venv/bin/activate && CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" maturin develop --manifest-path python/Cargo.toml
 	python/.venv/bin/python -m unittest discover -s python/tests
+
+# Turn the documented `pqbench ...` commands into Rust integration tests under
+# crates/pqbench-cli/tests/gen_*.rs. Committed, so `make test` runs them like any
+# other test; `make check-docs` fails if they are out of date with the Markdown.
+DOCS ?= README.md docs/ skills/
+sync-docs:
+	$(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
+check-docs:
+	$(CARGO) run -q -p docscheck-cli -- check $(DOCS)
 
 clean:
 	$(CARGO) clean

@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/aipnaming",
     "crates/aipnaming-cli",
+    "crates/docscheck",
+    "crates/docscheck-cli",
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
@@ -10,6 +12,8 @@ exclude = ["python"]
 default-members = [
     "crates/aipnaming",
     "crates/aipnaming-cli",
+    "crates/docscheck",
+    "crates/docscheck-cli",
     "crates/pqbench",
     "crates/pqbench-cli",
 ]
@@ -24,6 +28,7 @@ repository = "https://github.com/pqbench/pqbench"
 
 [workspace.dependencies]
 aipnaming = { version = "0.0.1", path = "crates/aipnaming" }
+docscheck = { version = "0.0.1", path = "crates/docscheck" }
 pqbench = { version = "0.0.1", path = "crates/pqbench" }
 
 [profile.dev]

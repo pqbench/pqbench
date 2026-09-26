@@ -7,11 +7,11 @@ instead of predicting its compression.
 
 ## Usage
 
-```sh
-pqbench experiment sample.parquet
-pqbench experiment sample.parquet --rewrite sort:text --aim all
-pqbench experiment sample.parquet --rewrite 'sort:country,city' --rewrite codec:snappy
-pqbench experiment sample.parquet --rewrite 'sort:id;dictionary:off' -o trials.ndjson.zst
+```sh run
+pqbench experiment examples/quickstart.parquet
+pqbench experiment examples/quickstart.parquet --rewrite sort:id --aim all
+pqbench experiment examples/quickstart.parquet --rewrite 'sort:id' --rewrite codec:snappy
+pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst
 ```
 
 | Flag | Meaning |

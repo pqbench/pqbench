@@ -24,20 +24,20 @@ fixture in the test suite. Catalog pipes need `make lakehouse`.
 decision. The stream is one JSON record per line, so `jq` prunes file records
 by `path`, and `sort`, `head`, or `awk` sample by name:
 
-```sh
-# one partition: keep the begin/end records, drop the other files
-pqbench table ./delta-table \
-  | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("year=2024/")))' \
+```sh run delta
+# one file: keep the begin/end records, drop the file records
+pqbench table docker/e2e-lakehouse/table \
+  | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("part-")))' \
   | pqbench bytemass --json
 
 # first N by path: sort the file URIs, cap them, then measure
-pqbench table ./delta-table \
+pqbench table docker/e2e-lakehouse/table \
   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
   | sort | head -10 \
   | xargs pqbench bytemass --json
 
 # every Nth file
-pqbench table ./delta-table \
+pqbench table docker/e2e-lakehouse/table \
   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
   | awk 'NR % 2 == 1' \
   | xargs pqbench bytemass --json
@@ -50,10 +50,10 @@ local-only: pass credentials in the environment when you use `xargs`.
 The same filtered stream copies the selected files to disk with `dump`, keeping
 each table-relative path:
 
-```sh
-pqbench table ./delta-table \
-  | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("year=2024/")))' \
-  | pqbench dump ./sample
+```sh run delta
+pqbench table docker/e2e-lakehouse/table \
+  | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("part-")))' \
+  | pqbench dump /tmp/sample
 ```
 
 ## A lake of tables
@@ -61,9 +61,9 @@ pqbench table ./delta-table \
 A directory, `file://` URI, or `s3://` prefix is walked until a table marker
 that `pqbench table` also accepts. Children of a table are not searched.
 
-```sh
-pqbench lake docker/e2e-lakehouse -o lake.ndjson.zst
-pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass | pqbench viz -o report
+```sh run delta
+pqbench lake docker/e2e-lakehouse -o /tmp/lake.ndjson.zst
+pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![pqbench lake CLI walkthrough](images/pqbench-lake.gif)
@@ -77,8 +77,8 @@ The image is one still of that page, not a lake click-through:
 
 ![one table viz page](images/pqbench-lake-treemap.gif)
 
-```sh
-pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o report
+```sh run delta
+pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ## Catalogs
@@ -96,10 +96,10 @@ Those documents point at the local stand. See
 
 ## One Parquet file
 
-```sh
-pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o bytemass.ndjson.zst
+```sh run
+pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.zst
 pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --json
-pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench viz -o report
+pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench viz -o /tmp/report
 ```
 
 ![pqbench CLI walkthrough](images/pqbench-bytemass.gif)
@@ -111,10 +111,10 @@ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | p
 `pqbench table` needs `--features delta` to load a log. A TTY prints a
 summary and requires `-o`; a pipe streams NDJSON for `bytemass`:
 
-```sh
-pqbench table docker/e2e-lakehouse/table -o table.ndjson.zst
+```sh run delta
+pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
 pqbench table docker/e2e-lakehouse/table | pqbench bytemass
-pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o report
+pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![pqbench table CLI walkthrough](images/pqbench-delta-bytemass.gif)

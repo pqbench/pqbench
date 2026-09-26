@@ -23,8 +23,8 @@ The published image is a portable baseline build; see
 
 lzbench-style compression benchmark over raw file bytes:
 
-```sh
-pqbench lz file.bin -c zstd@3 --samples 10
+```sh run
+pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0
 ```
 
 `--json` emits the same report as composable JSON.
@@ -34,8 +34,8 @@ pqbench lz file.bin -c zstd@3 --samples 10
 The same codec sweep over the encoded pages of a **NONE-compressed** parquet
 file:
 
-```sh
-pqbench compression data.parquet --per-column
+```sh run
+pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0
 ```
 
 `--json` emits the same report as composable JSON (the per-column rows are
@@ -48,11 +48,13 @@ Reads only the footer metadata, so it works on any file regardless of
 compression. Multiple paths, quoted glob masks, and storage URIs are
 aggregated:
 
-```sh
-pqbench bytemass data.parquet
-pqbench bytemass 'data/part-*.parquet'
-pqbench bytemass s3://bucket/table/part-0.parquet   # requires --features aws
+```sh run
+pqbench bytemass examples/quickstart.parquet
+pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet
 ```
+
+An `s3://` URI is the same command with the `aws` feature:
+`pqbench bytemass s3://bucket/table/part-0.parquet`.
 
 Remote reads fetch the object metadata, the Parquet trailer, and the
 serialized footer — never the data pages. `s3://` support is the `aws`
@@ -75,10 +77,10 @@ table and let the shell fan out (`xargs -P`). A terminal prints a short
 summary and requires `-o` (zstd
 NDJSON):
 
-```sh
-pqbench table ./path/to/table -o table.ndjson.zst
-pqbench table ./path/to/table | pqbench bytemass
-pqbench bytemass table.ndjson.zst
+```sh run delta
+pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
+pqbench table docker/e2e-lakehouse/table | pqbench bytemass
+pqbench bytemass /tmp/table.ndjson.zst
 ```
 
 Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
@@ -117,11 +119,16 @@ namespaces and tables, then `loadTable` for each metadata location.
 leading name is a literal. `token` is the Databricks bearer token. `env`
 holds `AWS_*` storage credentials and is copied onto each table-ref.
 
-```sh
-pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
-pqbench lake s3://bucket/warehouse --max-depth 2 | pqbench table | pqbench bytemass
-pqbench lake unity.json | pqbench table | pqbench bytemass
+```sh run delta
+pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*'
+pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass
 ```
+
+The committed fixture tree also holds an Iceberg table under
+`docker/e2e-lakehouse/iceberg/`; measuring it needs the stand
+(`make lakehouse`). A catalog is listed from a `pqbench.lake-source` document
+(`pqbench lake unity.json | pqbench table | pqbench bytemass`), and `s3://`
+needs `--features aws`.
 
 ```json
 {"kind": "pqbench.lake-source", "version": 1,
@@ -137,22 +144,25 @@ Collect a bytemass stream into a static HTML page. The page embeds the
 measured rows and loads the d3 modules it uses from a CDN, drawing one
 treemap per table id. Open the HTML in a browser; no server is needed.
 
-```sh
-pqbench bytemass data.parquet | pqbench viz -o report
-pqbench table ./delta-table | pqbench bytemass | pqbench viz -o report
-xdg-open report.html
+```sh run delta
+pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
+
+The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
 
 ### dump
 
 Copy the Parquet files a table names to a local directory — an `aws s3 cp`-style
 fetch for a Delta or Iceberg table, local or remote:
 
-```sh
-pqbench table ./delta-table | pqbench dump ./sample
-pqbench dump ./sample s3://bucket/table
-pqbench lake ./warehouse | pqbench table | pqbench dump ./mirror
+```sh run delta
+pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample
 ```
+
+`pqbench dump /tmp/sample s3://bucket/table` fetches from S3 (needs the `aws`
+feature), and `pqbench lake docker/e2e-lakehouse --include table | pqbench
+table | pqbench dump /tmp/mirror` mirrors a whole lake.
 
 Each file lands at its table-relative path, so partition directories are
 preserved. Which files to keep is a shell decision on the `table` stream
@@ -187,8 +197,9 @@ pqbench.viz(rows, output="report")
 ## Contributing
 
 PRs welcome. The gate is `make check` (`fmt-check` + `clippy -D warnings` +
-`test`). The PyO3 wheel is `make check-python`. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for the loop, style, and naming rules.
+`test`). The PyO3 wheel is `make check-python`. The runnable commands on this
+page are generated into tests by `docscheck` (`make sync-docs`); see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the loop, style, and naming rules.
 
 ## License
 
