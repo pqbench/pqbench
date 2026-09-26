@@ -86,10 +86,12 @@ fn index_start(metadata: &ParquetMetaData) -> Option<u64> {
         .filter_map(|column| {
             let column_index = column
                 .column_index_offset()
-                .and_then(|offset| u64::try_from(offset).ok());
+                .and_then(|offset| u64::try_from(offset).ok())
+                .filter(|offset| *offset > 0);
             let offset_index = column
                 .offset_index_offset()
-                .and_then(|offset| u64::try_from(offset).ok());
+                .and_then(|offset| u64::try_from(offset).ok())
+                .filter(|offset| *offset > 0);
             match (column_index, offset_index) {
                 (Some(left), Some(right)) => Some(left.min(right)),
                 (Some(offset), None) | (None, Some(offset)) => Some(offset),

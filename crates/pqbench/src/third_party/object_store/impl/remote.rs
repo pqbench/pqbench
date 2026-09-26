@@ -76,6 +76,13 @@ pub(crate) fn open_remote(url: &Url, options: &[(String, String)]) -> Result<Obj
     })))
 }
 
+/// One pooled client for every signed HEAD, so connections are reused across
+/// the files of a table.
+fn head_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 /// object_store 0.13 maps cache/content headers on HEAD but drops
 /// `x-amz-storage-class`. Sign a HEAD and read the header ourselves.
 async fn head_object(
@@ -90,7 +97,7 @@ async fn head_object(
         )
         .await
         .map_err(remote_error)?;
-    let response = reqwest::Client::new()
+    let response = head_client()
         .head(url)
         .send()
         .await

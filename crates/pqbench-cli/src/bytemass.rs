@@ -131,15 +131,17 @@ async fn measure_file(
         indexes,
     })
     .await?;
-    write_file(emit, id, &file, &rows)?;
-    for row in &rows {
-        if file.size_bytes != 0 && row.size_bytes != file.size_bytes {
+    if file.size_bytes != 0 {
+        if let Some(row) = rows.iter().find(|row| row.size_bytes != file.size_bytes) {
             return Err(format!(
                 "active file size differs from log: {} (expected {}, found {})",
                 file.path, file.size_bytes, row.size_bytes
             )
             .into());
         }
+    }
+    write_file(emit, id, &file, &rows)?;
+    for row in &rows {
         write_row(emit, id, row, stats)?;
     }
     Ok(())
