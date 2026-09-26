@@ -30,7 +30,8 @@ $ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iteratio
 {"kind":"pqbench.lz","event":"end","row_count":1}
 ```
 
-`--json` emits the same report as composable JSON.
+`--format json` (or `--json`) emits the same report as composable NDJSON;
+a terminal prints the sweep as a table.
 
 ### compression
 
@@ -49,8 +50,9 @@ $ pqbench compression examples/quickstart.parquet --per-column --samples 1 --war
 A sweep ranks codecs by measured speed, which varies run to run, so the
 transcript sorts the rows by compressed size to stay reproducible.
 
-`--json` emits the same report as composable JSON (the per-column rows are
-included when `--per-column` is set).
+`--format json` (or `--json`) emits the same report as composable NDJSON (the
+per-column rows are included when `--per-column` is set); a terminal prints
+the report and per-column tables.
 
 ### bytemass
 
@@ -76,8 +78,9 @@ serialized footer — never the data pages. `s3://` support is the `aws`
 feature; a URI whose backend is not compiled in fails at runtime with the
 missing feature named. The library entry point (`bytemass::bytemass`) is
 always available and never feature-gated. A pipe streams one NDJSON row per
-column as each file is measured; a terminal prints a short summary and
-requires `-o` (zstd NDJSON). Selecting which files to measure is a shell job:
+column as each file is measured; a terminal prints the same rows as a table.
+`--format json` (or `--json`) forces the stream and `-o` also writes it.
+Selecting which files to measure is a shell job:
 filter the `table` stream with `jq`, `sort`, and `head` before `bytemass` (see
 [docs/demo.md](docs/demo.md)).
 
@@ -88,9 +91,8 @@ transaction log and the active files. For Iceberg it is the metadata JSON and
 Avro manifests. A pipe writes NDJSON. Every line carries a table `id` so
 `bytemass` can attribute rows. One `table` process loads one table at a time
 — a table is the work unit, so scan a catalog by running one process per
-table and let the shell fan out (`xargs -P`). A terminal prints a short
-summary and requires `-o` (zstd
-NDJSON):
+table and let the shell fan out (`xargs -P`). A terminal prints the active
+files as a table; a pipe streams NDJSON (`--format json` also forces it):
 
 ```console run delta
 $ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst

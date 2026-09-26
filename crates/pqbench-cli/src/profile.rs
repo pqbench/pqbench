@@ -5,7 +5,7 @@ use pqbench::profile::{self, ColumnProfile, ProfileRequest};
 use pqbench::third_party::parquet::api::read_sample;
 use serde::Serialize;
 
-use crate::emit::Emitter;
+use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
 
 /// Arguments for `profile`: read and decode a bounded row sample, then stream
@@ -14,12 +14,15 @@ use crate::CliError;
 pub(crate) struct ProfileArgs {
     /// parquet paths to sample
     inputs: Vec<String>,
-    /// write the zstd NDJSON stream (required on a terminal)
+    /// also write the zstd NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// stream NDJSON (same as a pipe; kept for scripts)
+    /// stream NDJSON (same as --format json; kept for scripts)
     #[arg(long = "json")]
     json: bool,
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
     /// column name glob, repeatable; default: every column
     #[arg(long = "columns", value_name = "GLOB")]
     columns: Vec<String>,
@@ -32,7 +35,6 @@ pub(crate) struct ProfileArgs {
 }
 
 pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
-    let _ = args.json;
     if args.inputs.is_empty() {
         return Err("profile needs parquet files".into());
     }
@@ -41,8 +43,8 @@ pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
         columns: args.columns.clone(),
         top: args.top,
     };
-    let mut emit = Emitter::open("profile", args.output.as_deref())?;
-    emit.write(&BeginRecord {
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
+    emit.write_event(&BeginRecord {
         kind: "pqbench.profile",
         version: 1,
         event: "begin",
@@ -54,7 +56,7 @@ pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
         let report = profile::profile(&sample, &request)?;
         row_count += report.row_count;
         for column in &report.columns {
-            emit.write(&ColumnRecord {
+            emit.write_row(&ColumnRecord {
                 kind: "pqbench.profile-column",
                 id: input,
                 column,
@@ -62,7 +64,7 @@ pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
             column_count += 1;
         }
     }
-    emit.write(&EndRecord {
+    emit.write_event(&EndRecord {
         kind: "pqbench.profile",
         event: "end",
         file_count: args.inputs.len(),
@@ -111,6 +113,30 @@ struct ColumnRecord<'a> {
     id: &'a str,
     #[serde(flatten)]
     column: &'a ColumnProfile,
+}
+
+impl Row for ColumnRecord<'_> {
+    const HEADER: &'static [&'static str] = &["id", "column", "kind", "values", "nulls", "ndv"];
+    const ALIGN: &'static [Align] = &[
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let column = self.column;
+        vec![
+            self.id.to_string(),
+            column.column.clone(),
+            column.physical_kind.clone(),
+            column.num_values.to_string(),
+            column.null_count.to_string(),
+            column.ndv.to_string(),
+        ]
+    }
 }
 
 #[derive(Serialize)]

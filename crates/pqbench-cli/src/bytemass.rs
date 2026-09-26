@@ -8,7 +8,7 @@ use pqbench::table::TableFile;
 use serde::Serialize;
 
 use crate::document::{self, Record};
-use crate::emit::Emitter;
+use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
 
 /// Arguments for `bytemass`.
@@ -16,12 +16,15 @@ use crate::CliError;
 pub(crate) struct BytemassArgs {
     /// parquet paths, a `pqbench.table` document, or `-` for standard input
     inputs: Vec<String>,
-    /// write the zstd NDJSON stream (required on a terminal)
+    /// also write the zstd NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// stream NDJSON (same as a pipe; kept for scripts)
+    /// stream NDJSON (same as --format json; kept for scripts)
     #[arg(long = "json")]
     json: bool,
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
     /// also load ColumnIndex/OffsetIndex (one extra range per file)
     #[arg(long)]
     indexes: bool,
@@ -29,7 +32,6 @@ pub(crate) struct BytemassArgs {
 
 /// Build the typed request, measure, and stream each row as it is ready.
 pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
-    let _ = args.json;
     if args.inputs.is_empty() {
         if std::io::stdin().is_terminal() {
             return Err("bytemass needs parquet files or a table document".into());
@@ -43,11 +45,11 @@ pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
 }
 
 async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliError> {
-    let mut emit = Emitter::open("bytemass", args.output.as_deref())?;
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
     let mut envs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut open: BTreeSet<String> = BTreeSet::new();
-    emit.write(&BeginRecord {
+    emit.write_event(&BeginRecord {
         kind: "pqbench.bytemass",
         version: 1,
         event: "begin",
@@ -182,7 +184,7 @@ fn write_file(
     stat.storage_class = object.and_then(|row| row.storage_class.clone());
     stat.partition_values = file.partition_values.clone();
     stat.stats = file.stats.clone();
-    emit.write(&FileRecord {
+    emit.write_event(&FileRecord {
         kind: "pqbench.bytemass-file",
         file: &stat,
     })
@@ -193,9 +195,9 @@ async fn measure(
     env: BTreeMap<String, String>,
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
-    let mut emit = Emitter::open("bytemass", args.output.as_deref())?;
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    emit.write(&BeginRecord {
+    emit.write_event(&BeginRecord {
         kind: "pqbench.bytemass",
         version: 1,
         event: "begin",
@@ -221,7 +223,7 @@ fn write_row(
     stats: &mut MassStats,
 ) -> Result<(), CliError> {
     stats.add(row);
-    emit.write(&RowRecord {
+    emit.write_row(&RowRecord {
         kind: "pqbench.bytemass-row",
         id,
         row,
@@ -233,7 +235,7 @@ fn finish_stream(
     stats: &MassStats,
     output: Option<&std::path::Path>,
 ) -> Result<(), CliError> {
-    emit.write(&EndRecord {
+    emit.write_event(&EndRecord {
         kind: "pqbench.bytemass",
         event: "end",
         file_count: stats.file_rows.len(),
@@ -293,6 +295,31 @@ struct RowRecord<'a> {
     id: &'a str,
     #[serde(flatten)]
     row: &'a bytemass::MassRow,
+}
+
+impl Row for RowRecord<'_> {
+    const HEADER: &'static [&'static str] =
+        &["column", "type", "codec", "encodings", "bytes", "values"];
+    const ALIGN: &'static [Align] = &[
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let row = self.row;
+        vec![
+            row.column.clone(),
+            row.physical_type.clone(),
+            row.codec.clone(),
+            row.encodings.join(","),
+            row.compressed_bytes.to_string(),
+            row.num_values.to_string(),
+        ]
+    }
 }
 
 #[derive(Serialize)]

@@ -10,8 +10,9 @@ pqbench table ./iceberg-table | pqbench bytemass
 pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
 ```
 
-A TTY prints a short summary and requires `-o` (zstd NDJSON). A pipe streams
-NDJSON (`pqbench.table-ref`, `pqbench.table` begin/file/end, `pqbench.bytemass-row`).
+A terminal prints an aligned table; a pipe streams NDJSON
+(`pqbench.table-ref`, `pqbench.table` begin/file/end, `pqbench.bytemass-row`).
+`--format json` forces the stream, and `-o` also writes it.
 `pqbench viz` collects the bytemass stream into a static HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under
@@ -113,8 +114,8 @@ $ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet |
 
 ## One Delta snapshot
 
-`pqbench table` needs `--features delta` to load a log. A TTY prints a
-summary and requires `-o`; a pipe streams NDJSON for `bytemass`:
+`pqbench table` needs `--features delta` to load a log. A terminal prints the
+active files as a table; a pipe streams NDJSON for `bytemass`:
 
 ```console run delta
 $ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst

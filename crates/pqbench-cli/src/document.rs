@@ -5,7 +5,8 @@
 //! `pqbench.table-ref`, `pqbench.remote-source`, `pqbench.bytemass`, and
 //! `pqbench.bytemass-row`. A pipe writes NDJSON;
 //! every record carries a table `id` so rows stay attributable. A terminal
-//! prints a short summary and requires `-o` (zstd NDJSON). A single
+//! prints an aligned table; a pipe streams NDJSON (override with `--format`).
+//! `-o` also writes the zstd NDJSON stream. A single
 //! `pqbench.table` object is still accepted. Credentials stay on the document
 //! so a pipe can carry them between processes.
 
@@ -14,7 +15,7 @@ use std::ops::AsyncFnMut;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-use crate::emit::Emitter;
+use crate::emit::{Align, Emitter, Row};
 
 use pqbench::bytemass::MassRow;
 use pqbench::lake::Lake;
@@ -410,7 +411,7 @@ pub(crate) fn write_table_begin(
     id: &str,
     info: &TableInfo,
 ) -> Result<(), CliError> {
-    emit.write(&BeginRecord {
+    emit.write_event(&BeginRecord {
         kind: "pqbench.table",
         version: 1,
         event: "begin",
@@ -422,7 +423,7 @@ pub(crate) fn write_table_begin(
         env: &info.env,
     })?;
     for commit in &info.log {
-        emit.write(&CommitRecord {
+        emit.write_event(&CommitRecord {
             kind: "pqbench.table-log",
             id,
             commit,
@@ -437,7 +438,7 @@ pub(crate) fn write_table_file(
     id: &str,
     file: &TableFile,
 ) -> Result<(), CliError> {
-    emit.write(&FileRecord {
+    emit.write_row(&FileRecord {
         kind: "pqbench.table-file",
         id,
         file,
@@ -450,7 +451,7 @@ pub(crate) fn write_table_end(
     id: &str,
     partitions: &[PartitionMass],
 ) -> Result<(), CliError> {
-    emit.write(&EndRecord {
+    emit.write_event(&EndRecord {
         kind: "pqbench.table",
         event: "end",
         id,
@@ -490,6 +491,22 @@ struct FileRecord<'a> {
     id: &'a str,
     #[serde(flatten)]
     file: &'a TableFile,
+}
+
+impl Row for FileRecord<'_> {
+    const HEADER: &'static [&'static str] = &["path", "size_bytes", "num_records"];
+    const ALIGN: &'static [Align] = &[Align::Left, Align::Right, Align::Right];
+
+    fn cells(&self) -> Vec<String> {
+        vec![
+            self.file.path.clone(),
+            self.file.size_bytes.to_string(),
+            self.file
+                .stats
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |stats| stats.num_records.to_string()),
+        ]
+    }
 }
 
 #[derive(Serialize)]

@@ -21,8 +21,9 @@ next command reads.
   dump     →  Parquet files        copy the files the table names
   skill    →  markdown             bundled agent recipes (write / DDL / codec)
 
-A TTY prints a short summary and requires `-o` (zstd NDJSON). A pipe
-streams NDJSON. Subcommand help is local (`pqbench table --help`).
+A terminal prints an aligned table; a pipe streams NDJSON. `--format
+table|json` overrides either. `-o` also writes the zstd NDJSON stream.
+Subcommand help is local (`pqbench table --help`).
 Auth, documents, and format skills are here.
 
 Guide: docs/cli.md";
@@ -109,8 +110,9 @@ Works on compressed files (HEAD + ranged GETs on a URI).
 Inputs: parquet paths, quoted globs, s3://, a pqbench.table or loaded
 pqbench.lake, or '-' / stdin. A lake must go through `pqbench table` first.
 
-A pipe streams one `pqbench.bytemass-row` per column chunk. A TTY needs
-`-o`. `--json` is the same stream. Pipe the stream to `viz`.";
+A terminal prints one row per column chunk as a table; a pipe streams the
+same rows as `pqbench.bytemass-row` NDJSON. `--format json` (or `--json`)
+forces the stream, and `-o` also writes it. Pipe the stream to `viz`.";
 
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
@@ -235,7 +237,8 @@ pub const LZ_LONG_ABOUT: &str = "\
 Compress the whole file as opaque bytes. -c codec@level is repeatable;
 omitting -c sweeps every wired codec (zstd, lz4, gzip, snappy). --samples
 timed passes after --warmup-iterations. --mode fastest keeps the best pass;
-mean averages all. --json emits the same report as composable JSON.";
+mean averages all. A terminal prints the sweep as a table; `--format json`
+(or `--json`) streams the same report as composable NDJSON.";
 
 pub const LZ_AFTER: &str = "\
 Examples:
@@ -253,7 +256,9 @@ pub const COMPRESSION_ABOUT: &str =
 pub const COMPRESSION_LONG_ABOUT: &str = "\
 Same sweep as lz, but over each column chunk's encoded pages. The file must
 be NONE-compressed; a compressed file is rejected. --per-column adds one
-report row per column chunk. --json is the same report as composable JSON.";
+report row per column chunk. A terminal prints the sweep as a table (report
+rows, then per-column rows); `--format json` (or `--json`) streams the same
+report as composable NDJSON.";
 
 pub const COMPRESSION_AFTER: &str = "\
 Examples:
@@ -282,8 +287,9 @@ keeps every column, and a glob matching nothing is an error. --rows is
 `all` or `first:N` (default first:8192). --top bounds top_values per
 column (default 8).
 
-A pipe streams one `pqbench.profile-column` per column between begin and
-end. A TTY needs -o. --json is the same stream.";
+A terminal prints one row per column as a table; a pipe streams one
+`pqbench.profile-column` per column between begin and end. `--format json`
+(or `--json`) forces the stream, and `-o` also writes it.";
 
 pub const PROFILE_AFTER: &str = "\
 Examples:
@@ -316,9 +322,10 @@ Supported rewrites: sort:A / sort:A,B (numeric or bytewise), codec:NAME[@LEVEL]
 (row-group min/max locality), or all. skipping/all splits the sample into row
 groups of 2048 rows unless a trial sets row-group-size.
 
-A pipe streams one `pqbench.experiment-trial` per trial and one
-`pqbench.experiment-column` per column. A TTY needs -o. --json is the same
-stream. This command does not do zorder, hilbert, cast, drop, encoding,
+A terminal prints the trials and their columns as tables; a pipe streams one
+`pqbench.experiment-trial` per trial and one `pqbench.experiment-column` per
+column. `--format json` (or `--json`) forces the stream, and `-o` also writes
+it. This command does not do zorder, hilbert, cast, drop, encoding,
 page-size, or indexes.";
 
 pub const EXPERIMENT_AFTER: &str = "\

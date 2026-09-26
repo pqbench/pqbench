@@ -6,7 +6,7 @@ use clap::Args;
 use pqbench::table::{self, LoadEvent, LoadRequest, TableInfo};
 
 use crate::document::{self, Record};
-use crate::emit::Emitter;
+use crate::emit::{Emitter, Format};
 use crate::CliError;
 
 /// Arguments for `table`.
@@ -20,7 +20,10 @@ pub(crate) struct TableArgs {
     /// omit min/max/null maps (keep num_records and bytes_per_row)
     #[arg(long)]
     no_stats: bool,
-    /// zstd NDJSON stream (required on a terminal)
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
+    /// also write the zstd NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
 }
@@ -44,7 +47,7 @@ pub(crate) async fn run(args: &TableArgs) -> Result<(), CliError> {
 
 async fn load_path(uri: &str, args: &TableArgs) -> Result<(), CliError> {
     let request = load_request(uri.to_string(), BTreeMap::new(), args)?.with_collect_files(false);
-    let mut emit = Emitter::open("table", args.output.as_deref())?;
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut files = 0usize;
     let mut bytes = 0u64;
     let info = table::visit_load(&request, |event| match event {
@@ -79,7 +82,7 @@ fn load_request(
 }
 
 async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
-    let mut emit = Emitter::open("table", args.output.as_deref())?;
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut tables = 0usize;
     let mut files = 0usize;
     let mut bytes = 0u64;
