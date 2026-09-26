@@ -81,10 +81,21 @@ async fn discover_rejects_a_directory_with_no_tables() {
 #[tokio::test]
 async fn discover_at_stops_at_max_depth() {
     let root = warehouse();
-    let lake = lake::discover_bounded(&uri(root.path()), &Default::default(), Some(1))
+    let lake = lake::discover_bounded(&uri(root.path()), &Default::default(), Some(1), |_| true)
         .await
         .unwrap();
     assert_eq!(names(&lake), ["orders", "uniform"]);
+}
+
+#[tokio::test]
+async fn discover_prunes_prefixes_that_cannot_yield_a_table() {
+    let root = warehouse();
+    let lake = lake::discover_bounded(&uri(root.path()), &Default::default(), None, |name| {
+        name.starts_with("sales")
+    })
+    .await
+    .unwrap();
+    assert_eq!(names(&lake), ["sales/events"]);
 }
 
 #[tokio::test]
