@@ -80,8 +80,7 @@ fn file_runs(rows: &[MassRow]) -> Vec<&MassRow> {
 pub(super) fn tree(rows: &[MassRow]) -> Result<MassNode, Error> {
     let runs = file_runs(rows);
     let summary = summarize(rows, &runs)?;
-    let mass = summary.file_mass();
-    let mut tree = analytics::aggregate(&raw::read(&mass));
+    let mut tree = analytics::aggregate(&raw::read(summary.file_mass()));
     tree.label = label(&runs);
     Ok(tree)
 }

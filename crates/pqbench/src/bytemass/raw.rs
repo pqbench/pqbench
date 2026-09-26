@@ -7,30 +7,30 @@
 use crate::third_party::parquet::api::FileMass;
 
 /// One column chunk's raw on-disk byte mass.
-pub(super) struct RawColumn<'a> {
+pub(super) struct RawColumn {
     /// Column path in schema form, e.g. `content` or `a.b`.
-    pub column: &'a str,
+    pub column: String,
     /// On-disk (compressed) bytes for this column chunk.
     pub compressed_bytes: u64,
 }
 
 /// A file's raw column masses, plus the row count that normalizes them.
-pub(super) struct FileRaw<'a> {
+pub(super) struct FileRaw {
     /// Number of rows in the file (shared denominator for per-row mass).
     pub row_count: u64,
     /// One entry per column chunk, in file order.
-    pub columns: Vec<RawColumn<'a>>,
+    pub columns: Vec<RawColumn>,
 }
 
-/// Lift parsed metadata into the raw per-chunk masses.
-pub(super) fn read(mass: &FileMass) -> FileRaw<'_> {
+/// Lift parsed metadata into the raw per-chunk masses, taking the column paths.
+pub(super) fn read(mass: FileMass) -> FileRaw {
     FileRaw {
         row_count: mass.row_count,
         columns: mass
             .columns
-            .iter()
+            .into_iter()
             .map(|c| RawColumn {
-                column: c.column.as_str(),
+                column: c.column,
                 compressed_bytes: c.compressed_bytes,
             })
             .collect(),
@@ -64,7 +64,7 @@ mod tests {
             ],
             ..FileMass::default()
         };
-        let raw = read(&mass);
+        let raw = read(mass);
         assert_eq!(raw.row_count, 100);
         assert_eq!(raw.columns.len(), 2);
         assert_eq!(raw.columns[0].column, "text");
