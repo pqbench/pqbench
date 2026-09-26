@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::third_party::parquet::api::{
-    default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
-};
+use crate::third_party::object_store::api::ObjectStat;
+use crate::third_party::parquet::api::{read_file_masses, ColumnMass, Error, FileMass};
 
 use super::api::MassRow;
 use super::remote;
@@ -52,8 +51,10 @@ impl MassSummary {
                     compressed_bytes: column.compressed_bytes,
                     uncompressed_bytes: column.uncompressed_bytes,
                     codec: column.codecs.iter().cloned().collect::<Vec<_>>().join(","),
+                    ..ColumnMass::default()
                 })
                 .collect(),
+            ..FileMass::default()
         }
     }
 }
@@ -63,26 +64,54 @@ impl MassSummary {
 pub(super) async fn measure_inputs(
     inputs: &[String],
     env: &BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<Vec<MassRow>, Error> {
     let paths = expand_inputs(inputs)?;
     let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
-        let (size, mass) = read_input(&input, env).await?;
+        let (stat, mass) = read_input(&input, env, indexes).await?;
         let row_count = mass.row_count;
         for column in mass.columns {
-            rows.push(MassRow {
-                uri: input.clone(),
-                size_bytes: size,
-                row_count,
-                column: column.column,
-                compressed_bytes: column.compressed_bytes,
-                uncompressed_bytes: column.uncompressed_bytes,
-                codec: column.codec,
-            });
+            rows.push(mass_row(&input, &stat, row_count, column));
         }
     }
     Ok(rows)
+}
+
+fn mass_row(input: &str, stat: &ObjectStat, row_count: u64, column: ColumnMass) -> MassRow {
+    MassRow {
+        uri: input.to_string(),
+        size_bytes: stat.size_bytes,
+        row_count,
+        column: column.column,
+        compressed_bytes: column.compressed_bytes,
+        uncompressed_bytes: column.uncompressed_bytes,
+        codec: column.codec,
+        storage_class: stat.storage_class.clone(),
+        encodings: column.encodings,
+        num_values: column.num_values,
+        dictionary: column.dictionary,
+        null_count: column.null_count,
+        distinct_count: column.distinct_count,
+        min_value: column.min_value,
+        max_value: column.max_value,
+        physical_type: column.physical_type,
+        row_group: column.row_group,
+        row_group_rows: column.row_group_rows,
+        compressed_bytes_per_row: per_row(column.compressed_bytes, column.row_group_rows),
+        uncompressed_bytes_per_row: per_row(column.uncompressed_bytes, column.row_group_rows),
+        compression_ratio: per_row(column.uncompressed_bytes, column.compressed_bytes),
+        null_fraction: column
+            .null_count
+            .and_then(|count| per_row(count, column.num_values)),
+        page_count: column.page_count,
+        page_compressed_bytes: column.page_compressed_bytes,
+    }
+}
+
+fn per_row(bytes: u64, rows: u64) -> Option<f64> {
+    (rows > 0).then(|| bytes as f64 / rows as f64)
 }
 
 fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, Error> {
@@ -115,18 +144,27 @@ fn escape_literal_brackets(input: &str) -> String {
     input.replace('[', "[[]")
 }
 
-async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64, FileMass), Error> {
+async fn read_input(
+    input: &str,
+    env: &BTreeMap<String, String>,
+    indexes: bool,
+) -> Result<(ObjectStat, FileMass), Error> {
     if input.contains("://") {
         return remote::read_remote(
             input,
             env.iter().map(|(key, value)| (key.clone(), value.clone())),
+            indexes,
         )
         .await;
     }
     let path = Path::new(input);
-    let size = std::fs::metadata(path)
-        .map_err(|e| Error(format!("cannot stat {input}: {e}")))?
-        .len();
-    let mass = default_metadata_parser().read_masses(path)?;
-    Ok((size, mass))
+    let metadata =
+        std::fs::metadata(path).map_err(|e| Error(format!("cannot stat {input}: {e}")))?;
+    let stat = ObjectStat {
+        size_bytes: metadata.len(),
+        identity: None,
+        storage_class: None,
+    };
+    let mass = read_file_masses(path, indexes)?;
+    Ok((stat, mass))
 }

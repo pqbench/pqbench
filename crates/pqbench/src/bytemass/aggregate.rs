@@ -95,6 +95,7 @@ mod tests {
             compressed_bytes: 12,
             uncompressed_bytes: 24,
             codec: codec.into(),
+            ..MassRow::default()
         }
     }
 

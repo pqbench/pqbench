@@ -104,15 +104,17 @@ fn compression(
 /// Returns the stream of `pqbench.bytemass-row` objects (one dict per column
 /// chunk).
 #[pyfunction]
-#[pyo3(signature = (*inputs, env=None))]
+#[pyo3(signature = (*inputs, env=None, indexes=false))]
 fn bytemass(
     py: Python<'_>,
     inputs: Vec<String>,
     env: Option<BTreeMap<String, String>>,
+    indexes: bool,
 ) -> PyResult<Py<PyAny>> {
     let request = pqbench::bytemass::BytemassRequest {
         inputs,
         env: aws_env(env)?,
+        indexes,
     };
     let rows = py
         .detach(|| block_on(pqbench::bytemass::bytemass(&request)))
@@ -124,14 +126,16 @@ fn bytemass(
 ///
 /// Returns the `pqbench.table` document.
 #[pyfunction]
-#[pyo3(signature = (uri, *, version=None, env=None))]
+#[pyo3(signature = (uri, *, version=None, env=None, no_stats=false))]
 fn table(
     py: Python<'_>,
     uri: String,
     version: Option<u64>,
     env: Option<BTreeMap<String, String>>,
+    no_stats: bool,
 ) -> PyResult<Py<PyAny>> {
-    let request = pqbench::table::LoadRequest::new(uri, version, aws_env(env)?);
+    let request =
+        pqbench::table::LoadRequest::new(uri, version, aws_env(env)?).with_file_stats(!no_stats);
     let info = py
         .detach(|| block_on(pqbench::table::load(&request)))
         .map_err(runtime)?;
@@ -201,7 +205,7 @@ fn viz(py: Python<'_>, rows: Bound<'_, PyAny>, output: PathBuf) -> PyResult<Py<P
         Some("html" | "htm") => output.with_extension(""),
         _ => output,
     };
-    py.detach(|| pqbench::viz::write_report(&prefix, &records))
+    py.detach(|| pqbench::viz::write_report(&prefix, &records, &[]))
         .map_err(runtime)?;
     let mut result = serde_json::Map::new();
     result.insert(
@@ -373,6 +377,43 @@ fn viz_rows(obj: &Bound<'_, PyAny>) -> PyResult<Vec<MassRecord>> {
                 compressed_bytes: u64_field(&item, "compressed_bytes")?,
                 uncompressed_bytes: u64_field(&item, "uncompressed_bytes")?,
                 codec: string_field(&item, "codec")?,
+                encodings: item
+                    .get("encodings")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .or_else(|| {
+                        item.get("encodings")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default(),
+                num_values: item.get("num_values").and_then(Value::as_u64).unwrap_or(0),
+                dictionary: item
+                    .get("dictionary")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                null_count: item.get("null_count").and_then(Value::as_u64),
+                distinct_count: item.get("distinct_count").and_then(Value::as_u64),
+                physical_type: item
+                    .get("physical_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                row_group: item.get("row_group").and_then(Value::as_u64).unwrap_or(0) as u32,
+                row_group_rows: item
+                    .get("row_group_rows")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                compressed_bytes_per_row: item
+                    .get("compressed_bytes_per_row")
+                    .and_then(Value::as_f64),
+                page_count: item.get("page_count").and_then(Value::as_u64),
             })
         })
         .collect()

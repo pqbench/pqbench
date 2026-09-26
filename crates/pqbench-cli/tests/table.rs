@@ -81,6 +81,12 @@ fn table_detects_delta_and_pipes_the_log_to_bytemass() {
         1
     );
     assert_eq!(records.last().unwrap()["event"], "end");
+    let file = records
+        .iter()
+        .find(|record| record["kind"] == "pqbench.table-file")
+        .expect("table-file");
+    assert_eq!(file["stats"]["num_records"], 3000);
+    assert_eq!(file["stats"]["null_count"]["id"], 0);
 
     let measured = pipe(
         &["bytemass", "--json"],
@@ -98,6 +104,35 @@ fn table_detects_delta_and_pipes_the_log_to_bytemass() {
         .expect("bytemass end");
     assert_eq!(end["file_count"], 1);
     assert_eq!(end["row_count"], 3000);
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "pqbench.bytemass-file"
+                && record["stats"]["num_records"] == 3000),
+        "{records:?}"
+    );
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn table_no_stats_keeps_record_counts() {
+    let fixture = delta_fixture();
+    let table = pqbench()
+        .args(["table", "--no-stats", fixture.path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        table.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&table.stderr)
+    );
+    let file = ndjson_records(&table.stdout)
+        .into_iter()
+        .find(|record| record["kind"] == "pqbench.table-file")
+        .expect("table-file");
+    assert_eq!(file["stats"]["num_records"], 3000);
+    assert!(file["stats"].get("min_values").is_none());
+    assert!(file["stats"].get("null_count").is_none());
 }
 
 #[cfg(not(feature = "delta"))]
@@ -451,7 +486,8 @@ fn delta_fixture() -> DeltaFixture {
             "partitionValues": {},
             "size": size,
             "modificationTime": 0,
-            "dataChange": true
+            "dataChange": true,
+            "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
         }}
     ]);
     let text = commit

@@ -8,7 +8,7 @@
 //! The `delta` feature compiles the loader; without it [`load`] fails at
 //! runtime and names the feature.
 
-use crate::table::{LoadRequest, TableInfo};
+use crate::table::{LoadEvent, LoadRequest, TableInfo};
 
 /// Load the transaction log and the active files of a Delta table.
 ///
@@ -17,4 +17,15 @@ use crate::table::{LoadRequest, TableInfo};
 /// is invalid, or a data path leaves the table root.
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, crate::table::Error> {
     super::r#impl::load(request).await
+}
+
+/// Load a Delta snapshot, visiting the header then each active file.
+///
+/// # Errors
+/// Same as [`load`].
+pub async fn visit_load(
+    request: &LoadRequest,
+    mut visit: impl FnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+) -> Result<TableInfo, crate::table::Error> {
+    super::r#impl::visit_load(request, &mut visit).await
 }

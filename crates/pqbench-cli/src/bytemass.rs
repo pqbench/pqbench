@@ -22,6 +22,9 @@ pub(crate) struct BytemassArgs {
     /// stream NDJSON (same as a pipe; kept for scripts)
     #[arg(long = "json")]
     json: bool,
+    /// also load ColumnIndex/OffsetIndex (one extra range per file)
+    #[arg(long)]
+    indexes: bool,
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
@@ -53,13 +56,28 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
         match record {
             Record::RemoteSource(source) => {
                 for uri in source.inputs {
-                    measure_input(&mut emit, &mut stats, &uri, uri.clone(), source.env.clone())
-                        .await?;
+                    measure_input(
+                        &mut emit,
+                        &mut stats,
+                        &uri,
+                        uri.clone(),
+                        source.env.clone(),
+                        args.indexes,
+                    )
+                    .await?;
                 }
             }
             Record::Table(info) => {
                 for file in info.files {
-                    measure_file(&mut emit, &mut stats, &info.uri, file, info.env.clone()).await?;
+                    measure_file(
+                        &mut emit,
+                        &mut stats,
+                        &info.uri,
+                        file,
+                        info.env.clone(),
+                        args.indexes,
+                    )
+                    .await?;
                 }
             }
             Record::TableRef(table) => {
@@ -71,7 +89,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
             }
             Record::File { id, file } => {
                 let env = envs.get(&id).cloned().unwrap_or_default();
-                measure_file(&mut emit, &mut stats, &id, file, env).await?;
+                measure_file(&mut emit, &mut stats, &id, file, env, args.indexes).await?;
             }
             Record::Commit { .. } => {}
             Record::End { id } => {
@@ -83,7 +101,10 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                         .into(),
                 );
             }
-            Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+            Record::BytemassBegin
+            | Record::BytemassFile(_)
+            | Record::BytemassRow { .. }
+            | Record::BytemassEnd => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
         }
@@ -102,20 +123,25 @@ async fn measure_file(
     id: &str,
     file: TableFile,
     env: BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<(), CliError> {
     let rows = bytemass::bytemass(&bytemass::BytemassRequest {
         inputs: vec![file.uri.clone()],
         env,
+        indexes,
     })
     .await?;
-    for row in &rows {
-        if file.size_bytes != 0 && row.size_bytes != file.size_bytes {
+    if file.size_bytes != 0 {
+        if let Some(row) = rows.iter().find(|row| row.size_bytes != file.size_bytes) {
             return Err(format!(
                 "active file size differs from log: {} (expected {}, found {})",
                 file.path, file.size_bytes, row.size_bytes
             )
             .into());
         }
+    }
+    write_file(emit, id, &file, &rows)?;
+    for row in &rows {
         write_row(emit, id, row, stats)?;
     }
     Ok(())
@@ -127,8 +153,39 @@ async fn measure_input(
     id: &str,
     uri: String,
     env: BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<(), CliError> {
-    measure_file(emit, stats, id, TableFile::new(uri.clone(), uri, 0), env).await
+    measure_file(
+        emit,
+        stats,
+        id,
+        TableFile::new(uri.clone(), uri, 0),
+        env,
+        indexes,
+    )
+    .await
+}
+
+fn write_file(
+    emit: &mut Emitter,
+    id: &str,
+    file: &TableFile,
+    rows: &[bytemass::MassRow],
+) -> Result<(), CliError> {
+    let object = rows.first();
+    let size = if file.size_bytes != 0 {
+        file.size_bytes
+    } else {
+        object.map_or(0, |row| row.size_bytes)
+    };
+    let mut stat = bytemass::FileStat::new(id, file.path.clone(), file.uri.clone(), size);
+    stat.storage_class = object.and_then(|row| row.storage_class.clone());
+    stat.partition_values = file.partition_values.clone();
+    stat.stats = file.stats.clone();
+    emit.write(&FileRecord {
+        kind: "pqbench.bytemass-file",
+        file: &stat,
+    })
 }
 
 async fn measure(
@@ -144,7 +201,15 @@ async fn measure(
         event: "begin",
     })?;
     for input in inputs {
-        measure_input(&mut emit, &mut stats, &input, input.clone(), env.clone()).await?;
+        measure_input(
+            &mut emit,
+            &mut stats,
+            &input,
+            input.clone(),
+            env.clone(),
+            args.indexes,
+        )
+        .await?;
     }
     finish_stream(emit, &stats, args.output.as_deref())
 }
@@ -213,6 +278,13 @@ struct BeginRecord {
     kind: &'static str,
     version: u32,
     event: &'static str,
+}
+
+#[derive(Serialize)]
+struct FileRecord<'a> {
+    kind: &'static str,
+    #[serde(flatten)]
+    file: &'a bytemass::FileStat,
 }
 
 #[derive(Serialize)]

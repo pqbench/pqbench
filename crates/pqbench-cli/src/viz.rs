@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use pqbench::bytemass::MassRow;
+use pqbench::bytemass::{FileStat, MassRow};
 use pqbench::viz::{self, MassRecord};
 
 use crate::document::{self, Record};
@@ -28,20 +28,22 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
         Some(path) => prefix(path),
         None => return Err("viz writes an html page; pass --output".into()),
     };
-    let rows = collect(input).await?;
-    viz::write_report(&prefix, &rows)?;
+    let (rows, files) = collect(input).await?;
+    viz::write_report(&prefix, &rows, &files)?;
     if std::io::stdout().is_terminal() {
-        print!("{}", summary(&prefix, &rows));
+        print!("{}", summary(&prefix, &rows, &files));
     }
     Ok(())
 }
 
-async fn collect(input: &str) -> Result<Vec<MassRecord>, CliError> {
+async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliError> {
     let mut rows = Vec::new();
+    let mut files = Vec::new();
     let mut begun = false;
     document::visit_input(input, async |record| {
         match record {
             Record::BytemassBegin => begun = true,
+            Record::BytemassFile(file) => files.push(file),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
             Record::BytemassEnd => {}
             Record::Table(_)
@@ -72,7 +74,7 @@ async fn collect(input: &str) -> Result<Vec<MassRecord>, CliError> {
     if rows.is_empty() {
         return Err("bytemass stream has no rows".into());
     }
-    Ok(rows)
+    Ok((rows, files))
 }
 
 fn mass_record(id: String, row: MassRow) -> MassRecord {
@@ -85,6 +87,16 @@ fn mass_record(id: String, row: MassRow) -> MassRecord {
         compressed_bytes: row.compressed_bytes,
         uncompressed_bytes: row.uncompressed_bytes,
         codec: row.codec,
+        encodings: row.encodings.join(","),
+        num_values: row.num_values,
+        dictionary: row.dictionary,
+        null_count: row.null_count,
+        distinct_count: row.distinct_count,
+        physical_type: row.physical_type,
+        row_group: row.row_group,
+        row_group_rows: row.row_group_rows,
+        compressed_bytes_per_row: row.compressed_bytes_per_row,
+        page_count: row.page_count,
     }
 }
 
@@ -95,12 +107,17 @@ fn prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn summary(prefix: &Path, rows: &[MassRecord]) -> String {
-    let files = rows
+fn summary(prefix: &Path, rows: &[MassRecord], files: &[FileStat]) -> String {
+    let measured = rows
         .iter()
         .map(|row| row.file.as_str())
         .collect::<std::collections::BTreeSet<_>>()
         .len();
+    let files = if files.is_empty() {
+        measured
+    } else {
+        files.len()
+    };
     format!(
         "files: {files}\ncolumns: {}\noutput: {}\n",
         rows.len(),

@@ -10,7 +10,9 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use url::Url;
 
-use crate::table::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::table::{
+    LoadEvent, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo,
+};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 
@@ -98,6 +100,24 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         files,
         request.env.clone(),
     ))
+}
+
+/// Load the snapshot, visiting the header then each active file after the
+/// manifests are read.
+pub(super) async fn visit_load(
+    request: &LoadRequest,
+    visit: &mut impl FnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+) -> Result<TableInfo, Error> {
+    let mut info = load(request).await?;
+    let files = std::mem::take(&mut info.files);
+    visit(LoadEvent::BEGIN { info: &info }).map_err(|error| Error(error.to_string()))?;
+    for file in &files {
+        visit(LoadEvent::FILE { file }).map_err(|error| Error(error.to_string()))?;
+    }
+    if request.collect_files {
+        info.files = files;
+    }
+    Ok(info)
 }
 
 #[derive(Debug, Deserialize)]

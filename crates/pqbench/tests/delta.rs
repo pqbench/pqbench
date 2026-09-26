@@ -31,6 +31,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
         inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
         env: info.env.clone(),
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -54,10 +55,36 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     assert_eq!(latest.snapshot_version, 1);
     assert_eq!(latest.files.len(), 2);
     assert_eq!(latest.partition_columns, ["part"]);
+    let added = latest
+        .files
+        .iter()
+        .find(|file| file.path == "part=a/added.parquet")
+        .unwrap();
+    let stats = added.stats.as_ref().unwrap();
+    assert_eq!(stats.num_records, 9);
+    assert_eq!(stats.min_values["id"], 0);
+    assert_eq!(stats.max_values["id"], 8);
+    assert_eq!(stats.null_count["id"], 0);
+    assert_eq!(stats.tight_bounds, Some(true));
+    assert_eq!(
+        stats.bytes_per_row,
+        Some(added.size_bytes as f64 / stats.num_records as f64)
+    );
+    assert_eq!(added.partition_values["part"].as_deref(), Some("a"));
+    let part_a = latest
+        .partitions
+        .iter()
+        .find(|partition| partition.values.get("part").map(Option::as_deref) == Some(Some("a")))
+        .unwrap();
+    assert_eq!(part_a.file_count, 1);
+    assert_eq!(part_a.num_records, Some(9));
+    assert_eq!(part_a.bytes_per_row, stats.bytes_per_row);
+    assert_eq!(part_a.size, added.size_bytes);
 
     let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
         inputs: latest.files.iter().map(|file| file.uri.clone()).collect(),
         env: latest.env.clone(),
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -136,6 +163,12 @@ async fn load_resolves_checkpoint_after_old_json_is_removed() {
         .unwrap();
     assert_eq!(info.snapshot_version, 1);
     assert_eq!(info.files.len(), 2);
+    let kept = info
+        .files
+        .iter()
+        .find(|file| file.path == "part=b/kept.parquet")
+        .unwrap();
+    assert_eq!(kept.stats.as_ref().unwrap().num_records, 5);
 }
 
 #[tokio::test]
@@ -283,6 +316,138 @@ async fn load_copies_env_onto_the_document() {
     .await
     .unwrap();
     assert_eq!(info.env, env);
+}
+
+#[tokio::test]
+async fn load_omits_partition_row_counts_when_a_file_has_no_stats() {
+    let fixture = Fixture::new();
+    fixture.commit(
+        2,
+        &[json!({"add": {
+            "path": "part=b/nostats.parquet",
+            "partitionValues": {"part": "b"},
+            "size": 10,
+            "modificationTime": 0,
+            "dataChange": true
+        }})],
+    );
+    let info = table::load(&load_request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
+    let part_b = info
+        .partitions
+        .iter()
+        .find(|partition| partition.values.get("part").map(Option::as_deref) == Some(Some("b")))
+        .unwrap();
+    assert_eq!(part_b.file_count, 2);
+    assert!(part_b.num_records.is_none());
+    assert!(part_b.bytes_per_row.is_none());
+    assert!(part_b.size > 10);
+    let part_a = info
+        .partitions
+        .iter()
+        .find(|partition| partition.values.get("part").map(Option::as_deref) == Some(Some("a")))
+        .unwrap();
+    assert_eq!(part_a.num_records, Some(9));
+}
+
+#[tokio::test]
+async fn load_omits_add_stats_that_are_not_json() {
+    let fixture = Fixture::new();
+    write_parquet(&fixture.path().join("part=a/bad-stats.parquet"), 9);
+    let mut add = fixture.add("part=a/bad-stats.parquet", "a", 9);
+    add["add"]["stats"] = json!("not-json");
+    fixture.commit(2, &[add]);
+    let info = table::load(&load_request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
+    let added = info
+        .files
+        .iter()
+        .find(|file| file.path == "part=a/bad-stats.parquet")
+        .unwrap();
+    assert!(added.stats.is_none());
+}
+
+#[tokio::test]
+async fn load_flattens_nested_null_counts() {
+    let fixture = Fixture::new();
+    write_parquet(&fixture.path().join("part=a/nested.parquet"), 9);
+    let mut add = fixture.add("part=a/nested.parquet", "a", 9);
+    add["add"]["stats"] = json!(json!({
+        "numRecords": 9,
+        "nullCount": {
+            "id": 0,
+            "nested": { "inner": { "x": 3, "y": 4 } }
+        }
+    })
+    .to_string());
+    fixture.commit(2, &[add]);
+    let info = table::load(&load_request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
+    let stats = info
+        .files
+        .iter()
+        .find(|file| file.path == "part=a/nested.parquet")
+        .unwrap()
+        .stats
+        .as_ref()
+        .unwrap();
+    assert_eq!(stats.null_count["id"], 0);
+    assert_eq!(stats.null_count["nested.inner.x"], 3);
+    assert_eq!(stats.null_count["nested.inner.y"], 4);
+}
+
+#[tokio::test]
+async fn load_omits_stat_maps_when_disabled() {
+    let fixture = Fixture::new();
+    let info =
+        table::load(&load_request(fixture.path().to_string_lossy(), None).with_file_stats(false))
+            .await
+            .unwrap();
+    let stats = info
+        .files
+        .iter()
+        .find(|file| file.path == "part=a/added.parquet")
+        .unwrap()
+        .stats
+        .as_ref()
+        .unwrap();
+    assert_eq!(stats.num_records, 9);
+    assert!(stats.bytes_per_row.is_some());
+    assert!(stats.min_values.is_empty());
+    assert!(stats.max_values.is_empty());
+    assert!(stats.null_count.is_empty());
+    assert!(stats.tight_bounds.is_none());
+}
+
+#[tokio::test]
+async fn visit_load_emits_the_header_before_files() {
+    let fixture = Fixture::new();
+    let mut events = Vec::new();
+    let info = table::visit_load(
+        &load_request(fixture.path().to_string_lossy(), None).with_collect_files(false),
+        |event| {
+            match event {
+                table::LoadEvent::BEGIN { info } => {
+                    assert!(info.files.is_empty());
+                    events.push("begin");
+                }
+                table::LoadEvent::FILE { file } => {
+                    assert!(!file.path.is_empty());
+                    events.push("file");
+                }
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(events[0], "begin");
+    assert!(events.iter().filter(|event| **event == "file").count() >= 2);
+    assert!(info.files.is_empty());
+    assert_eq!(info.partitions.len(), 2);
 }
 
 #[tokio::test]

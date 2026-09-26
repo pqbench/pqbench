@@ -20,7 +20,7 @@ mod remote;
 mod text;
 
 pub use aggregate::aggregate;
-pub use api::{bytemass, BytemassRequest, MassRow};
+pub use api::{bytemass, BytemassRequest, FileStat, MassRow};
 pub use collection::{ColumnMassSummary, MassSummary};
 pub use json::render_json;
 pub use text::render_text;

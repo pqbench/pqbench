@@ -66,7 +66,7 @@ pub fn default_parser() -> impl PageParser {
 }
 
 /// A column's byte mass, read from parquet metadata (no page decoding).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ColumnMass {
     /// Column path in schema form, e.g. `content` or `a.b`.
     pub column: String,
@@ -76,13 +76,44 @@ pub struct ColumnMass {
     pub uncompressed_bytes: u64,
     /// Compression codec recorded in the column chunk metadata.
     pub codec: String,
+    /// Encodings listed on the column chunk.
+    pub encodings: Vec<String>,
+    /// Values in this chunk (including nulls).
+    // aipnaming: allow(aip-141/count-suffix)
+    pub num_values: u64,
+    /// Dictionary page offset is present.
+    pub dictionary: bool,
+    /// Footer `null_count`, when statistics exist.
+    pub null_count: Option<u64>,
+    /// Footer `distinct_count`, when statistics exist.
+    pub distinct_count: Option<u64>,
+    /// Footer min, when statistics exist.
+    // aipnaming: allow(aip-145/ranges)
+    pub min_value: Option<String>,
+    /// Footer max, when statistics exist.
+    // aipnaming: allow(aip-145/ranges)
+    pub max_value: Option<String>,
+    /// Physical type of the leaf column.
+    pub physical_type: String,
+    /// Row-group index (0-based).
+    pub row_group: u32,
+    /// Rows in this row group.
+    pub row_group_rows: u64,
+    /// Data pages in the OffsetIndex, when `--indexes` loaded one.
+    pub page_count: Option<u64>,
+    /// Sum of OffsetIndex `compressed_page_size`, when loaded.
+    pub page_compressed_bytes: Option<u64>,
 }
 
 /// A file's byte masses, read purely from metadata.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct FileMass {
     /// Number of rows in the file (shared denominator for per-row mass).
     pub row_count: u64,
+    /// Number of row groups.
+    pub row_group_count: usize,
+    /// Declared sort columns, as `name` or `name DESC`.
+    pub sorting_columns: Vec<String>,
     /// One entry per column chunk (per row group), in file order.
     pub columns: Vec<ColumnMass>,
 }
@@ -114,6 +145,32 @@ pub fn default_metadata_parser() -> impl MetadataParser {
 /// Returns [`Error`] if `footer` is not a valid Parquet footer.
 pub fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
     super::r#impl::read_footer_masses(footer)
+}
+
+/// Read byte masses from a local file. `indexes` loads ColumnIndex/OffsetIndex
+/// (one extra read of the page-index region). Default callers pass `false`.
+///
+/// # Errors
+/// Returns [`Error`] if `path` is not a readable parquet file.
+pub fn read_file_masses(path: &Path, indexes: bool) -> Result<FileMass, Error> {
+    super::r#impl::read_file_masses(path, indexes)
+}
+
+/// Lowest ColumnIndex/OffsetIndex offset recorded in `footer`, when present.
+///
+/// # Errors
+/// Returns [`Error`] if `footer` is not a valid Parquet footer.
+pub fn page_index_start(footer: &[u8]) -> Result<Option<u64>, Error> {
+    super::r#impl::page_index_start(footer)
+}
+
+/// Read byte masses from a file suffix that includes the footer and, when
+/// present, the page-index region. `tail` must end at `file_size`.
+///
+/// # Errors
+/// Returns [`Error`] if `tail` is not a valid Parquet suffix.
+pub fn read_tail_masses(tail: &[u8], file_size: u64) -> Result<FileMass, Error> {
+    super::r#impl::read_tail_masses(tail, file_size)
 }
 
 #[cfg(test)]
@@ -175,5 +232,28 @@ mod tests {
             mass.columns.iter().all(|c| c.compressed_bytes > 0),
             "expected positive on-disk column bytes"
         );
+        assert!(mass.row_group_count > 0);
+        assert!(mass
+            .columns
+            .iter()
+            .all(|column| !column.physical_type.is_empty()
+                && !column.encodings.is_empty()
+                && column.num_values > 0
+                && column.row_group_rows > 0));
+    }
+
+    #[test]
+    fn read_file_masses_indexes_is_optional() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/small_snappy.parquet"
+        ));
+        let without = read_file_masses(path, false).unwrap();
+        let with = read_file_masses(path, true).unwrap();
+        assert_eq!(without.columns.len(), with.columns.len());
+        assert!(without
+            .columns
+            .iter()
+            .all(|column| column.page_count.is_none()));
     }
 }

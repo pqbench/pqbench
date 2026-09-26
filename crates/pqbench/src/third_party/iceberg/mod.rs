@@ -7,4 +7,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::load;
+pub use api::{load, visit_load};

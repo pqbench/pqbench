@@ -5,21 +5,26 @@
 //! whose backend is not compiled in fails at runtime through the reader.
 
 use crate::third_party::object_store;
-use crate::third_party::parquet::api::{read_footer_masses, Error, FileMass};
+use crate::third_party::object_store::api::ObjectStat;
+use crate::third_party::parquet::api::{
+    page_index_start, read_footer_masses, read_tail_masses, Error, FileMass,
+};
 
 const PARQUET_FOOTER_SIZE: u64 = 8;
 
 /// Read an individual Parquet object's size and byte masses from a URI.
 ///
 /// Only the trailer and serialized footer metadata are fetched, never data
-/// pages or indexes. `options` override process-environment backend defaults.
+/// pages. `indexes` adds one extra range for ColumnIndex/OffsetIndex.
+/// `options` override process-environment backend defaults.
 ///
 /// # Errors
 /// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
 pub(super) async fn read_remote(
     uri: &str,
     options: impl IntoIterator<Item = (String, String)>,
-) -> Result<(u64, FileMass), Error> {
+    indexes: bool,
+) -> Result<(ObjectStat, FileMass), Error> {
     let options: Vec<(String, String)> = options.into_iter().collect();
     let reader = object_store::open(uri, &options).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
@@ -29,7 +34,8 @@ pub(super) async fn read_remote(
             "object {uri} is too small to be a Parquet file: {size} bytes"
         )));
     }
-    let identity = stat.identity.as_deref();
+    let identity = stat.identity.clone();
+    let identity = identity.as_deref();
 
     let trailer = reader
         .read_range(size - PARQUET_FOOTER_SIZE..size, identity)
@@ -61,7 +67,36 @@ pub(super) async fn read_remote(
         )));
     }
     footer.extend_from_slice(&trailer);
-    Ok((size, read_footer_masses(&footer)?))
+    if !indexes {
+        return Ok((stat, read_footer_masses(&footer)?));
+    }
+    Ok((
+        stat,
+        read_remote_indexes(&reader, uri, &footer, metadata_start, size, identity).await?,
+    ))
+}
+
+async fn read_remote_indexes(
+    reader: &object_store::api::ObjectReader,
+    uri: &str,
+    footer: &[u8],
+    metadata_start: u64,
+    size: u64,
+    identity: Option<&str>,
+) -> Result<FileMass, Error> {
+    let Some(start) = page_index_start(footer)? else {
+        return read_footer_masses(footer);
+    };
+    if start >= metadata_start {
+        return read_footer_masses(footer);
+    }
+    let index_bytes = reader
+        .read_range(start..metadata_start, identity)
+        .await
+        .map_err(storage_error)?;
+    let mut tail = index_bytes;
+    tail.extend_from_slice(footer);
+    read_tail_masses(&tail, size).map_err(|error| Error(format!("object {uri}: {error}")))
 }
 
 fn storage_error(error: object_store::Error) -> Error {
@@ -81,9 +116,20 @@ mod tests {
         ));
         let expected = default_metadata_parser().read_masses(path).unwrap();
         let uri = url::Url::from_file_path(path).unwrap();
-        let (size, actual) = read_remote(uri.as_str(), []).await.unwrap();
-        assert_eq!(size, std::fs::metadata(path).unwrap().len());
+        let (stat, actual) = read_remote(uri.as_str(), [], false).await.unwrap();
+        assert_eq!(stat.size_bytes, std::fs::metadata(path).unwrap().len());
         assert_eq!(actual.row_count, expected.row_count);
         assert_eq!(actual.columns.len(), expected.columns.len());
+    }
+
+    #[tokio::test]
+    async fn indexes_on_a_file_uri_do_not_fail() {
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/small_snappy.parquet"
+        ));
+        let uri = url::Url::from_file_path(path).unwrap();
+        let (_, actual) = read_remote(uri.as_str(), [], true).await.unwrap();
+        assert!(!actual.columns.is_empty());
     }
 }

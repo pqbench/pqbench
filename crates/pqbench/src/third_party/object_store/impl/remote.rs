@@ -4,6 +4,8 @@ use std::future::Future;
 use std::ops::Range;
 use std::pin::Pin;
 
+use ::object_store::aws::AmazonS3;
+use ::object_store::signer::Signer;
 use ::object_store::{GetOptions, ObjectStore, ObjectStoreExt};
 use url::Url;
 
@@ -13,6 +15,9 @@ use crate::third_party::object_store::api::{
 
 struct S3 {
     store: Box<dyn ObjectStore>,
+    /// A concrete S3 store so a HEAD can be signed and its
+    /// `x-amz-storage-class` read. Absent when the backend is not S3.
+    signer: Option<AmazonS3>,
     location: ::object_store::path::Path,
 }
 
@@ -29,15 +34,12 @@ impl Remote for S3 {
 
     fn stat<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<ObjectStat, Error>> + Send + 'a>> {
         Box::pin(async move {
-            let metadata = self
-                .store
-                .head(&self.location)
-                .await
-                .map_err(remote_error)?;
-            Ok(ObjectStat {
-                size_bytes: metadata.size,
-                identity: metadata.e_tag.or(metadata.version),
-            })
+            if let Some(signer) = &self.signer {
+                if let Ok(stat) = head_object(signer, &self.location).await {
+                    return Ok(stat);
+                }
+            }
+            stat_get_opts(self.store.as_ref(), &self.location).await
         })
     }
 
@@ -66,8 +68,107 @@ impl Remote for S3 {
 
 /// Build the S3 reader for `url`.
 pub(crate) fn open_remote(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
-    let (store, location) = s3_store(url, options)?;
-    Ok(ObjectReader::from_remote(Box::new(S3 { store, location })))
+    let (store, signer, location) = s3_store(url, options)?;
+    Ok(ObjectReader::from_remote(Box::new(S3 {
+        store,
+        signer,
+        location,
+    })))
+}
+
+/// One pooled client for every signed HEAD, so connections are reused across
+/// the files of a table.
+fn head_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
+/// object_store 0.13 maps cache/content headers on HEAD but drops
+/// `x-amz-storage-class`. Sign a HEAD and read the header ourselves.
+async fn head_object(
+    store: &AmazonS3,
+    location: &::object_store::path::Path,
+) -> Result<ObjectStat, Error> {
+    let url = store
+        .signed_url(
+            reqwest::Method::HEAD,
+            location,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .map_err(remote_error)?;
+    let response = head_client()
+        .head(url)
+        .send()
+        .await
+        .map_err(|error| Error(format!("cannot HEAD object: {error}")))?;
+    if !response.status().is_success() {
+        return Err(Error(format!(
+            "cannot HEAD object: HTTP {}",
+            response.status()
+        )));
+    }
+    let headers: Vec<(String, String)> = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+        })
+        .collect();
+    let pairs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    head_stat(&pairs).ok_or_else(|| Error("HEAD response has no object size".into()))
+}
+
+async fn stat_get_opts(
+    store: &dyn ObjectStore,
+    location: &::object_store::path::Path,
+) -> Result<ObjectStat, Error> {
+    let result = store
+        .get_opts(
+            location,
+            GetOptions {
+                head: true,
+                ..GetOptions::default()
+            },
+        )
+        .await
+        .map_err(remote_error)?;
+    let metadata = result.meta;
+    Ok(ObjectStat {
+        size_bytes: metadata.size,
+        identity: metadata.e_tag.or(metadata.version),
+        storage_class: result
+            .attributes
+            .get(&::object_store::Attribute::StorageClass)
+            .map(|value| value.as_ref().to_string()),
+    })
+}
+
+/// Parse size, identity, and storage class from a HEAD response.
+fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
+    let mut size = None;
+    let mut etag = None;
+    let mut version = None;
+    let mut storage_class = None;
+    for (name, value) in headers {
+        match name.to_ascii_lowercase().as_str() {
+            "content-length" => size = value.parse().ok(),
+            "etag" => etag = Some((*value).to_string()),
+            "x-amz-version-id" => version = Some((*value).to_string()),
+            "x-amz-storage-class" | "x-goog-storage-class" if !value.is_empty() => {
+                storage_class = Some((*value).to_string());
+            }
+            _ => {}
+        }
+    }
+    Some(ObjectStat {
+        size_bytes: size?,
+        identity: etag.or(version),
+        storage_class,
+    })
 }
 
 /// List one level of children under `url` with S3's delimiter. Listing does not
@@ -76,7 +177,7 @@ pub(crate) async fn list_remote(
     url: &Url,
     options: &[(String, String)],
 ) -> Result<PrefixListing, Error> {
-    let (store, location) = s3_store(url, options)?;
+    let (store, _signer, location) = s3_store(url, options)?;
     let prefix = (!location.as_ref().is_empty()).then_some(&location);
     let result = store
         .list_with_delimiter(prefix)
@@ -97,10 +198,13 @@ pub(crate) async fn list_remote(
     })
 }
 
-fn s3_store(
-    url: &Url,
-    options: &[(String, String)],
-) -> Result<(Box<dyn ObjectStore>, ::object_store::path::Path), Error> {
+type S3Store = (
+    Box<dyn ObjectStore>,
+    Option<AmazonS3>,
+    ::object_store::path::Path,
+);
+
+fn s3_store(url: &Url, options: &[(String, String)]) -> Result<S3Store, Error> {
     use ::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
     // The AWS_* environment supplies the defaults (credentials, region,
@@ -116,7 +220,7 @@ fn s3_store(
     let store = builder.build().map_err(remote_error)?;
     let (_, location) =
         ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
-    Ok((Box::new(store), location))
+    Ok((Box::new(store.clone()), Some(store), location))
 }
 
 fn child_name(parent: &str, child: &str) -> String {
@@ -169,6 +273,7 @@ mod tests {
             .unwrap();
         ObjectReader::from_remote(Box::new(S3 {
             store: Box::new(store),
+            signer: None,
             location: path,
         }))
     }
@@ -204,5 +309,25 @@ mod tests {
         }
         let elapsed = start.elapsed();
         assert!(elapsed < 4 * S3_LATENCY, "4 reads serialized: {elapsed:?}");
+    }
+
+    #[test]
+    fn head_reads_storage_class() {
+        let stat = super::head_stat(&[
+            ("Content-Length", "42"),
+            ("ETag", "\"abc\""),
+            ("x-amz-storage-class", "STANDARD_IA"),
+        ])
+        .unwrap();
+        assert_eq!(stat.size_bytes, 42);
+        assert_eq!(stat.identity.as_deref(), Some("\"abc\""));
+        assert_eq!(stat.storage_class.as_deref(), Some("STANDARD_IA"));
+    }
+
+    #[test]
+    fn head_omits_standard_when_s3_sends_no_class_header() {
+        let stat = super::head_stat(&[("content-length", "8")]).unwrap();
+        assert_eq!(stat.size_bytes, 8);
+        assert!(stat.storage_class.is_none());
     }
 }

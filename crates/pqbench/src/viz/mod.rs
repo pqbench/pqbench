@@ -8,12 +8,13 @@ mod html;
 
 use std::path::Path;
 
+use crate::bytemass::FileStat;
 use crate::third_party::parquet::api::Error;
 
 pub use html::render_html;
 
 /// One collected bytemass row, tagged with the stream `id`.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct MassRecord {
     /// Table id from the stream, or empty for a bare parquet input.
     pub id: String,
@@ -31,15 +32,36 @@ pub struct MassRecord {
     pub uncompressed_bytes: u64,
     /// Compression codec recorded in the column chunk metadata.
     pub codec: String,
+    /// Encodings listed on the column chunk, comma-joined.
+    pub encodings: String,
+    /// Values in this chunk (including nulls).
+    // aipnaming: allow(aip-141/count-suffix)
+    pub num_values: u64,
+    /// Dictionary page offset is present.
+    pub dictionary: bool,
+    /// Footer `null_count`, when statistics exist.
+    pub null_count: Option<u64>,
+    /// Footer `distinct_count`, when statistics exist.
+    pub distinct_count: Option<u64>,
+    /// Physical type of the leaf column.
+    pub physical_type: String,
+    /// Row-group index (0-based).
+    pub row_group: u32,
+    /// Rows in this row group.
+    pub row_group_rows: u64,
+    /// Compressed bytes / row-group rows.
+    pub compressed_bytes_per_row: Option<f64>,
+    /// Data pages in the OffsetIndex, when `--indexes` loaded one.
+    pub page_count: Option<u64>,
 }
 
-/// Write `path.html` from the collected rows.
+/// Write `path.html` from the collected rows and proxied file stats.
 ///
 /// # Errors
 /// Fails when there are no rows or the HTML page cannot be written.
-pub fn write_report(prefix: &Path, rows: &[MassRecord]) -> Result<(), Error> {
+pub fn write_report(prefix: &Path, rows: &[MassRecord], files: &[FileStat]) -> Result<(), Error> {
     let html_path = prefix.with_extension("html");
-    let html = render_html(rows, &title(rows))?;
+    let html = render_html(rows, files, &title(rows))?;
     std::fs::write(&html_path, html)
         .map_err(|error| Error(format!("cannot write {}: {error}", html_path.display())))
 }
@@ -78,6 +100,7 @@ mod tests {
             compressed_bytes: bytes,
             uncompressed_bytes: bytes,
             codec: "ZSTD".into(),
+            ..MassRecord::default()
         }
     }
 
@@ -85,7 +108,7 @@ mod tests {
     fn report_writes_html() {
         let directory = tempfile::tempdir().unwrap();
         let prefix = directory.path().join("masses");
-        write_report(&prefix, &[row("", "a<b>.parquet", "text", 4)]).unwrap();
+        write_report(&prefix, &[row("", "a<b>.parquet", "text", 4)], &[]).unwrap();
 
         let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
         assert!(html.starts_with("<!DOCTYPE html>"));
@@ -96,9 +119,37 @@ mod tests {
     }
 
     #[test]
+    fn report_embeds_proxied_file_stats() {
+        let directory = tempfile::tempdir().unwrap();
+        let prefix = directory.path().join("masses");
+        write_report(
+            &prefix,
+            &[row("sales", "part-0.parquet", "id", 20)],
+            &[FileStat {
+                id: "sales".into(),
+                path: "year=2024/part-0.parquet".into(),
+                file: "part-0.parquet".into(),
+                size: 40,
+                storage_class: Some("STANDARD".into()),
+                partition_values: [("year".to_string(), Some("2024".to_string()))].into(),
+                stats: Some(crate::table::FileStats {
+                    num_records: 10,
+                    bytes_per_row: Some(4.0),
+                    ..Default::default()
+                }),
+            }],
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
+        assert!(html.contains("STANDARD"), "{html}");
+        assert!(html.contains("year=2024"), "{html}");
+        assert!(html.contains("fileTree"), "{html}");
+    }
+
+    #[test]
     fn empty_rows_fail() {
         let directory = tempfile::tempdir().unwrap();
-        let error = write_report(&directory.path().join("empty"), &[])
+        let error = write_report(&directory.path().join("empty"), &[], &[])
             .unwrap_err()
             .to_string();
         assert!(error.contains("bytemass rows"), "{error}");
