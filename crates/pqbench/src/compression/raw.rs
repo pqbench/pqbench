@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use crate::codecs::{bench_pages, Codec, Error, PageSamples};
-use crate::third_party::parquet::api::ParquetFile;
+use crate::third_party::parquet::api::{ColumnChunk, ParquetFile};
 
 /// One page's raw measurement for one codec×level.
 pub struct PageResult {
@@ -50,18 +50,18 @@ pub fn bench_file(
     configs: &[(Codec, u8)],
     passes: u32,
 ) -> Result<Vec<RawRow>, Error> {
+    let chunk_payloads: Vec<Vec<&[u8]>> = file.chunks.iter().map(page_payloads).collect();
     let mut rows = Vec::with_capacity(configs.len());
     for &(codec, level) in configs {
         let mut chunks = Vec::with_capacity(file.chunks.len());
-        for chunk in &file.chunks {
-            let payloads: Vec<&[u8]> = chunk.pages.iter().map(|p| p.payload.as_slice()).collect();
+        for (chunk, payloads) in file.chunks.iter().zip(&chunk_payloads) {
             let PageSamples {
                 page_compressed_sizes,
                 compress_durations,
                 decompress_durations,
                 page_compress_durations,
                 page_decompress_durations,
-            } = bench_pages(codec, level, &payloads, passes)?;
+            } = bench_pages(codec, level, payloads, passes)?;
             let pages = payloads
                 .iter()
                 .zip(page_compressed_sizes)
@@ -92,4 +92,13 @@ pub fn bench_file(
         });
     }
     Ok(rows)
+}
+
+/// The page payloads of one column chunk, in page order.
+fn page_payloads(chunk: &ColumnChunk) -> Vec<&[u8]> {
+    chunk
+        .pages
+        .iter()
+        .map(|page| page.payload.as_slice())
+        .collect()
 }
