@@ -182,7 +182,7 @@ async fn discover_listed(
         let listing = object_store::list_prefix(&dir, &options)
             .await
             .map_err(|e| Error(e.to_string()))?;
-        if listing_is_delta(&listing) || listing_is_iceberg(&listing, &dir, &options).await? {
+        if is_listed_table(&listing, &dir, &options).await? {
             tables.push(listed_table(&root, &dir, env));
             continue;
         }
@@ -209,6 +209,14 @@ fn listed_table(root: &str, dir: &str, env: &BTreeMap<String, String>) -> LakeTa
         env: env.clone(),
         info: None,
     }
+}
+
+async fn is_listed_table(
+    listing: &PrefixListing,
+    dir: &str,
+    options: &[(String, String)],
+) -> Result<bool, Error> {
+    Ok(listing_is_delta(listing) || listing_is_iceberg(listing, dir, options).await?)
 }
 
 fn listing_is_delta(listing: &PrefixListing) -> bool {
