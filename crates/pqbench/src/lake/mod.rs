@@ -182,13 +182,7 @@ async fn discover_listed(
         let listing = object_store::list_prefix(&dir, &options)
             .await
             .map_err(|e| Error(e.to_string()))?;
-        if listing_is_delta(&listing) {
-            tables.push(listed_table(&root, &dir, env));
-            continue;
-        }
-        if listing.prefixes.iter().any(|name| name == "metadata")
-            && metadata_is_iceberg(&dir, &options).await?
-        {
+        if listing_is_delta(&listing) || listing_is_iceberg(&listing, &dir, &options).await? {
             tables.push(listed_table(&root, &dir, env));
             continue;
         }
@@ -221,11 +215,21 @@ fn listing_is_delta(listing: &PrefixListing) -> bool {
     listing.prefixes.iter().any(|name| name == "_delta_log")
 }
 
-async fn metadata_is_iceberg(dir: &str, options: &[(String, String)]) -> Result<bool, Error> {
-    let listing = object_store::list_prefix(&join_uri(dir, "metadata"), options)
+async fn listing_is_iceberg(
+    listing: &PrefixListing,
+    dir: &str,
+    options: &[(String, String)],
+) -> Result<bool, Error> {
+    if !listing.prefixes.iter().any(|name| name == "metadata") {
+        return Ok(false);
+    }
+    let metadata = object_store::list_prefix(&join_uri(dir, "metadata"), options)
         .await
         .map_err(|e| Error(e.to_string()))?;
-    Ok(listing.objects.iter().any(|name| is_iceberg_metadata(name)))
+    Ok(metadata
+        .objects
+        .iter()
+        .any(|name| is_iceberg_metadata(name)))
 }
 
 fn is_iceberg_metadata(name: &str) -> bool {
