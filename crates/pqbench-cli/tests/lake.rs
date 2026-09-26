@@ -202,6 +202,46 @@ fn lake_include_and_exclude_filter_directory_names() {
     assert_eq!(ids, ["sales/events"]);
 }
 
+#[cfg(unix)]
+#[test]
+fn lake_include_does_not_walk_a_pruned_prefix() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("sales/events/_delta_log")).unwrap();
+    let orders = root.path().join("orders");
+    std::fs::create_dir_all(orders.join("_delta_log")).unwrap();
+    std::fs::set_permissions(&orders, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Permission bits are advisory to root; without enforcement there is no
+    // observable difference between pruning a prefix and filtering its result.
+    if std::fs::read_dir(&orders).is_ok() {
+        std::fs::set_permissions(&orders, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let unfiltered = pqbench().arg("lake").arg(root.path()).output().unwrap();
+    let filtered = pqbench()
+        .args(["lake", root.path().to_str().unwrap(), "--include", "sales"])
+        .output()
+        .unwrap();
+    std::fs::set_permissions(&orders, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        !unfiltered.status.success(),
+        "an unreadable prefix must fail an unpruned walk"
+    );
+    assert!(
+        filtered.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&filtered.stderr)
+    );
+    let ids: Vec<_> = table_refs(&ndjson(&filtered.stdout))
+        .into_iter()
+        .map(|record| record["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["sales/events"]);
+}
+
 #[test]
 fn lake_file_uri_matches_a_bare_path() {
     let root = tempfile::tempdir().unwrap();
