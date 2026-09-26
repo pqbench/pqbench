@@ -22,6 +22,9 @@ pub(crate) struct BytemassArgs {
     /// stream NDJSON (same as a pipe; kept for scripts)
     #[arg(long = "json")]
     json: bool,
+    /// also load ColumnIndex/OffsetIndex (one extra range per file)
+    #[arg(long)]
+    indexes: bool,
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
@@ -53,13 +56,28 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
         match record {
             Record::RemoteSource(source) => {
                 for uri in source.inputs {
-                    measure_input(&mut emit, &mut stats, &uri, uri.clone(), source.env.clone())
-                        .await?;
+                    measure_input(
+                        &mut emit,
+                        &mut stats,
+                        &uri,
+                        uri.clone(),
+                        source.env.clone(),
+                        args.indexes,
+                    )
+                    .await?;
                 }
             }
             Record::Table(info) => {
                 for file in info.files {
-                    measure_file(&mut emit, &mut stats, &info.uri, file, info.env.clone()).await?;
+                    measure_file(
+                        &mut emit,
+                        &mut stats,
+                        &info.uri,
+                        file,
+                        info.env.clone(),
+                        args.indexes,
+                    )
+                    .await?;
                 }
             }
             Record::TableRef(table) => {
@@ -71,7 +89,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
             }
             Record::File { id, file } => {
                 let env = envs.get(&id).cloned().unwrap_or_default();
-                measure_file(&mut emit, &mut stats, &id, file, env).await?;
+                measure_file(&mut emit, &mut stats, &id, file, env, args.indexes).await?;
             }
             Record::Commit { .. } => {}
             Record::End { id } => {
@@ -105,10 +123,12 @@ async fn measure_file(
     id: &str,
     file: TableFile,
     env: BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<(), CliError> {
     let rows = bytemass::bytemass(&bytemass::BytemassRequest {
         inputs: vec![file.uri.clone()],
         env,
+        indexes,
     })
     .await?;
     write_file(emit, id, &file, &rows)?;
@@ -131,8 +151,17 @@ async fn measure_input(
     id: &str,
     uri: String,
     env: BTreeMap<String, String>,
+    indexes: bool,
 ) -> Result<(), CliError> {
-    measure_file(emit, stats, id, TableFile::new(uri.clone(), uri, 0), env).await
+    measure_file(
+        emit,
+        stats,
+        id,
+        TableFile::new(uri.clone(), uri, 0),
+        env,
+        indexes,
+    )
+    .await
 }
 
 fn write_file(
@@ -171,7 +200,15 @@ async fn measure(
         event: "begin",
     })?;
     for input in inputs {
-        measure_input(&mut emit, &mut stats, &input, input.clone(), env.clone()).await?;
+        measure_input(
+            &mut emit,
+            &mut stats,
+            &input,
+            input.clone(),
+            env.clone(),
+            args.indexes,
+        )
+        .await?;
     }
     finish_stream(emit, &stats, args.output.as_deref())
 }

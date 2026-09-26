@@ -31,6 +31,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
         inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
         env: info.env.clone(),
+        ..Default::default()
     })
     .await
     .unwrap();
@@ -83,6 +84,7 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
         inputs: latest.files.iter().map(|file| file.uri.clone()).collect(),
         env: latest.env.clone(),
+        ..Default::default()
     })
     .await
     .unwrap();

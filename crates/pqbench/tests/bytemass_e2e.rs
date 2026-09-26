@@ -74,6 +74,16 @@ async fn viz_collects_measured_rows() {
             compressed_bytes: row.compressed_bytes,
             uncompressed_bytes: row.uncompressed_bytes,
             codec: row.codec,
+            encodings: row.encodings.join(","),
+            num_values: row.num_values,
+            dictionary: row.dictionary,
+            null_count: row.null_count,
+            distinct_count: row.distinct_count,
+            physical_type: row.physical_type,
+            row_group: row.row_group,
+            row_group_rows: row.row_group_rows,
+            compressed_bytes_per_row: row.compressed_bytes_per_row,
+            page_count: row.page_count,
         })
         .collect();
     let directory = tempfile::tempdir().unwrap();
@@ -116,6 +126,29 @@ async fn rejects_empty_inputs_and_unmatched_masks() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("mask matched no files"), "{error}");
+}
+
+#[tokio::test]
+async fn rows_include_footer_facts() {
+    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
+        .await
+        .unwrap();
+    assert!(rows.iter().all(|row| !row.physical_type.is_empty()));
+    assert!(rows.iter().all(|row| !row.encodings.is_empty()));
+    assert!(rows.iter().all(|row| row.num_values > 0));
+    assert!(rows.iter().all(|row| row.row_group_rows > 0));
+    assert!(rows
+        .iter()
+        .all(|row| row.compressed_bytes_per_row.is_some()));
+}
+
+#[tokio::test]
+async fn indexes_are_optional() {
+    let mut request = request(vec![fixture("small_snappy.parquet")]);
+    request.indexes = true;
+    let rows = bytemass(&request).await.unwrap();
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(|row| !row.physical_type.is_empty()));
 }
 
 #[cfg(not(feature = "aws"))]

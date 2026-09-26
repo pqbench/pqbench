@@ -108,6 +108,16 @@ fn mass_record(id: String, row: MassRow) -> MassRecord {
         compressed_bytes: row.compressed_bytes,
         uncompressed_bytes: row.uncompressed_bytes,
         codec: row.codec,
+        encodings: row.encodings.join(","),
+        num_values: row.num_values,
+        dictionary: row.dictionary,
+        null_count: row.null_count,
+        distinct_count: row.distinct_count,
+        physical_type: row.physical_type,
+        row_group: row.row_group,
+        row_group_rows: row.row_group_rows,
+        compressed_bytes_per_row: row.compressed_bytes_per_row,
+        page_count: row.page_count,
     }
 }
 
