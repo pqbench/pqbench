@@ -1,31 +1,129 @@
 use pqbench::lake;
+use pqbench::table::{self, TableFormat};
 
-#[test]
-fn discover_names_delta_tables_and_does_not_descend_into_them() {
+fn names(lake: &pqbench::lake::Lake) -> Vec<&str> {
+    lake.tables
+        .iter()
+        .map(|table| table.name.as_str())
+        .collect()
+}
+
+fn warehouse() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     let events = root.path().join("sales/events");
     let orders = root.path().join("orders");
+    let reviews = root.path().join("catalog/reviews");
     std::fs::create_dir_all(events.join("_delta_log")).unwrap();
     std::fs::create_dir_all(events.join("part=a")).unwrap();
     std::fs::create_dir_all(orders.join("_delta_log")).unwrap();
+    std::fs::create_dir_all(reviews.join("metadata")).unwrap();
+    std::fs::create_dir_all(reviews.join("data")).unwrap();
+    std::fs::write(reviews.join("metadata/v1.metadata.json"), "{}").unwrap();
+    std::fs::write(reviews.join("metadata/version-hint.text"), "1").unwrap();
     std::fs::create_dir_all(root.path().join("notes")).unwrap();
-
-    let lake = lake::discover(root.path()).unwrap();
-    assert_eq!(lake.kind, "pqbench.lake");
-    assert_eq!(lake.version, 1);
-    let names: Vec<_> = lake
-        .tables
-        .iter()
-        .map(|table| table.name.as_str())
-        .collect();
-    assert_eq!(names, ["orders", "sales/events"]);
-    assert!(lake.tables.iter().all(|table| table.info.is_none()));
-    assert!(lake::render_text(&lake).contains("tables: 2"));
+    // Nested markers under a table must not be listed.
+    std::fs::create_dir_all(reviews.join("data/nested/_delta_log")).unwrap();
+    std::fs::create_dir_all(reviews.join("data/nested/metadata")).unwrap();
+    std::fs::write(reviews.join("data/nested/metadata/v1.metadata.json"), "{}").unwrap();
+    // `metadata/*.metadata.json` is one path component; nested JSON is not Iceberg.
+    std::fs::create_dir_all(root.path().join("notes/metadata/sub")).unwrap();
+    std::fs::write(
+        root.path().join("notes/metadata/sub/v1.metadata.json"),
+        "{}",
+    )
+    .unwrap();
+    // UniForm: Delta wins; do not emit the same path twice or walk its data.
+    let uniform = root.path().join("uniform");
+    std::fs::create_dir_all(uniform.join("_delta_log")).unwrap();
+    std::fs::create_dir_all(uniform.join("metadata")).unwrap();
+    std::fs::write(uniform.join("metadata/v1.metadata.json"), "{}").unwrap();
+    root
 }
 
 #[test]
-fn discover_rejects_a_directory_with_no_delta_tables() {
+fn discover_names_delta_and_iceberg_tables_and_does_not_descend_into_them() {
+    let root = warehouse();
+    let lake = lake::discover(root.path()).unwrap();
+    assert_eq!(lake.kind, "pqbench.lake");
+    assert_eq!(lake.version, 1);
+    assert_eq!(
+        names(&lake),
+        ["catalog/reviews", "orders", "sales/events", "uniform"]
+    );
+    assert!(lake.tables.iter().all(|table| table.info.is_none()));
+    assert!(lake::render_text(&lake).contains("tables: 4"));
+}
+
+#[test]
+fn discover_rejects_a_directory_with_no_tables() {
     let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("notes/metadata/sub")).unwrap();
+    std::fs::write(
+        root.path().join("notes/metadata/sub/v1.metadata.json"),
+        "{}",
+    )
+    .unwrap();
     let error = lake::discover(root.path()).unwrap_err().to_string();
-    assert!(error.contains("no delta tables"), "{error}");
+    assert!(error.contains("no tables"), "{error}");
+}
+
+#[test]
+fn discover_bounded_stops_at_max_depth() {
+    let root = warehouse();
+    let lake = lake::discover_bounded(root.path(), Some(1)).unwrap();
+    assert_eq!(names(&lake), ["orders", "uniform"]);
+}
+
+#[test]
+fn discover_walk_root_does_not_repeat_the_prefix_component() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("events/_delta_log")).unwrap();
+    let lake = lake::discover(root.path()).unwrap();
+    assert_eq!(names(&lake), ["events"]);
+}
+
+#[tokio::test]
+async fn discover_uri_file_matches_a_bare_path() {
+    let root = warehouse();
+    let path = lake::discover(root.path()).unwrap();
+    let uri = url::Url::from_directory_path(root.path()).unwrap();
+    let listed = lake::discover_uri(uri.as_str(), &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(names(&listed), names(&path));
+}
+
+#[tokio::test]
+async fn discover_uri_decodes_a_file_uri() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().join("my lake");
+    std::fs::create_dir_all(root.join("orders/_delta_log")).unwrap();
+    let uri = url::Url::from_directory_path(&root).unwrap();
+    assert!(uri.as_str().contains("%20") || root.to_str().unwrap().contains(' '));
+    let lake = lake::discover_uri(uri.as_str(), &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(names(&lake), ["orders"]);
+}
+
+#[tokio::test]
+async fn listed_tables_are_detectable() {
+    let root = warehouse();
+    let lake = lake::discover(root.path()).unwrap();
+    for table in &lake.tables {
+        let format = table::detect(&table.uri, &Default::default())
+            .await
+            .unwrap();
+        assert_ne!(format, TableFormat::UNSPECIFIED, "{}", table.uri);
+    }
+}
+
+#[cfg(not(feature = "aws"))]
+#[tokio::test]
+async fn discover_uri_names_the_missing_aws_feature() {
+    let error = lake::discover_uri("s3://bucket/warehouse", &Default::default())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("aws"), "{error}");
 }

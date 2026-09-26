@@ -4,7 +4,7 @@
 //! that names the `object_store` crate. The module is always compiled; an `s3`
 //! URI without the `aws` feature fails at runtime.
 
-pub(crate) mod api;
+pub mod api;
 mod r#impl;
 
-pub(crate) use api::{open, Error};
+pub use api::{list_prefix, open, Error, PrefixListing};

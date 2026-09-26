@@ -185,9 +185,11 @@ impl LoadRequest {
 #[must_use = "detecting a format has no effect unless the result is used"]
 pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFormat, Error> {
     if is_local(uri) {
-        detect_local(&local_path(uri)?)
+        local_format(&local_path(uri)?)?.ok_or_else(|| unrecognized(uri))
     } else {
-        detect_remote(uri, env).await
+        remote_format(uri, env)
+            .await?
+            .ok_or_else(|| unrecognized(uri))
     }
 }
 
@@ -209,34 +211,39 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     }
 }
 
-fn detect_local(path: &Path) -> Result<TableFormat, Error> {
+/// Local markers `lake` and `table` share. `None` is unrecognized, not an error.
+pub(crate) fn local_format(path: &Path) -> Result<Option<TableFormat>, Error> {
     if !path.exists() {
         return Err(Error(format!("cannot open table {}", path.display())));
     }
     if path.is_file() {
-        if is_metadata_json_path(path) {
-            return Ok(TableFormat::ICEBERG);
-        }
-        return Err(unrecognized(path.display()));
+        return Ok(is_metadata_json_path(path).then_some(TableFormat::ICEBERG));
     }
     if path.join("_delta_log").is_dir() {
-        return Ok(TableFormat::DELTA);
+        return Ok(Some(TableFormat::DELTA));
     }
-    if path.join("metadata").join("version-hint.text").is_file()
-        || has_metadata_json(&path.join("metadata"))
-    {
-        return Ok(TableFormat::ICEBERG);
+    if path.join("metadata").join("version-hint.text").is_file() {
+        return Ok(Some(TableFormat::ICEBERG));
     }
-    Err(unrecognized(path.display()))
+    if has_metadata_json(&path.join("metadata"))? {
+        return Ok(Some(TableFormat::ICEBERG));
+    }
+    Ok(None)
 }
 
-async fn detect_remote(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFormat, Error> {
+/// Remote markers `lake` and `table` share. A `.metadata.json` URI is Iceberg;
+/// otherwise Delta is `_delta_log/_last_checkpoint` or commit `0`, and Iceberg
+/// is `metadata/version-hint.text`.
+pub(crate) async fn remote_format(
+    uri: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<Option<TableFormat>, Error> {
     if uri
         .rsplit(['/', '\\'])
         .next()
         .is_some_and(|name| name.ends_with(".metadata.json"))
     {
-        return Ok(TableFormat::ICEBERG);
+        return Ok(Some(TableFormat::ICEBERG));
     }
     let options: Vec<(String, String)> = env
         .iter()
@@ -245,12 +252,12 @@ async fn detect_remote(uri: &str, env: &BTreeMap<String, String>) -> Result<Tabl
     if probe(uri, "_delta_log/_last_checkpoint", &options).await?
         || probe(uri, "_delta_log/00000000000000000000.json", &options).await?
     {
-        return Ok(TableFormat::DELTA);
+        return Ok(Some(TableFormat::DELTA));
     }
     if probe(uri, "metadata/version-hint.text", &options).await? {
-        return Ok(TableFormat::ICEBERG);
+        return Ok(Some(TableFormat::ICEBERG));
     }
-    Err(unrecognized(uri))
+    Ok(None)
 }
 
 async fn probe(uri: &str, relative: &str, options: &[(String, String)]) -> Result<bool, Error> {
@@ -291,13 +298,19 @@ fn is_metadata_json_path(path: &Path) -> bool {
         .is_some_and(|name| name.ends_with(".metadata.json"))
 }
 
-fn has_metadata_json(metadata: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(metadata) else {
-        return false;
-    };
-    entries
-        .flatten()
-        .any(|entry| is_metadata_json_path(&entry.path()))
+fn has_metadata_json(metadata: &Path) -> Result<bool, Error> {
+    if !metadata.exists() || !metadata.is_dir() {
+        return Ok(false);
+    }
+    let entries = std::fs::read_dir(metadata)
+        .map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
+        if entry.path().is_file() && is_metadata_json_path(&entry.path()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn unrecognized(location: impl std::fmt::Display) -> Error {

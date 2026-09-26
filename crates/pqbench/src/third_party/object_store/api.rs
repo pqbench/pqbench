@@ -15,7 +15,7 @@ use url::Url;
 
 /// Errors from the object-storage layer.
 #[derive(Debug)]
-pub(crate) struct Error(pub(crate) String);
+pub struct Error(pub String);
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -26,7 +26,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// What one object lookup reports before any bytes are read.
-pub(crate) struct ObjectStat {
+pub struct ObjectStat {
     /// Object size in bytes.
     pub size_bytes: u64,
     /// Backend ETag or version, used to pin range reads to one revision.
@@ -39,7 +39,7 @@ pub(crate) struct ObjectStat {
 /// Unused until a backend is compiled in; kept here so the api never sees a
 /// feature flag.
 #[allow(dead_code)]
-pub(crate) trait Remote: Send + Sync {
+pub trait Remote: Send + Sync {
     fn exists<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>>;
     fn stat<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<ObjectStat, Error>> + Send + 'a>>;
     fn read_range<'a>(
@@ -50,7 +50,7 @@ pub(crate) trait Remote: Send + Sync {
 }
 
 /// A random-access handle to a single object (local or remote).
-pub(crate) struct ObjectReader {
+pub struct ObjectReader {
     source: ObjectSource,
 }
 
@@ -62,14 +62,14 @@ enum ObjectSource {
 impl ObjectReader {
     /// Wrap a remote backend. Called by the private `impl` module.
     #[allow(dead_code)]
-    pub(crate) fn from_remote(remote: Box<dyn Remote>) -> Self {
+    pub fn from_remote(remote: Box<dyn Remote>) -> Self {
         Self {
             source: ObjectSource::Remote(remote),
         }
     }
 
     /// Whether the object exists. A missing object is `Ok(false)`.
-    pub(crate) async fn exists(&self) -> Result<bool, Error> {
+    pub async fn exists(&self) -> Result<bool, Error> {
         match &self.source {
             ObjectSource::Local(path) => Ok(tokio::fs::metadata(path).await.is_ok()),
             ObjectSource::Remote(remote) => remote.exists().await,
@@ -77,7 +77,7 @@ impl ObjectReader {
     }
 
     /// Report the object's size and identity.
-    pub(crate) async fn stat(&self) -> Result<ObjectStat, Error> {
+    pub async fn stat(&self) -> Result<ObjectStat, Error> {
         match &self.source {
             ObjectSource::Local(path) => {
                 let metadata = tokio::fs::metadata(path)
@@ -93,7 +93,7 @@ impl ObjectReader {
     }
 
     /// Read a bounded byte range, optionally pinned to a known identity.
-    pub(crate) async fn read_range(
+    pub async fn read_range(
         &self,
         range: Range<u64>,
         identity: Option<&str>,
@@ -107,11 +107,62 @@ impl ObjectReader {
     }
 }
 
+/// One level of names under a prefix. Listing does not recurse.
+pub struct PrefixListing {
+    /// Child prefix names. A table walk stops when one of these is a marker.
+    pub prefixes: Vec<String>,
+    /// Object names at this level (one path component).
+    pub objects: Vec<String>,
+}
+
+/// List one level of children under `uri`. `file` URIs always work; `s3`/`s3a`
+/// URIs require the `aws` feature. Backend options are passed through as
+/// `(key, value)` pairs.
+pub async fn list_prefix(uri: &str, options: &[(String, String)]) -> Result<PrefixListing, Error> {
+    let url = Url::parse(uri).map_err(|e| Error(format!("invalid object URI {uri}: {e}")))?;
+    match url.scheme() {
+        "file" => list_file(&url),
+        "s3" | "s3a" => super::r#impl::list_remote(&url, options).await,
+        scheme => Err(Error(format!(
+            "listing is not supported for object URI scheme `{scheme}`"
+        ))),
+    }
+}
+
+fn list_file(url: &Url) -> Result<PrefixListing, Error> {
+    let path = url
+        .to_file_path()
+        .map_err(|()| Error(format!("invalid local file URI: {url}")))?;
+    if !path.is_dir() {
+        return Ok(PrefixListing {
+            prefixes: Vec::new(),
+            objects: Vec::new(),
+        });
+    }
+    let entries = std::fs::read_dir(&path)
+        .map_err(|e| Error(format!("cannot list {}: {e}", path.display())))?;
+    let mut prefixes = Vec::new();
+    let mut objects = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| Error(format!("cannot list {}: {e}", path.display())))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        if entry.path().is_dir() {
+            prefixes.push(name);
+        } else {
+            objects.push(name);
+        }
+    }
+    Ok(PrefixListing { prefixes, objects })
+}
+
 /// Open the object named by `uri`.
 ///
 /// `file` URIs always work; `s3`/`s3a` URIs require the `aws` feature. Backend
 /// options are passed through as `(key, value)` pairs.
-pub(crate) fn open(uri: &str, options: &[(String, String)]) -> Result<ObjectReader, Error> {
+pub fn open(uri: &str, options: &[(String, String)]) -> Result<ObjectReader, Error> {
     let url = Url::parse(uri).map_err(|e| Error(format!("invalid object URI {uri}: {e}")))?;
     match url.scheme() {
         "file" => {
