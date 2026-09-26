@@ -118,22 +118,29 @@ fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, Error> {
     let mut paths = BTreeSet::new();
     for input in inputs {
         if has_glob_metachar(input) && !input.contains("://") {
-            let mut matched = false;
-            for entry in glob::glob(&escape_literal_brackets(input))
-                .map_err(|e| Error(format!("invalid mask {input}: {e}")))?
-            {
-                let path = entry.map_err(|e| Error(format!("cannot expand mask {input}: {e}")))?;
-                paths.insert(path);
-                matched = true;
-            }
-            if !matched {
-                return Err(Error(format!("mask matched no files: {input}")));
-            }
+            insert_glob(input, &mut paths)?;
         } else {
             paths.insert(PathBuf::from(input));
         }
     }
     Ok(paths.into_iter().collect())
+}
+
+/// Insert every local file a glob mask matches.
+fn insert_glob(mask: &str, paths: &mut BTreeSet<PathBuf>) -> Result<(), Error> {
+    let mut matched = false;
+    for entry in glob::glob(&escape_literal_brackets(mask))
+        .map_err(|e| Error(format!("invalid mask {mask}: {e}")))?
+    {
+        let path = entry.map_err(|e| Error(format!("cannot expand mask {mask}: {e}")))?;
+        paths.insert(path);
+        matched = true;
+    }
+    if matched {
+        Ok(())
+    } else {
+        Err(Error(format!("mask matched no files: {mask}")))
+    }
 }
 
 fn has_glob_metachar(input: &str) -> bool {

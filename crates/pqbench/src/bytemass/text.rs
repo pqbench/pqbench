@@ -2,8 +2,8 @@
 //!
 //! This is the agent-facing output: a terminal table of the per-column on-disk
 //! bytes per row (the measure), sorted descending, plus the total. The
-//! composable data and the browser picture come from [`super::json`] and
-//! [`super::d3`].
+//! composable data comes from [`super::json`]; `pqbench viz` builds the browser
+//! picture from that stream.
 
 use crate::third_party::parquet::api::Error;
 
