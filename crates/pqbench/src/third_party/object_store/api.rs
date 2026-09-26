@@ -8,7 +8,7 @@
 
 use std::future::Future;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use url::Url;
@@ -181,6 +181,74 @@ pub fn open(uri: &str, options: &[(String, String)]) -> Result<ObjectReader, Err
         scheme => Err(Error(format!(
             "unsupported object URI scheme `{scheme}`; supported schemes are file and s3"
         ))),
+    }
+}
+
+/// Bytes fetched per remote read when copying an object to disk.
+const COPY_CHUNK: u64 = 8 * 1024 * 1024;
+
+/// Copy the object at `uri` to local `dest`, returning the bytes written.
+///
+/// A local path or `file://` URI is copied on the filesystem; a remote URI is
+/// fetched in [`COPY_CHUNK`] pieces and streamed to disk. Parent directories of
+/// `dest` are created. Backend options are passed through as `(key, value)`
+/// pairs.
+///
+/// # Errors
+/// Fails for an unsupported URI scheme, an unreadable object, or a local write
+/// error.
+pub async fn copy(uri: &str, dest: &Path, options: &[(String, String)]) -> Result<u64, Error> {
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| Error(format!("cannot create {}: {error}", parent.display())))?;
+    }
+    if !is_remote(uri) {
+        let source = local_path(uri);
+        return tokio::fs::copy(&source, dest)
+            .await
+            .map_err(|error| Error(format!("cannot copy {}: {error}", source.display())));
+    }
+    let url =
+        Url::parse(uri).map_err(|error| Error(format!("invalid object URI {uri}: {error}")))?;
+    match url.scheme() {
+        "s3" | "s3a" => copy_remote(uri, dest, options).await,
+        scheme => Err(Error(format!(
+            "unsupported object URI scheme `{scheme}`; supported schemes are file and s3"
+        ))),
+    }
+}
+
+async fn copy_remote(uri: &str, dest: &Path, options: &[(String, String)]) -> Result<u64, Error> {
+    use tokio::io::AsyncWriteExt;
+
+    let reader = open(uri, options)?;
+    let stat = reader.stat().await?;
+    let size = stat.size_bytes;
+    let identity = stat.identity.as_deref();
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|error| Error(format!("cannot write {}: {error}", dest.display())))?;
+    let mut offset = 0;
+    while offset < size {
+        let end = (offset + COPY_CHUNK).min(size);
+        let bytes = reader.read_range(offset..end, identity).await?;
+        file.write_all(&bytes)
+            .await
+            .map_err(|error| Error(format!("cannot write {}: {error}", dest.display())))?;
+        offset = end;
+    }
+    Ok(size)
+}
+
+fn is_remote(uri: &str) -> bool {
+    uri.contains("://") && !uri.starts_with("file://")
+}
+
+fn local_path(uri: &str) -> PathBuf {
+    match uri.strip_prefix("file://") {
+        Some(path) => PathBuf::from(path),
+        None => PathBuf::from(uri),
     }
 }
 
