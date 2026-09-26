@@ -138,6 +138,23 @@ pqbench lake unity.json | pqbench table | pqbench bytemass
  "env": {"AWS_REGION": "us-east-1"}}
 ```
 
+### dump
+
+Copy the Parquet files a table names to a local directory — an `aws s3 cp`-style
+fetch for a Delta or Iceberg table, local or remote:
+
+```sh
+pqbench table ./delta-table | pqbench dump ./sample
+pqbench dump ./sample s3://bucket/table
+pqbench lake ./warehouse | pqbench table | pqbench dump ./mirror
+```
+
+Each file lands at its table-relative path, so partition directories are
+preserved. Which files to keep is a shell decision on the `table` stream
+(`jq`, `sort`, `head`); a lake nests each table under its name. A path that
+would escape the output directory is refused, and `s3://` needs the `aws`
+feature.
+
 ## Documentation
 
 - [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, lake walk, catalogs

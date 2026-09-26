@@ -47,6 +47,15 @@ The first form keeps the per-table `env` (S3/Unity credentials) on the begin
 record, so it works for remote tables. Dropping to bare `uri`s (`jq -r`) is
 local-only: pass credentials in the environment when you use `xargs`.
 
+The same filtered stream copies the selected files to disk with `dump`, keeping
+each table-relative path:
+
+```sh
+pqbench table ./delta-table \
+  | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("year=2024/")))' \
+  | pqbench dump ./sample
+```
+
 ## A lake of tables
 
 A directory, `file://` URI, or `s3://` prefix is walked until a table marker
