@@ -16,7 +16,7 @@ use super::api::{
 };
 
 mod dump;
-pub(crate) use dump::{read_rows, write_parquet};
+pub(crate) use dump::{data_ranges, footer_range, read_rows, write_parquet};
 
 /// The parquet-rs-backed page parser.
 pub struct ParquetRsParser;

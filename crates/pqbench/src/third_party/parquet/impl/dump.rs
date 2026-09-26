@@ -1,13 +1,13 @@
 //! The Parquet-backed `dump` implementation: read rows and copy row groups.
 //!
-//! This is the only dump file that names the `parquet` crate. It opens local
-//! and remote sources, reads records into plain JSON values, and copies row
-//! groups page-for-page. Selection and orchestration live in [`crate::dump`].
+//! This is the only dump file that names the `parquet` crate. It opens a local
+//! [`ObjectSource::Path`] or an in-memory [`ObjectSource::Partial`], reads
+//! records into plain JSON values, and copies row groups page-for-page.
+//! Storage and orchestration live in [`crate::dump`].
 
 use std::fs::File;
 use std::io::{Cursor, Read, Write};
 use std::ops::Range;
-use std::path::Path;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -21,28 +21,22 @@ use parquet::record::reader::RowIter;
 use parquet::record::Field;
 use serde_json::{Map, Value};
 
-use super::super::api::{Error, FileRows, Source};
-use crate::third_party::object_store;
+use super::super::api::{Error, FileRows, ObjectSource};
 
 /// Read rows from one source, keeping at most the first `row_groups`.
-pub(crate) async fn read_rows(
-    source: &Source<'_>,
+pub(crate) fn read_rows(
+    source: &ObjectSource,
     row_groups: Option<usize>,
 ) -> Result<FileRows, Error> {
-    let opened = open_source(source, row_groups).await?;
+    let opened = open(source)?;
     let keep = clamp(row_groups, opened.metadata.num_row_groups());
-    let reader = SerializedFileReader::new(clone_reader(&opened.reader)?)
-        .map_err(|error| Error(format!("{}: {error}", source.uri)))?;
+    let reader = SerializedFileReader::new(clone_reader(&opened.reader)?).map_err(parquet_error)?;
     let mut columns = Vec::new();
     let mut rows = Vec::new();
     for index in 0..keep {
-        let group = reader
-            .get_row_group(index)
-            .map_err(|error| Error(format!("{}: {error}", source.uri)))?;
-        for record in RowIter::from_row_group(None, group.as_ref())
-            .map_err(|error| Error(format!("{}: {error}", source.uri)))?
-        {
-            let record = record.map_err(|error| Error(format!("{}: {error}", source.uri)))?;
+        let group = reader.get_row_group(index).map_err(parquet_error)?;
+        for record in RowIter::from_row_group(None, group.as_ref()).map_err(parquet_error)? {
+            let record = record.map_err(parquet_error)?;
             let mut values = Vec::new();
             for (name, field) in record.get_column_iter() {
                 if rows.is_empty() {
@@ -57,14 +51,14 @@ pub(crate) async fn read_rows(
 }
 
 /// Copy the selected row groups of every source into one Parquet buffer.
-pub(crate) async fn write_parquet(
-    sources: &[Source<'_>],
+pub(crate) fn write_parquet(
+    sources: &[ObjectSource],
     row_groups: Option<usize>,
 ) -> Result<Vec<u8>, Error> {
     let Some(first_source) = sources.first() else {
         return Err(Error("no files".into()));
     };
-    let first = open_source(first_source, row_groups).await?;
+    let first = open(first_source)?;
     let schema = first
         .metadata
         .file_metadata()
@@ -79,17 +73,16 @@ pub(crate) async fn write_parquet(
         clamp(row_groups, first.metadata.num_row_groups()),
     )?;
     for source in &sources[1..] {
-        let opened = open_source(source, row_groups).await?;
+        let opened = open(source)?;
         let file_schema = opened
             .metadata
             .file_metadata()
             .schema_descr_ptr()
             .root_schema_ptr();
         if file_schema.as_ref() != schema.as_ref() {
-            return Err(Error(format!(
-                "{} has a different schema; dump parquet needs one schema",
-                source.uri
-            )));
+            return Err(Error(
+                "a source has a different schema; dump parquet needs one schema".into(),
+            ));
         }
         append_groups(
             &mut writer,
@@ -99,6 +92,48 @@ pub(crate) async fn write_parquet(
     }
     writer.close().map_err(parquet_error)?;
     Ok(out)
+}
+
+/// The footer byte range of a Parquet object of `size`, from its trailer.
+pub(crate) fn footer_range(size: u64, trailer: &[u8]) -> Result<Range<u64>, Error> {
+    let trailer: [u8; 8] = trailer
+        .try_into()
+        .map_err(|_| Error("truncated Parquet trailer".into()))?;
+    if &trailer[4..] != b"PAR1" {
+        return Err(Error("no Parquet footer magic".into()));
+    }
+    let metadata_size = u64::from(u32::from_le_bytes([
+        trailer[0], trailer[1], trailer[2], trailer[3],
+    ]));
+    let start = size
+        .checked_sub(8 + metadata_size)
+        .filter(|start| *start >= 4)
+        .ok_or_else(|| Error("invalid Parquet footer size".into()))?;
+    Ok(start..size)
+}
+
+/// The data byte ranges to fetch for the first `row_groups` groups.
+pub(crate) fn data_ranges(
+    footer: &[u8],
+    row_groups: Option<usize>,
+) -> Result<Vec<Range<u64>>, Error> {
+    let metadata = ParquetMetaDataReader::new()
+        .parse_and_finish(&Bytes::copy_from_slice(footer))
+        .map_err(parquet_error)?;
+    let keep = clamp(row_groups, metadata.num_row_groups());
+    let mut ranges = Vec::new();
+    for group in metadata.row_groups().iter().take(keep) {
+        ranges.extend(group_range(group)?);
+    }
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<u64>> = Vec::new();
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    Ok(merged)
 }
 
 /// The per-file row-group limit: every group when `row_groups` is `None`.
@@ -194,95 +229,36 @@ impl ChunkReader for PartialFile {
     }
 }
 
-async fn open_source(source: &Source<'_>, row_groups: Option<usize>) -> Result<Opened, Error> {
-    if object_store::is_remote(source.uri) {
-        return open_remote(source, row_groups).await;
-    }
-    let path = local_path(source.uri);
-    let file = File::open(&path)
-        .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;
-    let metadata = ParquetMetaDataReader::new()
-        .parse_and_finish(&file)
-        .map_err(parquet_error)?;
-    Ok(Opened {
-        reader: SourceReader::Local(file),
-        metadata,
-    })
-}
-
-async fn open_remote(source: &Source<'_>, row_groups: Option<usize>) -> Result<Opened, Error> {
-    let uri = source.uri;
-    let reader = object_store::open(uri, source.env).map_err(|error| Error(error.to_string()))?;
-    let stat = reader
-        .stat()
-        .await
-        .map_err(|error| Error(error.to_string()))?;
-    let size = stat.size_bytes;
-    if size < 8 {
-        return Err(Error(format!(
-            "object {uri} is too small to be a Parquet file: {size} bytes"
-        )));
-    }
-    let identity = stat.identity.as_deref();
-    let trailer = reader
-        .read_range(size - 8..size, identity)
-        .await
-        .map_err(|error| Error(error.to_string()))?;
-    let trailer: [u8; 8] = trailer
-        .as_slice()
-        .try_into()
-        .map_err(|_| Error(format!("object {uri} returned a truncated Parquet trailer")))?;
-    if &trailer[4..] != b"PAR1" {
-        return Err(Error(format!("object {uri} has no Parquet footer magic")));
-    }
-    let metadata_size = u64::from(u32::from_le_bytes([
-        trailer[0], trailer[1], trailer[2], trailer[3],
-    ]));
-    let metadata_start = size
-        .checked_sub(8 + metadata_size)
-        .filter(|start| *start >= 4)
-        .ok_or_else(|| Error(format!("object {uri} has an invalid Parquet footer size")))?;
-    let footer = reader
-        .read_range(metadata_start..size, identity)
-        .await
-        .map_err(|error| Error(error.to_string()))?;
-    if footer.len() as u64 != size - metadata_start {
-        return Err(Error(format!(
-            "object {uri} returned truncated Parquet metadata"
-        )));
-    }
-    let metadata = ParquetMetaDataReader::new()
-        .parse_and_finish(&Bytes::from(footer.clone()))
-        .map_err(parquet_error)?;
-    let keep = clamp(row_groups, metadata.num_row_groups());
-    let mut parts = vec![(metadata_start, Bytes::from(footer))];
-    for range in data_ranges(&metadata, keep)? {
-        let bytes = reader
-            .read_range(range.clone(), identity)
-            .await
-            .map_err(|error| Error(error.to_string()))?;
-        parts.push((range.start, Bytes::from(bytes)));
-    }
-    Ok(Opened {
-        reader: SourceReader::Partial(PartialFile { len: size, parts }),
-        metadata,
-    })
-}
-
-fn data_ranges(metadata: &ParquetMetaData, keep: usize) -> Result<Vec<Range<u64>>, Error> {
-    let mut ranges = Vec::new();
-    for group in metadata.row_groups().iter().take(keep) {
-        ranges.extend(group_range(group)?);
-    }
-    ranges.sort_by_key(|range| range.start);
-    let mut merged: Vec<Range<u64>> = Vec::new();
-    for range in ranges {
-        match merged.last_mut() {
-            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
-            _ => merged.push(range),
+fn open(source: &ObjectSource) -> Result<Opened, Error> {
+    match source {
+        ObjectSource::Path(path) => {
+            let file = File::open(path)
+                .map_err(|error| Error(format!("cannot read {}: {error}", path.display())))?;
+            let metadata = ParquetMetaDataReader::new()
+                .parse_and_finish(&file)
+                .map_err(parquet_error)?;
+            Ok(Opened {
+                reader: SourceReader::Local(file),
+                metadata,
+            })
+        }
+        ObjectSource::Partial { size, parts } => {
+            let reader = PartialFile {
+                len: *size,
+                parts: parts
+                    .iter()
+                    .map(|(o, b)| (*o, Bytes::from(b.clone())))
+                    .collect(),
+            };
+            let metadata = ParquetMetaDataReader::new()
+                .parse_and_finish(&reader)
+                .map_err(parquet_error)?;
+            Ok(Opened {
+                reader: SourceReader::Partial(reader),
+                metadata,
+            })
         }
     }
-    Ok(merged)
 }
 
 fn group_range(group: &RowGroupMetaData) -> Result<Vec<Range<u64>>, Error> {
@@ -342,13 +318,6 @@ fn clone_reader(reader: &SourceReader) -> Result<SourceReader, Error> {
             parts: file.parts.clone(),
         })),
     }
-}
-
-fn local_path(uri: &str) -> std::path::PathBuf {
-    if let Some(path) = uri.strip_prefix("file://") {
-        return Path::new(path).to_path_buf();
-    }
-    Path::new(uri).to_path_buf()
 }
 
 fn parquet_error(error: parquet::errors::ParquetError) -> Error {

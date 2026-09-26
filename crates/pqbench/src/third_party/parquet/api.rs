@@ -8,7 +8,8 @@
 //! Only NONE-compressed input is supported: `Page.payload` is the raw encoded
 //! values (what `compression.rs` will sweep codecs over).
 
-use std::path::Path;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -117,13 +118,23 @@ pub fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
     super::r#impl::read_footer_masses(footer)
 }
 
-/// One Parquet object to read or copy: a URI/path and its storage options.
-#[derive(Debug, Clone, Copy)]
-pub struct Source<'a> {
-    /// URI or filesystem path to the Parquet object.
-    pub uri: &'a str,
-    /// Storage options (`AWS_*`); ignored for a local path.
-    pub env: &'a [(String, String)],
+/// One Parquet object to read or copy, as plain data.
+///
+/// Storage is the caller's job: a local file is read in place, while a remote
+/// object is fetched as its footer and row-group byte ranges and passed as
+/// [`ObjectSource::Partial`]. No storage type appears here, so this module
+/// stays one third-party crate.
+#[derive(Debug, Clone)]
+pub enum ObjectSource {
+    /// A local filesystem path, opened and seeked by the reader.
+    Path(PathBuf),
+    /// Pre-fetched byte ranges of a remote object.
+    Partial {
+        /// Total object size in bytes.
+        size: u64,
+        /// `(offset, bytes)` ranges covering the footer and the kept rows.
+        parts: Vec<(u64, Vec<u8>)>,
+    },
 }
 
 /// Rows read from one Parquet file: column names and one value list per row.
@@ -135,16 +146,14 @@ pub struct FileRows {
     pub rows: Vec<Vec<Value>>,
 }
 
-/// Read rows from one Parquet object, keeping at most the first `row_groups`.
+/// Read rows from one source, keeping at most the first `row_groups`.
 ///
-/// `None` reads every row group. Local objects are seeked; `s3://` objects
-/// fetch only the footer and the selected row groups and need the `aws`
-/// feature.
+/// `None` reads every row group.
 ///
 /// # Errors
-/// Fails when the object cannot be read or a row cannot be decoded.
-pub async fn read_rows(source: &Source<'_>, row_groups: Option<usize>) -> Result<FileRows, Error> {
-    super::r#impl::read_rows(source, row_groups).await
+/// Fails when the source cannot be read or a row cannot be decoded.
+pub fn read_rows(source: &ObjectSource, row_groups: Option<usize>) -> Result<FileRows, Error> {
+    super::r#impl::read_rows(source, row_groups)
 }
 
 /// Copy the selected row groups of `sources` into one Parquet buffer.
@@ -155,11 +164,33 @@ pub async fn read_rows(source: &Source<'_>, row_groups: Option<usize>) -> Result
 /// # Errors
 /// Fails when there are no sources, a source cannot be read, schemas differ, or
 /// the writer cannot emit the file.
-pub async fn write_parquet(
-    sources: &[Source<'_>],
+pub fn write_parquet(
+    sources: &[ObjectSource],
     row_groups: Option<usize>,
 ) -> Result<Vec<u8>, Error> {
-    super::r#impl::write_parquet(sources, row_groups).await
+    super::r#impl::write_parquet(sources, row_groups)
+}
+
+/// The footer byte range of a Parquet object of `size`, from its trailer.
+///
+/// `trailer` is the object's last eight bytes: the four-byte metadata length
+/// followed by `PAR1`. The range covers the serialized metadata and the
+/// trailer, which is what a metadata parser expects.
+///
+/// # Errors
+/// Fails when `trailer` is not a Parquet trailer or the length is invalid.
+pub fn footer_range(size: u64, trailer: &[u8]) -> Result<Range<u64>, Error> {
+    super::r#impl::footer_range(size, trailer)
+}
+
+/// The data byte ranges to fetch for the first `row_groups` groups.
+///
+/// `footer` is the [`footer_range`] bytes. `None` covers every row group.
+///
+/// # Errors
+/// Fails when `footer` is not valid Parquet metadata.
+pub fn data_ranges(footer: &[u8], row_groups: Option<usize>) -> Result<Vec<Range<u64>>, Error> {
+    super::r#impl::data_ranges(footer, row_groups)
 }
 
 #[cfg(test)]

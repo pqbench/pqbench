@@ -11,9 +11,10 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::third_party::object_store::is_remote;
-use crate::third_party::parquet::{self, Error, FileRows, Source};
+use crate::third_party::parquet::{self, Error, FileRows};
 
 pub mod selection;
+mod source;
 pub use selection::{keep, select, Sample};
 
 /// How many leading row groups to read from each file.
@@ -99,12 +100,8 @@ pub async fn dump(request: &DumpRequest) -> Result<Dump, Error> {
     let mut columns = Vec::new();
     let mut rows = Vec::new();
     for file in &files {
-        let env = env_pairs(&file.env);
-        let source = Source {
-            uri: &file.uri,
-            env: &env,
-        };
-        let read = parquet::read_rows(&source, limit).await?;
+        let source = source::open(file, limit).await?;
+        let read = parquet::read_rows(&source, limit)?;
         let (file_columns, file_rows) = label(file, read)?;
         merge_columns(&mut columns, &file_columns, &mut rows);
         for row in file_rows {
@@ -124,16 +121,12 @@ pub async fn write_parquet(request: &DumpRequest) -> Result<Vec<u8>, Error> {
     if files.is_empty() {
         return Err(Error("no files".into()));
     }
-    let envs: Vec<Vec<(String, String)>> = files.iter().map(|file| env_pairs(&file.env)).collect();
-    let sources: Vec<Source<'_>> = files
-        .iter()
-        .zip(&envs)
-        .map(|(file, env)| Source {
-            uri: &file.uri,
-            env,
-        })
-        .collect();
-    parquet::write_parquet(&sources, request.row_group.limit()).await
+    let limit = request.row_group.limit();
+    let mut sources = Vec::with_capacity(files.len());
+    for file in &files {
+        sources.push(source::open(file, limit).await?);
+    }
+    parquet::write_parquet(&sources, limit)
 }
 
 /// Prepend the `_table` / `_path` columns to one file's rows.
@@ -199,12 +192,6 @@ fn expand_files(files: &[DumpFile]) -> Result<Vec<DumpFile>, Error> {
 
 fn has_glob(input: &str) -> bool {
     input.contains(['*', '?'])
-}
-
-fn env_pairs(env: &BTreeMap<String, String>) -> Vec<(String, String)> {
-    env.iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
 }
 
 fn merge_columns(columns: &mut Vec<String>, incoming: &[String], rows: &mut [Vec<Value>]) {
