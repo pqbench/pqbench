@@ -124,14 +124,24 @@ fn bytemass(
 ///
 /// Returns the `pqbench.table` document.
 #[pyfunction]
-#[pyo3(signature = (uri, *, version=None, env=None))]
+#[pyo3(signature = (uri, *, version=None, env=None, filter=None, snapshot_at=None))]
 fn table(
     py: Python<'_>,
     uri: String,
     version: Option<u64>,
     env: Option<BTreeMap<String, String>>,
+    filter: Option<String>,
+    snapshot_at: Option<String>,
 ) -> PyResult<Py<PyAny>> {
-    let request = pqbench::table::LoadRequest::new(uri, version, aws_env(env)?);
+    let mut request = pqbench::table::LoadRequest::new(uri, version, aws_env(env)?);
+    if let Some(instant) = snapshot_at {
+        request = request.set_snapshot_time(instant);
+    }
+    if let Some(expression) = filter {
+        let filter = pqbench::filter::Filter::parse(&expression)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        request = request.set_filter(filter);
+    }
     let info = py
         .detach(|| block_on(pqbench::table::load(&request)))
         .map_err(runtime)?;

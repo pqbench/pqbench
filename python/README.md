@@ -39,8 +39,9 @@ pqbench.viz(rows, output="report")               # report.html
 
 `codecs` repeats `codec@level`. Defaults match the CLI: `samples` 10,
 `warmup_iterations` 3, `mode` `fastest`. `mode` is `fastest` or `mean`.
-`table` and `lake` always return the versioned document. `dump` accepts a table
-URI or those documents and copies the Parquet files a table or lake names into
+`table` and `lake` always return the versioned document. `table` accepts the
+same `filter` (an AIP-160 expression) and `snapshot_at` as the CLI. `dump`
+accepts a table URI or those documents and copies the Parquet files a table or lake names into
 the output directory, returning `file_count` and `byte_count`. `viz` collects a
 bytemass row list into a static HTML treemap. `env` on `bytemass` and `table` may
 only contain `AWS_*` names.

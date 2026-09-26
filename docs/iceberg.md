@@ -67,9 +67,10 @@ third-party storage types.
 
 `pqbench table` describes the snapshot log, the snapshot id, partition columns,
 and the active data files. Delete files appear in the selected snapshot's
-actions. `pqbench bytemass` then reports physical storage of those files: file
-bytes, physical Parquet rows, compressed and uncompressed column bytes, codecs,
-and compressed bytes per row.
+actions. `--snapshot-at` loads the latest snapshot created at or before an
+instant (not together with `--version`). Iceberg manifests do not record
+per-file modification time or add version, so a `--filter` on `update_time`
+matches nothing and fails.
 
 ## Limitations
 

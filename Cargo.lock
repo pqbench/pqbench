@@ -2872,6 +2872,7 @@ dependencies = [
  "apache-avro",
  "buoyant_kernel_derive",
  "bytes",
+ "chrono",
  "deltalake",
  "flate2",
  "futures",

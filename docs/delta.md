@@ -67,7 +67,12 @@ of borrowing the caller's.
 ## Document
 
 `pqbench.table` version 1 names the format, the JSON commits that remain on
-disk, and the active files (path, URI, log size). On a pipe that is one JSON object per line, each tagged with a table `id`:
+disk, and the active files (path, URI, log size, and log modification time /
+add version when the commit records them). `--filter` keeps the files matching
+an AIP-160 expression over `path`, `uri`, `size_bytes`, `update_time`, and
+`snapshot_version`; `--snapshot-at` loads the latest snapshot created at or
+before an instant (not together with `--version`). `bytemass` then streams one
+`pqbench.bytemass-row` per column chunk. On a pipe that is one JSON object per line, each tagged with a table `id`:
 `begin`, then `pqbench.table-log` commits, then `pqbench.table-file` rows,
 then `end`. `lake` emits `pqbench.table-ref` lines; `table` loads them one at a
 time. A table is the work unit: scan a catalog by running one `table` process

@@ -308,3 +308,34 @@ async fn load_reports_a_broken_snapshot() {
         .to_string();
     assert!(error.contains("Partition column"), "{error}");
 }
+
+#[tokio::test]
+async fn load_keeps_files_matching_a_filter() {
+    let fixture = Fixture::new();
+    let filter =
+        pqbench::filter::Filter::parse("update_time >= \"1970-01-01\" AND snapshot_version >= 1")
+            .unwrap();
+    let info =
+        table::load(&load_request(fixture.path().to_string_lossy(), None).set_filter(filter))
+            .await
+            .unwrap();
+    assert_eq!(info.files.len(), 1);
+    assert_eq!(info.files[0].path, "part=a/added.parquet");
+    assert_eq!(info.files[0].snapshot_version, Some(1));
+    assert_eq!(
+        info.files[0].update_time.as_deref(),
+        Some("1970-01-01T00:00:00Z")
+    );
+}
+
+#[tokio::test]
+async fn load_rejects_a_filter_that_matches_nothing() {
+    let fixture = Fixture::new();
+    let filter = pqbench::filter::Filter::parse("snapshot_version >= 9").unwrap();
+    let error =
+        table::load(&load_request(fixture.path().to_string_lossy(), None).set_filter(filter))
+            .await
+            .unwrap_err()
+            .to_string();
+    assert!(error.contains("no files matched"), "{error}");
+}

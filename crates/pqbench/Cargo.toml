@@ -34,6 +34,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 bytes = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+chrono = { version = "0.4", default-features = false, features = ["alloc", "std"] }
 deltalake = { version = "=0.32.4", default-features = false, features = ["rustls"], optional = true }
 # delta-rs 0.32.4 was released against the 1.0 proc macros. Its transitive
 # semver range also accepts 1.2, whose renamed macros do not compile with

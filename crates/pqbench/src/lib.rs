@@ -6,6 +6,7 @@ pub mod bytemass;
 pub mod codecs;
 pub mod compression;
 pub mod dump;
+pub mod filter;
 pub mod lake;
 pub mod lz;
 pub mod report;

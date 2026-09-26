@@ -10,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::Deserialize;
 use url::Url;
 
+use crate::filter::Filter;
 use crate::table::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
@@ -47,8 +48,9 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             metadata.format_version
         )));
     }
+    let at = crate::table::snapshot_time_millis(request).map_err(|e| Error(e.to_string()))?;
     let requested = request.snapshot_version.map(create_i64).transpose()?;
-    let selected = select_snapshot(&metadata, requested)?;
+    let selected = select_snapshot(&metadata, requested, at)?;
     let snapshot_version = selected
         .as_ref()
         .map(|snapshot| create_u64(snapshot.snapshot_id))
@@ -56,7 +58,13 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         .unwrap_or(0);
     let (files, deletes) = match selected {
         Some(snapshot) => {
-            active_files(&metadata.location, &snapshot.manifest_list, &options).await?
+            active_files(
+                &metadata.location,
+                &snapshot.manifest_list,
+                &options,
+                request.filter.as_ref(),
+            )
+            .await?
         }
         None => (Vec::new(), Vec::new()),
     };
@@ -89,7 +97,7 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             });
         }
     }
-    Ok(TableInfo::new(
+    let info = TableInfo::new(
         TableFormat::ICEBERG,
         request.uri.clone(),
         snapshot_version,
@@ -97,7 +105,8 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         log,
         files,
         request.env.clone(),
-    ))
+    );
+    Ok(info)
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,6 +145,8 @@ struct Snapshot {
     parent_snapshot_id: Option<i64>,
     #[serde(rename = "manifest-list")]
     manifest_list: String,
+    #[serde(rename = "timestamp-ms", default)]
+    time_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,13 +189,29 @@ fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
 fn select_snapshot(
     metadata: &TableMetadata,
     requested: Option<i64>,
+    at: Option<i64>,
 ) -> Result<Option<&Snapshot>, Error> {
-    let snapshot_id = match requested {
+    if let Some(snapshot_id) = requested {
+        return metadata
+            .snapshots
+            .iter()
+            .find(|snapshot| snapshot.snapshot_id == snapshot_id)
+            .map(Some)
+            .ok_or_else(|| Error(format!("Iceberg snapshot does not exist: {snapshot_id}")));
+    }
+    if let Some(millis) = at {
+        return metadata
+            .snapshots
+            .iter()
+            .filter_map(|snapshot| snapshot.time_ms.map(|time| (time, snapshot)))
+            .filter(|(time, _)| *time <= millis)
+            .max_by_key(|(time, _)| *time)
+            .map(|(_, snapshot)| Some(snapshot))
+            .ok_or_else(|| Error("no snapshot at or before the requested time".into()));
+    }
+    let snapshot_id = match metadata.current_snapshot_id.filter(|id| *id != -1) {
         Some(snapshot_id) => snapshot_id,
-        None => match metadata.current_snapshot_id.filter(|id| *id != -1) {
-            Some(snapshot_id) => snapshot_id,
-            None => return Ok(None),
-        },
+        None => return Ok(None),
     };
     metadata
         .snapshots
@@ -317,10 +344,13 @@ fn metadata_json_version(name: &str) -> Option<u64> {
     version.parse().ok()
 }
 
+/// Walk the manifest list and each manifest, keeping only the data files a
+/// filter accepts so non-matching files never accumulate.
 async fn active_files(
     table_location: &str,
     manifest_list: &str,
     options: &[(String, String)],
+    filter: Option<&Filter>,
 ) -> Result<(Vec<TableFile>, Vec<String>), Error> {
     let root = table_root(table_location)?;
     let bytes = read_location(manifest_list, options).await?;
@@ -358,8 +388,14 @@ async fn active_files(
                 ))
             })?;
             let uri = resolve_data_file(&root, &entry.data_file.file_path)?;
-            files.push(TableFile::new(entry.data_file.file_path, uri, size));
+            let candidate = TableFile::new(entry.data_file.file_path, uri, size);
+            if filter.is_none_or(|filter| filter.matches(&candidate)) {
+                files.push(candidate);
+            }
         }
+    }
+    if filter.is_some() && files.is_empty() {
+        return Err(Error("no files matched the filter".into()));
     }
     Ok((files, deletes))
 }

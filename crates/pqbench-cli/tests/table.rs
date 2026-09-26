@@ -142,6 +142,68 @@ fn bytemass_reads_an_iceberg_table_document_from_stdin() {
 }
 
 #[test]
+fn table_rejects_a_filter_on_a_resolved_document() {
+    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
+    let document = json!({
+        "kind": "pqbench.table",
+        "version": 1,
+        "format": "delta",
+        "uri": "/tmp/table",
+        "snapshot_version": 0,
+        "partition_columns": [],
+        "log": [],
+        "files": [
+            {"path": "a.parquet", "uri": parquet_fixture(), "size_bytes": size}
+        ]
+    });
+    let output = pipe(
+        &["table", "--filter", "size_bytes > 0"],
+        &document.to_string(),
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--filter"), "{stderr}");
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn table_filter_keeps_matching_files_and_does_not_echo_it() {
+    let fixture = delta_fixture();
+    let path = fixture.path.to_str().unwrap();
+
+    let kept = pqbench()
+        .args(["table", path, "--filter", "snapshot_version = 0"])
+        .output()
+        .unwrap();
+    assert!(
+        kept.status.success(),
+        "{}",
+        String::from_utf8_lossy(&kept.stderr)
+    );
+    let records = ndjson_records(&kept.stdout);
+    let files: Vec<_> = records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.table-file")
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["path"], "data.parquet");
+    let begin = records
+        .iter()
+        .find(|record| record["event"] == "begin")
+        .expect("table begin");
+    assert!(begin.get("filter").is_none());
+    assert!(begin.get("selection").is_none());
+
+    let dropped = pqbench()
+        .args(["table", path, "--filter", "snapshot_version >= 1"])
+        .output()
+        .unwrap();
+    assert!(!dropped.status.success());
+    let stderr = String::from_utf8_lossy(&dropped.stderr);
+    assert!(stderr.contains("no files matched"), "{stderr}");
+}
+
+#[test]
 fn table_rejects_an_unrecognized_directory() {
     let directory = tempfile::tempdir().unwrap();
     let output = pqbench()

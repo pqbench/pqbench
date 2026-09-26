@@ -4,6 +4,7 @@
 //! `impl` (the only file that names the third-party crate).
 
 pub mod avro;
+pub mod chrono;
 pub mod delta;
 pub mod flate2;
 pub mod iceberg;

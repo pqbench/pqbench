@@ -12,6 +12,7 @@ use deltalake::{DeltaTable, DeltaTableBuilder};
 use futures::TryStreamExt;
 use url::Url;
 
+use crate::filter::Filter;
 use crate::table::{LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
 
 /// Errors resolving a snapshot through delta-rs.
@@ -28,11 +29,23 @@ impl std::error::Error for Error {}
 
 /// Resolve the transaction log and the active files of a Delta table.
 pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
+    let at = crate::table::snapshot_time_millis(request).map_err(|e| Error(e.to_string()))?;
     let table = open(&request.uri, request.snapshot_version, &request.env).await?;
     let snapshot = snapshot_meta(&table)?;
-    let files = active_files(&table).await?;
+    let version = match at {
+        Some(millis) => select_snapshot_time(&table, snapshot.version, millis)?,
+        None => snapshot.version,
+    };
+    let table = if version == snapshot.version {
+        table
+    } else {
+        open(&request.uri, Some(version), &request.env).await?
+    };
+    let snapshot = snapshot_meta(&table)?;
     let log = read_log(&table, snapshot.version).await?;
-    Ok(TableInfo::new(
+    let versions = add_versions(&log);
+    let files = active_files(&table, request.filter.as_ref(), &versions).await?;
+    let info = TableInfo::new(
         TableFormat::DELTA,
         request.uri.clone(),
         snapshot.version,
@@ -40,7 +53,44 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         log,
         files,
         request.env.clone(),
-    ))
+    );
+    Ok(info)
+}
+
+/// The latest snapshot created at or before `millis`.
+fn select_snapshot_time(table: &DeltaTable, latest: u64, millis: i64) -> Result<u64, Error> {
+    let snapshot = table.snapshot().map_err(delta_error)?;
+    for version in (0..=latest).rev() {
+        if snapshot
+            .version_timestamp(version)
+            .is_some_and(|at| at <= millis)
+        {
+            return Ok(version);
+        }
+    }
+    Err(Error("no snapshot at or before the requested time".into()))
+}
+
+/// The version that last added each still-active path, replayed from the log.
+fn add_versions(log: &[LogCommit]) -> BTreeMap<String, u64> {
+    let mut versions = BTreeMap::new();
+    for commit in log {
+        for action in &commit.actions {
+            let Some(path) = &action.path else {
+                continue;
+            };
+            match action.kind.as_str() {
+                "add" => {
+                    versions.insert(path.clone(), commit.version);
+                }
+                "remove" => {
+                    versions.remove(path);
+                }
+                _ => {}
+            }
+        }
+    }
+    versions
 }
 
 async fn open(
@@ -156,8 +206,13 @@ fn parse_action(line: &str, version: u64) -> Result<LogAction, Error> {
     })
 }
 
-/// Resolve every active data file to a path `bytemass` can read.
-async fn active_files(table: &DeltaTable) -> Result<Vec<TableFile>, Error> {
+/// Resolve each active data file as the add-action stream is walked, keeping
+/// only those a filter accepts and dropping the rest before they accumulate.
+async fn active_files(
+    table: &DeltaTable,
+    filter: Option<&Filter>,
+    versions: &BTreeMap<String, u64>,
+) -> Result<Vec<TableFile>, Error> {
     let root = if table.table_url().scheme() == "file" {
         Some(
             table
@@ -178,11 +233,19 @@ async fn active_files(table: &DeltaTable) -> Result<Vec<TableFile>, Error> {
             Some(root) => local_uri(root, &relative)?,
             None => object_uri(table.table_url(), &relative)?,
         };
-        active.push(TableFile {
+        let candidate = TableFile {
+            snapshot_version: versions.get(&relative).copied(),
             path: relative,
             uri,
             size_bytes: size,
-        });
+            update_time: crate::third_party::chrono::format_instant(file.modification_time()),
+        };
+        if filter.is_none_or(|filter| filter.matches(&candidate)) {
+            active.push(candidate);
+        }
+    }
+    if filter.is_some() && active.is_empty() {
+        return Err(Error("no files matched the filter".into()));
     }
     Ok(active)
 }

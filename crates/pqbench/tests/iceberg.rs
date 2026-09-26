@@ -374,3 +374,27 @@ async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
         "{error}"
     );
 }
+
+#[tokio::test]
+async fn load_picks_the_latest_snapshot_at_or_before_a_time() {
+    let fixture = Fixture::new();
+    let info = table::load(
+        &load_request(fixture.root.to_string_lossy(), None)
+            .set_snapshot_time("1970-01-01T00:00:00Z"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(info.snapshot_version, 0);
+    assert_eq!(info.files.len(), 1);
+}
+
+#[tokio::test]
+async fn load_rejects_a_modified_time_filter_without_file_times() {
+    let fixture = Fixture::new();
+    let filter = pqbench::filter::Filter::parse("update_time >= \"1970-01-01T00:00:00Z\"").unwrap();
+    let error = table::load(&load_request(fixture.root.to_string_lossy(), None).set_filter(filter))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no files matched"), "{error}");
+}

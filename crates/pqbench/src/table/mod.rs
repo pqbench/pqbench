@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::filter::Filter;
+use crate::third_party::chrono;
 use crate::third_party::delta;
 use crate::third_party::iceberg;
 use crate::third_party::object_store;
@@ -77,6 +79,12 @@ pub struct TableFile {
     pub uri: String,
     /// Size the log claims, in bytes.
     pub size_bytes: u64,
+    /// Log modification time as RFC3339 UTC, when the format records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_time: Option<String>,
+    /// Snapshot version that added this file, when the log records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_version: Option<u64>,
 }
 
 impl TableFile {
@@ -87,6 +95,8 @@ impl TableFile {
             path: path.into(),
             uri: uri.into(),
             size_bytes,
+            update_time: None,
+            snapshot_version: None,
         }
     }
 }
@@ -142,6 +152,12 @@ impl TableInfo {
             env,
         }
     }
+
+    /// Total size the log claims for the active files.
+    #[must_use]
+    pub fn bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.size_bytes).sum()
+    }
 }
 
 /// Arguments for [`load`].
@@ -155,6 +171,10 @@ pub struct LoadRequest {
     pub snapshot_version: Option<u64>,
     /// Storage options (`AWS_*` names), copied onto the document.
     pub env: BTreeMap<String, String>,
+    /// Keep only files matching this AIP-160 expression.
+    pub filter: Option<Filter>,
+    /// Load the latest snapshot created at or before this instant.
+    pub snapshot_time: Option<String>,
 }
 
 impl LoadRequest {
@@ -169,7 +189,23 @@ impl LoadRequest {
             uri: uri.into(),
             snapshot_version,
             env,
+            filter: None,
+            snapshot_time: None,
         }
+    }
+
+    /// Keep only files matching `filter`.
+    #[must_use]
+    pub fn set_filter(mut self, filter: Filter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Load the latest snapshot created at or before `instant`.
+    #[must_use]
+    pub fn set_snapshot_time(mut self, instant: impl Into<String>) -> Self {
+        self.snapshot_time = Some(instant.into());
+        self
     }
 }
 
@@ -203,11 +239,24 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
+    let _ = snapshot_time_millis(request)?;
     let format = detect(&request.uri, &request.env).await?;
     match format {
         TableFormat::DELTA => delta::load(request).await,
         TableFormat::ICEBERG => iceberg::load(request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+    }
+}
+
+/// Parse the snapshot instant from `request` and check it does not conflict
+/// with an explicit version. Shared by the format loaders.
+pub(crate) fn snapshot_time_millis(request: &LoadRequest) -> Result<Option<i64>, Error> {
+    match (&request.snapshot_version, &request.snapshot_time) {
+        (Some(_), Some(_)) => Err(Error("use --version or --snapshot-at, not both".into())),
+        (_, None) => Ok(None),
+        (_, Some(instant)) => chrono::parse_instant(instant)
+            .map(Some)
+            .map_err(|error| Error(error.to_string())),
     }
 }
 
