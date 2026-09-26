@@ -112,8 +112,15 @@ A producer can hand `table` a `pqbench.remote-source` document — one table URI
 plus optional `AWS_*` credentials — and the table document carries those
 credentials to `bytemass`:
 
-```sh
-producer | pqbench table | pqbench bytemass
+```console run delta
+$ pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
 ### lake

@@ -11,8 +11,15 @@ treemap. Every command is in the **[CLI reference](cli.md)**.
 The canonical pipe — list a lake, load each table's snapshot, measure its
 files, draw the result:
 
-```sh
-pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
+```console run delta
+$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format table|json`

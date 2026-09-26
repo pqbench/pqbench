@@ -53,6 +53,9 @@ module that resolves `pqbench` to the binary under test. A
 `# docscheck: cd: PATH` or `# docscheck: env: KEY=VALUE` line on its own body
 line sets the directory or environment.
 
+A `pqbench` example outside a `console` fence is an error, so a command example
+cannot silently go untested.
+
 Examples:
   docscheck sync README.md docs/
   docscheck check README.md docs/        # freshness gate for CI
@@ -117,6 +120,11 @@ fn run_sync(args: Args, check_only: bool) -> ExitCode {
         }
     };
 
+    if let Err(error) = reject_pqbench_outside_console(&files) {
+        eprintln!("docscheck: {error}");
+        return ExitCode::from(2);
+    }
+
     let generated = match generate_all(&files) {
         Ok(generated) => generated,
         Err(error) => {
@@ -141,6 +149,34 @@ fn run_sync(args: Args, check_only: bool) -> ExitCode {
             eprintln!("docscheck: cannot write {}: {error}", args.out.display());
             ExitCode::from(2)
         }
+    }
+}
+
+/// Fail when a `pqbench` example is not in a `console` block.
+///
+/// A command example only becomes a test inside a `console` fence, so a
+/// `pqbench` example written as `sh` or a bare fence would silently go
+/// untested. Report every offender with its file and line.
+fn reject_pqbench_outside_console(files: &[PathBuf]) -> Result<(), String> {
+    let mut parser = MarkdownParser::new();
+    let mut problems = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let blocks = parser.parse(&source);
+        for block in docscheck::pqbench_outside_console(&blocks) {
+            problems.push(format!(
+                "{}:{}: `pqbench` example in a `{}` block; use a ```console fence",
+                path.display(),
+                block.line,
+                block.language().unwrap_or("bare"),
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
     }
 }
 

@@ -26,11 +26,13 @@
 //! committed `gen_support.rs` that resolves `pqbench` to the built binary, so
 //! `cargo test` runs them like any other integration test.
 
+pub mod console;
 pub mod generate;
 pub mod markdown;
 pub mod model;
 pub mod plan;
 
+pub use console::{invokes_pqbench, pqbench_outside_console};
 pub use generate::{generate, has_runnable};
 pub use markdown::MarkdownParser;
 pub use model::{Block, BlockInfo, Directive};

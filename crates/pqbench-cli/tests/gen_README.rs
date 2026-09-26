@@ -41,25 +41,33 @@ fn table() {
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
+fn table_2() {
+    // table_2, from line 115
+    support::run("pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table", 116, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+}
+
+#[cfg(feature = "delta")]
+#[rustfmt::skip]
+#[test]
 fn lake() {
-    // lake, from line 143
-    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' | head -2", 144, Some(&[r#"{"kind":"pqbench.lake","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.table-ref","version":1,"id":"table","uri":"file://<root>/docker/e2e-lakehouse/table"}"#]));
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | head -2", 147, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
+    // lake, from line 150
+    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' | head -2", 151, Some(&[r#"{"kind":"pqbench.lake","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.table-ref","version":1,"id":"table","uri":"file://<root>/docker/e2e-lakehouse/table"}"#]));
+    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | head -2", 154, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 172
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 173, None);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 174, None);
+    // viz, from line 179
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 180, None);
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 181, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn dump() {
-    // dump, from line 184
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 185, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
+    // dump, from line 191
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 192, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
 }

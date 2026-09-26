@@ -11,3 +11,10 @@ fn what_to_run() {
     // what_to_run, from line 24
     support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 25, None);
 }
+
+#[rustfmt::skip]
+#[test]
+fn catalog_list_unity_databricks_iceberg_rest() {
+    // catalog_list_unity_databricks_iceberg_rest, from line 130
+    support::run("pqbench lake docs/demos/lake.json | tail -2", 131, Some(&[r#"{"kind":"pqbench.table-ref","version":1,"id":"unity/events","uri":"docker/e2e-lakehouse/table"}"#, r#"{"kind":"pqbench.lake","event":"end","table_count":1}"#]));
+}
