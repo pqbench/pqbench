@@ -30,6 +30,7 @@ Examples:
   pqbench table ./delta-table | pqbench bytemass
   pqbench table ./iceberg-table | pqbench bytemass
   pqbench lake ./warehouse | pqbench table | pqbench bytemass
+  pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
   pqbench bytemass data.parquet --d3 > treemap.html && xdg-open treemap.html
 "#
 )]
@@ -62,9 +63,10 @@ Examples:
   producer | pqbench table | pqbench bytemass
 "#)]
     Table(table::TableArgs),
-    /// list the Delta tables in a lake
+    /// list the tables in a lake
     #[command(after_help = r#"Examples:
   pqbench lake ./warehouse
+  pqbench lake s3://bucket/warehouse --max-depth 2
   pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
   pqbench lake creds.json --include 'main.default.*' --exclude 'main.default.tmp*'
   pqbench lake creds.json | pqbench table | pqbench bytemass

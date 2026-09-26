@@ -101,11 +101,18 @@ producer | pqbench table | pqbench bytemass
 ### lake
 
 List tables as `pqbench.table-ref` lines, one line per table for the shell to
-fan out (`xargs -P`). A directory that contains `_delta_log` is one Delta
-table. A `pqbench.lake-source` document, from a file or stdin, lists a
-catalog. `GET /v1/config` chooses the protocol: a 200 with a `defaults`
-object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity. A
-down catalog is an error, not Unity. The same Unity routes serve
+fan out (`xargs -P`). A directory, `file://` URI, or `s3://` prefix is walked
+until a table marker that `pqbench table` also accepts: `_delta_log` is Delta;
+Iceberg is `metadata/version-hint.text` or `metadata/*.metadata.json` (one path
+component). A remote walk lists each prefix once and reads format off the
+listing (`_delta_log/` or Iceberg metadata objects) instead of probing every
+child with HEADs. Children of a table are not searched. UniForm stays Delta.
+`file://` and a bare path name the same tables. `--max-depth` (default 8)
+bounds a tree with no marker. `s3://` listing needs `--features aws`. A
+`pqbench.lake-source` document, from a file or stdin, lists a catalog.
+`GET /v1/config` chooses the protocol: a 200 with a `defaults` object is
+Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity. A down catalog
+is an error, not Unity. The same Unity routes serve
 [Unity Catalog OSS](https://docs.unitycatalog.io/) and
 [Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
 then schemas, then tables, following `next_page_token`. Iceberg REST lists
@@ -117,6 +124,7 @@ holds `AWS_*` storage credentials and is copied onto each table-ref.
 
 ```sh
 pqbench lake ./warehouse --include 'sales/*' --exclude 'sales/tmp*'
+pqbench lake s3://bucket/warehouse --max-depth 2 | pqbench table | pqbench bytemass
 pqbench lake unity.json | pqbench table | pqbench bytemass
 ```
 

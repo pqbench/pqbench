@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
 
 use clap::Args;
 use pqbench::lake::{self, Lake, LakeTable};
@@ -14,11 +15,14 @@ use crate::CliError;
 /// Arguments for `lake`.
 #[derive(Args)]
 pub(crate) struct LakeArgs {
-    /// lake directory, a `pqbench.lake` document, or `-` for standard input
+    /// lake directory, object URI, a `pqbench.lake` document, or `-` for stdin
     input: Option<String>,
     /// zstd NDJSON stream (required on a terminal)
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
+    /// path components below the walk root to search
+    #[arg(long = "max-depth", default_value = "8", value_name = "N")]
+    max_depth: NonZeroUsize,
     /// keep FQNs that match a glob or prefix (`main`, `main.default`, `main.default.events`)
     #[arg(long = "include", value_name = "PATTERN")]
     include: Vec<String>,
@@ -36,14 +40,17 @@ pub(crate) async fn run(args: &LakeArgs) -> Result<(), CliError> {
         version: 1,
         event: "begin",
     })?;
+    let max_depth = args.max_depth.get();
     let tables = match &args.input {
         None if !std::io::stdin().is_terminal() => stream_document("-", &filter, &mut emit).await?,
-        None => return Err("lake needs a directory or a document on standard input".into()),
+        None => {
+            return Err("lake needs a directory, a URI, or a document on standard input".into())
+        }
         Some(value) => {
             if document::is_document(value).await {
                 stream_document(value, &filter, &mut emit).await?
             } else {
-                write_discovered(Path::new(value), &filter, &mut emit)?
+                write_discovered(value, &filter, max_depth, &mut emit).await?
             }
         }
     };
@@ -114,12 +121,17 @@ async fn stream_document(
     Ok(tables)
 }
 
-fn write_discovered(
-    root: &Path,
+async fn write_discovered(
+    uri: &str,
     filter: &NameFilter,
+    max_depth: usize,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    write_lake(&lake::discover(root)?, filter, emit)
+    write_lake(
+        &lake::discover_bounded(uri, &BTreeMap::new(), Some(max_depth)).await?,
+        filter,
+        emit,
+    )
 }
 
 fn write_lake(lake: &Lake, filter: &NameFilter, emit: &mut Emitter) -> Result<usize, CliError> {
