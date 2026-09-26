@@ -38,11 +38,16 @@ The same codec sweep over the encoded pages of a **NONE-compressed** parquet
 file:
 
 ```console run
-$ pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0 | jq -c 'del(.compress_estimate,.decompress_estimate)' | head -3
+$ pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0 \
+>   | jq -s -c '.[0], ([.[] | select(.kind=="pqbench.compression-row")] | sort_by(.compressed_bytes)[] | del(.compress_estimate,.decompress_estimate))' \
+>   | head -3
 {"kind":"pqbench.compression","version":1,"event":"begin","file":"examples/quickstart.parquet"}
 {"kind":"pqbench.compression-row","codec":"lz4","level":1,"compressed_bytes":83,"uncompressed_bytes":106,"ratio":0.7830188679245284}
 {"kind":"pqbench.compression-row","codec":"snappy","level":1,"compressed_bytes":90,"uncompressed_bytes":106,"ratio":0.8490566037735849}
 ```
+
+A sweep ranks codecs by measured speed, which varies run to run, so the
+transcript sorts the rows by compressed size to stay reproducible.
 
 `--json` emits the same report as composable JSON (the per-column rows are
 included when `--per-column` is set).
