@@ -29,14 +29,25 @@ impl Remote for S3 {
 
     fn stat<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<ObjectStat, Error>> + Send + 'a>> {
         Box::pin(async move {
-            let metadata = self
+            let result = self
                 .store
-                .head(&self.location)
+                .get_opts(
+                    &self.location,
+                    GetOptions {
+                        head: true,
+                        ..GetOptions::default()
+                    },
+                )
                 .await
                 .map_err(remote_error)?;
+            let metadata = result.meta;
             Ok(ObjectStat {
                 size_bytes: metadata.size,
                 identity: metadata.e_tag.or(metadata.version),
+                storage_class: result
+                    .attributes
+                    .get(&::object_store::Attribute::StorageClass)
+                    .map(|value| value.as_ref().to_string()),
             })
         })
     }

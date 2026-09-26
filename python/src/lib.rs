@@ -124,14 +124,16 @@ fn bytemass(
 ///
 /// Returns the `pqbench.table` document.
 #[pyfunction]
-#[pyo3(signature = (uri, *, version=None, env=None))]
+#[pyo3(signature = (uri, *, version=None, env=None, no_stats=false))]
 fn table(
     py: Python<'_>,
     uri: String,
     version: Option<u64>,
     env: Option<BTreeMap<String, String>>,
+    no_stats: bool,
 ) -> PyResult<Py<PyAny>> {
-    let request = pqbench::table::LoadRequest::new(uri, version, aws_env(env)?);
+    let request =
+        pqbench::table::LoadRequest::new(uri, version, aws_env(env)?).with_file_stats(!no_stats);
     let info = py
         .detach(|| block_on(pqbench::table::load(&request)))
         .map_err(runtime)?;
@@ -201,7 +203,7 @@ fn viz(py: Python<'_>, rows: Bound<'_, PyAny>, output: PathBuf) -> PyResult<Py<P
         Some("html" | "htm") => output.with_extension(""),
         _ => output,
     };
-    py.detach(|| pqbench::viz::write_report(&prefix, &records))
+    py.detach(|| pqbench::viz::write_report(&prefix, &records, &[]))
         .map_err(runtime)?;
     let mut result = serde_json::Map::new();
     result.insert(

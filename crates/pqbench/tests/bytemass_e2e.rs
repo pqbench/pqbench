@@ -78,7 +78,7 @@ async fn viz_collects_measured_rows() {
         .collect();
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
-    viz::write_report(&prefix, &records).unwrap();
+    viz::write_report(&prefix, &records, &[]).unwrap();
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains("d3-hierarchy@3"));

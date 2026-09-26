@@ -31,6 +31,9 @@ pub struct ObjectStat {
     pub size_bytes: u64,
     /// Backend ETag or version, used to pin range reads to one revision.
     pub identity: Option<String>,
+    /// Storage class or tier (`STANDARD_IA`, `GLACIER`, …), when HEAD reports
+    /// one. S3 omits the header for `STANDARD`.
+    pub storage_class: Option<String>,
 }
 
 /// A remote backend. Implemented by the private `impl` module over the
@@ -86,6 +89,7 @@ impl ObjectReader {
                 Ok(ObjectStat {
                     size_bytes: metadata.len(),
                     identity: None,
+                    storage_class: None,
                 })
             }
             ObjectSource::Remote(remote) => remote.stat().await,

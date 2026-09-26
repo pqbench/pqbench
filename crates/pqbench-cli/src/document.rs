@@ -18,7 +18,7 @@ use crate::emit::Emitter;
 
 use pqbench::bytemass::MassRow;
 use pqbench::lake::Lake;
-use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
+use pqbench::table::{LogCommit, PartitionMass, TableFile, TableFormat, TableInfo};
 use pqbench::third_party::unity::LakeSource;
 use serde::{Deserialize, Serialize};
 
@@ -58,11 +58,29 @@ pub(crate) enum Record {
     LakeSource(LakeSource),
     RemoteSource(RemoteSource),
     BytemassBegin,
+    BytemassFile(BytemassFile),
     BytemassRow {
         id: String,
         row: MassRow,
     },
     BytemassEnd,
+}
+
+/// Table stats proxied through a bytemass stream.
+#[derive(Debug, Deserialize)]
+pub(crate) struct BytemassFile {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub path: String,
+    pub file: String,
+    pub size: u64,
+    #[serde(default)]
+    pub storage_class: Option<String>,
+    #[serde(default)]
+    pub partition_values: BTreeMap<String, Option<String>>,
+    #[serde(default)]
+    pub stats: Option<pqbench::table::FileStats>,
 }
 
 /// One table name for `table` to load. `id` tags every later line.
@@ -182,6 +200,7 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             Err(format!("unsupported bytemass event `{other}`").into())
         }
         ("pqbench.bytemass", None) => Err("a bytemass stream needs begin/end events".into()),
+        ("pqbench.bytemass-file", _) => Ok(Record::BytemassFile(parse_bytemass_file(value)?)),
         ("pqbench.bytemass-row", _) => {
             let (id, row) = parse_mass_row(value)?;
             Ok(Record::BytemassRow { id, row })
@@ -274,6 +293,10 @@ fn parse_log(value: serde_json::Value) -> Result<(String, LogCommit), CliError> 
     }
     let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
     Ok((wire.id, wire.commit))
+}
+
+fn parse_bytemass_file(value: serde_json::Value) -> Result<BytemassFile, CliError> {
+    serde_json::from_value(value).map_err(invalid_json)
 }
 
 fn parse_mass_row(value: serde_json::Value) -> Result<(String, MassRow), CliError> {
@@ -393,6 +416,19 @@ pub(crate) fn write_table_records(
     id: &str,
     info: &TableInfo,
 ) -> Result<(), CliError> {
+    write_table_begin(emit, id, info)?;
+    for file in &info.files {
+        write_table_file(emit, id, file)?;
+    }
+    write_table_end(emit, id, &info.partitions)
+}
+
+/// Write `begin` plus every log commit.
+pub(crate) fn write_table_begin(
+    emit: &mut Emitter,
+    id: &str,
+    info: &TableInfo,
+) -> Result<(), CliError> {
     emit.write(&BeginRecord {
         kind: "pqbench.table",
         version: 1,
@@ -411,17 +447,33 @@ pub(crate) fn write_table_records(
             commit,
         })?;
     }
-    for file in &info.files {
-        emit.write(&FileRecord {
-            kind: "pqbench.table-file",
-            id,
-            file,
-        })?;
-    }
+    Ok(())
+}
+
+/// Write one active file.
+pub(crate) fn write_table_file(
+    emit: &mut Emitter,
+    id: &str,
+    file: &TableFile,
+) -> Result<(), CliError> {
+    emit.write(&FileRecord {
+        kind: "pqbench.table-file",
+        id,
+        file,
+    })
+}
+
+/// Write the table `end` record, including partition totals.
+pub(crate) fn write_table_end(
+    emit: &mut Emitter,
+    id: &str,
+    partitions: &[PartitionMass],
+) -> Result<(), CliError> {
     emit.write(&EndRecord {
         kind: "pqbench.table",
         event: "end",
         id,
+        partitions,
     })
 }
 
@@ -464,6 +516,12 @@ struct EndRecord<'a> {
     kind: &'static str,
     event: &'static str,
     id: &'a str,
+    #[serde(skip_serializing_if = "partitions_empty")]
+    partitions: &'a [PartitionMass],
+}
+
+fn partitions_empty(partitions: &&[PartitionMass]) -> bool {
+    partitions.is_empty()
 }
 
 fn invalid_json(error: serde_json::Error) -> CliError {

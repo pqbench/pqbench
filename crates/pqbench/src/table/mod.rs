@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 
 use crate::third_party::delta;
@@ -31,6 +32,14 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+impl Error {
+    /// Wrap a message as a table error.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
 
 /// On-disk table formats `pqbench table` can name. Detection runs before load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +86,12 @@ pub struct TableFile {
     pub uri: String,
     /// Size the log claims, in bytes.
     pub size_bytes: u64,
+    /// Partition values from the Delta add action. Empty when unpartitioned.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub partition_values: BTreeMap<String, Option<String>>,
+    /// Statistics from the Delta `add.stats` JSON. Absent when the log has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<FileStats>,
 }
 
 impl TableFile {
@@ -87,8 +102,57 @@ impl TableFile {
             path: path.into(),
             uri: uri.into(),
             size_bytes,
+            partition_values: BTreeMap::new(),
+            stats: None,
         }
     }
+}
+
+/// Statistics copied from a Delta add action. Values are the log's claim.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
+pub struct FileStats {
+    /// `numRecords` from `add.stats`.
+    // aipnaming: allow(aip-141/count-suffix)
+    pub num_records: u64,
+    /// On-disk file size divided by [`Self::num_records`]. Absent at zero rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_row: Option<f64>,
+    /// Per-column minimum from `minValues`, JSON as stored (nested structs stay
+    /// objects).
+    // aipnaming: allow(aip-145/ranges)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub min_values: BTreeMap<String, Value>,
+    /// Per-column maximum from `maxValues`, JSON as stored.
+    // aipnaming: allow(aip-145/ranges)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub max_values: BTreeMap<String, Value>,
+    /// Per-column `nullCount`. Nested struct columns are flattened to dotted
+    /// keys (`struct.inner.x`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub null_count: BTreeMap<String, u64>,
+    /// `tightBounds` when the log sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tight_bounds: Option<bool>,
+}
+
+/// Byte mass of one partition, summed from the active files' log statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
+pub struct PartitionMass {
+    /// Partition column values. Empty for an unpartitioned table.
+    pub values: BTreeMap<String, Option<String>>,
+    /// Active files in this partition.
+    pub file_count: usize,
+    /// Sum of log file sizes, in bytes.
+    pub size: u64,
+    /// Sum of `numRecords` when every file in the partition has statistics.
+    // aipnaming: allow(aip-141/count-suffix)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_records: Option<u64>,
+    /// [`Self::size`] divided by [`Self::num_records`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_row: Option<f64>,
 }
 
 /// A versioned table document: format, log, and the files the snapshot names.
@@ -113,6 +177,10 @@ pub struct TableInfo {
     pub log: Vec<LogCommit>,
     /// Active data files after replaying the log to `snapshot_version`.
     pub files: Vec<TableFile>,
+    /// Per-partition totals from Delta add statistics. Empty for Iceberg and
+    /// for a Delta snapshot with no active files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partitions: Vec<PartitionMass>,
     /// Storage options from the producer. A pipe to `bytemass` reuses them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
@@ -139,6 +207,7 @@ impl TableInfo {
             partition_columns,
             log,
             files,
+            partitions: Vec::new(),
             env,
         }
     }
@@ -155,6 +224,12 @@ pub struct LoadRequest {
     pub snapshot_version: Option<u64>,
     /// Storage options (`AWS_*` names), copied onto the document.
     pub env: BTreeMap<String, String>,
+    /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
+    pub file_stats: bool,
+    /// When false, do not retain active files on the returned document.
+    /// [`visit_load`] still emits each file; partition totals are kept.
+    // aipnaming: allow(aip-140/verbs)
+    pub collect_files: bool,
 }
 
 impl LoadRequest {
@@ -169,8 +244,41 @@ impl LoadRequest {
             uri: uri.into(),
             snapshot_version,
             env,
+            file_stats: true,
+            collect_files: true,
         }
     }
+
+    /// Omit heavy min/max/null maps from each file.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn with_file_stats(mut self, file_stats: bool) -> Self {
+        self.file_stats = file_stats;
+        self
+    }
+
+    /// Drop the file list from the returned document after visiting each file.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn with_collect_files(mut self, collect_files: bool) -> Self {
+        self.collect_files = collect_files;
+        self
+    }
+}
+
+/// One step of [`visit_load`]. `BEGIN` is the snapshot and log; `FILE` is
+/// each active file as it is resolved.
+pub enum LoadEvent<'a> {
+    /// Snapshot header and log. `files` is empty.
+    BEGIN {
+        /// Table document without active files.
+        info: &'a TableInfo,
+    },
+    /// One active file, in log order.
+    FILE {
+        /// File just resolved from the snapshot.
+        file: &'a TableFile,
+    },
 }
 
 /// Name the table format from well-known markers. Does not load the log.
@@ -203,11 +311,102 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
+    visit_load(request, |_| Ok(())).await
+}
+
+/// Load a table, calling `visit` as the snapshot and each file are known.
+///
+/// Delta files are visited from the add-action stream. Iceberg files are
+/// visited after the manifests are read. When [`LoadRequest::collect_files`]
+/// is false the returned document keeps partition totals and drops `files`.
+///
+/// # Errors
+/// Same as [`load`].
+pub async fn visit_load(
+    request: &LoadRequest,
+    mut visit: impl FnMut(LoadEvent<'_>) -> Result<(), Error>,
+) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::load(request).await,
-        TableFormat::ICEBERG => iceberg::load(request).await,
+        TableFormat::DELTA => delta::visit_load(request, &mut visit).await,
+        TableFormat::ICEBERG => iceberg::visit_load(request, &mut visit).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+    }
+}
+
+/// Sum log sizes and `numRecords` by partition value.
+///
+/// `num_records` and `bytes_per_row` are set only when every file in the
+/// partition has add statistics. A zero record count leaves `bytes_per_row`
+/// unset.
+///
+/// # Errors
+/// Fails when a partition's record count overflows `u64`.
+pub fn partition_masses(files: &[TableFile]) -> Result<Vec<PartitionMass>, Error> {
+    let mut groups = BTreeMap::new();
+    for file in files {
+        add_partition_total(&mut groups, file)?;
+    }
+    Ok(finish_partition_masses(groups))
+}
+
+pub(crate) fn add_partition_total(
+    groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+    file: &TableFile,
+) -> Result<(), Error> {
+    let entry = groups
+        .entry(file.partition_values.clone())
+        .or_insert(PartitionTotals {
+            file_count: 0,
+            size: 0,
+            num_records: Some(0),
+        });
+    entry.file_count += 1;
+    entry.size = entry
+        .size
+        .checked_add(file.size_bytes)
+        .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.path)))?;
+    entry.num_records = match (entry.num_records, file.stats.as_ref()) {
+        (Some(sum), Some(stats)) => Some(sum.checked_add(stats.num_records).ok_or_else(|| {
+            Error(format!(
+                "partition record total overflowed for {}",
+                file.path
+            ))
+        })?),
+        _ => None,
+    };
+    Ok(())
+}
+
+pub(crate) fn finish_partition_masses(
+    groups: BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+) -> Vec<PartitionMass> {
+    groups
+        .into_iter()
+        .map(|(values, totals)| PartitionMass {
+            values,
+            file_count: totals.file_count,
+            size: totals.size,
+            bytes_per_row: totals
+                .num_records
+                .and_then(|records| bytes_per_row(totals.size, records)),
+            num_records: totals.num_records,
+        })
+        .collect()
+}
+
+pub(crate) struct PartitionTotals {
+    file_count: usize,
+    size: u64,
+    // aipnaming: allow(aip-141/count-suffix)
+    num_records: Option<u64>,
+}
+
+pub(crate) fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
+    if num_records == 0 {
+        None
+    } else {
+        Some(size as f64 / num_records as f64)
     }
 }
 

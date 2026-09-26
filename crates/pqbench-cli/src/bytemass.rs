@@ -83,7 +83,10 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                         .into(),
                 );
             }
-            Record::BytemassBegin | Record::BytemassRow { .. } | Record::BytemassEnd => {
+            Record::BytemassBegin
+            | Record::BytemassFile(_)
+            | Record::BytemassRow { .. }
+            | Record::BytemassEnd => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
         }
@@ -108,6 +111,7 @@ async fn measure_file(
         env,
     })
     .await?;
+    write_file(emit, id, &file, &rows)?;
     for row in &rows {
         if file.size_bytes != 0 && row.size_bytes != file.size_bytes {
             return Err(format!(
@@ -129,6 +133,29 @@ async fn measure_input(
     env: BTreeMap<String, String>,
 ) -> Result<(), CliError> {
     measure_file(emit, stats, id, TableFile::new(uri.clone(), uri, 0), env).await
+}
+
+fn write_file(
+    emit: &mut Emitter,
+    id: &str,
+    file: &TableFile,
+    rows: &[bytemass::MassRow],
+) -> Result<(), CliError> {
+    let object = rows.first();
+    emit.write(&FileRecord {
+        kind: "pqbench.bytemass-file",
+        id,
+        path: &file.path,
+        file: &file.uri,
+        size: if file.size_bytes != 0 {
+            file.size_bytes
+        } else {
+            object.map(|row| row.size_bytes).unwrap_or(0)
+        },
+        storage_class: object.and_then(|row| row.storage_class.as_deref()),
+        partition_values: &file.partition_values,
+        stats: file.stats.as_ref(),
+    })
 }
 
 async fn measure(
@@ -213,6 +240,25 @@ struct BeginRecord {
     kind: &'static str,
     version: u32,
     event: &'static str,
+}
+
+#[derive(Serialize)]
+struct FileRecord<'a> {
+    kind: &'static str,
+    id: &'a str,
+    path: &'a str,
+    file: &'a str,
+    size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_class: Option<&'a str>,
+    #[serde(skip_serializing_if = "map_empty")]
+    partition_values: &'a std::collections::BTreeMap<String, Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stats: Option<&'a pqbench::table::FileStats>,
+}
+
+fn map_empty(values: &&std::collections::BTreeMap<String, Option<String>>) -> bool {
+    values.is_empty()
 }
 
 #[derive(Serialize)]

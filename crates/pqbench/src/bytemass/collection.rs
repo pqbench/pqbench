@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{
     default_metadata_parser, ColumnMass, Error, FileMass, MetadataParser,
 };
@@ -68,17 +69,18 @@ pub(super) async fn measure_inputs(
     let mut rows = Vec::new();
     for path in &paths {
         let input = path.to_string_lossy().into_owned();
-        let (size, mass) = read_input(&input, env).await?;
+        let (stat, mass) = read_input(&input, env).await?;
         let row_count = mass.row_count;
         for column in mass.columns {
             rows.push(MassRow {
                 uri: input.clone(),
-                size_bytes: size,
+                size_bytes: stat.size_bytes,
                 row_count,
                 column: column.column,
                 compressed_bytes: column.compressed_bytes,
                 uncompressed_bytes: column.uncompressed_bytes,
                 codec: column.codec,
+                storage_class: stat.storage_class.clone(),
             });
         }
     }
@@ -115,7 +117,10 @@ fn escape_literal_brackets(input: &str) -> String {
     input.replace('[', "[[]")
 }
 
-async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64, FileMass), Error> {
+async fn read_input(
+    input: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<(ObjectStat, FileMass), Error> {
     if input.contains("://") {
         return remote::read_remote(
             input,
@@ -124,9 +129,13 @@ async fn read_input(input: &str, env: &BTreeMap<String, String>) -> Result<(u64,
         .await;
     }
     let path = Path::new(input);
-    let size = std::fs::metadata(path)
-        .map_err(|e| Error(format!("cannot stat {input}: {e}")))?
-        .len();
+    let metadata =
+        std::fs::metadata(path).map_err(|e| Error(format!("cannot stat {input}: {e}")))?;
+    let stat = ObjectStat {
+        size_bytes: metadata.len(),
+        identity: None,
+        storage_class: None,
+    };
     let mass = default_metadata_parser().read_masses(path)?;
-    Ok((size, mass))
+    Ok((stat, mass))
 }

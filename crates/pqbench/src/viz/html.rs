@@ -1,19 +1,22 @@
 //! Static HTML: the embedded bytemass rows are drawn as a d3 treemap.
 
 use crate::third_party::parquet::api::Error;
-use crate::viz::MassRecord;
+use crate::viz::{FileMass, MassRecord};
 
 /// Self-contained page that groups the embedded rows and draws a d3 treemap.
 ///
 /// # Errors
 /// Fails when there are no rows or the rows cannot be encoded into the page.
-pub fn render_html(rows: &[MassRecord], title: &str) -> Result<String, Error> {
+pub fn render_html(rows: &[MassRecord], files: &[FileMass], title: &str) -> Result<String, Error> {
     if rows.is_empty() {
         return Err(Error("html needs bytemass rows".into()));
     }
     let title = html_escape(title);
     let data = serde_json::to_string(rows)
         .map_err(|error| Error(format!("cannot encode rows: {error}")))?
+        .replace('<', "\\u003c");
+    let files = serde_json::to_string(files)
+        .map_err(|error| Error(format!("cannot encode files: {error}")))?
         .replace('<', "\\u003c");
     let mut out = String::new();
     out.push_str("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>");
@@ -42,6 +45,8 @@ pub fn render_html(rows: &[MassRecord], title: &str) -> Result<String, Error> {
     out.push_str("import {select} from \"https://cdn.jsdelivr.net/npm/d3-selection@3/+esm\";\n");
     out.push_str("const ROWS = ");
     out.push_str(&data);
+    out.push_str(";\nconst FILES = ");
+    out.push_str(&files);
     out.push_str(";\n");
     out.push_str(PAGE_SCRIPT);
     out.push_str("</script>\n</body>\n</html>\n");
@@ -117,7 +122,28 @@ entries.forEach(([id, columns], index) => {
   maps.appendChild(section);
   const rows = [...columns.entries()].map(([column, value]) => ({ column, ...value }));
   draw(select(svg), tree(name, rows));
+  const fileRows = FILES.filter(file => (file.id || "") === id);
+  if (fileRows.length === 0) return;
+  const fileHeading = document.createElement("h2");
+  fileHeading.textContent = name + " files";
+  const fileSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  section.appendChild(fileHeading);
+  section.appendChild(fileSvg);
+  draw(select(fileSvg), fileTree(name, fileRows));
 });
+function fileTree(name, files) {
+  const root = branch(name);
+  for (const file of files) {
+    const parts = [];
+    if (file.partition) parts.push(...String(file.partition).split("/").filter(Boolean));
+    const leaf = String(file.path || file.file).split("/").pop() || file.file;
+    parts.push(leaf);
+    const value = file.bytes_per_row || file.size || 0;
+    insert(root, parts, value);
+  }
+  recompute(root);
+  return root;
+}
 "##;
 
 fn html_escape(text: &str) -> String {

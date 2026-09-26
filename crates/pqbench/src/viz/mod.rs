@@ -33,13 +33,35 @@ pub struct MassRecord {
     pub codec: String,
 }
 
-/// Write `path.html` from the collected rows.
+/// One proxied table-file / object-stat row collected from the bytemass stream.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileMass {
+    /// Table id from the stream.
+    pub id: String,
+    /// Table-relative path, when known.
+    pub path: String,
+    /// URI or filesystem path that was measured.
+    pub file: String,
+    /// Log or object size in bytes.
+    pub size: u64,
+    /// `numRecords` from Delta add stats.
+    // aipnaming: allow(aip-141/count-suffix)
+    pub num_records: Option<u64>,
+    /// Log size / num_records.
+    pub bytes_per_row: Option<f64>,
+    /// Storage class from HEAD, when known.
+    pub storage_class: Option<String>,
+    /// Hive partition values as `k=v/k=v`.
+    pub partition: String,
+}
+
+/// Write `path.html` from the collected rows and proxied file stats.
 ///
 /// # Errors
 /// Fails when there are no rows or the HTML page cannot be written.
-pub fn write_report(prefix: &Path, rows: &[MassRecord]) -> Result<(), Error> {
+pub fn write_report(prefix: &Path, rows: &[MassRecord], files: &[FileMass]) -> Result<(), Error> {
     let html_path = prefix.with_extension("html");
-    let html = render_html(rows, &title(rows))?;
+    let html = render_html(rows, files, &title(rows))?;
     std::fs::write(&html_path, html)
         .map_err(|error| Error(format!("cannot write {}: {error}", html_path.display())))
 }
@@ -85,7 +107,7 @@ mod tests {
     fn report_writes_html() {
         let directory = tempfile::tempdir().unwrap();
         let prefix = directory.path().join("masses");
-        write_report(&prefix, &[row("", "a<b>.parquet", "text", 4)]).unwrap();
+        write_report(&prefix, &[row("", "a<b>.parquet", "text", 4)], &[]).unwrap();
 
         let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
         assert!(html.starts_with("<!DOCTYPE html>"));
@@ -96,9 +118,34 @@ mod tests {
     }
 
     #[test]
+    fn report_embeds_proxied_file_stats() {
+        let directory = tempfile::tempdir().unwrap();
+        let prefix = directory.path().join("masses");
+        write_report(
+            &prefix,
+            &[row("sales", "part-0.parquet", "id", 20)],
+            &[FileMass {
+                id: "sales".into(),
+                path: "year=2024/part-0.parquet".into(),
+                file: "part-0.parquet".into(),
+                size: 40,
+                num_records: Some(10),
+                bytes_per_row: Some(4.0),
+                storage_class: Some("STANDARD".into()),
+                partition: "year=2024".into(),
+            }],
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
+        assert!(html.contains("STANDARD"), "{html}");
+        assert!(html.contains("year=2024"), "{html}");
+        assert!(html.contains("fileTree"), "{html}");
+    }
+
+    #[test]
     fn empty_rows_fail() {
         let directory = tempfile::tempdir().unwrap();
-        let error = write_report(&directory.path().join("empty"), &[])
+        let error = write_report(&directory.path().join("empty"), &[], &[])
             .unwrap_err()
             .to_string();
         assert!(error.contains("bytemass rows"), "{error}");
