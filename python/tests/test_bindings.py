@@ -18,7 +18,16 @@ class BindingsTest(unittest.TestCase):
     def test_commands_match_the_cli(self) -> None:
         self.assertEqual(
             pqbench.commands,
-            ("lz", "compression", "bytemass", "table", "lake", "dump", "viz"),
+            (
+                "lz",
+                "compression",
+                "bytemass",
+                "table",
+                "lake",
+                "dump",
+                "profile",
+                "viz",
+            ),
         )
         for name in pqbench.commands:
             self.assertTrue(callable(getattr(pqbench, name)))
@@ -85,6 +94,22 @@ class BindingsTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             pqbench.bytemass(str(_PARQUET), env={"PATH": "/"})
         self.assertIn("AWS_", str(caught.exception))
+
+    def test_profile_streams_column_facts(self) -> None:
+        columns = pqbench.profile(str(_PARQUET), rows="first:32", top=5)
+        self.assertIsInstance(columns, list)
+        self.assertGreaterEqual(len(columns), 1)
+        self.assertIn("column", columns[0])
+        self.assertIn("null_fraction", columns[0])
+        self.assertIn("ndv", columns[0])
+        self.assertIn("id", columns[0])
+        filtered = pqbench.profile(str(_PARQUET), columns=["text"], rows="first:8")
+        self.assertEqual([column["column"] for column in filtered], ["text"])
+
+    def test_profile_rejects_a_bad_rows_method(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            pqbench.profile(str(_PARQUET), rows="last:5")
+        self.assertIn("rows", str(caught.exception))
 
     def test_table_loads_a_delta_snapshot(self) -> None:
         info = pqbench.table(str(_TABLE))

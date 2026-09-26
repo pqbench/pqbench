@@ -37,6 +37,13 @@ pub struct ParquetFile {
     pub chunks: Vec<ColumnChunk>,
 }
 
+/// A decoded row sample: column names and stringified nullable cells.
+#[derive(Debug, Clone, Default)]
+pub struct Sample {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<String>>>,
+}
+
 /// Errors from the parquet layer.
 #[derive(Debug)]
 pub struct Error(pub String);
@@ -173,6 +180,16 @@ pub fn read_tail_masses(tail: &[u8], file_size: u64) -> Result<FileMass, Error> 
     super::r#impl::read_tail_masses(tail, file_size)
 }
 
+/// Read up to `max_rows` leading rows of a local Parquet file, decoding every
+/// value to a string (nulls stay `None`). `None` reads all rows.
+///
+/// # Errors
+/// Returns [`Error`] if `path` is not a readable Parquet file or decoding a
+/// value fails.
+pub fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error> {
+    super::r#impl::read_sample(path, max_rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +257,28 @@ mod tests {
                 && !column.encodings.is_empty()
                 && column.num_values > 0
                 && column.row_group_rows > 0));
+    }
+
+    #[test]
+    fn read_sample_decodes_bounded_rows() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/small_reddit_none.parquet"
+        );
+        let sample = read_sample(Path::new(path), Some(16)).unwrap();
+        assert!(!sample.columns.is_empty(), "expected columns");
+        assert_eq!(sample.rows.len(), 16);
+        for row in &sample.rows {
+            assert_eq!(row.len(), sample.columns.len());
+        }
+        assert!(
+            sample
+                .rows
+                .iter()
+                .flatten()
+                .any(std::option::Option::is_some),
+            "expected at least one decoded value"
+        );
     }
 
     #[test]
