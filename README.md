@@ -198,15 +198,19 @@ feature.
 
 ## Documentation
 
+Start with [Getting started](docs/getting-started.md). The
+[documentation index](docs/README.md) maps every page by kind.
+
+- [Getting started](docs/getting-started.md) — install, first measurement, the lake pipeline
+- [CLI reference](docs/cli.md) — the command table, documents, flags, and auth
 - [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, lake walk, catalogs
-- [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
-  naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
 - [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
-- [CLI guide](docs/cli.md) — `pqbench --help` copy: auth, documents, flags
 - [Visualization](docs/viz.md) — `pqbench viz`, a static HTML treemap
 - [Python bindings](python/README.md) — install the wheel and call every command
 - [Docker](docs/docker.md) — build, run, and publish a container image
+- [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
+  naming tables for `pqbench table`, over rustfs S3
 
 ## Python
 

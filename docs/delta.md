@@ -73,10 +73,10 @@ then `end`. `lake` emits `pqbench.table-ref` lines; `table` loads them one at a
 time. A table is the work unit: scan a catalog by running one `table` process
 per table and letting the shell fan out (`xargs -P`). `bytemass` measures each
 file as its line arrives and compares its size to the log. A single
-`pqbench.table` object is still accepted. A terminal
-prints only the summary (format, snapshot, commit count, file count, bytes)
-and requires `-o` to write a zstd stream. On a pipe `-o` is optional and
-does not delay stdout:
+`pqbench.table` object is still accepted. A terminal prints the active files
+as a table and the summary (format, snapshot, commit count, file count,
+bytes); a pipe streams NDJSON. `--format json` forces the stream, and `-o`
+also writes it without delaying stdout:
 
 ```
 pqbench table ./path/to/table -o table.ndjson.zst | pqbench bytemass
