@@ -27,6 +27,7 @@ class BindingsTest(unittest.TestCase):
                 "dump",
                 "profile",
                 "experiment",
+                "skill",
                 "viz",
             ),
         )
@@ -130,6 +131,14 @@ class BindingsTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             pqbench.experiment(str(_PARQUET), rewrite=["correlate:text"])
         self.assertIn("rewrite", str(caught.exception))
+
+    def test_skill_returns_the_advisor(self) -> None:
+        listed = pqbench.skill()
+        self.assertTrue(any(item["name"] == "parquet-advisor" for item in listed))
+        body = pqbench.skill("parquet-advisor")
+        self.assertIn("pqbench experiment", body)
+        recipes = pqbench.skill("parquet-advisor", "recipes")
+        self.assertIn("zstd@3", recipes)
 
     def test_table_loads_a_delta_snapshot(self) -> None:
         info = pqbench.table(str(_TABLE))

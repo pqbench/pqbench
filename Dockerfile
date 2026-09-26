@@ -13,6 +13,8 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo/ .cargo/
 COPY crates/ crates/
+# `crates/pqbench/src/skill.rs` compiles `skills/**` with `include_str!`.
+COPY skills/ skills/
 
 # Choose the CPU baseline and build the release binary; see scripts/docker_build.sh.
 # (x86 codecs use -march, ARM uses -mcpu; the script overrides

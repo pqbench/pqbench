@@ -57,3 +57,13 @@ fn lake_help_names_catalog_env_and_points_at_table() {
     assert!(stdout.contains("pqbench --help"), "{stdout}");
     assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
 }
+
+#[test]
+fn skill_help_points_at_profile_and_experiment() {
+    let stdout = help(&["skill", "--help"]);
+    assert!(stdout.contains("parquet-advisor"), "{stdout}");
+    assert!(stdout.contains("recipes"), "{stdout}");
+    assert!(stdout.contains("pqbench profile --help"), "{stdout}");
+    assert!(stdout.contains("pqbench experiment --help"), "{stdout}");
+    assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
+}

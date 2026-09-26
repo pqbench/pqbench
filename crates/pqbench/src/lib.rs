@@ -11,6 +11,7 @@ pub mod lake;
 pub mod lz;
 pub mod profile;
 pub mod report;
+pub mod skill;
 pub mod stats;
 pub mod table;
 mod text;

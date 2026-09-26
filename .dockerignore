@@ -7,6 +7,8 @@
 !.cargo/config.toml
 !crates/
 !crates/**
+!skills/
+!skills/**
 !scripts/docker_build.sh
 !LICENSE-MIT
 !LICENSE-APACHE
