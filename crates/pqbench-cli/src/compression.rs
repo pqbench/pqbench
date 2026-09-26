@@ -1,9 +1,10 @@
 use clap::Args;
 use pqbench::compression::{self, CompressionRequest};
+use pqbench::report::{ColumnRow, ReportRow};
 use serde::Serialize;
 
 use crate::bench::BenchArgs;
-use crate::emit::Emitter;
+use crate::emit::{Align, Emitter, Row};
 use crate::CliError;
 
 /// Arguments for `compression`: the shared sweep arguments plus the
@@ -18,7 +19,6 @@ pub(crate) struct CompressionArgs {
 }
 
 pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
-    let _ = args.bench.json;
     let request = CompressionRequest {
         file: args.bench.file.clone(),
         codec_specs: args.bench.codec_specs.clone(),
@@ -28,26 +28,27 @@ pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
         per_column: args.per_column,
     };
     let report = compression::compression(&request)?;
-    let mut emit = Emitter::open("compression", args.bench.output.as_deref())?;
-    emit.write(&BeginRecord {
+    let resolved = args.bench.format.resolve(args.bench.json);
+    let mut emit = Emitter::open(args.bench.output.as_deref(), resolved)?;
+    emit.write_event(&BeginRecord {
         kind: "pqbench.compression",
         version: 1,
         event: "begin",
         file: args.bench.file.to_string_lossy(),
     })?;
     for row in &report.rows {
-        emit.write(&RowRecord {
+        emit.write_row(&RowRecord {
             kind: "pqbench.compression-row",
             row,
         })?;
     }
     for column in &report.columns {
-        emit.write(&ColumnRecord {
+        emit.write_row(&ColumnRecord {
             kind: "pqbench.compression-column",
             row: column,
         })?;
     }
-    emit.write(&EndRecord {
+    emit.write_event(&EndRecord {
         kind: "pqbench.compression",
         event: "end",
         row_count: report.rows.len(),
@@ -77,14 +78,78 @@ struct BeginRecord<'a> {
 struct RowRecord<'a> {
     kind: &'static str,
     #[serde(flatten)]
-    row: &'a pqbench::report::ReportRow,
+    row: &'a ReportRow,
+}
+
+impl Row for RowRecord<'_> {
+    const HEADER: &'static [&'static str] = &[
+        "codec",
+        "level",
+        "compress MB/s",
+        "decompress MB/s",
+        "ratio",
+    ];
+    const ALIGN: &'static [Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        report_cells(self.row)
+    }
 }
 
 #[derive(Serialize)]
 struct ColumnRecord<'a> {
     kind: &'static str,
     #[serde(flatten)]
-    row: &'a pqbench::report::ColumnRow,
+    row: &'a ColumnRow,
+}
+
+impl Row for ColumnRecord<'_> {
+    const HEADER: &'static [&'static str] = &[
+        "codec",
+        "level",
+        "column",
+        "compress MB/s",
+        "decompress MB/s",
+        "ratio",
+    ];
+    const ALIGN: &'static [Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let row = self.row;
+        let bytes = row.uncompressed_bytes as u64;
+        vec![
+            row.codec.to_string(),
+            row.level.to_string(),
+            row.column.clone(),
+            format!("{:.1}", row.compress_estimate.megabytes_per_second(bytes)),
+            format!("{:.1}", row.decompress_estimate.megabytes_per_second(bytes)),
+            format!("{:.2}", row.ratio),
+        ]
+    }
+}
+
+fn report_cells(row: &ReportRow) -> Vec<String> {
+    let bytes = row.uncompressed_bytes as u64;
+    vec![
+        row.codec.to_string(),
+        row.level.to_string(),
+        format!("{:.1}", row.compress_estimate.megabytes_per_second(bytes)),
+        format!("{:.1}", row.decompress_estimate.megabytes_per_second(bytes)),
+        format!("{:.2}", row.ratio),
+    ]
 }
 
 #[derive(Serialize)]

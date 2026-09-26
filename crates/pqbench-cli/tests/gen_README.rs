@@ -14,52 +14,52 @@ fn lz() {
 #[rustfmt::skip]
 #[test]
 fn compression() {
-    // compression, from line 40
+    // compression, from line 41
     support::run(r#"pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0 \
   | jq -s -c '.[0], ([.[] | select(.kind=="pqbench.compression-row")] | sort_by(.compressed_bytes)[] | del(.compress_estimate,.decompress_estimate))' \
-  | head -3"#, 41, Some(&[r#"{"kind":"pqbench.compression","version":1,"event":"begin","file":"examples/quickstart.parquet"}"#, r#"{"kind":"pqbench.compression-row","codec":"lz4","level":1,"compressed_bytes":83,"uncompressed_bytes":106,"ratio":0.7830188679245284}"#, r#"{"kind":"pqbench.compression-row","codec":"snappy","level":1,"compressed_bytes":90,"uncompressed_bytes":106,"ratio":0.8490566037735849}"#]));
+  | head -3"#, 42, Some(&[r#"{"kind":"pqbench.compression","version":1,"event":"begin","file":"examples/quickstart.parquet"}"#, r#"{"kind":"pqbench.compression-row","codec":"lz4","level":1,"compressed_bytes":83,"uncompressed_bytes":106,"ratio":0.7830188679245284}"#, r#"{"kind":"pqbench.compression-row","codec":"snappy","level":1,"compressed_bytes":90,"uncompressed_bytes":106,"ratio":0.8490566037735849}"#]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn bytemass() {
-    // bytemass, from line 62
-    support::run("pqbench bytemass examples/quickstart.parquet --json | head -2", 63, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"examples/quickstart.parquet","path":"examples/quickstart.parquet","file":"examples/quickstart.parquet","size":541}"#]));
-    support::run("pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet | head -2", 66, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","path":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","file":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","size":2107406}"#]));
+    // bytemass, from line 64
+    support::run("pqbench bytemass examples/quickstart.parquet --json | head -2", 65, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"examples/quickstart.parquet","path":"examples/quickstart.parquet","file":"examples/quickstart.parquet","size":541}"#]));
+    support::run("pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet | head -2", 68, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","path":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","file":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","size":2107406}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn table() {
-    // table, from line 95
-    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 96, None);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | head -2", 97, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
-    support::run("pqbench bytemass /tmp/table.ndjson.zst | head -2", 100, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
+    // table, from line 97
+    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 98, None);
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | head -2", 99, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
+    support::run("pqbench bytemass /tmp/table.ndjson.zst | head -2", 102, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn lake() {
-    // lake, from line 141
-    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' | head -2", 142, Some(&[r#"{"kind":"pqbench.lake","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.table-ref","version":1,"id":"table","uri":"file://<root>/docker/e2e-lakehouse/table"}"#]));
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | head -2", 145, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
+    // lake, from line 143
+    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' | head -2", 144, Some(&[r#"{"kind":"pqbench.lake","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.table-ref","version":1,"id":"table","uri":"file://<root>/docker/e2e-lakehouse/table"}"#]));
+    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | head -2", 147, Some(&[r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#, r#"{"kind":"pqbench.bytemass-file","id":"table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 170
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 171, None);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 172, None);
+    // viz, from line 172
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 173, None);
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 174, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn dump() {
-    // dump, from line 182
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 183, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
+    // dump, from line 184
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 185, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
 }

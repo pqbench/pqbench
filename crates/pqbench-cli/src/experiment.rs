@@ -5,7 +5,7 @@ use pqbench::experiment::{self, Aim, Experiment, ExperimentRequest, Trial};
 use pqbench::third_party::parquet::api::read_typed_sample;
 use serde::Serialize;
 
-use crate::emit::Emitter;
+use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
 
 /// Arguments for `experiment`: read a decoded row sample, apply each rewrite,
@@ -14,12 +14,15 @@ use crate::CliError;
 pub(crate) struct ExperimentArgs {
     /// parquet sample path to read
     input: String,
-    /// write the zstd NDJSON stream (required on a terminal)
+    /// also write the zstd NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// stream NDJSON (same as a pipe; kept for scripts)
+    /// stream NDJSON (same as --format json; kept for scripts)
     #[arg(long = "json")]
     json: bool,
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
     /// how many leading rows to read: `all` or `first:N`
     #[arg(long = "rows", default_value = "first:8192", value_name = "METHOD")]
     rows: String,
@@ -35,7 +38,6 @@ pub(crate) struct ExperimentArgs {
 }
 
 pub(crate) fn run(args: &ExperimentArgs) -> Result<(), CliError> {
-    let _ = args.json;
     let max_rows = parse_rows(&args.rows)?;
     let mut trials = args.rewrites.clone();
     trials.extend(args.trials.iter().cloned());
@@ -45,8 +47,8 @@ pub(crate) fn run(args: &ExperimentArgs) -> Result<(), CliError> {
     };
     let sample = read_typed_sample(std::path::Path::new(&args.input), max_rows)?;
     let report = experiment::experiment(&sample, &request)?;
-    let mut emit = Emitter::open("experiment", args.output.as_deref())?;
-    emit.write(&BeginRecord {
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
+    emit.write_event(&BeginRecord {
         kind: "pqbench.experiment",
         version: 1,
         event: "begin",
@@ -55,19 +57,19 @@ pub(crate) fn run(args: &ExperimentArgs) -> Result<(), CliError> {
         capabilities: &report.capabilities,
     })?;
     for trial in &report.trials {
-        emit.write(&TrialRecord {
+        emit.write_row(&TrialRecord {
             kind: "pqbench.experiment-trial",
             trial,
         })?;
         for column in &trial.columns {
-            emit.write(&ColumnRecord {
+            emit.write_row(&ColumnRecord {
                 kind: "pqbench.experiment-column",
                 trial: trial.name.as_str(),
                 column,
             })?;
         }
     }
-    emit.write(&EndRecord {
+    emit.write_event(&EndRecord {
         kind: "pqbench.experiment",
         event: "end",
         trial_count: report.trials.len(),
@@ -123,12 +125,67 @@ struct TrialRecord<'a> {
     trial: &'a Trial,
 }
 
+impl Row for TrialRecord<'_> {
+    const HEADER: &'static [&'static str] = &["trial", "bytes", "bytes/row", "row_groups", "ratio"];
+    const ALIGN: &'static [Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let trial = self.trial;
+        vec![
+            trial.name.clone(),
+            trial.bytes.to_string(),
+            format!("{:.2}", trial.bytes_per_row),
+            trial.row_group_count.to_string(),
+            trial
+                .ratio
+                .map_or_else(|| "-".to_string(), |ratio| format!("{ratio:.2}")),
+        ]
+    }
+}
+
 #[derive(Serialize)]
 struct ColumnRecord<'a> {
     kind: &'static str,
     trial: &'a str,
     #[serde(flatten)]
     column: &'a experiment::ColumnTrial,
+}
+
+impl Row for ColumnRecord<'_> {
+    const HEADER: &'static [&'static str] = &[
+        "trial",
+        "column",
+        "codec",
+        "bytes",
+        "bytes/row",
+        "dictionary",
+    ];
+    const ALIGN: &'static [Align] = &[
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let column = self.column;
+        vec![
+            self.trial.to_string(),
+            column.column.clone(),
+            column.codec.clone(),
+            column.compressed_bytes.to_string(),
+            format!("{:.2}", column.bytes_per_row),
+            column.dictionary.to_string(),
+        ]
+    }
 }
 
 #[derive(Serialize)]

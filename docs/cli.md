@@ -25,9 +25,11 @@ The usual lake pipe:
 $ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
-A TTY prints a short summary and requires `-o`. A pipe streams NDJSON.
-Credentials travel on that document (`AWS_*`; a catalog `token` on a
-lake-source) and are not exported into the process environment.
+A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
+the stream clean: only data rows are shown, bounded to 1000 rows, with the
+count of hidden rows reported. Credentials travel on that document (`AWS_*`;
+a catalog `token` on a lake-source) and are not exported into the process
+environment.
 
 ## Documents
 
@@ -51,8 +53,9 @@ All current documents are version `1`.
 | `--include GLOB` / `--exclude GLOB` | `lake` only. Unix globs (`*`, `?`, `**`) on the relative table name; a literal leading name prunes the walk. |
 | `--max-depth N` | `lake` only. Bound a tree with no table marker (default 8). |
 | `--version N` | `table` only. Delta commit or Iceberg snapshot id. Default: latest. |
-| `-o` / `--output` | `FILE` on a TTY (zstd NDJSON); `PREFIX` on `viz`. Required on a terminal. |
-| `--json` | `bytemass`, `lz`, `compression`: stream NDJSON on stdout. |
+| `-o` / `--output` | `FILE` for the zstd NDJSON stream; `PREFIX` on `viz`. Independent of what stdout shows. |
+| `--format` | Every streaming command: `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
+| `--json` | `bytemass`, `lz`, `compression`, `profile`, `experiment`: stream NDJSON on stdout (same as `--format json`). |
 
 ## Auth — how to reach data
 

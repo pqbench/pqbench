@@ -29,9 +29,9 @@ module that names the `object_store` crate is `pqbench::object_store`.
 
 ## Usage
 
-Load the current snapshot, or an explicit snapshot id. A TTY pretty-prints the
-log; a pipe writes the full `pqbench.table` document. The URI may be a table
-root or the metadata JSON itself:
+Load the current snapshot, or an explicit snapshot id. A terminal prints the
+snapshot's log and files as a table; a pipe writes the full `pqbench.table`
+document. The URI may be a table root or the metadata JSON itself:
 
 ```
 cargo run -p pqbench-cli --features iceberg -- table ./path/to/table

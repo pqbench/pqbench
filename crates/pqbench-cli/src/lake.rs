@@ -9,7 +9,7 @@ use pqbench::third_party::unity::{self, NameFilter};
 use serde::Serialize;
 
 use crate::document::{self, Record};
-use crate::emit::Emitter;
+use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
 
 /// Arguments for `lake`.
@@ -17,7 +17,10 @@ use crate::CliError;
 pub(crate) struct LakeArgs {
     /// lake directory, object URI, a `pqbench.lake` document, or `-` for stdin
     input: Option<String>,
-    /// zstd NDJSON stream (required on a terminal)
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
+    /// also write the zstd NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
     /// path components below the walk root to search
@@ -34,8 +37,8 @@ pub(crate) struct LakeArgs {
 /// List a lake as `pqbench.table-ref` records, one table per later process.
 pub(crate) async fn run(args: &LakeArgs) -> Result<(), CliError> {
     let filter = NameFilter::new(args.include.clone(), args.exclude.clone());
-    let mut emit = Emitter::open("lake", args.output.as_deref())?;
-    emit.write(&BeginRecord {
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    emit.write_event(&BeginRecord {
         kind: "pqbench.lake",
         version: 1,
         event: "begin",
@@ -54,7 +57,7 @@ pub(crate) async fn run(args: &LakeArgs) -> Result<(), CliError> {
             }
         }
     };
-    emit.write(&EndRecord {
+    emit.write_event(&EndRecord {
         kind: "pqbench.lake",
         event: "end",
         table_count: tables,
@@ -150,7 +153,7 @@ fn write_lake(lake: &Lake, filter: &NameFilter, emit: &mut Emitter) -> Result<us
 }
 
 fn write_ref(emit: &mut Emitter, table: &LakeTable) -> Result<(), CliError> {
-    emit.write(&TableRefRecord {
+    emit.write_row(&TableRefRecord {
         kind: "pqbench.table-ref",
         version: 1,
         id: &table.name,
@@ -185,4 +188,13 @@ struct TableRefRecord<'a> {
 
 fn is_empty_env(env: &&BTreeMap<String, String>) -> bool {
     env.is_empty()
+}
+
+impl Row for TableRefRecord<'_> {
+    const HEADER: &'static [&'static str] = &["name", "uri"];
+    const ALIGN: &'static [Align] = &[Align::Left, Align::Left];
+
+    fn cells(&self) -> Vec<String> {
+        vec![self.id.to_string(), self.uri.to_string()]
+    }
 }
