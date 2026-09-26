@@ -14,7 +14,7 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse \
 	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity lakehouse-seed-iceberg \
-	check isolation clean
+	check isolation lfs-check clean
 
 all: fmt build test lint
 
@@ -66,13 +66,20 @@ lakehouse-seed-unity: lakehouse-up
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
-check: fmt-check lint isolation test
+check: fmt-check lint isolation lfs-check test
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
 ISOLATION_FLAGS ?=
 isolation:
 	./scripts/check_isolation.sh $(ISOLATION_FLAGS)
+
+# Every file under an LFS filter must be committed as a pointer, not a raw git
+# blob. A raw blob checks out (the smudge filter only warns) but never reaches
+# the LFS server, so it is invisible until a fresh clone. git-lfs is a
+# contributor prerequisite; see CONTRIBUTING.md.
+lfs-check:
+	git lfs fsck
 
 clean:
 	$(CARGO) clean
