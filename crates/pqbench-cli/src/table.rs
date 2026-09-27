@@ -23,7 +23,7 @@ pub(crate) struct TableArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
-    /// also write the zstd NDJSON stream to FILE
+    /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
 }
@@ -50,19 +50,22 @@ async fn load_path(uri: &str, args: &TableArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut files = 0usize;
     let mut bytes = 0u64;
-    let info = table::visit_load(&request, |event| match event {
+    let info = table::visit_load(&request, async |event| match event {
         LoadEvent::BEGIN { info } => document::write_table_begin(&mut emit, uri, info)
+            .await
             .map_err(|error| table::Error::new(error.to_string())),
         LoadEvent::FILE { file } => {
             files += 1;
             bytes += file.size_bytes;
             document::write_table_file(&mut emit, uri, file)
+                .await
                 .map_err(|error| table::Error::new(error.to_string()))
         }
     })
     .await?;
-    document::write_table_end(&mut emit, uri, &info.partitions)?;
+    document::write_table_end(&mut emit, uri, &info.partitions).await?;
     emit.finish(&summary(1, files, bytes, args.output.as_deref()))
+        .await
 }
 
 async fn load_info(
@@ -91,24 +94,24 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
             Record::TableRef(table_ref) => {
                 let info = load_info(table_ref.uri, table_ref.env, args).await?;
                 add(&info, &mut tables, &mut files, &mut bytes);
-                document::write_table_records(&mut emit, &table_ref.id, &info)?;
+                document::write_table_records(&mut emit, &table_ref.id, &info).await?;
             }
             Record::RemoteSource(source) => {
                 for uri in source.inputs {
                     let info = load_info(uri.clone(), source.env.clone(), args).await?;
                     add(&info, &mut tables, &mut files, &mut bytes);
-                    document::write_table_records(&mut emit, &uri, &info)?;
+                    document::write_table_records(&mut emit, &uri, &info).await?;
                 }
             }
             Record::Table(info) => {
                 add(&info, &mut tables, &mut files, &mut bytes);
-                document::write_table_records(&mut emit, &info.uri, &info)?;
+                document::write_table_records(&mut emit, &info.uri, &info).await?;
             }
             Record::Lake(lake) => {
                 for table in lake.tables {
                     let info = load_info(table.uri, table.env, args).await?;
                     add(&info, &mut tables, &mut files, &mut bytes);
-                    document::write_table_records(&mut emit, &table.name, &info)?;
+                    document::write_table_records(&mut emit, &table.name, &info).await?;
                 }
             }
             Record::LakeSource(_) => {
@@ -131,6 +134,7 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
     })
     .await?;
     emit.finish(&summary(tables, files, bytes, args.output.as_deref()))
+        .await
 }
 
 fn add(info: &TableInfo, tables: &mut usize, files: &mut usize, bytes: &mut u64) {

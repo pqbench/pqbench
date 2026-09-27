@@ -50,7 +50,7 @@ $ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:o
 | `--rewrite SPEC` | Repeatable. Each value is one trial; semicolons compose rewrites. |
 | `--trial SPEC` | Alias for `--rewrite`. |
 | `--aim AIM` | `storage` (default), `skipping`, or `all`. |
-| `-o` / `--output FILE` | Also write the zstd NDJSON stream to FILE, independent of what stdout shows. |
+| `-o` / `--output FILE` | Also write the lz4 NDJSON stream to FILE, independent of what stdout shows. |
 | `--format` | `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
 | `--json` | Stream NDJSON on stdout (same as `--format json`). |
 

@@ -266,7 +266,7 @@ fn table_rewrites_a_table_document_as_ndjson() {
 }
 
 #[test]
-fn table_writes_a_zstd_stream_to_output() {
+fn table_writes_an_lz4_stream_to_output() {
     let size = std::fs::metadata(parquet_fixture()).unwrap().len();
     let document = json!({
         "kind": "pqbench.table",
@@ -279,7 +279,7 @@ fn table_writes_a_zstd_stream_to_output() {
         "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
     });
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("table.ndjson.zst");
+    let path = directory.path().join("table.ndjson.lz4");
     let output = pipe(
         &["table", "-o", path.to_str().unwrap()],
         &document.to_string(),
@@ -293,7 +293,7 @@ fn table_writes_a_zstd_stream_to_output() {
     assert_eq!(records[0]["event"], "begin");
     assert_eq!(records.last().unwrap()["event"], "end");
     let magic = std::fs::read(&path).unwrap();
-    assert_eq!(&magic[..4], [0x28, 0xB5, 0x2F, 0xFD]);
+    assert_eq!(&magic[..4], [0x04, 0x22, 0x4D, 0x18]);
     let measured = pqbench()
         .args(["bytemass", path.to_str().unwrap()])
         .output()

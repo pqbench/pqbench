@@ -106,13 +106,17 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
 /// manifests are read.
 pub(super) async fn visit_load(
     request: &LoadRequest,
-    visit: &mut impl FnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<TableInfo, Error> {
     let mut info = load(request).await?;
     let files = std::mem::take(&mut info.files);
-    visit(LoadEvent::BEGIN { info: &info }).map_err(|error| Error(error.to_string()))?;
+    visit(LoadEvent::BEGIN { info: &info })
+        .await
+        .map_err(|error| Error(error.to_string()))?;
     for file in &files {
-        visit(LoadEvent::FILE { file }).map_err(|error| Error(error.to_string()))?;
+        visit(LoadEvent::FILE { file })
+            .await
+            .map_err(|error| Error(error.to_string()))?;
     }
     if request.collect_files {
         info.files = files;

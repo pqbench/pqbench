@@ -19,11 +19,21 @@
 //!
 //! Setup: `docs/auth.md`.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+
+/// Decode an lz4 frame (`-o` output) into its NDJSON bytes.
+fn decode_lz4(bytes: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::new();
+    lz4::Decoder::new(std::io::Cursor::new(bytes))
+        .unwrap()
+        .read_to_end(&mut decoded)
+        .unwrap();
+    decoded
+}
 
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
@@ -261,7 +271,7 @@ fn metastore_ls_lists_the_live_catalogs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let bytes = std::fs::read(&file).unwrap();
-    let decoded = zstd::decode_all(&bytes[..]).unwrap();
+    let decoded = decode_lz4(&bytes);
     assert_eq!(ndjson(&decoded).len(), 4);
 }
 

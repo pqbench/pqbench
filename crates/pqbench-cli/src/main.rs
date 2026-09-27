@@ -137,8 +137,8 @@ enum Command {
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Lz(args) => lz::run(&args),
-        Command::Compression(args) => compression::run(&args),
+        Command::Lz(args) => lz::run(&args).await,
+        Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&args).await,
         Command::Table(args) => table::run(&args).await,
         Command::Lake(args) => lake::run(&args).await,
@@ -146,8 +146,8 @@ async fn main() -> ExitCode {
         Command::Catalog(args) => catalog::run(&args).await,
         Command::Schema(args) => schema::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
-        Command::Profile(args) => profile::run(&args),
-        Command::Experiment(args) => experiment::run(&args),
+        Command::Profile(args) => profile::run(&args).await,
+        Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args).await,
     };

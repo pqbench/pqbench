@@ -19,7 +19,7 @@ pub(crate) struct LakeArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
-    /// also write the zstd NDJSON stream to FILE
+    /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
     /// path components below the walk root to search
@@ -41,7 +41,8 @@ pub(crate) async fn run(args: &LakeArgs) -> Result<(), CliError> {
         kind: "pqbench.lake",
         version: 1,
         event: "begin",
-    })?;
+    })
+    .await?;
     let max_depth = args.max_depth.get();
     let tables = match &args.input {
         None if !std::io::stdin().is_terminal() => stream_document("-", &filter, &mut emit).await?,
@@ -60,7 +61,8 @@ pub(crate) async fn run(args: &LakeArgs) -> Result<(), CliError> {
         kind: "pqbench.lake",
         event: "end",
         table_count: tables,
-    })?;
+    })
+    .await?;
     emit.finish(&format!(
         "tables: {tables}{}\n",
         args.output
@@ -68,6 +70,7 @@ pub(crate) async fn run(args: &LakeArgs) -> Result<(), CliError> {
             .map(|path| format!("\noutput: {}", path.display()))
             .unwrap_or_default()
     ))
+    .await
 }
 
 async fn stream_document(
@@ -89,7 +92,8 @@ async fn stream_document(
                         env: table.env,
                         info: None,
                     },
-                )?;
+                )
+                .await?;
                 tables += 1;
             }
             Record::Lake(listed) => lake = Some(listed),
@@ -114,12 +118,12 @@ async fn stream_document(
     .await?;
     if let Some(source) = source {
         for table in lake::list_tables(&source, filter).await? {
-            write_ref(emit, &table)?;
+            write_ref(emit, &table).await?;
             tables += 1;
         }
     }
     if let Some(lake) = lake {
-        tables += write_lake(&lake, filter, emit)?;
+        tables += write_lake(&lake, filter, emit).await?;
     }
     if tables == 0 {
         return Err("lake listed no tables after include/exclude".into());
@@ -137,21 +141,25 @@ async fn write_discovered(
         filter.keeps_prefix(name)
     })
     .await?;
-    write_lake(&discovered, filter, emit)
+    write_lake(&discovered, filter, emit).await
 }
 
-fn write_lake(lake: &Lake, filter: &NameFilter, emit: &mut Emitter) -> Result<usize, CliError> {
+async fn write_lake(
+    lake: &Lake,
+    filter: &NameFilter,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
     let mut tables = 0usize;
     for table in &lake.tables {
         if filter.keeps(&table.name) {
-            write_ref(emit, table)?;
+            write_ref(emit, table).await?;
             tables += 1;
         }
     }
     Ok(tables)
 }
 
-fn write_ref(emit: &mut Emitter, table: &LakeTable) -> Result<(), CliError> {
+async fn write_ref(emit: &mut Emitter, table: &LakeTable) -> Result<(), CliError> {
     emit.write_row(&TableRefRecord {
         kind: "pqbench.table-ref",
         version: 1,
@@ -159,6 +167,7 @@ fn write_ref(emit: &mut Emitter, table: &LakeTable) -> Result<(), CliError> {
         uri: &table.uri,
         env: &table.env,
     })
+    .await
 }
 
 #[derive(Serialize)]

@@ -62,7 +62,7 @@ All current documents are version `1`.
 | `--include GLOB` / `--exclude GLOB` | `lake` only. Unix globs (`*`, `?`, `**`) on the relative table name; a literal leading name prunes the walk. |
 | `--max-depth N` | `lake` only. Bound a tree with no table marker (default 8). |
 | `--version N` | `table` only. Delta commit or Iceberg snapshot id. Default: latest. |
-| `-o` / `--output` | `FILE` for the zstd NDJSON stream; `PREFIX` on `viz`. Independent of what stdout shows. |
+| `-o` / `--output` | `FILE` for the lz4 NDJSON stream; `PREFIX` on `viz`. Independent of what stdout shows. |
 | `--format` | Every streaming command: `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
 | `--json` | `bytemass`, `lz`, `compression`, `profile`, `experiment`: stream NDJSON on stdout (same as `--format json`). |
 
@@ -139,7 +139,9 @@ probe runs.
 The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
 input — one `pqbench.catalog` line per catalog, then one `pqbench.schema` line
-per schema.
+per schema. A level reads the whole parent stream first, then multiplexes every
+ref's request on one thread and emits rows in ref order; a slow endpoint
+overlaps the requests instead of serializing them.
 `metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
 catalog info` enriches each catalog instead. `info` emits the same kind as the
 `ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each

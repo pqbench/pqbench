@@ -80,6 +80,50 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
     address
 }
 
+/// Like `routes`, but each request sleeps `delay` and the server records the
+/// highest number of requests in flight — a command that awaits one request
+/// at a time never sees two.
+fn overlapping_routes(
+    routes: &'static [(&'static str, u16, &'static str)],
+    delay: std::time::Duration,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (requests_in_flight, requests_peak) = (in_flight.clone(), peak.clone());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let (in_flight, peak) = (requests_in_flight.clone(), requests_peak.clone());
+            std::thread::spawn(move || {
+                let mut stream = stream.unwrap();
+                let mut buffer = [0u8; 2048];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                std::thread::sleep(delay);
+                let (status, body) = routes
+                    .iter()
+                    .find(|(needle, _, _)| request.contains(needle))
+                    .map(|(_, status, body)| (*status, *body))
+                    .unwrap_or((404, "{}"));
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    (address, peak)
+}
+
 fn source(endpoint: &str) -> Vec<u8> {
     json!({"kind": "pqbench.lake-source", "version": 1, "endpoint": endpoint})
         .to_string()
@@ -332,6 +376,29 @@ fn schema_ls_reads_a_schema_stream() {
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 2);
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
+}
+
+#[test]
+fn schema_ls_multiplexes_its_refs() {
+    let (address, peak) = overlapping_routes(
+        &[("/tables", 200, TABLES)],
+        std::time::Duration::from_millis(50),
+    );
+    let output = pipe_env(
+        &["schema", "ls", "--format", "json"],
+        SCHEMA_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(ndjson(&output.stdout).len(), 2);
+    assert!(
+        peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "the two refs' requests did not overlap"
+    );
 }
 
 #[test]

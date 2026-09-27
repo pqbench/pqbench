@@ -3,6 +3,16 @@ use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
+/// Decode an lz4 frame (`-o` output) into its NDJSON bytes.
+fn decode_lz4(bytes: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::new();
+    lz4::Decoder::new(std::io::Cursor::new(bytes))
+        .unwrap()
+        .read_to_end(&mut decoded)
+        .unwrap();
+    decoded
+}
+
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
@@ -171,7 +181,7 @@ fn catalog_info_exports_the_ndjson_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     let bytes = std::fs::read(&file).unwrap();
-    let decoded = zstd::decode_all(&bytes[..]).unwrap();
+    let decoded = decode_lz4(&bytes);
     let records = ndjson(&decoded);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["kind"], "pqbench.catalog");
@@ -342,7 +352,7 @@ fn catalog_ls_exports_the_ndjson_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     let bytes = std::fs::read(&file).unwrap();
-    let decoded = zstd::decode_all(&bytes[..]).unwrap();
+    let decoded = decode_lz4(&bytes);
     let records = ndjson(&decoded);
     assert_eq!(records.len(), 2);
     assert_eq!(records[0]["kind"], "pqbench.schema");

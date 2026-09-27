@@ -428,7 +428,7 @@ async fn visit_load_emits_the_header_before_files() {
     let mut events = Vec::new();
     let info = table::visit_load(
         &load_request(fixture.path().to_string_lossy(), None).with_collect_files(false),
-        |event| {
+        async |event| {
             match event {
                 table::LoadEvent::BEGIN { info } => {
                     assert!(info.files.is_empty());

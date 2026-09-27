@@ -6,7 +6,7 @@
 //! `pqbench.bytemass-row`. A pipe writes NDJSON;
 //! every record carries a table `id` so rows stay attributable. A terminal
 //! prints an aligned table; a pipe streams NDJSON (override with `--format`).
-//! `-o` also writes the zstd NDJSON stream. A single
+//! `-o` also writes the lz4 NDJSON stream. A single
 //! `pqbench.table` object is still accepted. Credentials stay on the document
 //! so a pipe can carry them between processes.
 
@@ -84,7 +84,7 @@ pub(crate) struct Begin {
 /// Call `visit` once per JSON value, as soon as that value is complete.
 ///
 /// `-` streams standard input line by line. A path is read whole — documents
-/// are metadata, not data — and a zstd frame is decoded first.
+/// are metadata, not data — and an lz4 frame is decoded first.
 pub(crate) async fn visit_input<F>(input: &str, visit: F) -> Result<(), CliError>
 where
     F: AsyncFnMut(Record) -> Result<(), CliError>,
@@ -126,14 +126,14 @@ where
     Ok(())
 }
 
-/// Read a document file whole, decoding a zstd frame first.
+/// Read a document file whole, decoding an lz4 frame first.
 async fn visit_file<F>(input: &str, mut visit: F) -> Result<(), CliError>
 where
     F: AsyncFnMut(Record) -> Result<(), CliError>,
 {
     let bytes = tokio::fs::read(input).await?;
-    let bytes = if bytes.starts_with(&ZSTD_MAGIC) {
-        zstd::decode_all(&bytes[..])?
+    let bytes = if bytes.starts_with(&LZ4_MAGIC) {
+        decode_lz4(&bytes)?
     } else {
         bytes
     };
@@ -368,9 +368,17 @@ fn ensure_aws_env(env: &BTreeMap<String, String>) -> Result<(), CliError> {
     Ok(())
 }
 
-const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+const LZ4_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];
 
-/// Whether a path is `-`, JSON (`{`), or a zstd frame.
+/// Decode an lz4 frame whole; documents are metadata, not data.
+fn decode_lz4(bytes: &[u8]) -> Result<Vec<u8>, CliError> {
+    let mut decoder = lz4::Decoder::new(std::io::Cursor::new(bytes))?;
+    let mut decoded = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut decoded)?;
+    Ok(decoded)
+}
+
+/// Whether a path is `-`, JSON (`{`), or an lz4 frame.
 pub(crate) async fn is_document(path: &str) -> bool {
     if path == "-" {
         return true;
@@ -382,7 +390,7 @@ pub(crate) async fn is_document(path: &str) -> bool {
     let Ok(n) = file.read(&mut buf).await else {
         return false;
     };
-    if n >= 4 && buf[..4] == ZSTD_MAGIC {
+    if n >= 4 && buf[..4] == LZ4_MAGIC {
         return true;
     }
     buf[..n]
@@ -393,20 +401,20 @@ pub(crate) async fn is_document(path: &str) -> bool {
 }
 
 /// Write one table's records, tagged with `id`.
-pub(crate) fn write_table_records(
+pub(crate) async fn write_table_records(
     emit: &mut Emitter,
     id: &str,
     info: &TableInfo,
 ) -> Result<(), CliError> {
-    write_table_begin(emit, id, info)?;
+    write_table_begin(emit, id, info).await?;
     for file in &info.files {
-        write_table_file(emit, id, file)?;
+        write_table_file(emit, id, file).await?;
     }
-    write_table_end(emit, id, &info.partitions)
+    write_table_end(emit, id, &info.partitions).await
 }
 
 /// Write `begin` plus every log commit.
-pub(crate) fn write_table_begin(
+pub(crate) async fn write_table_begin(
     emit: &mut Emitter,
     id: &str,
     info: &TableInfo,
@@ -421,19 +429,21 @@ pub(crate) fn write_table_begin(
         snapshot_version: info.snapshot_version,
         partition_columns: &info.partition_columns,
         env: &info.env,
-    })?;
+    })
+    .await?;
     for commit in &info.log {
         emit.write_event(&CommitRecord {
             kind: "pqbench.table-log",
             id,
             commit,
-        })?;
+        })
+        .await?;
     }
     Ok(())
 }
 
 /// Write one active file.
-pub(crate) fn write_table_file(
+pub(crate) async fn write_table_file(
     emit: &mut Emitter,
     id: &str,
     file: &TableFile,
@@ -443,10 +453,11 @@ pub(crate) fn write_table_file(
         id,
         file,
     })
+    .await
 }
 
 /// Write the table `end` record, including partition totals.
-pub(crate) fn write_table_end(
+pub(crate) async fn write_table_end(
     emit: &mut Emitter,
     id: &str,
     partitions: &[PartitionMass],
@@ -457,6 +468,7 @@ pub(crate) fn write_table_end(
         id,
         partitions,
     })
+    .await
 }
 
 #[derive(Serialize)]

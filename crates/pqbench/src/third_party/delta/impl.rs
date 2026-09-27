@@ -26,7 +26,7 @@ pub(crate) async fn load(request: &LoadRequest) -> Result<TableInfo, crate::tabl
 
 pub(crate) async fn visit_load(
     request: &LoadRequest,
-    visit: &mut impl FnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<TableInfo, crate::table::Error> {
     #[cfg(feature = "delta")]
     {

@@ -14,7 +14,7 @@ use crate::CliError;
 pub(crate) struct ProfileArgs {
     /// parquet paths to sample
     inputs: Vec<String>,
-    /// also write the zstd NDJSON stream to FILE
+    /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
     /// stream NDJSON (same as --format json; kept for scripts)
@@ -34,7 +34,7 @@ pub(crate) struct ProfileArgs {
     top: u32,
 }
 
-pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
+pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
     if args.inputs.is_empty() {
         return Err("profile needs parquet files".into());
     }
@@ -48,7 +48,8 @@ pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
         kind: "pqbench.profile",
         version: 1,
         event: "begin",
-    })?;
+    })
+    .await?;
     let mut column_count = 0usize;
     let mut row_count = 0u64;
     for input in &args.inputs {
@@ -60,7 +61,8 @@ pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
                 kind: "pqbench.profile-column",
                 id: input,
                 column,
-            })?;
+            })
+            .await?;
             column_count += 1;
         }
     }
@@ -70,7 +72,8 @@ pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
         file_count: args.inputs.len(),
         row_count,
         column_count,
-    })?;
+    })
+    .await?;
     let mut summary = format!(
         "files: {}\nrows: {}\ncolumns: {}\n",
         args.inputs.len(),
@@ -80,7 +83,7 @@ pub(crate) fn run(args: &ProfileArgs) -> Result<(), CliError> {
     if let Some(path) = &args.output {
         summary.push_str(&format!("output: {}\n", path.display()));
     }
-    emit.finish(&summary)
+    emit.finish(&summary).await
 }
 
 /// Parse `--rows`: `all` reads every row, `first:N` reads N (N >= 1).

@@ -2925,6 +2925,7 @@ dependencies = [
  "deltalake",
  "flate2",
  "futures",
+ "futures-util",
  "glob",
  "lz4",
  "object_store",
@@ -2944,13 +2945,14 @@ name = "pqbench-cli"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "futures-util",
+ "lz4",
  "pqbench",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "zstd",
 ]
 
 [[package]]
