@@ -43,8 +43,15 @@ fn scrubbed() -> Command {
 }
 
 fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+    pipe_env(args, stdin, &[])
+}
+
+/// pqbench with the walk's context in the environment, stdin piped: the
+/// `PQB_ENDPOINT` / `PQB_TOKEN` half of decision 0004.
+fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let mut child = scrubbed()
         .args(args)
+        .envs(env.iter().copied())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -435,6 +442,71 @@ fn catalog_ls_lists_the_live_schemas() {
         })
         .collect();
     assert_eq!(names, DBX_SAMPLES_SCHEMAS);
+}
+
+/// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
+/// `metastore ls | catalog info | catalog ls` (decision 0004).
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn metastore_ls_pipes_into_catalog_info_and_ls() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = unity_endpoint(&host);
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+    ];
+
+    let catalogs = pipe_env(&["metastore", "ls", "--format", "json"], b"", &env);
+    assert!(
+        catalogs.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&catalogs.stderr)
+    );
+    let refs = catalogs.stdout;
+    let names: Vec<String> = ndjson(&refs)
+        .iter()
+        .map(|record| record["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["dbx_samples", "samples", "system", "workspace"]);
+
+    let info = pipe_env(&["catalog", "info", "--format", "json"], &refs, &env);
+    assert!(
+        info.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let records = ndjson(&info.stdout);
+    assert_eq!(records.len(), 4);
+    for record in &records {
+        assert_eq!(record["kind"], "pqbench.catalog");
+        assert!(names.contains(&record["name"].as_str().unwrap().to_string()));
+    }
+
+    let schemas = pipe_env(&["catalog", "ls", "--format", "json"], &refs, &env);
+    assert!(
+        schemas.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&schemas.stderr)
+    );
+    let records = ndjson(&schemas.stdout);
+    assert!(!records.is_empty());
+    for record in &records {
+        assert_eq!(record["kind"], "pqbench.schema");
+        assert!(names.contains(&record["catalog"].as_str().unwrap().to_string()));
+    }
+    let dbx_samples: Vec<&str> = records
+        .iter()
+        .filter(|record| record["catalog"] == "dbx_samples")
+        .map(|record| record["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(dbx_samples, DBX_SAMPLES_SCHEMAS);
 }
 
 #[test]
