@@ -62,12 +62,16 @@ const CATALOGS: &str = r#"{"catalogs":[{"name":"dbx_samples","catalog_type":"MAN
 const DBX_SAMPLES: &str = r#"{"name":"dbx_samples","catalog_type":"MANAGED_CATALOG","comment":"sample catalog","owner":"owner@example.com"}"#;
 const SYSTEM: &str = r#"{"name":"system","catalog_type":"SYSTEM_CATALOG"}"#;
 const SCHEMAS: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":null}"#;
+const SCHEMA: &str =
+    r#"{"name":"nyctaxi","comment":"taxi data","storage_location":"s3://bucket/nyctaxi"}"#;
+const TABLES: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"}],"next_page_token":null}"#;
 
 #[test]
 fn metastore_ls_pipes_into_catalog_info_and_ls() {
     let address = routes(&[
-        ("/v1/config", 404, "{}"),
-        ("/schemas", 200, SCHEMAS),
+        ("/schemas?", 200, SCHEMAS),
+        ("/schemas/", 200, SCHEMA),
+        ("/tables", 200, TABLES),
         ("/catalogs/dbx_samples", 200, DBX_SAMPLES),
         ("/catalogs/system", 200, SYSTEM),
         ("/catalogs", 200, CATALOGS),
@@ -111,4 +115,33 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     assert_eq!(names, ["nyctaxi", "nyctaxi"]);
     assert_eq!(records[0]["catalog"], "dbx_samples");
     assert_eq!(records[1]["catalog"], "system");
+
+    let info = pipe_env(
+        &["schema", "info", "--format", "json"],
+        &schemas.stdout,
+        &env,
+    );
+    assert!(
+        info.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let records = ndjson(&info.stdout);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["kind"], "pqbench.schema");
+    assert_eq!(records[0]["name"], "nyctaxi");
+    assert_eq!(records[0]["comment"], "taxi data");
+    assert_eq!(records[1]["catalog"], "system");
+
+    let tables = pipe_env(&["schema", "ls", "--format", "json"], &schemas.stdout, &env);
+    assert!(
+        tables.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&tables.stderr)
+    );
+    let records = ndjson(&tables.stdout);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["kind"], "pqbench.table-ref");
+    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
+    assert_eq!(records[0]["format"], "DELTA");
 }

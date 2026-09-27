@@ -230,7 +230,19 @@ check_unity() {
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas"
+    # `schema ls` lists Unity's tables for the same schema.
+    local tables
+    tables=$("$pqbench_bin" schema ls pqbench.demo --format json < "$lake_source" |
+        jq -r 'select(.kind == "pqbench.table-ref") | .id + " " + (.format // "-")') || {
+        echo "check failed: schema ls produced no tables" >&2
+        exit 1
+    }
+    [ "$tables" = "pqbench.demo.events DELTA" ] || {
+        echo "check failed (unity schema ls): expected pqbench.demo.events DELTA; measured ${tables:-nothing}" >&2
+        exit 1
+    }
+
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables"
 }
 
 check_iceberg() {

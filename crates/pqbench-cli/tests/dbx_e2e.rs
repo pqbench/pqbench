@@ -368,6 +368,31 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             assert_eq!(record["catalog"], name.as_str());
         }
         println!("catalog {name}: {} schema(s)", records.len());
+
+        // schema → each schema's tables, one directory per catalog.schema
+        for record in &records {
+            let schema = record["name"].as_str().unwrap();
+            let fqn = format!("{name}.{schema}");
+            let dir = job.path().join("schema").join(&fqn);
+            std::fs::create_dir_all(&dir).unwrap();
+            let tables = dir.join("tables.jsonl");
+            let output = pipe_output(
+                &["schema", "ls", &fqn, "--format", "json"],
+                document.as_bytes(),
+                &tables,
+            );
+            assert!(
+                output.status.success(),
+                "stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let records = read_ndjson(&tables);
+            for record in &records {
+                assert_eq!(record["kind"], "pqbench.table-ref");
+                assert_eq!(record["version"], 1);
+            }
+            println!("schema {fqn}: {} table(s)", records.len());
+        }
     }
 }
 
@@ -442,6 +467,115 @@ fn catalog_ls_lists_the_live_schemas() {
         })
         .collect();
     assert_eq!(names, DBX_SAMPLES_SCHEMAS);
+}
+
+/// `schema info` reads `dbx_samples.nyctaxi` from both dialects.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn schema_info_reads_the_live_schema() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    for endpoint in [
+        unity_endpoint(&host),
+        format!(
+            "{}/iceberg-rest/v1/catalogs/dbx_samples",
+            unity_endpoint(&host)
+        ),
+    ] {
+        let iceberg = endpoint.contains("/iceberg-rest");
+        let document = source(&endpoint, Some(&token)).to_string();
+        let output = if iceberg {
+            pipe_env(
+                &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+                document.as_bytes(),
+                &[("PQB_TABLE_FORMAT", "iceberg")],
+            )
+        } else {
+            pipe(
+                &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+                document.as_bytes(),
+            )
+        };
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records = ndjson(&output.stdout);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["kind"], "pqbench.schema");
+        assert_eq!(records[0]["version"], 1);
+        assert_eq!(records[0]["catalog"], "dbx_samples");
+        assert_eq!(records[0]["name"], "nyctaxi");
+    }
+}
+
+/// `schema ls` lists `dbx_samples.nyctaxi` from both dialects: Unity answers
+/// Delta tables with a storage location, Iceberg REST a metadata location.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn schema_ls_lists_the_live_tables() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let output = pipe(
+        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        source(&unity_endpoint(&host), Some(&token))
+            .to_string()
+            .as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert!(!records.is_empty());
+    for record in &records {
+        assert_eq!(record["kind"], "pqbench.table-ref");
+        assert_eq!(record["format"], "DELTA");
+    }
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| record["id"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"dbx_samples.nyctaxi.trips"), "{names:?}");
+
+    let endpoint = format!(
+        "{}/iceberg-rest/v1/catalogs/dbx_samples",
+        unity_endpoint(&host)
+    );
+    let output = pipe_env(
+        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        source(&endpoint, Some(&token)).to_string().as_bytes(),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let trips = records
+        .iter()
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .unwrap_or_else(|| panic!("no trips table: {records:?}"));
+    assert_eq!(trips["format"], "ICEBERG");
+    assert!(
+        trips["uri"].as_str().unwrap().ends_with(".metadata.json"),
+        "{trips:?}"
+    );
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
@@ -520,10 +654,14 @@ fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let endpoint = format!("{}/iceberg-rest", unity_endpoint(&host));
-    let output = pipe(
+    let endpoint = format!(
+        "{}/iceberg-rest/v1/catalogs/dbx_samples",
+        unity_endpoint(&host)
+    );
+    let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
         source(&endpoint, Some(&token)).to_string().as_bytes(),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
     );
     assert!(
         output.status.success(),

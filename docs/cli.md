@@ -15,6 +15,8 @@ that command and links back. This file is the durable copy.
 | List the catalogs at a catalog endpoint | `pqbench metastore ls` (lake-source / `PQB_ENDPOINT`) |
 | Read one catalog's record | `pqbench catalog info [CATALOG]` (refs on stdin) |
 | List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
+| Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
+| List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -42,8 +44,8 @@ environment.
 | `pqbench.lake-source` | you / a producer | `lake`, `metastore`, `catalog` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
-| `pqbench.schema` | `catalog ls` | `schema ls`, `table` |
-| `pqbench.table-ref` | `lake` | `table` |
+| `pqbench.schema` | `catalog ls`, `schema info` | `schema ls`, `table` |
+| `pqbench.table-ref` | `lake`, `schema ls` | `table` |
 | `pqbench.table` | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
@@ -117,6 +119,7 @@ list.
 | `endpoint` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
 | `token` | Bearer PAT (`dapi-…`) or OAuth token; list API only |
 | `catalog` / `schema` | Optional catalog / schema (or glob) to list |
+| `table_format` | Optional `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
 
 The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
@@ -127,13 +130,16 @@ the catalogs at the endpoint, one `pqbench.catalog` line each (name,
 catalog_type). `catalog info` reports one catalog's record (name, catalog_type,
 comment, owner) as a single `pqbench.catalog` line. `catalog ls` lists the
 schemas in the catalog, one `pqbench.schema` line each (catalog, name): Unity
-REST serves `/schemas`, an Iceberg REST endpoint serves `/v1/namespaces` — the
-dialect comes from the `GET /v1/config` probe (a `defaults` object is Iceberg
-REST; a 404 is Unity).
+REST serves `/schemas`; with `PQB_TABLE_FORMAT=iceberg` (or `"table_format":
+"iceberg"` in the document) the command speaks Iceberg REST instead — the
+endpoint then names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) and
+the command reads `/namespaces` under it. Unity is the default; no config
+probe runs.
 
-The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` carry the walk's
-context, and each level reads the parent's refs on standard input — one
-`pqbench.catalog` line per catalog, then one `pqbench.schema` line per schema.
+The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
+carry the walk's context, and each level reads the parent's refs on standard
+input — one `pqbench.catalog` line per catalog, then one `pqbench.schema` line
+per schema.
 `metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
 catalog info` enriches each catalog instead. `info` emits the same kind as the
 `ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each
@@ -149,6 +155,24 @@ dbx_samples  bakehouse
 dbx_samples  nyctaxi
 samples      accuweather
 schemas: 3
+```
+
+`schema info` reads one schema (catalog, name, comment, location, properties)
+from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `schema ls`
+lists the tables in it, one `pqbench.table-ref` line each (name, uri, format) —
+the document `pqbench table` loads. Unity's `/tables` pages carry the full
+name, format, and storage location; Iceberg REST lists a namespace's table
+identifiers and `loadTable` for each metadata location. Entries with no
+location (views) are skipped.
+
+```console no-run
+$ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
+    pqbench catalog ls dbx_samples | pqbench schema ls
+name                       uri                            format
+-------------------------  -----------------------------  --------
+dbx_samples.nyctaxi.trips  s3://bucket/…/trips            DELTA
+dbx_samples.nyctaxi.zones  s3://bucket/…/zones            DELTA
+tables: 2
 ```
 
 ```json

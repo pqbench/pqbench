@@ -89,7 +89,6 @@ const SCHEMAS: &str =
     r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"}],"next_page_token":null}"#;
 const SCHEMAS_PAGE: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":"more"}"#;
 const SCHEMAS_LAST: &str = r#"{"schemas":[{"name":"bakehouse"}]}"#;
-const ICEBERG_CONFIG: &str = r#"{"defaults":{"snapshot-loading-mode":"refs"},"overrides":{"prefix":"catalogs/dbx_samples"}}"#;
 const ICEBERG_NAMESPACES: &str =
     r#"{"namespaces":[["nyctaxi"],["bakehouse"]],"next-page-token":null}"#;
 const ICEBERG_PAGE: &str = r#"{"namespaces":[["nyctaxi"]],"next-page-token":"more"}"#;
@@ -273,17 +272,11 @@ fn catalog_ls_follows_unity_page_tokens() {
 
 #[test]
 fn catalog_ls_lists_iceberg_rest_namespaces() {
-    let address = routes(&[
-        ("/v1/config", 200, ICEBERG_CONFIG),
-        (
-            "/v1/catalogs/dbx_samples/namespaces",
-            200,
-            ICEBERG_NAMESPACES,
-        ),
-    ]);
-    let output = pipe(
+    let address = routes(&[("/namespaces", 200, ICEBERG_NAMESPACES)]);
+    let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
         &source(&address),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
     );
     assert!(
         output.status.success(),
@@ -306,12 +299,12 @@ fn catalog_ls_lists_iceberg_rest_namespaces() {
 fn catalog_ls_follows_iceberg_page_tokens() {
     let address = routes(&[
         ("pageToken=", 200, ICEBERG_LAST),
-        ("/v1/config", 200, ICEBERG_CONFIG),
         ("/namespaces", 200, ICEBERG_PAGE),
     ]);
-    let output = pipe(
+    let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
         &source(&address),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
     );
     assert!(
         output.status.success(),

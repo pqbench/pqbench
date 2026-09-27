@@ -13,6 +13,7 @@ pub mod lz;
 pub mod metastore;
 pub mod profile;
 pub mod report;
+pub mod schema;
 pub mod skill;
 pub mod stats;
 pub mod table;
