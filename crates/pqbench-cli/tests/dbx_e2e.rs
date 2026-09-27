@@ -172,11 +172,10 @@ fn metastore_ls_lists_the_live_catalogs() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
+    let document = source(&unity_endpoint(&host), Some(&token)).to_string();
     let output = pipe(
         &["metastore", "ls", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        document.as_bytes(),
     );
     assert!(
         output.status.success(),
@@ -184,7 +183,6 @@ fn metastore_ls_lists_the_live_catalogs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert!(!records.is_empty());
     for record in &records {
         assert_eq!(record["kind"], "pqbench.catalog");
         assert_eq!(record["version"], 1);
@@ -193,7 +191,42 @@ fn metastore_ls_lists_the_live_catalogs() {
         .iter()
         .filter_map(|record| record["name"].as_str())
         .collect();
-    assert!(names.contains(&"dbx_samples"), "{names:?}");
+    assert_eq!(names, ["dbx_samples", "samples", "system", "workspace"]);
+
+    let output = pipe(
+        &["metastore", "ls", "--format", "table"],
+        document.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("dbx_samples"), "{stdout}");
+    assert!(stdout.contains("catalogs: 4"), "{stdout}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("catalogs.ndjson.zst");
+    let output = pipe(
+        &[
+            "metastore",
+            "ls",
+            "--format",
+            "json",
+            "-o",
+            file.to_str().unwrap(),
+        ],
+        document.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = std::fs::read(&file).unwrap();
+    let decoded = zstd::decode_all(&bytes[..]).unwrap();
+    assert_eq!(ndjson(&decoded).len(), 4);
 }
 
 #[test]
