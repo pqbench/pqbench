@@ -14,6 +14,7 @@ that command and links back. This file is the durable copy.
 | Read the endpoint's metastore record | `pqbench metastore info` (a lake-source on stdin) |
 | List the catalogs at a catalog endpoint | `pqbench metastore ls` (a lake-source on stdin) |
 | Read one catalog's record | `pqbench catalog info CATALOG` (a lake-source on stdin) |
+| List the schemas in a catalog | `pqbench catalog ls CATALOG` (a lake-source on stdin) |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -40,7 +41,8 @@ environment.
 | --- | --- | --- |
 | `pqbench.lake-source` | you / a producer | `lake`, `metastore` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
-| `pqbench.catalog` | `metastore ls` | humans / scripts (`--json`) |
+| `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog ls`, humans / scripts (`--json`) |
+| `pqbench.schema` | `catalog ls` | `schema ls`, `table` |
 | `pqbench.table-ref` | `lake` | `table` |
 | `pqbench.table` | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
@@ -123,7 +125,11 @@ listed tables. A PAT does not open `s3://`.
 record (name, id, cloud, region) as `pqbench.metastore`; `metastore ls` lists
 the catalogs at the endpoint, one `pqbench.catalog` line each (name,
 catalog_type). `catalog info` reports one catalog's record (name, catalog_type,
-comment, owner) as a single `pqbench.catalog` line.
+comment, owner) as a single `pqbench.catalog` line. `catalog ls` lists the
+schemas in the catalog, one `pqbench.schema` line each (catalog, name): Unity
+REST serves `/schemas`, an Iceberg REST endpoint serves `/v1/namespaces` — the
+dialect comes from the `GET /v1/config` probe (a `defaults` object is Iceberg
+REST; a 404 is Unity).
 
 ```json
 {
@@ -165,6 +171,17 @@ name         catalog_type     comment         owner
 -----------  ---------------  --------------  -----------------
 dbx_samples  MANAGED_CATALOG  sample catalog  owner@example.com
 catalogs: 1
+```
+
+List the schemas in a catalog:
+
+```console no-run
+$ pqbench catalog ls dbx_samples < source.json
+catalog      name
+-----------  ----------------
+dbx_samples  bakehouse
+dbx_samples  nyctaxi
+schemas: 2
 ```
 
 ### Databricks-governed tables
