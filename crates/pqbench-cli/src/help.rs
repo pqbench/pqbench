@@ -216,20 +216,27 @@ See also:
   pqbench --help           catalog auth, lake-source shape
   docs/cli.md";
 
-pub const CATALOG_ABOUT: &str = "Read one catalog's record";
+pub const CATALOG_ABOUT: &str = "Read one catalog's record or list its schemas";
 
 pub const CATALOG_LONG_ABOUT: &str = "\
 Read one catalog at a catalog endpoint: the entity above schemas. The
 endpoint and token come from a pqbench.lake-source on standard input; the
 catalog name is the argument.
 
-A terminal prints the record (name, catalog_type, comment, owner) as a table;
-a pipe streams one `pqbench.catalog` line. `--format json` forces the stream,
-and `-o` also writes it.";
+  info   the catalog's record (name, catalog_type, comment, owner) as one
+         pqbench.catalog line
+  ls     the schemas in the catalog, one pqbench.schema line each (catalog,
+         name). Unity REST serves /schemas; an Iceberg REST endpoint serves
+         /v1/namespaces, its prefix read from GET /v1/config — a 404 there
+         means Unity.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
 
 pub const CATALOG_AFTER: &str = "\
 Examples:
   pqbench catalog info dbx_samples < source.json
+  pqbench catalog ls dbx_samples < source.json
 
 See also:
   pqbench metastore --help  the endpoint's metastore and its catalogs
