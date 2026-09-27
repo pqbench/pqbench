@@ -7,64 +7,64 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn lz() {
-    // lz, from line 46
-    support::run("pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table", 47, Some(&["codec  level  compress MB/s  decompress MB/s  ratio", "-----  -----  -------------  ---------------  -----", "zstd       3          ±12.5            ±31.8   0.63", "file: examples/quickstart.parquet", "rows: 1"]));
+    // lz, from line 40
+    support::run("pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table", 41, Some(&["codec  level  compress MB/s  decompress MB/s  ratio", "-----  -----  -------------  ---------------  -----", "zstd       3          ±12.5            ±31.8   0.63", "file: examples/quickstart.parquet", "rows: 1"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn compression() {
-    // compression, from line 64
-    support::run("pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table", 65, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "lz4         1          ±71.0            ±89.0   0.78", "snappy      1          ±20.0            ±40.0   0.85", "zstd        1          ±12.0            ±28.0   1.01", "gzip        1           ±0.6             ±4.0   1.26", "file: examples/quickstart.parquet", "rows: 4", "columns: 0"]));
+    // compression, from line 58
+    support::run("pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table", 59, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "lz4         1          ±71.0            ±89.0   0.78", "snappy      1          ±20.0            ±40.0   0.85", "zstd        1          ±12.0            ±28.0   1.01", "gzip        1           ±0.6             ±4.0   1.26", "file: examples/quickstart.parquet", "rows: 4", "columns: 0"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn bytemass() {
-    // bytemass, from line 85
-    support::run("pqbench bytemass examples/quickstart.parquet --format table", 86, Some(&["column  type   codec         encodings                 bytes  values", "------  -----  ------------  ------------------------  -----  ------", "id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "rows: 8", "columns: 2"]));
+    // bytemass, from line 79
+    support::run("pqbench bytemass examples/quickstart.parquet --format table", 80, Some(&["column  type   codec         encodings                 bytes  values", "------  -----  ------------  ------------------------  -----  ------", "id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "rows: 8", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn table() {
-    // table, from line 114
-    support::run("pqbench table docker/e2e-lakehouse/table --format table", 115, Some(&["path                                                                 size_bytes  num_records", "-------------------------------------------------------------------  ----------  -----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3", "tables: 1", "files: 1 (796 bytes)"]));
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table", 121, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
-    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 129, None);
+    // table, from line 108
+    support::run("pqbench table docker/e2e-lakehouse/table --format table", 109, Some(&["path                                                                 size_bytes  num_records", "-------------------------------------------------------------------  ----------  -----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3", "tables: 1", "files: 1 (796 bytes)"]));
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table", 115, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 123, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn table_2() {
-    // table_2, from line 147
-    support::run("pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table", 148, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    // table_2, from line 141
+    support::run("pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table", 142, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn lake() {
-    // lake, from line 163
-    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table", 164, Some(&["name   uri", "-----  ----------------------------------------", "table  file://<root>/docker/e2e-lakehouse/table", "tables: 1"]));
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table", 169, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    // lake, from line 157
+    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table", 158, Some(&["name   uri", "-----  ----------------------------------------", "table  file://<root>/docker/e2e-lakehouse/table", "tables: 1"]));
+    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table", 163, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 219
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 220, None);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 221, None);
+    // viz, from line 213
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 214, None);
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 215, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn dump() {
-    // dump, from line 231
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 232, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
+    // dump, from line 225
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 226, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
 }

@@ -8,13 +8,7 @@
 Measure how well each codec compresses a parquet file and how many on-disk bytes
 each column costs.
 
-Two jobs, one binary:
-
-- **Codec benchmarking** — `lz` sweeps codecs over raw file bytes;
-  `compression` sweeps them over a parquet file's encoded pages.
-- **Storage accounting** — `bytemass` reads the footer and reports the on-disk
-  bytes each column costs; `profile` decodes a row sample into per-column facts;
-  `experiment` rewrites that sample and measures the result.
+One binary for parquet optimizations.
 
 Commands compose on pipes: each writes a versioned JSON document the next reads.
 The usual pipe is `lake` → `table` → `bytemass` → `viz`; `dump` copies the files.
