@@ -163,6 +163,41 @@ fn metastore_info_reads_the_live_metastore() {
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
+fn metastore_ls_lists_the_live_catalogs() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let output = pipe(
+        &["metastore", "ls", "--format", "json"],
+        source(&unity_endpoint(&host), Some(&token))
+            .to_string()
+            .as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert!(!records.is_empty());
+    for record in &records {
+        assert_eq!(record["kind"], "pqbench.catalog");
+        assert_eq!(record["version"], 1);
+    }
+    let names: Vec<&str> = records
+        .iter()
+        .filter_map(|record| record["name"].as_str())
+        .collect();
+    assert!(names.contains(&"dbx_samples"), "{names:?}");
+}
+
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_info_rejects_a_missing_token() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
