@@ -216,6 +216,26 @@ See also:
   pqbench --help           catalog auth, lake-source shape
   docs/cli.md";
 
+pub const CATALOG_ABOUT: &str = "Read one catalog's record";
+
+pub const CATALOG_LONG_ABOUT: &str = "\
+Read one catalog at a catalog endpoint: the entity above schemas. The
+endpoint and token come from a pqbench.lake-source on standard input; the
+catalog name is the argument.
+
+A terminal prints the record (name, catalog_type, comment, owner) as a table;
+a pipe streams one `pqbench.catalog` line. `--format json` forces the stream,
+and `-o` also writes it.";
+
+pub const CATALOG_AFTER: &str = "\
+Examples:
+  pqbench catalog info dbx_samples < source.json
+
+See also:
+  pqbench metastore --help  the endpoint's metastore and its catalogs
+  pqbench --help            catalog auth, lake-source shape
+  docs/cli.md";
+
 pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
 
 pub const DUMP_LONG_ABOUT: &str = "\
