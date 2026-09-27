@@ -33,7 +33,7 @@ test:
 
 # The live Databricks metastore e2e; needs the service principal credentials.
 dbx-e2e:
-	@test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_SAMPLES_SP_CLIENT_ID/SECRET (see experiments/exp33_databricks_credential_vending.md)"; exit 1; }
+	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/auth.md)"; exit 1; }
 	$(CARGO) test -p pqbench-cli --test dbx_e2e -- --ignored --nocapture
 
 lint:

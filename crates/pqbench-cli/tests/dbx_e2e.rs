@@ -1,17 +1,19 @@
 //! Live Databricks metastore e2e: mint an OAuth M2M bearer (or take
 //! `DBX_TOKEN`), then read the live metastore record with `metastore info`.
 //!
+//! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
+//! service principal's credentials come from `DBX_SAMPLES_SP_CLIENT_ID` /
+//! `DBX_SAMPLES_SP_CLIENT_SECRET`, or a ready `DBX_TOKEN` is used instead.
+//!
 //! Auth flows covered: a short-lived minted token used as a standard bearer,
-//! a missing token, and an invalid token (both rejected with 401). A
-//! `DBX_TOKEN` in the environment (a PAT or a token minted elsewhere) is used
-//! instead of minting, for local runs.
+//! a missing token, and an invalid token (both rejected with 401).
 //!
 //! Ignored by default so `make test` stays offline; run with `make dbx-e2e`
-//! (or `cargo test -p pqbench-cli --test dbx_e2e -- --ignored`). When neither
-//! a token nor the service principal's credentials are set, each test skips,
-//! so `--include-ignored` legs without secrets stay green.
+//! (or `cargo test -p pqbench-cli --test dbx_e2e -- --ignored`). When
+//! `DBX_HOST` or the credentials are not set, each test skips, so
+//! `--include-ignored` legs without secrets stay green.
 //!
-//! Setup and endpoints: `experiments/exp33_databricks_credential_vending.md`.
+//! Setup: `docs/auth.md`.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -29,6 +31,7 @@ fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
     let mut child = pqbench()
         .args(args)
         .env_remove("DBX_TOKEN")
+        .env_remove("DBX_HOST")
         .env_remove("DBX_SAMPLES_SP_CLIENT_ID")
         .env_remove("DBX_SAMPLES_SP_CLIENT_SECRET")
         .stdin(Stdio::piped())
@@ -48,21 +51,23 @@ fn ndjson(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
-fn dbx_host() -> String {
+/// The live workspace URL, from `DBX_HOST` (a CI secret or the local shell).
+fn dbx_host() -> Option<String> {
     std::env::var("DBX_HOST")
-        .unwrap_or_else(|_| "https://dbc-ffe76e52-77ba.cloud.databricks.com".to_string())
+        .ok()
+        .filter(|host| !host.is_empty())
 }
 
-fn unity_endpoint() -> String {
-    format!("{}/api/2.1/unity-catalog", dbx_host())
+fn unity_endpoint(host: &str) -> String {
+    format!("{}/api/2.1/unity-catalog", host.trim_end_matches('/'))
 }
 
 /// A `pqbench.lake-source` naming the live endpoint.
-fn source(token: Option<&str>) -> Value {
+fn source(endpoint: &str, token: Option<&str>) -> Value {
     let mut document = json!({
         "kind": "pqbench.lake-source",
         "version": 1,
-        "endpoint": unity_endpoint(),
+        "endpoint": endpoint,
     });
     if let Some(token) = token {
         document["token"] = json!(token);
@@ -72,13 +77,13 @@ fn source(token: Option<&str>) -> Value {
 
 /// The service principal's short-lived OAuth M2M bearer, minted once per test
 /// process. `None` when the SP credentials are not configured.
-fn minted_token() -> Option<String> {
+fn minted_token(host: &str) -> Option<String> {
     static TOKEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     TOKEN
         .get_or_init(|| {
             let client_id = std::env::var("DBX_SAMPLES_SP_CLIENT_ID").ok()?;
             let client_secret = std::env::var("DBX_SAMPLES_SP_CLIENT_SECRET").ok()?;
-            mint_token(&dbx_host(), &client_id, &client_secret)
+            mint_token(host, &client_id, &client_secret)
         })
         .clone()
 }
@@ -91,8 +96,8 @@ fn ready_token() -> Option<String> {
 }
 
 /// A token for a test that only needs to be authenticated.
-fn any_token() -> Option<String> {
-    ready_token().or_else(minted_token)
+fn any_token(host: &str) -> Option<String> {
+    ready_token().or_else(|| minted_token(host))
 }
 
 /// `POST /oidc/v1/token` with HTTP Basic `client_id:client_secret`.
@@ -119,13 +124,19 @@ fn mint_token(host: &str, client_id: &str, client_secret: &str) -> Option<String
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_info_reads_the_live_metastore() {
-    let Some(token) = any_token() else {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
     let output = pipe(
         &["metastore", "info", "--format", "json"],
-        source(Some(&token)).to_string().as_bytes(),
+        source(&unity_endpoint(&host), Some(&token))
+            .to_string()
+            .as_bytes(),
     );
     assert!(
         output.status.success(),
@@ -153,7 +164,14 @@ fn metastore_info_reads_the_live_metastore() {
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_info_rejects_a_missing_token() {
-    let output = pipe(&["metastore", "info"], source(None).to_string().as_bytes());
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let output = pipe(
+        &["metastore", "info"],
+        source(&unity_endpoint(&host), None).to_string().as_bytes(),
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -162,9 +180,15 @@ fn metastore_info_rejects_a_missing_token() {
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_info_rejects_an_invalid_token() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
     let output = pipe(
         &["metastore", "info"],
-        source(Some("not-a-real-token")).to_string().as_bytes(),
+        source(&unity_endpoint(&host), Some("not-a-real-token"))
+            .to_string()
+            .as_bytes(),
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

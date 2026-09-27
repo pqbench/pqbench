@@ -177,6 +177,7 @@ jobs:
       # receive them in their environment.
       - name: Run the live Databricks metastore e2e
         env:
+          DBX_HOST: ${{ secrets.DBX_HOST }}
           DBX_SAMPLES_SP_CLIENT_ID: ${{ secrets.DBX_SAMPLES_SP_CLIENT_ID }}
           DBX_SAMPLES_SP_CLIENT_SECRET: ${{ secrets.DBX_SAMPLES_SP_CLIENT_SECRET }}
         run: make dbx-e2e
