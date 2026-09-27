@@ -13,6 +13,7 @@ that command and links back. This file is the durable copy.
 | List tables in a warehouse or catalog | `pqbench lake DIR` |
 | Read the endpoint's metastore record | `pqbench metastore info` (a lake-source on stdin) |
 | List the catalogs at a catalog endpoint | `pqbench metastore ls` (a lake-source on stdin) |
+| Read one catalog's record | `pqbench catalog info CATALOG` (a lake-source on stdin) |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -121,7 +122,8 @@ listed tables. A PAT does not open `s3://`.
 `metastore info` reads the same document and reports the endpoint's metastore
 record (name, id, cloud, region) as `pqbench.metastore`; `metastore ls` lists
 the catalogs at the endpoint, one `pqbench.catalog` line each (name,
-catalog_type).
+catalog_type). `catalog info` reports one catalog's record (name, catalog_type,
+comment, owner) as a single `pqbench.catalog` line.
 
 ```json
 {
@@ -153,6 +155,16 @@ name         catalog_type
 dbx_samples  MANAGED_CATALOG
 samples      SYSTEM_CATALOG
 catalogs: 2
+```
+
+Read one catalog's record:
+
+```console no-run
+$ pqbench catalog info dbx_samples < source.json
+name         catalog_type     comment         owner
+-----------  ---------------  --------------  -----------------
+dbx_samples  MANAGED_CATALOG  sample catalog  owner@example.com
+catalogs: 1
 ```
 
 ### Databricks-governed tables
