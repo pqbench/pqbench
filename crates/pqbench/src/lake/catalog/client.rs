@@ -1,18 +1,15 @@
-//! The Unity Catalog list client behind [`super::super::api::list_tables`].
+//! The Unity Catalog list client behind [`super::api::list_tables`].
 //!
-//! Compiled only with the `unity` feature; it names `reqwest`, as does
-//! [`super::http`], which holds the shared page walk.
+//! The transport is the `reqwest` wrapper.
 
 use std::collections::BTreeMap;
 
-use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-use crate::third_party::unity::api::{is_glob, Error, LakeSource, NameFilter};
-
+use super::super::api::{is_glob, Error, LakeSource, NameFilter};
 use super::filter;
-use super::http::{self, encode, page_token, REQUEST_TIMEOUT};
+use super::http::{encode, page_token, pages};
 use crate::lake::LakeTable;
 
 const PAGE_SIZE: u32 = 50;
@@ -64,28 +61,13 @@ pub(crate) async fn list_tables(
     source: &LakeSource,
     filter: &NameFilter,
 ) -> Result<Vec<LakeTable>, Error> {
-    let client = Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|error| Error::from(format!("catalog client: {error}")))?;
     let root = api_root(&source.endpoint);
-    let token = source.token.clone().filter(|token| !token.is_empty());
+    let token = source.token.as_deref().filter(|token| !token.is_empty());
     let mut tables = Vec::new();
-    for catalog in list_catalogs(&client, &root, token.as_deref(), source, filter).await? {
-        for schema in
-            list_schemas(&client, &root, token.as_deref(), &catalog, source, filter).await?
-        {
+    for catalog in list_catalogs(&root, token, source, filter).await? {
+        for schema in list_schemas(&root, token, &catalog, source, filter).await? {
             tables.extend(
-                list_schema_tables(
-                    &client,
-                    &root,
-                    token.as_deref(),
-                    &catalog,
-                    &schema,
-                    &source.env,
-                    filter,
-                )
-                .await?,
+                list_schema_tables(&root, token, &catalog, &schema, &source.env, filter).await?,
             );
         }
     }
@@ -96,7 +78,6 @@ pub(crate) async fn list_tables(
 }
 
 async fn list_catalogs(
-    client: &Client,
     root: &str,
     token: Option<&str>,
     source: &LakeSource,
@@ -119,7 +100,6 @@ async fn list_catalogs(
         }
     }
     let names = names::<CatalogsPage>(
-        client,
         root,
         token,
         "/catalogs",
@@ -144,7 +124,6 @@ async fn list_catalogs(
 }
 
 async fn list_schemas(
-    client: &Client,
     root: &str,
     token: Option<&str>,
     catalog: &str,
@@ -170,7 +149,6 @@ async fn list_schemas(
         }
     }
     let names = names::<SchemasPage>(
-        client,
         root,
         token,
         "/schemas",
@@ -205,7 +183,6 @@ fn api_root(endpoint: &str) -> String {
 }
 
 async fn names<P: DeserializeOwned>(
-    client: &Client,
     root: &str,
     token: Option<&str>,
     path: &str,
@@ -214,8 +191,7 @@ async fn names<P: DeserializeOwned>(
     next: fn(&P) -> Option<String>,
 ) -> Result<Vec<String>, Error> {
     let mut names = Vec::new();
-    for page in http::pages::<P>(
-        client,
+    for page in pages::<P>(
         token,
         |page_token| unity_path(root, path, query, page_token),
         next,
@@ -251,7 +227,6 @@ fn unity_path(root: &str, path: &str, query: &[(&str, &str)], page_token: Option
 }
 
 async fn list_schema_tables(
-    client: &Client,
     root: &str,
     token: Option<&str>,
     catalog: &str,
@@ -261,8 +236,7 @@ async fn list_schema_tables(
 ) -> Result<Vec<LakeTable>, Error> {
     let mut tables = Vec::new();
     let query = [("catalog_name", catalog), ("schema_name", schema)];
-    for page in http::pages::<TablesPage>(
-        client,
+    for page in pages::<TablesPage>(
         token,
         |page_token| unity_path(root, "/tables", &query, page_token),
         |page| page_token(&page.next_page_token),

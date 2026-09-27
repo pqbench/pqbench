@@ -1,9 +1,7 @@
 use serde_json::{json, Value};
-#[cfg(feature = "unity")]
 use std::io::Read;
 use std::io::Write;
 use std::process::{Command, Stdio};
-#[cfg(feature = "unity")]
 use std::sync::{Arc, Mutex};
 
 fn pqbench() -> Command {
@@ -12,7 +10,6 @@ fn pqbench() -> Command {
 
 /// One Unity Catalog list server. `expect_bearer` is the Databricks token the
 /// client must send; `None` is Unity OSS, which sends no Authorization header.
-#[cfg(feature = "unity")]
 struct Catalog {
     address: String,
     seen: Arc<Mutex<Vec<String>>>,
@@ -20,7 +17,6 @@ struct Catalog {
     thread: std::thread::JoinHandle<()>,
 }
 
-#[cfg(feature = "unity")]
 impl Catalog {
     fn spawn(expect_bearer: Option<&'static str>, tables: Vec<Value>) -> Self {
         Self::spawn_catalogs(expect_bearer, vec!["main"], tables)
@@ -89,7 +85,6 @@ impl Catalog {
     }
 }
 
-#[cfg(feature = "unity")]
 fn catalog_body(request: &str, catalogs: &[&str], tables: &[Value]) -> String {
     let path = request.split_whitespace().nth(1).unwrap_or("");
     // 200 without `defaults` is Unity; Iceberg REST answers with a defaults object.
@@ -307,7 +302,6 @@ fn lake_names_the_missing_aws_feature_for_s3() {
     assert!(stderr.contains("aws"), "{stderr}");
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn unity_oss_lists_delta_tables_without_a_token() {
     let table = json!({
@@ -357,7 +351,6 @@ fn unity_oss_lists_delta_tables_without_a_token() {
     assert_eq!(refs[0]["env"]["AWS_REGION"], "us-east-1");
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn databricks_list_follows_an_empty_page_token() {
     let catalog = Catalog::spawn(
@@ -393,7 +386,6 @@ fn databricks_list_follows_an_empty_page_token() {
     assert_eq!(refs[0]["uri"], "s3://bucket/events");
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn unity_skips_an_empty_schema_page() {
     let catalog = Catalog::spawn_catalogs(
@@ -423,7 +415,6 @@ fn unity_skips_an_empty_schema_page() {
     assert_eq!(refs[0]["id"], "main.default.events");
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn include_and_exclude_match_table_fqn() {
     let catalog = Catalog::spawn(
@@ -472,7 +463,6 @@ fn include_and_exclude_match_table_fqn() {
     assert_eq!(ids, ["main.default.events"]);
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn include_table_fqn_skips_other_catalogs() {
     let catalog = Catalog::spawn_catalogs(
@@ -509,7 +499,6 @@ fn include_table_fqn_skips_other_catalogs() {
     assert_eq!(ids, ["main.default.events"]);
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn include_prefix_skips_other_catalogs() {
     let catalog = Catalog::spawn_catalogs(
@@ -544,7 +533,6 @@ fn include_prefix_skips_other_catalogs() {
     assert_eq!(refs.len(), 1);
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn iceberg_rest_lists_tables_from_metadata_location() {
     let catalog = IcebergCatalog::spawn();
@@ -571,7 +559,6 @@ fn iceberg_rest_lists_tables_from_metadata_location() {
     assert!(refs[0].get("info").is_none());
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn iceberg_rest_rejects_a_table_without_metadata_location() {
     let catalog = IcebergCatalog::spawn_load("{}");
@@ -589,7 +576,6 @@ fn iceberg_rest_rejects_a_table_without_metadata_location() {
     );
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn iceberg_rest_rejects_a_namespace_page_without_namespaces() {
     let catalog = IcebergCatalog::spawn_namespaces("{}");
@@ -607,7 +593,6 @@ fn iceberg_rest_rejects_a_namespace_page_without_namespaces() {
     );
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn iceberg_rest_rejects_an_identifier_without_a_name() {
     let catalog = IcebergCatalog::spawn_identifiers(r#"{"identifiers":[{}]}"#);
@@ -625,7 +610,6 @@ fn iceberg_rest_rejects_an_identifier_without_a_name() {
     );
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn lake_source_rejects_a_catalog_that_does_not_answer() {
     let source = json!({
@@ -644,7 +628,6 @@ fn lake_source_rejects_a_catalog_that_does_not_answer() {
 
 /// One Iceberg REST list server: `/v1/config` reports the defaults object that
 /// selects this dialect, then namespaces, tables, and `loadTable`.
-#[cfg(feature = "unity")]
 struct IcebergCatalog {
     address: String,
     // Held only to keep the mock catalog thread alive for the test's duration.
@@ -652,7 +635,6 @@ struct IcebergCatalog {
     thread: std::thread::JoinHandle<()>,
 }
 
-#[cfg(feature = "unity")]
 impl IcebergCatalog {
     fn spawn() -> Self {
         Self::serve(None, None, None)
@@ -805,7 +787,6 @@ fn lake_source_rejects_a_non_aws_env_key() {
     assert!(stderr.contains("AWS_*"), "{stderr}");
 }
 
-#[cfg(feature = "unity")]
 #[test]
 fn lake_rejects_a_catalog_with_no_delta_tables() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

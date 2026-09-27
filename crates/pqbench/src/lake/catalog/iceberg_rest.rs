@@ -1,25 +1,15 @@
-//! List tables from an Iceberg REST catalog.
+//! The Iceberg REST list client behind [`super::api::list_tables`].
 //!
-//! The walk is the Iceberg REST dialect the lakehouse stand serves:
-//! `GET /v1/namespaces`, `GET /v1/namespaces/{ns}/tables`, then
-//! `GET /v1/namespaces/{ns}/tables/{table}` for the metadata location. Listing
-//! is sequential: the caller runs one table per later process. `--include` /
-//! `--exclude` prune the walk when the leading name is a literal.
-//!
-//! `GET /v1/config` picked this protocol (see [`super::super::protocol`]); this
-//! module names `reqwest` and is compiled only with the `unity` feature.
+//! The transport is the `reqwest` wrapper.
 //!
 //! https://iceberg.apache.org/docs/latest/rest-catalog-spec/
 
 use std::collections::BTreeMap;
 
-use reqwest::Client;
 use serde::Deserialize;
 
-use crate::third_party::unity::api::{Error, LakeSource, NameFilter};
-
-use super::filter;
-use super::http::{self, encode, get_json, page_token, REQUEST_TIMEOUT};
+use super::super::api::{Error, LakeSource, NameFilter};
+use super::http::{encode, get_json, page_token, pages};
 use crate::lake::LakeTable;
 
 #[derive(Deserialize)]
@@ -51,25 +41,11 @@ pub(crate) async fn list_tables(
     source: &LakeSource,
     filter: &NameFilter,
 ) -> Result<Vec<LakeTable>, Error> {
-    let client = Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|error| Error::from(format!("catalog client: {error}")))?;
     let root = source.endpoint.trim_end_matches('/').to_string();
-    let token = source.token.clone().filter(|token| !token.is_empty());
+    let token = source.token.as_deref().filter(|token| !token.is_empty());
     let mut tables = Vec::new();
-    for namespace in list_namespaces(&client, &root, token.as_deref(), filter).await? {
-        tables.extend(
-            list_namespace_tables(
-                &client,
-                &root,
-                token.as_deref(),
-                &namespace,
-                &source.env,
-                filter,
-            )
-            .await?,
-        );
+    for namespace in list_namespaces(&root, token, filter).await? {
+        tables.extend(list_namespace_tables(&root, token, &namespace, &source.env, filter).await?);
     }
     if tables.is_empty() {
         return Err(Error::from("catalog listed no Iceberg tables".to_string()));
@@ -78,14 +54,12 @@ pub(crate) async fn list_tables(
 }
 
 async fn list_namespaces(
-    client: &Client,
     root: &str,
     token: Option<&str>,
     filter: &NameFilter,
 ) -> Result<Vec<Vec<String>>, Error> {
     let mut namespaces = Vec::new();
-    for page in http::pages::<NamespacesPage>(
-        client,
+    for page in pages::<NamespacesPage>(
         token,
         |page_token| root_path(root, "/v1/namespaces", page_token),
         |page| page_token(&page.next_page_token),
@@ -98,7 +72,7 @@ async fn list_namespaces(
                     "catalog /v1/namespaces listed a nameless namespace".to_string(),
                 ));
             }
-            if filter::keeps_prefix(filter, &parts.join(".")) {
+            if filter.keeps_prefix(&parts.join(".")) {
                 namespaces.push(parts);
             }
         }
@@ -107,7 +81,6 @@ async fn list_namespaces(
 }
 
 async fn list_namespace_tables(
-    client: &Client,
     root: &str,
     token: Option<&str>,
     namespace: &[String],
@@ -116,8 +89,7 @@ async fn list_namespace_tables(
 ) -> Result<Vec<LakeTable>, Error> {
     let encoded = encoded_namespace(namespace);
     let mut tables = Vec::new();
-    for page in http::pages::<TablesPage>(
-        client,
+    for page in pages::<TablesPage>(
         token,
         |page_token| {
             root_path(
@@ -138,7 +110,7 @@ async fn list_namespace_tables(
                 )
                 .into());
             }
-            let table = load_table(client, root, token, namespace, &item.name, env).await?;
+            let table = load_table(root, token, namespace, &item.name, env).await?;
             if filter.keeps(&table.name) {
                 tables.push(table);
             }
@@ -148,7 +120,6 @@ async fn list_namespace_tables(
 }
 
 async fn load_table(
-    client: &Client,
     root: &str,
     token: Option<&str>,
     namespace: &[String],
@@ -160,7 +131,7 @@ async fn load_table(
         encoded_namespace(namespace),
         encode(name)
     );
-    let loaded: LoadedTable = get_json(client, &url, token).await?;
+    let loaded: LoadedTable = get_json(&url, token).await?;
     if loaded.metadata_location.is_empty() {
         return Err(format!(
             "Iceberg table {}.{} is missing metadata-location",

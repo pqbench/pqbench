@@ -43,6 +43,8 @@ details.
   backends, limitations.
 - [Iceberg tables](iceberg.md) — load metadata and manifests, `table |
   bytemass`, limitations.
+- [Databricks auth](auth.md) — create the service principal, grant metadata
+  access, mint the OAuth M2M bearer.
 - [Docker](docker.md) — build, run, publish, and benchmark in a container.
 
 ### Reference
@@ -61,3 +63,5 @@ details.
 - [`README.md`](../README.md) — the landing page and quick start.
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — the change loop, the gate, naming.
 - [`AGENTS.md`](../AGENTS.md) — the working rules for agents.
+- [Architecture](architecture.md) — the command layout, third-party isolation,
+  features, and the wire format.

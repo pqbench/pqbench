@@ -4,8 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::Args;
-use pqbench::lake::{self, Lake, LakeTable};
-use pqbench::third_party::unity::{self, NameFilter};
+use pqbench::lake::{self, Lake, LakeTable, NameFilter};
 use serde::Serialize;
 
 use crate::document::{self, Record};
@@ -114,7 +113,7 @@ async fn stream_document(
     })
     .await?;
     if let Some(source) = source {
-        for table in unity::list_tables(&source, filter).await? {
+        for table in lake::list_tables(&source, filter).await? {
             write_ref(emit, &table)?;
             tables += 1;
         }

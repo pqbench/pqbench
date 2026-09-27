@@ -11,6 +11,7 @@ that command and links back. This file is the durable copy.
 | On-disk bytes per column | `pqbench bytemass FILE` |
 | Delta / Iceberg snapshot + files | `pqbench table DIR` |
 | List tables in a warehouse or catalog | `pqbench lake DIR` |
+| Read the endpoint's metastore record | `pqbench metastore info` (a lake-source on stdin) |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -35,7 +36,8 @@ environment.
 
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
-| `pqbench.lake-source` | you / a producer | `lake` |
+| `pqbench.lake-source` | you / a producer | `lake`, `metastore info` |
+| `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
 | `pqbench.table-ref` | `lake` | `table` |
 | `pqbench.table` | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
@@ -113,6 +115,9 @@ list.
 
 The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
+
+`metastore info` reads the same document and reports the endpoint's metastore
+record (name, id, cloud, region) as `pqbench.metastore`.
 
 ```json
 {

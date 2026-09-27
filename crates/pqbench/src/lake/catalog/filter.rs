@@ -3,7 +3,7 @@
 //! These complement [`NameFilter::keeps`] for the partial (`catalog`,
 //! `catalog.schema`) names the crawl visits before a full table FQN exists.
 
-use crate::third_party::unity::api::{self, NameFilter};
+use super::super::api::{self, NameFilter};
 
 /// A catalog or `catalog.schema` still worth walking.
 pub(super) fn keeps_prefix(filter: &NameFilter, name: &str) -> bool {
