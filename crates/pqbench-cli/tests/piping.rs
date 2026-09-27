@@ -69,7 +69,6 @@ const TABLES: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyct
 #[test]
 fn metastore_ls_pipes_into_catalog_info_and_ls() {
     let address = routes(&[
-        ("/v1/config", 404, "{}"),
         ("/schemas?", 200, SCHEMAS),
         ("/schemas/", 200, SCHEMA),
         ("/tables", 200, TABLES),

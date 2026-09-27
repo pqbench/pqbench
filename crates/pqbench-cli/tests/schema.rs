@@ -91,8 +91,6 @@ const SCHEMA: &str = r#"{"name":"nyctaxi","catalog_name":"dbx_samples","comment"
 const TABLES: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"},{"name":"recent","table_type":"VIEW"}],"next_page_token":null}"#;
 const TABLES_PAGE: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"}],"next_page_token":"more"}"#;
 const TABLES_LAST: &str = r#"{"tables":[{"name":"zones","full_name":"dbx_samples.nyctaxi.zones","data_source_format":"DELTA","storage_location":"s3://bucket/zones"}]}"#;
-
-const ICEBERG_CONFIG: &str = r#"{"defaults":{"snapshot-loading-mode":"refs"},"overrides":{"prefix":"catalogs/dbx_samples"}}"#;
 const ICEBERG_NAMESPACE: &str =
     r#"{"namespace":["nyctaxi"],"properties":{"location":"s3://bucket/nyctaxi","owner":"data"}}"#;
 const ICEBERG_TABLES: &str =
@@ -151,13 +149,11 @@ fn schema_info_streams_the_record_as_ndjson() {
 
 #[test]
 fn schema_info_reads_the_iceberg_rest_namespace() {
-    let address = routes(&[
-        ("/v1/config", 200, ICEBERG_CONFIG),
-        ("/namespaces/", 200, ICEBERG_NAMESPACE),
-    ]);
-    let output = pipe(
+    let address = routes(&[("/namespaces/", 200, ICEBERG_NAMESPACE)]);
+    let output = pipe_env(
         &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
         &source(&address),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
     );
     assert!(
         output.status.success(),
@@ -269,14 +265,16 @@ fn schema_ls_streams_table_refs() {
 #[test]
 fn schema_ls_lists_iceberg_rest_tables() {
     let address = routes(&[
-        ("/v1/config", 200, ICEBERG_CONFIG),
         ("/namespaces/nyctaxi/tables/trips", 200, ICEBERG_LOADED),
         ("/namespaces/nyctaxi/tables", 200, ICEBERG_TABLES),
     ]);
     let output = pipe_env(
         &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
-        &[("PQB_ENDPOINT", address.as_str())],
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),

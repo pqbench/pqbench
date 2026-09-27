@@ -483,12 +483,25 @@ fn schema_info_reads_the_live_schema() {
     };
     for endpoint in [
         unity_endpoint(&host),
-        format!("{}/iceberg-rest", unity_endpoint(&host)),
+        format!(
+            "{}/iceberg-rest/v1/catalogs/dbx_samples",
+            unity_endpoint(&host)
+        ),
     ] {
-        let output = pipe(
-            &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
-            source(&endpoint, Some(&token)).to_string().as_bytes(),
-        );
+        let iceberg = endpoint.contains("/iceberg-rest");
+        let document = source(&endpoint, Some(&token)).to_string();
+        let output = if iceberg {
+            pipe_env(
+                &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+                document.as_bytes(),
+                &[("PQB_TABLE_FORMAT", "iceberg")],
+            )
+        } else {
+            pipe(
+                &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+                document.as_bytes(),
+            )
+        };
         assert!(
             output.status.success(),
             "stderr: {}",
@@ -539,10 +552,14 @@ fn schema_ls_lists_the_live_tables() {
         .collect();
     assert!(names.contains(&"dbx_samples.nyctaxi.trips"), "{names:?}");
 
-    let endpoint = format!("{}/iceberg-rest", unity_endpoint(&host));
-    let output = pipe(
+    let endpoint = format!(
+        "{}/iceberg-rest/v1/catalogs/dbx_samples",
+        unity_endpoint(&host)
+    );
+    let output = pipe_env(
         &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         source(&endpoint, Some(&token)).to_string().as_bytes(),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
     );
     assert!(
         output.status.success(),
@@ -637,10 +654,14 @@ fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let endpoint = format!("{}/iceberg-rest", unity_endpoint(&host));
-    let output = pipe(
+    let endpoint = format!(
+        "{}/iceberg-rest/v1/catalogs/dbx_samples",
+        unity_endpoint(&host)
+    );
+    let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
         source(&endpoint, Some(&token)).to_string().as_bytes(),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
     );
     assert!(
         output.status.success(),
