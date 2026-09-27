@@ -282,8 +282,32 @@ See also:
   pqbench --help          catalog auth, lake-source shape
   docs/cli.md";
 
-pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
+pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
 
+pub const RATELIMIT_LONG_ABOUT: &str = "\
+Pace an NDJSON ref stream: records pass through unchanged, delayed so each
+record kind observes at most --rate records per second (15 by default; 0
+turns pacing off). Nothing is dropped. One bucket per kind, so catalogs,
+schemas, and table refs pace independently — the walk's per-endpoint pace.
+
+  metastore ls | pqbench ratelimit | catalog ls
+  catalog ls | pqbench ratelimit --rate 5 | schema ls
+
+A consumer that issues one request per record as it arrives sees the same
+rate. A 429 fails the level; retry it at a lower --rate.";
+
+pub const RATELIMIT_AFTER: &str = "\
+Examples:
+  pqbench metastore ls | pqbench ratelimit | pqbench catalog ls
+  pqbench catalog ls | pqbench ratelimit --rate 5 | pqbench schema ls
+
+See also:
+  pqbench metastore --help  the walk's first level
+  pqbench catalog --help    the walk's second level
+  pqbench schema --help     the walk's third level
+  docs/cli.md";
+
+pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
 pub const DUMP_LONG_ABOUT: &str = "\
 Write the Parquet files named by a pqbench.table or pqbench.lake document
 into OUTPUT, each at its table-relative path. A single table keeps its own

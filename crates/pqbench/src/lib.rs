@@ -12,6 +12,7 @@ pub mod lake;
 pub mod lz;
 pub mod metastore;
 pub mod profile;
+pub mod ratelimit;
 pub mod report;
 pub mod schema;
 pub mod skill;

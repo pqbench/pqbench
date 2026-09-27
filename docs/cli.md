@@ -17,6 +17,7 @@ that command and links back. This file is the durable copy.
 | List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
+| Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -141,7 +142,20 @@ carry the walk's context, and each level reads the parent's refs on standard
 input — one `pqbench.catalog` line per catalog, then one `pqbench.schema` line
 per schema. A level reads the whole parent stream first, then multiplexes every
 ref's request on one thread and emits rows in ref order; a slow endpoint
-overlaps the requests instead of serializing them.
+overlaps the requests instead of serializing them. A `pqbench ratelimit` stage
+paces the refs between two levels at a target rate — records pass through
+unchanged, one bucket per kind, nothing dropped. A 429 fails the level with the
+endpoint's status and body; pace the walk and retry it at a lower rate in the
+shell:
+
+```console
+set -o pipefail
+rate=15
+until pqbench metastore ls | pqbench ratelimit --rate "$rate" | pqbench catalog ls; do
+    rate=$((rate / 2))
+done
+```
+
 `metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
 catalog info` enriches each catalog instead. `info` emits the same kind as the
 `ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each

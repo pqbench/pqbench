@@ -15,6 +15,7 @@ mod lake;
 mod lz;
 mod metastore;
 mod profile;
+mod ratelimit;
 mod schema;
 mod skill;
 mod source;
@@ -97,6 +98,14 @@ enum Command {
     )]
     Schema(schema::SchemaArgs),
     #[command(
+        name = "ratelimit",
+        about = help::RATELIMIT_ABOUT,
+        long_about = help::RATELIMIT_LONG_ABOUT,
+        after_help = help::RATELIMIT_AFTER,
+        after_long_help = help::RATELIMIT_AFTER
+    )]
+    RateLimit(ratelimit::RateLimitArgs),
+    #[command(
         about = help::DUMP_ABOUT,
         long_about = help::DUMP_LONG_ABOUT,
         after_help = help::DUMP_AFTER,
@@ -145,6 +154,7 @@ async fn main() -> ExitCode {
         Command::Metastore(args) => metastore::run(&args).await,
         Command::Catalog(args) => catalog::run(&args).await,
         Command::Schema(args) => schema::run(&args).await,
+        Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
