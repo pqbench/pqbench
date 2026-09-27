@@ -19,8 +19,8 @@ use crate::emit::{Align, Emitter, Row};
 
 use pqbench::bytemass::MassRow;
 use pqbench::lake::Lake;
+use pqbench::lake::LakeSource;
 use pqbench::table::{LogCommit, PartitionMass, TableFile, TableFormat, TableInfo};
-use pqbench::third_party::unity::LakeSource;
 use serde::{Deserialize, Serialize};
 
 use crate::CliError;

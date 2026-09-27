@@ -12,6 +12,7 @@ mod experiment;
 mod help;
 mod lake;
 mod lz;
+mod metastore;
 mod profile;
 mod skill;
 mod table;
@@ -72,6 +73,13 @@ enum Command {
     )]
     Lake(lake::LakeArgs),
     #[command(
+        about = help::METASTORE_ABOUT,
+        long_about = help::METASTORE_LONG_ABOUT,
+        after_help = help::METASTORE_AFTER,
+        after_long_help = help::METASTORE_AFTER
+    )]
+    Metastore(metastore::MetastoreArgs),
+    #[command(
         about = help::DUMP_ABOUT,
         long_about = help::DUMP_LONG_ABOUT,
         after_help = help::DUMP_AFTER,
@@ -117,6 +125,7 @@ async fn main() -> ExitCode {
         Command::Bytemass(args) => bytemass::run(&args).await,
         Command::Table(args) => table::run(&args).await,
         Command::Lake(args) => lake::run(&args).await,
+        Command::Metastore(args) => metastore::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
         Command::Profile(args) => profile::run(&args),
         Command::Experiment(args) => experiment::run(&args),

@@ -12,14 +12,10 @@ description = "A benchmarking library for Parquet files (in-memory read/write th
 default = []
 # S3 object reads. Without it, `s3://` fails at runtime, not at compile time.
 # reqwest signs a HEAD to read `x-amz-storage-class`, which object_store drops.
-aws = ["dep:object_store", "object_store/aws", "dep:reqwest"]
+aws = ["dep:object_store", "object_store/aws"]
 # Delta snapshot resolution requires Rust 1.91.1 or newer.
 delta = ["dep:deltalake", "dep:buoyant_kernel_derive", "dep:futures"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
-# Listing a Unity Catalog / Databricks lake over HTTP. Without it the client
-# still compiles but `unity::list_tables` fails at runtime.
-unity = ["dep:reqwest"]
-
 # Iceberg snapshot planning reads metadata JSON and Avro manifests.
 iceberg = ["dep:apache-avro"]
 iceberg-s3 = ["iceberg", "aws"]
@@ -33,7 +29,7 @@ glob = "0.3"
 # Codecs are enabled so `read_sample` can decode compressed files; without
 # them parquet-rs fails at runtime (`Disabled feature at compile time`).
 parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 bytes = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

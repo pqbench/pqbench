@@ -18,7 +18,7 @@ iceberg_meta="$root/docker/e2e-lakehouse/iceberg/metadata-location"
 pqbench_bin="${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
 
 ensure_pqbench() {
-    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3,unity,iceberg-s3
+    [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3,iceberg-s3
 }
 
 # Create, or accept that a previous run already did.

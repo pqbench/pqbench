@@ -10,6 +10,6 @@ pub mod iceberg;
 pub mod lz4;
 pub mod object_store;
 pub mod parquet;
+pub mod reqwest;
 pub mod snappy;
-pub mod unity;
 pub mod zstd;

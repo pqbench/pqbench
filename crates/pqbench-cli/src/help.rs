@@ -45,6 +45,7 @@ Documents (kind + version 1):
   pqbench.experiment     begin/end around trial and column lines
   pqbench.profile        begin/end around pqbench.profile-column lines
   pqbench.lake-source    catalog endpoint + token; lake lists it
+  pqbench.metastore      the endpoint's metastore record
   pqbench.lake           tables (name, uri, env); table loads each log
   pqbench.table-ref      one table name + uri + env
   pqbench.table          format, snapshot, log, active files (streamed)
@@ -190,6 +191,25 @@ See also:
   pqbench table --help     load each listed table
   pqbench --help           catalog vs object auth, lake-source shape
   docs/cli.md  docs/demos/unity.json";
+
+pub const METASTORE_ABOUT: &str = "Read the endpoint's metastore record";
+
+pub const METASTORE_LONG_ABOUT: &str = "\
+Read the metastore at a catalog endpoint: the entity above catalogs. The
+endpoint and token come from a pqbench.lake-source on standard input.
+
+A terminal prints the record as a table; a pipe streams one
+`pqbench.metastore` line. `--format json` forces the stream, and `-o` also
+writes it.";
+
+pub const METASTORE_AFTER: &str = "\
+Examples:
+  pqbench metastore info < source.json
+
+See also:
+  pqbench lake --help      list the tables the endpoint serves
+  pqbench --help           catalog auth, lake-source shape
+  docs/cli.md";
 
 pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
 

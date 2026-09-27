@@ -282,3 +282,7 @@ pub fn render_text(lake: &Lake) -> String {
     }
     out
 }
+
+mod catalog;
+
+pub use catalog::{list_tables, LakeSource, NameFilter};
