@@ -108,6 +108,7 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
             catalog,
             schema,
             input.source.token.as_deref(),
+            input.source.table_format.into(),
         )
         .await?;
         emit.write_row(&SchemaRecord {
@@ -134,6 +135,7 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
             catalog,
             schema,
             input.source.token.as_deref(),
+            input.source.table_format.into(),
         )
         .await?
         {

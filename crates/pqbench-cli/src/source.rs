@@ -20,11 +20,38 @@ use serde_json::Value;
 
 use crate::CliError;
 
-/// The endpoint and bearer a metadata command runs under.
+/// The endpoint and bearer a metadata command runs under, and the catalog
+/// dialect it speaks.
 #[derive(Debug, Clone)]
 pub(crate) struct Source {
     pub endpoint: String,
     pub token: Option<String>,
+    pub table_format: TableFormat,
+}
+
+/// The catalog dialect the walk runs against.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TableFormat {
+    Unity,
+    Iceberg,
+}
+
+impl From<TableFormat> for pqbench::catalog::ls::TableFormat {
+    fn from(format: TableFormat) -> Self {
+        match format {
+            TableFormat::Unity => Self::Unity,
+            TableFormat::Iceberg => Self::Iceberg,
+        }
+    }
+}
+
+impl From<TableFormat> for pqbench::schema::TableFormat {
+    fn from(format: TableFormat) -> Self {
+        match format {
+            TableFormat::Unity => Self::Unity,
+            TableFormat::Iceberg => Self::Iceberg,
+        }
+    }
 }
 
 /// One command's stdin: the resolved context and the parent's records.
@@ -42,6 +69,8 @@ struct Document {
     endpoint: Option<String>,
     #[serde(default)]
     token: Option<String>,
+    #[serde(default)]
+    table_format: Option<String>,
 }
 
 /// Read stdin: a `pqbench.lake-source` (context) and/or parent refs (items).
@@ -117,7 +146,18 @@ fn resolve(command: &str, document: Option<Document>) -> Result<Source, CliError
         .and_then(|document| document.token.clone())
         .filter(|token| !token.is_empty())
         .or_else(env_token);
-    Ok(Source { endpoint, token })
+    let table_format = document
+        .as_ref()
+        .and_then(|document| document.table_format.clone())
+        .or_else(env_table_format)
+        .map(|value| parse_table_format(command, &value))
+        .transpose()?
+        .unwrap_or(TableFormat::Unity);
+    Ok(Source {
+        endpoint,
+        token,
+        table_format,
+    })
 }
 
 fn env_endpoint() -> Option<String> {
@@ -130,4 +170,22 @@ fn env_token() -> Option<String> {
     std::env::var("PQB_TOKEN")
         .ok()
         .filter(|token| !token.is_empty())
+}
+
+fn env_table_format() -> Option<String> {
+    std::env::var("PQB_TABLE_FORMAT")
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
+/// `unity` (the default) or `iceberg`; the endpoint names the catalog base.
+fn parse_table_format(command: &str, value: &str) -> Result<TableFormat, CliError> {
+    match value {
+        "unity" => Ok(TableFormat::Unity),
+        "iceberg" => Ok(TableFormat::Iceberg),
+        other => Err(format!(
+            "{command}: PQB_TABLE_FORMAT expects `unity` or `iceberg`, got {other:?}"
+        )
+        .into()),
+    }
 }

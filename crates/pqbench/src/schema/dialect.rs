@@ -1,87 +1,17 @@
-//! The catalog dialect behind the schema commands.
+//! URL helpers shared by the schema commands.
 //!
-//! `GET {endpoint}/v1/config?warehouse={catalog}` selects it: a 2xx with a
-//! `defaults` object is Iceberg REST, whose `prefix` (overrides win over
-//! defaults) shapes the namespace URLs; a 404 is Unity REST, which serves
-//! `/schemas/...` and `/tables?...`. Transport failures and other statuses
-//! propagate, so a down catalog is not silently read as the other dialect.
+//! The table format is declared by the caller (`PQB_TABLE_FORMAT`); nothing
+//! here probes the endpoint. Iceberg REST endpoints already name the catalog
+//! base (`{root}/v1` or `{root}/v1/{prefix}`), so the commands append
+//! `/namespaces…` directly.
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
 
 use crate::third_party::reqwest::{self, Request};
 
-/// The catalog dialect the endpoint speaks.
-pub(super) enum Dialect {
-    Unity,
-    IcebergRest { prefix: String },
-}
-
-/// The `GET /v1/config` document that picks the dialect.
-#[derive(Deserialize)]
-struct Config {
-    #[serde(default)]
-    defaults: Option<Properties>,
-    #[serde(default)]
-    overrides: Option<Properties>,
-}
-
-#[derive(Deserialize)]
-struct Properties {
-    #[serde(default)]
-    prefix: Option<String>,
-}
-
-/// Pick Unity or Iceberg REST from `GET {endpoint}/v1/config`.
-pub(super) async fn select(
-    endpoint: &str,
-    catalog: &str,
-    token: Option<&str>,
-) -> Result<Dialect, String> {
-    let url = format!(
-        "{}/v1/config?warehouse={}",
-        endpoint.trim_end_matches('/'),
-        encode(catalog)
-    );
-    let response = reqwest::request(Request {
-        url,
-        bearer: token.map(str::to_owned),
-    })
-    .await
-    .map_err(|error| format!("catalog request failed: {error}"))?;
-    if response.status == 404 {
-        return Ok(Dialect::Unity);
-    }
-    if !(200..300).contains(&response.status) {
-        return Err(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        ));
-    }
-    let config: Config = serde_json::from_slice(&response.bytes)
-        .map_err(|error| format!("the response was not a catalog config: {error}"))?;
-    Ok(match config.defaults {
-        Some(defaults) => Dialect::IcebergRest {
-            prefix: config
-                .overrides
-                .and_then(|overrides| overrides.prefix)
-                .or(defaults.prefix)
-                .unwrap_or_default(),
-        },
-        None => Dialect::Unity,
-    })
-}
-
-/// The Iceberg REST root for one dialect prefix (`{root}/v1/{prefix}`).
-pub(super) fn iceberg_base(endpoint: &str, prefix: &str) -> String {
-    let root = endpoint.trim_end_matches('/');
-    let prefix = prefix.trim_matches('/');
-    if prefix.is_empty() {
-        format!("{root}/v1")
-    } else {
-        format!("{root}/v1/{prefix}")
-    }
+/// The Iceberg REST base, whether or not the endpoint has a trailing slash.
+pub(super) fn iceberg_root(endpoint: &str) -> String {
+    endpoint.trim_end_matches('/').to_string()
 }
 
 /// A percent-encoded Iceberg namespace: parts joined by the unit separator.

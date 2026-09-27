@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::schema::TableFormat;
+
 /// One table in a schema: the `pqbench.table-ref` the CLI emits.
 #[derive(Debug, Clone)]
 pub struct TableRef {
@@ -44,6 +46,7 @@ pub async fn list(
     catalog: &str,
     schema: &str,
     token: Option<&str>,
+    table_format: TableFormat,
 ) -> Result<Vec<TableRef>, Error> {
-    super::r#impl::list(endpoint, catalog, schema, token).await
+    super::r#impl::list(endpoint, catalog, schema, token, table_format).await
 }

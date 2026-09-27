@@ -114,7 +114,14 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut schemas = 0;
     for name in &names {
-        for schema in ls::list(&input.source.endpoint, name, input.source.token.as_deref()).await? {
+        for schema in ls::list(
+            &input.source.endpoint,
+            name,
+            input.source.token.as_deref(),
+            input.source.table_format.into(),
+        )
+        .await?
+        {
             emit.write_row(&SchemaRecord {
                 kind: "pqbench.schema",
                 version: 1,

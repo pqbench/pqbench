@@ -6,6 +6,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::schema::TableFormat;
+
 /// One schema record.
 #[derive(Debug, Clone)]
 pub struct Schema {
@@ -49,6 +51,7 @@ pub async fn read(
     catalog: &str,
     schema: &str,
     token: Option<&str>,
+    table_format: TableFormat,
 ) -> Result<Schema, Error> {
-    super::r#impl::read(endpoint, catalog, schema, token).await
+    super::r#impl::read(endpoint, catalog, schema, token, table_format).await
 }

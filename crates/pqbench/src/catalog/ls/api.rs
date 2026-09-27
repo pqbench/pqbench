@@ -5,6 +5,16 @@
 
 use std::fmt;
 
+/// The catalog dialect a command speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableFormat {
+    /// Unity REST: `/schemas`, `/tables`.
+    Unity,
+    /// Iceberg REST: `/namespaces…`; the endpoint already names the catalog
+    /// base (`{root}/v1` or `{root}/v1/{prefix}`), so no config probe runs.
+    Iceberg,
+}
+
 /// One schema in a catalog.
 #[derive(Debug, Clone)]
 pub struct Schema {
@@ -41,6 +51,7 @@ pub async fn list(
     endpoint: &str,
     catalog: &str,
     token: Option<&str>,
+    table_format: TableFormat,
 ) -> Result<Vec<Schema>, Error> {
-    super::r#impl::list(endpoint, catalog, token).await
+    super::r#impl::list(endpoint, catalog, token, table_format).await
 }

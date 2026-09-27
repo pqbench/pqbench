@@ -1,16 +1,19 @@
 //! The Unity and Iceberg REST calls behind [`super::api::list`].
 //!
-//! Unity serves `/tables?catalog_name=&schema_name=` pages, each entry
-//! carrying `full_name`, `data_source_format`, and `storage_location`.
-//! Iceberg REST lists `/v1/{prefix}/namespaces/{namespace}/tables`
-//! identifiers, then `loadTable` for each `metadata-location`. Entries with
-//! no location (views) are skipped. The URLs, the page shapes, and the
-//! pagination are this command's; the transport is the third-party facade.
+//! The table format is declared by the caller (`PQB_TABLE_FORMAT`). Unity
+//! serves `/tables?catalog_name=&schema_name=` pages, each entry carrying
+//! `full_name`, `data_source_format`, and `storage_location`. Iceberg REST
+//! lists `{endpoint}/namespaces/{namespace}/tables` identifiers, then
+//! `loadTable` for each `metadata-location`, where the endpoint already names
+//! the catalog base. No config probe runs. Entries with no location (views)
+//! are skipped. The URLs, the page shapes, and the pagination are this
+//! command's; the transport is the third-party facade.
 
 use serde::Deserialize;
 
 use super::api::{Error, TableRef};
-use crate::schema::dialect::{self, Dialect};
+use crate::schema::dialect;
+use crate::schema::TableFormat;
 
 /// Table names per page; both walks follow the endpoint's page token.
 const PAGE_SIZE: u32 = 1000;
@@ -65,15 +68,11 @@ pub(crate) async fn list(
     catalog: &str,
     schema: &str,
     token: Option<&str>,
+    table_format: TableFormat,
 ) -> Result<Vec<TableRef>, Error> {
-    let mut tables = match dialect::select(endpoint, catalog, token)
-        .await
-        .map_err(Error::from)?
-    {
-        Dialect::Unity => unity_tables(endpoint, catalog, schema, token).await?,
-        Dialect::IcebergRest { prefix } => {
-            iceberg_tables(endpoint, catalog, schema, &prefix, token).await?
-        }
+    let mut tables = match table_format {
+        TableFormat::Unity => unity_tables(endpoint, catalog, schema, token).await?,
+        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token).await?,
     };
     tables.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(tables)
@@ -135,10 +134,9 @@ async fn iceberg_tables(
     endpoint: &str,
     catalog: &str,
     schema: &str,
-    prefix: &str,
     token: Option<&str>,
 ) -> Result<Vec<TableRef>, Error> {
-    let base = dialect::iceberg_base(endpoint, prefix);
+    let base = dialect::iceberg_root(endpoint);
     let namespace = dialect::iceberg_namespace(schema);
     let mut tables = Vec::new();
     let mut page_token: Option<String> = None;

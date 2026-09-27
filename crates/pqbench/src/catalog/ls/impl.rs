@@ -1,10 +1,9 @@
 //! The Unity and Iceberg REST calls behind [`super::api::list`].
 //!
-//! The dialect comes from `GET {endpoint}/v1/config?warehouse={catalog}`: a
-//! 2xx with a `defaults` object is Iceberg REST, whose `prefix` (overrides
-//! win over defaults) shapes the namespaces URL; a 404 is Unity REST, which
-//! serves `/schemas?catalog_name=`. Transport failures and other statuses
-//! propagate, so a down catalog is not silently read as the other dialect.
+//! The table format is declared by the caller (`PQB_TABLE_FORMAT`): Unity
+//! REST serves `/schemas?catalog_name=`; Iceberg REST serves
+//! `{endpoint}/namespaces`, where the endpoint already names the catalog base
+//! (`{root}/v1` or `{root}/v1/{prefix}`). No config probe runs.
 //!
 //! The URLs, the page shapes, and the pagination are this command's; the
 //! transport is the third-party HTTP facade. No feature flags live here.
@@ -12,26 +11,11 @@
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
-use super::api::{Error, Schema};
+use super::api::{Error, Schema, TableFormat};
 use crate::third_party::reqwest::{self, Request};
 
 /// Schema names per page; both walks follow the endpoint's page token.
 const PAGE_SIZE: u32 = 1000;
-
-/// The `GET /v1/config` document that picks the dialect.
-#[derive(Deserialize)]
-struct Config {
-    #[serde(default)]
-    defaults: Option<Properties>,
-    #[serde(default)]
-    overrides: Option<Properties>,
-}
-
-#[derive(Deserialize)]
-struct Properties {
-    #[serde(default)]
-    prefix: Option<String>,
-}
 
 /// One page of Unity `GET /schemas`.
 #[derive(Deserialize)]
@@ -47,7 +31,7 @@ struct Named {
     name: String,
 }
 
-/// One page of Iceberg REST `GET /v1/{prefix}/namespaces`.
+/// One page of Iceberg REST `GET {endpoint}/namespaces`.
 #[derive(Deserialize)]
 struct NamespacesPage {
     #[serde(default)]
@@ -56,20 +40,15 @@ struct NamespacesPage {
     next_page_token: Option<String>,
 }
 
-/// The catalog dialect the endpoint speaks.
-enum Dialect {
-    Unity,
-    Iceberg { prefix: String },
-}
-
 pub(crate) async fn list(
     endpoint: &str,
     catalog: &str,
     token: Option<&str>,
+    table_format: TableFormat,
 ) -> Result<Vec<Schema>, Error> {
-    let names = match dialect(endpoint, catalog, token).await? {
-        Dialect::Unity => unity_schemas(endpoint, catalog, token).await?,
-        Dialect::Iceberg { prefix } => iceberg_namespaces(endpoint, &prefix, token).await?,
+    let names = match table_format {
+        TableFormat::Unity => unity_schemas(endpoint, catalog, token).await?,
+        TableFormat::Iceberg => iceberg_namespaces(endpoint, token).await?,
     };
     let mut schemas: Vec<Schema> = names
         .into_iter()
@@ -80,43 +59,6 @@ pub(crate) async fn list(
         .collect();
     schemas.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(schemas)
-}
-
-/// Pick Unity or Iceberg REST from `GET {endpoint}/v1/config`.
-async fn dialect(endpoint: &str, catalog: &str, token: Option<&str>) -> Result<Dialect, Error> {
-    let url = format!(
-        "{}/v1/config?warehouse={}",
-        endpoint.trim_end_matches('/'),
-        encode(catalog)
-    );
-    let response = reqwest::request(Request {
-        url,
-        bearer: token.map(str::to_owned),
-    })
-    .await
-    .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
-    if response.status == 404 {
-        return Ok(Dialect::Unity);
-    }
-    if !(200..300).contains(&response.status) {
-        return Err(Error::from(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        )));
-    }
-    let config: Config = serde_json::from_slice(&response.bytes)
-        .map_err(|error| Error::from(format!("the response was not a catalog config: {error}")))?;
-    Ok(match config.defaults {
-        Some(defaults) => Dialect::Iceberg {
-            prefix: config
-                .overrides
-                .and_then(|overrides| overrides.prefix)
-                .or(defaults.prefix)
-                .unwrap_or_default(),
-        },
-        None => Dialect::Unity,
-    })
 }
 
 async fn unity_schemas(
@@ -156,18 +98,8 @@ async fn unity_schemas(
     Ok(names)
 }
 
-async fn iceberg_namespaces(
-    endpoint: &str,
-    prefix: &str,
-    token: Option<&str>,
-) -> Result<Vec<String>, Error> {
-    let root = endpoint.trim_end_matches('/');
-    let prefix = prefix.trim_matches('/');
-    let base = if prefix.is_empty() {
-        format!("{root}/v1")
-    } else {
-        format!("{root}/v1/{prefix}")
-    };
+async fn iceberg_namespaces(endpoint: &str, token: Option<&str>) -> Result<Vec<String>, Error> {
+    let base = endpoint.trim_end_matches('/');
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
