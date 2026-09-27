@@ -48,8 +48,8 @@ struct IdentifiersPage {
 
 #[derive(Deserialize)]
 struct Identifier {
-    #[serde(default)]
-    namespace: Vec<String>,
+    #[serde(default, rename = "namespace")]
+    namespaces: Vec<String>,
     name: String,
 }
 
@@ -172,10 +172,10 @@ async fn iceberg_tables(
                     identifier.name
                 )));
             }
-            let namespace = if identifier.namespace.is_empty() {
+            let namespace = if identifier.namespaces.is_empty() {
                 schema.to_string()
             } else {
-                identifier.namespace.join(".")
+                identifier.namespaces.join(".")
             };
             tables.push(TableRef {
                 name: format!("{catalog}.{namespace}.{}", identifier.name),

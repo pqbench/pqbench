@@ -28,8 +28,8 @@ struct UnityRecord {
 /// The Iceberg REST `loadNamespace` document.
 #[derive(Deserialize)]
 struct Namespace {
-    #[serde(default)]
-    namespace: Vec<String>,
+    #[serde(default, rename = "namespace")]
+    namespaces: Vec<String>,
     #[serde(default)]
     properties: Option<BTreeMap<String, String>>,
 }
@@ -95,10 +95,10 @@ async fn iceberg_schema(
     let location = properties
         .remove("location")
         .filter(|location| !location.is_empty());
-    let name = if namespace.namespace.is_empty() {
+    let name = if namespace.namespaces.is_empty() {
         schema.to_string()
     } else {
-        namespace.namespace.join(".")
+        namespace.namespaces.join(".")
     };
     Ok(Schema {
         catalog: catalog.to_string(),
