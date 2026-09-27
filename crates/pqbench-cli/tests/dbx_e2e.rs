@@ -1,5 +1,7 @@
 //! Live Databricks metastore e2e: mint an OAuth M2M bearer (or take
-//! `DBX_TOKEN`), then read the live metastore record with `metastore info`.
+//! `DBX_TOKEN`), read the live metastore record with `metastore info`, list
+//! its catalogs with `metastore ls`, and walk the two into a job directory of
+//! NDJSON files (the issue-#58 shape, one command per iteration).
 //!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
 //! service principal's credentials come from `DBX_SAMPLES_SP_CLIENT_ID` /
@@ -25,17 +27,37 @@ fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
 
-fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
-    // The credentials are the test's, not pqbench's: the token travels on the
-    // document, so the child gets a scrubbed environment.
-    let mut child = pqbench()
-        .args(args)
+/// pqbench with a scrubbed environment and piped stdin: the credentials are
+/// the test's, not the child's — the token travels on the document.
+fn scrubbed() -> Command {
+    let mut command = pqbench();
+    command
         .env_remove("DBX_TOKEN")
         .env_remove("DBX_HOST")
         .env_remove("DBX_SAMPLES_SP_CLIENT_ID")
         .env_remove("DBX_SAMPLES_SP_CLIENT_SECRET")
-        .stdin(Stdio::piped())
+        .stdin(Stdio::piped());
+    command
+}
+
+fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+    let mut child = scrubbed()
+        .args(args)
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// One walk step: run pqbench with `stdin` and write stdout to `path` — the
+/// job tree's NDJSON file for that step.
+fn pipe_output(args: &[&str], stdin: &[u8], path: &std::path::Path) -> std::process::Output {
+    let file = std::fs::File::create(path).unwrap();
+    let mut child = scrubbed()
+        .args(args)
+        .stdout(Stdio::from(file))
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -49,6 +71,11 @@ fn ndjson(stdout: &[u8]) -> Vec<Value> {
         .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_slice(line).expect("ndjson line"))
         .collect()
+}
+
+/// The NDJSON records in one job-tree file.
+fn read_ndjson(path: &std::path::Path) -> Vec<Value> {
+    ndjson(&std::fs::read(path).unwrap())
 }
 
 /// The live workspace URL, from `DBX_HOST` (a CI secret or the local shell).
@@ -159,6 +186,131 @@ fn metastore_info_reads_the_live_metastore() {
         !records[0]["region"].as_str().unwrap_or_default().is_empty(),
         "{records:?}"
     );
+}
+
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn metastore_ls_lists_the_live_catalogs() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let document = source(&unity_endpoint(&host), Some(&token)).to_string();
+    let output = pipe(
+        &["metastore", "ls", "--format", "json"],
+        document.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    for record in &records {
+        assert_eq!(record["kind"], "pqbench.catalog");
+        assert_eq!(record["version"], 1);
+    }
+    let names: Vec<&str> = records
+        .iter()
+        .filter_map(|record| record["name"].as_str())
+        .collect();
+    assert_eq!(names, ["dbx_samples", "samples", "system", "workspace"]);
+
+    let output = pipe(
+        &["metastore", "ls", "--format", "table"],
+        document.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("dbx_samples"), "{stdout}");
+    assert!(stdout.contains("catalogs: 4"), "{stdout}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("catalogs.ndjson.zst");
+    let output = pipe(
+        &[
+            "metastore",
+            "ls",
+            "--format",
+            "json",
+            "-o",
+            file.to_str().unwrap(),
+        ],
+        document.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = std::fs::read(&file).unwrap();
+    let decoded = zstd::decode_all(&bytes[..]).unwrap();
+    assert_eq!(ndjson(&decoded).len(), 4);
+}
+
+/// The issue-#58 walk, for the commands that exist: a job directory holds
+/// each step's NDJSON, and the walk prints the result from the tree. Auth is
+/// the bearer the whole walk runs under; the missing/invalid-token tests
+/// cover its failures. `catalog ls` and below extend this tree next.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let document = source(&unity_endpoint(&host), Some(&token)).to_string();
+
+    let job = tempfile::tempdir().unwrap();
+    let metastore = job.path().join("metastore");
+    std::fs::create_dir_all(&metastore).unwrap();
+
+    let info = metastore.join("info.jsonl");
+    let output = pipe_output(
+        &["metastore", "info", "--format", "json"],
+        document.as_bytes(),
+        &info,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let catalogs = metastore.join("catalogs.jsonl");
+    let output = pipe_output(
+        &["metastore", "ls", "--format", "json"],
+        document.as_bytes(),
+        &catalogs,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let records = read_ndjson(&info);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["kind"], "pqbench.metastore");
+    println!("metastore: {}", records[0]["name"].as_str().unwrap_or("-"));
+
+    let records = read_ndjson(&catalogs);
+    assert_eq!(records.len(), 4);
+    for record in &records {
+        assert_eq!(record["kind"], "pqbench.catalog");
+        println!("catalog: {}", record["name"].as_str().unwrap_or("-"));
+    }
 }
 
 #[test]

@@ -8,13 +8,13 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn what_to_run() {
-    // what_to_run, from line 25
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 26, None);
+    // what_to_run, from line 26
+    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 27, None);
 }
 
 #[rustfmt::skip]
 #[test]
 fn catalog_list_unity_databricks_iceberg_rest() {
-    // catalog_list_unity_databricks_iceberg_rest, from line 135
-    support::run("pqbench lake docs/demos/lake.json --format table", 136, Some(&["name          uri", "------------  --------------------------", "unity/events  docker/e2e-lakehouse/table", "tables: 1"]));
+    // catalog_list_unity_databricks_iceberg_rest, from line 139
+    support::run("pqbench lake docs/demos/lake.json --format table", 140, Some(&["name          uri", "------------  --------------------------", "unity/events  docker/e2e-lakehouse/table", "tables: 1"]));
 }
