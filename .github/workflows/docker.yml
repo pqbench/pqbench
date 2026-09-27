@@ -2,6 +2,8 @@ name: Docker
 
 on:
   pull_request:
+    # Marking a draft ready starts the image build; drafts skip it.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   release:
