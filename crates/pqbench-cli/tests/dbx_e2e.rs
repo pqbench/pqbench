@@ -53,7 +53,7 @@ fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
 
 /// One walk step: run pqbench with `stdin` and write stdout to `path` — the
 /// job tree's NDJSON file for that step.
-fn pipe_to_file(args: &[&str], stdin: &[u8], path: &std::path::Path) -> std::process::Output {
+fn pipe_output(args: &[&str], stdin: &[u8], path: &std::path::Path) -> std::process::Output {
     let file = std::fs::File::create(path).unwrap();
     let mut child = scrubbed()
         .args(args)
@@ -278,7 +278,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
     std::fs::create_dir_all(&metastore).unwrap();
 
     let info = metastore.join("info.jsonl");
-    let output = pipe_to_file(
+    let output = pipe_output(
         &["metastore", "info", "--format", "json"],
         document.as_bytes(),
         &info,
@@ -289,7 +289,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         String::from_utf8_lossy(&output.stderr)
     );
     let catalogs = metastore.join("catalogs.jsonl");
-    let output = pipe_to_file(
+    let output = pipe_output(
         &["metastore", "ls", "--format", "json"],
         document.as_bytes(),
         &catalogs,
