@@ -1,11 +1,11 @@
-use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use pqbench::metastore::{info, ls};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::emit::{Align, Emitter, Format, Row};
+use crate::source::read_source;
 use crate::CliError;
 
 /// Arguments for `metastore`: the endpoint's metastore and its catalogs.
@@ -31,15 +31,6 @@ pub(crate) struct OutputArgs {
     /// also write the zstd NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-}
-
-/// The document the metastore commands read: a `pqbench.lake-source`.
-#[derive(Deserialize)]
-struct Source {
-    version: u32,
-    endpoint: String,
-    #[serde(default)]
-    token: Option<String>,
 }
 
 /// The document `metastore info` writes.
@@ -97,7 +88,7 @@ pub(crate) async fn run(args: &MetastoreArgs) -> Result<(), CliError> {
 }
 
 async fn run_info(args: &OutputArgs) -> Result<(), CliError> {
-    let source = read_source().await?;
+    let source = read_source("metastore").await?;
     let metastore = info::read(&source.endpoint, source.token.as_deref()).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     emit.write_row(&MetastoreRecord {
@@ -112,7 +103,7 @@ async fn run_info(args: &OutputArgs) -> Result<(), CliError> {
 }
 
 async fn run_ls(args: &OutputArgs) -> Result<(), CliError> {
-    let source = read_source().await?;
+    let source = read_source("metastore").await?;
     let catalogs = ls::list(&source.endpoint, source.token.as_deref()).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     for catalog in &catalogs {
@@ -124,26 +115,4 @@ async fn run_ls(args: &OutputArgs) -> Result<(), CliError> {
         })?;
     }
     emit.finish(&format!("catalogs: {}\n", catalogs.len()))
-}
-
-async fn read_source() -> Result<Source, CliError> {
-    if std::io::stdin().is_terminal() {
-        return Err("metastore needs a pqbench.lake-source on standard input".into());
-    }
-    let mut bytes = Vec::new();
-    tokio::io::AsyncReadExt::read_to_end(&mut tokio::io::stdin(), &mut bytes).await?;
-    if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Err("metastore reads a pqbench.lake-source document".into());
-    }
-    let source: Source = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("metastore reads a pqbench.lake-source document: {error}"))?;
-    if source.version != 1 {
-        return Err(
-            "unsupported lake source; expected kind `pqbench.lake-source` version 1".into(),
-        );
-    }
-    if source.endpoint.trim().is_empty() {
-        return Err("lake source needs an endpoint".into());
-    }
-    Ok(source)
 }

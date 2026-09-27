@@ -16,6 +16,7 @@ mod lz;
 mod metastore;
 mod profile;
 mod skill;
+mod source;
 mod table;
 mod viz;
 

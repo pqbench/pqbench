@@ -1,11 +1,11 @@
-use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use pqbench::catalog::{info, ls};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::emit::{Align, Emitter, Format, Row};
+use crate::source::read_source;
 use crate::CliError;
 
 /// Arguments for `catalog`: one catalog's record.
@@ -34,15 +34,6 @@ pub(crate) struct NameArgs {
     /// also write the zstd NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-}
-
-/// The document the catalog commands read: a `pqbench.lake-source`.
-#[derive(Deserialize)]
-struct Source {
-    version: u32,
-    endpoint: String,
-    #[serde(default)]
-    token: Option<String>,
 }
 
 /// The document `catalog info` writes.
@@ -99,7 +90,7 @@ pub(crate) async fn run(args: &CatalogArgs) -> Result<(), CliError> {
 }
 
 async fn run_info(args: &NameArgs) -> Result<(), CliError> {
-    let source = read_source().await?;
+    let source = read_source("catalog").await?;
     let catalog = info::read(&source.endpoint, &args.catalog, source.token.as_deref()).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     emit.write_row(&CatalogRecord {
@@ -114,7 +105,7 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
 }
 
 async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
-    let source = read_source().await?;
+    let source = read_source("catalog").await?;
     let schemas = ls::list(&source.endpoint, &args.catalog, source.token.as_deref()).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     for schema in &schemas {
@@ -126,26 +117,4 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         })?;
     }
     emit.finish(&format!("schemas: {}\n", schemas.len()))
-}
-
-async fn read_source() -> Result<Source, CliError> {
-    if std::io::stdin().is_terminal() {
-        return Err("catalog needs a pqbench.lake-source on standard input".into());
-    }
-    let mut bytes = Vec::new();
-    tokio::io::AsyncReadExt::read_to_end(&mut tokio::io::stdin(), &mut bytes).await?;
-    if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Err("catalog reads a pqbench.lake-source document".into());
-    }
-    let source: Source = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("catalog reads a pqbench.lake-source document: {error}"))?;
-    if source.version != 1 {
-        return Err(
-            "unsupported lake source; expected kind `pqbench.lake-source` version 1".into(),
-        );
-    }
-    if source.endpoint.trim().is_empty() {
-        return Err("lake source needs an endpoint".into());
-    }
-    Ok(source)
 }
