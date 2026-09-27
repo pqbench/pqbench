@@ -16,7 +16,8 @@ prompt "pqbench lake docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.n
 pqbench lake docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.ndjson.zst
 sleep 2
 
-if [ "${PQBENCH_LAKEHOUSE:-}" = "1" ]; then
+# The REST pipe needs the local stand (`make lakehouse`); run it when it answers.
+if curl -sf http://localhost:8181/v1/config >/dev/null 2>&1; then
     prompt "pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass --json"
     pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass --json | cat
     sleep 2
