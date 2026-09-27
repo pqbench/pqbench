@@ -249,6 +249,37 @@ See also:
   pqbench --help            catalog auth, lake-source shape
   docs/cli.md";
 
+pub const SCHEMA_ABOUT: &str = "Read one schema's record or list its tables";
+
+pub const SCHEMA_LONG_ABOUT: &str = "\
+Read one schema at a catalog endpoint: the entity between catalogs and
+tables. The endpoint and token come from a pqbench.lake-source on standard
+input, or from PQB_ENDPOINT / PQB_TOKEN when the document leaves them out.
+Without a CATALOG.SCHEMA argument the command reads pqbench.schema refs on
+standard input — one schema per line — so `catalog ls | schema ls` chains.
+
+  info   the schema's record (catalog, name, comment, location, properties)
+         as one pqbench.schema line
+  ls     the tables in the schema, one pqbench.table-ref line each (name,
+         uri, format) — the document `pqbench table` loads. Unity REST serves
+         /tables; an Iceberg REST endpoint lists namespaces' tables and
+         loadTable for each metadata location.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
+
+pub const SCHEMA_AFTER: &str = "\
+Examples:
+  pqbench schema info dbx_samples.nyctaxi < source.json
+  pqbench schema ls dbx_samples.nyctaxi < source.json
+  PQB_ENDPOINT=… pqbench catalog ls | pqbench schema ls
+
+See also:
+  pqbench catalog --help  the schemas of one catalog
+  pqbench table --help    load a listed table
+  pqbench --help          catalog auth, lake-source shape
+  docs/cli.md";
+
 pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
 
 pub const DUMP_LONG_ABOUT: &str = "\

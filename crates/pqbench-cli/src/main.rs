@@ -15,6 +15,7 @@ mod lake;
 mod lz;
 mod metastore;
 mod profile;
+mod schema;
 mod skill;
 mod source;
 mod table;
@@ -89,6 +90,13 @@ enum Command {
     )]
     Catalog(catalog::CatalogArgs),
     #[command(
+        about = help::SCHEMA_ABOUT,
+        long_about = help::SCHEMA_LONG_ABOUT,
+        after_help = help::SCHEMA_AFTER,
+        after_long_help = help::SCHEMA_AFTER
+    )]
+    Schema(schema::SchemaArgs),
+    #[command(
         about = help::DUMP_ABOUT,
         long_about = help::DUMP_LONG_ABOUT,
         after_help = help::DUMP_AFTER,
@@ -136,6 +144,7 @@ async fn main() -> ExitCode {
         Command::Lake(args) => lake::run(&args).await,
         Command::Metastore(args) => metastore::run(&args).await,
         Command::Catalog(args) => catalog::run(&args).await,
+        Command::Schema(args) => schema::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
         Command::Profile(args) => profile::run(&args),
         Command::Experiment(args) => experiment::run(&args),
