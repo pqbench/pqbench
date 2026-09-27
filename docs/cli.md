@@ -119,6 +119,7 @@ list.
 | `endpoint` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
 | `token` | Bearer PAT (`dapi-…`) or OAuth token; list API only |
 | `catalog` / `schema` | Optional catalog / schema (or glob) to list |
+| `table_format` | Optional `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
 
 The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
@@ -129,13 +130,16 @@ the catalogs at the endpoint, one `pqbench.catalog` line each (name,
 catalog_type). `catalog info` reports one catalog's record (name, catalog_type,
 comment, owner) as a single `pqbench.catalog` line. `catalog ls` lists the
 schemas in the catalog, one `pqbench.schema` line each (catalog, name): Unity
-REST serves `/schemas`, an Iceberg REST endpoint serves `/v1/namespaces` — the
-dialect comes from the `GET /v1/config` probe (a `defaults` object is Iceberg
-REST; a 404 is Unity).
+REST serves `/schemas`; with `PQB_TABLE_FORMAT=iceberg` (or `"table_format":
+"iceberg"` in the document) the command speaks Iceberg REST instead — the
+endpoint then names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) and
+the command reads `/namespaces` under it. Unity is the default; no config
+probe runs.
 
-The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` carry the walk's
-context, and each level reads the parent's refs on standard input — one
-`pqbench.catalog` line per catalog, then one `pqbench.schema` line per schema.
+The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
+carry the walk's context, and each level reads the parent's refs on standard
+input — one `pqbench.catalog` line per catalog, then one `pqbench.schema` line
+per schema.
 `metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
 catalog info` enriches each catalog instead. `info` emits the same kind as the
 `ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each
