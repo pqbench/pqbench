@@ -103,13 +103,12 @@ fn parses_a_cd_directive() {
 
 #[test]
 fn parses_an_env_directive() {
-    let directive =
-        Directive::parse("  # docscheck: env: PQB_ENDPOINT=https://example.cloud.databricks.com");
+    let directive = Directive::parse("  # docscheck: env: PQBENCH_LAKEHOUSE=1");
     assert_eq!(
         directive,
         Some(Directive::Environment {
-            name: "PQB_ENDPOINT".to_owned(),
-            value: "https://example.cloud.databricks.com".to_owned(),
+            name: "PQBENCH_LAKEHOUSE".to_owned(),
+            value: "1".to_owned(),
         })
     );
 }

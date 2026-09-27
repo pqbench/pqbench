@@ -5,7 +5,7 @@ use pqbench::catalog::{info, ls};
 use serde::Serialize;
 
 use crate::emit::{Align, Emitter, Format, Row};
-use crate::source::read_source;
+use crate::source::{self, read_input};
 use crate::CliError;
 
 /// Arguments for `catalog`: one catalog's record.
@@ -26,8 +26,8 @@ pub(crate) enum CatalogCommand {
 /// Arguments for a catalog subcommand: the catalog name and the output flags.
 #[derive(Args)]
 pub(crate) struct NameArgs {
-    /// catalog name (Unity `catalog`)
-    catalog: String,
+    /// catalog name; without it, read `pqbench.catalog` refs on stdin
+    catalog: Option<String>,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
@@ -90,31 +90,59 @@ pub(crate) async fn run(args: &CatalogArgs) -> Result<(), CliError> {
 }
 
 async fn run_info(args: &NameArgs) -> Result<(), CliError> {
-    let source = read_source("catalog").await?;
-    let catalog = info::read(&source.endpoint, &args.catalog, source.token.as_deref()).await?;
+    let input = read_input("catalog info").await?;
+    let names = catalog_names("catalog info", &input, args.catalog.as_deref())?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    emit.write_row(&CatalogRecord {
-        kind: "pqbench.catalog",
-        version: 1,
-        name: &catalog.name,
-        catalog_type: catalog.catalog_type.as_deref(),
-        comment: catalog.comment.as_deref(),
-        owner: catalog.owner.as_deref(),
-    })?;
-    emit.finish("catalogs: 1\n")
+    for name in &names {
+        let catalog =
+            info::read(&input.source.endpoint, name, input.source.token.as_deref()).await?;
+        emit.write_row(&CatalogRecord {
+            kind: "pqbench.catalog",
+            version: 1,
+            name: &catalog.name,
+            catalog_type: catalog.catalog_type.as_deref(),
+            comment: catalog.comment.as_deref(),
+            owner: catalog.owner.as_deref(),
+        })?;
+    }
+    emit.finish(&format!("catalogs: {}\n", names.len()))
 }
 
 async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
-    let source = read_source("catalog").await?;
-    let schemas = ls::list(&source.endpoint, &args.catalog, source.token.as_deref()).await?;
+    let input = read_input("catalog ls").await?;
+    let names = catalog_names("catalog ls", &input, args.catalog.as_deref())?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    for schema in &schemas {
-        emit.write_row(&SchemaRecord {
-            kind: "pqbench.schema",
-            version: 1,
-            catalog: &schema.catalog,
-            name: &schema.name,
-        })?;
+    let mut schemas = 0;
+    for name in &names {
+        for schema in ls::list(&input.source.endpoint, name, input.source.token.as_deref()).await? {
+            emit.write_row(&SchemaRecord {
+                kind: "pqbench.schema",
+                version: 1,
+                catalog: &schema.catalog,
+                name: &schema.name,
+            })?;
+            schemas += 1;
+        }
     }
-    emit.finish(&format!("schemas: {}\n", schemas.len()))
+    emit.finish(&format!("schemas: {schemas}\n"))
+}
+
+/// The catalogs to read: the argument, or the `pqbench.catalog` refs on stdin.
+fn catalog_names(
+    command: &str,
+    input: &source::Input,
+    catalog: Option<&str>,
+) -> Result<Vec<String>, CliError> {
+    if let Some(catalog) = catalog {
+        if !input.items.is_empty() {
+            return Err(
+                format!("{command} takes CATALOG or a pqbench.catalog stream, not both").into(),
+            );
+        }
+        return Ok(vec![catalog.to_string()]);
+    }
+    if !input.piped {
+        return Err(format!("{command} needs CATALOG or a pqbench.catalog stream").into());
+    }
+    source::names(&input.items, "pqbench.catalog")
 }

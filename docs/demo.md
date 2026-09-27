@@ -169,8 +169,8 @@ $ pqbench lake docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst
 
 With the stand up, list the Iceberg REST catalog and measure through it with
 `pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass`.
-`docs/demos/pqbench-iceberg-session.sh` lists the fixture and runs the REST
-pipe when the stand answers at `localhost:8181`.
+`docs/demos/pqbench-iceberg-session.sh` lists the fixture; set
+`PQBENCH_LAKEHOUSE=1` when the stand is up to run the REST pipe.
 
 ## Regenerate the terminal recordings
 
