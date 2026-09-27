@@ -197,7 +197,8 @@ pub const METASTORE_ABOUT: &str = "Read the endpoint's metastore record and list
 
 pub const METASTORE_LONG_ABOUT: &str = "\
 Read the metastore at a catalog endpoint: the entity above catalogs. The
-endpoint and token come from a pqbench.lake-source on standard input.
+endpoint and token come from a pqbench.lake-source on standard input, or from
+PQB_ENDPOINT / PQB_TOKEN when the document leaves them out.
 
   info   the metastore record (name, id, cloud, region) as one
          pqbench.metastore line
@@ -210,8 +211,10 @@ pub const METASTORE_AFTER: &str = "\
 Examples:
   pqbench metastore info < source.json
   pqbench metastore ls < source.json
+  PQB_ENDPOINT=… pqbench metastore ls | pqbench catalog ls
 
 See also:
+  pqbench catalog --help   the schemas of one catalog
   pqbench lake --help      list the tables the endpoint serves
   pqbench --help           catalog auth, lake-source shape
   docs/cli.md";
@@ -220,8 +223,10 @@ pub const CATALOG_ABOUT: &str = "Read one catalog's record or list its schemas";
 
 pub const CATALOG_LONG_ABOUT: &str = "\
 Read one catalog at a catalog endpoint: the entity above schemas. The
-endpoint and token come from a pqbench.lake-source on standard input; the
-catalog name is the argument.
+endpoint and token come from a pqbench.lake-source on standard input, or from
+PQB_ENDPOINT / PQB_TOKEN when the document leaves them out. Without a CATALOG
+argument the command reads pqbench.catalog refs on standard input — one
+catalog per line — so `metastore ls | catalog ls` chains.
 
   info   the catalog's record (name, catalog_type, comment, owner) as one
          pqbench.catalog line
@@ -237,6 +242,7 @@ pub const CATALOG_AFTER: &str = "\
 Examples:
   pqbench catalog info dbx_samples < source.json
   pqbench catalog ls dbx_samples < source.json
+  PQB_ENDPOINT=… pqbench metastore ls | pqbench catalog ls
 
 See also:
   pqbench metastore --help  the endpoint's metastore and its catalogs

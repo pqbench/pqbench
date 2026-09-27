@@ -11,10 +11,10 @@ that command and links back. This file is the durable copy.
 | On-disk bytes per column | `pqbench bytemass FILE` |
 | Delta / Iceberg snapshot + files | `pqbench table DIR` |
 | List tables in a warehouse or catalog | `pqbench lake DIR` |
-| Read the endpoint's metastore record | `pqbench metastore info` (a lake-source on stdin) |
-| List the catalogs at a catalog endpoint | `pqbench metastore ls` (a lake-source on stdin) |
-| Read one catalog's record | `pqbench catalog info CATALOG` (a lake-source on stdin) |
-| List the schemas in a catalog | `pqbench catalog ls CATALOG` (a lake-source on stdin) |
+| Read the endpoint's metastore record | `pqbench metastore info` (lake-source / `PQB_ENDPOINT`) |
+| List the catalogs at a catalog endpoint | `pqbench metastore ls` (lake-source / `PQB_ENDPOINT`) |
+| Read one catalog's record | `pqbench catalog info [CATALOG]` (refs on stdin) |
+| List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -39,9 +39,9 @@ environment.
 
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
-| `pqbench.lake-source` | you / a producer | `lake`, `metastore` |
+| `pqbench.lake-source` | you / a producer | `lake`, `metastore`, `catalog` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
-| `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog ls`, humans / scripts (`--json`) |
+| `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
 | `pqbench.schema` | `catalog ls` | `schema ls`, `table` |
 | `pqbench.table-ref` | `lake` | `table` |
 | `pqbench.table` | `table` | `bytemass`, `dump` |
@@ -130,6 +130,26 @@ schemas in the catalog, one `pqbench.schema` line each (catalog, name): Unity
 REST serves `/schemas`, an Iceberg REST endpoint serves `/v1/namespaces` — the
 dialect comes from the `GET /v1/config` probe (a `defaults` object is Iceberg
 REST; a 404 is Unity).
+
+The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` carry the walk's
+context, and each level reads the parent's refs on standard input — one
+`pqbench.catalog` line per catalog, then one `pqbench.schema` line per schema.
+`metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
+catalog info` enriches each catalog instead. `info` emits the same kind as the
+`ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each
+level into the job tree. A `pqbench.lake-source` on stdin overrides the
+environment.
+
+```console no-run
+$ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
+    pqbench metastore ls | pqbench catalog ls
+catalog      name
+-----------  ----------------
+dbx_samples  bakehouse
+dbx_samples  nyctaxi
+samples      accuweather
+schemas: 3
+```
 
 ```json
 {
