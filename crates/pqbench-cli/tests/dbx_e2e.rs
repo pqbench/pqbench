@@ -1,8 +1,9 @@
 //! Live Databricks metastore e2e: mint an OAuth M2M bearer (or take
 //! `DBX_TOKEN`), read the live metastore record with `metastore info`, list
-//! its catalogs with `metastore ls`, read one with `catalog info`, and walk
-//! them into a job directory of NDJSON files (the issue-#58 shape, one
-//! command per iteration).
+//! its catalogs with `metastore ls`, read one with `catalog info`, list its
+//! schemas with `catalog ls` (Unity REST and Iceberg REST), and walk them
+//! into a job directory of NDJSON files (the issue-#58 shape, one command per
+//! iteration).
 //!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
 //! service principal's credentials come from `DBX_SAMPLES_SP_CLIENT_ID` /
@@ -260,7 +261,7 @@ fn metastore_ls_lists_the_live_catalogs() {
 /// The issue-#58 walk, for the commands that exist: a job directory holds
 /// each step's NDJSON, and the walk prints the result from the tree. Auth is
 /// the bearer the whole walk runs under; the missing/invalid-token tests
-/// cover its failures. `catalog ls` and below extend this tree next.
+/// cover its failures. `schema ls` and below extend this tree next.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
@@ -316,7 +317,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         .collect();
     assert_eq!(names, ["dbx_samples", "samples", "system", "workspace"]);
 
-    // catalog → each catalog's record, one directory per catalog
+    // catalog → each catalog's record and schemas, one directory per catalog
     for name in &names {
         let dir = job.path().join("catalog").join(name);
         std::fs::create_dir_all(&dir).unwrap();
@@ -340,6 +341,26 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             name,
             records[0]["catalog_type"].as_str().unwrap_or("-")
         );
+
+        let catalog_schemas = dir.join("schemas.jsonl");
+        let output = pipe_output(
+            &["catalog", "ls", name, "--format", "json"],
+            document.as_bytes(),
+            &catalog_schemas,
+        );
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records = read_ndjson(&catalog_schemas);
+        assert!(!records.is_empty(), "{name} listed no schemas");
+        for record in &records {
+            assert_eq!(record["kind"], "pqbench.schema");
+            assert_eq!(record["version"], 1);
+            assert_eq!(record["catalog"], name.as_str());
+        }
+        println!("catalog {name}: {} schema(s)", records.len());
     }
 }
 
@@ -371,6 +392,82 @@ fn catalog_info_reads_the_live_catalog() {
     assert_eq!(records[0]["version"], 1);
     assert_eq!(records[0]["name"], "dbx_samples");
     assert_eq!(records[0]["catalog_type"], "MANAGED_CATALOG");
+}
+
+/// The schemas `dbx_samples` answers with, from either dialect.
+const DBX_SAMPLES_SCHEMAS: [&str; 5] = [
+    "bakehouse",
+    "information_schema",
+    "nyctaxi",
+    "tpch_sf1",
+    "wanderbricks",
+];
+
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn catalog_ls_lists_the_live_schemas() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let output = pipe(
+        &["catalog", "ls", "dbx_samples", "--format", "json"],
+        source(&unity_endpoint(&host), Some(&token))
+            .to_string()
+            .as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| {
+            assert_eq!(record["kind"], "pqbench.schema");
+            assert_eq!(record["catalog"], "dbx_samples");
+            record["name"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(names, DBX_SAMPLES_SCHEMAS);
+}
+
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = format!("{}/iceberg-rest", unity_endpoint(&host));
+    let output = pipe(
+        &["catalog", "ls", "dbx_samples", "--format", "json"],
+        source(&endpoint, Some(&token)).to_string().as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| {
+            assert_eq!(record["kind"], "pqbench.schema");
+            assert_eq!(record["catalog"], "dbx_samples");
+            record["name"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(names, DBX_SAMPLES_SCHEMAS);
 }
 
 #[test]

@@ -218,7 +218,19 @@ check_unity() {
     }
     measured=$(expect_events "unity lake" "$measurement")
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured"
+    # `catalog ls` lists Unity's schemas for the same catalog.
+    local schemas
+    schemas=$("$pqbench_bin" catalog ls pqbench --format json < "$lake_source" |
+        jq -r 'select(.kind == "pqbench.schema") | .name') || {
+        echo "check failed: catalog ls produced no schemas" >&2
+        exit 1
+    }
+    [ "$schemas" = "demo" ] || {
+        echo "check failed (unity catalog ls): expected demo; measured ${schemas:-nothing}" >&2
+        exit 1
+    }
+
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas"
 }
 
 check_iceberg() {
