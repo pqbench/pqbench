@@ -3,6 +3,7 @@
 
 pub mod bench;
 pub mod bytemass;
+pub mod catalog;
 pub mod codecs;
 pub mod compression;
 pub mod dump;

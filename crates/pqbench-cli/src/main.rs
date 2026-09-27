@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 
 mod bench;
 mod bytemass;
+mod catalog;
 mod compression;
 mod document;
 mod dump;
@@ -80,6 +81,13 @@ enum Command {
     )]
     Metastore(metastore::MetastoreArgs),
     #[command(
+        about = help::CATALOG_ABOUT,
+        long_about = help::CATALOG_LONG_ABOUT,
+        after_help = help::CATALOG_AFTER,
+        after_long_help = help::CATALOG_AFTER
+    )]
+    Catalog(catalog::CatalogArgs),
+    #[command(
         about = help::DUMP_ABOUT,
         long_about = help::DUMP_LONG_ABOUT,
         after_help = help::DUMP_AFTER,
@@ -126,6 +134,7 @@ async fn main() -> ExitCode {
         Command::Table(args) => table::run(&args).await,
         Command::Lake(args) => lake::run(&args).await,
         Command::Metastore(args) => metastore::run(&args).await,
+        Command::Catalog(args) => catalog::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
         Command::Profile(args) => profile::run(&args),
         Command::Experiment(args) => experiment::run(&args),
