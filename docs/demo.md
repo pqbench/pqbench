@@ -3,11 +3,16 @@
 pqbench measures Parquet footers. A file is one input. A table is a snapshot
 of files. A lake is a list of tables. The pipe is the same in every case:
 
-```sh
-pqbench bytemass data.parquet
-pqbench table ./delta-table | pqbench bytemass
-pqbench table ./iceberg-table | pqbench bytemass
-pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
+```console run
+$ pqbench bytemass examples/quickstart.parquet --format table
+column  type   codec         encodings                 bytes  values
+------  -----  ------------  ------------------------  -----  ------
+id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+files: 1
+rows: 8
+columns: 2
+$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
 ```
 
 A terminal prints an aligned table; a pipe streams NDJSON
@@ -25,7 +30,7 @@ fixture in the test suite. Catalog pipes need `make lakehouse`.
 decision. The stream is one JSON record per line, so `jq` prunes file records
 by `path`, and `sort`, `head`, or `awk` sample by name:
 
-```console run delta
+```console run delta json
 # one file: keep the begin/end records, drop the file records
 $ pqbench table docker/e2e-lakehouse/table \
 >   | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("part-")))' \
@@ -91,21 +96,40 @@ $ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /
 A `pqbench.lake-source` lists a catalog. `GET /v1/config` with a `defaults`
 object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity.
 
-```sh
-pqbench lake docs/demos/unity.json | pqbench table | pqbench bytemass
-pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass
+```console run delta
+$ pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
-Those documents point at the local stand. See
+Every stage of a pipe writes NDJSON for the next stage; the last one prints the
+table (`--format table`). A catalog document lists the same way
+(`docs/demos/unity.json`, `docs/demos/iceberg-rest.json`); those documents point
+at the local stand (`make lakehouse`). See
 [docker/e2e-lakehouse/README.md](../docker/e2e-lakehouse/README.md).
 
 ## One Parquet file
 
 ```console run
 $ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.zst
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --json | tail -1
-{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3000,"column_count":7}
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench viz -o /tmp/report
+$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
+column            type        codec         encodings                  bytes  values
+----------------  ----------  ------------  ------------------------  ------  ------
+text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
+label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
+dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
+communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
+datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
+username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
+url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
+files: 1
+rows: 3000
+columns: 7
 ```
 
 ![pqbench CLI walkthrough](images/pqbench-bytemass.gif)
@@ -119,8 +143,14 @@ active files as a table; a pipe streams NDJSON for `bytemass`:
 
 ```console run delta
 $ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
-$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | tail -1
-{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 $ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
@@ -133,11 +163,12 @@ $ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /
 Iceberg needs `--features iceberg` (`iceberg-s3` for `s3://`). The committed
 fixture stores data as `s3://lakehouse/...`, so measure it through the stand:
 
-```sh
-pqbench lake docker/e2e-lakehouse/iceberg -o iceberg.ndjson.zst
-pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass
+```console run
+$ pqbench lake docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst
 ```
 
+With the stand up, list the Iceberg REST catalog and measure through it with
+`pqbench lake docs/demos/iceberg-rest.json | pqbench table | pqbench bytemass`.
 `docs/demos/pqbench-iceberg-session.sh` lists the fixture; set
 `PQBENCH_LAKEHOUSE=1` when the stand is up to run the REST pipe.
 

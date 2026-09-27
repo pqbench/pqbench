@@ -31,30 +31,38 @@ module that names the `object_store` crate is `pqbench::object_store`.
 
 Load the current snapshot, or an explicit snapshot id. A terminal prints the
 snapshot's log and files as a table; a pipe writes the full `pqbench.table`
-document. The URI may be a table root or the metadata JSON itself:
+document. The URI may be a table root or the metadata JSON itself.
 
+The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
+it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
+stand up, `pqbench table <table> | pqbench bytemass --format table` prints the
+same column table as a bare parquet:
+
+```console run
+$ pqbench bytemass examples/quickstart.parquet --format table
+column  type   codec         encodings                 bytes  values
+------  -----  ------------  ------------------------  -----  ------
+id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+files: 1
+rows: 8
+columns: 2
 ```
+
+Two invocations from the `iceberg` cargo feature:
+
 cargo run -p pqbench-cli --features iceberg -- table ./path/to/table
 cargo run -p pqbench-cli --features iceberg -- table ./path/to/table/metadata/v1.metadata.json --version 1
-cargo run -p pqbench-cli --features iceberg -- table ./path/to/table | cargo run -p pqbench-cli -- bytemass --json
-cargo test -p pqbench --features iceberg
-```
 
 Remote metadata and data objects are resolved with `iceberg-s3` (which enables
-`aws`). Remote table roots need `metadata/version-hint.text`; otherwise pass the
-metadata JSON URI:
+`aws`). A remote table root needs `metadata/version-hint.text`; otherwise pass
+the metadata JSON URI:
 
-```
-cargo run -p pqbench-cli --features iceberg-s3 -- table s3://bucket/table | cargo run -p pqbench-cli --features aws -- bytemass --json
-```
+cargo run -p pqbench-cli --features iceberg-s3 -- table s3://bucket/table
 
 A producer can supply the table URI and vended credentials as
 `pqbench.remote-source`; `table` detects the format, loads the snapshot, and the
-document carries `env` to `bytemass`:
-
-```
-producer | pqbench table | pqbench bytemass
-```
+document carries `env` to `bytemass`.
 
 ## Backends
 

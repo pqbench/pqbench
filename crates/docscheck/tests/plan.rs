@@ -49,15 +49,6 @@ fn a_blank_line_is_not_expected_output() {
 }
 
 #[test]
-fn a_dot_dot_dot_line_is_plain_output() {
-    let plan = plan(&transcript("$ echo hi\nhi\n...\nbye"));
-    assert_eq!(
-        plan.steps[0].expected,
-        vec!["hi".to_owned(), "...".to_owned(), "bye".to_owned()]
-    );
-}
-
-#[test]
 fn a_cd_directive_applies_to_later_steps() {
     let plan = plan(&transcript("# docscheck: cd: sub\n$ echo hi"));
     assert_eq!(plan.steps.len(), 1);

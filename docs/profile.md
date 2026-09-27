@@ -7,11 +7,20 @@ data — `profile` reads row values and decodes them.
 ## Usage
 
 ```console run
-$ pqbench profile examples/quickstart.parquet | head -1
-{"kind":"pqbench.profile","version":1,"event":"begin"}
-$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 | head -1
-{"kind":"pqbench.profile","version":1,"event":"begin"}
-$ pqbench profile examples/quickstart.parquet --rows first:2 -o /tmp/profile.ndjson.zst
+$ pqbench profile examples/quickstart.parquet --format table
+id                           column  kind     values  nulls  ndv
+---------------------------  ------  -------  ------  -----  ---
+examples/quickstart.parquet  id      integer       8      0    8
+examples/quickstart.parquet  year    integer       8      0    8
+files: 1
+rows: 8
+columns: 2
+$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/profile.ndjson.zst
+```
+
+The stream is the explicit machine output, useful for the next command:
+
+```console run json
 $ pqbench profile examples/quickstart.parquet --rows all --json | head -1
 {"kind":"pqbench.profile","version":1,"event":"begin"}
 ```
@@ -24,8 +33,9 @@ rows are decoded, and a profile is computed per selected column.
 | `--columns GLOB` | Repeatable. A `glob::Pattern` matched against the whole column name. Default: every column. A glob that matches nothing is an error. |
 | `--rows METHOD` | `all` or `first:N` with `N >= 1`. Default: `first:8192`. |
 | `--top N` | How many top values to keep per column. Default: 8. |
-| `-o` / `--output FILE` | Write the zstd NDJSON stream. Required on a terminal. |
-| `--json` | Stream NDJSON on stdout (same as a pipe). |
+| `-o` / `--output FILE` | Also write the zstd NDJSON stream to FILE, independent of what stdout shows. |
+| `--format` | `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
+| `--json` | Stream NDJSON on stdout (same as `--format json`). |
 
 A pipe streams one `pqbench.profile-column` line per column between a
 `pqbench.profile` begin and end. `row_count` and `column_count` are on the

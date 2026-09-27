@@ -9,9 +9,11 @@
 //! A `console` block becomes a test only when its info string carries `run`:
 //!
 //! ```console run
-//! $ pqbench bytemass examples/quickstart.parquet
-//! {"kind":"pqbench.bytemass","version":1,"event":"begin"}
-//! ...
+//! $ pqbench bytemass examples/quickstart.parquet --format table
+//! column  type   codec         encodings                 bytes  values
+//! ------  -----  ------------  ------------------------  -----  ------
+//! id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+//! files: 1
 //! ```
 
 use std::collections::BTreeSet;
@@ -40,18 +42,27 @@ const SUPPORT_NAME: &str = "gen_support.rs";
 A `console` transcript is generated only when its info string carries `run`:
 
     ```console run
-    $ pqbench bytemass examples/quickstart.parquet
-    {"kind":"pqbench.bytemass","version":1,"event":"begin"}
-    ...
+    $ pqbench bytemass examples/quickstart.parquet --format table
+    column  type   codec         encodings                 bytes  values
+    ------  -----  ------------  ------------------------  -----  ------
+    id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+    files: 1
     ```
 
-Each `$ ` line is a command; the lines under it are its expected stdout, and a
-lone `...` matches any run of lines. A later info word gates the test on a cargo
-feature (```console run delta```), and `no-run` opts a block out. One block
-becomes one `#[test]`; the test runs the commands through a shared `support`
-module that resolves `pqbench` to the binary under test. A
-`# docscheck: cd: PATH` or `# docscheck: env: KEY=VALUE` line on its own body
-line sets the directory or environment.
+Each `$ ` line is a command; the lines under it are its expected stdout, matched
+token by token. A `±`-prefixed token (a measured value) or a run of dashes (a
+table separator) is a tolerance marker and matches any actual token. A later info
+word gates the test on a cargo feature
+(```console run delta```), and `no-run` opts a block out. One block becomes one
+`#[test]`; the test runs the commands through a shared `support` module that
+resolves `pqbench` to the binary under test. A `# docscheck: cd: PATH` or
+`# docscheck: env: KEY=VALUE` line on its own body line sets the directory or
+environment.
+
+Two gates run on every document. A `pqbench` example outside a `console` fence
+is an error, so a command example cannot silently go untested. And a transcript
+must document the human table, not NDJSON: a `{"kind":"pqbench` output line is an
+error unless the fence opts in with `json` (```console run json```).
 
 Examples:
   docscheck sync README.md docs/
@@ -117,6 +128,16 @@ fn run_sync(args: Args, check_only: bool) -> ExitCode {
         }
     };
 
+    if let Err(error) = reject_untested_pqbench_blocks(&files) {
+        eprintln!("docscheck: {error}");
+        return ExitCode::from(2);
+    }
+
+    if let Err(error) = reject_ndjson_output(&files) {
+        eprintln!("docscheck: {error}");
+        return ExitCode::from(2);
+    }
+
     let generated = match generate_all(&files) {
         Ok(generated) => generated,
         Err(error) => {
@@ -141,6 +162,62 @@ fn run_sync(args: Args, check_only: bool) -> ExitCode {
             eprintln!("docscheck: cannot write {}: {error}", args.out.display());
             ExitCode::from(2)
         }
+    }
+}
+
+/// Fail when a `pqbench` example is not in a `console` block.
+///
+/// A command example only becomes a test inside a `console` fence, so a
+/// `pqbench` example written as `sh` or a bare fence would silently go
+/// untested. Report every offender with its file and line.
+fn reject_untested_pqbench_blocks(files: &[PathBuf]) -> Result<(), String> {
+    let mut parser = MarkdownParser::new();
+    let mut problems = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let blocks = parser.parse(&source);
+        for block in docscheck::untested_pqbench_blocks(&blocks) {
+            problems.push(format!(
+                "{}:{}: `pqbench` example in a `{}` block; use a ```console fence",
+                path.display(),
+                block.line,
+                block.language().unwrap_or("bare"),
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
+    }
+}
+
+/// Fail when a `console` transcript documents NDJSON instead of a table.
+///
+/// A transcript shows what a terminal prints; NDJSON is the pipe format. A
+/// block whose example is *about* the machine output opts in with the `json`
+/// fence word. Report every offender with its file and command line.
+fn reject_ndjson_output(files: &[PathBuf]) -> Result<(), String> {
+    let mut parser = MarkdownParser::new();
+    let mut problems = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let blocks = parser.parse(&source);
+        for step in docscheck::ndjson_outputs(&blocks) {
+            problems.push(format!(
+                "{}:{}: documented output is NDJSON; show the table or mark the fence `json`\n  {}",
+                path.display(),
+                step.line,
+                step.output,
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
     }
 }
 

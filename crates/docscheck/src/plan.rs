@@ -6,14 +6,16 @@
 //! (a shell line continuation), so long pipes stay readable.
 //!
 //! ```text
-//! $ pqbench bytemass examples/quickstart.parquet --json
-//! {"kind":"pqbench.bytemass","version":1,"event":"begin"}
-//! ...
+//! $ pqbench bytemass examples/quickstart.parquet --format table
+//! column  type   codec         encodings                 bytes  values
+//! ------  -----  ------------  ------------------------  -----  ------
+//! id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+//! files: 1
 //! ```
 //!
 //! Each command becomes a [`Step`] carrying its expected output, so a generated
-//! test can run it and compare. A line equal to `...` in the expected output
-//! matches any run of lines, for values that vary (timings, sizes).
+//! test can run it and compare. The generated support matches line by line,
+//! token by token; the support module documents the tolerance markers.
 
 use crate::model::{Block, Directive};
 
@@ -24,8 +26,9 @@ pub struct Step {
     pub command: String,
     /// 1-based line in the source document where the command starts.
     pub line: usize,
-    /// The documented stdout, one entry per line. A lone `...` entry matches
-    /// any number of lines. Empty means the test only checks the exit status.
+    /// The documented stdout, one entry per line. The support module compares
+    /// it token by token, with `±` and dash-run markers as tolerance. Empty
+    /// means the test only checks the exit status.
     pub expected: Vec<String>,
     /// Working directory relative to the repository root, or `None` for the root.
     pub directory: Option<String>,

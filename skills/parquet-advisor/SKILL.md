@@ -12,9 +12,16 @@ description: >-
 Facts come from the CLI. This skill proposes recipes. It does not replace
 a measured experiment. Load the full text anytime with:
 
-```sh
-pqbench skill parquet-advisor
-pqbench skill parquet-advisor recipes
+```console run json
+$ pqbench skill
+{"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}
+```
+
+```console run
+$ pqbench skill parquet-advisor | head -1
+---
+$ pqbench skill parquet-advisor recipes | head -1
+# Recipes: write path, DDL, compression levels
 ```
 
 ## Tools (what exists)

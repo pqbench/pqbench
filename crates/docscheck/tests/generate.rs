@@ -63,12 +63,6 @@ fn expected_output_becomes_a_slice_of_lines() {
 }
 
 #[test]
-fn a_dot_dot_dot_line_is_emitted_literally() {
-    let out = gen(&transcript("$ echo hi\nhi\n...\nbye"));
-    assert!(out.contains(r#"Some(&["hi", "...", "bye"])"#));
-}
-
-#[test]
 fn a_command_with_quotes_uses_a_raw_string() {
     let out = gen(&transcript("$ pqbench viz -o report && echo \"done\""));
     assert!(out.contains("r#\""));
@@ -104,6 +98,12 @@ fn a_feature_word_gates_the_test() {
 fn several_feature_words_gate_on_all_of_them() {
     let out = gen("## t\n\n```console run delta aws\n$ pqbench table x\n```\n");
     assert!(out.contains("#[cfg(all(feature = \"delta\", feature = \"aws\"))]"));
+}
+
+#[test]
+fn the_json_word_is_not_a_feature_gate() {
+    let out = gen("## t\n\n```console run json\n$ pqbench skill\n```\n");
+    assert!(!out.contains("#[cfg("));
 }
 
 #[test]

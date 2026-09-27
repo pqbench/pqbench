@@ -138,7 +138,16 @@ analogy, convention, or precedent:
   hook) fails when the generated files are stale. A block runs only when its
   fence carries `run` (e.g. ` ```console run `, or
   ` ```console run delta ` to gate the test on a cargo feature); a `$ ` line is
-  a command and the lines under it are its expected output, matched exactly.
+  a command and the lines under it are its expected output, matched token by
+  token. A documented token stands for a value that varies when it starts with
+  `±` (a measured speed — see the `lz`/`compression` tables) or is a run of
+  dashes (a separator whose width follows the data); either matches any actual
+  token, so mark a varying number rather than filter it in the shell.
+  Two gates run before generation. A `pqbench` example outside a `console` fence
+  fails, so a command example cannot silently go untested. A transcript that
+  documents an NDJSON line (`{"kind":"pqbench`) also fails — the docs show the
+  human table; a block whose example is *about* the machine output opts in with
+  ` ```console run json ` (the `json` word is not a cargo feature).
 - Features: pass `CARGO_FEATURES` to any target (quote values with a space),
   e.g. `make check CARGO_FEATURES=--all-features`,
   `make test CARGO_FEATURES="--features aws"`.

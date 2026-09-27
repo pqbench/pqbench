@@ -24,14 +24,17 @@ The published image is a portable baseline build; see
 lzbench-style compression benchmark over raw file bytes:
 
 ```console run
-$ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 | jq -c 'del(.compress_estimate,.decompress_estimate)'
-{"kind":"pqbench.lz","version":1,"event":"begin","file":"examples/quickstart.parquet"}
-{"kind":"pqbench.lz-row","codec":"zstd","level":3,"compressed_bytes":343,"uncompressed_bytes":541,"ratio":0.634011090573013}
-{"kind":"pqbench.lz","event":"end","row_count":1}
+$ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table
+codec  level  compress MB/s  decompress MB/s  ratio
+-----  -----  -------------  ---------------  -----
+zstd       3          ±12.5            ±31.8   0.63
+file: examples/quickstart.parquet
+rows: 1
 ```
 
-`--format json` (or `--json`) emits the same report as composable NDJSON;
-a terminal prints the sweep as a table.
+The speeds vary run to run; a `±`-prefixed number is a placeholder the docs
+check tolerates. `--format json` (or `--json`) emits the same report as
+composable NDJSON.
 
 ### compression
 
@@ -39,20 +42,22 @@ The same codec sweep over the encoded pages of a **NONE-compressed** parquet
 file:
 
 ```console run
-$ pqbench compression examples/quickstart.parquet --per-column --samples 1 --warmup-iterations 0 \
->   | jq -s -c '.[0], ([.[] | select(.kind=="pqbench.compression-row")] | sort_by(.compressed_bytes)[] | del(.compress_estimate,.decompress_estimate))' \
->   | head -3
-{"kind":"pqbench.compression","version":1,"event":"begin","file":"examples/quickstart.parquet"}
-{"kind":"pqbench.compression-row","codec":"lz4","level":1,"compressed_bytes":83,"uncompressed_bytes":106,"ratio":0.7830188679245284}
-{"kind":"pqbench.compression-row","codec":"snappy","level":1,"compressed_bytes":90,"uncompressed_bytes":106,"ratio":0.8490566037735849}
+$ pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table
+codec   level  compress MB/s  decompress MB/s  ratio
+------  -----  -------------  ---------------  -----
+lz4         1          ±71.0            ±89.0   0.78
+snappy      1          ±20.0            ±40.0   0.85
+zstd        1          ±12.0            ±28.0   1.01
+gzip        1           ±0.6             ±4.0   1.26
+file: examples/quickstart.parquet
+rows: 4
+columns: 0
 ```
 
-A sweep ranks codecs by measured speed, which varies run to run, so the
-transcript sorts the rows by compressed size to stay reproducible.
-
-`--format json` (or `--json`) emits the same report as composable NDJSON (the
-per-column rows are included when `--per-column` is set); a terminal prints
-the report and per-column tables.
+Rows are ordered by compression ratio, which is a property of the data, so the
+order is reproducible; a `±`-prefixed number marks the speeds that are not. The
+codec rows are one per codec, and `--per-column` adds a second table per column.
+`--format json` (or `--json`) emits the same report as composable NDJSON.
 
 ### bytemass
 
@@ -62,12 +67,14 @@ compression. Multiple paths, quoted glob masks, and storage URIs are
 aggregated:
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet --json | head -2
-{"kind":"pqbench.bytemass","version":1,"event":"begin"}
-{"kind":"pqbench.bytemass-file","id":"examples/quickstart.parquet","path":"examples/quickstart.parquet","file":"examples/quickstart.parquet","size":541}
-$ pqbench bytemass crates/pqbench/tests/fixtures/small_*.parquet | head -2
-{"kind":"pqbench.bytemass","version":1,"event":"begin"}
-{"kind":"pqbench.bytemass-file","id":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","path":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","file":"crates/pqbench/tests/fixtures/small_reddit_none.parquet","size":2107406}
+$ pqbench bytemass examples/quickstart.parquet --format table
+column  type   codec         encodings                 bytes  values
+------  -----  ------------  ------------------------  -----  ------
+id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+files: 1
+rows: 8
+columns: 2
 ```
 
 An `s3://` URI is the same command with the `aws` feature:
@@ -77,12 +84,11 @@ Remote reads fetch the object metadata, the Parquet trailer, and the
 serialized footer — never the data pages. `s3://` support is the `aws`
 feature; a URI whose backend is not compiled in fails at runtime with the
 missing feature named. The library entry point (`bytemass::bytemass`) is
-always available and never feature-gated. A pipe streams one NDJSON row per
-column as each file is measured; a terminal prints the same rows as a table.
-`--format json` (or `--json`) forces the stream and `-o` also writes it.
-Selecting which files to measure is a shell job:
-filter the `table` stream with `jq`, `sort`, and `head` before `bytemass` (see
-[docs/demo.md](docs/demo.md)).
+always available and never feature-gated. A terminal prints the columns as a
+table; a pipe streams one NDJSON row per column as each file is measured
+(`--format json` forces the stream and `-o` also writes it). Selecting which
+files to measure is a shell job: filter the `table` stream with `jq`, `sort`,
+and `head` before `bytemass` (see [docs/demo.md](docs/demo.md)).
 
 ### table
 
@@ -95,13 +101,21 @@ table and let the shell fan out (`xargs -P`). A terminal prints the active
 files as a table; a pipe streams NDJSON (`--format json` also forces it):
 
 ```console run delta
+$ pqbench table docker/e2e-lakehouse/table --format table
+path                                                                 size_bytes  num_records
+-------------------------------------------------------------------  ----------  -----------
+part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3
+tables: 1
+files: 1 (796 bytes)
+$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 $ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
-$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | head -2
-{"kind":"pqbench.bytemass","version":1,"event":"begin"}
-{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}
-$ pqbench bytemass /tmp/table.ndjson.zst | head -2
-{"kind":"pqbench.bytemass","version":1,"event":"begin"}
-{"kind":"pqbench.bytemass-file","id":"docker/e2e-lakehouse/table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}
 ```
 
 Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
@@ -112,8 +126,15 @@ A producer can hand `table` a `pqbench.remote-source` document — one table URI
 plus optional `AWS_*` credentials — and the table document carries those
 credentials to `bytemass`:
 
-```sh
-producer | pqbench table | pqbench bytemass
+```console run delta
+$ pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
 ### lake
@@ -141,12 +162,19 @@ leading name is a literal. `token` is the Databricks bearer token. `env`
 holds `AWS_*` storage credentials and is copied onto each table-ref.
 
 ```console run delta
-$ pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' | head -2
-{"kind":"pqbench.lake","version":1,"event":"begin"}
-{"kind":"pqbench.table-ref","version":1,"id":"table","uri":"file://<root>/docker/e2e-lakehouse/table"}
-$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | head -2
-{"kind":"pqbench.bytemass","version":1,"event":"begin"}
-{"kind":"pqbench.bytemass-file","id":"table","path":"part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","file":"<root>/docker/e2e-lakehouse/table/part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet","size":796,"stats":{"num_records":3,"bytes_per_row":265.3333333333333,"min_values":{"id":1,"label":"lake"},"max_values":{"id":3,"label":"remote"},"null_count":{"id":0,"label":0}}}
+$ pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table
+name   uri
+-----  ----------------------------------------
+table  file://<root>/docker/e2e-lakehouse/table
+tables: 1
+$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
 The committed fixture tree also holds an Iceberg table under
@@ -198,15 +226,19 @@ feature.
 
 ## Documentation
 
+Start with [Getting started](docs/getting-started.md). The
+[documentation index](docs/README.md) maps every page by kind.
+
+- [Getting started](docs/getting-started.md) — install, first measurement, the lake pipeline
+- [CLI reference](docs/cli.md) — the command table, documents, flags, and auth
 - [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, lake walk, catalogs
-- [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
-  naming tables for `pqbench table`, over rustfs S3
 - [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
 - [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
-- [CLI guide](docs/cli.md) — `pqbench --help` copy: auth, documents, flags
 - [Visualization](docs/viz.md) — `pqbench viz`, a static HTML treemap
 - [Python bindings](python/README.md) — install the wheel and call every command
 - [Docker](docs/docker.md) — build, run, and publish a container image
+- [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
+  naming tables for `pqbench table`, over rustfs S3
 
 ## Python
 

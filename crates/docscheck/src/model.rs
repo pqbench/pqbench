@@ -35,17 +35,21 @@ impl Block {
 /// The parsed info string of a fence.
 ///
 /// The first word is the language; the words after it are options. `run` marks
-/// the block executable, `no-run` keeps an otherwise-likely block out, and any
-/// other word is a cargo feature the generated test is gated on (`console run
-/// delta` emits `#[cfg(feature = "delta")]`).
+/// the block executable, `no-run` keeps an otherwise-likely block out, `json`
+/// marks a block that intentionally shows NDJSON, and any other word is a cargo
+/// feature the generated test is gated on (`console run delta` emits
+/// `#[cfg(feature = "delta")]`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BlockInfo {
     /// The language tag, or `None` for a bare fence.
     pub language: Option<String>,
     /// Whether `run` was one of the option words.
     pub run: bool,
-    /// The other option words, in order, with `run`/`no-run` removed. Each is a
-    /// cargo feature the generated test requires.
+    /// Whether `json` was one of the option words: the block documents NDJSON
+    /// on purpose, so the no-NDJSON gate lets it through.
+    pub json: bool,
+    /// The other option words, in order, with `run`/`no-run`/`json` removed.
+    /// Each is a cargo feature the generated test requires.
     pub options: Vec<String>,
 }
 
@@ -55,18 +59,22 @@ impl BlockInfo {
         let mut words = info.split_whitespace();
         let language = words.next().map(str::to_owned);
         let mut run = false;
+        let mut json = false;
         let mut options = Vec::new();
         for word in words {
             match word {
                 "run" => run = true,
                 // An explicit opt-out always wins, even if `run` was also given.
                 "no-run" => run = false,
+                // `json` is an exemption, not a cargo feature.
+                "json" => json = true,
                 other => options.push(other.to_owned()),
             }
         }
         Self {
             language,
             run,
+            json,
             options,
         }
     }

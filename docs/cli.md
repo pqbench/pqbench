@@ -82,11 +82,15 @@ reads the default AWS provider chain, then applies document `env`.
 Only `AWS_*` names are accepted on `pqbench.table`, `pqbench.remote-source`,
 and listed lake tables.
 
-```sh
-# Process env (instance role, SSO, shared credentials):
-AWS_PROFILE=analytics pqbench bytemass s3://bucket/table/part-0.parquet
+Process env (instance role, SSO, shared credentials):
 
-# Vended STS on a producer document:
+```console no-run
+AWS_PROFILE=analytics pqbench bytemass s3://bucket/table/part-0.parquet
+```
+
+Vended STS on a producer document piped into `table` and `bytemass`:
+
+```console no-run
 cat <<'EOF' | pqbench table | pqbench bytemass
 {"kind":"pqbench.remote-source","version":1,
  "inputs":["s3://bucket/table"],
@@ -121,8 +125,14 @@ listed tables. A PAT does not open `s3://`.
 }
 ```
 
-```sh
-pqbench lake source.json --include 'main.default.*'
+List a catalog with a document from a file; a terminal prints the tables:
+
+```console run
+$ pqbench lake docs/demos/lake.json --format table
+name          uri
+------------  --------------------------
+unity/events  docker/e2e-lakehouse/table
+tables: 1
 ```
 
 ### Databricks-governed tables

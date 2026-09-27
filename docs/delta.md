@@ -28,30 +28,30 @@ measure footers. The only module that names the `object_store` crate is
 ## Usage
 
 Load the latest snapshot, or an explicit version, then measure the named files.
-Enable the feature when building, running, or testing:
+A terminal prints the active files as a table and a summary:
 
+```console run delta
+$ pqbench table docker/e2e-lakehouse/table --format table
+path                                                                 size_bytes  num_records
+-------------------------------------------------------------------  ----------  -----------
+part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3
+tables: 1
+files: 1 (796 bytes)
 ```
-cargo run -p pqbench-cli --features delta -- table ./path/to/table -o table.ndjson.zst
-cargo run -p pqbench-cli --features delta -- table ./path/to/table --version 3 -o table.ndjson.zst
-cargo run -p pqbench-cli --features delta -- table ./path/to/table | cargo run -p pqbench-cli -- bytemass --json
-cargo test -p pqbench --features delta
-```
+
+`--version N` loads an explicit Delta commit instead of the latest. Build with
+the feature when you run from source, e.g.
+`cargo run -p pqbench-cli --features delta -- table ./path/to/table`, or run
+the same command in a container.
 
 Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
 options travel on the document as `env` (`AWS_*` only); they are not written
-into the process environment:
-
-```
-cargo run -p pqbench-cli --features delta-s3 -- table s3://bucket/table | cargo run -p pqbench-cli --features aws -- bytemass --json
-```
+into the process environment. The cargo command is
+`cargo run -p pqbench-cli --features delta-s3 -- table s3://bucket/table`.
 
 A producer can supply the table URI and vended credentials as
 `pqbench.remote-source`. `table` detects the format, loads the log, and the
 document carries `env` to `bytemass`:
-
-```
-producer | pqbench table | pqbench bytemass
-```
 
 ## Backends
 
@@ -73,14 +73,21 @@ then `end`. `lake` emits `pqbench.table-ref` lines; `table` loads them one at a
 time. A table is the work unit: scan a catalog by running one `table` process
 per table and letting the shell fan out (`xargs -P`). `bytemass` measures each
 file as its line arrives and compares its size to the log. A single
-`pqbench.table` object is still accepted. A terminal
-prints only the summary (format, snapshot, commit count, file count, bytes)
-and requires `-o` to write a zstd stream. On a pipe `-o` is optional and
-does not delay stdout:
+`pqbench.table` object is still accepted. A terminal prints the active files
+as a table and the summary (format, snapshot, commit count, file count,
+bytes); a pipe streams NDJSON. `--format json` forces the stream, and `-o`
+also writes it without delaying stdout:
 
-```
-pqbench table ./path/to/table -o table.ndjson.zst | pqbench bytemass
-pqbench bytemass table.ndjson.zst
+```console run delta
+$ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
+$ pqbench bytemass /tmp/table.ndjson.zst --format table
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
 ## Limitations

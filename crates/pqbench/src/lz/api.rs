@@ -29,7 +29,7 @@ pub struct LzRequest {
 ///
 /// The file is loaded once and the codec sweep runs over its raw bytes
 /// (lzbench's model), verifying each round-trip. The result is one
-/// [`report::ReportRow`] per config, ordered by compress speed.
+/// [`report::ReportRow`] per config, ordered by compression ratio.
 ///
 /// # Errors
 /// Fails when a `codec@level` spec is malformed, the file cannot be read, or a

@@ -4,66 +4,88 @@
 #[path = "gen_support.rs"]
 mod support;
 
+#[rustfmt::skip]
+#[test]
+fn visual_demos() {
+    // visual_demos, from line 6
+    support::run("pqbench bytemass examples/quickstart.parquet --format table", 7, Some(&["column  type   codec         encodings                 bytes  values", "------  -----  ------------  ------------------------  -----  ------", "id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "rows: 8", "columns: 2"]));
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 15, None);
+}
+
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn selecting_files_with_unix_tools() {
-    // selecting_files_with_unix_tools, from line 28
+    // selecting_files_with_unix_tools, from line 33
     support::run(r#"pqbench table docker/e2e-lakehouse/table \
   | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("part-")))' \
-  | pqbench bytemass --json | tail -1"#, 30, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
+  | pqbench bytemass --json | tail -1"#, 35, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
     support::run(r#"pqbench table docker/e2e-lakehouse/table \
   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
   | sort | head -10 \
-  | xargs pqbench bytemass --json | tail -1"#, 36, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
+  | xargs pqbench bytemass --json | tail -1"#, 41, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
     support::run(r#"pqbench table docker/e2e-lakehouse/table \
   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
   | awk 'NR % 2 == 1' \
-  | xargs pqbench bytemass --json | tail -1"#, 43, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
+  | xargs pqbench bytemass --json | tail -1"#, 48, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn selecting_files_with_unix_tools_2() {
-    // selecting_files_with_unix_tools_2, from line 57
+    // selecting_files_with_unix_tools_2, from line 62
     support::run(r#"pqbench table docker/e2e-lakehouse/table \
   | jq -c 'select(.kind != "pqbench.table-file" or (.path | startswith("part-")))' \
-  | pqbench dump /tmp/sample"#, 58, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
+  | pqbench dump /tmp/sample"#, 63, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn a_lake_of_tables() {
-    // a_lake_of_tables, from line 69
-    support::run("pqbench lake docker/e2e-lakehouse -o /tmp/lake.ndjson.zst", 70, None);
-    support::run("pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 71, None);
+    // a_lake_of_tables, from line 74
+    support::run("pqbench lake docker/e2e-lakehouse -o /tmp/lake.ndjson.zst", 75, None);
+    support::run("pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 76, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn a_lake_of_tables_2() {
-    // a_lake_of_tables_2, from line 85
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 86, None);
+    // a_lake_of_tables_2, from line 90
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 91, None);
+}
+
+#[cfg(feature = "delta")]
+#[rustfmt::skip]
+#[test]
+fn catalogs() {
+    // catalogs, from line 99
+    support::run("pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table", 100, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn one_parquet_file() {
-    // one_parquet_file, from line 104
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.zst", 105, None);
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --json | tail -1", 106, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3000,"column_count":7}"#]));
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench viz -o /tmp/report", 108, None);
+    // one_parquet_file, from line 118
+    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.zst", 119, None);
+    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table", 120, Some(&["column            type        codec         encodings                  bytes  values", "----------------  ----------  ------------  ------------------------  ------  ------", "text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000", "files: 1", "rows: 3000", "columns: 7"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn one_delta_snapshot() {
-    // one_delta_snapshot, from line 120
-    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 121, None);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | tail -1", 122, Some(&[r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}"#]));
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 124, None);
+    // one_delta_snapshot, from line 144
+    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 145, None);
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table", 146, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 154, None);
+}
+
+#[rustfmt::skip]
+#[test]
+fn one_iceberg_snapshot() {
+    // one_iceberg_snapshot, from line 166
+    support::run("pqbench lake docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst", 167, None);
 }

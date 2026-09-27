@@ -6,7 +6,7 @@ use crate::stats;
 
 use super::raw::RawRow;
 
-/// Aggregate raw measurements into a report sorted by compress speed.
+/// Aggregate raw measurements into a report sorted by compression ratio.
 pub fn aggregate(raw: &[RawRow], cfg: &stats::Config) -> report::Report {
     let rows = raw
         .iter()
