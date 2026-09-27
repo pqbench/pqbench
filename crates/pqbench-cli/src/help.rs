@@ -46,6 +46,7 @@ Documents (kind + version 1):
   pqbench.profile        begin/end around pqbench.profile-column lines
   pqbench.lake-source    catalog endpoint + token; lake lists it
   pqbench.metastore      the endpoint's metastore record
+  pqbench.catalog        the endpoint's catalogs (metastore ls)
   pqbench.lake           tables (name, uri, env); table loads each log
   pqbench.table-ref      one table name + uri + env
   pqbench.table          format, snapshot, log, active files (streamed)
@@ -192,19 +193,23 @@ See also:
   pqbench --help           catalog vs object auth, lake-source shape
   docs/cli.md  docs/demos/unity.json";
 
-pub const METASTORE_ABOUT: &str = "Read the endpoint's metastore record";
+pub const METASTORE_ABOUT: &str = "Read the endpoint's metastore record and list its catalogs";
 
 pub const METASTORE_LONG_ABOUT: &str = "\
 Read the metastore at a catalog endpoint: the entity above catalogs. The
 endpoint and token come from a pqbench.lake-source on standard input.
 
-A terminal prints the record as a table; a pipe streams one
-`pqbench.metastore` line. `--format json` forces the stream, and `-o` also
-writes it.";
+  info   the metastore record (name, id, cloud, region) as one
+         pqbench.metastore line
+  ls     the catalogs at the endpoint, one pqbench.catalog line each
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
 
 pub const METASTORE_AFTER: &str = "\
 Examples:
   pqbench metastore info < source.json
+  pqbench metastore ls < source.json
 
 See also:
   pqbench lake --help      list the tables the endpoint serves
