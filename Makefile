@@ -13,7 +13,7 @@ TEST_FLAGS ?=
 PYTHON ?= python3
 LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
-.PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse \
+.PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity lakehouse-seed-iceberg \
 	check isolation lfs-check check-python sync-docs check-docs clean
 
@@ -30,6 +30,11 @@ build:
 
 test:
 	$(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
+
+# The live Databricks metastore e2e; needs the service principal credentials.
+dbx-e2e:
+	@test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_SAMPLES_SP_CLIENT_ID/SECRET (see experiments/exp33_databricks_credential_vending.md)"; exit 1; }
+	$(CARGO) test -p pqbench-cli --test dbx_e2e -- --ignored --nocapture
 
 lint:
 	$(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
