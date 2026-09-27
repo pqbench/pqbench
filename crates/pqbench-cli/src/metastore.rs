@@ -28,7 +28,7 @@ pub(crate) struct OutputArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
-    /// also write the zstd NDJSON stream to FILE
+    /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
 }
@@ -98,8 +98,9 @@ async fn run_info(args: &OutputArgs) -> Result<(), CliError> {
         id: &metastore.id,
         cloud: &metastore.cloud,
         region: &metastore.region,
-    })?;
-    emit.finish("metastores: 1\n")
+    })
+    .await?;
+    emit.finish("metastores: 1\n").await
 }
 
 async fn run_ls(args: &OutputArgs) -> Result<(), CliError> {
@@ -112,7 +113,9 @@ async fn run_ls(args: &OutputArgs) -> Result<(), CliError> {
             version: 1,
             name: &catalog.name,
             catalog_type: catalog.catalog_type.as_deref(),
-        })?;
+        })
+        .await?;
     }
     emit.finish(&format!("catalogs: {}\n", catalogs.len()))
+        .await
 }

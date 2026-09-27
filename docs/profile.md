@@ -33,7 +33,7 @@ rows are decoded, and a profile is computed per selected column.
 | `--columns GLOB` | Repeatable. A `glob::Pattern` matched against the whole column name. Default: every column. A glob that matches nothing is an error. |
 | `--rows METHOD` | `all` or `first:N` with `N >= 1`. Default: `first:8192`. |
 | `--top N` | How many top values to keep per column. Default: 8. |
-| `-o` / `--output FILE` | Also write the zstd NDJSON stream to FILE, independent of what stdout shows. |
+| `-o` / `--output FILE` | Also write the lz4 NDJSON stream to FILE, independent of what stdout shows. |
 | `--format` | `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
 | `--json` | Stream NDJSON on stdout (same as `--format json`). |
 

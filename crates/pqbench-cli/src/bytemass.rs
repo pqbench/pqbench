@@ -16,7 +16,7 @@ use crate::CliError;
 pub(crate) struct BytemassArgs {
     /// parquet paths, a `pqbench.table` document, or `-` for standard input
     inputs: Vec<String>,
-    /// also write the zstd NDJSON stream to FILE
+    /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
     /// stream NDJSON (same as --format json; kept for scripts)
@@ -53,7 +53,8 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
         kind: "pqbench.bytemass",
         version: 1,
         event: "begin",
-    })?;
+    })
+    .await?;
     document::visit_input(input, async |record| {
         match record {
             Record::RemoteSource(source) => {
@@ -116,7 +117,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
     if !open.is_empty() {
         return Err("table stream ended without end".into());
     }
-    finish_stream(emit, &stats, args.output.as_deref())
+    finish_stream(emit, &stats, args.output.as_deref()).await
 }
 
 async fn measure_file(
@@ -142,9 +143,9 @@ async fn measure_file(
             .into());
         }
     }
-    write_file(emit, id, &file, &rows)?;
+    write_file(emit, id, &file, &rows).await?;
     for row in &rows {
-        write_row(emit, id, row, stats)?;
+        write_row(emit, id, row, stats).await?;
     }
     Ok(())
 }
@@ -168,7 +169,7 @@ async fn measure_input(
     .await
 }
 
-fn write_file(
+async fn write_file(
     emit: &mut Emitter,
     id: &str,
     file: &TableFile,
@@ -188,6 +189,7 @@ fn write_file(
         kind: "pqbench.bytemass-file",
         file: &stat,
     })
+    .await
 }
 
 async fn measure(
@@ -201,7 +203,8 @@ async fn measure(
         kind: "pqbench.bytemass",
         version: 1,
         event: "begin",
-    })?;
+    })
+    .await?;
     for input in inputs {
         measure_input(
             &mut emit,
@@ -213,10 +216,10 @@ async fn measure(
         )
         .await?;
     }
-    finish_stream(emit, &stats, args.output.as_deref())
+    finish_stream(emit, &stats, args.output.as_deref()).await
 }
 
-fn write_row(
+async fn write_row(
     emit: &mut Emitter,
     id: &str,
     row: &bytemass::MassRow,
@@ -228,9 +231,10 @@ fn write_row(
         id,
         row,
     })
+    .await
 }
 
-fn finish_stream(
+async fn finish_stream(
     mut emit: Emitter,
     stats: &MassStats,
     output: Option<&std::path::Path>,
@@ -241,8 +245,9 @@ fn finish_stream(
         file_count: stats.file_rows.len(),
         row_count: stats.row_count(),
         column_count: stats.column_count,
-    })?;
-    emit.finish(&stats.summary(output))
+    })
+    .await?;
+    emit.finish(&stats.summary(output)).await
 }
 
 #[derive(Default)]

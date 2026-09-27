@@ -23,7 +23,7 @@ columns: 2
 ```
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format table|json`
-overrides either, and `-o` additionally writes the zstd NDJSON stream.
+overrides either, and `-o` additionally writes the lz4 NDJSON stream.
 
 ## The docs, by kind
 

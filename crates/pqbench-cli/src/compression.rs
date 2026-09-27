@@ -18,7 +18,7 @@ pub(crate) struct CompressionArgs {
     per_column: bool,
 }
 
-pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
+pub(crate) async fn run(args: &CompressionArgs) -> Result<(), CliError> {
     let request = CompressionRequest {
         file: args.bench.file.clone(),
         codec_specs: args.bench.codec_specs.clone(),
@@ -35,25 +35,29 @@ pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
         version: 1,
         event: "begin",
         file: args.bench.file.to_string_lossy(),
-    })?;
+    })
+    .await?;
     for row in &report.rows {
         emit.write_row(&RowRecord {
             kind: "pqbench.compression-row",
             row,
-        })?;
+        })
+        .await?;
     }
     for column in &report.columns {
         emit.write_row(&ColumnRecord {
             kind: "pqbench.compression-column",
             row: column,
-        })?;
+        })
+        .await?;
     }
     emit.write_event(&EndRecord {
         kind: "pqbench.compression",
         event: "end",
         row_count: report.rows.len(),
         column_count: report.columns.len(),
-    })?;
+    })
+    .await?;
     let mut summary = format!(
         "file: {}\nrows: {}\ncolumns: {}\n",
         args.bench.file.display(),
@@ -63,7 +67,7 @@ pub(crate) fn run(args: &CompressionArgs) -> Result<(), CliError> {
     if let Some(path) = &args.bench.output {
         summary.push_str(&format!("output: {}\n", path.display()));
     }
-    emit.finish(&summary)
+    emit.finish(&summary).await
 }
 
 #[derive(Serialize)]

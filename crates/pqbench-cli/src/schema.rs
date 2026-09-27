@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+use futures_util::future::join_all;
 use pqbench::schema::{info, ls};
 use serde::Serialize;
 
@@ -33,7 +34,7 @@ pub(crate) struct NameArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
-    /// also write the zstd NDJSON stream to FILE
+    /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
 }
@@ -102,15 +103,17 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema info").await?;
     let refs = schema_refs("schema info", &input, args.schema.as_deref())?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    for (catalog, schema) in &refs {
-        let record = info::read(
+    let reads = refs.iter().map(|(catalog, schema)| {
+        info::read(
             &input.source.endpoint,
             catalog,
             schema,
             input.source.token.as_deref(),
             input.source.table_format.into(),
         )
-        .await?;
+    });
+    for record in join_all(reads).await {
+        let record = record?;
         emit.write_row(&SchemaRecord {
             kind: "pqbench.schema",
             version: 1,
@@ -119,37 +122,40 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
             comment: record.comment.as_deref(),
             location: record.location.as_deref(),
             properties: &record.properties,
-        })?;
+        })
+        .await?;
     }
-    emit.finish(&format!("schemas: {}\n", refs.len()))
+    emit.finish(&format!("schemas: {}\n", refs.len())).await
 }
 
 async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema ls").await?;
     let refs = schema_refs("schema ls", &input, args.schema.as_deref())?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let mut tables = 0;
-    for (catalog, schema) in &refs {
-        for table in ls::list(
+    let lists = refs.iter().map(|(catalog, schema)| {
+        ls::list(
             &input.source.endpoint,
             catalog,
             schema,
             input.source.token.as_deref(),
             input.source.table_format.into(),
         )
-        .await?
-        {
+    });
+    let mut tables = 0;
+    for listed in join_all(lists).await {
+        for table in listed? {
             emit.write_row(&TableRefRecord {
                 kind: "pqbench.table-ref",
                 version: 1,
                 id: &table.name,
                 uri: &table.uri,
                 format: table.format.as_deref(),
-            })?;
+            })
+            .await?;
             tables += 1;
         }
     }
-    emit.finish(&format!("tables: {tables}\n"))
+    emit.finish(&format!("tables: {tables}\n")).await
 }
 
 /// The schemas to read: the argument, or the `pqbench.schema` refs on stdin.

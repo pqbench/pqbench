@@ -5,7 +5,7 @@ use crate::bench::BenchArgs;
 use crate::emit::{Align, Emitter, Row};
 use crate::CliError;
 
-pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
+pub(crate) async fn run(args: &BenchArgs) -> Result<(), CliError> {
     let request = LzRequest {
         file: args.file.clone(),
         codec_specs: args.codec_specs.clone(),
@@ -20,18 +20,21 @@ pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
         version: 1,
         event: "begin",
         file: args.file.to_string_lossy(),
-    })?;
+    })
+    .await?;
     for row in &report.rows {
         emit.write_row(&RowRecord {
             kind: "pqbench.lz-row",
             row,
-        })?;
+        })
+        .await?;
     }
     emit.write_event(&EndRecord {
         kind: "pqbench.lz",
         event: "end",
         row_count: report.rows.len(),
-    })?;
+    })
+    .await?;
     let mut summary = format!(
         "file: {}\nrows: {}\n",
         args.file.display(),
@@ -40,7 +43,7 @@ pub(crate) fn run(args: &BenchArgs) -> Result<(), CliError> {
     if let Some(path) = &args.output {
         summary.push_str(&format!("output: {}\n", path.display()));
     }
-    emit.finish(&summary)
+    emit.finish(&summary).await
 }
 
 #[derive(Serialize)]

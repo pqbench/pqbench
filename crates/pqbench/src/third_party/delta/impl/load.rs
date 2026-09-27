@@ -33,13 +33,13 @@ impl std::error::Error for Error {}
 
 /// Resolve the transaction log and the active files of a Delta table.
 pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
-    visit_load(request, &mut |_| Ok(())).await
+    visit_load(request, &mut async |_| Ok(())).await
 }
 
 /// Resolve a Delta snapshot, visiting the header then each active file.
 pub(super) async fn visit_load(
     request: &LoadRequest,
-    visit: &mut impl FnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<TableInfo, Error> {
     let table = open(&request.uri, request.snapshot_version, &request.env).await?;
     let snapshot = snapshot_meta(&table)?;
@@ -53,7 +53,9 @@ pub(super) async fn visit_load(
         Vec::new(),
         request.env.clone(),
     );
-    visit(LoadEvent::BEGIN { info: &info }).map_err(|error| Error(error.to_string()))?;
+    visit(LoadEvent::BEGIN { info: &info })
+        .await
+        .map_err(|error| Error(error.to_string()))?;
     let (files, partitions) = active_files(&table, request, visit).await?;
     if request.collect_files {
         info.files = files;
@@ -180,7 +182,7 @@ fn parse_action(line: &str, version: u64) -> Result<LogAction, Error> {
 async fn active_files(
     table: &DeltaTable,
     request: &LoadRequest,
-    visit: &mut impl FnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<(Vec<TableFile>, Vec<PartitionMass>), Error> {
     let root = if table.table_url().scheme() == "file" {
         Some(
@@ -221,7 +223,9 @@ async fn active_files(
             stats,
         };
         add_partition_total(&mut totals, &table_file).map_err(|error| Error(error.to_string()))?;
-        visit(LoadEvent::FILE { file: &table_file }).map_err(|error| Error(error.to_string()))?;
+        visit(LoadEvent::FILE { file: &table_file })
+            .await
+            .map_err(|error| Error(error.to_string()))?;
         if request.collect_files {
             active.push(table_file);
         }

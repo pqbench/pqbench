@@ -22,7 +22,7 @@ next command reads.
   skill    →  markdown             bundled agent recipes (write / DDL / codec)
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format
-table|json` overrides either. `-o` also writes the zstd NDJSON stream.
+table|json` overrides either. `-o` also writes the lz4 NDJSON stream.
 Subcommand help is local (`pqbench table --help`).
 Auth, documents, and format skills are here.
 

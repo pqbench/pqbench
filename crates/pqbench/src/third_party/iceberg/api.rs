@@ -27,7 +27,7 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, crate::table::Erro
 /// Same as [`load`].
 pub async fn visit_load(
     request: &LoadRequest,
-    mut visit: impl FnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+    mut visit: impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<TableInfo, crate::table::Error> {
     super::r#impl::visit_load(request, &mut visit).await
 }

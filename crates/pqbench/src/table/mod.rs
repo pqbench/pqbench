@@ -311,7 +311,7 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
-    visit_load(request, |_| Ok(())).await
+    visit_load(request, async |_| Ok(())).await
 }
 
 /// Load a table, calling `visit` as the snapshot and each file are known.
@@ -324,7 +324,7 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
 /// Same as [`load`].
 pub async fn visit_load(
     request: &LoadRequest,
-    mut visit: impl FnMut(LoadEvent<'_>) -> Result<(), Error>,
+    mut visit: impl AsyncFnMut(LoadEvent<'_>) -> Result<(), Error>,
 ) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     match format {

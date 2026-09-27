@@ -1,5 +1,5 @@
 //! Shared command output: an aligned table on a terminal, NDJSON to a pipe
-//! and/or a zstd file.
+//! and/or an lz4 file.
 //!
 //! A terminal is interactive, so it gets columns a human can read; a pipe gets
 //! one JSON value per line so the next command can start immediately. `Auto`
@@ -7,6 +7,9 @@
 //! machine pipeline while `pqbench table` shows a table. `--format` (and the
 //! older `--json`) override that choice. `-o` always receives the NDJSON
 //! stream, independent of what stdout shows.
+//!
+//! A pipe write awaits the event loop. The `-o` sink compresses with lz4
+//! inline: lz4 is fast enough to treat as work, not as I/O.
 
 use std::fs::File;
 use std::io::{IsTerminal, Write};
@@ -71,15 +74,15 @@ pub(crate) trait Row: Serialize {
 pub(crate) struct Emitter {
     pipe: bool,
     closed: bool,
-    file: Option<zstd::Encoder<'static, File>>,
+    file: Option<lz4::Encoder<File>>,
     table: Option<Table>,
 }
 
 impl Emitter {
-    /// Open stdout in `format` and the optional `-o` zstd file.
+    /// Open stdout in `format` and the optional `-o` lz4 file.
     pub(crate) fn open(output: Option<&Path>, format: Resolved) -> Result<Self, CliError> {
         let file = match output {
-            Some(path) => Some(open_zstd(path)?),
+            Some(path) => Some(open_lz4(path)?),
             None => None,
         };
         let table = match format {
@@ -95,49 +98,58 @@ impl Emitter {
     }
 
     /// Write a structural record: NDJSON sinks only.
-    pub(crate) fn write_event(&mut self, value: &impl Serialize) -> Result<(), CliError> {
-        self.write_json(value)
+    pub(crate) async fn write_event(&mut self, value: &impl Serialize) -> Result<(), CliError> {
+        self.write_json(value).await
     }
 
     /// Write a data row: table cells on a terminal, NDJSON otherwise.
-    pub(crate) fn write_row<T: Row>(&mut self, row: &T) -> Result<(), CliError> {
+    pub(crate) async fn write_row<T: Row>(&mut self, row: &T) -> Result<(), CliError> {
         if let Some(table) = &mut self.table {
             table.push(row);
         }
-        self.write_json(row)
+        self.write_json(row).await
     }
 
-    fn write_json(&mut self, value: &impl Serialize) -> Result<(), CliError> {
+    async fn write_json(&mut self, value: &impl Serialize) -> Result<(), CliError> {
+        let mut line = serde_json::to_string(value)
+            .map_err(|error| format!("cannot serialize output: {error}"))?;
+        line.push('\n');
         if self.pipe && !self.closed {
-            match write_record(&mut std::io::stdout(), value) {
+            match write_stdout(&line).await {
                 Ok(()) => {}
                 Err(error) if closed_pipe(&error) => self.closed = true,
                 Err(error) => return Err(error),
             }
         }
         if let Some(file) = &mut self.file {
-            write_record(file, value)?;
+            file.write_all(line.as_bytes())?;
+            file.flush()?;
         }
         Ok(())
     }
 
-    /// Finish the zstd frame. On a table, render it followed by `summary`.
-    pub(crate) fn finish(mut self, summary: &str) -> Result<(), CliError> {
+    /// Finish the lz4 frame. On a table, render it followed by `summary`.
+    pub(crate) async fn finish(mut self, summary: &str) -> Result<(), CliError> {
         if let Some(encoder) = self.file.take() {
-            encoder
-                .finish()
-                .map_err(|error| format!("cannot finish output: {error}"))?;
+            let (_, result) = encoder.finish();
+            result.map_err(|error| format!("cannot finish output: {error}"))?;
         }
         if let Some(table) = self.table.take() {
-            write_stdout(&table.render(summary))?;
+            write_stdout(&table.render(summary)).await?;
         }
         Ok(())
     }
 }
 
 /// Write plain text to stdout. A closed reader is not an error.
-pub(crate) fn write_stdout(text: &str) -> Result<(), CliError> {
-    match std::io::stdout().write_all(text.as_bytes()) {
+pub(crate) async fn write_stdout(text: &str) -> Result<(), CliError> {
+    use tokio::io::AsyncWriteExt;
+    let mut stdout = tokio::io::stdout();
+    match stdout
+        .write_all(text.as_bytes())
+        .await
+        .and(stdout.flush().await)
+    {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Err(error) => Err(error.into()),
@@ -150,19 +162,13 @@ fn closed_pipe(error: &CliError) -> bool {
         .is_some_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe)
 }
 
-fn open_zstd(path: &Path) -> Result<zstd::Encoder<'static, File>, CliError> {
+fn open_lz4(path: &Path) -> Result<lz4::Encoder<File>, CliError> {
     let file =
         File::create(path).map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    Ok(zstd::Encoder::new(file, 0)
-        .map_err(|error| format!("cannot compress {}: {error}", path.display()))?)
-}
-
-fn write_record(writer: &mut impl Write, value: &impl Serialize) -> Result<(), CliError> {
-    let line = serde_json::to_string(value)
-        .map_err(|error| format!("cannot serialize output: {error}"))?;
-    writeln!(writer, "{line}")?;
-    writer.flush()?;
-    Ok(())
+    let encoder = lz4::EncoderBuilder::new()
+        .build(file)
+        .map_err(|error| format!("cannot compress {}: {error}", path.display()))?;
+    Ok(encoder)
 }
 
 /// One block of rows sharing a header.

@@ -14,7 +14,7 @@ use crate::CliError;
 pub(crate) struct ExperimentArgs {
     /// parquet sample path to read
     input: String,
-    /// also write the zstd NDJSON stream to FILE
+    /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
     /// stream NDJSON (same as --format json; kept for scripts)
@@ -37,7 +37,7 @@ pub(crate) struct ExperimentArgs {
     aim: String,
 }
 
-pub(crate) fn run(args: &ExperimentArgs) -> Result<(), CliError> {
+pub(crate) async fn run(args: &ExperimentArgs) -> Result<(), CliError> {
     let max_rows = parse_rows(&args.rows)?;
     let mut trials = args.rewrites.clone();
     trials.extend(args.trials.iter().cloned());
@@ -55,18 +55,21 @@ pub(crate) fn run(args: &ExperimentArgs) -> Result<(), CliError> {
         row_count: report.row_count,
         aim: report.aim.as_str(),
         capabilities: &report.capabilities,
-    })?;
+    })
+    .await?;
     for trial in &report.trials {
         emit.write_row(&TrialRecord {
             kind: "pqbench.experiment-trial",
             trial,
-        })?;
+        })
+        .await?;
         for column in &trial.columns {
             emit.write_row(&ColumnRecord {
                 kind: "pqbench.experiment-column",
                 trial: trial.name.as_str(),
                 column,
-            })?;
+            })
+            .await?;
         }
     }
     emit.write_event(&EndRecord {
@@ -74,8 +77,9 @@ pub(crate) fn run(args: &ExperimentArgs) -> Result<(), CliError> {
         event: "end",
         trial_count: report.trials.len(),
         row_count: report.row_count,
-    })?;
-    emit.finish(&summary(&report, args.output.as_deref()))
+    })
+    .await?;
+    emit.finish(&summary(&report, args.output.as_deref())).await
 }
 
 /// Parse `--rows`: `all` reads every row, `first:N` reads N (N >= 1).

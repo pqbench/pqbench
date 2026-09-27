@@ -9,6 +9,7 @@
 //! are skipped. The URLs, the page shapes, and the pagination are this
 //! command's; the transport is the third-party facade.
 
+use futures_util::future::join_all;
 use serde::Deserialize;
 
 use super::api::{Error, TableRef};
@@ -149,21 +150,22 @@ async fn iceberg_tables(
             None => format!("{base}/namespaces/{namespace}/tables"),
         };
         let page: IdentifiersPage = dialect::get_json(&url, token).await.map_err(Error::from)?;
-        for identifier in page.identifiers {
+        for identifier in &page.identifiers {
             if identifier.name.is_empty() {
                 return Err(Error::from(
                     "the endpoint listed a nameless table".to_string(),
                 ));
             }
-            let loaded: LoadedTable = dialect::get_json(
-                &format!(
-                    "{base}/namespaces/{namespace}/tables/{}",
-                    dialect::encode(&identifier.name)
-                ),
-                token,
-            )
-            .await
-            .map_err(Error::from)?;
+        }
+        let loads = page.identifiers.iter().map(|identifier| {
+            let url = format!(
+                "{base}/namespaces/{namespace}/tables/{}",
+                dialect::encode(&identifier.name)
+            );
+            async move { dialect::get_json::<LoadedTable>(&url, token).await }
+        });
+        for (identifier, loaded) in page.identifiers.iter().zip(join_all(loads).await) {
+            let loaded = loaded.map_err(Error::from)?;
             if loaded.metadata_location.is_empty() {
                 return Err(Error::from(format!(
                     "Iceberg table {} is missing metadata-location",
