@@ -12,6 +12,7 @@ that command and links back. This file is the durable copy.
 | Delta / Iceberg snapshot + files | `pqbench table DIR` |
 | List tables in a warehouse or catalog | `pqbench lake DIR` |
 | Read the endpoint's metastore record | `pqbench metastore info` (a lake-source on stdin) |
+| List the catalogs at a catalog endpoint | `pqbench metastore ls` (a lake-source on stdin) |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -36,8 +37,9 @@ environment.
 
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
-| `pqbench.lake-source` | you / a producer | `lake`, `metastore info` |
+| `pqbench.lake-source` | you / a producer | `lake`, `metastore` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
+| `pqbench.catalog` | `metastore ls` | humans / scripts (`--json`) |
 | `pqbench.table-ref` | `lake` | `table` |
 | `pqbench.table` | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
@@ -117,7 +119,9 @@ The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
 
 `metastore info` reads the same document and reports the endpoint's metastore
-record (name, id, cloud, region) as `pqbench.metastore`.
+record (name, id, cloud, region) as `pqbench.metastore`; `metastore ls` lists
+the catalogs at the endpoint, one `pqbench.catalog` line each (name,
+catalog_type).
 
 ```json
 {
@@ -138,6 +142,17 @@ name          uri
 ------------  --------------------------
 unity/events  docker/e2e-lakehouse/table
 tables: 1
+```
+
+List the catalogs at the endpoint:
+
+```console no-run
+$ pqbench metastore ls < source.json
+name         catalog_type
+-----------  ---------------
+dbx_samples  MANAGED_CATALOG
+samples      SYSTEM_CATALOG
+catalogs: 2
 ```
 
 ### Databricks-governed tables
