@@ -8,8 +8,14 @@ fn pqbench() -> Command {
 }
 
 fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+    pipe_env(args, stdin, &[])
+}
+
+/// pqbench with extra environment: the walk's context can come from `PQB_*`.
+fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let mut child = pqbench()
         .args(args)
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -76,16 +82,26 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
 
 const CATALOG: &str = r#"{"name":"dbx_samples","catalog_type":"MANAGED_CATALOG","comment":"sample catalog","owner":"owner@example.com"}"#;
 
+const SYSTEM_CATALOG: &str =
+    r#"{"name":"system","catalog_type":"SYSTEM_CATALOG","comment":"system catalog"}"#;
+
 const SCHEMAS: &str =
     r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"}],"next_page_token":null}"#;
 const SCHEMAS_PAGE: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":"more"}"#;
 const SCHEMAS_LAST: &str = r#"{"schemas":[{"name":"bakehouse"}]}"#;
-
 const ICEBERG_CONFIG: &str = r#"{"defaults":{"snapshot-loading-mode":"refs"},"overrides":{"prefix":"catalogs/dbx_samples"}}"#;
 const ICEBERG_NAMESPACES: &str =
     r#"{"namespaces":[["nyctaxi"],["bakehouse"]],"next-page-token":null}"#;
 const ICEBERG_PAGE: &str = r#"{"namespaces":[["nyctaxi"]],"next-page-token":"more"}"#;
 const ICEBERG_LAST: &str = r#"{"namespaces":[["bakehouse"]],"next-page-token":null}"#;
+
+/// The parent level's stream: one `pqbench.catalog` ref per catalog.
+const CATALOG_REFS: &str = concat!(
+    r#"{"kind":"pqbench.catalog","version":1,"name":"dbx_samples"}"#,
+    "\n",
+    r#"{"kind":"pqbench.catalog","version":1,"name":"system"}"#,
+    "\n",
+);
 
 fn source(endpoint: &str) -> Vec<u8> {
     json!({"kind": "pqbench.lake-source", "version": 1, "endpoint": endpoint})
@@ -364,4 +380,99 @@ fn catalog_ls_rejects_an_empty_document() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("lake-source"), "{stderr}");
+}
+
+#[test]
+fn catalog_info_enriches_a_catalog_stream() {
+    let address = routes(&[
+        ("/catalogs/dbx_samples", 200, CATALOG),
+        ("/catalogs/system", 200, SYSTEM_CATALOG),
+    ]);
+    let output = pipe_env(
+        &["catalog", "info", "--format", "json"],
+        CATALOG_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["kind"], "pqbench.catalog");
+    assert_eq!(records[0]["name"], "dbx_samples");
+    assert_eq!(records[0]["comment"], "sample catalog");
+    assert_eq!(records[1]["name"], "system");
+}
+
+#[test]
+fn catalog_ls_lists_a_catalog_stream() {
+    let address = server(200, SCHEMAS);
+    let output = pipe_env(
+        &["catalog", "ls", "--format", "json"],
+        CATALOG_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| record["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["bakehouse", "nyctaxi", "bakehouse", "nyctaxi"]);
+    assert_eq!(records[0]["catalog"], "dbx_samples");
+    assert_eq!(records[2]["catalog"], "system");
+}
+
+#[test]
+fn catalog_info_prefers_the_document_over_the_environment() {
+    let address = server(200, CATALOG);
+    let output = pipe_env(
+        &["catalog", "info", "dbx_samples", "--format", "json"],
+        &source(&address),
+        &[("PQB_ENDPOINT", "http://127.0.0.1:9")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["name"], "dbx_samples");
+}
+
+#[test]
+fn catalog_info_takes_a_catalog_or_a_stream_not_both() {
+    let address = server(200, CATALOG);
+    let output = pipe_env(
+        &["catalog", "info", "dbx_samples"],
+        CATALOG_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not both"), "{stderr}");
+}
+
+#[test]
+fn catalog_info_reports_an_empty_stream() {
+    let address = server(200, CATALOG);
+    let output = pipe_env(
+        &["catalog", "info", "--format", "table"],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("catalogs: 0"), "{stdout}");
 }

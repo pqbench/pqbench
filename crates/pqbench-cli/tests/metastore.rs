@@ -8,8 +8,14 @@ fn pqbench() -> Command {
 }
 
 fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+    pipe_env(args, stdin, &[])
+}
+
+/// pqbench with extra environment: the walk's context can come from `PQB_*`.
+fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let mut child = pqbench()
         .args(args)
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -250,4 +256,42 @@ fn metastore_ls_reports_an_unauthorized_endpoint() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
+}
+
+#[test]
+fn metastore_ls_reads_the_endpoint_from_the_environment() {
+    let address = server(200, CATALOGS);
+    let output = pipe_env(
+        &["metastore", "ls", "--format", "json"],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| record["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["dbx_samples", "system"]);
+}
+
+#[test]
+fn metastore_ls_skips_a_record_it_does_not_consume() {
+    let address = server(200, CATALOGS);
+    let record = json!({"kind": "pqbench.metastore", "version": 1, "name": "metastore"});
+    let output = pipe_env(
+        &["metastore", "ls", "--format", "json"],
+        record.to_string().as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(ndjson(&output.stdout).len(), 2);
 }
