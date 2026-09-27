@@ -103,11 +103,11 @@ fn parses_a_cd_directive() {
 
 #[test]
 fn parses_an_env_directive() {
-    let directive = Directive::parse("  # docscheck: env: PQBENCH_LAKEHOUSE=1");
+    let directive = Directive::parse("  # docscheck: env: PQB_LAKEHOUSE=1");
     assert_eq!(
         directive,
         Some(Directive::Environment {
-            name: "PQBENCH_LAKEHOUSE".to_owned(),
+            name: "PQB_LAKEHOUSE".to_owned(),
             value: "1".to_owned(),
         })
     );

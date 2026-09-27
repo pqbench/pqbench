@@ -85,7 +85,7 @@ impl BlockInfo {
 /// A directive is written as a shell comment so the block stays copy-pasteable:
 ///
 /// ```text
-/// # docscheck: env: PQBENCH_LAKEHOUSE=1
+/// # docscheck: env: PQB_LAKEHOUSE=1
 /// # docscheck: cd: docker/e2e-lakehouse
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
