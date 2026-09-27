@@ -1,9 +1,23 @@
 # pqbench
 
+[![CI](https://github.com/pqbench/pqbench/actions/workflows/ci.yml/badge.svg)](https://github.com/pqbench/pqbench/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
 *lzbench for parquet.*
 
 Measure how well each codec compresses a parquet file and how many on-disk bytes
 each column costs.
+
+Two jobs, one binary:
+
+- **Codec benchmarking** — `lz` sweeps codecs over raw file bytes;
+  `compression` sweeps them over a parquet file's encoded pages.
+- **Storage accounting** — `bytemass` reads the footer and reports the on-disk
+  bytes each column costs; `profile` decodes a row sample into per-column facts;
+  `experiment` rewrites that sample and measures the result.
+
+Commands compose on pipes: each writes a versioned JSON document the next reads.
+The usual pipe is `lake` → `table` → `bytemass` → `viz`; `dump` copies the files.
 
 ## Quick start
 
@@ -16,6 +30,12 @@ docker run --rm -v "$PWD:/data:ro" pqbench/pqbench:latest bytemass /data/your.pa
 
 The published image is a portable baseline build; see
 [docs/docker.md](docs/docker.md) for how its numbers compare to a native build.
+
+From a checkout, install the binary on your `PATH`:
+
+```sh
+cargo install --path crates/pqbench-cli
+```
 
 ## Commands
 
@@ -32,14 +52,14 @@ file: examples/quickstart.parquet
 rows: 1
 ```
 
-The speeds vary run to run; a `±`-prefixed number is a placeholder the docs
-check tolerates. `--format json` (or `--json`) emits the same report as
-composable NDJSON.
+Omit `-c` to sweep every wired codec. Speeds vary run to run, so a `±`-prefixed
+number is a placeholder the docs check tolerates. `--format json` (or `--json`)
+emits the same report as composable NDJSON.
 
 ### compression
 
-The same codec sweep over the encoded pages of a **NONE-compressed** parquet
-file:
+The same sweep over the encoded pages of a **NONE-compressed** parquet file. A
+compressed file is rejected; `--per-column` adds one table per column.
 
 ```console run
 $ pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table
@@ -54,17 +74,13 @@ rows: 4
 columns: 0
 ```
 
-Rows are ordered by compression ratio, which is a property of the data, so the
-order is reproducible; a `±`-prefixed number marks the speeds that are not. The
-codec rows are one per codec, and `--per-column` adds a second table per column.
-`--format json` (or `--json`) emits the same report as composable NDJSON.
+Rows are ordered by compression ratio, a property of the data, so the order is
+reproducible; only the speeds vary. `--format json` (or `--json`) emits NDJSON.
 
 ### bytemass
 
 Per-column byte masses — how many on-disk bytes each column takes per row.
-Reads only the footer metadata, so it works on any file regardless of
-compression. Multiple paths, quoted glob masks, and storage URIs are
-aggregated:
+Reads only the footer, so it works on any file regardless of compression.
 
 ```console run
 $ pqbench bytemass examples/quickstart.parquet --format table
@@ -77,28 +93,23 @@ rows: 8
 columns: 2
 ```
 
-An `s3://` URI is the same command with the `aws` feature:
-`pqbench bytemass s3://bucket/table/part-0.parquet`.
+- Multiple paths, quoted glob masks, and storage URIs are aggregated.
+- Remote reads fetch the object metadata, the Parquet trailer, and the
+  serialized footer — never the data pages.
+- `--indexes` also loads ColumnIndex/OffsetIndex page counts.
 
-Remote reads fetch the object metadata, the Parquet trailer, and the
-serialized footer — never the data pages. `s3://` support is the `aws`
-feature; a URI whose backend is not compiled in fails at runtime with the
-missing feature named. The library entry point (`bytemass::bytemass`) is
-always available and never feature-gated. A terminal prints the columns as a
-table; a pipe streams one NDJSON row per column as each file is measured
-(`--format json` forces the stream and `-o` also writes it). Selecting which
-files to measure is a shell job: filter the `table` stream with `jq`, `sort`,
-and `head` before `bytemass` (see [docs/demo.md](docs/demo.md)).
+An `s3://` URI is the same command with the `aws` feature:
+`pqbench bytemass s3://bucket/table/part-0.parquet`. A URI whose backend is not
+compiled in fails at runtime with the missing feature named. The library entry
+point (`bytemass::bytemass`) is always available and never feature-gated.
+Selecting which files to measure is a shell job: filter the `table` stream with
+`jq`, `sort`, and `head` before `bytemass` (see [docs/demo.md](docs/demo.md)).
+A terminal prints the columns as a table; a pipe streams one NDJSON row per
+column (`--format json` forces the stream and `-o` also writes it).
 
 ### table
 
-Detect the table format and load its metadata. For Delta this is the
-transaction log and the active files. For Iceberg it is the metadata JSON and
-Avro manifests. A pipe writes NDJSON. Every line carries a table `id` so
-`bytemass` can attribute rows. One `table` process loads one table at a time
-— a table is the work unit, so scan a catalog by running one process per
-table and let the shell fan out (`xargs -P`). A terminal prints the active
-files as a table; a pipe streams NDJSON (`--format json` also forces it):
+Detect the table format and load one snapshot's metadata.
 
 ```console run delta
 $ pqbench table docker/e2e-lakehouse/table --format table
@@ -118,9 +129,16 @@ columns: 2
 $ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
 ```
 
-Format detection runs first (`_delta_log` is Delta; `metadata/version-hint.text`
-or `.metadata.json` is Iceberg). Delta needs `--features delta` (`delta-s3` for
-`s3://`); Iceberg needs `iceberg` (`iceberg-s3` for `s3://`).
+- Detection runs first: `_delta_log` is Delta (wins UniForm);
+  `metadata/version-hint.text` or `.metadata.json` is Iceberg.
+- `--version N` picks a Delta commit or Iceberg snapshot id (default: latest).
+- Delta needs `--features delta` (`delta-s3` for `s3://`); Iceberg needs
+  `iceberg` (`iceberg-s3` for `s3://`).
+- Every line carries a table `id` so `bytemass` can attribute rows. One `table`
+  process loads one table at a time — scan a catalog by running one process per
+  table and let the shell fan out (`xargs -P`).
+- A terminal prints the active files as a table; a pipe streams NDJSON
+  (`--format json` also forces it).
 
 A producer can hand `table` a `pqbench.remote-source` document — one table URI
 plus optional `AWS_*` credentials — and the table document carries those
@@ -139,27 +157,8 @@ columns: 2
 
 ### lake
 
-List tables as `pqbench.table-ref` lines, one line per table for the shell to
-fan out (`xargs -P`). A directory, `file://` URI, or `s3://` prefix is walked
-until a table marker that `pqbench table` also accepts: `_delta_log` is Delta;
-Iceberg is `metadata/version-hint.text` or `metadata/*.metadata.json` (one path
-component). A remote walk lists each prefix once and reads format off the
-listing (`_delta_log/` or Iceberg metadata objects) instead of probing every
-child with HEADs. Children of a table are not searched. UniForm stays Delta.
-`file://` and a bare path name the same tables. `--max-depth` (default 8)
-bounds a tree with no marker. `s3://` listing needs `--features aws`. A
-`pqbench.lake-source` document, from a file or stdin, lists a catalog.
-`GET /v1/config` chooses the protocol: a 200 with a `defaults` object is
-Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity. A down catalog
-is an error, not Unity. The same Unity routes serve
-[Unity Catalog OSS](https://docs.unitycatalog.io/) and
-[Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
-then schemas, then tables, following `next_page_token`. Iceberg REST lists
-namespaces and tables, then `loadTable` for each metadata location.
-`--include` / `--exclude` match an FQN (`main`, `main.default`,
-`main.default.events`) as a glob or a prefix, and prune the walk when the
-leading name is a literal. `token` is the Databricks bearer token. `env`
-holds `AWS_*` storage credentials and is copied onto each table-ref.
+List tables as `pqbench.table-ref` lines, one per table for the shell to fan
+out (`xargs -P`).
 
 ```console run delta
 $ pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table
@@ -176,6 +175,26 @@ files: 1
 rows: 3
 columns: 2
 ```
+
+- A directory, `file://` URI, or `s3://` prefix is walked until a table marker.
+  Children of a table are not searched; `--max-depth` (default 8) bounds a tree
+  with no marker.
+- `--include` / `--exclude` match an FQN (`main`, `main.default`,
+  `main.default.events`) as a glob or prefix, and prune the walk when the
+  leading name is a literal.
+- `s3://` listing needs `--features aws`. `file://` and a bare path name the
+  same tables.
+
+A `pqbench.lake-source` document, from a file or stdin, lists a catalog.
+`GET /v1/config` chooses the protocol: a 200 with a `defaults` object is
+Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity. A down catalog
+is an error, not Unity. The same Unity routes serve
+[Unity Catalog OSS](https://docs.unitycatalog.io/) and
+[Databricks](https://docs.databricks.com/api/workspace/tables/list): catalogs,
+then schemas, then tables, following `next_page_token`. Iceberg REST lists
+namespaces and tables, then `loadTable` for each metadata location. `token` is
+the Databricks bearer token. `env` holds `AWS_*` storage credentials and is
+copied onto each table-ref.
 
 The committed fixture tree also holds an Iceberg table under
 `docker/e2e-lakehouse/iceberg/`; measuring it needs the stand
@@ -228,6 +247,8 @@ feature.
 
 Start with [Getting started](docs/getting-started.md). The
 [documentation index](docs/README.md) maps every page by kind.
+`pqbench --help` is the command guide; `pqbench <command> --help` is local to
+that command.
 
 - [Getting started](docs/getting-started.md) — install, first measurement, the lake pipeline
 - [CLI reference](docs/cli.md) — the command table, documents, flags, and auth
