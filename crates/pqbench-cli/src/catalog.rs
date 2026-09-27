@@ -18,11 +18,12 @@ pub(crate) struct CatalogArgs {
 #[derive(Subcommand)]
 pub(crate) enum CatalogCommand {
     /// Show one catalog's record
-    Info(InfoArgs),
+    Info(NameArgs),
 }
 
+/// Arguments for a catalog subcommand: the catalog name and the output flags.
 #[derive(Args)]
-pub(crate) struct InfoArgs {
+pub(crate) struct NameArgs {
     /// catalog name (Unity `catalog`)
     catalog: String,
     /// stdout format: auto (table on a terminal) | table | json
@@ -76,7 +77,7 @@ pub(crate) async fn run(args: &CatalogArgs) -> Result<(), CliError> {
     }
 }
 
-async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
+async fn run_info(args: &NameArgs) -> Result<(), CliError> {
     let source = read_source().await?;
     let catalog = info::read(&source.endpoint, &args.catalog, source.token.as_deref()).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
