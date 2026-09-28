@@ -114,7 +114,7 @@ async fn load_table(
     if let Some(version) = version {
         builder = builder.with_version(version);
     }
-    builder.without_files().load().await.map_err(delta_error)
+    builder.load().await.map_err(delta_error)
 }
 
 struct SnapshotMeta {

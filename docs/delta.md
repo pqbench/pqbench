@@ -92,17 +92,26 @@ columns: 2
 
 ## Memory use
 
-With NDJSON output, direct table paths and piped table references emit the snapshot header, each
-available JSON commit, and then each active file without retaining the complete
-history or file list. Output writes are awaited, so a slow consumer slows the
-producer. Delta-rs resolves active files lazily, including removals and checkpoints.
+With NDJSON output, direct table paths and piped table references emit each
+available JSON commit and active file without retaining a second complete
+history or file list in the CLI. Output writes are awaited, so a slow consumer
+slows the producer.
 
-Memory is not constant: a whole commit is parsed at once, Delta replay retains
-reconciliation state, and partition totals grow with distinct partitions. The
-command still reads all available JSON history. Human table output buffers rows
-to align columns. The collecting library API
-retains logs and files by default; visitor callers can disable both with
-`with_collect_log(false)` and `with_collect_files(false)`.
+Delta-rs still loads its active-file snapshot before the first record. Its lazy
+file stream in the pinned version rejects malformed optional statistics that
+the existing loader tolerates, so it is not a compatible replacement yet.
+Memory also includes the largest individual commit and per-partition totals;
+human table output buffers rows to align columns. All available JSON history
+is still read. The collecting library API retains logs and files by default;
+visitor callers can disable both with `with_collect_log(false)` and
+`with_collect_files(false)`.
+
+## Visitor events
+
+`visit_load` emits `BEGIN` with an empty log and file list, then `COMMIT` for
+each log entry, then `FILE` for each active file. Consumers that previously
+read the log from `BEGIN` should handle `COMMIT` instead. The NDJSON record
+format and the collecting `load` API are unchanged.
 
 ## Limitations
 
