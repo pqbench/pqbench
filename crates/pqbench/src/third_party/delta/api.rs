@@ -19,7 +19,7 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, crate::table::Erro
     super::r#impl::load(request).await
 }
 
-/// Load a Delta snapshot, visiting the header then each active file.
+/// Load a Delta snapshot, visiting the header, commits, then active files.
 ///
 /// # Errors
 /// Same as [`load`].

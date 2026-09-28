@@ -140,34 +140,39 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
 }
 
 async fn load_path(uri: &str, args: &LoadArgs) -> Result<(), CliError> {
-    let request = load_request(uri.to_string(), BTreeMap::new(), args)?.with_collect_files(false);
+    let request = load_request(uri.to_string(), BTreeMap::new(), args)?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let mut files = 0usize;
-    let mut bytes = 0u64;
-    let info = table::visit_load(&request, async |event| match event {
-        LoadEvent::BEGIN { info } => document::write_table_begin(&mut emit, uri, info)
-            .await
-            .map_err(|error| table::Error::new(error.to_string())),
-        LoadEvent::FILE { file } => {
-            files += 1;
-            bytes += file.size_bytes;
-            document::write_table_file(&mut emit, uri, file)
-                .await
-                .map_err(|error| table::Error::new(error.to_string()))
-        }
-    })
-    .await?;
-    document::write_table_end(&mut emit, uri, &info.partitions).await?;
+    let (files, bytes) = emit_table(&request, uri, &mut emit).await?;
     emit.finish(&summary(1, files, bytes, args.output.as_deref()))
         .await
 }
 
-async fn load_info(
-    uri: String,
-    env: BTreeMap<String, String>,
-    args: &LoadArgs,
-) -> Result<TableInfo, CliError> {
-    Ok(table::load(&load_request(uri, env, args)?).await?)
+async fn emit_table(
+    request: &LoadRequest,
+    id: &str,
+    emit: &mut Emitter,
+) -> Result<(usize, u64), CliError> {
+    let request = request
+        .clone()
+        .with_collect_files(false)
+        .with_collect_log(false);
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    let info = table::visit_load(&request, async |event| {
+        let result = match event {
+            LoadEvent::BEGIN { info } => document::write_table_begin(emit, id, info).await,
+            LoadEvent::COMMIT { commit } => document::write_table_commit(emit, id, commit).await,
+            LoadEvent::FILE { file } => {
+                files += 1;
+                bytes += file.size_bytes;
+                document::write_table_file(emit, id, file).await
+            }
+        };
+        result.map_err(|error| table::Error::new(error.to_string()))
+    })
+    .await?;
+    document::write_table_end(emit, id, &info.partitions).await?;
+    Ok((files, bytes))
 }
 
 fn load_request(
@@ -192,15 +197,19 @@ async fn stream(input: &str, args: &LoadArgs) -> Result<(), CliError> {
                         table_ref.id
                     ))
                 })?;
-                let info = load_info(storage_path, table_ref.env, args).await?;
-                add(&info, &mut tables, &mut files, &mut bytes);
-                document::write_table_records(&mut emit, &table_ref.id, &info).await?;
+                let request = load_request(storage_path, table_ref.env, args)?;
+                let (file_count, size) = emit_table(&request, &table_ref.id, &mut emit).await?;
+                tables += 1;
+                files += file_count;
+                bytes += size;
             }
             Record::RemoteSource(source) => {
                 for uri in source.inputs {
-                    let info = load_info(uri.clone(), source.env.clone(), args).await?;
-                    add(&info, &mut tables, &mut files, &mut bytes);
-                    document::write_table_records(&mut emit, &uri, &info).await?;
+                    let request = load_request(uri.clone(), source.env.clone(), args)?;
+                    let (file_count, size) = emit_table(&request, &uri, &mut emit).await?;
+                    tables += 1;
+                    files += file_count;
+                    bytes += size;
                 }
             }
             Record::Table(info) => {
@@ -209,9 +218,11 @@ async fn stream(input: &str, args: &LoadArgs) -> Result<(), CliError> {
             }
             Record::Lake(lake) => {
                 for table in lake.tables {
-                    let info = load_info(table.uri, table.env, args).await?;
-                    add(&info, &mut tables, &mut files, &mut bytes);
-                    document::write_table_records(&mut emit, &table.name, &info).await?;
+                    let request = load_request(table.uri, table.env, args)?;
+                    let (file_count, size) = emit_table(&request, &table.name, &mut emit).await?;
+                    tables += 1;
+                    files += file_count;
+                    bytes += size;
                 }
             }
             Record::LakeSource(_) => {

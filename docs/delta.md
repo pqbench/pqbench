@@ -90,6 +90,20 @@ rows: 3
 columns: 2
 ```
 
+## Memory use
+
+With NDJSON output, direct table paths and piped table references emit the snapshot header, each
+available JSON commit, and then each active file without retaining the complete
+history or file list. Output writes are awaited, so a slow consumer slows the
+producer. Delta-rs resolves active files lazily, including removals and checkpoints.
+
+Memory is not constant: a whole commit is parsed at once, Delta replay retains
+reconciliation state, and partition totals grow with distinct partitions. The
+command still reads all available JSON history. Human table output buffers rows
+to align columns. The collecting library API
+retains logs and files by default; visitor callers can disable both with
+`with_collect_log(false)` and `with_collect_files(false)`.
+
 ## Limitations
 
 Data paths must stay inside the table root (no URIs, no `..`). A missing
