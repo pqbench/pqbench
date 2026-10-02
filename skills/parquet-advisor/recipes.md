@@ -121,6 +121,49 @@ Spark session write (when DDL cannot set level):
 # parquet.compression.codec.zstd.level=3
 ```
 
+### Databricks Parquet v2
+
+For Databricks Runtime 18.1 and later, opt future Delta writes into v2:
+
+```sql
+ALTER TABLE db.t SET TBLPROPERTIES (
+  'delta.parquet.format.version' = '2.12.0'
+);
+```
+
+Existing files are unchanged. On Runtime 18.2 and later, rewrite them with:
+
+```sql
+REORG TABLE db.t APPLY (SET PARQUET (FORMAT_VERSION = '2.12.0'));
+```
+
+Check reader compatibility before changing the table. Measure the actual
+output: this selects an engine format policy, not a guarantee about any
+individual column's encoding. The property value is distinct from the integer
+version in a Parquet footer. See [Databricks Parquet v2](https://docs.databricks.com/aws/en/tables/features/parquet-v2).
+
+### parquet-mr: column dictionaries and zstd levels
+
+For a writer using parquet-mr's Hadoop configuration:
+
+```java
+conf.setBoolean("parquet.enable.dictionary", true);
+conf.setBoolean("parquet.enable.dictionary#events.list.element", false);
+conf.setInt("parquet.compression.codec.zstd.level", 7);
+```
+
+Replace the physical leaf path with the path in the output schema. The column
+setting overrides the global dictionary default. Select zstd as the codec
+separately; its level setting does not select it. These are Hadoop writer
+properties, not universal Delta table properties. Verify that the actual
+writer forwards them; do not assume Photon honors parquet-mr settings.
+See [Apache parquet-java configuration](https://github.com/apache/parquet-java/blob/master/parquet-hadoop/README.md).
+
+Databricks SQL warehouses accept only their documented configuration
+parameters. The Hadoop zstd-level setting is not on that list, so do not use
+an arbitrary SQL `SET` for it there. Use a writer with documented level
+control and measure its output. See [Databricks SQL parameters](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-parameters).
+
 ### DuckDB
 
 ```sql
