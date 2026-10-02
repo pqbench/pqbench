@@ -436,8 +436,12 @@ file's original encodings.
 
 --rewrite / --trial is repeatable and each value is one trial; semicolons
 compose rewrites (sort:a;codec:zstd@3;dictionary:off;row-group-size:2048).
-Supported rewrites: sort:A / sort:A,B (numeric or bytewise), codec:NAME[@LEVEL]
-(uncompressed, snappy, gzip, lz4, zstd), dictionary:on|off, row-group-size:N.
+Supported rewrites: sort:A / sort:A,B (numeric or bytewise), zorder:A,B,
+hilbert:A,B (exactly two columns), codec:NAME[@LEVEL] (uncompressed, snappy,
+gzip, lz4, zstd), dictionary:on|off|BYTES, row-group-size:N, page-size:BYTES,
+encoding:plain|delta|rle|delta_length|delta_byte_array|byte_stream_split,
+and cast:COL:int64|double|string. Encodings apply only to compatible columns;
+an encoding that applies to no column is an error.
 
 --aim chooses what to measure: storage (bytes, bytes per row), skipping
 (row-group min/max locality), or all. skipping/all splits the sample into row
@@ -446,8 +450,10 @@ groups of 2048 rows unless a trial sets row-group-size.
 A terminal prints the trials and their columns as tables; a pipe streams one
 `pqbench.experiment-trial` per trial and one `pqbench.experiment-column` per
 column. `--format json` (or `--json`) forces the stream, and `-o` also writes
-it. This command does not do zorder, hilbert, cast, drop, encoding,
-page-size, or indexes.";
+it. This command does not do drop, index editing, or input row-group selection.
+The current sample representation flattens nested columns to strings and
+does not preserve all logical types. Casts are not guaranteed lossless; verify
+values and schema before applying a trial to production data.";
 
 pub const EXPERIMENT_AFTER: &str = "\
 Examples:
