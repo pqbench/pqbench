@@ -4,11 +4,12 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use futures_util::stream::{self, StreamExt};
-use pqbench::table::{self, info, LoadEvent, LoadRequest, TableInfo};
+use pqbench::table::{self, info, FileSelection, LoadEvent, LoadRequest, TableInfo};
 use serde::Serialize;
 
 use crate::document::{self, Record, TableRef};
 use crate::emit::{Align, Emitter, Format, Row};
+use crate::file_selection::{self, FileSelectionArgs};
 use crate::CliError;
 
 /// Arguments for `table`: load one table, or resolve refs with `info`.
@@ -30,6 +31,8 @@ pub(crate) enum TableCommand {
 /// Arguments for loading one table.
 #[derive(Args)]
 pub(crate) struct LoadArgs {
+    #[command(flatten)]
+    selection: FileSelectionArgs,
     /// table URI, a document file, or `-` for standard input
     input: Option<String>,
     /// snapshot version; defaults to the latest version
@@ -68,17 +71,18 @@ pub(crate) async fn run(args: &TableArgs) -> Result<(), CliError> {
 }
 
 async fn run_load(args: &LoadArgs) -> Result<(), CliError> {
+    let selection = args.selection.parse()?;
     match &args.input {
-        None if !std::io::stdin().is_terminal() => stream("-", args).await,
+        None if !std::io::stdin().is_terminal() => stream("-", args, &selection).await,
         None => Err("table needs a URI or a document on standard input".into()),
         Some(value) => {
             // An Iceberg `.metadata.json` is JSON on disk but names a table,
             // not a pqbench document; keep it on the table path.
             let metadata_json = value.ends_with(".metadata.json");
             if !metadata_json && document::is_document(value).await {
-                stream(value, args).await
+                stream(value, args, &selection).await
             } else {
-                load_path(value, args).await
+                load_path(value, args, &selection).await
             }
         }
     }
@@ -139,12 +143,36 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
     emit.finish(&format!("tables: {tables}\n")).await
 }
 
-async fn load_path(uri: &str, args: &LoadArgs) -> Result<(), CliError> {
-    let request = load_request(uri.to_string(), BTreeMap::new(), args)?;
+async fn load_path(uri: &str, args: &LoadArgs, selection: &FileSelection) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    if !selection.unrestricted() {
+        let info = load_info(uri.to_owned(), BTreeMap::new(), args, selection).await?;
+        document::write_table_records(&mut emit, uri, &info).await?;
+        return emit
+            .finish(&summary(
+                1,
+                info.files.len(),
+                file_bytes(&info),
+                args.output.as_deref(),
+            ))
+            .await;
+    }
+    let request = load_request(uri.to_string(), BTreeMap::new(), args)?;
     let (files, bytes) = emit_table(&request, uri, &mut emit).await?;
     emit.finish(&summary(1, files, bytes, args.output.as_deref()))
         .await
+}
+
+/// Load one table and apply `selection`; buffers the file list.
+async fn load_info(
+    uri: String,
+    env: BTreeMap<String, String>,
+    args: &LoadArgs,
+    selection: &FileSelection,
+) -> Result<TableInfo, CliError> {
+    let mut info = table::load(&load_request(uri, env, args)?).await?;
+    file_selection::apply(selection, &mut info)?;
+    Ok(info)
 }
 
 async fn emit_table(
@@ -175,6 +203,27 @@ async fn emit_table(
     Ok((files, bytes))
 }
 
+/// Load one table, selecting when the policy is restricted, else stream it.
+async fn load_one(
+    uri: String,
+    env: BTreeMap<String, String>,
+    id: &str,
+    args: &LoadArgs,
+    selection: &FileSelection,
+    emit: &mut Emitter,
+) -> Result<(usize, u64), CliError> {
+    if selection.unrestricted() {
+        let request = load_request(uri, env, args)?;
+        emit_table(&request, id, emit).await
+    } else {
+        let info = load_info(uri, env, args, selection).await?;
+        let files = info.files.len();
+        let bytes = file_bytes(&info);
+        document::write_table_records(emit, id, &info).await?;
+        Ok((files, bytes))
+    }
+}
+
 fn load_request(
     uri: String,
     env: BTreeMap<String, String>,
@@ -183,7 +232,7 @@ fn load_request(
     Ok(LoadRequest::new(uri, args.version, env).with_file_stats(!args.no_stats))
 }
 
-async fn stream(input: &str, args: &LoadArgs) -> Result<(), CliError> {
+async fn stream(input: &str, args: &LoadArgs, selection: &FileSelection) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut tables = 0usize;
     let mut files = 0usize;
@@ -197,29 +246,51 @@ async fn stream(input: &str, args: &LoadArgs) -> Result<(), CliError> {
                         table_ref.id
                     ))
                 })?;
-                let request = load_request(storage_path, table_ref.env, args)?;
-                let (file_count, size) = emit_table(&request, &table_ref.id, &mut emit).await?;
+                let (file_count, size) = load_one(
+                    storage_path,
+                    table_ref.env,
+                    &table_ref.id,
+                    args,
+                    selection,
+                    &mut emit,
+                )
+                .await?;
                 tables += 1;
                 files += file_count;
                 bytes += size;
             }
             Record::RemoteSource(source) => {
                 for uri in source.inputs {
-                    let request = load_request(uri.clone(), source.env.clone(), args)?;
-                    let (file_count, size) = emit_table(&request, &uri, &mut emit).await?;
+                    let (file_count, size) = load_one(
+                        uri.clone(),
+                        source.env.clone(),
+                        &uri,
+                        args,
+                        selection,
+                        &mut emit,
+                    )
+                    .await?;
                     tables += 1;
                     files += file_count;
                     bytes += size;
                 }
             }
-            Record::Table(info) => {
+            Record::Table(mut info) => {
+                file_selection::apply(selection, &mut info)?;
                 add(&info, &mut tables, &mut files, &mut bytes);
                 document::write_table_records(&mut emit, &info.uri, &info).await?;
             }
             Record::Lake(lake) => {
                 for table in lake.tables {
-                    let request = load_request(table.uri, table.env, args)?;
-                    let (file_count, size) = emit_table(&request, &table.name, &mut emit).await?;
+                    let (file_count, size) = load_one(
+                        table.uri,
+                        table.env,
+                        &table.name,
+                        args,
+                        selection,
+                        &mut emit,
+                    )
+                    .await?;
                     tables += 1;
                     files += file_count;
                     bytes += size;
