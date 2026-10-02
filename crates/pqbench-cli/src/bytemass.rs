@@ -128,24 +128,37 @@ async fn measure_file(
     env: BTreeMap<String, String>,
     indexes: bool,
 ) -> Result<(), CliError> {
-    let rows = bytemass::bytemass(&bytemass::BytemassRequest {
+    let measured = bytemass::measure_files(&bytemass::BytemassRequest {
         inputs: vec![file.uri.clone()],
         env,
         indexes,
     })
     .await?;
-    if file.size_bytes != 0 {
-        if let Some(row) = rows.iter().find(|row| row.size_bytes != file.size_bytes) {
+    for mut measured in measured {
+        if file.size_bytes != 0 && measured.file.size != file.size_bytes {
             return Err(format!(
                 "active file size differs from log: {} (expected {}, found {})",
-                file.path, file.size_bytes, row.size_bytes
+                file.path, file.size_bytes, measured.file.size
             )
             .into());
         }
-    }
-    write_file(emit, id, &file, &rows).await?;
-    for row in &rows {
-        write_row(emit, id, row, stats).await?;
+        measured.file.id = id.to_owned();
+        if file.uri == measured.file.file {
+            measured.file.path = file.path.clone();
+        }
+        measured.file.partition_values = file.partition_values.clone();
+        measured.file.stats = file.stats.clone();
+        stats
+            .file_rows
+            .insert(measured.file.file.clone(), measured.row_count);
+        emit.write_event(&FileRecord {
+            kind: "pqbench.bytemass-file",
+            file: &measured.file,
+        })
+        .await?;
+        for row in &measured.columns {
+            write_row(emit, id, row, stats).await?;
+        }
     }
     Ok(())
 }
@@ -166,29 +179,6 @@ async fn measure_input(
         env,
         indexes,
     )
-    .await
-}
-
-async fn write_file(
-    emit: &mut Emitter,
-    id: &str,
-    file: &TableFile,
-    rows: &[bytemass::MassRow],
-) -> Result<(), CliError> {
-    let object = rows.first();
-    let size = if file.size_bytes != 0 {
-        file.size_bytes
-    } else {
-        object.map_or(0, |row| row.size_bytes)
-    };
-    let mut stat = bytemass::FileStat::new(id, file.path.clone(), file.uri.clone(), size);
-    stat.storage_class = object.and_then(|row| row.storage_class.clone());
-    stat.partition_values = file.partition_values.clone();
-    stat.stats = file.stats.clone();
-    emit.write_event(&FileRecord {
-        kind: "pqbench.bytemass-file",
-        file: &stat,
-    })
     .await
 }
 

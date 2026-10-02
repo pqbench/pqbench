@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// One encoded page: the payload a codec compresses, plus its metadata.
 #[derive(Debug, Clone)]
@@ -168,9 +168,40 @@ pub struct ColumnMass {
     pub page_compressed_bytes: Option<u64>,
 }
 
+/// File-level facts read from the footer, without loading page indexes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FileMetadata {
+    pub creator: Option<String>,
+    /// Footer format version, independent of data-page version.
+    pub format_version: i32,
+    pub key_values: Vec<MetadataEntry>,
+    pub row_groups: Vec<RowGroupMetadata>,
+}
+
+/// A metadata value preview, limited to 256 UTF-8 bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetadataEntry {
+    pub key: String,
+    pub value: Option<String>,
+    pub value_bytes: Option<usize>,
+    pub truncated: bool,
+}
+
+/// Row-group sizes and index availability, obtained from footer metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RowGroupMetadata {
+    pub row_count: u64,
+    /// Sum of compressed column chunks, including page headers.
+    pub compressed_bytes: u64,
+    pub uncompressed_bytes: u64,
+    pub column_indexes: Vec<bool>,
+    pub offset_indexes: Vec<bool>,
+}
+
 /// A file's byte masses, read purely from metadata.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct FileMass {
+    pub metadata: FileMetadata,
     /// Number of rows in the file (shared denominator for per-row mass).
     pub row_count: u64,
     /// Number of row groups.

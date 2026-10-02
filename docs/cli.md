@@ -289,3 +289,17 @@ Read these when the input is a Parquet file or a table format:
 Repo docs: [delta.md](delta.md), [iceberg.md](iceberg.md), [viz.md](viz.md),
 [profile.md](profile.md), [experiment.md](experiment.md), [skill.md](skill.md),
 [demo.md](demo.md).
+
+## File footer metadata
+
+The `bytemass-file` machine record includes a `metadata` object, even for an
+empty file. It contains `creator`, the footer `format_version`, ordered
+`key_values` (including duplicate keys), and `row_groups`. Metadata values
+are UTF-8-safe previews of at most 256 bytes; `value_bytes` and `truncated`
+distinguish previews from complete values. Missing values remain null.
+
+Each row group reports its rows and compressed/uncompressed column-chunk
+bytes, plus `column_indexes` and `offset_indexes` booleans in leaf-column
+order. Presence is available without loading index contents. These facts need
+only the footer; `--indexes` still controls the extra index read. Footer
+format version does not identify the data-page version or compression level.

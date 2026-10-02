@@ -19,6 +19,9 @@ use super::collection;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct FileStat {
+    /// Footer facts, absent in older streams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<crate::third_party::parquet::api::FileMetadata>,
     /// Table id from the stream, or empty for a bare parquet input.
     #[serde(default)]
     pub id: String,
@@ -51,6 +54,7 @@ impl FileStat {
         size: u64,
     ) -> Self {
         Self {
+            metadata: None,
             id: id.into(),
             path: path.into(),
             file: file.into(),
@@ -162,4 +166,23 @@ pub async fn bytemass(request: &BytemassRequest) -> Result<Vec<MassRow>, Error> 
         return Err(Error("no inputs".into()));
     }
     collection::measure_inputs(&request.inputs, &request.env, request.indexes).await
+}
+
+/// One measured file, including metadata even when it has no column chunks.
+#[derive(Debug, Clone, Serialize)]
+pub struct MeasuredFile {
+    pub file: FileStat,
+    pub row_count: u64,
+    pub columns: Vec<MassRow>,
+}
+
+/// Measure file-level footer facts and column masses for each expanded input.
+///
+/// # Errors
+/// Fails for empty inputs, unmatched patterns, invalid footers or I/O failures.
+pub async fn measure_files(request: &BytemassRequest) -> Result<Vec<MeasuredFile>, Error> {
+    if request.inputs.is_empty() {
+        return Err(Error("no inputs".into()));
+    }
+    collection::measure_files(&request.inputs, &request.env, request.indexes).await
 }

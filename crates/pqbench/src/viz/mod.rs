@@ -126,6 +126,7 @@ mod tests {
             &prefix,
             &[row("sales", "part-0.parquet", "id", 20)],
             &[FileStat {
+                metadata: None,
                 id: "sales".into(),
                 path: "year=2024/part-0.parquet".into(),
                 file: "part-0.parquet".into(),

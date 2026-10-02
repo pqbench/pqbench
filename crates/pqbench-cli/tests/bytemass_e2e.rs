@@ -53,6 +53,16 @@ fn bytemass_streams_column_rows() {
             "missing {column}"
         );
     }
+    let file = records
+        .iter()
+        .find(|record| record["kind"] == "pqbench.bytemass-file")
+        .unwrap();
+    assert!(file["metadata"]["creator"].is_string());
+    assert!(file["metadata"]["format_version"].is_number());
+    assert!(!file["metadata"]["row_groups"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     let end = records.last().unwrap();
     assert_eq!(end["event"], "end");
     assert_eq!(end["file_count"], 1);
