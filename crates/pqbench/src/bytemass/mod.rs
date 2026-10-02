@@ -15,6 +15,8 @@ mod analytics;
 mod api;
 mod collection;
 mod json;
+mod pages;
+pub use pages::{scan_pages, PageRecord};
 mod raw;
 mod remote;
 mod text;

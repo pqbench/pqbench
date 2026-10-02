@@ -158,3 +158,35 @@ fn bytemass_exits_cleanly_when_stdout_is_closed() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn page_scan_emits_headers_and_remains_a_viz_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let stream = directory.path().join("pages.lz4");
+    let output = Command::new(env!("CARGO_BIN_EXE_pqbench"))
+        .args(["bytemass", parquet_fixture(), "--pages", "-o"])
+        .arg(&stream)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson_records(&output.stdout);
+    assert!(records
+        .iter()
+        .any(|r| r["kind"] == "pqbench.bytemass-page" && r["header_bytes"].as_u64().unwrap() > 0));
+    let output = Command::new(env!("CARGO_BIN_EXE_pqbench"))
+        .arg("viz")
+        .arg(stream)
+        .arg("-o")
+        .arg(directory.path().join("view"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

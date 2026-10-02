@@ -108,6 +108,7 @@ async fn from_document(input: &str) -> Result<Vec<Entry>, CliError> {
             Record::BytemassBegin
             | Record::BytemassFile(_)
             | Record::BytemassRow { .. }
+            | Record::BytemassPage
             | Record::BytemassEnd => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }

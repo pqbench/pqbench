@@ -28,6 +28,9 @@ pub(crate) struct BytemassArgs {
     /// also load ColumnIndex/OffsetIndex (one extra range per file)
     #[arg(long)]
     indexes: bool,
+    /// Scan page headers without requiring page indexes (extra reads).
+    #[arg(long)]
+    pages: bool,
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
@@ -65,7 +68,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                         &uri,
                         uri.clone(),
                         source.env.clone(),
-                        args.indexes,
+                        (args.indexes, args.pages),
                     )
                     .await?;
                 }
@@ -78,7 +81,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                         &info.uri,
                         file,
                         info.env.clone(),
-                        args.indexes,
+                        (args.indexes, args.pages),
                     )
                     .await?;
                 }
@@ -92,7 +95,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
             }
             Record::File { id, file } => {
                 let env = envs.get(&id).cloned().unwrap_or_default();
-                measure_file(&mut emit, &mut stats, &id, file, env, args.indexes).await?;
+                measure_file(&mut emit, &mut stats, &id, file, env, (args.indexes, args.pages)).await?;
             }
             Record::Commit { .. } => {}
             Record::End { id } => {
@@ -107,6 +110,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
             Record::BytemassBegin
             | Record::BytemassFile(_)
             | Record::BytemassRow { .. }
+            | Record::BytemassPage
             | Record::BytemassEnd => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
@@ -126,12 +130,12 @@ async fn measure_file(
     id: &str,
     file: TableFile,
     env: BTreeMap<String, String>,
-    indexes: bool,
+    options: (bool, bool),
 ) -> Result<(), CliError> {
     let measured = bytemass::measure_files(&bytemass::BytemassRequest {
         inputs: vec![file.uri.clone()],
-        env,
-        indexes,
+        env: env.clone(),
+        indexes: options.0,
     })
     .await?;
     for mut measured in measured {
@@ -156,6 +160,16 @@ async fn measure_file(
             file: &measured.file,
         })
         .await?;
+        if options.1 {
+            for page in bytemass::scan_pages(&measured.file.file, &env).await? {
+                emit.write_row(&PageRow {
+                    kind: "pqbench.bytemass-page",
+                    id,
+                    page: &page,
+                })
+                .await?;
+            }
+        }
         for row in &measured.columns {
             write_row(emit, id, row, stats).await?;
         }
@@ -169,7 +183,7 @@ async fn measure_input(
     id: &str,
     uri: String,
     env: BTreeMap<String, String>,
-    indexes: bool,
+    options: (bool, bool),
 ) -> Result<(), CliError> {
     for input in bytemass::expand_inputs(&[uri], &env).await? {
         measure_file(
@@ -178,7 +192,7 @@ async fn measure_input(
             id,
             TableFile::new(input.clone(), input, 0),
             env.clone(),
-            indexes,
+            options,
         )
         .await?;
     }
@@ -205,7 +219,7 @@ async fn measure(
             &input,
             input.clone(),
             env.clone(),
-            args.indexes,
+            (args.indexes, args.pages),
         )
         .await?;
     }
@@ -327,4 +341,44 @@ struct EndRecord {
     file_count: usize,
     row_count: u64,
     column_count: usize,
+}
+
+#[derive(Serialize)]
+struct PageRow<'a> {
+    kind: &'static str,
+    id: &'a str,
+    #[serde(flatten)]
+    page: &'a bytemass::PageRecord,
+}
+impl Row for PageRow<'_> {
+    const HEADER: &'static [&'static str] = &[
+        "column",
+        "row_group",
+        "page",
+        "type",
+        "encoding",
+        "compressed_bytes",
+        "values",
+    ];
+    const ALIGN: &'static [Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+    ];
+    fn cells(&self) -> Vec<String> {
+        let p = self.page;
+        vec![
+            p.column.clone(),
+            p.row_group.to_string(),
+            p.page.to_string(),
+            p.header.page_type.clone(),
+            p.header.encoding.clone().unwrap_or_default(),
+            p.header.compressed_bytes.to_string(),
+            p.header.value_count.map_or("-".into(), |n| n.to_string()),
+        ]
+    }
 }

@@ -131,6 +131,8 @@ pub fn default_parser() -> impl PageParser {
 /// A column's byte mass, read from parquet metadata (no page decoding).
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ColumnMass {
+    /// Start of the column chunk, including its dictionary page if present.
+    pub chunk_offset: u64,
     /// Column path in schema form, e.g. `content` or `a.b`.
     pub column: String,
     /// On-disk (compressed) bytes for this column chunk.
@@ -306,6 +308,27 @@ pub fn write_parquet(
 /// Returns [`Error`] if `bytes` is not a valid Parquet file.
 pub fn read_buffer_masses(bytes: &[u8], indexes: bool) -> Result<FileMass, Error> {
     super::r#impl::read_buffer_masses(bytes, indexes)
+}
+
+/// Facts from one page header; sizes exclude the serialized header itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct PageHeader {
+    pub header_bytes: u64,
+    pub page_type: String,
+    pub compressed_bytes: u64,
+    pub uncompressed_bytes: u64,
+    pub value_count: Option<u64>,
+    pub row_count: Option<u64>,
+    pub dictionary_entries: Option<u64>,
+    pub encoding: Option<String>,
+}
+
+/// Decode a bounded compact-Thrift page header without touching its payload.
+///
+/// # Errors
+/// Invalid, incomplete, or oversized headers and negative sizes/counts.
+pub fn read_page_header(bytes: &[u8]) -> Result<PageHeader, Error> {
+    super::r#impl::read_page_header(bytes)
 }
 
 #[cfg(test)]
