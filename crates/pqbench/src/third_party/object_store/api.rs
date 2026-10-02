@@ -275,3 +275,55 @@ async fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>
         .map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
     Ok(buffer)
 }
+
+/// Expand an S3 key glob, listing only under its literal directory prefix.
+///
+/// `*` and `?` match within a component; `**` traverses directories. Percent
+/// escapes address literal key characters. Exact URIs do not require listing.
+///
+/// # Errors
+/// Invalid/unsupported URIs, disabled backend, listing failure, or no matches.
+pub async fn expand_glob(uri: &str, options: &[(String, String)]) -> Result<Vec<String>, Error> {
+    if !uri.contains(['*', '?']) {
+        return Ok(vec![uri.to_owned()]);
+    }
+    super::r#impl::expand_glob(uri, options).await
+}
+
+/// A key glob with a literal listing prefix and component-aware matching.
+pub struct KeyPattern {
+    pattern: glob::Pattern,
+    prefix: String,
+}
+impl KeyPattern {
+    /// Parse a key pattern; square brackets are literal, as in local inputs.
+    ///
+    /// # Errors
+    /// Missing wildcards or invalid glob syntax.
+    pub fn parse(mask: &str) -> Result<Self, Error> {
+        let wildcard = mask
+            .find(['*', '?'])
+            .ok_or_else(|| Error("missing key wildcard".into()))?;
+        let prefix = mask[..wildcard]
+            .rfind('/')
+            .map_or("", |end| &mask[..end])
+            .to_owned();
+        let pattern = glob::Pattern::new(&mask.replace('[', "[[]"))
+            .map_err(|e| Error(format!("invalid key glob: {e}")))?;
+        Ok(Self { pattern, prefix })
+    }
+    /// Literal directory prefix to list, empty for the bucket root.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+    /// Match a decoded object key; ordinary wildcards cannot cross slashes.
+    pub fn matches(&self, key: &str) -> bool {
+        self.pattern.matches_with(
+            key,
+            glob::MatchOptions {
+                require_literal_separator: true,
+                ..Default::default()
+            },
+        )
+    }
+}

@@ -153,8 +153,7 @@ pub struct MassRow {
 
 /// Measure the per-column byte masses of Parquet files.
 ///
-/// Inputs are local paths or storage URIs, each possibly a glob mask for local
-/// files. Only file footers are read. The result is one [`MassRow`] per column
+/// Inputs are local paths or storage URIs, each possibly a local or S3 glob mask. Only file footers are read. The result is one [`MassRow`] per column
 /// chunk, in input order; call `render_text`, `render_json`, or `aggregate`
 /// on it, or pipe the stream to `viz`.
 ///
@@ -185,4 +184,19 @@ pub async fn measure_files(request: &BytemassRequest) -> Result<Vec<MeasuredFile
         return Err(Error("no inputs".into()));
     }
     collection::measure_files(&request.inputs, &request.env, request.indexes).await
+}
+
+/// Resolve local and S3 patterns to sorted, unique object paths.
+///
+/// # Errors
+/// Invalid patterns, missing backend, listing errors, or unmatched patterns.
+pub async fn expand_inputs(
+    inputs: &[String],
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<String>, Error> {
+    Ok(collection::expand_inputs(inputs, env)
+        .await?
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect())
 }
