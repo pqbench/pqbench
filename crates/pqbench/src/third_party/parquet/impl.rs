@@ -555,6 +555,7 @@ fn create_masses(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
                 .and_then(|indexes| indexes.get(row_group_index))
                 .and_then(|row| row.get(column_index));
             columns.push(ColumnMass {
+                chunk_offset: meta.byte_range().0,
                 column: meta.column_path().string(),
                 compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
                 uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
@@ -732,4 +733,75 @@ impl From<parquet::errors::ParquetError> for Error {
     fn from(e: parquet::errors::ParquetError) -> Self {
         Error(e.to_string())
     }
+}
+
+pub(crate) fn read_page_header(bytes: &[u8]) -> Result<super::api::PageHeader, Error> {
+    use parquet_format_safe::{PageHeader, PageType};
+    let mut input = std::io::Cursor::new(bytes);
+    let mut protocol =
+        parquet_format_safe::thrift::protocol::TCompactInputProtocol::new(&mut input, 1_048_576);
+    let header = PageHeader::read_from_in_protocol(&mut protocol)
+        .map_err(|e| Error(format!("page header: {e}")))?;
+    let positive =
+        |value: i32| u64::try_from(value).map_err(|_| Error("negative page size or count".into()));
+    let mut result = super::api::PageHeader {
+        header_bytes: input.position(),
+        page_type: match header.type_ {
+            PageType::DATA_PAGE => "DATA_PAGE".into(),
+            PageType::DATA_PAGE_V2 => "DATA_PAGE_V2".into(),
+            PageType::DICTIONARY_PAGE => "DICTIONARY_PAGE".into(),
+            PageType::INDEX_PAGE => "INDEX_PAGE".into(),
+            other => format!("UNKNOWN({})", other.0),
+        },
+        compressed_bytes: positive(header.compressed_page_size)?,
+        uncompressed_bytes: positive(header.uncompressed_page_size)?,
+        value_count: None,
+        row_count: None,
+        dictionary_entries: None,
+        encoding: None,
+    };
+    match header.type_ {
+        PageType::DATA_PAGE => {
+            let data = header
+                .data_page_header
+                .ok_or_else(|| Error("missing DATA_PAGE header".into()))?;
+            result.value_count = Some(positive(data.num_values)?);
+            result.encoding = Some(encoding_name(data.encoding.0));
+        }
+        PageType::DATA_PAGE_V2 => {
+            let data = header
+                .data_page_header_v2
+                .ok_or_else(|| Error("missing DATA_PAGE_V2 header".into()))?;
+            result.value_count = Some(positive(data.num_values)?);
+            result.row_count = Some(positive(data.num_rows)?);
+            positive(data.num_nulls)?;
+            positive(data.definition_levels_byte_length)?;
+            positive(data.repetition_levels_byte_length)?;
+            result.encoding = Some(encoding_name(data.encoding.0));
+        }
+        PageType::DICTIONARY_PAGE => {
+            let data = header
+                .dictionary_page_header
+                .ok_or_else(|| Error("missing DICTIONARY_PAGE header".into()))?;
+            result.dictionary_entries = Some(positive(data.num_values)?);
+            result.encoding = Some(encoding_name(data.encoding.0));
+        }
+        _ => {}
+    }
+    Ok(result)
+}
+fn encoding_name(value: i32) -> String {
+    match value {
+        0 => "PLAIN",
+        2 => "PLAIN_DICTIONARY",
+        3 => "RLE",
+        4 => "BIT_PACKED",
+        5 => "DELTA_BINARY_PACKED",
+        6 => "DELTA_LENGTH_BYTE_ARRAY",
+        7 => "DELTA_BYTE_ARRAY",
+        8 => "RLE_DICTIONARY",
+        9 => "BYTE_STREAM_SPLIT",
+        _ => return format!("UNKNOWN({value})"),
+    }
+    .into()
 }

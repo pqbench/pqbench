@@ -340,3 +340,27 @@ $ pqbench bytemass 's3://bucket/table/**/*.parquet'
 
 These patterns enumerate physical objects, not a table's active snapshot.
 Use `table` for Delta/Iceberg analysis to avoid counting obsolete files.
+
+## Page headers without indexes
+
+`bytemass --pages` emits a `bytemass-page` record for every page, including
+its row group, leaf path, ordinal, absolute offset, header length, page type,
+compressed/uncompressed payload sizes, encoding, and applicable value or
+dictionary-entry counts. A v2 page also reports row count. A v1 value count
+is not a row count for repeated columns.
+
+```console
+$ pqbench bytemass data.parquet --pages --format table
+```
+
+This opt-in scan works without ColumnIndex/OffsetIndex and skips compressed
+payloads without decoding them. Small header reads can include up to 4 KiB
+of payload read-ahead; unusually large headers are capped at 1 MiB. Remote
+reads reuse object identity conditions. Ordinary bytemass remains footer-only;
+`--indexes` independently loads index contents. Header sizes exclude the
+header itself, while chunk sizes include it. Checksums of skipped payloads
+are not verified. Encrypted headers are unsupported.
+
+Observed dictionary fallback and page boundaries do not establish which
+writer thresholds caused them. `viz` ignores page records and continues to
+render the column totals from the same stream.

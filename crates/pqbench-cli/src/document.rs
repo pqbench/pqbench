@@ -65,6 +65,7 @@ pub(crate) enum Record {
         row: MassRow,
     },
     BytemassEnd,
+    BytemassPage,
 }
 
 /// One table name for `table` to load. `id` tags every later line.
@@ -188,6 +189,7 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         ("pqbench.bytemass-file", _) => Ok(Record::BytemassFile(
             serde_json::from_value(value).map_err(invalid_json)?,
         )),
+        ("pqbench.bytemass-page", _) => Ok(Record::BytemassPage),
         ("pqbench.bytemass-row", _) => {
             let (id, row) = parse_mass_row(value)?;
             Ok(Record::BytemassRow { id, row })

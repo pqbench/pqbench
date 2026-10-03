@@ -45,7 +45,7 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliErr
             Record::BytemassBegin => begun = true,
             Record::BytemassFile(file) => files.push(file),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
-            Record::BytemassEnd => {}
+            Record::BytemassEnd | Record::BytemassPage => {}
             Record::Table(_)
             | Record::TableRef(_)
             | Record::Begin(_)

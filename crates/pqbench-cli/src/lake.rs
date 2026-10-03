@@ -107,6 +107,7 @@ async fn stream_document(
             | Record::BytemassBegin
             | Record::BytemassFile(_)
             | Record::BytemassRow { .. }
+            | Record::BytemassPage
             | Record::BytemassEnd => return Err(
                 "pqbench lake reads a directory, a pqbench.lake document, or a pqbench.lake-source"
                     .into(),
