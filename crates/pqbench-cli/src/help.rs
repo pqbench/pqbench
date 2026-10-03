@@ -48,7 +48,7 @@ Documents (kind + version 1):
   pqbench.metastore      the endpoint's metastore record
   pqbench.catalog        the endpoint's catalogs (metastore ls)
   pqbench.lake           tables (name, uri, env); table loads each log
-  pqbench.table-ref      one table name + uri + env
+  pqbench.table-ref      one table's record address + storage path
   pqbench.table          format, snapshot, log, active files (streamed)
   pqbench.remote-source  one URI + AWS_* from a producer
   pqbench.bytemass       begin/end around pqbench.bytemass-row lines
@@ -139,7 +139,12 @@ files. Iceberg: metadata JSON and Avro manifests (delete files in the log,
 not files[]). Does not measure bytes — pipe to bytemass or dump.
 
 Inputs: table directory or URI, Iceberg metadata JSON, a pqbench.table /
-pqbench.lake / pqbench.remote-source, or '-' / stdin.
+pqbench.lake / pqbench.remote-source, or '-' / stdin. A pqbench.table-ref
+carries its storage path; a ref from an Iceberg catalog walk does not, so run
+`table info` first to fill it.
+
+  info   read each table-ref's record (Iceberg loadTable) and emit the ref
+         with its storage path; a ref that already has one passes through
 
 Detection: _delta_log is Delta (wins UniForm). Iceberg is
 metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json
@@ -153,10 +158,11 @@ pub const TABLE_AFTER: &str = "\
 Examples:
   pqbench table ./delta-table -o table.ndjson.zst
   pqbench table ./delta-table | pqbench bytemass
+  pqbench schema ls dbx_samples.nyctaxi | pqbench table info | pqbench table
   pqbench table ./iceberg-table | pqbench bytemass
-  pqbench table ./delta-table --version 3 | pqbench bytemass
 
 See also:
+  pqbench schema --help    list table refs for a catalog schema
   pqbench lake --help      list tables into a document this command loads
   pqbench bytemass --help  measure the files named here
   pqbench dump --help      copy those files to a directory
@@ -282,8 +288,32 @@ See also:
   pqbench --help          catalog auth, lake-source shape
   docs/cli.md";
 
-pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
+pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
 
+pub const RATELIMIT_LONG_ABOUT: &str = "\
+Pace an NDJSON ref stream: records pass through unchanged, delayed so each
+record kind observes at most --rate records per second (15 by default; 0
+turns pacing off). Nothing is dropped. One bucket per kind, so catalogs,
+schemas, and table refs pace independently — the walk's per-endpoint pace.
+
+  metastore ls | pqbench ratelimit | catalog ls
+  catalog ls | pqbench ratelimit --rate 5 | schema ls
+
+A consumer that issues one request per record as it arrives sees the same
+rate. A 429 fails the level; retry it at a lower --rate.";
+
+pub const RATELIMIT_AFTER: &str = "\
+Examples:
+  pqbench metastore ls | pqbench ratelimit | pqbench catalog ls
+  pqbench catalog ls | pqbench ratelimit --rate 5 | pqbench schema ls
+
+See also:
+  pqbench metastore --help  the walk's first level
+  pqbench catalog --help    the walk's second level
+  pqbench schema --help     the walk's third level
+  docs/cli.md";
+
+pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
 pub const DUMP_LONG_ABOUT: &str = "\
 Write the Parquet files named by a pqbench.table or pqbench.lake document
 into OUTPUT, each at its table-relative path. A single table keeps its own

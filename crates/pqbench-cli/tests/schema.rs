@@ -139,7 +139,6 @@ const ICEBERG_NAMESPACE: &str =
     r#"{"namespace":["nyctaxi"],"properties":{"location":"s3://bucket/nyctaxi","owner":"data"}}"#;
 const ICEBERG_TABLES: &str =
     r#"{"identifiers":[{"namespace":["nyctaxi"],"name":"trips"}],"next-page-token":null}"#;
-const ICEBERG_LOADED: &str = r#"{"metadata-location":"s3://bucket/trips/metadata/00000.json","metadata":{"location":"s3://bucket/trips"}}"#;
 
 /// The parent level's stream: one `pqbench.schema` ref per schema.
 const SCHEMA_REFS: &str = concat!(
@@ -280,7 +279,6 @@ fn schema_ls_prints_the_tables_as_a_table() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dbx_samples.nyctaxi.trips"), "{stdout}");
     assert!(stdout.contains("s3://bucket/trips"), "{stdout}");
-    assert!(stdout.contains("DELTA"), "{stdout}");
     assert!(stdout.contains("tables: 1"), "{stdout}");
 }
 
@@ -302,16 +300,16 @@ fn schema_ls_streams_table_refs() {
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
     assert_eq!(records[0]["version"], 1);
     assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
-    assert_eq!(records[0]["uri"], "s3://bucket/trips");
-    assert_eq!(records[0]["format"], "DELTA");
+    assert!(records[0]["uri"]
+        .as_str()
+        .unwrap()
+        .contains("/tables/dbx_samples.nyctaxi.trips"));
+    assert_eq!(records[0]["storage_path"], "s3://bucket/trips");
 }
 
 #[test]
 fn schema_ls_lists_iceberg_rest_tables() {
-    let address = routes(&[
-        ("/namespaces/nyctaxi/tables/trips", 200, ICEBERG_LOADED),
-        ("/namespaces/nyctaxi/tables", 200, ICEBERG_TABLES),
-    ]);
+    let address = routes(&[("/namespaces/nyctaxi/tables", 200, ICEBERG_TABLES)]);
     let output = pipe_env(
         &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
@@ -329,8 +327,11 @@ fn schema_ls_lists_iceberg_rest_tables() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
     assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
-    assert_eq!(records[0]["uri"], "s3://bucket/trips/metadata/00000.json");
-    assert_eq!(records[0]["format"], "ICEBERG");
+    assert_eq!(
+        records[0]["uri"],
+        format!("{address}/namespaces/nyctaxi/tables/trips")
+    );
+    assert!(records[0]["storage_path"].is_null());
 }
 
 #[test]

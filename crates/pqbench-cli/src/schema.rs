@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use futures_util::future::join_all;
+use futures_util::stream::{self, StreamExt};
 use pqbench::schema::{info, ls};
 use serde::Serialize;
 
@@ -37,6 +37,9 @@ pub(crate) struct NameArgs {
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
+    /// requests in flight at once
+    #[arg(long, default_value_t = 64)]
+    fan_out: usize,
 }
 
 /// The document `schema info` writes.
@@ -76,18 +79,18 @@ struct TableRefRecord<'a> {
     id: &'a str,
     uri: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    format: Option<&'a str>,
+    storage_path: Option<&'a str>,
 }
 
 impl Row for TableRefRecord<'_> {
-    const HEADER: &'static [&'static str] = &["name", "uri", "format"];
+    const HEADER: &'static [&'static str] = &["name", "uri", "storage path"];
     const ALIGN: &'static [Align] = &[Align::Left; 3];
 
     fn cells(&self) -> Vec<String> {
         vec![
             self.id.to_string(),
             self.uri.to_string(),
-            self.format.unwrap_or_default().to_string(),
+            self.storage_path.unwrap_or_default().to_string(),
         ]
     }
 }
@@ -112,7 +115,8 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
             input.source.table_format.into(),
         )
     });
-    for record in join_all(reads).await {
+    let mut reads = stream::iter(reads).buffered(args.fan_out);
+    while let Some(record) = reads.next().await {
         let record = record?;
         emit.write_row(&SchemaRecord {
             kind: "pqbench.schema",
@@ -142,14 +146,15 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         )
     });
     let mut tables = 0;
-    for listed in join_all(lists).await {
+    let mut lists = stream::iter(lists).buffered(args.fan_out);
+    while let Some(listed) = lists.next().await {
         for table in listed? {
             emit.write_row(&TableRefRecord {
                 kind: "pqbench.table-ref",
                 version: 1,
                 id: &table.name,
                 uri: &table.uri,
-                format: table.format.as_deref(),
+                storage_path: table.storage_path.as_deref(),
             })
             .await?;
             tables += 1;

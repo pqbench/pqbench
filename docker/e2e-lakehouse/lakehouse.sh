@@ -233,12 +233,12 @@ check_unity() {
     # `schema ls` lists Unity's tables for the same schema.
     local tables
     tables=$("$pqbench_bin" schema ls pqbench.demo --format json < "$lake_source" |
-        jq -r 'select(.kind == "pqbench.table-ref") | .id + " " + (.format // "-")') || {
+        jq -r 'select(.kind == "pqbench.table-ref") | .id + " " + (.storage_path // "-")') || {
         echo "check failed: schema ls produced no tables" >&2
         exit 1
     }
-    [ "$tables" = "pqbench.demo.events DELTA" ] || {
-        echo "check failed (unity schema ls): expected pqbench.demo.events DELTA; measured ${tables:-nothing}" >&2
+    [ "$tables" = "pqbench.demo.events $table_location" ] || {
+        echo "check failed (unity schema ls): expected pqbench.demo.events $table_location; measured ${tables:-nothing}" >&2
         exit 1
     }
 

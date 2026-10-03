@@ -2,16 +2,34 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use clap::Args;
-use pqbench::table::{self, LoadEvent, LoadRequest, TableInfo};
+use clap::{Args, Subcommand};
+use futures_util::stream::{self, StreamExt};
+use pqbench::table::{self, info, LoadEvent, LoadRequest, TableInfo};
+use serde::Serialize;
 
-use crate::document::{self, Record};
-use crate::emit::{Emitter, Format};
+use crate::document::{self, Record, TableRef};
+use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
 
-/// Arguments for `table`.
+/// Arguments for `table`: load one table, or resolve refs with `info`.
 #[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct TableArgs {
+    #[command(subcommand)]
+    command: Option<TableCommand>,
+    #[command(flatten)]
+    load: LoadArgs,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TableCommand {
+    /// Fill each table-ref's storage path from its record
+    Info(InfoArgs),
+}
+
+/// Arguments for loading one table.
+#[derive(Args)]
+pub(crate) struct LoadArgs {
     /// table URI, a document file, or `-` for standard input
     input: Option<String>,
     /// snapshot version; defaults to the latest version
@@ -28,7 +46,28 @@ pub(crate) struct TableArgs {
     output: Option<PathBuf>,
 }
 
+/// Arguments for `table info`.
+#[derive(Args)]
+pub(crate) struct InfoArgs {
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
+    /// also write the lz4 NDJSON stream to FILE
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    output: Option<PathBuf>,
+    /// requests in flight at once
+    #[arg(long, default_value_t = 64)]
+    fan_out: usize,
+}
+
 pub(crate) async fn run(args: &TableArgs) -> Result<(), CliError> {
+    match &args.command {
+        Some(TableCommand::Info(info)) => run_info(info).await,
+        None => run_load(&args.load).await,
+    }
+}
+
+async fn run_load(args: &LoadArgs) -> Result<(), CliError> {
     match &args.input {
         None if !std::io::stdin().is_terminal() => stream("-", args).await,
         None => Err("table needs a URI or a document on standard input".into()),
@@ -45,7 +84,62 @@ pub(crate) async fn run(args: &TableArgs) -> Result<(), CliError> {
     }
 }
 
-async fn load_path(uri: &str, args: &TableArgs) -> Result<(), CliError> {
+/// Fill each `pqbench.table-ref`'s storage path from its record address.
+async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
+    if std::io::stdin().is_terminal() {
+        return Err("table info reads pqbench.table-ref records on standard input".into());
+    }
+    let mut refs = Vec::new();
+    document::visit_input("-", async |record| {
+        match record {
+            Record::TableRef(table_ref) => refs.push(table_ref),
+            Record::Lake(lake) => {
+                for table in lake.tables {
+                    refs.push(TableRef {
+                        id: table.name,
+                        uri: table.uri.clone(),
+                        storage_path: Some(table.uri),
+                        env: table.env,
+                    });
+                }
+            }
+            Record::LakeBegin | Record::LakeEnd => {}
+            _ => return Err("table info reads pqbench.table-ref records on standard input".into()),
+        }
+        Ok(())
+    })
+    .await?;
+    let token = std::env::var("PQB_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty());
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    let mut tables = 0usize;
+    let mut resolved = stream::iter(refs)
+        .map(|table_ref| async {
+            let mut table_ref = table_ref;
+            if table_ref.storage_path.is_none() {
+                table_ref.storage_path = Some(info::read(&table_ref.uri, token.as_deref()).await?);
+            }
+            Ok::<_, CliError>(table_ref)
+        })
+        .buffered(args.fan_out);
+    while let Some(table_ref) = resolved.next().await {
+        let table_ref = table_ref?;
+        emit.write_row(&TableRefRecord {
+            kind: "pqbench.table-ref",
+            version: 1,
+            id: &table_ref.id,
+            uri: &table_ref.uri,
+            storage_path: table_ref.storage_path.as_deref(),
+            env: &table_ref.env,
+        })
+        .await?;
+        tables += 1;
+    }
+    emit.finish(&format!("tables: {tables}\n")).await
+}
+
+async fn load_path(uri: &str, args: &LoadArgs) -> Result<(), CliError> {
     let request = load_request(uri.to_string(), BTreeMap::new(), args)?.with_collect_files(false);
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut files = 0usize;
@@ -71,7 +165,7 @@ async fn load_path(uri: &str, args: &TableArgs) -> Result<(), CliError> {
 async fn load_info(
     uri: String,
     env: BTreeMap<String, String>,
-    args: &TableArgs,
+    args: &LoadArgs,
 ) -> Result<TableInfo, CliError> {
     Ok(table::load(&load_request(uri, env, args)?).await?)
 }
@@ -79,12 +173,12 @@ async fn load_info(
 fn load_request(
     uri: String,
     env: BTreeMap<String, String>,
-    args: &TableArgs,
+    args: &LoadArgs,
 ) -> Result<LoadRequest, CliError> {
     Ok(LoadRequest::new(uri, args.version, env).with_file_stats(!args.no_stats))
 }
 
-async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
+async fn stream(input: &str, args: &LoadArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut tables = 0usize;
     let mut files = 0usize;
@@ -92,7 +186,13 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
     document::visit_input(input, async |record| {
         match record {
             Record::TableRef(table_ref) => {
-                let info = load_info(table_ref.uri, table_ref.env, args).await?;
+                let storage_path = table_ref.storage_path.clone().ok_or_else(|| {
+                    CliError::from(format!(
+                        "table-ref {} has no storage path; run `pqbench table info` first",
+                        table_ref.id
+                    ))
+                })?;
+                let info = load_info(storage_path, table_ref.env, args).await?;
                 add(&info, &mut tables, &mut files, &mut bytes);
                 document::write_table_records(&mut emit, &table_ref.id, &info).await?;
             }
@@ -135,6 +235,36 @@ async fn stream(input: &str, args: &TableArgs) -> Result<(), CliError> {
     .await?;
     emit.finish(&summary(tables, files, bytes, args.output.as_deref()))
         .await
+}
+
+/// The document `table info` writes, one line per resolved ref.
+#[derive(Serialize)]
+struct TableRefRecord<'a> {
+    kind: &'static str,
+    version: u32,
+    id: &'a str,
+    uri: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_path: Option<&'a str>,
+    #[serde(skip_serializing_if = "is_empty_env")]
+    env: &'a BTreeMap<String, String>,
+}
+
+fn is_empty_env(env: &&BTreeMap<String, String>) -> bool {
+    env.is_empty()
+}
+
+impl Row for TableRefRecord<'_> {
+    const HEADER: &'static [&'static str] = &["name", "uri", "storage path"];
+    const ALIGN: &'static [Align] = &[Align::Left; 3];
+
+    fn cells(&self) -> Vec<String> {
+        vec![
+            self.id.to_string(),
+            self.uri.to_string(),
+            self.storage_path.unwrap_or_default().to_string(),
+        ]
+    }
 }
 
 fn add(info: &TableInfo, tables: &mut usize, files: &mut usize, bytes: &mut u64) {

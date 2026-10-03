@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use futures_util::future::join_all;
+use futures_util::stream::{self, StreamExt};
 use pqbench::catalog::{info, ls};
 use serde::Serialize;
 
@@ -35,6 +35,9 @@ pub(crate) struct NameArgs {
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
+    /// requests in flight at once
+    #[arg(long, default_value_t = 64)]
+    fan_out: usize,
 }
 
 /// The document `catalog info` writes.
@@ -97,7 +100,8 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
     let reads = names
         .iter()
         .map(|name| info::read(&input.source.endpoint, name, input.source.token.as_deref()));
-    for catalog in join_all(reads).await {
+    let mut reads = stream::iter(reads).buffered(args.fan_out);
+    while let Some(catalog) = reads.next().await {
         let catalog = catalog?;
         emit.write_row(&CatalogRecord {
             kind: "pqbench.catalog",
@@ -125,7 +129,8 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         )
     });
     let mut schemas = 0;
-    for listed in join_all(lists).await {
+    let mut lists = stream::iter(lists).buffered(args.fan_out);
+    while let Some(listed) = lists.next().await {
         for schema in listed? {
             emit.write_row(&SchemaRecord {
                 kind: "pqbench.schema",

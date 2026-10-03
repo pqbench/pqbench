@@ -12,10 +12,10 @@ use crate::schema::TableFormat;
 pub struct TableRef {
     /// The table's full name (`catalog.schema.table`).
     pub name: String,
-    /// The table root `pqbench table` loads.
+    /// The endpoint URL that reads this table's record.
     pub uri: String,
-    /// The format the endpoint reports (`DELTA`, `ICEBERG`, …), when it does.
-    pub format: Option<String>,
+    /// The table's storage location, when the listing reports it.
+    pub storage_path: Option<String>,
 }
 
 /// Errors listing a schema's tables.
@@ -37,6 +37,9 @@ impl From<String> for Error {
 }
 
 /// List the tables in `schema` of `catalog` at `endpoint`.
+///
+/// Unity pages carry a storage location; Iceberg REST lists identifiers only,
+/// so `storage_path` is `None` there until `pqbench table info` resolves it.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected

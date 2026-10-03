@@ -479,3 +479,14 @@ fn catalog_info_reports_an_empty_stream() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("catalogs: 0"), "{stdout}");
 }
+
+#[test]
+fn catalog_info_rejects_a_bad_fan_out() {
+    let output = pipe(
+        &["catalog", "info", "dbx_samples", "--fan-out", "lots"],
+        b"",
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("fan-out"), "{stderr}");
+}

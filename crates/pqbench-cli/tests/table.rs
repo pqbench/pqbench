@@ -1,5 +1,5 @@
 use serde_json::json;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 fn pqbench() -> Command {
@@ -564,4 +564,99 @@ fn table_reports_a_failed_snapshot_without_dependency_panics() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Partition column"), "{stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
+    let mut child = pqbench()
+        .args(args)
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn ndjson(stdout: &[u8]) -> Vec<serde_json::Value> {
+    stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
+        .collect()
+}
+
+/// One endpoint that answers every GET with `body`.
+fn server(body: &'static str) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(4) {
+            let mut stream = stream.unwrap();
+            let mut buffer = [0u8; 2048];
+            let _ = stream.read(&mut buffer);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+        }
+    });
+    address
+}
+
+const ICEBERG_REF: &str = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips","uri":"https://example/iceberg-rest/v1/catalogs/dbx_samples/namespaces/nyctaxi/tables/trips"}"#;
+
+#[test]
+fn table_info_fills_an_iceberg_storage_path() {
+    let address = server(r#"{"metadata-location":"s3://bucket/trips/metadata/00000.json"}"#);
+    let input = ICEBERG_REF.replace("https://example", &address);
+    let output = pipe_env(
+        &["table", "info", "--format", "json"],
+        input.as_bytes(),
+        &[("PQB_TOKEN", "dapi-test")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["kind"], "pqbench.table-ref");
+    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
+    assert_eq!(
+        records[0]["storage_path"],
+        "s3://bucket/trips/metadata/00000.json"
+    );
+}
+
+#[test]
+fn table_info_passes_a_complete_ref_through() {
+    let input = r#"{"kind":"pqbench.table-ref","version":1,"id":"a","uri":"file:///tmp/a","storage_path":"/tmp/a"}"#;
+    let output = pipe_env(
+        &["table", "info", "--format", "json"],
+        input.as_bytes(),
+        &[],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["storage_path"], "/tmp/a");
+}
+
+#[test]
+fn table_rejects_a_ref_without_a_storage_path() {
+    let input =
+        r#"{"kind":"pqbench.table-ref","version":1,"id":"a","uri":"https://example/table"}"#;
+    let output = pipe(&["table"], input);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("table info"), "{stderr}");
 }

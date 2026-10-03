@@ -10,6 +10,8 @@
 //! 1.91.1 or newer because of the Delta snapshot dependencies. Iceberg needs
 //! `iceberg` (`iceberg-s3` for S3).
 
+pub mod info;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

@@ -72,6 +72,7 @@ pub(crate) enum Record {
 pub(crate) struct TableRef {
     pub id: String,
     pub uri: String,
+    pub storage_path: Option<String>,
     pub env: BTreeMap<String, String>,
 }
 
@@ -239,6 +240,8 @@ fn parse_table_ref(value: serde_json::Value) -> Result<TableRef, CliError> {
         version: u32,
         uri: String,
         #[serde(default)]
+        storage_path: Option<String>,
+        #[serde(default)]
         env: BTreeMap<String, String>,
     }
     let wire: Wire = serde_json::from_value(value).map_err(invalid_json)?;
@@ -256,6 +259,7 @@ fn parse_table_ref(value: serde_json::Value) -> Result<TableRef, CliError> {
     Ok(TableRef {
         id,
         uri: wire.uri,
+        storage_path: wire.storage_path.filter(|path| !path.is_empty()),
         env: wire.env,
     })
 }
