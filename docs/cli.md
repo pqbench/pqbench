@@ -44,10 +44,10 @@ environment.
 
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
-| `pqbench.lake-source` | you / a producer | `lake`, `metastore`, `catalog` |
+| `pqbench.lake-source` | you / a producer | `lake`, `metastore`, `catalog`, `schema`, `tablev2` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
-| `pqbench.schema` | `catalog ls`, `schema info` | `schema ls` |
+| `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
 | `pqbench.table-ref` v1 | `lake` | `table info`, `table` |
 | `pqbench.table-ref` v2 | `schema ls`, `tablev2 info` | `tablev2 info` |
 | `pqbench.table` v1 | `table` | `bytemass`, `dump` |
