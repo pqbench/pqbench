@@ -12,10 +12,10 @@ use crate::schema::TableFormat;
 pub struct TableRef {
     /// The table's full name (`catalog.schema.table`).
     pub name: String,
-    /// The table root `pqbench table` loads.
+    /// The endpoint URL that reads this table's record.
     pub uri: String,
-    /// The format the endpoint reports (`DELTA`, `ICEBERG`, …), when it does.
-    pub format: Option<String>,
+    /// The table's storage location, when the listing reports it.
+    pub storage_path: Option<String>,
 }
 
 /// Errors listing a schema's tables.
@@ -38,9 +38,8 @@ impl From<String> for Error {
 
 /// List the tables in `schema` of `catalog` at `endpoint`.
 ///
-/// `fan_out` bounds the Iceberg `loadTable` calls in flight (at least one);
-/// the caller owns the concurrency because the async call schedules nothing
-/// by itself.
+/// Unity pages carry a storage location; Iceberg REST lists identifiers only,
+/// so `storage_path` is `None` there until `pqbench table info` resolves it.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
@@ -51,7 +50,6 @@ pub async fn list(
     schema: &str,
     token: Option<&str>,
     table_format: TableFormat,
-    fan_out: usize,
 ) -> Result<Vec<TableRef>, Error> {
-    super::r#impl::list(endpoint, catalog, schema, token, table_format, fan_out).await
+    super::r#impl::list(endpoint, catalog, schema, token, table_format).await
 }

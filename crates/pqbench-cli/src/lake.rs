@@ -84,15 +84,14 @@ async fn stream_document(
     document::visit_input(input, async |record| {
         match record {
             Record::TableRef(table) => {
-                write_ref(
-                    emit,
-                    &LakeTable {
-                        name: table.id,
-                        uri: table.uri,
-                        env: table.env,
-                        info: None,
-                    },
-                )
+                emit.write_row(&TableRefRecord {
+                    kind: "pqbench.table-ref",
+                    version: 1,
+                    id: &table.id,
+                    uri: &table.uri,
+                    storage_path: table.storage_path.as_deref(),
+                    env: &table.env,
+                })
                 .await?;
                 tables += 1;
             }
@@ -165,6 +164,7 @@ async fn write_ref(emit: &mut Emitter, table: &LakeTable) -> Result<(), CliError
         version: 1,
         id: &table.name,
         uri: &table.uri,
+        storage_path: Some(&table.uri),
         env: &table.env,
     })
     .await
@@ -190,6 +190,8 @@ struct TableRefRecord<'a> {
     version: u32,
     id: &'a str,
     uri: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_path: Option<&'a str>,
     #[serde(skip_serializing_if = "is_empty_env")]
     env: &'a BTreeMap<String, String>,
 }

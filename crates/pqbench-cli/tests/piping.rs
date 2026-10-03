@@ -143,5 +143,9 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     assert_eq!(records.len(), 2);
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
     assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
-    assert_eq!(records[0]["format"], "DELTA");
+    assert!(records[0]["uri"]
+        .as_str()
+        .unwrap()
+        .contains("/tables/dbx_samples.nyctaxi.trips"));
+    assert_eq!(records[0]["storage_path"], "s3://bucket/trips");
 }

@@ -17,6 +17,7 @@ that command and links back. This file is the durable copy.
 | List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
+| Fill a table-ref's storage path | `pqbench table info` (refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
@@ -46,7 +47,7 @@ environment.
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
 | `pqbench.schema` | `catalog ls`, `schema info` | `schema ls`, `table` |
-| `pqbench.table-ref` | `lake`, `schema ls` | `table` |
+| `pqbench.table-ref` | `lake`, `schema ls` | `table info`, `table` |
 | `pqbench.table` | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
@@ -176,19 +177,24 @@ schemas: 3
 
 `schema info` reads one schema (catalog, name, comment, location, properties)
 from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `schema ls`
-lists the tables in it, one `pqbench.table-ref` line each (name, uri, format) —
-the document `pqbench table` loads. Unity's `/tables` pages carry the full
-name, format, and storage location; Iceberg REST lists a namespace's table
-identifiers and `loadTable` for each metadata location. Entries with no
-location (views) are skipped.
+lists the tables in it, one `pqbench.table-ref` line each — the document
+`pqbench table` loads. Unity's `/tables` pages carry the full name and storage
+location, so the ref is complete; Iceberg REST lists identifiers only, so the
+ref carries the `loadTable` URL as its `uri` and `table info` fills the storage
+path from it. Entries with no location (views) are skipped.
+
+An Iceberg walk needs one more stage: `schema ls | table info | table`. `info`
+reads each ref's record URL and emits the same ref with its storage path, so
+Unity refs pass through unchanged; `lake` fills the path at discovery time, so
+`lake | table` still works.
 
 ```console no-run
 $ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
-    pqbench catalog ls dbx_samples | pqbench schema ls
-name                       uri                            format
--------------------------  -----------------------------  --------
-dbx_samples.nyctaxi.trips  s3://bucket/…/trips            DELTA
-dbx_samples.nyctaxi.zones  s3://bucket/…/zones            DELTA
+    pqbench catalog ls dbx_samples | pqbench schema ls | pqbench table info
+name                       uri                                  storage path
+-------------------------  -----------------------------------  -------------------------
+dbx_samples.nyctaxi.trips  https://…/tables/dbx_samples.nyc…    s3://bucket/…/trips
+dbx_samples.nyctaxi.zones  https://…/tables/dbx_samples.nyc…    s3://bucket/…/zones
 tables: 2
 ```
 

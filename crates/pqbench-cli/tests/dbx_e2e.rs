@@ -526,8 +526,8 @@ fn schema_info_reads_the_live_schema() {
     }
 }
 
-/// `schema ls` lists `dbx_samples.nyctaxi` from both dialects: Unity answers
-/// Delta tables with a storage location, Iceberg REST a metadata location.
+/// `schema ls` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
+/// the storage path in the listing, Iceberg REST leaves it to `table info`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn schema_ls_lists_the_live_tables() {
@@ -554,7 +554,14 @@ fn schema_ls_lists_the_live_tables() {
     assert!(!records.is_empty());
     for record in &records {
         assert_eq!(record["kind"], "pqbench.table-ref");
-        assert_eq!(record["format"], "DELTA");
+        assert!(
+            record["uri"].as_str().unwrap().contains("/tables/"),
+            "{record:?}"
+        );
+        assert!(
+            record["storage_path"].as_str().is_some(),
+            "Unity fills the storage path: {record:?}"
+        );
     }
     let names: Vec<&str> = records
         .iter()
@@ -581,9 +588,32 @@ fn schema_ls_lists_the_live_tables() {
         .iter()
         .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
         .unwrap_or_else(|| panic!("no trips table: {records:?}"));
-    assert_eq!(trips["format"], "ICEBERG");
+    assert!(trips["storage_path"].is_null(), "{trips:?}");
     assert!(
-        trips["uri"].as_str().unwrap().ends_with(".metadata.json"),
+        trips["uri"].as_str().unwrap().ends_with("/tables/trips"),
+        "{trips:?}"
+    );
+
+    let info = pipe_env(
+        &["table", "info", "--format", "json"],
+        &output.stdout,
+        &[("PQB_TOKEN", token.as_str())],
+    );
+    assert!(
+        info.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let records = ndjson(&info.stdout);
+    let trips = records
+        .iter()
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .unwrap_or_else(|| panic!("no trips table: {records:?}"));
+    assert!(
+        trips["storage_path"]
+            .as_str()
+            .unwrap()
+            .ends_with(".metadata.json"),
         "{trips:?}"
     );
 }

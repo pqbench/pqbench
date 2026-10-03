@@ -79,18 +79,18 @@ struct TableRefRecord<'a> {
     id: &'a str,
     uri: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    format: Option<&'a str>,
+    storage_path: Option<&'a str>,
 }
 
 impl Row for TableRefRecord<'_> {
-    const HEADER: &'static [&'static str] = &["name", "uri", "format"];
+    const HEADER: &'static [&'static str] = &["name", "uri", "storage path"];
     const ALIGN: &'static [Align] = &[Align::Left; 3];
 
     fn cells(&self) -> Vec<String> {
         vec![
             self.id.to_string(),
             self.uri.to_string(),
-            self.format.unwrap_or_default().to_string(),
+            self.storage_path.unwrap_or_default().to_string(),
         ]
     }
 }
@@ -143,7 +143,6 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
             schema,
             input.source.token.as_deref(),
             input.source.table_format.into(),
-            args.fan_out,
         )
     });
     let mut tables = 0;
@@ -155,7 +154,7 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
                 version: 1,
                 id: &table.name,
                 uri: &table.uri,
-                format: table.format.as_deref(),
+                storage_path: table.storage_path.as_deref(),
             })
             .await?;
             tables += 1;

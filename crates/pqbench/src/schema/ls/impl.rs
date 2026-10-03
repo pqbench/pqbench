@@ -2,14 +2,13 @@
 //!
 //! The table format is declared by the caller (`PQB_TABLE_FORMAT`). Unity
 //! serves `/tables?catalog_name=&schema_name=` pages, each entry carrying
-//! `full_name`, `data_source_format`, and `storage_location`. Iceberg REST
-//! lists `{endpoint}/namespaces/{namespace}/tables` identifiers, then
-//! `loadTable` for each `metadata-location`, where the endpoint already names
-//! the catalog base. No config probe runs. Entries with no location (views)
-//! are skipped. The URLs, the page shapes, and the pagination are this
-//! command's; the transport is the third-party facade.
+//! `full_name` and `storage_location`, so a ref is complete in one page.
+//! Iceberg REST lists `{endpoint}/namespaces/{namespace}/tables` identifiers
+//! only; the ref carries the `loadTable` URL as its `uri`, and
+//! `pqbench table info` dereferences it later. No config probe runs. Entries
+//! with no location (views) are skipped. The URLs, the page shapes, and the
+//! pagination are this command's; the transport is the third-party facade.
 
-use futures_util::stream::{self, StreamExt};
 use serde::Deserialize;
 
 use super::api::{Error, TableRef};
@@ -36,8 +35,6 @@ struct UnityTable {
     #[serde(default)]
     full_name: Option<String>,
     #[serde(default)]
-    data_source_format: Option<String>,
-    #[serde(default)]
     storage_location: Option<String>,
 }
 
@@ -57,24 +54,16 @@ struct Identifier {
     name: String,
 }
 
-/// The `loadTable` subset this command needs.
-#[derive(Deserialize)]
-struct LoadedTable {
-    #[serde(rename = "metadata-location")]
-    metadata_location: String,
-}
-
 pub(crate) async fn list(
     endpoint: &str,
     catalog: &str,
     schema: &str,
     token: Option<&str>,
     table_format: TableFormat,
-    fan_out: usize,
 ) -> Result<Vec<TableRef>, Error> {
     let mut tables = match table_format {
         TableFormat::Unity => unity_tables(endpoint, catalog, schema, token).await?,
-        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token, fan_out).await?,
+        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token).await?,
     };
     tables.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(tables)
@@ -105,7 +94,7 @@ async fn unity_tables(
         };
         let page: UnityPage = dialect::get_json(&url, token).await.map_err(Error::from)?;
         for table in page.tables {
-            let Some(uri) = table.storage_location.filter(|uri| !uri.is_empty()) else {
+            let Some(storage_path) = table.storage_location.filter(|path| !path.is_empty()) else {
                 continue;
             };
             let name = table
@@ -117,11 +106,11 @@ async fn unity_tables(
                         .filter(|name| !name.is_empty())
                         .map(|name| format!("{catalog}.{schema}.{name}"))
                 })
-                .ok_or_else(|| Error::from(format!("the table at {uri} has no name")))?;
+                .ok_or_else(|| Error::from(format!("the table at {storage_path} has no name")))?;
             tables.push(TableRef {
+                uri: format!("{root}/tables/{}", dialect::encode(&name)),
                 name,
-                uri,
-                format: table.data_source_format.filter(|format| !format.is_empty()),
+                storage_path: Some(storage_path),
             });
         }
         match page.next_page_token {
@@ -137,7 +126,6 @@ async fn iceberg_tables(
     catalog: &str,
     schema: &str,
     token: Option<&str>,
-    fan_out: usize,
 ) -> Result<Vec<TableRef>, Error> {
     let base = dialect::iceberg_root(endpoint);
     let namespace = dialect::iceberg_namespace(schema);
@@ -152,38 +140,26 @@ async fn iceberg_tables(
             None => format!("{base}/namespaces/{namespace}/tables"),
         };
         let page: IdentifiersPage = dialect::get_json(&url, token).await.map_err(Error::from)?;
-        for identifier in &page.identifiers {
+        for identifier in page.identifiers {
             if identifier.name.is_empty() {
                 return Err(Error::from(
                     "the endpoint listed a nameless table".to_string(),
                 ));
-            }
-        }
-        let loads = page.identifiers.iter().map(|identifier| {
-            let url = format!(
-                "{base}/namespaces/{namespace}/tables/{}",
-                dialect::encode(&identifier.name)
-            );
-            async move { dialect::get_json::<LoadedTable>(&url, token).await }
-        });
-        let loaded: Vec<_> = stream::iter(loads).buffered(fan_out.max(1)).collect().await;
-        for (identifier, loaded) in page.identifiers.iter().zip(loaded) {
-            let loaded = loaded.map_err(Error::from)?;
-            if loaded.metadata_location.is_empty() {
-                return Err(Error::from(format!(
-                    "Iceberg table {} is missing metadata-location",
-                    identifier.name
-                )));
             }
             let namespace = if identifier.namespaces.is_empty() {
                 schema.to_string()
             } else {
                 identifier.namespaces.join(".")
             };
+            let name = format!("{catalog}.{namespace}.{}", identifier.name);
             tables.push(TableRef {
-                name: format!("{catalog}.{namespace}.{}", identifier.name),
-                uri: loaded.metadata_location,
-                format: Some("ICEBERG".to_string()),
+                uri: format!(
+                    "{base}/namespaces/{}/tables/{}",
+                    dialect::iceberg_namespace(&namespace),
+                    dialect::encode(&identifier.name)
+                ),
+                name,
+                storage_path: None,
             });
         }
         match page.next_page_token {
