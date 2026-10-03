@@ -237,6 +237,57 @@ fn remote_error(error: ::object_store::Error) -> Error {
     Error(error.to_string())
 }
 
+pub(crate) async fn expand_glob(
+    uri: &str,
+    options: &[(String, String)],
+) -> Result<Vec<String>, Error> {
+    // Escape '?' before URL parsing, since it belongs to the key pattern.
+    let url = Url::parse(&uri.replace('?', "%3F")).map_err(|e| Error(e.to_string()))?;
+    if !matches!(url.scheme(), "s3" | "s3a") {
+        return Err(Error("remote globs require an s3:// or s3a:// URI".into()));
+    }
+    let (store, _, location) = s3_store(&url, options)?;
+    let matches = match_objects(store.as_ref(), location.as_ref()).await?;
+    Ok(matches
+        .into_iter()
+        .map(|key| {
+            let mut result = url.clone();
+            result
+                .path_segments_mut()
+                .expect("S3 URI has path segments")
+                .clear()
+                .extend(key.split('/'));
+            result.set_query(None);
+            result.set_fragment(None);
+            result.to_string()
+        })
+        .collect())
+}
+
+async fn match_objects(store: &dyn ObjectStore, mask: &str) -> Result<Vec<String>, Error> {
+    use futures_util::TryStreamExt;
+    let pattern = super::super::api::KeyPattern::parse(mask)?;
+    let directory = pattern.prefix();
+    let prefix = ::object_store::path::Path::from(directory);
+    let mut objects = store.list((!directory.is_empty()).then_some(&prefix));
+    let mut result = Vec::new();
+    while let Some(object) = objects
+        .try_next()
+        .await
+        .map_err(|e| Error(format!("listing S3 glob: {e}")))?
+    {
+        if pattern.matches(object.location.as_ref()) {
+            result.push(object.location.to_string());
+        }
+    }
+    result.sort();
+    result.dedup();
+    if result.is_empty() {
+        return Err(Error(format!("S3 glob matched no files: {mask}")));
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

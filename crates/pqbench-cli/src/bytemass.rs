@@ -171,15 +171,18 @@ async fn measure_input(
     env: BTreeMap<String, String>,
     indexes: bool,
 ) -> Result<(), CliError> {
-    measure_file(
-        emit,
-        stats,
-        id,
-        TableFile::new(uri.clone(), uri, 0),
-        env,
-        indexes,
-    )
-    .await
+    for input in bytemass::expand_inputs(&[uri], &env).await? {
+        measure_file(
+            emit,
+            stats,
+            id,
+            TableFile::new(input.clone(), input, 0),
+            env.clone(),
+            indexes,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn measure(
@@ -195,7 +198,7 @@ async fn measure(
         event: "begin",
     })
     .await?;
-    for input in inputs {
+    for input in bytemass::expand_inputs(&inputs, &env).await? {
         measure_input(
             &mut emit,
             &mut stats,

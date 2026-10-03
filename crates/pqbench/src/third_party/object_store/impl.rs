@@ -40,3 +40,18 @@ pub(crate) async fn list_remote(
         ))
     }
 }
+
+pub(crate) async fn expand_glob(
+    uri: &str,
+    options: &[(String, String)],
+) -> Result<Vec<String>, Error> {
+    #[cfg(feature = "aws")]
+    {
+        remote::expand_glob(uri, options).await
+    }
+    #[cfg(not(feature = "aws"))]
+    {
+        let _ = (uri, options);
+        Err(Error("S3 glob expansion requires the `aws` feature".into()))
+    }
+}

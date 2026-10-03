@@ -79,7 +79,7 @@ pub(super) async fn measure_files(
     indexes: bool,
 ) -> Result<Vec<super::api::MeasuredFile>, Error> {
     let mut files = Vec::new();
-    for path in expand_inputs(inputs)? {
+    for path in expand_inputs(inputs, env).await? {
         let input = path.to_string_lossy().into_owned();
         let (stat, mass) = read_input(&input, env, indexes).await?;
         let mut file = super::api::FileStat::new("", &input, &input, stat.size_bytes);
@@ -133,10 +133,21 @@ fn per_row(bytes: u64, rows: u64) -> Option<f64> {
     (rows > 0).then(|| bytes as f64 / rows as f64)
 }
 
-fn expand_inputs(inputs: &[String]) -> Result<Vec<PathBuf>, Error> {
+pub(super) async fn expand_inputs(
+    inputs: &[String],
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<PathBuf>, Error> {
     let mut paths = BTreeSet::new();
     for input in inputs {
-        if has_glob_metachar(input) && !input.contains("://") {
+        if has_glob_metachar(input) && input.contains("://") {
+            let options: Vec<_> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            for uri in crate::third_party::object_store::api::expand_glob(input, &options)
+                .await
+                .map_err(|e| Error(e.to_string()))?
+            {
+                paths.insert(PathBuf::from(uri));
+            }
+        } else if has_glob_metachar(input) {
             insert_glob(input, &mut paths)?;
         } else {
             paths.insert(PathBuf::from(input));

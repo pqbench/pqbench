@@ -323,3 +323,20 @@ are rejected for median sampling. Typical file size does not guarantee
 representative data. Median selection buffers file metadata; default table
 loading continues streaming. Selected table output records the selection
 (`file_selection` on the begin record) and recomputes partition totals.
+
+## S3 file patterns
+
+With the `aws` feature, `bytemass` expands quoted S3 key patterns before
+reading footers. `*` and `?` match within one path component; `**` can span
+subdirectories. Listing starts at the literal directory prefix and consumes
+all listing pages. Results are sorted and deduplicated. No matches and listing
+permission failures are explicit errors; exact URIs never require listing.
+Percent-encode literal wildcard characters when addressing an exact key.
+
+```console
+$ pqbench bytemass 's3://bucket/table/*.parquet'
+$ pqbench bytemass 's3://bucket/table/**/*.parquet'
+```
+
+These patterns enumerate physical objects, not a table's active snapshot.
+Use `table` for Delta/Iceberg analysis to avoid counting obsolete files.
