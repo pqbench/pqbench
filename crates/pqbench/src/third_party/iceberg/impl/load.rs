@@ -8,10 +8,11 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
+use serde_json::Value;
 use url::Url;
 
 use crate::table::{
-    LoadEvent, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo,
+    Column, LoadEvent, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo,
 };
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
@@ -57,23 +58,27 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         .transpose()?
         .unwrap_or(0);
     let (files, deletes) = match selected {
-        Some(snapshot) => {
+        Some(snapshot) if request.require_files => {
             active_files(&metadata.location, &snapshot.manifest_list, &options).await?
         }
-        None => (Vec::new(), Vec::new()),
+        _ => (Vec::new(), Vec::new()),
     };
-    let mut log = ancestry(&metadata, selected)
-        .into_iter()
-        .map(|snapshot| {
-            Ok(LogCommit {
-                version: create_u64(snapshot.snapshot_id)?,
-                actions: vec![LogAction {
-                    kind: "snapshot".into(),
-                    path: Some(snapshot.manifest_list.clone()),
-                }],
+    let mut log = if request.require_files {
+        ancestry(&metadata, selected)
+            .into_iter()
+            .map(|snapshot| {
+                Ok(LogCommit {
+                    version: create_u64(snapshot.snapshot_id)?,
+                    actions: vec![LogAction {
+                        kind: "snapshot".into(),
+                        path: Some(snapshot.manifest_list.clone()),
+                    }],
+                })
             })
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
+            .collect::<Result<Vec<_>, Error>>()?
+    } else {
+        Vec::new()
+    };
     if let Some(commit) = log
         .iter_mut()
         .find(|commit| commit.version == snapshot_version)
@@ -91,7 +96,7 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
             });
         }
     }
-    Ok(TableInfo::new(
+    let mut info = TableInfo::new(
         TableFormat::ICEBERG,
         request.uri.clone(),
         snapshot_version,
@@ -99,7 +104,10 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         log,
         files,
         request.env.clone(),
-    ))
+    );
+    info.columns = columns(&metadata);
+    info.iceberg_properties = metadata.properties.clone();
+    Ok(info)
 }
 
 /// Load the snapshot, visiting the header then each active file after the
@@ -140,12 +148,37 @@ struct TableMetadata {
     location: String,
     #[serde(rename = "current-snapshot-id", default)]
     current_snapshot_id: Option<i64>,
+    #[serde(rename = "current-schema-id", default)]
+    current_schema_id: i32,
     #[serde(rename = "default-spec-id", default)]
     default_spec_id: i32,
     #[serde(rename = "partition-specs", default)]
     partition_specs: Vec<PartitionSpec>,
     #[serde(default)]
+    schemas: Vec<Schema>,
+    #[serde(default)]
+    properties: BTreeMap<String, String>,
+    #[serde(default)]
     snapshots: Vec<Snapshot>,
+}
+
+/// One Iceberg schema; the current one carries the table's columns.
+#[derive(Debug, Deserialize)]
+struct Schema {
+    #[serde(rename = "schema-id")]
+    schema_id: i32,
+    #[serde(default)]
+    fields: Vec<Field>,
+}
+
+/// One top-level Iceberg schema field.
+#[derive(Debug, Deserialize)]
+struct Field {
+    name: String,
+    #[serde(rename = "type")]
+    data_type: Value,
+    #[serde(default)]
+    required: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,6 +239,35 @@ fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
         .or_else(|| metadata.partition_specs.first())
         .map(|spec| spec.fields.iter().map(|field| field.name.clone()).collect())
         .unwrap_or_default()
+}
+
+/// The columns of the current schema; the first schema when none is marked.
+fn columns(metadata: &TableMetadata) -> Vec<Column> {
+    metadata
+        .schemas
+        .iter()
+        .find(|schema| schema.schema_id == metadata.current_schema_id)
+        .or_else(|| metadata.schemas.first())
+        .map(|schema| {
+            schema
+                .fields
+                .iter()
+                .map(|field| Column {
+                    name: field.name.clone(),
+                    data_type: type_name(&field.data_type),
+                    nullable: !field.required,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A primitive type is its name; a nested type stays the format's JSON form.
+fn type_name(value: &Value) -> String {
+    match value {
+        Value::String(name) => name.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn select_snapshot(

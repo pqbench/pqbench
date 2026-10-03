@@ -17,7 +17,8 @@ that command and links back. This file is the durable copy.
 | List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
-| Fill a table-ref's storage path | `pqbench table info` (refs on stdin) |
+| Read one table's record | `pqbench tablev2 info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
+| Fill a legacy table-ref's storage path | `pqbench table info` (v1 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Copy a table's Parquet files | `pqbench table DIR \| pqbench dump ./sample` |
@@ -43,19 +44,23 @@ environment.
 
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
-| `pqbench.lake-source` | you / a producer | `lake`, `metastore`, `catalog` |
+| `pqbench.lake-source` | you / a producer | `lake`, `metastore`, `catalog`, `schema`, `tablev2` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
-| `pqbench.schema` | `catalog ls`, `schema info` | `schema ls`, `table` |
-| `pqbench.table-ref` | `lake`, `schema ls` | `table info`, `table` |
-| `pqbench.table` | `table` | `bytemass`, `dump` |
+| `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
+| `pqbench.table-ref` v1 | `lake` | `table info`, `table` |
+| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info` | `tablev2 info` |
+| `pqbench.table` v1 | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
 | `pqbench.profile` / `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
 | `pqbench.experiment` / `pqbench.experiment-trial` / `pqbench.experiment-column` | `experiment` | humans / scripts (`--json`) |
 | `pqbench.skill` | `skill` (list) | an agent |
 
-All current documents are version `1`.
+The new metadata walk's table level exchanges `pqbench.table-ref` version `2`;
+the legacy `lake` / `table` tree exchanges version `1`. The versions do not
+cross: the legacy commands reject version `2`, and `tablev2 info` rejects
+version `1`.
 
 ## Flags that repeat
 
@@ -140,13 +145,13 @@ probe runs.
 
 The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
-input — one `pqbench.catalog` line per catalog, then one `pqbench.schema` line
-per schema. A level reads the whole parent stream first, then multiplexes every
-ref's request on one thread and emits rows in ref order; a slow endpoint
-overlaps the requests instead of serializing them. `--fan-out` (64 by default)
-caps the requests in flight — it is a limit, not a batch: the first ref's
-request starts immediately, up to that many run at once, and rows still come out
-in ref order. A `pqbench ratelimit` stage
+input as they arrive — one `pqbench.catalog` line per catalog, then one
+`pqbench.schema` line per schema. Each ref's request starts as its record is
+read; `--fan-out` (64 by default) caps the requests in flight — it is a limit,
+not a batch: up to that many run at once on one thread, and rows are written as
+requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
+a slow downstream pipe stops the reads, so the level above backpressures
+instead of buffering. A `pqbench ratelimit` stage
 paces the refs between two levels at a target rate — records pass through
 unchanged, one bucket per kind, nothing dropped. A 429 fails the level with the
 endpoint's status and body; pace the walk and retry it at a lower rate in the
@@ -179,25 +184,33 @@ schemas: 3
 
 `schema info` reads one schema (catalog, name, comment, location, properties)
 from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `schema ls`
-lists the tables in it, one `pqbench.table-ref` line each — the document
-`pqbench table` loads. Unity's `/tables` pages carry the full name and storage
-location, so the ref is complete; Iceberg REST lists identifiers only, so the
-ref carries the `loadTable` URL as its `uri` and `table info` fills the storage
-path from it. Entries with no location (views) are skipped.
+lists the tables in it, one `pqbench.table-ref` version 2 line each — the
+document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
+and storage location, so the ref is complete; Iceberg REST lists identifiers
+only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
+Entries with no location (views) are skipped.
 
-An Iceberg walk needs one more stage: `schema ls | table info | table`. `info`
-reads each ref's record URL and emits the same ref with its storage path, so
-Unity refs pass through unchanged; `lake` fills the path at discovery time, so
-`lake | table` still works.
+`tablev2 info` enriches that ref — id, format, snapshot, columns, partition
+columns, format properties — and keeps the same kind and version, so
+`schema ls | tablev2 info` chains. Unity `/tables/{full_name}` names the
+storage location whose Delta log is read with `without_files()`, and the
+catalog's declared columns and properties are merged over the log's; Iceberg
+REST `loadTable` carries the metadata inline, so the Iceberg path runs no
+storage read at all. The Delta read is O(1) in files, so a walk can descend to
+every table before deciding which files to measure. The name is temporary: the
+older `pqbench table info` (fill a v1 ref's storage path) keeps its name until
+the legacy command is deprecated.
+
+The Delta path needs a readable storage location — the local stand, or `env`
+credentials on the lake source; Databricks default-storage tables cannot read
+their log. The Iceberg REST path needs no storage read.
 
 ```console no-run
-$ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
-    pqbench catalog ls dbx_samples | pqbench schema ls | pqbench table info
-name                       uri                                  storage path
--------------------------  -----------------------------------  -------------------------
-dbx_samples.nyctaxi.trips  https://…/tables/dbx_samples.nyc…    s3://bucket/…/trips
-dbx_samples.nyctaxi.zones  https://…/tables/dbx_samples.nyc…    s3://bucket/…/zones
-tables: 2
+$ pqbench tablev2 info pqbench.demo.events < lake-source.json
+name                 format  snapshot  columns  location
+-------------------  ------  --------  -------  ----------------------
+pqbench.demo.events  delta          0        2  s3://lakehouse/unity/events
+tables: 1
 ```
 
 ```json

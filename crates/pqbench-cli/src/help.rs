@@ -158,12 +158,12 @@ pub const TABLE_AFTER: &str = "\
 Examples:
   pqbench table ./delta-table -o table.ndjson.zst
   pqbench table ./delta-table | pqbench bytemass
-  pqbench schema ls dbx_samples.nyctaxi | pqbench table info | pqbench table
+  pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
   pqbench table ./iceberg-table | pqbench bytemass
 
 See also:
-  pqbench schema --help    list table refs for a catalog schema
   pqbench lake --help      list tables into a document this command loads
+  pqbench tablev2 --help   read a catalog table's record (the new tree)
   pqbench bytemass --help  measure the files named here
   pqbench dump --help      copy those files to a directory
   pqbench --help           auth (AWS_*, catalog token), documents, format skills
@@ -267,11 +267,11 @@ schema ls` chains.
 
   info   the schema's record (catalog, name, comment, location, properties)
          as one pqbench.schema line
-  ls     the tables in the schema, one pqbench.table-ref line each (name,
-         uri, format) — the document `pqbench table` loads. Unity REST serves
-         /tables; PQB_TABLE_FORMAT=iceberg lists namespaces' tables and
-         loadTable for each metadata location (the endpoint names the catalog
-         base).
+  ls     the tables in the schema, one pqbench.table-ref version 2 line each
+         (id, uri, storage path) — the document `tablev2 info` enriches. Unity
+         REST serves /tables; PQB_TABLE_FORMAT=iceberg lists namespaces'
+         tables and carries each loadTable URL (the endpoint names the catalog
+         base). The legacy `table` reads version 1 refs only.
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
 forces the stream, and `-o` also writes it.";
@@ -284,8 +284,45 @@ Examples:
 
 See also:
   pqbench catalog --help  the schemas of one catalog
-  pqbench table --help    load a listed table
+  pqbench tablev2 --help  read a listed table's record
   pqbench --help          catalog auth, lake-source shape
+  docs/cli.md";
+
+pub const TABLEV2_ABOUT: &str = "Read one table's record without its files";
+
+pub const TABLEV2_LONG_ABOUT: &str = "\
+Read one table at a catalog endpoint: the entity between schemas and
+partitions. The endpoint, token, and object-store options come from a
+pqbench.lake-source on standard input, or from PQB_ENDPOINT / PQB_TOKEN (and
+PQB_TABLE_FORMAT) when the document leaves them out. Without a
+CATALOG.SCHEMA.TABLE argument the command reads pqbench.table-ref version 2
+refs on standard input — one table per line — so `schema ls | tablev2 info`
+chains. Version 1 refs (the legacy `lake` stream) are rejected.
+
+  info   the ref enriched with the table's record (format, snapshot, columns,
+         partition columns, format properties) as one pqbench.table-ref
+         version 2 line. Unity REST serves /tables/{full_name}; the catalog's
+         declared columns and properties are merged over the Delta log read
+         with without_files(), so that path is O(1) in files and needs a
+         readable storage location. PQB_TABLE_FORMAT=iceberg reads loadTable,
+         whose metadata is inline, so the Iceberg path runs no storage read.
+
+The name is temporary: the older `pqbench table` still owns `table info`
+(filling a ref's storage path) and the file-loading command, and exchanges
+version 1 documents only.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
+
+pub const TABLEV2_AFTER: &str = "\
+Examples:
+  pqbench tablev2 info dbx_samples.nyctaxi.trips < source.json
+  PQB_ENDPOINT=… pqbench schema ls | pqbench tablev2 info
+
+See also:
+  pqbench schema --help  the tables of one schema
+  pqbench table --help   load a listed table's files
+  pqbench --help         catalog auth, lake-source shape
   docs/cli.md";
 
 pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";

@@ -298,7 +298,7 @@ fn schema_ls_streams_table_refs() {
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
-    assert_eq!(records[0]["version"], 1);
+    assert_eq!(records[0]["version"], 2);
     assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
     assert!(records[0]["uri"]
         .as_str()

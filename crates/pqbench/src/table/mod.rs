@@ -160,6 +160,19 @@ pub struct PartitionMass {
     pub bytes_per_row: Option<f64>,
 }
 
+/// One column in a table's schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Column {
+    /// Column name.
+    pub name: String,
+    /// Data type as the format reports it (e.g. `long`, `string`). A nested
+    /// type is the format's JSON form.
+    pub data_type: String,
+    /// Whether the column accepts nulls.
+    pub nullable: bool,
+}
+
 /// A versioned table document: format, log, and the files the snapshot names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -175,14 +188,30 @@ pub struct TableInfo {
     pub format: TableFormat,
     /// Table root as given (path or URI).
     pub uri: String,
+    /// Table's full name (`catalog.schema.table`), when a catalog named it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     /// Snapshot version the files belong to.
     pub snapshot_version: u64,
     /// Partition columns live in the log and need not occupy Parquet columns.
     pub partition_columns: Vec<String>,
+    /// Table schema columns, when the metadata carries them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<Column>,
+    /// Delta table properties: the log's `metaData.configuration` plus the
+    /// catalog record's values.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub delta_properties: BTreeMap<String, String>,
+    /// Iceberg table properties from the metadata JSON, or the catalog
+    /// response that carries it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub iceberg_properties: BTreeMap<String, String>,
     /// Every available JSON commit, in version order. Checkpoint-only versions
     /// that have no remaining JSON file are omitted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub log: Vec<LogCommit>,
     /// Active data files after replaying the log to `snapshot_version`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<TableFile>,
     /// Per-partition totals from Delta add statistics. Empty for Iceberg and
     /// for a Delta snapshot with no active files.
@@ -211,8 +240,12 @@ impl TableInfo {
             document_version: 1,
             format,
             uri: uri.into(),
+            name: String::new(),
             snapshot_version,
             partition_columns,
+            columns: Vec::new(),
+            delta_properties: BTreeMap::new(),
+            iceberg_properties: BTreeMap::new(),
             log,
             files,
             partitions: Vec::new(),
@@ -234,6 +267,10 @@ pub struct LoadRequest {
     pub env: BTreeMap<String, String>,
     /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
     pub file_stats: bool,
+    /// When false, read only the snapshot metadata: no commit log, no active
+    /// files. [`visit_load`] emits the header and nothing else.
+    // aipnaming: allow(aip-140/verbs)
+    pub require_files: bool,
     /// When false, do not retain active files on the returned document.
     /// [`visit_load`] still emits each file; partition totals are kept.
     // aipnaming: allow(aip-140/verbs)
@@ -256,6 +293,7 @@ impl LoadRequest {
             snapshot_version,
             env,
             file_stats: true,
+            require_files: true,
             collect_files: true,
             collect_log: true,
         }
@@ -266,6 +304,16 @@ impl LoadRequest {
     #[must_use]
     pub fn with_file_stats(mut self, file_stats: bool) -> Self {
         self.file_stats = file_stats;
+        self
+    }
+
+    /// Read only the snapshot metadata: no commit log, no active files. This is
+    /// `without_files()` for Delta and a metadata-JSON-only read for Iceberg,
+    /// so the cost is O(1) in files.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn without_files(mut self) -> Self {
+        self.require_files = false;
         self
     }
 

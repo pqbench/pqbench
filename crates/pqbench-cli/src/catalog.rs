@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream::StreamExt;
 use pqbench::catalog::{info, ls};
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::emit::{Align, Emitter, Format, Row};
 use crate::source::{self, read_input};
@@ -68,6 +69,18 @@ impl Row for CatalogRecord<'_> {
     }
 }
 
+/// The row `catalog info` writes for a catalog.
+fn catalog_record(catalog: &info::Catalog) -> CatalogRecord<'_> {
+    CatalogRecord {
+        kind: "pqbench.catalog",
+        version: 1,
+        name: &catalog.name,
+        catalog_type: catalog.catalog_type.as_deref(),
+        comment: catalog.comment.as_deref(),
+        owner: catalog.owner.as_deref(),
+    }
+}
+
 /// The document `catalog ls` writes, one line per schema.
 #[derive(Serialize)]
 struct SchemaRecord<'a> {
@@ -86,6 +99,16 @@ impl Row for SchemaRecord<'_> {
     }
 }
 
+/// The row `catalog ls` writes for a schema.
+fn schema_record(schema: &ls::Schema) -> SchemaRecord<'_> {
+    SchemaRecord {
+        kind: "pqbench.schema",
+        version: 1,
+        catalog: &schema.catalog,
+        name: &schema.name,
+    }
+}
+
 pub(crate) async fn run(args: &CatalogArgs) -> Result<(), CliError> {
     match &args.command {
         CatalogCommand::Info(args) => run_info(args).await,
@@ -95,72 +118,92 @@ pub(crate) async fn run(args: &CatalogArgs) -> Result<(), CliError> {
 
 async fn run_info(args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("catalog info").await?;
-    let names = catalog_names("catalog info", &input, args.catalog.as_deref())?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let reads = names
-        .iter()
-        .map(|name| info::read(&input.source.endpoint, name, input.source.token.as_deref()));
-    let mut reads = stream::iter(reads).buffered(args.fan_out);
-    while let Some(catalog) = reads.next().await {
-        let catalog = catalog?;
-        emit.write_row(&CatalogRecord {
-            kind: "pqbench.catalog",
-            version: 1,
-            name: &catalog.name,
-            catalog_type: catalog.catalog_type.as_deref(),
-            comment: catalog.comment.as_deref(),
-            owner: catalog.owner.as_deref(),
-        })
-        .await?;
+    if let Some(name) = &args.catalog {
+        if input.first.is_some() {
+            return Err("catalog info takes CATALOG or a pqbench.catalog stream, not both".into());
+        }
+        let catalog =
+            info::read(&input.source.endpoint, name, input.source.token.as_deref()).await?;
+        emit.write_row(&catalog_record(&catalog)).await?;
+        return emit.finish("catalogs: 1\n").await;
     }
-    emit.finish(&format!("catalogs: {}\n", names.len())).await
+    if !input.piped {
+        return Err("catalog info needs CATALOG or a pqbench.catalog stream".into());
+    }
+    let records = source::records("catalog info", input.first, input.lines);
+    let source = input.source;
+    let mut catalogs = 0;
+    let mut reads = records
+        .map(|record| async {
+            let name = catalog_name(&record?)?;
+            Ok::<_, CliError>(info::read(&source.endpoint, &name, source.token.as_deref()).await?)
+        })
+        .buffer_unordered(args.fan_out.max(1));
+    while let Some(catalog) = reads.next().await {
+        emit.write_row(&catalog_record(&catalog?)).await?;
+        catalogs += 1;
+    }
+    emit.finish(&format!("catalogs: {catalogs}\n")).await
 }
 
 async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("catalog ls").await?;
-    let names = catalog_names("catalog ls", &input, args.catalog.as_deref())?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let lists = names.iter().map(|name| {
-        ls::list(
+    if let Some(name) = &args.catalog {
+        if input.first.is_some() {
+            return Err("catalog ls takes CATALOG or a pqbench.catalog stream, not both".into());
+        }
+        let schemas = ls::list(
             &input.source.endpoint,
             name,
             input.source.token.as_deref(),
             input.source.table_format.into(),
         )
-    });
+        .await?;
+        for schema in &schemas {
+            emit.write_row(&schema_record(schema)).await?;
+        }
+        return emit.finish(&format!("schemas: {}\n", schemas.len())).await;
+    }
+    if !input.piped {
+        return Err("catalog ls needs CATALOG or a pqbench.catalog stream".into());
+    }
+    let records = source::records("catalog ls", input.first, input.lines);
+    let source = input.source;
     let mut schemas = 0;
-    let mut lists = stream::iter(lists).buffered(args.fan_out);
+    let mut lists = records
+        .map(|record| async {
+            let name = catalog_name(&record?)?;
+            Ok::<_, CliError>(
+                ls::list(
+                    &source.endpoint,
+                    &name,
+                    source.token.as_deref(),
+                    source.table_format.into(),
+                )
+                .await?,
+            )
+        })
+        .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {
         for schema in listed? {
-            emit.write_row(&SchemaRecord {
-                kind: "pqbench.schema",
-                version: 1,
-                catalog: &schema.catalog,
-                name: &schema.name,
-            })
-            .await?;
+            emit.write_row(&schema_record(&schema)).await?;
             schemas += 1;
         }
     }
     emit.finish(&format!("schemas: {schemas}\n")).await
 }
 
-/// The catalogs to read: the argument, or the `pqbench.catalog` refs on stdin.
-fn catalog_names(
-    command: &str,
-    input: &source::Input,
-    catalog: Option<&str>,
-) -> Result<Vec<String>, CliError> {
-    if let Some(catalog) = catalog {
-        if !input.items.is_empty() {
-            return Err(
-                format!("{command} takes CATALOG or a pqbench.catalog stream, not both").into(),
-            );
-        }
-        return Ok(vec![catalog.to_string()]);
+/// The catalog name a `pqbench.catalog` ref names.
+fn catalog_name(record: &Value) -> Result<String, CliError> {
+    let kind = record["kind"].as_str().unwrap_or_default();
+    if kind != "pqbench.catalog" {
+        return Err(format!("expected pqbench.catalog records, found {kind:?}").into());
     }
-    if !input.piped {
-        return Err(format!("{command} needs CATALOG or a pqbench.catalog stream").into());
-    }
-    source::names(&input.items, "pqbench.catalog")
+    let name = record["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or("a pqbench.catalog record needs a name")?;
+    Ok(name.to_string())
 }

@@ -15,8 +15,8 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, FileStats, LoadEvent, LoadRequest,
-    LogAction, LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
+    add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadEvent,
+    LoadRequest, LogAction, LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
 };
 
 /// Errors resolving a snapshot through delta-rs.
@@ -41,7 +41,7 @@ pub(super) async fn visit_load(
     request: &LoadRequest,
     visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<TableInfo, Error> {
-    let table = open(&request.uri, request.snapshot_version, &request.env).await?;
+    let table = open(request).await?;
     let snapshot = snapshot_meta(&table)?;
     let mut info = TableInfo::new(
         TableFormat::DELTA,
@@ -52,34 +52,34 @@ pub(super) async fn visit_load(
         Vec::new(),
         request.env.clone(),
     );
+    info.columns = snapshot.columns;
+    info.delta_properties = snapshot.properties;
     visit(LoadEvent::BEGIN { info: &info })
         .await
         .map_err(|error| Error(error.to_string()))?;
-    info.log = visit_log(&table, snapshot.version, request.collect_log, visit).await?;
-    let (files, partitions) = active_files(&table, request, visit).await?;
-    if request.collect_files {
-        info.files = files;
+    if request.require_files {
+        info.log = visit_log(&table, snapshot.version, request.collect_log, visit).await?;
+        let (files, partitions) = active_files(&table, request, visit).await?;
+        if request.collect_files {
+            info.files = files;
+        }
+        info.partitions = partitions;
     }
-    info.partitions = partitions;
     Ok(info)
 }
 
-async fn open(
-    uri: &str,
-    version: Option<u64>,
-    env: &BTreeMap<String, String>,
-) -> Result<DeltaTable, Error> {
-    if uri.contains("://") {
-        let url = Url::parse(uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
+async fn open(request: &LoadRequest) -> Result<DeltaTable, Error> {
+    if request.uri.contains("://") {
+        let url = Url::parse(&request.uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
         if url.scheme() == "file" {
             let path = url
                 .to_file_path()
                 .map_err(|()| Error("invalid local table URI".into()))?;
-            return load_local_table(&local_root(&path)?, version, env).await;
+            return load_local_table(&local_root(&path)?, request).await;
         }
-        return load_table(url, version, env).await;
+        return load_table(url, request).await;
     }
-    load_local_table(&local_root(Path::new(uri))?, version, env).await
+    load_local_table(&local_root(Path::new(&request.uri))?, request).await
 }
 
 fn local_root(path: &Path) -> Result<PathBuf, Error> {
@@ -92,27 +92,22 @@ fn local_root(path: &Path) -> Result<PathBuf, Error> {
     Ok(root)
 }
 
-async fn load_local_table(
-    root: &Path,
-    version: Option<u64>,
-    env: &BTreeMap<String, String>,
-) -> Result<DeltaTable, Error> {
+async fn load_local_table(root: &Path, request: &LoadRequest) -> Result<DeltaTable, Error> {
     let url = Url::from_directory_path(root)
         .map_err(|()| Error("cannot convert table path to a local file URL".into()))?;
-    load_table(url, version, env).await
+    load_table(url, request).await
 }
 
-async fn load_table(
-    url: Url,
-    version: Option<u64>,
-    env: &BTreeMap<String, String>,
-) -> Result<DeltaTable, Error> {
+async fn load_table(url: Url, request: &LoadRequest) -> Result<DeltaTable, Error> {
     let mut builder = DeltaTableBuilder::from_url(url).map_err(delta_error)?;
-    if !env.is_empty() {
-        builder = builder.with_storage_options(env.clone().into_iter().collect());
+    if !request.env.is_empty() {
+        builder = builder.with_storage_options(request.env.clone().into_iter().collect());
     }
-    if let Some(version) = version {
+    if let Some(version) = request.snapshot_version {
         builder = builder.with_version(version);
+    }
+    if !request.require_files {
+        builder = builder.without_files();
     }
     builder.load().await.map_err(delta_error)
 }
@@ -120,6 +115,8 @@ async fn load_table(
 struct SnapshotMeta {
     version: u64,
     partition_columns: Vec<String>,
+    columns: Vec<Column>,
+    properties: BTreeMap<String, String>,
 }
 
 fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
@@ -127,6 +124,21 @@ fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
     Ok(SnapshotMeta {
         version: snapshot.version(),
         partition_columns: snapshot.metadata().partition_columns().to_vec(),
+        columns: snapshot
+            .schema()
+            .fields()
+            .map(|field| Column {
+                name: field.name().clone(),
+                data_type: field.data_type().to_string(),
+                nullable: field.is_nullable(),
+            })
+            .collect(),
+        properties: snapshot
+            .metadata()
+            .configuration()
+            .clone()
+            .into_iter()
+            .collect(),
     })
 }
 
