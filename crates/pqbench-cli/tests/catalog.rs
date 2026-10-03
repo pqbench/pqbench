@@ -403,10 +403,13 @@ fn catalog_info_enriches_a_catalog_stream() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["kind"], "pqbench.catalog");
-    assert_eq!(records[0]["name"], "dbx_samples");
-    assert_eq!(records[0]["comment"], "sample catalog");
-    assert_eq!(records[1]["name"], "system");
+    let dbx_samples = records
+        .iter()
+        .find(|record| record["name"] == "dbx_samples")
+        .unwrap();
+    assert_eq!(dbx_samples["kind"], "pqbench.catalog");
+    assert_eq!(dbx_samples["comment"], "sample catalog");
+    assert!(records.iter().any(|record| record["name"] == "system"));
 }
 
 #[test]
@@ -423,13 +426,19 @@ fn catalog_ls_lists_a_catalog_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    let names: Vec<&str> = records
-        .iter()
-        .map(|record| record["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, ["bakehouse", "nyctaxi", "bakehouse", "nyctaxi"]);
-    assert_eq!(records[0]["catalog"], "dbx_samples");
-    assert_eq!(records[2]["catalog"], "system");
+    assert_eq!(records.len(), 4);
+    for record in &records {
+        assert_eq!(record["kind"], "pqbench.schema");
+    }
+    let schemas = |catalog: &str| -> Vec<&str> {
+        records
+            .iter()
+            .filter(|record| record["catalog"] == catalog)
+            .map(|record| record["name"].as_str().unwrap())
+            .collect()
+    };
+    assert_eq!(schemas("dbx_samples"), ["bakehouse", "nyctaxi"]);
+    assert_eq!(schemas("system"), ["bakehouse", "nyctaxi"]);
 }
 
 #[test]

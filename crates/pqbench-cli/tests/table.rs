@@ -679,6 +679,21 @@ fn table_info_passes_a_complete_ref_through() {
     assert_eq!(records[0]["storage_path"], "/tmp/a");
 }
 
+/// The legacy `table` reads version 1 refs only; the new tree's version 2
+/// refs (`schema ls`) fail loudly instead of being silently misread.
+#[test]
+fn table_info_rejects_a_v2_ref() {
+    let input = r#"{"kind":"pqbench.table-ref","version":2,"id":"a","uri":"file:///tmp/a","storage_path":"/tmp/a"}"#;
+    let output = pipe_env(
+        &["table", "info", "--format", "json"],
+        input.as_bytes(),
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("version 1"), "{stderr}");
+}
+
 #[test]
 fn table_rejects_a_ref_without_a_storage_path() {
     let input =

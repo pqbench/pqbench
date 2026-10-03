@@ -399,7 +399,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             let records = read_ndjson(&tables);
             for record in &records {
                 assert_eq!(record["kind"], "pqbench.table-ref");
-                assert_eq!(record["version"], 1);
+                assert_eq!(record["version"], 2);
             }
             println!("schema {fqn}: {} table(s)", records.len());
         }
@@ -554,6 +554,7 @@ fn schema_ls_lists_the_live_tables() {
     assert!(!records.is_empty());
     for record in &records {
         assert_eq!(record["kind"], "pqbench.table-ref");
+        assert_eq!(record["version"], 2);
         assert!(
             record["uri"].as_str().unwrap().contains("/tables/"),
             "{record:?}"
@@ -588,16 +589,23 @@ fn schema_ls_lists_the_live_tables() {
         .iter()
         .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
         .unwrap_or_else(|| panic!("no trips table: {records:?}"));
+    assert_eq!(trips["version"], 2);
     assert!(trips["storage_path"].is_null(), "{trips:?}");
     assert!(
         trips["uri"].as_str().unwrap().ends_with("/tables/trips"),
         "{trips:?}"
     );
 
+    // The new tree enriches its own v2 refs: `tablev2 info` reads the
+    // `loadTable` metadata inline, so no storage read runs.
     let info = pipe_env(
-        &["table", "info", "--format", "json"],
+        &["tablev2", "info", "--format", "json"],
         &output.stdout,
-        &[("PQB_TOKEN", token.as_str())],
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         info.status.success(),
@@ -609,13 +617,61 @@ fn schema_ls_lists_the_live_tables() {
         .iter()
         .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
         .unwrap_or_else(|| panic!("no trips table: {records:?}"));
+    assert_eq!(trips["kind"], "pqbench.table-ref");
+    assert_eq!(trips["version"], 2);
+    assert_eq!(trips["format"], "iceberg");
+    assert!(!trips["columns"].as_array().unwrap().is_empty());
+    assert!(trips["snapshot_version"].as_u64().unwrap() > 0);
     assert!(
-        trips["storage_path"]
-            .as_str()
-            .unwrap()
-            .ends_with(".metadata.json"),
+        !trips["storage_path"].as_str().unwrap().is_empty(),
         "{trips:?}"
     );
+}
+
+/// `tablev2 info` reads the live Iceberg REST table: the `loadTable` response
+/// carries the metadata inline, so the record is complete without any storage
+/// read (the default-storage Delta path cannot read its log).
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn tablev2_info_reads_the_live_iceberg_table() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = format!(
+        "{}/iceberg-rest/v1/catalogs/dbx_samples",
+        unity_endpoint(&host)
+    );
+    let output = pipe_env(
+        &[
+            "tablev2",
+            "info",
+            "dbx_samples.nyctaxi.trips",
+            "--format",
+            "json",
+        ],
+        source(&endpoint, Some(&token)).to_string().as_bytes(),
+        &[("PQB_TABLE_FORMAT", "iceberg")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record["kind"], "pqbench.table-ref");
+    assert_eq!(record["version"], 2);
+    assert_eq!(record["id"], "dbx_samples.nyctaxi.trips");
+    assert_eq!(record["format"], "iceberg");
+    assert!(record["snapshot_version"].as_u64().unwrap() > 0);
+    assert!(record["columns"].as_array().unwrap().len() >= 6);
+    assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:

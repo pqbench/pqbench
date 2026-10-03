@@ -242,7 +242,20 @@ check_unity() {
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables"
+    # `tablev2 info` reads the record without files: the Unity record plus the
+    # Delta snapshot metadata, as an enriched `pqbench.table-ref` v2.
+    local table_info
+    table_info=$("$pqbench_bin" tablev2 info pqbench.demo.events --format json < "$lake_source" |
+        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))]"') || {
+        echo "check failed: tablev2 info produced no table" >&2
+        exit 1
+    }
+    [ "$table_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label]" ] || {
+        echo "check failed (unity tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label]; measured ${table_info:-nothing}" >&2
+        exit 1
+    }
+
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info"
 }
 
 check_iceberg() {
@@ -257,7 +270,21 @@ check_iceberg() {
         exit 1
     }
     measured=$(expect_events "iceberg lake" "$measurement")
-    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured"
+
+    # `tablev2 info` reads loadTable's inline metadata, without files.
+    local table_info
+    table_info=$(jq -c -n --arg endpoint "$iceberg_rest/v1" --argjson env "$(storage_env)" \
+        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
+        PQB_TABLE_FORMAT=iceberg "$pqbench_bin" tablev2 info pqbench.demo.events --format json |
+        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) columns=[\([.columns[].name] | join(","))] snapshot=\(if .snapshot_version > 0 then "set" else "unset" end)"') || {
+        echo "check failed: tablev2 info produced no Iceberg table" >&2
+        exit 1
+    }
+    [ "$table_info" = "pqbench.demo.events iceberg columns=[id,label] snapshot=set" ] || {
+        echo "check failed (iceberg tablev2 info): expected pqbench.demo.events iceberg columns=[id,label] snapshot=set; measured ${table_info:-nothing}" >&2
+        exit 1
+    }
+    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured; tablev2 info: $table_info"
 }
 
 check() {
