@@ -232,6 +232,9 @@ pub struct LoadRequest {
     /// [`visit_load`] still emits each file; partition totals are kept.
     // aipnaming: allow(aip-140/verbs)
     pub collect_files: bool,
+    /// When false, emit commits without retaining them on the returned document.
+    // aipnaming: allow(aip-140/verbs)
+    pub collect_log: bool,
 }
 
 impl LoadRequest {
@@ -248,6 +251,7 @@ impl LoadRequest {
             env,
             file_stats: true,
             collect_files: true,
+            collect_log: true,
         }
     }
 
@@ -256,6 +260,14 @@ impl LoadRequest {
     #[must_use]
     pub fn with_file_stats(mut self, file_stats: bool) -> Self {
         self.file_stats = file_stats;
+        self
+    }
+
+    /// Drop commits from the returned document after visiting each commit.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn with_collect_log(mut self, collect_log: bool) -> Self {
+        self.collect_log = collect_log;
         self
     }
 
@@ -268,15 +280,19 @@ impl LoadRequest {
     }
 }
 
-/// One step of [`visit_load`]. `BEGIN` is the snapshot and log; `FILE` is
-/// each active file as it is resolved.
+/// One step of [`visit_load`]: snapshot header, available commits, then active files.
 pub enum LoadEvent<'a> {
-    /// Snapshot header and log. `files` is empty.
+    /// Snapshot header. `log` and `files` are empty.
     BEGIN {
         /// Table document without active files.
         info: &'a TableInfo,
     },
-    /// One active file, in log order.
+    /// One available log commit (or Iceberg snapshot summary).
+    COMMIT {
+        /// Commit just read from the transaction log.
+        commit: &'a LogCommit,
+    },
+    /// One active file, in replay order.
     FILE {
         /// File just resolved from the snapshot.
         file: &'a TableFile,
@@ -316,11 +332,12 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     visit_load(request, async |_| Ok(())).await
 }
 
-/// Load a table, calling `visit` as the snapshot and each file are known.
+/// Load a table, visiting its header, commits, then active files.
 ///
 /// Delta files are visited from the add-action stream. Iceberg files are
 /// visited after the manifests are read. When [`LoadRequest::collect_files`]
 /// is false the returned document keeps partition totals and drops `files`.
+/// Set [`LoadRequest::collect_log`] to false to drop visited commits as well.
 ///
 /// # Errors
 /// Same as [`load`].

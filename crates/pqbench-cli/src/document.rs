@@ -411,13 +411,16 @@ pub(crate) async fn write_table_records(
     info: &TableInfo,
 ) -> Result<(), CliError> {
     write_table_begin(emit, id, info).await?;
+    for commit in &info.log {
+        write_table_commit(emit, id, commit).await?;
+    }
     for file in &info.files {
         write_table_file(emit, id, file).await?;
     }
     write_table_end(emit, id, &info.partitions).await
 }
 
-/// Write `begin` plus every log commit.
+/// Write the snapshot header.
 pub(crate) async fn write_table_begin(
     emit: &mut Emitter,
     id: &str,
@@ -434,16 +437,21 @@ pub(crate) async fn write_table_begin(
         partition_columns: &info.partition_columns,
         env: &info.env,
     })
-    .await?;
-    for commit in &info.log {
-        emit.write_event(&CommitRecord {
-            kind: "pqbench.table-log",
-            id,
-            commit,
-        })
-        .await?;
-    }
-    Ok(())
+    .await
+}
+
+/// Write one log commit.
+pub(crate) async fn write_table_commit(
+    emit: &mut Emitter,
+    id: &str,
+    commit: &LogCommit,
+) -> Result<(), CliError> {
+    emit.write_event(&CommitRecord {
+        kind: "pqbench.table-log",
+        id,
+        commit,
+    })
+    .await
 }
 
 /// Write one active file.

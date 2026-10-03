@@ -110,9 +110,18 @@ pub(super) async fn visit_load(
 ) -> Result<TableInfo, Error> {
     let mut info = load(request).await?;
     let files = std::mem::take(&mut info.files);
+    let log = std::mem::take(&mut info.log);
     visit(LoadEvent::BEGIN { info: &info })
         .await
         .map_err(|error| Error(error.to_string()))?;
+    for commit in &log {
+        visit(LoadEvent::COMMIT { commit })
+            .await
+            .map_err(|error| Error(error.to_string()))?;
+    }
+    if request.collect_log {
+        info.log = log;
+    }
     for file in &files {
         visit(LoadEvent::FILE { file })
             .await

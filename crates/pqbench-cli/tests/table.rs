@@ -579,14 +579,6 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
     child.wait_with_output().unwrap()
 }
 
-fn ndjson(stdout: &[u8]) -> Vec<serde_json::Value> {
-    stdout
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
-        .collect()
-}
-
 /// One endpoint that answers every GET with `body`.
 fn server(body: &'static str) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -623,7 +615,7 @@ fn table_info_fills_an_iceberg_storage_path() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson(&output.stdout);
+    let records = ndjson_records(&output.stdout);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
     assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
@@ -646,7 +638,7 @@ fn table_info_passes_a_complete_ref_through() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson(&output.stdout);
+    let records = ndjson_records(&output.stdout);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["storage_path"], "/tmp/a");
 }
@@ -659,4 +651,30 @@ fn table_rejects_a_ref_without_a_storage_path() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("table info"), "{stderr}");
+}
+
+#[cfg(feature = "delta")]
+#[test]
+fn table_streams_references_like_direct_paths() {
+    let fixture = delta_fixture();
+    let uri = fixture.path.to_str().unwrap();
+    let direct = pqbench().args(["table", uri]).output().unwrap();
+    assert!(
+        direct.status.success(),
+        "{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    let expected = ndjson_records(&direct.stdout);
+    for input in [
+        json!({"kind": "pqbench.table-ref", "version": 1, "uri": uri, "storage_path": uri}),
+        json!({"kind": "pqbench.remote-source", "version": 1, "inputs": [uri]}),
+    ] {
+        let output = pipe(&["table"], &input.to_string());
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(ndjson_records(&output.stdout), expected);
+    }
 }

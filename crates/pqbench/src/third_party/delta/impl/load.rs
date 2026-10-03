@@ -36,26 +36,26 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     visit_load(request, &mut async |_| Ok(())).await
 }
 
-/// Resolve a Delta snapshot, visiting the header then each active file.
+/// Resolve a Delta snapshot, visiting the header, commits, then active files.
 pub(super) async fn visit_load(
     request: &LoadRequest,
     visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<TableInfo, Error> {
     let table = open(&request.uri, request.snapshot_version, &request.env).await?;
     let snapshot = snapshot_meta(&table)?;
-    let log = read_log(&table, snapshot.version).await?;
     let mut info = TableInfo::new(
         TableFormat::DELTA,
         request.uri.clone(),
         snapshot.version,
         snapshot.partition_columns,
-        log,
+        Vec::new(),
         Vec::new(),
         request.env.clone(),
     );
     visit(LoadEvent::BEGIN { info: &info })
         .await
         .map_err(|error| Error(error.to_string()))?;
+    info.log = visit_log(&table, snapshot.version, request.collect_log, visit).await?;
     let (files, partitions) = active_files(&table, request, visit).await?;
     if request.collect_files {
         info.files = files;
@@ -130,7 +130,12 @@ fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
     })
 }
 
-async fn read_log(table: &DeltaTable, last_version: u64) -> Result<Vec<LogCommit>, Error> {
+async fn visit_log(
+    table: &DeltaTable,
+    last_version: u64,
+    collect_log: bool,
+    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
+) -> Result<Vec<LogCommit>, Error> {
     let store = table.log_store();
     let mut commits = Vec::new();
     for version in 0..=last_version {
@@ -141,10 +146,17 @@ async fn read_log(table: &DeltaTable, last_version: u64) -> Result<Vec<LogCommit
         else {
             continue;
         };
-        commits.push(LogCommit {
+        let commit = LogCommit {
             version,
             actions: parse_commit(&bytes, version)?,
-        });
+        };
+        drop(bytes);
+        visit(LoadEvent::COMMIT { commit: &commit })
+            .await
+            .map_err(|error| Error(error.to_string()))?;
+        if collect_log {
+            commits.push(commit);
+        }
     }
     Ok(commits)
 }
