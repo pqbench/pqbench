@@ -9,7 +9,7 @@
 //! are skipped. The URLs, the page shapes, and the pagination are this
 //! command's; the transport is the third-party facade.
 
-use futures_util::future::join_all;
+use futures_util::stream::{self, StreamExt};
 use serde::Deserialize;
 
 use super::api::{Error, TableRef};
@@ -70,10 +70,11 @@ pub(crate) async fn list(
     schema: &str,
     token: Option<&str>,
     table_format: TableFormat,
+    fan_out: usize,
 ) -> Result<Vec<TableRef>, Error> {
     let mut tables = match table_format {
         TableFormat::Unity => unity_tables(endpoint, catalog, schema, token).await?,
-        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token).await?,
+        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token, fan_out).await?,
     };
     tables.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(tables)
@@ -136,6 +137,7 @@ async fn iceberg_tables(
     catalog: &str,
     schema: &str,
     token: Option<&str>,
+    fan_out: usize,
 ) -> Result<Vec<TableRef>, Error> {
     let base = dialect::iceberg_root(endpoint);
     let namespace = dialect::iceberg_namespace(schema);
@@ -164,7 +166,8 @@ async fn iceberg_tables(
             );
             async move { dialect::get_json::<LoadedTable>(&url, token).await }
         });
-        for (identifier, loaded) in page.identifiers.iter().zip(join_all(loads).await) {
+        let loaded: Vec<_> = stream::iter(loads).buffered(fan_out.max(1)).collect().await;
+        for (identifier, loaded) in page.identifiers.iter().zip(loaded) {
             let loaded = loaded.map_err(Error::from)?;
             if loaded.metadata_location.is_empty() {
                 return Err(Error::from(format!(

@@ -142,7 +142,8 @@ carry the walk's context, and each level reads the parent's refs on standard
 input — one `pqbench.catalog` line per catalog, then one `pqbench.schema` line
 per schema. A level reads the whole parent stream first, then multiplexes every
 ref's request on one thread and emits rows in ref order; a slow endpoint
-overlaps the requests instead of serializing them. A `pqbench ratelimit` stage
+overlaps the requests instead of serializing them. Each level takes `--fan-out`
+(64 by default), the requests in flight at once. A `pqbench ratelimit` stage
 paces the refs between two levels at a target rate — records pass through
 unchanged, one bucket per kind, nothing dropped. A 429 fails the level with the
 endpoint's status and body; pace the walk and retry it at a lower rate in the

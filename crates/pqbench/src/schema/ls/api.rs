@@ -38,6 +38,10 @@ impl From<String> for Error {
 
 /// List the tables in `schema` of `catalog` at `endpoint`.
 ///
+/// `fan_out` bounds the Iceberg `loadTable` calls in flight (at least one);
+/// the caller owns the concurrency because the async call schedules nothing
+/// by itself.
+///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed table page.
@@ -47,6 +51,7 @@ pub async fn list(
     schema: &str,
     token: Option<&str>,
     table_format: TableFormat,
+    fan_out: usize,
 ) -> Result<Vec<TableRef>, Error> {
-    super::r#impl::list(endpoint, catalog, schema, token, table_format).await
+    super::r#impl::list(endpoint, catalog, schema, token, table_format, fan_out).await
 }
