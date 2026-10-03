@@ -435,6 +435,7 @@ pub(crate) async fn write_table_begin(
         uri: &info.uri,
         snapshot_version: info.snapshot_version,
         partition_columns: &info.partition_columns,
+        file_selection: &info.file_selection,
         env: &info.env,
     })
     .await
@@ -485,6 +486,8 @@ pub(crate) async fn write_table_end(
 
 #[derive(Serialize)]
 struct BeginRecord<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file_selection: &'a Option<pqbench::table::FileSelection>,
     kind: &'static str,
     version: u32,
     event: &'static str,

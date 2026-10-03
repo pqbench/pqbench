@@ -11,6 +11,7 @@ mod document;
 mod dump;
 mod emit;
 mod experiment;
+mod file_selection;
 mod help;
 mod lake;
 mod lz;

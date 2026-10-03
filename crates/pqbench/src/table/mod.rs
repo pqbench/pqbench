@@ -12,6 +12,9 @@
 
 pub mod info;
 
+mod selection;
+pub use selection::FileSelection;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -161,6 +164,8 @@ pub struct PartitionMass {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TableInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_selection: Option<FileSelection>,
     /// Document kind; always `pqbench.table`.
     pub kind: String,
     /// Document version; currently `1`.
@@ -201,6 +206,7 @@ impl TableInfo {
         env: BTreeMap<String, String>,
     ) -> Self {
         Self {
+            file_selection: None,
             kind: "pqbench.table".into(),
             document_version: 1,
             format,

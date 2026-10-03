@@ -447,6 +447,42 @@ fn bytemass_measures_mixed_table_ids() {
     assert!(ids.contains(&"b".to_string()));
 }
 
+#[test]
+fn table_selects_partition_and_median_files() {
+    let document = json!({
+        "kind": "pqbench.table", "version": 1, "format": "delta",
+        "uri": "/tmp/table", "snapshot_version": 0, "partition_columns": ["year"], "log": [],
+        "files": [
+            {"path":"year=2024/small", "uri":"/missing-small", "size_bytes":1, "partition_values":{"year":"2024"}},
+            {"path":"year=2024/medium", "uri":"/missing-medium", "size_bytes":10, "partition_values":{"year":"2024"}},
+            {"path":"year=2024/large", "uri":"/missing-large", "size_bytes":100, "partition_values":{"year":"2024"}},
+            {"path":"year=2023/other", "uri":"/missing-other", "size_bytes":10, "partition_values":{"year":"2023"}}
+        ]
+    });
+    let output = pipe(
+        &["table", "--partition", "year=2024", "--sample", "median:1"],
+        &document.to_string(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson_records(&output.stdout);
+    assert_eq!(records[0]["file_selection"]["sample"], "median:1");
+    assert_eq!(records[0]["file_selection"]["partitions"]["year"], "2024");
+    let files: Vec<&serde_json::Value> = records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.table-file")
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["path"], "year=2024/medium");
+    let end = records.last().unwrap();
+    assert_eq!(end["event"], "end");
+    assert_eq!(end["partitions"][0]["file_count"], 1);
+    assert_eq!(end["partitions"][0]["size"], 10);
+}
+
 fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
     stdout
         .split(|byte| *byte == b'\n')

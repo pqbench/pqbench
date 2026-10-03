@@ -303,3 +303,23 @@ bytes, plus `column_indexes` and `offset_indexes` booleans in leaf-column
 order. Presence is available without loading index contents. These facts need
 only the footer; `--indexes` still controls the extra index read. Footer
 format version does not identify the data-page version or compression level.
+
+## Selecting active files
+
+`table` accepts repeatable `--include GLOB`, `--exclude GLOB`, and
+`--partition COLUMN=VALUE` selectors, plus `--sample all|first:N|every:N|median:N`.
+Patterns match table-relative paths; partitions match exact metadata values.
+Filters precede sampling. N must be positive. Selection is per table and
+uses active snapshot metadata before any data file is downloaded.
+
+```console no-run
+$ pqbench table ./table --partition year=2024 --sample median:3
+$ pqbench table ./table --include 'year=2024/*' --sample first:5 | pqbench bytemass
+```
+
+`first`/`every` use path order. `median` chooses N files closest to the lower
+median byte size after filtering, breaking ties by path. Unknown/zero sizes
+are rejected for median sampling. Typical file size does not guarantee
+representative data. Median selection buffers file metadata; default table
+loading continues streaming. Selected table output records the selection
+(`file_selection` on the begin record) and recomputes partition totals.
