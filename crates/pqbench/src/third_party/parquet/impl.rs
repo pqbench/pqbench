@@ -23,8 +23,9 @@ use parquet::record::Field;
 use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
-    Sample, TypedColumn, TypedSample, Value, WriteOptions,
+    ColumnChunk, ColumnMass, Error, FileMass, FileMetadata, Kind, MetadataEntry, MetadataParser,
+    Page, PageParser, ParquetFile, RowGroupMetadata, Sample, TypedColumn, TypedSample, Value,
+    WriteOptions,
 };
 
 /// The parquet-rs-backed page parser.
@@ -582,7 +583,71 @@ fn create_masses(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
             });
         }
     }
+    let file = metadata.file_metadata();
+    let key_values = file
+        .key_value_metadata()
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            let value_bytes = entry.value.as_ref().map(String::len);
+            let value = entry.value.as_ref().map(|value| {
+                let mut end = value.len().min(256);
+                while !value.is_char_boundary(end) {
+                    end -= 1;
+                }
+                value[..end].to_owned()
+            });
+            MetadataEntry {
+                key: entry.key.clone(),
+                value,
+                value_bytes,
+                truncated: value_bytes.is_some_and(|size| size > 256),
+            }
+        })
+        .collect();
+    let row_groups = metadata
+        .row_groups()
+        .iter()
+        .map(|group| {
+            let sum = |compressed: bool| {
+                group.columns().iter().try_fold(0u64, |total, column| {
+                    let size = if compressed {
+                        column.compressed_size()
+                    } else {
+                        column.uncompressed_size()
+                    };
+                    let size =
+                        u64::try_from(size).map_err(|_| Error("negative column size".into()))?;
+                    total
+                        .checked_add(size)
+                        .ok_or_else(|| Error("row-group size overflow".into()))
+                })
+            };
+            Ok(RowGroupMetadata {
+                row_count: u64::try_from(group.num_rows())
+                    .map_err(|_| Error("negative row count".into()))?,
+                compressed_bytes: sum(true)?,
+                uncompressed_bytes: sum(false)?,
+                column_indexes: group
+                    .columns()
+                    .iter()
+                    .map(|column| column.column_index_offset().is_some())
+                    .collect(),
+                offset_indexes: group
+                    .columns()
+                    .iter()
+                    .map(|column| column.offset_index_offset().is_some())
+                    .collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
     Ok(FileMass {
+        metadata: FileMetadata {
+            creator: file.created_by().map(str::to_owned),
+            format_version: file.version(),
+            key_values,
+            row_groups,
+        },
         row_count: u64::try_from(row_count).unwrap_or(0),
         row_group_count: metadata.row_groups().len(),
         sorting_columns: sorting_columns(metadata),

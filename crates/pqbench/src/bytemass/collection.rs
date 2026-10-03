@@ -66,17 +66,36 @@ pub(super) async fn measure_inputs(
     env: &BTreeMap<String, String>,
     indexes: bool,
 ) -> Result<Vec<MassRow>, Error> {
-    let paths = expand_inputs(inputs)?;
-    let mut rows = Vec::new();
-    for path in &paths {
+    Ok(measure_files(inputs, env, indexes)
+        .await?
+        .into_iter()
+        .flat_map(|file| file.columns)
+        .collect())
+}
+
+pub(super) async fn measure_files(
+    inputs: &[String],
+    env: &BTreeMap<String, String>,
+    indexes: bool,
+) -> Result<Vec<super::api::MeasuredFile>, Error> {
+    let mut files = Vec::new();
+    for path in expand_inputs(inputs)? {
         let input = path.to_string_lossy().into_owned();
         let (stat, mass) = read_input(&input, env, indexes).await?;
-        let row_count = mass.row_count;
-        for column in mass.columns {
-            rows.push(mass_row(&input, &stat, row_count, column));
-        }
+        let mut file = super::api::FileStat::new("", &input, &input, stat.size_bytes);
+        file.metadata = Some(mass.metadata);
+        file.storage_class = stat.storage_class.clone();
+        files.push(super::api::MeasuredFile {
+            file,
+            row_count: mass.row_count,
+            columns: mass
+                .columns
+                .into_iter()
+                .map(|column| mass_row(&input, &stat, mass.row_count, column))
+                .collect(),
+        });
     }
-    Ok(rows)
+    Ok(files)
 }
 
 fn mass_row(input: &str, stat: &ObjectStat, row_count: u64, column: ColumnMass) -> MassRow {
