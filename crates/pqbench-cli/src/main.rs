@@ -6,6 +6,7 @@ mod bench;
 mod bytemass;
 mod catalog;
 mod compression;
+mod diff;
 mod document;
 mod dump;
 mod emit;
@@ -41,6 +42,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Diff(diff::DiffArgs),
     #[command(
         about = help::LZ_ABOUT,
         long_about = help::LZ_LONG_ABOUT,
@@ -146,6 +148,7 @@ enum Command {
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Diff(args) => diff::run(&args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&args).await,
