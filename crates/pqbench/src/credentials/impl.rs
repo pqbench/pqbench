@@ -1,4 +1,4 @@
-//! The Unity calls behind [`super::api::vend`].
+//! The catalog calls behind [`super::api`].
 //!
 //! Unity serves `GET /tables/{catalog}.{schema}.{table}`; the record names the
 //! table id and kind. Only `TABLE_EXTERNAL`, `TABLE_DELTA_EXTERNAL`, and
@@ -6,8 +6,15 @@
 //! `POST /temporary-table-credentials` vends read credentials. A record that
 //! names another kind (managed default storage, a view) stops there; one that
 //! names no kind is attempted, so a catalog that omits `securable_kind` (Unity
-//! OSS) still vends. The URLs and JSON shapes are this command's; the
-//! transport is the third-party facade.
+//! OSS) still vends.
+//!
+//! Iceberg REST serves `loadTable`; with `X-Iceberg-Access-Delegation:
+//! vended-credentials` the response may carry `storage-credentials`, a list of
+//! prefix-scoped configs. The longest prefix covering the table's location
+//! supplies the `s3.*` keys; an empty list means the catalog does not vend.
+//!
+//! The URLs and JSON shapes are this module's; the transport is the
+//! third-party facade.
 
 use std::collections::BTreeMap;
 
@@ -40,7 +47,33 @@ struct AwsTempCredentials {
     session_token: String,
 }
 
-pub(super) async fn vend(
+/// The subset of the Iceberg REST `loadTable` response vending needs.
+#[derive(Deserialize)]
+struct LoadedTable {
+    #[serde(default)]
+    metadata: Option<TableMetadata>,
+    #[serde(default)]
+    config: BTreeMap<String, String>,
+    #[serde(default, rename = "storage-credentials")]
+    storage_credentials: Vec<StorageCredential>,
+}
+
+#[derive(Deserialize)]
+struct TableMetadata {
+    #[serde(default)]
+    location: Option<String>,
+}
+
+/// One prefix-scoped credential set from `storage-credentials`.
+#[derive(Deserialize)]
+struct StorageCredential {
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    config: BTreeMap<String, String>,
+}
+
+pub(super) async fn vend_unity(
     endpoint: &str,
     catalog: &str,
     schema: &str,
@@ -101,4 +134,57 @@ fn is_vendable(kind: &str) -> bool {
         kind,
         "TABLE_EXTERNAL" | "TABLE_DELTA_EXTERNAL" | "TABLE_DELTA"
     )
+}
+
+pub(super) async fn vend_iceberg(
+    endpoint: &str,
+    schema: &str,
+    table: &str,
+    token: Option<&str>,
+) -> Result<Option<BTreeMap<String, String>>, Error> {
+    let url = format!(
+        "{}/namespaces/{}/tables/{}",
+        dialect::iceberg_root(endpoint),
+        dialect::iceberg_namespace(schema),
+        dialect::encode(table)
+    );
+    let request = Request::get(url, token.map(str::to_owned))
+        .header("X-Iceberg-Access-Delegation", "vended-credentials");
+    let loaded: LoadedTable = dialect::send_json(request).await.map_err(Error::from)?;
+    let location = loaded
+        .metadata
+        .and_then(|metadata| metadata.location)
+        .unwrap_or_default();
+    let config = matching_config(&loaded.storage_credentials, &location).unwrap_or(loaded.config);
+    Ok(aws_options(&config))
+}
+
+/// The config of the storage credential whose prefix covers `location`; the
+/// longest prefix wins. `None` when no prefix matches.
+fn matching_config(
+    credentials: &[StorageCredential],
+    location: &str,
+) -> Option<BTreeMap<String, String>> {
+    credentials
+        .iter()
+        .filter(|credential| {
+            !credential.prefix.is_empty() && location.starts_with(&credential.prefix)
+        })
+        .max_by_key(|credential| credential.prefix.len())
+        .map(|credential| credential.config.clone())
+}
+
+/// The `AWS_*` options an Iceberg `s3.*` config names; `None` without an
+/// access key.
+fn aws_options(config: &BTreeMap<String, String>) -> Option<BTreeMap<String, String>> {
+    let key = config.get("s3.access-key-id")?;
+    let secret = config.get("s3.secret-access-key")?;
+    let mut options = BTreeMap::from([
+        ("AWS_ACCESS_KEY_ID".to_string(), key.clone()),
+        ("AWS_SECRET_ACCESS_KEY".to_string(), secret.clone()),
+    ]);
+    if let Some(token) = config.get("s3.session-token") {
+        options.insert("AWS_SESSION_TOKEN".to_string(), token.clone());
+    }
+    Some(options)
 }

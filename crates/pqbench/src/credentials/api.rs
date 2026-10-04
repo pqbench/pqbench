@@ -1,9 +1,10 @@
 //! `credentials get`: one table's vended storage options.
 //!
-//! [`vend`] is the only public function. It returns the `AWS_*` storage
-//! options Unity vends for the table, or `None` when the table's kind cannot
-//! be read outside Databricks compute or the catalog does not serve the
-//! route, so the caller keeps its own `env`.
+//! [`vend_unity`] asks Unity for temporary read credentials; [`vend_iceberg`]
+//! takes the Iceberg REST catalog's `storage-credentials`. Both return the
+//! `AWS_*` storage options for the table, or `None` when the catalog does not
+//! vend (managed default storage, a view, no vending support), so the caller
+//! keeps its own `env`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -26,7 +27,7 @@ impl From<String> for Error {
     }
 }
 
-/// Vend read credentials for `table` in `schema` of `catalog` at `endpoint`.
+/// Vend Unity read credentials for `table` in `schema` of `catalog` at `endpoint`.
 ///
 /// The returned options are `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
 /// `AWS_SESSION_TOKEN`. `None` means the table cannot be read outside
@@ -38,12 +39,33 @@ impl From<String> for Error {
 /// # Errors
 /// Fails when the endpoint cannot be reached or answers with an unexpected
 /// status.
-pub async fn vend(
+pub async fn vend_unity(
     endpoint: &str,
     catalog: &str,
     schema: &str,
     table: &str,
     token: Option<&str>,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
-    super::r#impl::vend(endpoint, catalog, schema, table, token).await
+    super::r#impl::vend_unity(endpoint, catalog, schema, table, token).await
+}
+
+/// Vend Iceberg REST read credentials for `table` in `schema` at `endpoint`.
+///
+/// The endpoint names the catalog base. The request asks for delegation, and
+/// the returned options are the `storage-credentials` config covering the
+/// table's location, as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+/// `AWS_SESSION_TOKEN`. `None` means the catalog vends nothing for the table
+/// (managed default storage, or no vending support); the caller keeps its own
+/// `env`.
+///
+/// # Errors
+/// Fails when the endpoint cannot be reached or answers with an unexpected
+/// status.
+pub async fn vend_iceberg(
+    endpoint: &str,
+    schema: &str,
+    table: &str,
+    token: Option<&str>,
+) -> Result<Option<BTreeMap<String, String>>, Error> {
+    super::r#impl::vend_iceberg(endpoint, schema, table, token).await
 }

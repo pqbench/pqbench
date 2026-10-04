@@ -167,8 +167,9 @@ pub(crate) fn ref_env(
     env
 }
 
-/// The table's vended read credentials; the Iceberg dialect carries its
-/// metadata inline, so only Unity vends.
+/// The table's vended read credentials; only Unity vends, because the Iceberg
+/// read carries its metadata inline and touches no storage. Iceberg REST can
+/// vend `storage-credentials` for data reads; no stage uses that yet.
 pub(crate) async fn vend_if_unity(
     source: &Source,
     catalog: &str,
@@ -178,7 +179,7 @@ pub(crate) async fn vend_if_unity(
     if !matches!(source.table_format, TableFormat::Unity) {
         return Ok(None);
     }
-    Ok(credentials::vend(
+    Ok(credentials::vend_unity(
         &source.endpoint,
         catalog,
         schema,
