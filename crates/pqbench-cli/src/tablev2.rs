@@ -12,6 +12,11 @@ use crate::emit::{Align, Emitter, Format, Row};
 use crate::source::{self, read_input};
 use crate::CliError;
 
+/// The default tables in flight for the per-table stages: one per core.
+fn default_fan_out() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
+
 /// Arguments for `tablev2`: one table's record.
 #[derive(Args)]
 pub(crate) struct TableV2Args {
@@ -39,8 +44,8 @@ pub(crate) struct InfoArgs {
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// requests in flight at once
-    #[arg(long, default_value_t = 64)]
+    /// tables in flight at once (default: cores)
+    #[arg(long, default_value_t = default_fan_out())]
     fan_out: usize,
 }
 
@@ -76,6 +81,14 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             );
         }
         let (catalog, schema, name) = split_table("tablev2 info", table)?;
+        let env = vend_if_needed(
+            &input.source,
+            &catalog,
+            &schema,
+            &name,
+            input.source.env.clone(),
+        )
+        .await?;
         let record = info::read(
             &input.source.endpoint,
             &catalog,
@@ -83,10 +96,11 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             &name,
             input.source.token.as_deref(),
             input.source.table_format.into(),
-            &input.source.env,
+            &env,
         )
         .await?;
-        emit.write_row(&table_record(&record)).await?;
+        emit.write_row(&table_record(&without_credentials(record)))
+            .await?;
         return emit.finish("tables: 1\n").await;
     }
     if !input.piped {
@@ -101,8 +115,15 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("tablev2 info", &record)?;
-            let env = ref_env(&record, &source.env);
-            Ok::<_, CliError>(
+            let env = vend_if_needed(
+                &source,
+                &catalog,
+                &schema,
+                &name,
+                ref_env(&record, &source.env),
+            )
+            .await?;
+            Ok::<_, CliError>(without_credentials(
                 info::read(
                     &source.endpoint,
                     &catalog,
@@ -113,7 +134,7 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
                     &env,
                 )
                 .await?,
-            )
+            ))
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {
@@ -203,6 +224,52 @@ fn add_env(
     }
     object.insert("env".to_string(), Value::Object(values));
     record
+}
+
+/// The table's env, plus vended credentials when it names none: the credentials
+/// stay in memory, and the emitted record never carries them.
+async fn vend_if_needed(
+    source: &source::Source,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+    mut env: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, CliError> {
+    if !matches!(source.table_format, source::TableFormat::Unity) || !needs_credentials(&env) {
+        return Ok(env);
+    }
+    if let Some(credentials) = credentials::vend(
+        &source.endpoint,
+        catalog,
+        schema,
+        name,
+        source.token.as_deref(),
+    )
+    .await?
+    {
+        env.extend(credentials);
+    }
+    Ok(env)
+}
+
+/// Whether the env names no credential: a public bucket or a set of keys skips
+/// vending.
+fn needs_credentials(env: &BTreeMap<String, String>) -> bool {
+    !env.contains_key("AWS_ACCESS_KEY_ID")
+        && env.get("AWS_SKIP_SIGNATURE").map(String::as_str) != Some("true")
+}
+
+/// The record without its credential keys: they stay in memory.
+fn without_credentials(mut info: TableInfo) -> TableInfo {
+    info.env.retain(|key, _| !is_credential(key));
+    info
+}
+
+fn is_credential(key: &str) -> bool {
+    matches!(
+        key,
+        "AWS_ACCESS_KEY_ID" | "AWS_SECRET_ACCESS_KEY" | "AWS_SESSION_TOKEN"
+    )
 }
 
 /// The catalog, schema, and table a `pqbench.table-ref` v2 ref names.

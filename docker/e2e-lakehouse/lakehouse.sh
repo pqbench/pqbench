@@ -255,9 +255,9 @@ check_unity() {
         exit 1
     }
 
-    # The vend stage: a lake source with the stand's storage options but no AWS
-    # keys. Unity vends the preset session per table, and `tablev2 info` reads
-    # the Delta log with the credentials the ref carries.
+    # The vend paths: a lake source with the stand's storage options but no AWS
+    # keys. `vend-credentials` materializes the vended session on the ref, and
+    # `tablev2 info` vends it in memory for the Delta log read.
     local vended_source="local/lakehouse/vended-source.json"
     jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
         '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
@@ -275,16 +275,17 @@ check_unity() {
         exit 1
     }
 
+    # `tablev2 info` vends in memory when the source carries no AWS keys: the
+    # Delta log read uses the credentials, and the record never carries them.
     local vended_info
     vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
-        PQB_ENDPOINT="$unity_catalog" "$pqbench_bin" tablev2 vend-credentials |
         PQB_ENDPOINT="$unity_catalog" "$pqbench_bin" tablev2 info --format json |
-        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))]"') || {
+        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))] creds=\(if .env.AWS_ACCESS_KEY_ID then "leaked" else "none" end)"') || {
         echo "check failed: the vended table pipe produced no record" >&2
         exit 1
     }
-    [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label]" ] || {
-        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label]; measured ${vended_info:-nothing}" >&2
+    [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label] creds=none" ] || {
+        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] creds=none; measured ${vended_info:-nothing}" >&2
         exit 1
     }
 

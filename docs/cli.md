@@ -148,7 +148,8 @@ The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
 input as they arrive — one `pqbench.catalog` line per catalog, then one
 `pqbench.schema` line per schema. Each ref's request starts as its record is
-read; `--fan-out` (64 by default) caps the requests in flight — it is a limit,
+read; `--fan-out` (64 on the listing levels, one per core on the per-table
+stages) caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
@@ -209,17 +210,18 @@ credentials on the lake source, or the vended credentials `tablev2
 vend-credentials` adds; Databricks default-storage tables cannot read their
 log. The Iceberg REST path needs no storage read.
 
-`tablev2 vend-credentials` asks Unity for each ref's temporary read
-credentials and puts them on that ref's `env` (`AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), over the ref's own options and
-the lake source's. A known non-vendable kind (managed default storage, a view)
-passes through unchanged, as does a catalog that does not serve
+`tablev2 info` reads a governed `s3://` table with only a catalog token: when
+the ref and the lake source carry no AWS keys, it vends that table's temporary
+read credentials in memory before the log read and never writes them to the
+record. A known non-vendable kind (managed default storage, a view) proceeds
+with the static env, as does a catalog that does not serve
 `temporary-table-credentials`; a catalog that reports no kind is attempted.
-The stage is optional — `tablev2 info` merges a ref's `env` over the lake
-source's when one is present — so a workspace with external tables can read
-them with only a catalog token:
+`tablev2 vend-credentials` is the explicit stage that materializes those
+credentials on the refs (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`, over the ref's and the source's options) for other tools:
 
 ```console no-run
+$ PQB_ENDPOINT=… pqbench schema ls dbx_samples.nyctaxi | pqbench tablev2 info
 $ PQB_ENDPOINT=… pqbench schema ls dbx_samples.nyctaxi \
     | pqbench tablev2 vend-credentials | pqbench tablev2 info
 ```

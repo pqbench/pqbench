@@ -307,8 +307,11 @@ are rejected.
          version 2 line. Unity REST serves /tables/{full_name}; the catalog's
          declared columns and properties are merged over the Delta log read
          with without_files(), so that path is O(1) in files and needs a
-         readable storage location. PQB_TABLE_FORMAT=iceberg reads loadTable,
-         whose metadata is inline, so the Iceberg path runs no storage read.
+         readable storage location. A lake source with no AWS keys vends each
+         table's read credentials in memory before the log read (the same kind
+         gate as vend-credentials); the emitted record never carries them.
+         PQB_TABLE_FORMAT=iceberg reads loadTable, whose metadata is inline,
+         so the Iceberg path runs no storage read.
   vend-credentials
          each ref enriched with the table's vended read credentials (AWS_* on
          env) as one pqbench.table-ref version 2 line. Unity GET
