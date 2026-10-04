@@ -932,9 +932,9 @@ fn credentials_get_vends_the_external_fixture() {
 }
 
 /// `tablev2 info` on a table in customer storage: `credentials get`
-/// materializes the vended lease on the ref, the test puts the ref's keys in
-/// the process environment with the bucket's region, and the Delta log read
-/// runs under them. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
+/// materializes the vended lease on the ref, `tablev2 info` reads the Delta
+/// log under it, and the lease rides through on the emitted record for the
+/// next stage. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
 /// `DBX_AWS_REGION` to read another one.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
@@ -972,27 +972,21 @@ fn tablev2_info_reads_the_external_aws_table() {
     );
     let vended = ndjson(&vended.stdout);
     assert_eq!(vended.len(), 1);
-    let lease = &vended[0]["env"];
     assert!(
-        lease["AWS_ACCESS_KEY_ID"]
+        vended[0]["env"]["AWS_ACCESS_KEY_ID"]
             .as_str()
             .is_some_and(|value| !value.is_empty()),
         "no vended lease: {}",
         vended[0]
     );
-    let key = lease["AWS_ACCESS_KEY_ID"].as_str().unwrap();
-    let secret = lease["AWS_SECRET_ACCESS_KEY"].as_str().unwrap();
-    let session = lease["AWS_SESSION_TOKEN"].as_str().unwrap();
+    let enriched = vended[0].to_string();
     let output = pipe_env(
         &["tablev2", "info", "--format", "json"],
-        format!("{reference}\n").as_bytes(),
+        format!("{enriched}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
             ("PQB_TOKEN", token.as_str()),
             ("AWS_REGION", region.as_str()),
-            ("AWS_ACCESS_KEY_ID", key),
-            ("AWS_SECRET_ACCESS_KEY", secret),
-            ("AWS_SESSION_TOKEN", session),
         ],
     );
     assert!(
@@ -1015,6 +1009,12 @@ fn tablev2_info_reads_the_external_aws_table() {
     assert!(
         !record["columns"].as_array().unwrap().is_empty(),
         "{record:?}"
+    );
+    assert!(
+        record["env"]["AWS_ACCESS_KEY_ID"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "the lease did not ride through: {record:?}"
     );
 }
 

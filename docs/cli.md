@@ -191,11 +191,12 @@ lists the tables in it, one `pqbench.table-ref` version 2 line each — the
 document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
-Entries with no location (views) are skipped. Refs are durable data only — no
-env — so each stage gets the lake source (endpoint, token, storage options)
-from its own stdin or `PQB_*`, in memory. The walk is a plain pipeline: every
-command streams refs and keeps `--fan-out` in flight, and `credentials get`
-writes the vended keys onto the refs it passes to `tablev2 info`:
+Entries with no location (views) are skipped. Refs are addresses; the walk
+context (endpoint, token, storage options) comes from the lake source or
+`PQB_*`. The walk is a plain pipeline: every command streams refs and keeps
+`--fan-out` in flight, `credentials get` writes the vended keys onto the refs,
+and `tablev2 info` passes them on so `bytemass` reads the files under the same
+lease:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
@@ -216,12 +217,14 @@ every table before deciding which files to measure. The name is temporary: the
 older `pqbench table info` (fill a v1 ref's storage path) keeps its name until
 the legacy command is deprecated.
 
-The table read is deliberately credential-free: it reads with the env it is
+The table read knows nothing about credentials: it reads with the env it is
 given — the lake source's options, the ref's own, and the process environment
-the storage client also reads. Everything credential-shaped is the
-`credentials` stage's concern. The Delta path needs a readable storage
-location; the local stand, `env` credentials on the lake source, and a vended
-lease all supply one. The Iceberg REST path needs no storage read.
+the storage client also reads — and emits that env back on the record, so the
+next stage reads the data files under the same lease. Everything
+credential-shaped is the `credentials` stage's concern. The Delta path needs a
+readable storage location; the local stand, `env` credentials on the lake
+source, and a vended lease all supply one. The Iceberg REST path needs no
+storage read.
 
 A vended lease is a storage fact, not a caller choice. Databricks serves
 managed tables to external systems through its catalog APIs; resolving the

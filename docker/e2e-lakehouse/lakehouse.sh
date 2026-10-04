@@ -293,8 +293,8 @@ check_unity() {
         echo "check failed: the vended table loop produced no record" >&2
         exit 1
     }
-    [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label] env=none" ] || {
-        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] env=none; measured ${vended_info:-nothing}" >&2
+    [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label] env=set" ] || {
+        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
         exit 1
     }
 

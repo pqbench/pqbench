@@ -55,7 +55,8 @@ pub(crate) async fn run(args: &TableV2Args) -> Result<(), CliError> {
 /// Read one table's record with the env the stream carries: the lake source's
 /// options, the ref's own, and the process environment the storage client also
 /// reads. Credentials are the `credentials` stage's concern — `credentials get`
-/// materializes them onto refs, and this read only consumes them.
+/// materializes them onto refs; this read consumes them and passes them on, so
+/// a later stage reads the table's files under the same lease.
 async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
     let input = read_input("tablev2 info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
@@ -67,9 +68,9 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             );
         }
         let (catalog, schema, name) = split_table("tablev2 info", table)?;
-        let record =
-            read_record(&input.source, &catalog, &schema, &name, &input.source.env).await?;
-        emit.write_row(&table_record(&record)).await?;
+        let env = input.source.env.clone();
+        let record = read_record(&input.source, &catalog, &schema, &name, &env).await?;
+        emit.write_row(&table_record(&record, env)).await?;
         return emit.finish("tables: 1\n").await;
     }
     if !input.piped {
@@ -85,11 +86,13 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             let record = record?;
             let (catalog, schema, name) = table_ref("tablev2 info", &record)?;
             let env = ref_env(&record, &source.env);
-            read_record(&source, &catalog, &schema, &name, &env).await
+            let record = read_record(&source, &catalog, &schema, &name, &env).await?;
+            Ok::<_, CliError>((record, env))
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {
-        emit.write_row(&table_record(&record?)).await?;
+        let (record, env) = record?;
+        emit.write_row(&table_record(&record, env)).await?;
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await
@@ -117,7 +120,8 @@ async fn read_record(
 }
 
 /// The document `tablev2 info` writes: the `schema ls` ref enriched with the
-/// table's record.
+/// table's record and the env the read ran under, so a later stage
+/// (`bytemass`) reads the table's files under the same lease.
 #[derive(Serialize)]
 struct TableRefRecord<'a> {
     kind: &'static str,
@@ -134,14 +138,17 @@ struct TableRefRecord<'a> {
     delta_properties: &'a BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     iceberg_properties: &'a BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    env: BTreeMap<String, String>,
 }
 
 fn is_empty_slice<T>(values: &&[T]) -> bool {
     values.is_empty()
 }
 
-/// The row `tablev2 info` writes for a table.
-fn table_record(record: &TableInfo) -> TableRefRecord<'_> {
+/// The row `tablev2 info` writes for a table: the record plus the env the read
+/// ran under.
+fn table_record(record: &TableInfo, env: BTreeMap<String, String>) -> TableRefRecord<'_> {
     TableRefRecord {
         kind: "pqbench.table-ref",
         version: 2,
@@ -153,6 +160,7 @@ fn table_record(record: &TableInfo) -> TableRefRecord<'_> {
         columns: record.columns.as_slice(),
         delta_properties: &record.delta_properties,
         iceberg_properties: &record.iceberg_properties,
+        env,
     }
 }
 

@@ -311,7 +311,8 @@ chains. Version 1 refs (the legacy `lake` stream) are rejected.
          the process environment. Vended credentials ride the ref (or the
          process env) from `credentials get`; `credentials check` gates the
          walk on tables the catalog marks readable outside compute. The
-         emitted record carries no env. PQB_TABLE_FORMAT=iceberg reads
+         emitted record carries the env it read under, so a later stage reads
+         the table's files under the same lease. PQB_TABLE_FORMAT=iceberg reads
          loadTable, whose metadata is inline, so the Iceberg path runs no
          storage read.
 
