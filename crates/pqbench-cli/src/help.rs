@@ -268,7 +268,8 @@ schema ls` chains.
   info   the schema's record (catalog, name, comment, location, properties)
          as one pqbench.schema line
   ls     the tables in the schema, one pqbench.table-ref version 2 line each
-         (id, uri, storage path) — the document `tablev2 info` enriches. Unity
+         (id, uri, storage path, storage options) — the document `tablev2 info`
+         enriches. Unity
          REST serves /tables; PQB_TABLE_FORMAT=iceberg lists namespaces'
          tables and carries each loadTable URL (the endpoint names the catalog
          base). The legacy `table` reads version 1 refs only.
@@ -297,7 +298,9 @@ pqbench.lake-source on standard input, or from PQB_ENDPOINT / PQB_TOKEN (and
 PQB_TABLE_FORMAT) when the document leaves them out. Without a
 CATALOG.SCHEMA.TABLE argument the command reads pqbench.table-ref version 2
 refs on standard input — one table per line — so `schema ls | tablev2 info`
-chains. Version 1 refs (the legacy `lake` stream) are rejected.
+chains, and `schema ls | tablev2 vend-credentials | tablev2 info` adds each
+table's vended credentials first. Version 1 refs (the legacy `lake` stream)
+are rejected.
 
   info   the ref enriched with the table's record (format, snapshot, columns,
          partition columns, format properties) as one pqbench.table-ref
@@ -306,6 +309,14 @@ chains. Version 1 refs (the legacy `lake` stream) are rejected.
          with without_files(), so that path is O(1) in files and needs a
          readable storage location. PQB_TABLE_FORMAT=iceberg reads loadTable,
          whose metadata is inline, so the Iceberg path runs no storage read.
+  vend-credentials
+         each ref enriched with the table's vended read credentials (AWS_* on
+         env) as one pqbench.table-ref version 2 line. Unity GET
+         /tables/{full_name} names the table id and kind; a known non-vendable
+         kind (managed default storage, a view) passes through with its own
+         env, and a catalog that reports no kind is attempted. The ref keeps
+         the lake source's storage options, so `schema ls | vend-credentials |
+         tablev2 info` reads the log with the vended keys.
 
 The name is temporary: the older `pqbench table` still owns `table info`
 (filling a ref's storage path) and the file-loading command, and exchanges
@@ -318,6 +329,7 @@ pub const TABLEV2_AFTER: &str = "\
 Examples:
   pqbench tablev2 info dbx_samples.nyctaxi.trips < source.json
   PQB_ENDPOINT=… pqbench schema ls | pqbench tablev2 info
+  PQB_ENDPOINT=… pqbench schema ls | pqbench tablev2 vend-credentials | pqbench tablev2 info
 
 See also:
   pqbench schema --help  the tables of one schema

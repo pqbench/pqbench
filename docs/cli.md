@@ -18,6 +18,7 @@ that command and links back. This file is the durable copy.
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
 | Read one table's record | `pqbench tablev2 info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
+| Vend read credentials onto a ref stream | `pqbench tablev2 vend-credentials` (v2 refs on stdin) |
 | Fill a legacy table-ref's storage path | `pqbench table info` (v1 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -49,7 +50,7 @@ environment.
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
 | `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
 | `pqbench.table-ref` v1 | `lake` | `table info`, `table` |
-| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info` | `tablev2 info` |
+| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info`, `tablev2 vend-credentials` | `tablev2 info`, `tablev2 vend-credentials` |
 | `pqbench.table` v1 | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
@@ -188,7 +189,9 @@ lists the tables in it, one `pqbench.table-ref` version 2 line each — the
 document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
-Entries with no location (views) are skipped.
+Entries with no location (views) are skipped. Each ref also carries the lake
+source's storage options, so a later storage read (`tablev2 info`, or the
+vended keys `tablev2 vend-credentials` adds) finds them.
 
 `tablev2 info` enriches that ref — id, format, snapshot, columns, partition
 columns, format properties — and keeps the same kind and version, so
@@ -201,9 +204,25 @@ every table before deciding which files to measure. The name is temporary: the
 older `pqbench table info` (fill a v1 ref's storage path) keeps its name until
 the legacy command is deprecated.
 
-The Delta path needs a readable storage location — the local stand, or `env`
-credentials on the lake source; Databricks default-storage tables cannot read
-their log. The Iceberg REST path needs no storage read.
+The Delta path needs a readable storage location — the local stand, `env`
+credentials on the lake source, or the vended credentials `tablev2
+vend-credentials` adds; Databricks default-storage tables cannot read their
+log. The Iceberg REST path needs no storage read.
+
+`tablev2 vend-credentials` asks Unity for each ref's temporary read
+credentials and puts them on that ref's `env` (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`), over the ref's own options and
+the lake source's. A known non-vendable kind (managed default storage, a view)
+passes through unchanged, as does a catalog that does not serve
+`temporary-table-credentials`; a catalog that reports no kind is attempted.
+The stage is optional — `tablev2 info` merges a ref's `env` over the lake
+source's when one is present — so a workspace with external tables can read
+them with only a catalog token:
+
+```console no-run
+$ PQB_ENDPOINT=… pqbench schema ls dbx_samples.nyctaxi \
+    | pqbench tablev2 vend-credentials | pqbench tablev2 info
+```
 
 ```console no-run
 $ pqbench tablev2 info pqbench.demo.events < lake-source.json

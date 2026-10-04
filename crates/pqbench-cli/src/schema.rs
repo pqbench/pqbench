@@ -87,7 +87,8 @@ fn schema_record(schema: &info::Schema) -> SchemaRecord<'_> {
 
 /// The document `schema ls` writes, one line per table. Version 2 is the new
 /// tree's ref: the legacy `table` reads version 1 refs only, so the two trees
-/// never consume each other.
+/// never consume each other. The lake source's storage options ride on each
+/// ref, so a later storage read (`tablev2 info`) finds them.
 #[derive(Serialize)]
 struct TableRefRecord<'a> {
     kind: &'static str,
@@ -96,6 +97,8 @@ struct TableRefRecord<'a> {
     uri: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     storage_path: Option<&'a str>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    env: &'a BTreeMap<String, String>,
 }
 
 impl Row for TableRefRecord<'_> {
@@ -112,13 +115,17 @@ impl Row for TableRefRecord<'_> {
 }
 
 /// The row `schema ls` writes for a table.
-fn table_record(table: &ls::TableRef) -> TableRefRecord<'_> {
+fn table_record<'a>(
+    table: &'a ls::TableRef,
+    env: &'a BTreeMap<String, String>,
+) -> TableRefRecord<'a> {
     TableRefRecord {
         kind: "pqbench.table-ref",
         version: 2,
         id: &table.name,
         uri: &table.uri,
         storage_path: table.storage_path.as_deref(),
+        env,
     }
 }
 
@@ -197,7 +204,8 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         )
         .await?;
         for table in &tables {
-            emit.write_row(&table_record(table)).await?;
+            emit.write_row(&table_record(table, &input.source.env))
+                .await?;
         }
         return emit.finish(&format!("tables: {}\n", tables.len())).await;
     }
@@ -224,7 +232,7 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {
         for table in listed? {
-            emit.write_row(&table_record(&table)).await?;
+            emit.write_row(&table_record(&table, &source.env)).await?;
             tables += 1;
         }
     }

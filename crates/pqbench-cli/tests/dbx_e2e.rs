@@ -674,6 +674,54 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
+/// `tablev2 vend-credentials` on the live Unity catalog: the `dbx_samples`
+/// tables are managed default storage (`TABLE_DB_STORAGE`), which cannot be
+/// read outside Databricks compute, so the ref passes through with no `env`.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn vend_credentials_passes_a_managed_table_through() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = unity_endpoint(&host);
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+    ];
+    let refs = pipe_env(
+        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &env,
+    );
+    assert!(
+        refs.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&refs.stderr)
+    );
+    let output = pipe_env(
+        &["tablev2", "vend-credentials", "--format", "json"],
+        &refs.stdout,
+        &env,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let trips = records
+        .iter()
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .unwrap_or_else(|| panic!("no trips table: {records:?}"));
+    assert_eq!(trips["kind"], "pqbench.table-ref");
+    assert!(trips["env"].is_null(), "{trips:?}");
+}
+
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
 /// `metastore ls | catalog info | catalog ls` (decision 0004).
 #[test]

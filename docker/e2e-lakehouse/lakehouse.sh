@@ -255,7 +255,40 @@ check_unity() {
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info"
+    # The vend stage: a lake source with the stand's storage options but no AWS
+    # keys. Unity vends the preset session per table, and `tablev2 info` reads
+    # the Delta log with the credentials the ref carries.
+    local vended_source="local/lakehouse/vended-source.json"
+    jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
+        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
+        env: {AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
+            AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' > "$vended_source"
+    local vended_ref
+    vended_ref=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
+        PQB_ENDPOINT="$unity_catalog" "$pqbench_bin" tablev2 vend-credentials --format json |
+        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) key=\(.env.AWS_ACCESS_KEY_ID // "-") session=\(if .env.AWS_SESSION_TOKEN then "set" else "unset" end)"') || {
+        echo "check failed: tablev2 vend-credentials produced no ref" >&2
+        exit 1
+    }
+    [ "$vended_ref" = "pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set" ] || {
+        echo "check failed (unity vend-credentials): expected pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set; measured ${vended_ref:-nothing}" >&2
+        exit 1
+    }
+
+    local vended_info
+    vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
+        PQB_ENDPOINT="$unity_catalog" "$pqbench_bin" tablev2 vend-credentials |
+        PQB_ENDPOINT="$unity_catalog" "$pqbench_bin" tablev2 info --format json |
+        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))]"') || {
+        echo "check failed: the vended table pipe produced no record" >&2
+        exit 1
+    }
+    [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label]" ] || {
+        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label]; measured ${vended_info:-nothing}" >&2
+        exit 1
+    }
+
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info; vended tablev2 info: $vended_info"
 }
 
 check_iceberg() {
