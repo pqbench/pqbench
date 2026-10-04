@@ -27,27 +27,27 @@ pub(crate) enum CredentialsCommand {
     Check(CheckArgs),
 }
 
-/// Arguments for `credentials get`: the output flags.
+/// Arguments for `credentials get`: the shared output flags and `--shell-env`.
 #[derive(Args)]
 pub(crate) struct GetArgs {
-    /// stdout format: auto (table on a terminal) | table | json
-    #[arg(long, value_enum, default_value_t = Format::Auto)]
-    format: Format,
-    /// also write the lz4 NDJSON stream to FILE
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    output: Option<PathBuf>,
-    /// requests in flight at once
-    #[arg(long, default_value_t = 64)]
-    fan_out: usize,
+    #[command(flatten)]
+    stage: StageArgs,
     /// write the one ref's env as shell `export` lines for a loop's `eval`,
     /// not refs
     #[arg(long = "shell-env")]
     shell_env: bool,
 }
 
-/// Arguments for `credentials check`: the output flags.
+/// Arguments for `credentials check`: the shared output flags.
 #[derive(Args)]
 pub(crate) struct CheckArgs {
+    #[command(flatten)]
+    stage: StageArgs,
+}
+
+/// The output flags both credentials stages share.
+#[derive(Args)]
+pub(crate) struct StageArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
@@ -76,7 +76,7 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
         return Err("credentials get reads pqbench.table-ref v2 refs on standard input".into());
     }
     if args.shell_env {
-        if args.output.is_some() || args.format != Format::Auto {
+        if args.stage.output.is_some() || args.stage.format != Format::Auto {
             return Err(
                 "credentials get --shell-env writes shell assignments to stdout; drop --format / --output"
                     .into(),
@@ -84,7 +84,10 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
         }
         return export_credentials(input).await;
     }
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    let mut emit = Emitter::open(
+        args.stage.output.as_deref(),
+        args.stage.format.resolve(false),
+    )?;
     let records = source::records("credentials get", input.first, input.lines);
     let source = input.source;
     let mut tables = 0;
@@ -95,7 +98,7 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
             let credentials = vend(&source, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, credentials))
         })
-        .buffer_unordered(args.fan_out.max(1));
+        .buffer_unordered(args.stage.fan_out.max(1));
     while let Some(result) = vends.next().await {
         let (record, credentials) = result?;
         let vended = credentials.is_some();
@@ -122,7 +125,10 @@ async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
     if !input.piped {
         return Err("credentials check reads pqbench.table-ref v2 refs on standard input".into());
     }
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    let mut emit = Emitter::open(
+        args.stage.output.as_deref(),
+        args.stage.format.resolve(false),
+    )?;
     let records = source::records("credentials check", input.first, input.lines);
     let source = input.source;
     let mut tables = 0;
@@ -133,7 +139,7 @@ async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
             check(&source, &catalog, &schema, &name).await?;
             Ok::<_, CliError>(record)
         })
-        .buffer_unordered(args.fan_out.max(1));
+        .buffer_unordered(args.stage.fan_out.max(1));
     while let Some(record) = checks.next().await {
         emit.write_row(&CheckedRef { record: record? }).await?;
         tables += 1;
