@@ -24,13 +24,9 @@ pub(super) async fn get_json<T: DeserializeOwned>(
     url: &str,
     token: Option<&str>,
 ) -> Result<T, String> {
-    let response = reqwest::request(Request {
-        url: url.to_string(),
-        bearer: token.map(str::to_owned),
-        body: None,
-    })
-    .await
-    .map_err(|error| error.to_string())?;
+    let response = reqwest::request(Request::get(url.to_string(), token.map(str::to_owned)))
+        .await
+        .map_err(|error| error.to_string())?;
     if response.status != 200 {
         return Err(format!(
             "the endpoint returned HTTP {}: {}",

@@ -49,13 +49,9 @@ pub(crate) async fn list(endpoint: &str, token: Option<&str>) -> Result<Vec<Cata
             }
             None => format!("{root}/catalogs?max_results={PAGE_SIZE}"),
         };
-        let response = reqwest::request(Request {
-            url,
-            bearer: token.map(str::to_owned),
-            body: None,
-        })
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
+        let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+            .await
+            .map_err(|error| Error::from(error.to_string()))?;
         if response.status != 200 {
             return Err(Error::from(format!(
                 "the endpoint returned HTTP {}: {}",

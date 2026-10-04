@@ -31,13 +31,9 @@ fn api_root(endpoint: &str) -> String {
 
 pub(crate) async fn read(endpoint: &str, token: Option<&str>) -> Result<Metastore, Error> {
     let url = format!("{}/metastore_summary", api_root(endpoint));
-    let response = reqwest::request(Request {
-        url,
-        bearer: token.map(str::to_owned),
-        body: None,
-    })
-    .await
-    .map_err(|error| Error::from(error.to_string()))?;
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
     if response.status != 200 {
         return Err(Error::from(format!(
             "the endpoint returned HTTP {}: {}",

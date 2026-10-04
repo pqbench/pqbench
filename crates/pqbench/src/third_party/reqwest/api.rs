@@ -19,7 +19,8 @@ impl From<String> for Error {
 }
 
 /// One request: a URL, an optional bearer token, and an optional JSON body.
-/// A body makes it a POST; without one it is a GET.
+/// A body makes it a POST; without one it is a GET. Build one with
+/// [`Request::get`] or [`Request::post`].
 pub struct Request {
     /// The URL to request.
     pub url: String,
@@ -27,6 +28,26 @@ pub struct Request {
     pub bearer: Option<String>,
     /// The JSON body; `None` sends a GET, `Some` sends a POST.
     pub body: Option<String>,
+}
+
+impl Request {
+    /// A GET request: the URL and an optional bearer.
+    pub fn get(url: String, bearer: Option<String>) -> Self {
+        Self {
+            url,
+            bearer,
+            body: None,
+        }
+    }
+
+    /// A POST request: the URL, an optional bearer, and a JSON body.
+    pub fn post(url: String, bearer: Option<String>, body: String) -> Self {
+        Self {
+            url,
+            bearer,
+            body: Some(body),
+        }
+    }
 }
 
 /// One response: the status and the body bytes.

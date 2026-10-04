@@ -28,13 +28,9 @@ struct Config {
 /// Select Unity or Iceberg REST from `GET {endpoint}/v1/config`.
 pub(crate) async fn select(endpoint: &str, token: Option<&str>) -> Result<Protocol, Error> {
     let url = format!("{}/v1/config", endpoint.trim_end_matches('/'));
-    let response = reqwest::request(Request {
-        url,
-        bearer: token.map(str::to_owned),
-        body: None,
-    })
-    .await
-    .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+        .await
+        .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
     if response.status == 404 {
         return Ok(Protocol::Unity);
     }

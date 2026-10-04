@@ -61,11 +61,11 @@ pub(super) async fn vend(
             return Ok(None);
         }
     }
-    let response = reqwest::request(Request {
-        url: format!("{root}/temporary-table-credentials"),
-        bearer: token.map(str::to_owned),
-        body: Some(serde_json::json!({"table_id": table_id, "operation": "READ"}).to_string()),
-    })
+    let response = reqwest::request(Request::post(
+        format!("{root}/temporary-table-credentials"),
+        token.map(str::to_owned),
+        serde_json::json!({"table_id": table_id, "operation": "READ"}).to_string(),
+    ))
     .await
     .map_err(|error| Error::from(error.to_string()))?;
     if matches!(response.status, 404 | 501) {
