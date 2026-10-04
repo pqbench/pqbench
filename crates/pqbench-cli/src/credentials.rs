@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::emit::{write_stdout, Align, Emitter, Format, Row};
-use crate::source::{self, read_input, ref_env, table_ref, vend_if_unity};
+use crate::source::{self, read_input, ref_env, table_ref, vend};
 use crate::CliError;
 
 /// Arguments for `credentials`: one table's storage options.
@@ -75,7 +75,7 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("credentials get", &record)?;
-            let credentials = vend_if_unity(&source, &catalog, &schema, &name).await?;
+            let credentials = vend(&source, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, credentials))
         })
         .buffer_unordered(args.fan_out.max(1));
@@ -108,7 +108,7 @@ async fn export_credentials(input: source::Input) -> Result<(), CliError> {
         return Err("credentials get --shell-env populates one table's env; feed one ref".into());
     }
     let (catalog, schema, name) = table_ref("credentials get", &record)?;
-    let credentials = vend_if_unity(&source, &catalog, &schema, &name).await?;
+    let credentials = vend(&source, &catalog, &schema, &name).await?;
     let env = table_env(&record, credentials, &source.env);
     write_stdout(&export_lines(&env)).await
 }

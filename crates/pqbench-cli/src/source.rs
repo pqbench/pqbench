@@ -167,26 +167,31 @@ pub(crate) fn ref_env(
     env
 }
 
-/// The table's vended read credentials; only Unity vends, because the Iceberg
-/// read carries its metadata inline and touches no storage. Iceberg REST can
-/// vend `storage-credentials` for data reads; no stage uses that yet.
-pub(crate) async fn vend_if_unity(
+/// The table's vended read credentials, by dialect: Unity's
+/// `temporary-table-credentials`, or the Iceberg REST catalog's
+/// `storage-credentials` for the table's data read.
+pub(crate) async fn vend(
     source: &Source,
     catalog: &str,
     schema: &str,
     name: &str,
 ) -> Result<Option<BTreeMap<String, String>>, CliError> {
-    if !matches!(source.table_format, TableFormat::Unity) {
-        return Ok(None);
+    match source.table_format {
+        TableFormat::Unity => Ok(credentials::vend_unity(
+            &source.endpoint,
+            catalog,
+            schema,
+            name,
+            source.token.as_deref(),
+        )
+        .await?),
+        TableFormat::Iceberg => {
+            Ok(
+                credentials::vend_iceberg(&source.endpoint, schema, name, source.token.as_deref())
+                    .await?,
+            )
+        }
     }
-    Ok(credentials::vend_unity(
-        &source.endpoint,
-        catalog,
-        schema,
-        name,
-        source.token.as_deref(),
-    )
-    .await?)
 }
 
 #[derive(Deserialize)]

@@ -126,7 +126,8 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
 }
 
 /// The table's env, plus vended credentials when it names none: the credentials
-/// stay in memory, and the emitted record never carries them.
+/// stay in memory, and the emitted record never carries them. Only Unity vends
+/// here — the Iceberg read carries its metadata inline.
 async fn vend_if_needed(
     source: &source::Source,
     catalog: &str,
@@ -134,10 +135,10 @@ async fn vend_if_needed(
     name: &str,
     mut env: BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, CliError> {
-    if !needs_credentials(&env) {
+    if !matches!(source.table_format, source::TableFormat::Unity) || !needs_credentials(&env) {
         return Ok(env);
     }
-    if let Some(credentials) = source::vend_if_unity(source, catalog, schema, name).await? {
+    if let Some(credentials) = source::vend(source, catalog, schema, name).await? {
         env.extend(credentials);
     }
     Ok(env)

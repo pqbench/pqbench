@@ -747,6 +747,58 @@ fn credentials_get_passes_a_managed_table_through() {
     assert!(trips["env"].is_null(), "{trips:?}");
 }
 
+/// `credentials get` with `PQB_TABLE_FORMAT=iceberg` on the live catalog: the
+/// `loadTable` delegation runs, the managed table's `storage-credentials` come
+/// back empty, and the ref passes through with no `env`.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn credentials_get_iceberg_passes_a_managed_table_through() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = format!(
+        "{}/iceberg-rest/v1/catalogs/dbx_samples",
+        unity_endpoint(&host)
+    );
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+        ("PQB_TABLE_FORMAT", "iceberg"),
+    ];
+    let refs = pipe_env(
+        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &env,
+    );
+    assert!(
+        refs.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&refs.stderr)
+    );
+    let output = pipe_env(
+        &["credentials", "get", "--format", "json"],
+        &refs.stdout,
+        &env,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let trips = records
+        .iter()
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .unwrap_or_else(|| panic!("no trips table: {records:?}"));
+    assert_eq!(trips["kind"], "pqbench.table-ref");
+    assert!(trips["env"].is_null(), "{trips:?}");
+}
+
 /// `credentials get --shell-env` on the live Unity catalog: the managed
 /// table passes through, so the loop's `eval` gets the lake source's options
 /// as shell assignments and no vended keys.

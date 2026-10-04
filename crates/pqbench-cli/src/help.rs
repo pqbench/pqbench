@@ -346,7 +346,11 @@ options come from a pqbench.lake-source on standard input, or from PQB_ENDPOINT
          env for other tools; `tablev2 info` vends in memory instead. Unity GET
          /tables/{full_name} names the table id and kind; a known non-vendable
          kind (managed default storage, a view) passes through with its own
-         env, and a catalog that reports no kind is attempted.
+         env, and a catalog that reports no kind is attempted. Under
+         PQB_TABLE_FORMAT=iceberg the command reads loadTable with
+         X-Iceberg-Access-Delegation and takes the catalog's
+         storage-credentials covering the table's location, for the next
+         storage read.
          --shell-env writes the one ref's env (the source's options plus the
          vended keys) as shell `export` lines instead, for the per-table loop
          to `eval` into the process environment.

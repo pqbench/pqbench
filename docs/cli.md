@@ -233,8 +233,13 @@ proceeds with the static env, as does a catalog that does not serve
 The record never carries env — refs stay durable data. `credentials get` is
 the explicit stage that materializes the credentials on the refs
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) for other
-tools; `--shell-env` writes the one ref's env — the source's options plus
-those keys — as shell `export` lines instead, for the loop's `eval`:
+tools: Unity's `temporary-table-credentials`, or under
+`PQB_TABLE_FORMAT=iceberg` `loadTable` with
+`X-Iceberg-Access-Delegation: vended-credentials` and the catalog's
+`storage-credentials` covering the table's location (the metadata-inline
+Iceberg read needs no keys, but the next storage operations do).
+`--shell-env` writes the one ref's env — the source's options plus those
+keys — as shell `export` lines instead, for the loop's `eval`:
 
 ```console no-run
 $ pqbench schema ls dbx_samples.nyctaxi --format json < source.json |

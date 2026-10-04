@@ -1,5 +1,6 @@
-//! Blackbox tests for `pqbench credentials get`: the shell env `--shell-env`
-//! writes for one ref, offline through the Iceberg dialect (which never vends).
+//! Blackbox tests for `pqbench credentials get`: the `--shell-env` one-ref
+//! rule, which fails before any request. The vend paths themselves run against
+//! the live Databricks suite and the lakehouse stand, not here.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -18,34 +19,6 @@ fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
         .unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();
     child.wait_with_output().unwrap()
-}
-
-/// `--shell-env` writes one ref's env as shell assignments for a loop's `eval`:
-/// the lake source's options first, the ref's over them. The Iceberg dialect
-/// never vends, so this runs offline.
-#[test]
-fn credentials_get_shell_env_writes_shell_assignments() {
-    let source = concat!(
-        r#"{"kind":"pqbench.lake-source","version":1,"table_format":"iceberg","endpoint":"http://example.test","env":{"AWS_REGION":"us-east-1","AWS_ENDPOINT":"http://minio.test:9000"}}"#,
-        "\n"
-    );
-    let reference = concat!(
-        r#"{"kind":"pqbench.table-ref","version":2,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips","env":{"AWS_REGION":"eu-west-1"}}"#,
-        "\n"
-    );
-    let output = pipe(
-        &["credentials", "get", "--shell-env"],
-        format!("{source}{reference}").as_bytes(),
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "export AWS_ENDPOINT='http://minio.test:9000'\nexport AWS_REGION='eu-west-1'\n"
-    );
 }
 
 /// `--shell-env` populates one table's env: a second ref fails before any output.
