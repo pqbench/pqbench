@@ -241,9 +241,9 @@ pass through, while classic compute reaches storage through its own instance
 profile.
 
 `credentials check` and `credentials get` read the same refs. The check asks
-each table's catalog for the capability manifest and errors when the manifest
-lists no direct-external-engine read or write support; eligible refs pass
-through unchanged. `credentials get` is the stage that materializes the
+each table's catalog for the capability manifest and drops a table whose
+manifest lists no direct-external-engine read or write support, with the
+reason on standard error; eligible refs pass through unchanged. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
 `temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the

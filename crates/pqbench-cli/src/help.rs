@@ -346,10 +346,10 @@ out.
          against the catalog's capability manifest: a table the catalog
          reports without direct-external-engine read or write support (managed
          default storage, a view) has no external read at all, so the check
-         errors with the reason; eligible refs pass through unchanged, so the
-         stage composes ahead of `credentials get`. Under
-         PQB_TABLE_FORMAT=iceberg the metadata read is inline through the
-         catalog, so the check passes.
+         drops it with the reason on standard error; eligible refs pass
+         through unchanged, so the stage composes ahead of `credentials get`
+         and a mixed schema keeps going. Under PQB_TABLE_FORMAT=iceberg the
+         metadata read is inline through the catalog, so the check passes.
 
   get    each pqbench.table-ref version 2 ref enriched with the table's
          vended read credentials (AWS_* on env) as one pqbench.table-ref

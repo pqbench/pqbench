@@ -112,14 +112,15 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
     emit.finish(&format!("tables: {tables}\n")).await
 }
 
-/// Check each ref's table is readable outside Databricks compute:
+/// Filter each ref's table on the catalog's eligibility:
 /// `schema ls | credentials check | credentials get`.
 ///
 /// The capability manifest names the tables only Databricks compute reads
 /// (managed default storage, a view). Those have no external read at all, so
-/// the check reports the table with the reason instead of letting a later
-/// storage read fail on credentials. Eligible refs pass through unchanged, so
-/// the stage composes ahead of `credentials get`.
+/// the check writes the reason to standard error and drops them instead of
+/// letting a later storage read fail on credentials. Eligible refs pass
+/// through unchanged, so the stage composes ahead of `credentials get` and a
+/// mixed schema keeps going.
 async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
     let input = read_input("credentials check").await?;
     if !input.piped {
@@ -132,33 +133,45 @@ async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
     let records = source::records("credentials check", input.first, input.lines);
     let source = input.source;
     let mut tables = 0;
+    let mut dropped = 0;
     let mut checks = records
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("credentials check", &record)?;
-            check(&source, &catalog, &schema, &name).await?;
-            Ok::<_, CliError>(record)
+            let reason = check(&source, &catalog, &schema, &name).await?;
+            Ok::<_, CliError>((record, reason))
         })
         .buffer_unordered(args.stage.fan_out.max(1));
-    while let Some(record) = checks.next().await {
-        emit.write_row(&CheckedRef { record: record? }).await?;
+    while let Some(checked) = checks.next().await {
+        let (record, reason) = checked?;
+        if let Some(reason) = reason {
+            eprintln!("error: {reason}");
+            dropped += 1;
+            continue;
+        }
+        emit.write_row(&CheckedRef { record }).await?;
         tables += 1;
     }
-    emit.finish(&format!("tables: {tables}\n")).await
+    emit.finish(&format!("tables: {tables}\n")).await?;
+    if dropped > 0 {
+        return Err(
+            format!("{dropped} table(s) are not readable outside Databricks compute").into(),
+        );
+    }
+    Ok(())
 }
 
-/// Gate a table on the catalog's eligibility: an ineligible table has no
-/// external read, so it errors with the reason instead of a doomed storage
-/// read. Iceberg reads its metadata inline through the catalog, so the
+/// The reason a table is not readable outside Databricks compute, `None` when
+/// it is. Iceberg reads its metadata inline through the catalog, so the
 /// eligibility gate is Unity's alone.
 async fn check(
     source: &source::Source,
     catalog: &str,
     schema: &str,
     name: &str,
-) -> Result<(), CliError> {
+) -> Result<Option<String>, CliError> {
     if !matches!(source.table_format, source::TableFormat::Unity) {
-        return Ok(());
+        return Ok(None);
     }
     let eligibility = pqbench::credentials::check_unity(
         &source.endpoint,
@@ -169,19 +182,18 @@ async fn check(
     )
     .await?;
     if eligibility == pqbench::credentials::Eligibility::Ineligible {
-        return Err(ineligible(&format!("{catalog}.{schema}.{name}")));
+        return Ok(Some(ineligible(&format!("{catalog}.{schema}.{name}"))));
     }
-    Ok(())
+    Ok(None)
 }
 
-/// The error an ineligible table reports.
-fn ineligible(name: &str) -> CliError {
+/// The message an ineligible table reports.
+fn ineligible(name: &str) -> String {
     format!(
         "{name} is not readable outside Databricks compute: the catalog reports no direct external \
          engine read support (managed default storage or a view); read it with Databricks compute, \
          or copy it to an external location"
     )
-    .into()
 }
 
 /// `--shell-env`: one ref's env as shell assignments, for the loop's `eval`.

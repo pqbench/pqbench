@@ -781,8 +781,9 @@ fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
 
 /// `credentials check` on the live Unity catalog: the UniForm Delta fixture
 /// (`pqbench_delta_test`) lists no direct-external-engine capability in its
-/// manifest, so the check errors with the reason; the managed Iceberg tables
-/// carry the capability and pass through.
+/// manifest, so the check drops it with the reason on stderr; the managed
+/// Iceberg tables carry the capability and pass through, including from a
+/// mixed schema.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn credentials_check_gates_the_live_tables() {
@@ -829,6 +830,45 @@ fn credentials_check_gates_the_live_tables() {
     let records = ndjson(&eligible.stdout);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
+
+    // A mixed schema drops the ineligible table and keeps the eligible ones:
+    // the filter the walk composes on.
+    let refs = pipe_env(
+        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &env,
+    );
+    assert!(
+        refs.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&refs.stderr)
+    );
+    let mixed = pipe_env(
+        &["credentials", "check", "--format", "json"],
+        &refs.stdout,
+        &env,
+    );
+    assert!(!mixed.status.success());
+    let mixed_stderr = String::from_utf8_lossy(&mixed.stderr);
+    assert!(
+        mixed_stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
+        "{mixed_stderr}"
+    );
+    assert!(
+        mixed_stderr.contains("no direct external engine read support"),
+        "{mixed_stderr}"
+    );
+    let mixed_records = ndjson(&mixed.stdout);
+    let passed: Vec<&str> = mixed_records
+        .iter()
+        .map(|record| record["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(passed.len(), 2, "{passed:?}");
+    assert!(passed.contains(&"dbx_samples.nyctaxi.trips"), "{passed:?}");
+    assert!(
+        passed.contains(&"dbx_samples.nyctaxi.pqbench_iceberg_test"),
+        "{passed:?}"
+    );
 }
 
 /// The whole credentials stage on the external fixture: every table in the
