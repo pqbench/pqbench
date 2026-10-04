@@ -589,3 +589,35 @@ See also:
   pqbench experiment --help  measure a rewrite
   pqbench --help             documents
   docs/skill.md  docs/cli.md";
+
+pub const SETUP_ABOUT: &str = "Print the walk's environment as shell exports to eval";
+
+pub const SETUP_LONG_ABOUT: &str = "\
+Print the environment the metadata walk needs, as shell `export` lines, for
+the caller to evaluate:
+
+  eval \"$(pqbench setup)\"
+
+The endpoint and token resolve the way the Databricks SDKs do: the flag, then
+PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A notebook
+kernel's dbutils context is not visible to a subprocess, so a notebook sets
+DATABRICKS_* from it first. AWS_REGION comes from the flag or AWS_REGION (a
+vended lease carries no region); AWS_EC2_METADATA_DISABLED=true keeps the AWS
+SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
+
+  endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
+  token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
+  format    --table-format | PQB_TABLE_FORMAT (unity default)
+  region    --region   | AWS_REGION";
+
+pub const SETUP_AFTER: &str = "\
+Examples:
+  eval \"$(pqbench setup --endpoint https://… --token dapi-… --region us-east-1)\"
+  DATABRICKS_HOST=https://… DATABRICKS_TOKEN=dapi-… eval \"$(pqbench setup)\"
+  pqbench setup --table-format iceberg --region us-west-2
+
+See also:
+  pqbench credentials --help  check and vend read credentials
+  pqbench tablev2 --help      read a listed table's record
+  pqbench --help              auth, lake-source shape
+  docs/cli.md";

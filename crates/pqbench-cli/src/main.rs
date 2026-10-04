@@ -20,6 +20,7 @@ mod metastore;
 mod profile;
 mod ratelimit;
 mod schema;
+mod setup;
 mod skill;
 mod source;
 mod table;
@@ -160,6 +161,13 @@ enum Command {
         after_long_help = help::VIZ_AFTER
     )]
     Viz(viz::VizArgs),
+    #[command(
+        about = help::SETUP_ABOUT,
+        long_about = help::SETUP_LONG_ABOUT,
+        after_help = help::SETUP_AFTER,
+        after_long_help = help::SETUP_AFTER
+    )]
+    Setup(setup::SetupArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -192,6 +200,7 @@ async fn main() -> ExitCode {
         Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args).await,
+        Command::Setup(args) => setup::run(&args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
