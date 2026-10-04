@@ -1041,9 +1041,10 @@ fn credentials_get_vends_the_live_tables() {
 }
 
 /// `credentials get` with `PQB_TABLE_FORMAT=iceberg` on the live catalog: the
-/// `loadTable` delegation returns the catalog's credentials for the managed
-/// Iceberg tables onto the ref's `env`; the UniForm Delta table returns none
-/// and passes through with no `env`.
+/// `loadCredentials` route returns the catalog's credentials for the managed
+/// Iceberg tables onto the ref's `env`; the UniForm Delta table cannot mint
+/// there, falls back to the delegated `loadTable`, and passes through with no
+/// `env`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn credentials_get_iceberg_vends_the_live_tables() {

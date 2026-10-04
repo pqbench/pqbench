@@ -246,11 +246,12 @@ lists no direct-external-engine read or write support; eligible refs pass
 through unchanged. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
-`temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` `loadTable`
-with `X-Iceberg-Access-Delegation: vended-credentials` and the catalog's
-`storage-credentials` covering the table's location (the metadata-inline
-Iceberg read needs no keys, but the next storage operations do). A table the
-Iceberg catalog cannot serve passes through with its own env. `--shell-env`
+`temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the
+catalog's `loadCredentials` route (`GET …/tables/{table}/credentials`) and the
+`storage-credentials` it returns (the metadata-inline Iceberg read needs no
+keys, but the next storage operations do); a catalog that does not serve the
+route falls back to the delegated `loadTable`. A table the Iceberg catalog
+cannot serve passes through with its own env. `--shell-env`
 writes the one ref's env — the source's options plus those keys — as shell
 `export` lines instead, for the loop's `eval`:
 

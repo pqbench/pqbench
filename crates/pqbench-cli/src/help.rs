@@ -360,11 +360,11 @@ out.
          storage, a view) passes through with its own env, and a catalog that
          reports no manifest is attempted; inside serverless compute Unity
          refuses to mint storage credentials, so refs pass through there too.
-         Under PQB_TABLE_FORMAT=iceberg the command reads loadTable with
-         X-Iceberg-Access-Delegation and takes the catalog's
-         storage-credentials covering the table's location, for the next
-         storage read; a table the catalog cannot serve via Iceberg passes
-         through with its own env.
+         Under PQB_TABLE_FORMAT=iceberg the command reads the catalog's
+         credentials route (loadCredentials) and takes the storage-credentials
+         it returns, for the next storage read; a catalog that does not serve
+         it falls back to the delegated loadTable, and a table the catalog
+         cannot serve via Iceberg passes through with its own env.
          --shell-env writes the one ref's env (the source's options plus the
          vended keys) as shell `export` lines instead, for the per-table loop
          to `eval` into the process environment.

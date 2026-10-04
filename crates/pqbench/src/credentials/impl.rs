@@ -14,10 +14,13 @@
 //! (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); those refs pass
 //! through with no env, since the compute reaches storage itself.
 //!
-//! Iceberg REST serves `loadTable`; with `X-Iceberg-Access-Delegation:
-//! vended-credentials` the response may carry `storage-credentials`, a list of
-//! prefix-scoped configs. The longest prefix covering the table's location
-//! supplies the `s3.*` keys; an empty list means the catalog does not vend. A
+//! Iceberg REST serves `loadCredentials` (`GET
+//! …/tables/{table}/credentials`) with the catalog's vended credentials: a
+//! list of prefix-scoped configs whose `s3.*` keys become the ref's `AWS_*`
+//! env. A catalog that does not serve the route (or cannot mint for the table,
+//! like a UniForm Delta table) falls back to `loadTable` with
+//! `X-Iceberg-Access-Delegation: vended-credentials`, where the longest prefix
+//! covering the table's location wins, and `config` may carry the keys. A
 //! table the catalog cannot serve via Iceberg (`is not an Iceberg compatible
 //! table`), an unknown table, and an unimplemented operation all pass through
 //! with no credentials.
@@ -101,6 +104,13 @@ struct LoadedTable {
 struct TableMetadata {
     #[serde(default)]
     location: Option<String>,
+}
+
+/// The document `loadCredentials` returns: the vended storage credentials.
+#[derive(Deserialize)]
+struct LoadedCredentials {
+    #[serde(default, rename = "storage-credentials")]
+    storage_credentials: Vec<StorageCredential>,
 }
 
 /// One prefix-scoped credential set from `storage-credentials`.
@@ -206,7 +216,43 @@ fn grants_direct_access(capability: &str) -> bool {
     )
 }
 
+/// The catalog's vended credentials for one Iceberg table: `loadCredentials`
+/// (`GET …/tables/{table}/credentials`) names the `s3.*` keys directly; a
+/// catalog that does not serve the route (or cannot mint for the table, like a
+/// UniForm Delta table) falls back to the delegated `loadTable`.
 pub(super) async fn vend_iceberg(
+    endpoint: &str,
+    schema: &str,
+    table: &str,
+    token: Option<&str>,
+) -> Result<Option<BTreeMap<String, String>>, Error> {
+    let url = format!(
+        "{}/namespaces/{}/tables/{}/credentials",
+        dialect::iceberg_root(endpoint),
+        dialect::iceberg_namespace(schema),
+        dialect::encode(table)
+    );
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
+    if response.status == 200 {
+        let loaded: LoadedCredentials =
+            serde_json::from_slice(&response.bytes).map_err(|error| {
+                Error::from(format!(
+                    "the response was not the expected document: {error}"
+                ))
+            })?;
+        return Ok(credential_options(&loaded.storage_credentials));
+    }
+    vend_iceberg_load(endpoint, schema, table, token).await
+}
+
+/// The delegated `loadTable` route: `X-Iceberg-Access-Delegation:
+/// vended-credentials` may carry `storage-credentials` — the longest prefix
+/// covering the table's location wins — or the `s3.*` keys in `config`. A
+/// table the catalog cannot serve via Iceberg, an unknown table, and an
+/// unimplemented operation all pass through with no credentials.
+async fn vend_iceberg_load(
     endpoint: &str,
     schema: &str,
     table: &str,
@@ -249,6 +295,15 @@ pub(super) async fn vend_iceberg(
         .unwrap_or_default();
     let config = matching_config(&loaded.storage_credentials, &location).unwrap_or(loaded.config);
     Ok(aws_options(&config))
+}
+
+/// The `AWS_*` options from the first vended credential naming an access key:
+/// the credentials route is table-scoped, so any credential it returns can
+/// supply the env.
+fn credential_options(credentials: &[StorageCredential]) -> Option<BTreeMap<String, String>> {
+    credentials
+        .iter()
+        .find_map(|credential| aws_options(&credential.config))
 }
 
 /// The config of the storage credential whose prefix covers `location`; the
