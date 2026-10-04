@@ -344,23 +344,23 @@ out.
 
   check  the walk's single filter: each pqbench.table-ref version 2 ref on
          standard input is checked against the catalog. A `system` catalog
-         ref, a view (the catalog reports no location), and a table whose
-         capability manifest lists no direct-external-engine read or write
-         support (managed default storage) all have no external read, so the
-         check drops each with the reason on standard error; eligible refs
-         pass through unchanged, so the stage composes ahead of `credentials
-         get` and a mixed schema keeps going. Under PQB_TABLE_FORMAT=iceberg
-         the metadata read is inline through the catalog, so the check passes.
+         ref, a view (the catalog reports no location), and a table on
+         Databricks default storage (`TABLE_DB_STORAGE`) all have no external
+         read, so the check drops each with the reason on standard error;
+         eligible refs pass through unchanged, so the stage composes ahead of
+         `credentials get` and a mixed schema keeps going. Under
+         PQB_TABLE_FORMAT=iceberg the metadata read is inline through the
+         catalog, so the check passes.
 
   get    each pqbench.table-ref version 2 ref enriched with the table's
          vended read credentials (AWS_* on env) as one pqbench.table-ref
          version 2 line — the explicit stage that materializes env for the
          table read and other tools. Unity GET /tables/{full_name} reads the
-         table id and capability manifest; a manifest without
-         direct-external-engine read or write support (managed default
-         storage, a view) passes through with its own env, and a catalog that
-         reports no manifest is attempted; inside serverless compute Unity
-         refuses to mint storage credentials, so refs pass through there too.
+         table id and securable kind; Databricks default storage
+         (`TABLE_DB_STORAGE`) passes through with its own env, and any other
+         kind (or a catalog that reports none) is attempted; inside serverless
+         compute Unity refuses to mint storage credentials, so refs pass
+         through there too.
          Under PQB_TABLE_FORMAT=iceberg the command reads the catalog's
          credentials route (loadCredentials) and takes the storage-credentials
          it returns, for the next storage read; a catalog that does not serve

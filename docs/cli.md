@@ -244,8 +244,8 @@ A vended lease is a storage fact, not a caller choice. Databricks serves
 managed tables to external systems through its catalog APIs; resolving the
 Delta log by path is not that interface, and Databricks-managed default
 storage explicitly denies externally issued sessions on its objects (verified
-for data files, Iceberg manifests, and the Delta log) — the capability
-manifest reports those tables without direct external engine support, so
+for data files, Iceberg manifests, and the Delta log) — the catalog reports
+those tables as Databricks default storage (`TABLE_DB_STORAGE`), so
 `credentials check` stops the walk with the reason and no storage read runs.
 Customer-storage tables read under the lease; compatibility mode publishes a
 read-only copy for path-based clients. Inside Databricks compute the lease is
@@ -256,9 +256,8 @@ profile.
 
 `credentials check` and `credentials get` read the same refs. The check is the
 walk's single filter: it drops a `system` catalog ref, a view (the catalog
-reports no location), and a table whose manifest lists no direct-external-engine
-read or write support, with the reason on standard error; eligible refs pass
-through unchanged. `credentials get` is the stage that materializes the
+reports no location), and a table on Databricks default storage, with the
+reason on standard error; eligible refs pass through unchanged. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
 `temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the
@@ -353,11 +352,11 @@ Whether the second mode exists is the storage's property, not the caller's:
 | --- | --- |
 | External location (customer S3), external table | yes |
 | External location, managed table | yes |
-| Databricks default storage, managed table | no — the capability manifest reports no direct external engine support, and the objects deny externally issued sessions |
+| Databricks default storage, managed table | no — the catalog reports `TABLE_DB_STORAGE`; the vending route refuses, and the objects deny externally issued sessions |
 | Managed volume | files via FUSE in compute or the Files API; not a table read |
 
-`credentials check` reports the answer (a system table, a view, or a manifest
-without direct external read) with a reason; `credentials get` vends the lease.
+`credentials check` reports the answer (a system table, a view, or Databricks
+default storage) with a reason; `credentials get` vends the lease.
 Two environment notes:
 
 - The vended response carries the keys, a session token, and the storage URL,

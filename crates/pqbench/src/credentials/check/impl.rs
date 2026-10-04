@@ -1,14 +1,15 @@
 //! The Unity table record behind [`super::api::check_unity`].
 //!
-//! Unity serves `GET /tables/{catalog}.{schema}.{table}` with
-//! `include_manifest_capabilities=true`; the record names the capability
-//! manifest. A manifest that lists capabilities without
-//! `HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT` or
-//! `HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT` (managed default storage, a
-//! view) means only Databricks compute reads the table; a missing or empty
-//! manifest says nothing, so a catalog that reports none (Unity OSS) is
-//! eligible. The URLs and JSON shapes are this module's; the transport is the
-//! third-party facade.
+//! Unity serves `GET /tables/{catalog}.{schema}.{table}`; the record names the
+//! securable kind. Databricks default storage is `TABLE_DB_STORAGE`, the kind
+//! the vending route refuses, so it has no external read; a view has no data
+//! files of its own. Every other kind is attempted, and a missing kind says
+//! nothing, so a catalog that reports none (Unity OSS) is eligible.
+//!
+//! The gate is the kind, not the capability manifest: a managed table in an
+//! external location can carry an incomplete capability list, so keying on it
+//! would drop a readable table. The URLs and JSON shapes are this module's;
+//! the transport is the third-party facade.
 
 use serde::Deserialize;
 
@@ -23,31 +24,23 @@ struct TableRecord {
     #[serde(default)]
     storage_location: Option<String>,
     #[serde(default)]
-    securable_kind_manifest: Option<SecurableKindManifest>,
+    securable_kind: Option<String>,
 }
 
 impl TableRecord {
     /// Whether the catalog reports the table readable outside Databricks
     /// compute. A view (or another location-less securable) has no data files
-    /// to read; a manifest that lists capabilities without direct support
-    /// (managed default storage) is not readable either. A missing or empty
-    /// manifest says nothing, so the table is attempted.
+    /// to read; `TABLE_DB_STORAGE` is Databricks default storage, which the
+    /// vending route refuses. A missing kind says nothing, so the table is
+    /// attempted.
     fn eligibility(&self) -> Eligibility {
         if self.is_view() {
             return Eligibility::Ineligible(Reason::NotATable);
         }
-        match &self.securable_kind_manifest {
-            Some(manifest)
-                if !manifest.capabilities.is_empty()
-                    && !manifest
-                        .capabilities
-                        .iter()
-                        .any(|capability| grants_direct_access(capability)) =>
-            {
-                Eligibility::Ineligible(Reason::NoExternalRead)
-            }
-            _ => Eligibility::Eligible,
+        if self.is_default_storage() {
+            return Eligibility::Ineligible(Reason::NoExternalRead);
         }
+        Eligibility::Eligible
     }
 
     /// Whether the record is a view rather than a table: the type names a
@@ -58,23 +51,12 @@ impl TableRecord {
             Some("VIEW" | "MATERIALIZED_VIEW")
         ) || self.storage_location.as_deref().is_none_or(str::is_empty)
     }
-}
 
-/// The capability manifest Unity returns for
-/// `include_manifest_capabilities=true`.
-#[derive(Deserialize)]
-struct SecurableKindManifest {
-    #[serde(default)]
-    capabilities: Vec<String>,
-}
-
-/// Whether a manifest capability marks the table readable or writable
-/// outside Databricks compute.
-fn grants_direct_access(capability: &str) -> bool {
-    matches!(
-        capability,
-        "HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT" | "HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT"
-    )
+    /// Whether the catalog reports Databricks default (managed) storage — the
+    /// kind the vending route refuses to mint for.
+    fn is_default_storage(&self) -> bool {
+        self.securable_kind.as_deref() == Some("TABLE_DB_STORAGE")
+    }
 }
 
 /// Whether Unity reports the table readable outside Databricks compute,
@@ -89,7 +71,7 @@ pub(super) async fn check_unity(
     let name = format!("{catalog}.{schema}.{table}");
     let record: TableRecord = dialect::get_json(
         &format!(
-            "{}/tables/{}?include_manifest_capabilities=true",
+            "{}/tables/{}",
             dialect::api_root(endpoint),
             dialect::encode(&name)
         ),
@@ -127,11 +109,9 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_without_direct_support_is_ineligible() {
-        let record = record(
-            r#"{"storage_location":"s3://b/t",
-                "securable_kind_manifest":{"capabilities":["HAS_MANAGED_STORAGE"]}}"#,
-        );
+    fn databricks_default_storage_is_ineligible() {
+        let record =
+            record(r#"{"storage_location":"s3://b/t","securable_kind":"TABLE_DB_STORAGE"}"#);
         assert_eq!(
             record.eligibility(),
             Eligibility::Ineligible(Reason::NoExternalRead)
@@ -139,11 +119,20 @@ mod tests {
     }
 
     #[test]
-    fn a_customer_table_with_direct_support_is_eligible() {
+    fn a_managed_table_in_an_external_location_is_eligible() {
+        // Its capability list may be incomplete; the kind still reads
+        // externally, so the check must not drop it.
         let record = record(
-            r#"{"storage_location":"s3://b/t",
-                "securable_kind_manifest":{"capabilities":["HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT"]}}"#,
+            r#"{"storage_location":"s3://b/t","securable_kind":"TABLE_DELTA_ICEBERG_MANAGED",
+                "securable_kind_manifest":{"capabilities":["HAS_STORAGE"]}}"#,
         );
+        assert_eq!(record.eligibility(), Eligibility::Eligible);
+    }
+
+    #[test]
+    fn a_customer_table_is_eligible() {
+        let record =
+            record(r#"{"storage_location":"s3://b/t","securable_kind":"TABLE_DELTA_EXTERNAL"}"#);
         assert_eq!(record.eligibility(), Eligibility::Eligible);
     }
 }

@@ -41,10 +41,9 @@ pub enum Reason {
     /// The catalog reports a view (or another non-table securable), which has
     /// no data files of its own.
     NotATable,
-    /// The capability manifest lists capabilities without
-    /// `HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT` or
-    /// `HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT` (managed default storage):
-    /// only Databricks compute reads the table.
+    /// The catalog reports Databricks default storage (`TABLE_DB_STORAGE`),
+    /// the kind the vending route refuses: only Databricks compute reads the
+    /// table.
     NoExternalRead,
 }
 
@@ -60,12 +59,11 @@ pub enum TableFormat {
 
 /// Whether `table` is readable outside Databricks compute, by dialect.
 ///
-/// The check owns the format: Unity reads the
-/// `GET /tables/{full_name}?include_manifest_capabilities=true` record without
-/// asking for credentials; Iceberg REST reads its metadata inline through the
-/// catalog, so the table is eligible and no catalog call is made. Unity also
-/// drops a `system` catalog ref without a call and reports a view as
-/// [`Reason::NotATable`], so `schema ls` can list every securable and the
+/// The check owns the format: Unity reads the `GET /tables/{full_name}` record
+/// without asking for credentials; Iceberg REST reads its metadata inline
+/// through the catalog, so the table is eligible and no catalog call is made.
+/// Unity also drops a `system` catalog ref without a call and reports a view
+/// as [`Reason::NotATable`], so `schema ls` can list every securable and the
 /// check is the single filter. The caller passes the dialect it runs under and
 /// gets the same [`Eligibility`] either way. The check separates eligibility
 /// from vending: a caller that needs the table itself (`tablev2 info`) can
