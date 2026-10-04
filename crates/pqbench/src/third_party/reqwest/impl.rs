@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use reqwest::Client;
 
-use super::api::{Error, Request, Response};
+use super::api::{Error, Method, Request, Response};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -28,12 +28,13 @@ fn client() -> Result<&'static Client, Error> {
 
 pub(crate) async fn request(request: Request) -> Result<Response, Error> {
     let client = client()?;
-    let mut builder = match &request.body {
-        Some(body) => client
+    let mut builder = match request.method {
+        Method::Post => client
             .post(&request.url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body.clone()),
-        None => client.get(&request.url),
+            .body(request.body.clone().unwrap_or_default()),
+        Method::Get => client.get(&request.url),
+        Method::Head => client.head(&request.url),
     };
     if let Some(bearer) = &request.bearer {
         builder = builder.bearer_auth(bearer);
@@ -46,6 +47,13 @@ pub(crate) async fn request(request: Request) -> Result<Response, Error> {
         .await
         .map_err(|error| Error::from(format!("request failed: {error}")))?;
     let status = response.status().as_u16();
+    let headers: Vec<(String, String)> = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
+        })
+        .collect();
     let body = response
         .bytes()
         .await
@@ -53,6 +61,7 @@ pub(crate) async fn request(request: Request) -> Result<Response, Error> {
         .map_err(|error| Error::from(format!("response failed: {error}")))?;
     Ok(Response {
         status,
+        headers,
         bytes: body,
     })
 }

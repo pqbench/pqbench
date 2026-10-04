@@ -12,6 +12,7 @@ use url::Url;
 use crate::third_party::object_store::api::{
     Error, ObjectReader, ObjectStat, PrefixListing, Remote,
 };
+use crate::third_party::reqwest as http;
 
 struct S3 {
     store: Box<dyn ObjectStore>,
@@ -76,31 +77,9 @@ pub(crate) fn open_remote(url: &Url, options: &[(String, String)]) -> Result<Obj
     })))
 }
 
-/// Timeouts for the signed HEAD. The HEAD uses its own client, so it does not
-/// inherit `object_store`'s 5s connect / 30s request defaults; a blackholed
-/// storage endpoint must fail, not hang.
-const HEAD_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const HEAD_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// One pooled client for every signed HEAD, so connections are reused across
-/// the files of a table.
-fn head_client() -> Result<&'static reqwest::Client, Error> {
-    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
-        std::sync::OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .connect_timeout(HEAD_CONNECT_TIMEOUT)
-                .timeout(HEAD_REQUEST_TIMEOUT)
-                .build()
-                .map_err(|error| error.to_string())
-        })
-        .as_ref()
-        .map_err(|error| Error(format!("http client: {error}")))
-}
-
 /// object_store 0.13 maps cache/content headers on HEAD but drops
-/// `x-amz-storage-class`. Sign a HEAD and read the header ourselves.
+/// `x-amz-storage-class`. Sign a HEAD and read the header ourselves, through
+/// the one HTTP transport (the same pooled client the catalog calls use).
 async fn head_object(
     store: &AmazonS3,
     location: &::object_store::path::Path,
@@ -113,25 +92,17 @@ async fn head_object(
         )
         .await
         .map_err(remote_error)?;
-    let response = head_client()?
-        .head(url)
-        .send()
+    let response = http::request(http::Request::head(url.to_string(), None))
         .await
         .map_err(|error| Error(format!("cannot HEAD object: {error}")))?;
-    if !response.status().is_success() {
+    if !(200..300).contains(&response.status) {
         return Err(Error(format!(
             "cannot HEAD object: HTTP {}",
-            response.status()
+            response.status
         )));
     }
-    let headers: Vec<(String, String)> = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| {
-            Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
-        })
-        .collect();
-    let pairs: Vec<(&str, &str)> = headers
+    let pairs: Vec<(&str, &str)> = response
+        .headers
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
