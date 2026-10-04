@@ -191,7 +191,8 @@ lists the tables in it, one `pqbench.table-ref` version 2 line each — the
 document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
-Entries with no location (views) are skipped. Refs are addresses; the walk
+A view carries no location, so its ref keeps no storage path;
+`credentials check` is the stage that drops it. Refs are addresses; the walk
 context (endpoint, token, storage options) comes from the lake source or
 `PQB_*`. The walk is a plain pipeline: every command streams refs and keeps
 `--fan-out` in flight, `credentials get` writes the vended keys onto the refs,
@@ -240,10 +241,11 @@ outright (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`) and refs
 pass through, while classic compute reaches storage through its own instance
 profile.
 
-`credentials check` and `credentials get` read the same refs. The check asks
-each table's catalog for the capability manifest and drops a table whose
-manifest lists no direct-external-engine read or write support, with the
-reason on standard error; eligible refs pass through unchanged. `credentials get` is the stage that materializes the
+`credentials check` and `credentials get` read the same refs. The check is the
+walk's single filter: it drops a `system` catalog ref, a view (the catalog
+reports no location), and a table whose manifest lists no direct-external-engine
+read or write support, with the reason on standard error; eligible refs pass
+through unchanged. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
 `temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the
@@ -341,8 +343,9 @@ Whether the second mode exists is the storage's property, not the caller's:
 | Databricks default storage, managed table | no — the capability manifest reports no direct external engine support, and the objects deny externally issued sessions |
 | Managed volume | files via FUSE in compute or the Files API; not a table read |
 
-`credentials check` reports the manifest's answer with a reason; `credentials
-get` vends the lease. Two environment notes:
+`credentials check` reports the answer (a system table, a view, or a manifest
+without direct external read) with a reason; `credentials get` vends the lease.
+Two environment notes:
 
 - The vended response carries the keys, a session token, and the storage URL,
   but no region: set `AWS_REGION` (or the client's equivalent) for the read.

@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::emit::{Align, Emitter, Format, Row};
 use crate::source::{self, read_input, ref_env, table_ref, vend};
 use crate::CliError;
+use pqbench::credentials::check::{Eligibility, Reason};
 
 /// Arguments for `credentials`: one table's storage options.
 #[derive(Args)]
@@ -99,12 +100,11 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
 /// Filter each ref's table on the catalog's eligibility:
 /// `schema ls | credentials check | credentials get`.
 ///
-/// The capability manifest names the tables only Databricks compute reads
-/// (managed default storage, a view). Those have no external read at all, so
-/// the check writes the reason to standard error and drops them instead of
-/// letting a later storage read fail on credentials. Eligible refs pass
-/// through unchanged, so the stage composes ahead of `credentials get` and a
-/// mixed schema keeps going.
+/// The check is the walk's single filter. It drops a `system` catalog ref, a
+/// view (the catalog reports no location), and a table whose capability
+/// manifest marks compute-only (managed default storage), writing the reason
+/// to standard error. Eligible refs pass through unchanged, so the stage
+/// composes ahead of `credentials get` and a mixed schema keeps going.
 async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
     let input = read_input("credentials check").await?;
     if !input.piped {
@@ -164,18 +164,24 @@ async fn check(
         source.token.as_deref(),
     )
     .await?;
-    if eligibility == pqbench::credentials::check::Eligibility::Ineligible {
-        return Ok(Some(ineligible(&format!("{catalog}.{schema}.{name}"))));
+    match eligibility {
+        Eligibility::Eligible => Ok(None),
+        Eligibility::Ineligible(reason) => Ok(Some(ineligible(
+            &format!("{catalog}.{schema}.{name}"),
+            reason,
+        ))),
     }
-    Ok(None)
 }
 
 /// The message an ineligible table reports.
-fn ineligible(name: &str) -> String {
+fn ineligible(name: &str, reason: Reason) -> String {
+    let because = match reason {
+        Reason::SystemTable => "a system table",
+        Reason::NotATable => "a view, not a table",
+        Reason::NoExternalRead => "a table only Databricks compute reads (managed default storage)",
+    };
     format!(
-        "{name} is not readable outside Databricks compute: the catalog reports no direct external \
-         engine read support (managed default storage or a view); read it with Databricks compute, \
-         or copy it to an external location"
+        "{name} is {because}: read it with Databricks compute, or copy it to an external location"
     )
 }
 

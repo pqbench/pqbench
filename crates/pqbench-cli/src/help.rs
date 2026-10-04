@@ -342,14 +342,15 @@ object-store options come from a pqbench.lake-source on standard input, or from
 PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them
 out.
 
-  check  each pqbench.table-ref version 2 ref on standard input is checked
-         against the catalog's capability manifest: a table the catalog
-         reports without direct-external-engine read or write support (managed
-         default storage, a view) has no external read at all, so the check
-         drops it with the reason on standard error; eligible refs pass
-         through unchanged, so the stage composes ahead of `credentials get`
-         and a mixed schema keeps going. Under PQB_TABLE_FORMAT=iceberg the
-         metadata read is inline through the catalog, so the check passes.
+  check  the walk's single filter: each pqbench.table-ref version 2 ref on
+         standard input is checked against the catalog. A `system` catalog
+         ref, a view (the catalog reports no location), and a table whose
+         capability manifest lists no direct-external-engine read or write
+         support (managed default storage) all have no external read, so the
+         check drops each with the reason on standard error; eligible refs
+         pass through unchanged, so the stage composes ahead of `credentials
+         get` and a mixed schema keeps going. Under PQB_TABLE_FORMAT=iceberg
+         the metadata read is inline through the catalog, so the check passes.
 
   get    each pqbench.table-ref version 2 ref enriched with the table's
          vended read credentials (AWS_* on env) as one pqbench.table-ref
