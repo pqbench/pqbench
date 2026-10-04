@@ -8,7 +8,7 @@ use pqbench::tablev2::{credentials, info};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::emit::{Align, Emitter, Format, Row};
+use crate::emit::{write_stdout, Align, Emitter, Format, Row};
 use crate::source::{self, read_input};
 use crate::CliError;
 
@@ -61,6 +61,10 @@ pub(crate) struct VendCredentialsArgs {
     /// requests in flight at once
     #[arg(long, default_value_t = 64)]
     fan_out: usize,
+    /// write the one ref's env as shell `export` lines for a loop's `eval`,
+    /// not refs
+    #[arg(long = "shell-env")]
+    shell_env: bool,
 }
 
 pub(crate) async fn run(args: &TableV2Args) -> Result<(), CliError> {
@@ -144,12 +148,24 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
 }
 
 /// Put vended read credentials on each ref: `schema ls | vend-credentials`.
+///
+/// `--shell-env` writes the one ref's env as shell assignments instead, so a
+/// per-table loop can `eval` them into the process environment.
 async fn run_vend_credentials(args: &VendCredentialsArgs) -> Result<(), CliError> {
     let input = read_input("tablev2 vend-credentials").await?;
     if !input.piped {
         return Err(
             "tablev2 vend-credentials reads pqbench.table-ref v2 refs on standard input".into(),
         );
+    }
+    if args.shell_env {
+        if args.output.is_some() || args.format != Format::Auto {
+            return Err(
+                "tablev2 vend-credentials --shell-env writes shell assignments to stdout; drop --format / --output"
+                    .into(),
+            );
+        }
+        return export_credentials(input).await;
     }
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let records = source::records("tablev2 vend-credentials", input.first, input.lines);
@@ -188,6 +204,40 @@ async fn run_vend_credentials(args: &VendCredentialsArgs) -> Result<(), CliError
     emit.finish(&format!("tables: {tables}\n")).await
 }
 
+/// `--shell-env`: one ref's env as shell assignments, for the loop's `eval`.
+///
+/// The env is the lake source's options, the ref's own, then the vended
+/// credentials, so the loop can put them in the process environment once and
+/// run the table's work under them.
+async fn export_credentials(input: source::Input) -> Result<(), CliError> {
+    let source = input.source;
+    let mut records = source::records("tablev2 vend-credentials", input.first, input.lines);
+    let Some(record) = records.next().await else {
+        return Err("tablev2 vend-credentials --shell-env takes one pqbench.table-ref".into());
+    };
+    let record = record?;
+    if records.next().await.transpose()?.is_some() {
+        return Err(
+            "tablev2 vend-credentials --shell-env populates one table's env; feed one ref".into(),
+        );
+    }
+    let (catalog, schema, name) = table_ref("tablev2 vend-credentials", &record)?;
+    let credentials = if matches!(source.table_format, source::TableFormat::Unity) {
+        credentials::vend(
+            &source.endpoint,
+            &catalog,
+            &schema,
+            &name,
+            source.token.as_deref(),
+        )
+        .await?
+    } else {
+        None
+    };
+    let env = table_env(&record, credentials, &source.env);
+    write_stdout(&export_lines(&env)).await
+}
+
 /// The ref's `env` merged over the lake source's: the table's vended options win.
 fn ref_env(record: &Value, source: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut env = source.clone();
@@ -201,9 +251,35 @@ fn ref_env(record: &Value, source: &BTreeMap<String, String>) -> BTreeMap<String
     env
 }
 
-/// The ref's `env`: the lake source's options, the ref's own, then the vended
+/// The table's env: the lake source's options, the ref's own, then the vended
 /// credentials. The vended keys win, so a table-scoped lease replaces any
 /// static key for that table.
+fn table_env(
+    record: &Value,
+    credentials: Option<BTreeMap<String, String>>,
+    source: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut env = ref_env(record, source);
+    if let Some(credentials) = credentials {
+        env.extend(credentials);
+    }
+    env
+}
+
+/// The env as shell `export` lines, one variable per line; the value is single
+/// quoted, so `eval` sets it literally (`'` becomes `'\''`).
+fn export_lines(env: &BTreeMap<String, String>) -> String {
+    let mut lines = String::new();
+    for (key, value) in env {
+        lines.push_str(&format!(
+            "export {key}='{}'\n",
+            value.replace('\'', "'\\''")
+        ));
+    }
+    lines
+}
+
+/// The ref's `env` with the vended credentials written over it.
 fn add_env(
     mut record: Value,
     credentials: Option<BTreeMap<String, String>>,
@@ -212,8 +288,7 @@ fn add_env(
     let Some(credentials) = credentials else {
         return record;
     };
-    let mut env = ref_env(&record, source);
-    env.extend(credentials);
+    let env = table_env(&record, Some(credentials), source);
     let Some(object) = record.as_object_mut() else {
         return record;
     };

@@ -80,9 +80,12 @@ Auth (how to reach data):
 
   Databricks-governed tables
     lake lists storage_location. Reading objects still needs AWS keys that
-    can GetObject. pqbench does not call temporary-table-credentials; paste
-    vended STS into AWS_* on env, or use a role that already can read the
-    bucket.
+    can GetObject. The legacy lake path does not call
+    temporary-table-credentials; paste vended STS into AWS_* on env, or use
+    a role that already can read the bucket. The tablev2 walk does:
+    `tablev2 info` vends in memory and `tablev2 vend-credentials`
+    materializes the keys (or prints them as shell `export` lines for a
+    loop's `eval` with `--shell-env`).
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
   Producer pipe
@@ -318,6 +321,9 @@ chains. Version 1 refs (the legacy `lake` stream) are rejected.
          GET /tables/{full_name} names the table id and kind; a known
          non-vendable kind (managed default storage, a view) passes through
          with its own env, and a catalog that reports no kind is attempted.
+         --shell-env writes the one ref's env (the source's options plus the
+         vended keys) as shell `export` lines instead, for the per-table loop
+         to `eval` into the process environment.
 
 The name is temporary: the older `pqbench table` still owns `table info`
 (filling a ref's storage path) and the file-loading command, and exchanges

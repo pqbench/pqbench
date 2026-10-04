@@ -722,6 +722,57 @@ fn vend_credentials_passes_a_managed_table_through() {
     assert!(trips["env"].is_null(), "{trips:?}");
 }
 
+/// `tablev2 vend-credentials --shell-env` on the live Unity catalog: the managed
+/// table passes through, so the loop's `eval` gets the lake source's options
+/// as shell assignments and no vended keys.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn vend_credentials_export_writes_the_loop_env() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = unity_endpoint(&host);
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+    ];
+    let refs = pipe_env(
+        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &env,
+    );
+    assert!(
+        refs.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&refs.stderr)
+    );
+    let trips = ndjson(&refs.stdout)
+        .into_iter()
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .unwrap_or_else(|| panic!("no trips table"));
+    let mut document = source(&endpoint, Some(&token));
+    document["env"] = json!({"AWS_REGION": "us-east-1"});
+    let stdin = format!("{document}\n{trips}\n");
+    let output = pipe(
+        &["tablev2", "vend-credentials", "--shell-env"],
+        stdin.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "export AWS_REGION='us-east-1'\n"
+    );
+}
+
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
 /// `metastore ls | catalog info | catalog ls` (decision 0004).
 #[test]
