@@ -46,12 +46,9 @@ pub(super) async fn get_json<T: DeserializeOwned>(
     url: &str,
     token: Option<&str>,
 ) -> Result<T, Error> {
-    let response = reqwest::request(Request {
-        url: url.to_string(),
-        bearer: token.map(str::to_owned),
-    })
-    .await
-    .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+        .await
+        .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;
     if !(200..300).contains(&response.status) {
         return Err(Error::from(format!(
             "catalog returned HTTP {}: {}",

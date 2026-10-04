@@ -32,9 +32,11 @@ test:
 	$(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
 
 # The live Databricks metastore e2e; needs the service principal credentials.
+# The S3 features are on so the walk's storage reads actually run (under the
+# vended keys; Databricks default storage refuses externally issued sessions).
 dbx-e2e:
 	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/auth.md)"; exit 1; }
-	$(CARGO) test -p pqbench-cli --test dbx_e2e -- --ignored --nocapture
+	$(CARGO) test -p pqbench-cli --features delta-s3,iceberg-s3 --test dbx_e2e -- --ignored --nocapture
 
 lint:
 	$(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings

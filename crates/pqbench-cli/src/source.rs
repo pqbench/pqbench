@@ -1,4 +1,4 @@
-//! The walk's input: context and parent refs.
+//! The walk's input: context, parent refs, and the options a table read needs.
 //!
 //! A metadata command reads one stream. The first record may be a
 //! `pqbench.lake-source` — the walk's context: the endpoint and bearer.
@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use futures_util::stream::{self, Stream, StreamExt};
+use pqbench::credentials;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
@@ -71,6 +72,15 @@ impl From<TableFormat> for pqbench::tablev2::TableFormat {
     }
 }
 
+impl From<TableFormat> for pqbench::credentials::check::TableFormat {
+    fn from(format: TableFormat) -> Self {
+        match format {
+            TableFormat::Unity => Self::Unity,
+            TableFormat::Iceberg => Self::Iceberg,
+        }
+    }
+}
+
 /// One command's stdin: the resolved context and the parent records.
 pub(crate) struct Input {
     pub source: Source,
@@ -109,6 +119,89 @@ pub(crate) fn records(
         }
     });
     Box::pin(first.chain(rest))
+}
+
+/// The catalog, schema, and table a `pqbench.table-ref` v2 ref names.
+///
+/// Version 1 refs (the legacy `lake` stream) are rejected, so the old and new
+/// trees never consume each other.
+pub(crate) fn table_ref(
+    command: &str,
+    record: &Value,
+) -> Result<(String, String, String), CliError> {
+    let kind = record["kind"].as_str().unwrap_or_default();
+    if kind != "pqbench.table-ref" {
+        return Err(format!("expected pqbench.table-ref records, found {kind:?}").into());
+    }
+    if record["version"].as_u64() != Some(2) {
+        return Err(
+            format!("{command} reads pqbench.table-ref version 2; run `schema ls` first").into(),
+        );
+    }
+    let id = record["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("a pqbench.table-ref record needs an id")?;
+    split_table(command, id)
+}
+
+/// Split `catalog.schema.table` at the first and last dots; an Iceberg
+/// namespace keeps its remaining dots.
+pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, String), CliError> {
+    let Some((catalog, rest)) = fqn.split_once('.') else {
+        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
+    };
+    let Some((schema, table)) = rest.rsplit_once('.') else {
+        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
+    };
+    if catalog.is_empty() || schema.is_empty() || table.is_empty() {
+        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
+    }
+    Ok((catalog.to_string(), schema.to_string(), table.to_string()))
+}
+
+/// The ref's `env` merged over the lake source's: the table's vended options win.
+pub(crate) fn ref_env(
+    record: &Value,
+    source: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut env = source.clone();
+    if let Some(values) = record["env"].as_object() {
+        for (key, value) in values {
+            if let Some(value) = value.as_str() {
+                env.insert(key.clone(), value.to_string());
+            }
+        }
+    }
+    env
+}
+
+/// The table's vended read credentials, by dialect: Unity's
+/// `temporary-table-credentials`, or the Iceberg REST catalog's
+/// `storage-credentials` for the table's data read.
+pub(crate) async fn vend(
+    source: &Source,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+) -> Result<Option<BTreeMap<String, String>>, CliError> {
+    match source.table_format {
+        TableFormat::Unity => Ok(credentials::get::vend_unity(
+            &source.endpoint,
+            catalog,
+            schema,
+            name,
+            source.token.as_deref(),
+        )
+        .await?),
+        TableFormat::Iceberg => Ok(credentials::get::vend_iceberg(
+            &source.endpoint,
+            schema,
+            name,
+            source.token.as_deref(),
+        )
+        .await?),
+    }
 }
 
 #[derive(Deserialize)]

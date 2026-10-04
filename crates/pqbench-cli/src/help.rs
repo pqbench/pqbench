@@ -80,9 +80,11 @@ Auth (how to reach data):
 
   Databricks-governed tables
     lake lists storage_location. Reading objects still needs AWS keys that
-    can GetObject. pqbench does not call temporary-table-credentials; paste
-    vended STS into AWS_* on env, or use a role that already can read the
-    bucket.
+    can GetObject. The legacy lake path does not call
+    temporary-table-credentials; paste vended STS into AWS_* on env, or use
+    a role that already can read the bucket. The tablev2 walk does:
+    `credentials get` materializes the vended keys onto the refs, and
+    `tablev2 info` reads under the env it is given.
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
   Producer pipe
@@ -268,7 +270,8 @@ schema ls` chains.
   info   the schema's record (catalog, name, comment, location, properties)
          as one pqbench.schema line
   ls     the tables in the schema, one pqbench.table-ref version 2 line each
-         (id, uri, storage path) — the document `tablev2 info` enriches. Unity
+         (id, uri, storage path, storage options) — the document `tablev2 info`
+         enriches. Unity
          REST serves /tables; PQB_TABLE_FORMAT=iceberg lists namespaces'
          tables and carries each loadTable URL (the endpoint names the catalog
          base). The legacy `table` reads version 1 refs only.
@@ -304,8 +307,14 @@ chains. Version 1 refs (the legacy `lake` stream) are rejected.
          version 2 line. Unity REST serves /tables/{full_name}; the catalog's
          declared columns and properties are merged over the Delta log read
          with without_files(), so that path is O(1) in files and needs a
-         readable storage location. PQB_TABLE_FORMAT=iceberg reads loadTable,
-         whose metadata is inline, so the Iceberg path runs no storage read.
+         readable storage location: the lake source's env, the ref's env, or
+         the process environment. Vended credentials ride the ref (or the
+         process env) from `credentials get`; `credentials check` gates the
+         walk on tables the catalog marks readable outside compute. The
+         emitted record carries the env it read under, so a later stage reads
+         the table's files under the same lease. PQB_TABLE_FORMAT=iceberg reads
+         loadTable, whose metadata is inline, so the Iceberg path runs no
+         storage read.
 
 The name is temporary: the older `pqbench table` still owns `table info`
 (filling a ref's storage path) and the file-loading command, and exchanges
@@ -323,6 +332,52 @@ See also:
   pqbench schema --help  the tables of one schema
   pqbench table --help   load a listed table's files
   pqbench --help         catalog auth, lake-source shape
+  docs/cli.md";
+
+pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
+
+pub const CREDENTIALS_LONG_ABOUT: &str = "\
+Check and vend read credentials for table-refs. The endpoint, token, and
+object-store options come from a pqbench.lake-source on standard input, or from
+PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them
+out.
+
+  check  each pqbench.table-ref version 2 ref on standard input is checked
+         against the catalog's capability manifest: a table the catalog
+         reports without direct-external-engine read or write support (managed
+         default storage, a view) has no external read at all, so the check
+         drops it with the reason on standard error; eligible refs pass
+         through unchanged, so the stage composes ahead of `credentials get`
+         and a mixed schema keeps going. Under PQB_TABLE_FORMAT=iceberg the
+         metadata read is inline through the catalog, so the check passes.
+
+  get    each pqbench.table-ref version 2 ref enriched with the table's
+         vended read credentials (AWS_* on env) as one pqbench.table-ref
+         version 2 line — the explicit stage that materializes env for the
+         table read and other tools. Unity GET /tables/{full_name} reads the
+         table id and capability manifest; a manifest without
+         direct-external-engine read or write support (managed default
+         storage, a view) passes through with its own env, and a catalog that
+         reports no manifest is attempted; inside serverless compute Unity
+         refuses to mint storage credentials, so refs pass through there too.
+         Under PQB_TABLE_FORMAT=iceberg the command reads the catalog's
+         credentials route (loadCredentials) and takes the storage-credentials
+         it returns, for the next storage read; a catalog that does not serve
+         it falls back to the delegated loadTable, and a table the catalog
+         cannot serve via Iceberg passes through with its own env.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
+
+pub const CREDENTIALS_AFTER: &str = "\
+Examples:
+  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get
+  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get | pqbench tablev2 info
+
+See also:
+  pqbench tablev2 --help  read a listed table's record
+  pqbench schema --help   the tables of one schema
+  pqbench --help          catalog auth, lake-source shape
   docs/cli.md";
 
 pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";

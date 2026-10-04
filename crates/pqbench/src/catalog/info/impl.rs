@@ -6,6 +6,7 @@
 use serde::Deserialize;
 
 use super::api::{Catalog, Error};
+use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
 /// The subset of `GET /catalogs/{name}` this command reports.
@@ -20,16 +21,6 @@ struct Record {
     owner: Option<String>,
 }
 
-/// The Unity REST root, whether or not the endpoint already names it.
-fn api_root(endpoint: &str) -> String {
-    let endpoint = endpoint.trim_end_matches('/');
-    if endpoint.ends_with("/api/2.1/unity-catalog") {
-        endpoint.to_string()
-    } else {
-        format!("{endpoint}/api/2.1/unity-catalog")
-    }
-}
-
 pub(crate) async fn read(
     endpoint: &str,
     catalog: &str,
@@ -37,15 +28,12 @@ pub(crate) async fn read(
 ) -> Result<Catalog, Error> {
     let url = format!(
         "{}/catalogs/{}",
-        api_root(endpoint),
+        dialect::api_root(endpoint),
         catalog.trim_matches('/')
     );
-    let response = reqwest::request(Request {
-        url,
-        bearer: token.map(str::to_owned),
-    })
-    .await
-    .map_err(|error| Error::from(error.to_string()))?;
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
     if response.status != 200 {
         return Err(Error::from(format!(
             "the endpoint returned HTTP {}: {}",

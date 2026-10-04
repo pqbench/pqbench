@@ -4,7 +4,6 @@
 //! record: the catalog names the table and its location, and the table's own
 //! metadata is read without files, so the cost is O(1) in files.
 
-mod dialect;
 pub mod info;
 
 /// The catalog dialect a table command speaks.

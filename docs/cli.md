@@ -18,6 +18,7 @@ that command and links back. This file is the durable copy.
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
 | Read one table's record | `pqbench tablev2 info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
+| Vend read credentials (refs) | `pqbench credentials get` (v2 refs on stdin) |
 | Fill a legacy table-ref's storage path | `pqbench table info` (v1 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -37,8 +38,9 @@ $ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench by
 A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
 the stream clean: only data rows are shown, bounded to 1000 rows, with the
 count of hidden rows reported. Credentials travel on that document (`AWS_*`;
-a catalog `token` on a lake-source) and are not exported into the process
-environment.
+a catalog `token` on a lake-source) — `credentials get` writes the vended
+keys onto the refs it passes on, and pqbench never writes them into the
+process environment itself.
 
 ## Documents
 
@@ -49,7 +51,7 @@ environment.
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
 | `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
 | `pqbench.table-ref` v1 | `lake` | `table info`, `table` |
-| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info` | `tablev2 info` |
+| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info`, `credentials get` | `tablev2 info`, `credentials get` |
 | `pqbench.table` v1 | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
@@ -147,7 +149,8 @@ The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
 input as they arrive — one `pqbench.catalog` line per catalog, then one
 `pqbench.schema` line per schema. Each ref's request starts as its record is
-read; `--fan-out` (64 by default) caps the requests in flight — it is a limit,
+read; `--fan-out` (64 on the listing levels, one per core on the per-table
+stages) caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
@@ -188,7 +191,20 @@ lists the tables in it, one `pqbench.table-ref` version 2 line each — the
 document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
-Entries with no location (views) are skipped.
+Entries with no location (views) are skipped. Refs are addresses; the walk
+context (endpoint, token, storage options) comes from the lake source or
+`PQB_*`. The walk is a plain pipeline: every command streams refs and keeps
+`--fan-out` in flight, `credentials get` writes the vended keys onto the refs,
+and `tablev2 info` passes them on so `bytemass` reads the files under the same
+lease:
+
+```console no-run
+$ export PQB_ENDPOINT=… PQB_TOKEN=…
+$ pqbench schema ls dbx_samples.nyctaxi --format json |
+    pqbench credentials check |
+    pqbench credentials get |
+    pqbench tablev2 info --format json
+```
 
 `tablev2 info` enriches that ref — id, format, snapshot, columns, partition
 columns, format properties — and keeps the same kind and version, so
@@ -201,9 +217,47 @@ every table before deciding which files to measure. The name is temporary: the
 older `pqbench table info` (fill a v1 ref's storage path) keeps its name until
 the legacy command is deprecated.
 
-The Delta path needs a readable storage location — the local stand, or `env`
-credentials on the lake source; Databricks default-storage tables cannot read
-their log. The Iceberg REST path needs no storage read.
+The table read knows nothing about credentials: it reads with the env it is
+given — the lake source's options, the ref's own, and the process environment
+the storage client also reads — and emits that env back on the record, so the
+next stage reads the data files under the same lease. Everything
+credential-shaped is the `credentials` stage's concern. The Delta path needs a
+readable storage location; the local stand, `env` credentials on the lake
+source, and a vended lease all supply one. The Iceberg REST path needs no
+storage read.
+
+A vended lease is a storage fact, not a caller choice. Databricks serves
+managed tables to external systems through its catalog APIs; resolving the
+Delta log by path is not that interface, and Databricks-managed default
+storage explicitly denies externally issued sessions on its objects (verified
+for data files, Iceberg manifests, and the Delta log) — the capability
+manifest reports those tables without direct external engine support, so
+`credentials check` stops the walk with the reason and no storage read runs.
+Customer-storage tables read under the lease; compatibility mode publishes a
+read-only copy for path-based clients. Inside Databricks compute the lease is
+not the mechanism: serverless notebooks are refused storage-credential minting
+outright (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`) and refs
+pass through, while classic compute reaches storage through its own instance
+profile.
+
+`credentials check` and `credentials get` read the same refs. The check asks
+each table's catalog for the capability manifest and drops a table whose
+manifest lists no direct-external-engine read or write support, with the
+reason on standard error; eligible refs pass through unchanged. `credentials get` is the stage that materializes the
+credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
+`temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the
+catalog's `loadCredentials` route (`GET …/tables/{table}/credentials`) and the
+`storage-credentials` it returns (the metadata-inline Iceberg read needs no
+keys, but the next storage operations do); a catalog that does not serve the
+route falls back to the delegated `loadTable`. A table the Iceberg catalog
+cannot serve passes through with its own env.
+
+```console no-run
+$ export PQB_ENDPOINT=… PQB_TOKEN=…
+$ pqbench schema ls dbx_samples.nyctaxi --format json |
+    pqbench credentials check | pqbench credentials get
+```
 
 ```console no-run
 $ pqbench tablev2 info pqbench.demo.events < lake-source.json
@@ -268,11 +322,39 @@ schemas: 2
 
 ### Databricks-governed tables
 
-`lake` returns `storage_location`. Reading the objects still needs AWS keys
-that can `GetObject` / `HeadObject`. pqbench does **not** call
-`temporary-table-credentials` or `temporary-path-credentials`. Paste those
-STS keys into `AWS_*` on `env`, or run under a role that already can read
-the bucket.
+A governed table has two access modes, and pqbench is the second one:
+
+- **Engine-mediated.** Notebooks, SQL, and BI drivers ask Databricks compute
+  to read the table; the platform reaches storage with its own identity and no
+  cloud credentials reach the caller. Use `spark.sql` / the SQL warehouse for
+  this; pqbench does not.
+- **Credential-mediated.** An external reader calls the catalog's vending
+  route and reads storage itself under a short-lived, downscoped lease — the
+  `credentials check` → `credentials get` → `tablev2 info` walk.
+
+Whether the second mode exists is the storage's property, not the caller's:
+
+| Table storage | External read under a vended lease |
+| --- | --- |
+| External location (customer S3), external table | yes |
+| External location, managed table | yes |
+| Databricks default storage, managed table | no — the capability manifest reports no direct external engine support, and the objects deny externally issued sessions |
+| Managed volume | files via FUSE in compute or the Files API; not a table read |
+
+`credentials check` reports the manifest's answer with a reason; `credentials
+get` vends the lease. Two environment notes:
+
+- The vended response carries the keys, a session token, and the storage URL,
+  but no region: set `AWS_REGION` (or the client's equivalent) for the read.
+- Inside serverless compute, Unity refuses to mint storage credentials to
+  notebook code (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); the
+  refs pass through and the compute's own engines are the readers. Classic
+  compute reaches storage through its instance profile.
+
+The legacy `lake` / `table` (v1) flow does not vend: `lake` returns
+`storage_location`, and reading the objects needs AWS keys that can
+`GetObject` / `HeadObject`, pasted into `AWS_*` on `env` or supplied by the
+ambient chain.
 
 - Temporary table credentials: <https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials>
 - AWS default credential chain: <https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html>

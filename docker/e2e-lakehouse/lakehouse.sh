@@ -255,7 +255,50 @@ check_unity() {
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info"
+    # The per-table loop: refs are durable data only, so each table's worker
+    # gets the lake source (endpoint + storage options, no AWS keys) on stdin,
+    # in memory. `credentials get` materializes the vended session on the ref;
+    # `tablev2 info` reads the Delta log under it and emits no env.
+    local vended_source="local/lakehouse/vended-source.json"
+    jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
+        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
+        env: {AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
+            AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' > "$vended_source"
+    local vended_doc
+    vended_doc=$(cat "$vended_source")
+    local vended_ref
+    vended_ref=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
+        while IFS= read -r ref; do
+            printf '%s\n%s\n' "$vended_doc" "$ref" |
+                "$pqbench_bin" credentials get --format json
+        done |
+        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) key=\(.env.AWS_ACCESS_KEY_ID // "-") session=\(if .env.AWS_SESSION_TOKEN then "set" else "unset" end) endpoint=\(.env.AWS_ENDPOINT // "-")"') || {
+        echo "check failed: credentials get produced no ref" >&2
+        exit 1
+    }
+    [ "$vended_ref" = "pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=$s3_endpoint" ] || {
+        echo "check failed (unity credentials get): expected pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=$s3_endpoint; measured ${vended_ref:-nothing}" >&2
+        exit 1
+    }
+
+    local vended_info
+    vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
+        while IFS= read -r ref; do
+            vended=$(printf '%s\n%s\n' "$vended_doc" "$ref" |
+                "$pqbench_bin" credentials get --format json) || exit 1
+            printf '%s\n%s\n' "$vended_doc" "$vended" |
+                "$pqbench_bin" tablev2 info --format json
+        done |
+        jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))] env=\(if .env then "set" else "none" end)"') || {
+        echo "check failed: the vended table loop produced no record" >&2
+        exit 1
+    }
+    [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label] env=set" ] || {
+        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
+        exit 1
+    }
+
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info; vended tablev2 info: $vended_info"
 }
 
 check_iceberg() {

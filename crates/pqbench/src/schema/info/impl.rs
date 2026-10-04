@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use super::api::{Error, Schema};
-use crate::schema::dialect;
+use crate::dialect;
 use crate::schema::TableFormat;
 
 /// The subset of Unity `GET /schemas/{full_name}` this command reports.

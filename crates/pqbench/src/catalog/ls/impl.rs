@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use super::api::{Error, Schema, TableFormat};
+use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
 /// Schema names per page; both walks follow the endpoint's page token.
@@ -66,19 +67,19 @@ async fn unity_schemas(
     catalog: &str,
     token: Option<&str>,
 ) -> Result<Vec<String>, Error> {
-    let root = api_root(endpoint);
+    let root = dialect::api_root(endpoint);
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
         let url = match &page_token {
             Some(page_token) => format!(
                 "{root}/schemas?catalog_name={}&max_results={PAGE_SIZE}&page_token={}",
-                encode(catalog),
-                encode(page_token)
+                dialect::encode(catalog),
+                dialect::encode(page_token)
             ),
             None => format!(
                 "{root}/schemas?catalog_name={}&max_results={PAGE_SIZE}",
-                encode(catalog)
+                dialect::encode(catalog)
             ),
         };
         let page: SchemasPage = get_json(&url, token).await?;
@@ -104,7 +105,10 @@ async fn iceberg_namespaces(endpoint: &str, token: Option<&str>) -> Result<Vec<S
     let mut page_token: Option<String> = None;
     loop {
         let url = match &page_token {
-            Some(page_token) => format!("{base}/namespaces?pageToken={}", encode(page_token)),
+            Some(page_token) => format!(
+                "{base}/namespaces?pageToken={}",
+                dialect::encode(page_token)
+            ),
             None => format!("{base}/namespaces"),
         };
         let page: NamespacesPage = get_json(&url, token).await?;
@@ -125,12 +129,9 @@ async fn iceberg_namespaces(endpoint: &str, token: Option<&str>) -> Result<Vec<S
 }
 
 async fn get_json<T: DeserializeOwned>(url: &str, token: Option<&str>) -> Result<T, Error> {
-    let response = reqwest::request(Request {
-        url: url.to_string(),
-        bearer: token.map(str::to_owned),
-    })
-    .await
-    .map_err(|error| Error::from(error.to_string()))?;
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
     if response.status != 200 {
         return Err(Error::from(format!(
             "the endpoint returned HTTP {}: {}",
@@ -140,28 +141,4 @@ async fn get_json<T: DeserializeOwned>(url: &str, token: Option<&str>) -> Result
     }
     serde_json::from_slice(&response.bytes)
         .map_err(|error| Error::from(format!("the response was not a schema page: {error}")))
-}
-
-/// The Unity REST root, whether or not the endpoint already names it.
-fn api_root(endpoint: &str) -> String {
-    let endpoint = endpoint.trim_end_matches('/');
-    if endpoint.ends_with("/api/2.1/unity-catalog") {
-        endpoint.to_string()
-    } else {
-        format!("{endpoint}/api/2.1/unity-catalog")
-    }
-}
-
-/// Percent-encode one query value (RFC 3986 unreserved bytes pass through).
-fn encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
