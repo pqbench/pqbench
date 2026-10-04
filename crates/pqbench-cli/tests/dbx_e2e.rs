@@ -674,6 +674,31 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
+/// `tablev2 info` on the live Unity catalog: the managed default-storage table
+/// cannot be read outside Databricks compute, and the error names the table
+/// and its storage location.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = unity_endpoint(&host);
+    let output = pipe(
+        &["tablev2", "info", "dbx_samples.nyctaxi.trips"],
+        source(&endpoint, Some(&token)).to_string().as_bytes(),
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("dbx_samples.nyctaxi.trips"), "{stderr}");
+    assert!(stderr.contains("s3://"), "{stderr}");
+}
+
 /// `credentials get` on the live Unity catalog: the `dbx_samples`
 /// tables are managed default storage (`TABLE_DB_STORAGE`), which cannot be
 /// read outside Databricks compute, so the ref passes through with no `env`.
