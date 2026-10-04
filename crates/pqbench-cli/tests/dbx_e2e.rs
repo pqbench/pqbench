@@ -699,12 +699,14 @@ fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
     assert!(stderr.contains("s3://"), "{stderr}");
 }
 
-/// `credentials get` on the live Unity catalog: the `dbx_samples`
-/// tables are managed default storage (`TABLE_DB_STORAGE`), which cannot be
-/// read outside Databricks compute, so the ref passes through with no `env`.
+/// `credentials get` on the live Unity catalog: the managed Iceberg tables
+/// (`trips`, `pqbench_iceberg_test`) carry direct-external-engine support in
+/// their capability manifest, so Unity vends temporary read credentials onto
+/// the ref's `env`; the UniForm Delta table (`pqbench_delta_test`) lists no
+/// such capability and passes through with no `env`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_get_passes_a_managed_table_through() {
+fn credentials_get_vends_the_live_tables() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -739,20 +741,42 @@ fn credentials_get_passes_a_managed_table_through() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    let trips = records
+    for id in [
+        "dbx_samples.nyctaxi.trips",
+        "dbx_samples.nyctaxi.pqbench_iceberg_test",
+    ] {
+        let vended = records
+            .iter()
+            .find(|record| record["id"] == id)
+            .unwrap_or_else(|| panic!("no {id}: {records:?}"));
+        assert_eq!(vended["kind"], "pqbench.table-ref");
+        for key in [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ] {
+            assert!(
+                vended["env"][key]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "{id} {key}: {vended:?}"
+            );
+        }
+    }
+    let passed = records
         .iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
-        .unwrap_or_else(|| panic!("no trips table: {records:?}"));
-    assert_eq!(trips["kind"], "pqbench.table-ref");
-    assert!(trips["env"].is_null(), "{trips:?}");
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.pqbench_delta_test")
+        .unwrap_or_else(|| panic!("no pqbench_delta_test: {records:?}"));
+    assert!(passed["env"].is_null(), "{passed:?}");
 }
 
 /// `credentials get` with `PQB_TABLE_FORMAT=iceberg` on the live catalog: the
-/// `loadTable` delegation runs, the managed table's `storage-credentials` come
-/// back empty, and the ref passes through with no `env`.
+/// `loadTable` delegation returns the catalog's credentials for the managed
+/// Iceberg tables onto the ref's `env`; the UniForm Delta table returns none
+/// and passes through with no `env`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_get_iceberg_passes_a_managed_table_through() {
+fn credentials_get_iceberg_vends_the_live_tables() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -791,17 +815,48 @@ fn credentials_get_iceberg_passes_a_managed_table_through() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    let trips = records
+    for id in [
+        "dbx_samples.nyctaxi.trips",
+        "dbx_samples.nyctaxi.pqbench_iceberg_test",
+    ] {
+        let vended = records
+            .iter()
+            .find(|record| record["id"] == id)
+            .unwrap_or_else(|| panic!("no {id}: {records:?}"));
+        assert_eq!(vended["kind"], "pqbench.table-ref");
+        for key in [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ] {
+            assert!(
+                vended["env"][key]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty()),
+                "{id} {key}: {vended:?}"
+            );
+        }
+    }
+    let passed = records
         .iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
-        .unwrap_or_else(|| panic!("no trips table: {records:?}"));
-    assert_eq!(trips["kind"], "pqbench.table-ref");
-    assert!(trips["env"].is_null(), "{trips:?}");
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.pqbench_delta_test")
+        .unwrap_or_else(|| panic!("no pqbench_delta_test: {records:?}"));
+    assert!(passed["env"].is_null(), "{passed:?}");
 }
 
-/// `credentials get --shell-env` on the live Unity catalog: the managed
-/// table passes through, so the loop's `eval` gets the lake source's options
-/// as shell assignments and no vended keys.
+/// The value one `export KEY='…'` line of `credentials get --shell-env`
+/// assigns.
+fn export_value<'a>(stdout: &'a str, key: &str) -> &'a str {
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("export {key}='")))
+        .and_then(|value| value.strip_suffix('\''))
+        .unwrap_or_else(|| panic!("no export for {key}: {stdout}"))
+}
+
+/// `credentials get --shell-env` on the live Unity catalog: the managed table
+/// vends, so the loop's `eval` gets the lake source's options plus the vended
+/// keys as shell assignments.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn credentials_get_shell_env_writes_the_loop_env() {
@@ -841,10 +896,15 @@ fn credentials_get_shell_env_writes_the_loop_env() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "export AWS_REGION='us-east-1'\n"
-    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(export_value(&stdout, "AWS_REGION"), "us-east-1");
+    for key in [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    ] {
+        assert!(!export_value(&stdout, key).is_empty(), "{stdout}");
+    }
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:

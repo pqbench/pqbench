@@ -1,17 +1,22 @@
 //! The catalog calls behind [`super::api`].
 //!
-//! Unity serves `GET /tables/{catalog}.{schema}.{table}`; the record names the
-//! table id and kind. Only `TABLE_EXTERNAL`, `TABLE_DELTA_EXTERNAL`, and
-//! `TABLE_DELTA` can be read outside Databricks compute; for those,
-//! `POST /temporary-table-credentials` vends read credentials. A record that
-//! names another kind (managed default storage, a view) stops there; one that
-//! names no kind is attempted, so a catalog that omits `securable_kind` (Unity
-//! OSS) still vends.
+//! Unity serves `GET /tables/{catalog}.{schema}.{table}` with
+//! `include_manifest_capabilities=true`; the record names the table id and
+//! the capability manifest. A manifest that lists capabilities without
+//! `HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT` or
+//! `HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT` (managed default storage, a
+//! view) stops there; for an eligible table `POST
+//! /temporary-table-credentials` vends read credentials. A missing or empty
+//! manifest says nothing, so a catalog that reports none (Unity OSS) is
+//! attempted.
 //!
 //! Iceberg REST serves `loadTable`; with `X-Iceberg-Access-Delegation:
 //! vended-credentials` the response may carry `storage-credentials`, a list of
 //! prefix-scoped configs. The longest prefix covering the table's location
-//! supplies the `s3.*` keys; an empty list means the catalog does not vend.
+//! supplies the `s3.*` keys; an empty list means the catalog does not vend. A
+//! table the catalog cannot serve via Iceberg (`is not an Iceberg compatible
+//! table`), an unknown table, and an unimplemented operation all pass through
+//! with no credentials.
 //!
 //! The URLs and JSON shapes are this module's; the transport is the
 //! third-party facade.
@@ -30,7 +35,15 @@ struct TableRecord {
     #[serde(default)]
     table_id: Option<String>,
     #[serde(default)]
-    securable_kind: Option<String>,
+    securable_kind_manifest: Option<SecurableKindManifest>,
+}
+
+/// The capability manifest Unity returns for
+/// `include_manifest_capabilities=true`.
+#[derive(Deserialize)]
+struct SecurableKindManifest {
+    #[serde(default)]
+    capabilities: Vec<String>,
 }
 
 /// The subset of the temporary-credentials response this command reports.
@@ -82,15 +95,25 @@ pub(super) async fn vend_unity(
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let root = dialect::api_root(endpoint);
-    let record: TableRecord =
-        dialect::get_json(&format!("{root}/tables/{}", dialect::encode(&name)), token)
-            .await
-            .map_err(Error::from)?;
+    let record: TableRecord = dialect::get_json(
+        &format!(
+            "{root}/tables/{}?include_manifest_capabilities=true",
+            dialect::encode(&name)
+        ),
+        token,
+    )
+    .await
+    .map_err(Error::from)?;
     let Some(table_id) = record.table_id.filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
-    if let Some(kind) = record.securable_kind.as_deref() {
-        if !is_vendable(kind) {
+    if let Some(manifest) = &record.securable_kind_manifest {
+        if !manifest.capabilities.is_empty()
+            && !manifest
+                .capabilities
+                .iter()
+                .any(|capability| grants_direct_access(capability))
+        {
             return Ok(None);
         }
     }
@@ -128,11 +151,12 @@ pub(super) async fn vend_unity(
     }))
 }
 
-/// The Unity table kinds readable outside Databricks compute.
-fn is_vendable(kind: &str) -> bool {
+/// Whether a manifest capability marks the table readable or writable
+/// outside Databricks compute.
+fn grants_direct_access(capability: &str) -> bool {
     matches!(
-        kind,
-        "TABLE_EXTERNAL" | "TABLE_DELTA_EXTERNAL" | "TABLE_DELTA"
+        capability,
+        "HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT" | "HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT"
     )
 }
 
@@ -150,7 +174,29 @@ pub(super) async fn vend_iceberg(
     );
     let request = Request::get(url, token.map(str::to_owned))
         .header("X-Iceberg-Access-Delegation", "vended-credentials");
-    let loaded: LoadedTable = dialect::send_json(request).await.map_err(Error::from)?;
+    let response = reqwest::request(request)
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
+    if matches!(response.status, 404 | 501) {
+        return Ok(None);
+    }
+    if response.status == 400
+        && String::from_utf8_lossy(&response.bytes).contains("is not an Iceberg compatible table")
+    {
+        return Ok(None);
+    }
+    if response.status != 200 {
+        return Err(Error::from(format!(
+            "the endpoint returned HTTP {}: {}",
+            response.status,
+            String::from_utf8_lossy(&response.bytes)
+        )));
+    }
+    let loaded: LoadedTable = serde_json::from_slice(&response.bytes).map_err(|error| {
+        Error::from(format!(
+            "the response was not the expected document: {error}"
+        ))
+    })?;
     let location = loaded
         .metadata
         .and_then(|metadata| metadata.location)

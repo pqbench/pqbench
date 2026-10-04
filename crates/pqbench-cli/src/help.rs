@@ -310,8 +310,8 @@ chains. Version 1 refs (the legacy `lake` stream) are rejected.
          with without_files(), so that path is O(1) in files and needs a
          readable storage location. The lake source supplies the endpoint and
          env in memory; when it carries no AWS keys, info vends each table's
-         read credentials in memory before the log read (the same kind gate as
-         `credentials get`), and the emitted record carries no env.
+         read credentials in memory before the log read (the same capability
+         gate as `credentials get`), and the emitted record carries no env.
          PQB_TABLE_FORMAT=iceberg reads loadTable, whose metadata is inline,
          so the Iceberg path runs no storage read.
 
@@ -344,13 +344,15 @@ options come from a pqbench.lake-source on standard input, or from PQB_ENDPOINT
          the table's vended read credentials (AWS_* on env) as one
          pqbench.table-ref version 2 line — the explicit path that materializes
          env for other tools; `tablev2 info` vends in memory instead. Unity GET
-         /tables/{full_name} names the table id and kind; a known non-vendable
-         kind (managed default storage, a view) passes through with its own
-         env, and a catalog that reports no kind is attempted. Under
+         /tables/{full_name} reads the table id and capability manifest; a
+         manifest without direct-external-engine read or write support
+         (managed default storage, a view) passes through with its own env,
+         and a catalog that reports no manifest is attempted. Under
          PQB_TABLE_FORMAT=iceberg the command reads loadTable with
          X-Iceberg-Access-Delegation and takes the catalog's
          storage-credentials covering the table's location, for the next
-         storage read.
+         storage read; a table the catalog cannot serve via Iceberg passes
+         through with its own env.
          --shell-env writes the one ref's env (the source's options plus the
          vended keys) as shell `export` lines instead, for the per-table loop
          to `eval` into the process environment.

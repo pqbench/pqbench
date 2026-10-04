@@ -227,17 +227,18 @@ REST path needs no storage read.
 `tablev2 info` reads a governed `s3://` table with only a catalog token: the
 lake source supplies the endpoint and env in memory, and when it carries no
 AWS keys, info vends that table's temporary read credentials in memory before
-the log read. A known non-vendable kind (managed default storage, a view)
-proceeds with the static env, as does a catalog that does not serve
-`temporary-table-credentials`; a catalog that reports no kind is attempted.
-The record never carries env — refs stay durable data. `credentials get` is
-the explicit stage that materializes the credentials on the refs
-(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) for other
-tools: Unity's `temporary-table-credentials`, or under
-`PQB_TABLE_FORMAT=iceberg` `loadTable` with
-`X-Iceberg-Access-Delegation: vended-credentials` and the catalog's
+the log read. A capability manifest without direct-external-engine read or
+write support (managed default storage, a view) proceeds with the static env,
+as does a catalog that does not serve `temporary-table-credentials`; a
+catalog that reports no manifest is attempted. The record never carries env —
+refs stay durable data. `credentials get` is the explicit stage that
+materializes the credentials on the refs (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) for other tools: Unity's
+`temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` `loadTable`
+with `X-Iceberg-Access-Delegation: vended-credentials` and the catalog's
 `storage-credentials` covering the table's location (the metadata-inline
-Iceberg read needs no keys, but the next storage operations do).
+Iceberg read needs no keys, but the next storage operations do). A table the
+Iceberg catalog cannot serve passes through with its own env.
 `--shell-env` writes the one ref's env — the source's options plus those
 keys — as shell `export` lines instead, for the loop's `eval`:
 
