@@ -23,6 +23,8 @@ pub(crate) struct CredentialsArgs {
 pub(crate) enum CredentialsCommand {
     /// Put vended read credentials on each table-ref
     Get(GetArgs),
+    /// Check each table-ref is readable outside Databricks compute
+    Check(CheckArgs),
 }
 
 /// Arguments for `credentials get`: the output flags.
@@ -43,9 +45,24 @@ pub(crate) struct GetArgs {
     shell_env: bool,
 }
 
+/// Arguments for `credentials check`: the output flags.
+#[derive(Args)]
+pub(crate) struct CheckArgs {
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
+    /// also write the lz4 NDJSON stream to FILE
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    output: Option<PathBuf>,
+    /// requests in flight at once
+    #[arg(long, default_value_t = 64)]
+    fan_out: usize,
+}
+
 pub(crate) async fn run(args: &CredentialsArgs) -> Result<(), CliError> {
     match &args.command {
         CredentialsCommand::Get(args) => run_get(args).await,
+        CredentialsCommand::Check(args) => run_check(args).await,
     }
 }
 
@@ -90,6 +107,75 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await
+}
+
+/// Check each ref's table is readable outside Databricks compute:
+/// `schema ls | credentials check | credentials get`.
+///
+/// The capability manifest names the tables only Databricks compute reads
+/// (managed default storage, a view). Those have no external read at all, so
+/// the check reports the table with the reason instead of letting a later
+/// storage read fail on credentials. Eligible refs pass through unchanged, so
+/// the stage composes ahead of `credentials get`.
+async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
+    let input = read_input("credentials check").await?;
+    if !input.piped {
+        return Err("credentials check reads pqbench.table-ref v2 refs on standard input".into());
+    }
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    let records = source::records("credentials check", input.first, input.lines);
+    let source = input.source;
+    let mut tables = 0;
+    let mut checks = records
+        .map(|record| async {
+            let record = record?;
+            let (catalog, schema, name) = table_ref("credentials check", &record)?;
+            check(&source, &catalog, &schema, &name).await?;
+            Ok::<_, CliError>(record)
+        })
+        .buffer_unordered(args.fan_out.max(1));
+    while let Some(record) = checks.next().await {
+        emit.write_row(&CheckedRef { record: record? }).await?;
+        tables += 1;
+    }
+    emit.finish(&format!("tables: {tables}\n")).await
+}
+
+/// Gate a table on the catalog's eligibility: an ineligible table has no
+/// external read, so it errors with the reason instead of a doomed storage
+/// read. Iceberg reads its metadata inline through the catalog, so the
+/// eligibility gate is Unity's alone.
+async fn check(
+    source: &source::Source,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+) -> Result<(), CliError> {
+    if !matches!(source.table_format, source::TableFormat::Unity) {
+        return Ok(());
+    }
+    let eligibility = pqbench::credentials::check_unity(
+        &source.endpoint,
+        catalog,
+        schema,
+        name,
+        source.token.as_deref(),
+    )
+    .await?;
+    if eligibility == pqbench::credentials::Eligibility::Ineligible {
+        return Err(ineligible(&format!("{catalog}.{schema}.{name}")));
+    }
+    Ok(())
+}
+
+/// The error an ineligible table reports.
+fn ineligible(name: &str) -> CliError {
+    format!(
+        "{name} is not readable outside Databricks compute: the catalog reports no direct external \
+         engine read support (managed default storage or a view); read it with Databricks compute, \
+         or copy it to an external location"
+    )
+    .into()
 }
 
 /// `--shell-env`: one ref's env as shell assignments, for the loop's `eval`.
@@ -183,6 +269,30 @@ impl Row for VendedRef {
         vec![
             self.record["id"].as_str().unwrap_or_default().to_string(),
             if self.vended { "vended" } else { "-" }.to_string(),
+        ]
+    }
+}
+
+/// The row `credentials check` writes: the ref, gated on eligibility. The
+/// serialized form is the ref itself.
+struct CheckedRef {
+    record: Value,
+}
+
+impl Serialize for CheckedRef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.record.serialize(serializer)
+    }
+}
+
+impl Row for CheckedRef {
+    const HEADER: &'static [&'static str] = &["name", "eligible"];
+    const ALIGN: &[Align] = &[Align::Left, Align::Left];
+
+    fn cells(&self) -> Vec<String> {
+        vec![
+            self.record["id"].as_str().unwrap_or_default().to_string(),
+            "yes".to_string(),
         ]
     }
 }

@@ -52,6 +52,11 @@ pub(crate) async fn run(args: &TableV2Args) -> Result<(), CliError> {
     }
 }
 
+/// Read one table's record with the env the stream carries: the lake source's
+/// options, the ref's own, and the process environment the storage client also
+/// reads. Credentials are the `credentials` stage's concern — `credentials get`
+/// materializes them onto refs (or into the process env with `--shell-env`),
+/// and this read only consumes them.
 async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
     let input = read_input("tablev2 info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
@@ -63,14 +68,6 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             );
         }
         let (catalog, schema, name) = split_table("tablev2 info", table)?;
-        let env = vend_if_needed(
-            &input.source,
-            &catalog,
-            &schema,
-            &name,
-            input.source.env.clone(),
-        )
-        .await?;
         let record = info::read(
             &input.source.endpoint,
             &catalog,
@@ -78,7 +75,7 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             &name,
             input.source.token.as_deref(),
             input.source.table_format.into(),
-            &env,
+            &input.source.env,
         )
         .await?;
         emit.write_row(&table_record(&record)).await?;
@@ -96,14 +93,7 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("tablev2 info", &record)?;
-            let env = vend_if_needed(
-                &source,
-                &catalog,
-                &schema,
-                &name,
-                ref_env(&record, &source.env),
-            )
-            .await?;
+            let env = ref_env(&record, &source.env);
             Ok::<_, CliError>(
                 info::read(
                     &source.endpoint,
@@ -123,32 +113,6 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await
-}
-
-/// The table's env, plus vended credentials when it names none: the credentials
-/// stay in memory, and the emitted record never carries them. Only Unity vends
-/// here — the Iceberg read carries its metadata inline.
-async fn vend_if_needed(
-    source: &source::Source,
-    catalog: &str,
-    schema: &str,
-    name: &str,
-    mut env: BTreeMap<String, String>,
-) -> Result<BTreeMap<String, String>, CliError> {
-    if !matches!(source.table_format, source::TableFormat::Unity) || !needs_credentials(&env) {
-        return Ok(env);
-    }
-    if let Some(credentials) = source::vend(source, catalog, schema, name).await? {
-        env.extend(credentials);
-    }
-    Ok(env)
-}
-
-/// Whether the env names no credential: a public bucket or a set of keys skips
-/// vending.
-fn needs_credentials(env: &BTreeMap<String, String>) -> bool {
-    !env.contains_key("AWS_ACCESS_KEY_ID")
-        && env.get("AWS_SKIP_SIGNATURE").map(String::as_str) != Some("true")
 }
 
 /// The document `tablev2 info` writes: the `schema ls` ref enriched with the

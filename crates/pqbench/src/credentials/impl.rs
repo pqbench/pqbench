@@ -8,7 +8,9 @@
 //! view) stops there; for an eligible table `POST
 //! /temporary-table-credentials` vends read credentials. A missing or empty
 //! manifest says nothing, so a catalog that reports none (Unity OSS) is
-//! attempted. Serverless notebooks are refused
+//! attempted. [`check_unity`] reads the same record without vending, so a
+//! caller can gate a read on eligibility before asking for credentials.
+//! Serverless notebooks are refused
 //! (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); those refs pass
 //! through with no env, since the compute reaches storage itself.
 //!
@@ -27,17 +29,39 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use super::api::Error;
+use super::api::{Eligibility, Error};
 use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
-/// The subset of the Unity table record vending needs.
+/// The subset of the Unity table record vending and the eligibility check
+/// need.
 #[derive(Deserialize)]
 struct TableRecord {
     #[serde(default)]
     table_id: Option<String>,
     #[serde(default)]
     securable_kind_manifest: Option<SecurableKindManifest>,
+}
+
+impl TableRecord {
+    /// Whether the manifest marks the table readable outside Databricks
+    /// compute. A missing or empty manifest says nothing, so the table is
+    /// attempted; a manifest that lists capabilities without direct support
+    /// (managed default storage, a view) is not.
+    fn eligibility(&self) -> Eligibility {
+        match &self.securable_kind_manifest {
+            Some(manifest)
+                if !manifest.capabilities.is_empty()
+                    && !manifest
+                        .capabilities
+                        .iter()
+                        .any(|capability| grants_direct_access(capability)) =>
+            {
+                Eligibility::Ineligible
+            }
+            _ => Eligibility::Eligible,
+        }
+    }
 }
 
 /// The capability manifest Unity returns for
@@ -88,6 +112,33 @@ struct StorageCredential {
     config: BTreeMap<String, String>,
 }
 
+/// The table's Unity record: the table id and the capability manifest.
+async fn table_record(root: &str, name: &str, token: Option<&str>) -> Result<TableRecord, Error> {
+    dialect::get_json(
+        &format!(
+            "{root}/tables/{}?include_manifest_capabilities=true",
+            dialect::encode(name)
+        ),
+        token,
+    )
+    .await
+    .map_err(Error::from)
+}
+
+/// Whether Unity reports the table readable outside Databricks compute,
+/// without asking for credentials.
+pub(super) async fn check_unity(
+    endpoint: &str,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+    token: Option<&str>,
+) -> Result<Eligibility, Error> {
+    let name = format!("{catalog}.{schema}.{table}");
+    let record = table_record(&dialect::api_root(endpoint), &name, token).await?;
+    Ok(record.eligibility())
+}
+
 pub(super) async fn vend_unity(
     endpoint: &str,
     catalog: &str,
@@ -97,28 +148,13 @@ pub(super) async fn vend_unity(
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let root = dialect::api_root(endpoint);
-    let record: TableRecord = dialect::get_json(
-        &format!(
-            "{root}/tables/{}?include_manifest_capabilities=true",
-            dialect::encode(&name)
-        ),
-        token,
-    )
-    .await
-    .map_err(Error::from)?;
+    let record = table_record(&root, &name, token).await?;
+    if record.eligibility() == Eligibility::Ineligible {
+        return Ok(None);
+    }
     let Some(table_id) = record.table_id.filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
-    if let Some(manifest) = &record.securable_kind_manifest {
-        if !manifest.capabilities.is_empty()
-            && !manifest
-                .capabilities
-                .iter()
-                .any(|capability| grants_direct_access(capability))
-        {
-            return Ok(None);
-        }
-    }
     let response = reqwest::request(Request::post(
         format!("{root}/temporary-table-credentials"),
         token.map(str::to_owned),
