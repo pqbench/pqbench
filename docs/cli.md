@@ -190,9 +190,18 @@ lists the tables in it, one `pqbench.table-ref` version 2 line each — the
 document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
-Entries with no location (views) are skipped. Each ref also carries the lake
-source's storage options, so a later storage read (`tablev2 info`, or the
-vended keys `tablev2 vend-credentials` adds) finds them.
+Entries with no location (views) are skipped. Refs are durable data only — no
+env — so a per-table stage gets the lake source (endpoint, token, storage
+options) from its own stdin or `PQB_*`, in memory. The walk's per-table work
+runs as a loop over refs, one table per worker:
+
+```console no-run
+$ pqbench schema ls dbx_samples.nyctaxi --format json < source.json |
+    while IFS= read -r ref; do
+        printf '%s\n%s\n' "$(cat source.json)" "$ref" |
+            pqbench tablev2 info --format json
+    done
+```
 
 `tablev2 info` enriches that ref — id, format, snapshot, columns, partition
 columns, format properties — and keeps the same kind and version, so
@@ -210,20 +219,22 @@ credentials on the lake source, or the vended credentials `tablev2
 vend-credentials` adds; Databricks default-storage tables cannot read their
 log. The Iceberg REST path needs no storage read.
 
-`tablev2 info` reads a governed `s3://` table with only a catalog token: when
-the ref and the lake source carry no AWS keys, it vends that table's temporary
-read credentials in memory before the log read and never writes them to the
-record. A known non-vendable kind (managed default storage, a view) proceeds
-with the static env, as does a catalog that does not serve
+`tablev2 info` reads a governed `s3://` table with only a catalog token: the
+lake source supplies the endpoint and env in memory, and when it carries no
+AWS keys, info vends that table's temporary read credentials in memory before
+the log read. A known non-vendable kind (managed default storage, a view)
+proceeds with the static env, as does a catalog that does not serve
 `temporary-table-credentials`; a catalog that reports no kind is attempted.
-`tablev2 vend-credentials` is the explicit stage that materializes those
-credentials on the refs (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-`AWS_SESSION_TOKEN`, over the ref's and the source's options) for other tools:
+The record never carries env — refs stay durable data. `tablev2
+vend-credentials` is the explicit stage that materializes the credentials on
+the refs (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
+for other tools:
 
 ```console no-run
-$ PQB_ENDPOINT=… pqbench schema ls dbx_samples.nyctaxi | pqbench tablev2 info
-$ PQB_ENDPOINT=… pqbench schema ls dbx_samples.nyctaxi \
-    | pqbench tablev2 vend-credentials | pqbench tablev2 info
+$ pqbench schema ls dbx_samples.nyctaxi --format json < source.json |
+    while IFS= read -r ref; do
+        printf '%s\n%s\n' "$(cat source.json)" "$ref" | pqbench tablev2 vend-credentials
+    done
 ```
 
 ```console no-run

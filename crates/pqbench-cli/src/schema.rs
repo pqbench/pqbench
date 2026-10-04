@@ -97,8 +97,6 @@ struct TableRefRecord<'a> {
     uri: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     storage_path: Option<&'a str>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    env: &'a BTreeMap<String, String>,
 }
 
 impl Row for TableRefRecord<'_> {
@@ -122,7 +120,6 @@ fn table_record(table: &ls::TableRef) -> TableRefRecord<'_> {
         id: &table.name,
         uri: &table.uri,
         storage_path: table.storage_path.as_deref(),
-        env: &table.env,
     }
 }
 
@@ -198,7 +195,6 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
             &name,
             input.source.token.as_deref(),
             input.source.table_format.into(),
-            &input.source.env,
         )
         .await?;
         for table in &tables {
@@ -222,7 +218,6 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
                     &name,
                     source.token.as_deref(),
                     source.table_format.into(),
-                    &source.env,
                 )
                 .await?,
             )

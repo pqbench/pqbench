@@ -99,8 +99,7 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             &env,
         )
         .await?;
-        emit.write_row(&table_record(&without_credentials(record)))
-            .await?;
+        emit.write_row(&table_record(&record)).await?;
         return emit.finish("tables: 1\n").await;
     }
     if !input.piped {
@@ -123,7 +122,7 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
                 ref_env(&record, &source.env),
             )
             .await?;
-            Ok::<_, CliError>(without_credentials(
+            Ok::<_, CliError>(
                 info::read(
                     &source.endpoint,
                     &catalog,
@@ -134,7 +133,7 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
                     &env,
                 )
                 .await?,
-            ))
+            )
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {
@@ -259,19 +258,6 @@ fn needs_credentials(env: &BTreeMap<String, String>) -> bool {
         && env.get("AWS_SKIP_SIGNATURE").map(String::as_str) != Some("true")
 }
 
-/// The record without its credential keys: they stay in memory.
-fn without_credentials(mut info: TableInfo) -> TableInfo {
-    info.env.retain(|key, _| !is_credential(key));
-    info
-}
-
-fn is_credential(key: &str) -> bool {
-    matches!(
-        key,
-        "AWS_ACCESS_KEY_ID" | "AWS_SECRET_ACCESS_KEY" | "AWS_SESSION_TOKEN"
-    )
-}
-
 /// The catalog, schema, and table a `pqbench.table-ref` v2 ref names.
 ///
 /// Version 1 refs (the legacy `lake` stream) are rejected, so the old and new
@@ -326,8 +312,6 @@ struct TableRefRecord<'a> {
     delta_properties: &'a BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     iceberg_properties: &'a BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    env: &'a BTreeMap<String, String>,
 }
 
 fn is_empty_slice<T>(values: &&[T]) -> bool {
@@ -347,7 +331,6 @@ fn table_record(record: &TableInfo) -> TableRefRecord<'_> {
         columns: record.columns.as_slice(),
         delta_properties: &record.delta_properties,
         iceberg_properties: &record.iceberg_properties,
-        env: &record.env,
     }
 }
 
