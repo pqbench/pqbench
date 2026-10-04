@@ -207,6 +207,19 @@ $ pqbench schema ls dbx_samples.nyctaxi --format json |
     pqbench tablev2 info --format json
 ```
 
+`pqbench setup` prints that environment for the shell to evaluate:
+
+```console no-run
+$ eval "$(pqbench setup)"
+```
+
+It resolves the endpoint and token the way the Databricks SDKs do — the flag,
+then `PQB_*`, then `DATABRICKS_*` — and adds `AWS_REGION` and
+`AWS_EC2_METADATA_DISABLED=true` (the AWS SDK otherwise probes EC2 metadata
+for the region, which hangs where that endpoint is blackholed). A notebook
+kernel's dbutils context is not visible to a subprocess, so a notebook sets
+`DATABRICKS_*` from it first.
+
 `tablev2 info` enriches that ref — id, format, snapshot, columns, partition
 columns, format properties — and keeps the same kind and version, so
 `schema ls | tablev2 info` chains. Unity `/tables/{full_name}` names the
