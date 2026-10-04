@@ -4,6 +4,7 @@
 //! record: the catalog names the table and its location, and the table's own
 //! metadata is read without files, so the cost is O(1) in files.
 
+pub mod credentials;
 mod dialect;
 pub mod info;
 

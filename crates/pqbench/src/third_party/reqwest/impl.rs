@@ -27,7 +27,14 @@ fn client() -> Result<&'static Client, Error> {
 }
 
 pub(crate) async fn request(request: Request) -> Result<Response, Error> {
-    let mut builder = client()?.get(&request.url);
+    let client = client()?;
+    let mut builder = match &request.body {
+        Some(body) => client
+            .post(&request.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.clone()),
+        None => client.get(&request.url),
+    };
     if let Some(bearer) = &request.bearer {
         builder = builder.bearer_auth(bearer);
     }

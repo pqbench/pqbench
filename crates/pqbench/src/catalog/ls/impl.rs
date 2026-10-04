@@ -128,6 +128,7 @@ async fn get_json<T: DeserializeOwned>(url: &str, token: Option<&str>) -> Result
     let response = reqwest::request(Request {
         url: url.to_string(),
         bearer: token.map(str::to_owned),
+        body: None,
     })
     .await
     .map_err(|error| Error::from(error.to_string()))?;

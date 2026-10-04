@@ -52,6 +52,7 @@ pub(crate) async fn list(endpoint: &str, token: Option<&str>) -> Result<Vec<Cata
         let response = reqwest::request(Request {
             url,
             bearer: token.map(str::to_owned),
+            body: None,
         })
         .await
         .map_err(|error| Error::from(error.to_string()))?;

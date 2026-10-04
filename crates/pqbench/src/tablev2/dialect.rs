@@ -27,6 +27,7 @@ pub(super) async fn get_json<T: DeserializeOwned>(
     let response = reqwest::request(Request {
         url: url.to_string(),
         bearer: token.map(str::to_owned),
+        body: None,
     })
     .await
     .map_err(|error| error.to_string())?;

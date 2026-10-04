@@ -19,6 +19,7 @@ pub(crate) async fn read(uri: &str, token: Option<&str>) -> Result<String, Error
     let response = reqwest::request(Request {
         url: uri.to_string(),
         bearer: token.map(str::to_owned),
+        body: None,
     })
     .await
     .map_err(|error| Error::from(error.to_string()))?;

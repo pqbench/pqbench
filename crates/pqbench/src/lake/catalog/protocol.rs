@@ -31,6 +31,7 @@ pub(crate) async fn select(endpoint: &str, token: Option<&str>) -> Result<Protoc
     let response = reqwest::request(Request {
         url,
         bearer: token.map(str::to_owned),
+        body: None,
     })
     .await
     .map_err(|error| Error::from(format!("catalog request failed: {error}")))?;

@@ -18,12 +18,15 @@ impl From<String> for Error {
     }
 }
 
-/// One GET request: a URL and an optional bearer token.
+/// One request: a URL, an optional bearer token, and an optional JSON body.
+/// A body makes it a POST; without one it is a GET.
 pub struct Request {
-    /// The URL to GET.
+    /// The URL to request.
     pub url: String,
     /// The bearer credential, when the endpoint needs one.
     pub bearer: Option<String>,
+    /// The JSON body; `None` sends a GET, `Some` sends a POST.
+    pub body: Option<String>,
 }
 
 /// One response: the status and the body bytes.
