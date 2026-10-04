@@ -8,9 +8,7 @@
 //! view) stops there; for an eligible table `POST
 //! /temporary-table-credentials` vends read credentials. A missing or empty
 //! manifest says nothing, so a catalog that reports none (Unity OSS) is
-//! attempted. [`check_unity`] reads the same record without vending, so a
-//! caller can gate a read on eligibility before asking for credentials.
-//! Serverless notebooks are refused
+//! attempted. Serverless notebooks are refused
 //! (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); those refs pass
 //! through with no env, since the compute reaches storage itself.
 //!
@@ -32,12 +30,12 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use super::api::{Eligibility, Error};
+use super::api::Error;
 use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
-/// The subset of the Unity table record vending and the eligibility check
-/// need.
+/// The subset of the Unity table record vending needs: the table id and the
+/// capability manifest that gates the attempt.
 #[derive(Deserialize)]
 struct TableRecord {
     #[serde(default)]
@@ -51,19 +49,16 @@ impl TableRecord {
     /// compute. A missing or empty manifest says nothing, so the table is
     /// attempted; a manifest that lists capabilities without direct support
     /// (managed default storage, a view) is not.
-    fn eligibility(&self) -> Eligibility {
-        match &self.securable_kind_manifest {
+    fn eligible(&self) -> bool {
+        !matches!(
+            &self.securable_kind_manifest,
             Some(manifest)
                 if !manifest.capabilities.is_empty()
                     && !manifest
                         .capabilities
                         .iter()
-                        .any(|capability| grants_direct_access(capability)) =>
-            {
-                Eligibility::Ineligible
-            }
-            _ => Eligibility::Eligible,
-        }
+                        .any(|capability| grants_direct_access(capability))
+        )
     }
 }
 
@@ -75,51 +70,13 @@ struct SecurableKindManifest {
     capabilities: Vec<String>,
 }
 
-/// The subset of the temporary-credentials response this command reports.
-#[derive(Deserialize)]
-struct CredentialsRecord {
-    #[serde(default)]
-    aws_temp_credentials: Option<AwsTempCredentials>,
-}
-
-#[derive(Deserialize)]
-struct AwsTempCredentials {
-    access_key_id: String,
-    secret_access_key: String,
-    session_token: String,
-}
-
-/// The subset of the Iceberg REST `loadTable` response vending needs.
-#[derive(Deserialize)]
-struct LoadedTable {
-    #[serde(default)]
-    metadata: Option<TableMetadata>,
-    #[serde(default)]
-    config: BTreeMap<String, String>,
-    #[serde(default, rename = "storage-credentials")]
-    storage_credentials: Vec<StorageCredential>,
-}
-
-#[derive(Deserialize)]
-struct TableMetadata {
-    #[serde(default)]
-    location: Option<String>,
-}
-
-/// The document `loadCredentials` returns: the vended storage credentials.
-#[derive(Deserialize)]
-struct LoadedCredentials {
-    #[serde(default, rename = "storage-credentials")]
-    storage_credentials: Vec<StorageCredential>,
-}
-
-/// One prefix-scoped credential set from `storage-credentials`.
-#[derive(Deserialize)]
-struct StorageCredential {
-    #[serde(default)]
-    prefix: String,
-    #[serde(default)]
-    config: BTreeMap<String, String>,
+/// Whether a manifest capability marks the table readable or writable
+/// outside Databricks compute.
+fn grants_direct_access(capability: &str) -> bool {
+    matches!(
+        capability,
+        "HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT" | "HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT"
+    )
 }
 
 /// The table's Unity record: the table id and the capability manifest.
@@ -135,20 +92,6 @@ async fn table_record(root: &str, name: &str, token: Option<&str>) -> Result<Tab
     .map_err(Error::from)
 }
 
-/// Whether Unity reports the table readable outside Databricks compute,
-/// without asking for credentials.
-pub(super) async fn check_unity(
-    endpoint: &str,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    token: Option<&str>,
-) -> Result<Eligibility, Error> {
-    let name = format!("{catalog}.{schema}.{table}");
-    let record = table_record(&dialect::api_root(endpoint), &name, token).await?;
-    Ok(record.eligibility())
-}
-
 pub(super) async fn vend_unity(
     endpoint: &str,
     catalog: &str,
@@ -159,7 +102,7 @@ pub(super) async fn vend_unity(
     let name = format!("{catalog}.{schema}.{table}");
     let root = dialect::api_root(endpoint);
     let record = table_record(&root, &name, token).await?;
-    if record.eligibility() == Eligibility::Ineligible {
+    if !record.eligible() {
         return Ok(None);
     }
     let Some(table_id) = record.table_id.filter(|id| !id.is_empty()) else {
@@ -207,13 +150,18 @@ pub(super) async fn vend_unity(
     }))
 }
 
-/// Whether a manifest capability marks the table readable or writable
-/// outside Databricks compute.
-fn grants_direct_access(capability: &str) -> bool {
-    matches!(
-        capability,
-        "HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT" | "HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT"
-    )
+/// The subset of the temporary-credentials response this command reports.
+#[derive(Deserialize)]
+struct CredentialsRecord {
+    #[serde(default)]
+    aws_temp_credentials: Option<AwsTempCredentials>,
+}
+
+#[derive(Deserialize)]
+struct AwsTempCredentials {
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: String,
 }
 
 /// The catalog's vended credentials for one Iceberg table: `loadCredentials`
@@ -295,6 +243,39 @@ async fn vend_iceberg_load(
         .unwrap_or_default();
     let config = matching_config(&loaded.storage_credentials, &location).unwrap_or(loaded.config);
     Ok(aws_options(&config))
+}
+
+/// The subset of the Iceberg REST `loadTable` response vending needs.
+#[derive(Deserialize)]
+struct LoadedTable {
+    #[serde(default)]
+    metadata: Option<TableMetadata>,
+    #[serde(default)]
+    config: BTreeMap<String, String>,
+    #[serde(default, rename = "storage-credentials")]
+    storage_credentials: Vec<StorageCredential>,
+}
+
+#[derive(Deserialize)]
+struct TableMetadata {
+    #[serde(default)]
+    location: Option<String>,
+}
+
+/// The document `loadCredentials` returns: the vended storage credentials.
+#[derive(Deserialize)]
+struct LoadedCredentials {
+    #[serde(default, rename = "storage-credentials")]
+    storage_credentials: Vec<StorageCredential>,
+}
+
+/// One prefix-scoped credential set from `storage-credentials`.
+#[derive(Deserialize)]
+struct StorageCredential {
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    config: BTreeMap<String, String>,
 }
 
 /// The `AWS_*` options from the first vended credential naming an access key:

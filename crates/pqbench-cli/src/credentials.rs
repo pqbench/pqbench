@@ -173,7 +173,7 @@ async fn check(
     if !matches!(source.table_format, source::TableFormat::Unity) {
         return Ok(None);
     }
-    let eligibility = pqbench::credentials::check_unity(
+    let eligibility = pqbench::credentials::check::check_unity(
         &source.endpoint,
         catalog,
         schema,
@@ -181,7 +181,7 @@ async fn check(
         source.token.as_deref(),
     )
     .await?;
-    if eligibility == pqbench::credentials::Eligibility::Ineligible {
+    if eligibility == pqbench::credentials::check::Eligibility::Ineligible {
         return Ok(Some(ineligible(&format!("{catalog}.{schema}.{name}"))));
     }
     Ok(None)

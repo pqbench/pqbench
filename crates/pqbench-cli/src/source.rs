@@ -177,7 +177,7 @@ pub(crate) async fn vend(
     name: &str,
 ) -> Result<Option<BTreeMap<String, String>>, CliError> {
     match source.table_format {
-        TableFormat::Unity => Ok(credentials::vend_unity(
+        TableFormat::Unity => Ok(credentials::get::vend_unity(
             &source.endpoint,
             catalog,
             schema,
@@ -185,12 +185,13 @@ pub(crate) async fn vend(
             source.token.as_deref(),
         )
         .await?),
-        TableFormat::Iceberg => {
-            Ok(
-                credentials::vend_iceberg(&source.endpoint, schema, name, source.token.as_deref())
-                    .await?,
-            )
-        }
+        TableFormat::Iceberg => Ok(credentials::get::vend_iceberg(
+            &source.endpoint,
+            schema,
+            name,
+            source.token.as_deref(),
+        )
+        .await?),
     }
 }
 
