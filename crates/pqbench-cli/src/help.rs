@@ -347,7 +347,9 @@ options come from a pqbench.lake-source on standard input, or from PQB_ENDPOINT
          /tables/{full_name} reads the table id and capability manifest; a
          manifest without direct-external-engine read or write support
          (managed default storage, a view) passes through with its own env,
-         and a catalog that reports no manifest is attempted. Under
+         and a catalog that reports no manifest is attempted; inside
+         serverless compute Unity refuses to mint storage credentials, so
+         refs pass through there too. Under
          PQB_TABLE_FORMAT=iceberg the command reads loadTable with
          X-Iceberg-Access-Delegation and takes the catalog's
          storage-credentials covering the table's location, for the next

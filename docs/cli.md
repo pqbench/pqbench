@@ -227,8 +227,12 @@ Databricks-managed default storage explicitly denies externally issued
 sessions on its objects (verified for data files, Iceberg manifests, and the
 Delta log) — those tables stay unreadable outside compute even under a vended
 lease. Customer-storage tables read under it; compatibility mode publishes a
-read-only copy for path-based clients. The Iceberg REST path needs no storage
-read.
+read-only copy for path-based clients. Inside Databricks compute the vended
+lease is not the mechanism: serverless notebooks are refused
+storage-credential minting outright
+(`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`) and refs pass
+through, while classic compute reaches storage through its own instance
+profile. The Iceberg REST path needs no storage read.
 
 `tablev2 info` reads a governed `s3://` table with only a catalog token: the
 lake source supplies the endpoint and env in memory, and when it carries no

@@ -8,7 +8,9 @@
 //! view) stops there; for an eligible table `POST
 //! /temporary-table-credentials` vends read credentials. A missing or empty
 //! manifest says nothing, so a catalog that reports none (Unity OSS) is
-//! attempted.
+//! attempted. Serverless notebooks are refused
+//! (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); those refs pass
+//! through with no env, since the compute reaches storage itself.
 //!
 //! Iceberg REST serves `loadTable`; with `X-Iceberg-Access-Delegation:
 //! vended-credentials` the response may carry `storage-credentials`, a list of
@@ -125,6 +127,14 @@ pub(super) async fn vend_unity(
     .await
     .map_err(|error| Error::from(error.to_string()))?;
     if matches!(response.status, 404 | 501) {
+        return Ok(None);
+    }
+    if response.status == 403
+        && String::from_utf8_lossy(&response.bytes)
+            .contains("UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING")
+    {
+        // Serverless notebooks cannot mint storage credentials; the compute's
+        // engines reach storage, so the ref passes through with no env.
         return Ok(None);
     }
     if response.status != 200 {
