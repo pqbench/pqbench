@@ -15,6 +15,6 @@ fn what_to_run() {
 #[rustfmt::skip]
 #[test]
 fn catalog_list_unity_databricks_iceberg_rest() {
-    // catalog_list_unity_databricks_iceberg_rest, from line 283
-    support::run("pqbench lake docs/demos/lake.json --format table", 284, Some(&["name          uri", "------------  --------------------------", "unity/events  docker/e2e-lakehouse/table", "tables: 1"]));
+    // catalog_list_unity_databricks_iceberg_rest, from line 284
+    support::run("pqbench lake docs/demos/lake.json --format table", 285, Some(&["name          uri", "------------  --------------------------", "unity/events  docker/e2e-lakehouse/table", "tables: 1"]));
 }
