@@ -148,18 +148,18 @@ fn is_empty_slice<T>(values: &&[T]) -> bool {
 
 /// The row `tablev2 info` writes for a table: the record plus the env the read
 /// ran under.
-fn table_record(record: &TableInfo, env: BTreeMap<String, String>) -> TableRefRecord<'_> {
+fn table_record(info: &TableInfo, env: BTreeMap<String, String>) -> TableRefRecord<'_> {
     TableRefRecord {
         kind: "pqbench.table-ref",
         version: 2,
-        id: &record.name,
-        format: record.format,
-        storage_path: &record.uri,
-        snapshot_version: record.snapshot_version,
-        partition_columns: record.partition_columns.as_slice(),
-        columns: record.columns.as_slice(),
-        delta_properties: &record.delta_properties,
-        iceberg_properties: &record.iceberg_properties,
+        id: &info.name,
+        format: info.format,
+        storage_path: &info.uri,
+        snapshot_version: info.snapshot_version,
+        partition_columns: info.partition_columns.as_slice(),
+        columns: info.columns.as_slice(),
+        delta_properties: &info.delta_properties,
+        iceberg_properties: &info.iceberg_properties,
         env,
     }
 }

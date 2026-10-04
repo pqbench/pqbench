@@ -146,18 +146,17 @@ async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
 }
 
 /// The reason a table is not readable outside Databricks compute, `None` when
-/// it is. Iceberg reads its metadata inline through the catalog, so the
-/// eligibility gate is Unity's alone.
+/// it is. The core check owns the dialect — Unity reads the capability
+/// manifest; Iceberg REST reads its metadata inline through the catalog, so it
+/// passes — and the CLI only renders the reason.
 async fn check(
     source: &source::Source,
     catalog: &str,
     schema: &str,
     name: &str,
 ) -> Result<Option<String>, CliError> {
-    if !matches!(source.table_format, source::TableFormat::Unity) {
-        return Ok(None);
-    }
-    let eligibility = pqbench::credentials::check::check_unity(
+    let eligibility = pqbench::credentials::check::check(
+        source.table_format.into(),
         &source.endpoint,
         catalog,
         schema,

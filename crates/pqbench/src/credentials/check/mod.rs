@@ -3,4 +3,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{check_unity, Eligibility, Error};
+pub use api::{check, Eligibility, Error, TableFormat};

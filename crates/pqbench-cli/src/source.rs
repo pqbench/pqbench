@@ -72,6 +72,15 @@ impl From<TableFormat> for pqbench::tablev2::TableFormat {
     }
 }
 
+impl From<TableFormat> for pqbench::credentials::check::TableFormat {
+    fn from(format: TableFormat) -> Self {
+        match format {
+            TableFormat::Unity => Self::Unity,
+            TableFormat::Iceberg => Self::Iceberg,
+        }
+    }
+}
+
 /// One command's stdin: the resolved context and the parent records.
 pub(crate) struct Input {
     pub source: Source,

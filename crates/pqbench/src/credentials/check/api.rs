@@ -35,23 +35,65 @@ pub enum Eligibility {
     Ineligible,
 }
 
-/// Check whether Unity reports `table` readable outside Databricks compute.
+/// The catalog dialect a check speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableFormat {
+    /// Unity Catalog REST: the capability manifest gates external read.
+    Unity,
+    /// Iceberg REST: table metadata is read inline through the catalog, so
+    /// there is no manifest to gate — the table is eligible.
+    Iceberg,
+}
+
+/// Whether `table` is readable outside Databricks compute, by dialect.
 ///
-/// Reads the `GET /tables/{full_name}?include_manifest_capabilities=true`
-/// record without asking for credentials. The check separates eligibility
-/// from vending: a caller that needs the table itself (`tablev2 info`) can
-/// report an [`Eligibility::Ineligible`] table with the reason instead of
-/// running a storage read that cannot succeed.
+/// The check owns the format: Unity reads the
+/// `GET /tables/{full_name}?include_manifest_capabilities=true` record without
+/// asking for credentials; Iceberg REST reads its metadata inline through the
+/// catalog, so the table is eligible and no catalog call is made. The caller
+/// passes the dialect it runs under and gets the same [`Eligibility`] either
+/// way. The check separates eligibility from vending: a caller that needs the
+/// table itself (`tablev2 info`) can report an [`Eligibility::Ineligible`]
+/// table with the reason instead of running a storage read that cannot
+/// succeed.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached or answers with an unexpected
 /// status.
-pub async fn check_unity(
+pub async fn check(
+    format: TableFormat,
     endpoint: &str,
     catalog: &str,
     schema: &str,
     table: &str,
     token: Option<&str>,
 ) -> Result<Eligibility, Error> {
-    super::r#impl::check_unity(endpoint, catalog, schema, table, token).await
+    match format {
+        TableFormat::Unity => {
+            super::r#impl::check_unity(endpoint, catalog, schema, table, token).await
+        }
+        TableFormat::Iceberg => Ok(Eligibility::Eligible),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Iceberg REST reads its metadata through the catalog, so the check is
+    /// eligible without a catalog call — a bogus endpoint is never reached.
+    #[tokio::test]
+    async fn iceberg_check_is_eligible_without_a_catalog_call() {
+        let eligibility = check(
+            TableFormat::Iceberg,
+            "http://127.0.0.1:1",
+            "catalog",
+            "schema",
+            "table",
+            None,
+        )
+        .await
+        .expect("the Iceberg check does not call the catalog");
+        assert_eq!(eligibility, Eligibility::Eligible);
+    }
 }
