@@ -5,12 +5,11 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use futures_util::stream::StreamExt;
-use pqbench::credentials::vend;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::emit::{write_stdout, Align, Emitter, Format, Row};
-use crate::source::{self, read_input, ref_env, table_ref};
+use crate::source::{self, read_input, ref_env, table_ref, vend_if_unity};
 use crate::CliError;
 
 /// Arguments for `credentials`: one table's storage options.
@@ -112,27 +111,6 @@ async fn export_credentials(input: source::Input) -> Result<(), CliError> {
     let credentials = vend_if_unity(&source, &catalog, &schema, &name).await?;
     let env = table_env(&record, credentials, &source.env);
     write_stdout(&export_lines(&env)).await
-}
-
-/// The table's vended read credentials; the Iceberg dialect carries its
-/// metadata inline, so only Unity vends.
-async fn vend_if_unity(
-    source: &source::Source,
-    catalog: &str,
-    schema: &str,
-    name: &str,
-) -> Result<Option<BTreeMap<String, String>>, CliError> {
-    if !matches!(source.table_format, source::TableFormat::Unity) {
-        return Ok(None);
-    }
-    Ok(vend(
-        &source.endpoint,
-        catalog,
-        schema,
-        name,
-        source.token.as_deref(),
-    )
-    .await?)
 }
 
 /// The table's env: the lake source's options, the ref's own, then the vended

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use futures_util::stream::StreamExt;
-use pqbench::credentials;
 use pqbench::table::{Column, TableFormat, TableInfo};
 use pqbench::tablev2::info;
 use serde::Serialize;
@@ -135,18 +134,10 @@ async fn vend_if_needed(
     name: &str,
     mut env: BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, CliError> {
-    if !matches!(source.table_format, source::TableFormat::Unity) || !needs_credentials(&env) {
+    if !needs_credentials(&env) {
         return Ok(env);
     }
-    if let Some(credentials) = credentials::vend(
-        &source.endpoint,
-        catalog,
-        schema,
-        name,
-        source.token.as_deref(),
-    )
-    .await?
-    {
+    if let Some(credentials) = source::vend_if_unity(source, catalog, schema, name).await? {
         env.extend(credentials);
     }
     Ok(env)

@@ -1,4 +1,4 @@
-//! The walk's input: context and parent refs.
+//! The walk's input: context, parent refs, and the options a table read needs.
 //!
 //! A metadata command reads one stream. The first record may be a
 //! `pqbench.lake-source` — the walk's context: the endpoint and bearer.
@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use futures_util::stream::{self, Stream, StreamExt};
+use pqbench::credentials;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
@@ -164,6 +165,27 @@ pub(crate) fn ref_env(
         }
     }
     env
+}
+
+/// The table's vended read credentials; the Iceberg dialect carries its
+/// metadata inline, so only Unity vends.
+pub(crate) async fn vend_if_unity(
+    source: &Source,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+) -> Result<Option<BTreeMap<String, String>>, CliError> {
+    if !matches!(source.table_format, TableFormat::Unity) {
+        return Ok(None);
+    }
+    Ok(credentials::vend(
+        &source.endpoint,
+        catalog,
+        schema,
+        name,
+        source.token.as_deref(),
+    )
+    .await?)
 }
 
 #[derive(Deserialize)]
