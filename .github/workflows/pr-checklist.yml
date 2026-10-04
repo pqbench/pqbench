@@ -1,0 +1,42 @@
+name: PR checklist
+
+# The PR description certifies the checks per commit: it must contain the line
+#   Above checks are true for the commit "<head sha>"
+# for the branch's current head. A push moves the head, so the old line no
+# longer matches and this check goes red until the description is updated; a
+# stale description cannot be merged unnoticed. `edited` is in the types so
+# fixing the description re-runs the check.
+#
+# The body is read from the event payload into an env var — never interpolate
+# it into `run`, which would be script injection.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+# One run per ref: a new push cancels the superseded run.
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  head-commit:
+    name: Description certifies the head commit
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the description certifies the head commit
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          expected="Above checks are true for the commit \"$HEAD_SHA\""
+          if printf '%s\n' "$PR_BODY" | grep -Fq -- "$expected"; then
+            echo "Description certifies the head commit $HEAD_SHA."
+            exit 0
+          fi
+          echo "::error::PR description does not certify the head commit; re-run the checks, then update the certification line."
+          echo "The line must name this PR's head commit; see .github/PULL_REQUEST_TEMPLATE.md." >&2
+          exit 1
