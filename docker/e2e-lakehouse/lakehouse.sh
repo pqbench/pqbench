@@ -258,7 +258,7 @@ check_unity() {
     # The per-table loop: refs are durable data only, so each table's worker
     # gets the lake source (endpoint + storage options, no AWS keys) on stdin,
     # in memory. `credentials get` materializes the vended session on the ref;
-    # `tablev2 info` vends it in memory for the Delta log read and emits no env.
+    # `tablev2 info` reads the Delta log under it and emits no env.
     local vended_source="local/lakehouse/vended-source.json"
     jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
         '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
@@ -284,7 +284,9 @@ check_unity() {
     local vended_info
     vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
         while IFS= read -r ref; do
-            printf '%s\n%s\n' "$vended_doc" "$ref" |
+            vended=$(printf '%s\n%s\n' "$vended_doc" "$ref" |
+                "$pqbench_bin" credentials get --format json) || exit 1
+            printf '%s\n%s\n' "$vended_doc" "$vended" |
                 "$pqbench_bin" tablev2 info --format json
         done |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))] env=\(if .env then "set" else "none" end)"') || {
