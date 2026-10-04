@@ -674,9 +674,11 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
-/// `tablev2 info` on the live Unity catalog: the managed default-storage table
-/// cannot be read outside Databricks compute, and the error names the table
-/// and its storage location.
+/// `tablev2 info` on the live Unity catalog: info vends the table's read
+/// credentials in memory, then runs the `without_files()` Delta log read
+/// under them. Databricks default storage's bucket policy explicitly denies
+/// externally issued sessions, so the read still fails outside compute — and
+/// the error names the table and its storage location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
@@ -905,6 +907,107 @@ fn credentials_get_shell_env_writes_the_loop_env() {
     ] {
         assert!(!export_value(&stdout, key).is_empty(), "{stdout}");
     }
+}
+
+/// The whole per-table loop on the live Iceberg REST catalog: `schema ls`
+/// streams refs, `credentials get --shell-env` vends the table's keys into
+/// shell exports, and `tablev2 info` runs under them — the enriched ref keeps
+/// the catalog's inline metadata (snapshot, columns) and never carries env.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn credentials_get_shell_env_arms_the_live_iceberg_loop() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = format!(
+        "{}/iceberg-rest/v1/catalogs/dbx_samples",
+        unity_endpoint(&host)
+    );
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+        ("PQB_TABLE_FORMAT", "iceberg"),
+    ];
+    let refs = pipe_env(
+        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &env,
+    );
+    assert!(
+        refs.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&refs.stderr)
+    );
+    let trips = ndjson(&refs.stdout)
+        .into_iter()
+        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .unwrap_or_else(|| panic!("no trips table"));
+    let mut document = source(&endpoint, Some(&token));
+    document["table_format"] = json!("iceberg");
+    let stdin = format!("{document}\n{trips}\n");
+    let exports = pipe(&["credentials", "get", "--shell-env"], stdin.as_bytes());
+    assert!(
+        exports.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&exports.stderr)
+    );
+    let stdout = String::from_utf8(exports.stdout).unwrap();
+    let lease = [
+        (
+            "AWS_ACCESS_KEY_ID",
+            export_value(&stdout, "AWS_ACCESS_KEY_ID"),
+        ),
+        (
+            "AWS_SECRET_ACCESS_KEY",
+            export_value(&stdout, "AWS_SECRET_ACCESS_KEY"),
+        ),
+        (
+            "AWS_SESSION_TOKEN",
+            export_value(&stdout, "AWS_SESSION_TOKEN"),
+        ),
+    ];
+    assert!(lease.iter().all(|(_, value)| !value.is_empty()), "{stdout}");
+    let mut loop_env = vec![
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+        ("PQB_TABLE_FORMAT", "iceberg"),
+    ];
+    loop_env.extend(lease.iter().copied());
+    let info = pipe_env(
+        &["tablev2", "info", "--format", "json"],
+        stdin.as_bytes(),
+        &loop_env,
+    );
+    assert!(
+        info.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&info.stderr)
+    );
+    let records = ndjson(&info.stdout);
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record["id"], "dbx_samples.nyctaxi.trips");
+    assert_eq!(record["format"], "iceberg");
+    assert!(
+        record["snapshot_version"].as_u64().unwrap() > 0,
+        "{record:?}"
+    );
+    assert!(
+        !record["columns"].as_array().unwrap().is_empty(),
+        "{record:?}"
+    );
+    assert!(
+        record["storage_path"]
+            .as_str()
+            .is_some_and(|path| !path.is_empty()),
+        "{record:?}"
+    );
+    assert!(record["env"].is_null(), "{record:?}");
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:

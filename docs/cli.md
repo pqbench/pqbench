@@ -221,8 +221,10 @@ the legacy command is deprecated.
 
 The Delta path needs a readable storage location — the local stand, `env`
 credentials on the lake source, or the vended credentials `credentials get`
-adds; Databricks default-storage tables cannot read their log. The Iceberg
-REST path needs no storage read.
+adds. Databricks default storage's bucket policy explicitly denies externally
+issued sessions, so those tables' logs stay unreadable outside compute even
+under a vended lease; customer-storage tables read under it. The Iceberg REST
+path needs no storage read.
 
 `tablev2 info` reads a governed `s3://` table with only a catalog token: the
 lake source supplies the endpoint and env in memory, and when it carries no
