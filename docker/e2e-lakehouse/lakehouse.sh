@@ -257,7 +257,7 @@ check_unity() {
 
     # The per-table loop: refs are durable data only, so each table's worker
     # gets the lake source (endpoint + storage options, no AWS keys) on stdin,
-    # in memory. `vend-credentials` materializes the vended session on the ref;
+    # in memory. `credentials get` materializes the vended session on the ref;
     # `tablev2 info` vends it in memory for the Delta log read and emits no env.
     local vended_source="local/lakehouse/vended-source.json"
     jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
@@ -270,14 +270,14 @@ check_unity() {
     vended_ref=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
         while IFS= read -r ref; do
             printf '%s\n%s\n' "$vended_doc" "$ref" |
-                "$pqbench_bin" tablev2 vend-credentials --format json
+                "$pqbench_bin" credentials get --format json
         done |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) key=\(.env.AWS_ACCESS_KEY_ID // "-") session=\(if .env.AWS_SESSION_TOKEN then "set" else "unset" end) endpoint=\(.env.AWS_ENDPOINT // "-")"') || {
-        echo "check failed: tablev2 vend-credentials produced no ref" >&2
+        echo "check failed: credentials get produced no ref" >&2
         exit 1
     }
     [ "$vended_ref" = "pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=$s3_endpoint" ] || {
-        echo "check failed (unity vend-credentials): expected pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=$s3_endpoint; measured ${vended_ref:-nothing}" >&2
+        echo "check failed (unity credentials get): expected pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=$s3_endpoint; measured ${vended_ref:-nothing}" >&2
         exit 1
     }
 
@@ -301,15 +301,15 @@ check_unity() {
     local vended_export
     vended_export=$(
         ref=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" | head -1)
-        exported=$(printf '%s\n%s\n' "$vended_doc" "$ref" | "$pqbench_bin" tablev2 vend-credentials --shell-env) || exit 1
+        exported=$(printf '%s\n%s\n' "$vended_doc" "$ref" | "$pqbench_bin" credentials get --shell-env) || exit 1
         eval "$exported" || exit 1
         printf '%s %s %s' "$AWS_ACCESS_KEY_ID" "${AWS_SESSION_TOKEN:+set}" "$AWS_ENDPOINT"
     ) || {
-        echo "check failed: tablev2 vend-credentials --shell-env failed" >&2
+        echo "check failed: credentials get --shell-env failed" >&2
         exit 1
     }
     [ "$vended_export" = "$VENDED_ACCESS_KEY_ID set $s3_endpoint" ] || {
-        echo "check failed (unity vend-credentials --shell-env): expected $VENDED_ACCESS_KEY_ID set $s3_endpoint; measured ${vended_export:-nothing}" >&2
+        echo "check failed (unity credentials get --shell-env): expected $VENDED_ACCESS_KEY_ID set $s3_endpoint; measured ${vended_export:-nothing}" >&2
         exit 1
     }
 

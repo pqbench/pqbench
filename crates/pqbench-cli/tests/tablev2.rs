@@ -1,8 +1,7 @@
-//! Blackbox tests for the `pqbench tablev2` commands: one table's record from
-//! both catalog dialects, refs on stdin, the metadata-only read, and the shell
-//! env `vend-credentials --shell-env` writes. The Unity path reads the Delta log
-//! without files; the Iceberg path uses the `loadTable` metadata inline and
-//! never touches storage.
+//! Blackbox tests for `pqbench tablev2 info`: one table's record from both
+//! catalog dialects, refs on stdin, and the metadata-only read. The Unity
+//! path reads the Delta log without files; the Iceberg path uses the
+//! `loadTable` metadata inline and never touches storage.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -408,47 +407,4 @@ fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("dbx_samples.nyctaxi.trips"), "{stderr}");
     assert!(stderr.contains("/nonexistent/table"), "{stderr}");
-}
-
-/// `--shell-env` writes one ref's env as shell assignments for a loop's `eval`:
-/// the lake source's options first, the ref's over them. The Iceberg dialect
-/// never vends, so this runs offline.
-#[test]
-fn vend_credentials_export_writes_shell_assignments() {
-    let source = concat!(
-        r#"{"kind":"pqbench.lake-source","version":1,"table_format":"iceberg","endpoint":"http://example.test","env":{"AWS_REGION":"us-east-1","AWS_ENDPOINT":"http://minio.test:9000"}}"#,
-        "\n"
-    );
-    let reference = concat!(
-        r#"{"kind":"pqbench.table-ref","version":2,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips","env":{"AWS_REGION":"eu-west-1"}}"#,
-        "\n"
-    );
-    let output = pipe(
-        &["tablev2", "vend-credentials", "--shell-env"],
-        format!("{source}{reference}").as_bytes(),
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "export AWS_ENDPOINT='http://minio.test:9000'\nexport AWS_REGION='eu-west-1'\n"
-    );
-}
-
-/// `--shell-env` populates one table's env: a second ref fails before any output.
-#[test]
-fn vend_credentials_export_takes_one_ref() {
-    let source = r#"{"kind":"pqbench.lake-source","version":1,"table_format":"iceberg","endpoint":"http://example.test"}"#;
-    let reference = r#"{"kind":"pqbench.table-ref","version":2,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips"}"#;
-    let output = pipe(
-        &["tablev2", "vend-credentials", "--shell-env"],
-        format!("{source}\n{reference}\n{reference}\n").as_bytes(),
-    );
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty(), "{output:?}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("one ref"), "{stderr}");
 }

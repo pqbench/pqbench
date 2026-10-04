@@ -18,7 +18,7 @@ that command and links back. This file is the durable copy.
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
 | Read one table's record | `pqbench tablev2 info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
-| Vend read credentials (refs or shell exports) | `pqbench tablev2 vend-credentials [--shell-env]` (v2 refs on stdin) |
+| Vend read credentials (refs or shell exports) | `pqbench credentials get [--shell-env]` (v2 refs on stdin) |
 | Fill a legacy table-ref's storage path | `pqbench table info` (v1 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -39,7 +39,7 @@ A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
 the stream clean: only data rows are shown, bounded to 1000 rows, with the
 count of hidden rows reported. Credentials travel on that document (`AWS_*`;
 a catalog `token` on a lake-source); pqbench never writes them into the
-process environment itself — `tablev2 vend-credentials --shell-env` prints
+process environment itself — `credentials get --shell-env` prints
 shell assignments for a loop to `eval` when you want them there.
 
 ## Documents
@@ -51,7 +51,7 @@ shell assignments for a loop to `eval` when you want them there.
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
 | `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
 | `pqbench.table-ref` v1 | `lake` | `table info`, `table` |
-| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info`, `tablev2 vend-credentials` | `tablev2 info`, `tablev2 vend-credentials` |
+| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info`, `credentials get` | `tablev2 info`, `credentials get` |
 | `pqbench.table` v1 | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
@@ -194,7 +194,7 @@ only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
 Entries with no location (views) are skipped. Refs are durable data only — no
 env — so a per-table stage gets the lake source (endpoint, token, storage
 options) from its own stdin or `PQB_*`, in memory. The walk's per-table work
-runs as a loop over refs, one table per worker; `vend-credentials --shell-env`
+runs as a loop over refs, one table per worker; `credentials get --shell-env`
 puts the table's env in the process environment for every command in the
 body:
 
@@ -202,7 +202,7 @@ body:
 $ pqbench schema ls dbx_samples.nyctaxi --format json < source.json |
     while IFS= read -r ref; do
         eval "$(printf '%s\n%s\n' "$(cat source.json)" "$ref" |
-            pqbench tablev2 vend-credentials --shell-env)"
+            pqbench credentials get --shell-env)"
         printf '%s\n%s\n' "$(cat source.json)" "$ref" |
             pqbench tablev2 info --format json
     done
@@ -220,9 +220,9 @@ older `pqbench table info` (fill a v1 ref's storage path) keeps its name until
 the legacy command is deprecated.
 
 The Delta path needs a readable storage location — the local stand, `env`
-credentials on the lake source, or the vended credentials `tablev2
-vend-credentials` adds; Databricks default-storage tables cannot read their
-log. The Iceberg REST path needs no storage read.
+credentials on the lake source, or the vended credentials `credentials get`
+adds; Databricks default-storage tables cannot read their log. The Iceberg
+REST path needs no storage read.
 
 `tablev2 info` reads a governed `s3://` table with only a catalog token: the
 lake source supplies the endpoint and env in memory, and when it carries no
@@ -230,16 +230,16 @@ AWS keys, info vends that table's temporary read credentials in memory before
 the log read. A known non-vendable kind (managed default storage, a view)
 proceeds with the static env, as does a catalog that does not serve
 `temporary-table-credentials`; a catalog that reports no kind is attempted.
-The record never carries env — refs stay durable data. `tablev2
-vend-credentials` is the explicit stage that materializes the credentials on
-the refs (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
-for other tools; `--shell-env` writes the one ref's env — the source's options
-plus those keys — as shell `export` lines instead, for the loop's `eval`:
+The record never carries env — refs stay durable data. `credentials get` is
+the explicit stage that materializes the credentials on the refs
+(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) for other
+tools; `--shell-env` writes the one ref's env — the source's options plus
+those keys — as shell `export` lines instead, for the loop's `eval`:
 
 ```console no-run
 $ pqbench schema ls dbx_samples.nyctaxi --format json < source.json |
     while IFS= read -r ref; do
-        printf '%s\n%s\n' "$(cat source.json)" "$ref" | pqbench tablev2 vend-credentials
+        printf '%s\n%s\n' "$(cat source.json)" "$ref" | pqbench credentials get
     done
 ```
 

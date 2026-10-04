@@ -83,7 +83,7 @@ Auth (how to reach data):
     can GetObject. The legacy lake path does not call
     temporary-table-credentials; paste vended STS into AWS_* on env, or use
     a role that already can read the bucket. The tablev2 walk does:
-    `tablev2 info` vends in memory and `tablev2 vend-credentials`
+    `tablev2 info` vends in memory and `credentials get`
     materializes the keys (or prints them as shell `export` lines for a
     loop's `eval` with `--shell-env`).
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
@@ -311,19 +311,9 @@ chains. Version 1 refs (the legacy `lake` stream) are rejected.
          readable storage location. The lake source supplies the endpoint and
          env in memory; when it carries no AWS keys, info vends each table's
          read credentials in memory before the log read (the same kind gate as
-         vend-credentials), and the emitted record carries no env.
+         `credentials get`), and the emitted record carries no env.
          PQB_TABLE_FORMAT=iceberg reads loadTable, whose metadata is inline,
          so the Iceberg path runs no storage read.
-  vend-credentials
-         each ref enriched with the table's vended read credentials (AWS_* on
-         env) as one pqbench.table-ref version 2 line — the explicit path that
-         materializes env for other tools; info vends in memory instead. Unity
-         GET /tables/{full_name} names the table id and kind; a known
-         non-vendable kind (managed default storage, a view) passes through
-         with its own env, and a catalog that reports no kind is attempted.
-         --shell-env writes the one ref's env (the source's options plus the
-         vended keys) as shell `export` lines instead, for the per-table loop
-         to `eval` into the process environment.
 
 The name is temporary: the older `pqbench table` still owns `table info`
 (filling a ref's storage path) and the file-loading command, and exchanges
@@ -336,12 +326,43 @@ pub const TABLEV2_AFTER: &str = "\
 Examples:
   pqbench tablev2 info dbx_samples.nyctaxi.trips < source.json
   PQB_ENDPOINT=… pqbench schema ls | pqbench tablev2 info
-  PQB_ENDPOINT=… pqbench schema ls | pqbench tablev2 vend-credentials
 
 See also:
   pqbench schema --help  the tables of one schema
   pqbench table --help   load a listed table's files
   pqbench --help         catalog auth, lake-source shape
+  docs/cli.md";
+
+pub const CREDENTIALS_ABOUT: &str = "Vend read credentials for table-refs";
+
+pub const CREDENTIALS_LONG_ABOUT: &str = "\
+Get one table's vended read credentials. The endpoint, token, and object-store
+options come from a pqbench.lake-source on standard input, or from PQB_ENDPOINT
+/ PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them out.
+
+  get    each pqbench.table-ref version 2 ref on standard input enriched with
+         the table's vended read credentials (AWS_* on env) as one
+         pqbench.table-ref version 2 line — the explicit path that materializes
+         env for other tools; `tablev2 info` vends in memory instead. Unity GET
+         /tables/{full_name} names the table id and kind; a known non-vendable
+         kind (managed default storage, a view) passes through with its own
+         env, and a catalog that reports no kind is attempted.
+         --shell-env writes the one ref's env (the source's options plus the
+         vended keys) as shell `export` lines instead, for the per-table loop
+         to `eval` into the process environment.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
+
+pub const CREDENTIALS_AFTER: &str = "\
+Examples:
+  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials get
+  eval \"$(pqbench credentials get --shell-env < ref.ndjson)\"
+
+See also:
+  pqbench tablev2 --help  read a listed table's record
+  pqbench schema --help   the tables of one schema
+  pqbench --help          catalog auth, lake-source shape
   docs/cli.md";
 
 pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";

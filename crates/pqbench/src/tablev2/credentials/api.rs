@@ -1,4 +1,4 @@
-//! `tablev2 vend-credentials`: one table's vended storage options.
+//! `credentials get`: one table's vended storage options.
 //!
 //! [`vend`] is the only public function. It returns the `AWS_*` storage
 //! options Unity vends for the table, or `None` when the table's kind cannot

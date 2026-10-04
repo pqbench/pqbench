@@ -150,6 +150,22 @@ pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, S
     Ok((catalog.to_string(), schema.to_string(), table.to_string()))
 }
 
+/// The ref's `env` merged over the lake source's: the table's vended options win.
+pub(crate) fn ref_env(
+    record: &Value,
+    source: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut env = source.clone();
+    if let Some(values) = record["env"].as_object() {
+        for (key, value) in values {
+            if let Some(value) = value.as_str() {
+                env.insert(key.clone(), value.to_string());
+            }
+        }
+    }
+    env
+}
+
 #[derive(Deserialize)]
 struct Document {
     version: u32,

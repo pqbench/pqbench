@@ -6,6 +6,7 @@ mod bench;
 mod bytemass;
 mod catalog;
 mod compression;
+mod credentials;
 mod diff;
 mod document;
 mod dump;
@@ -110,6 +111,13 @@ enum Command {
     )]
     TableV2(tablev2::TableV2Args),
     #[command(
+        about = help::CREDENTIALS_ABOUT,
+        long_about = help::CREDENTIALS_LONG_ABOUT,
+        after_help = help::CREDENTIALS_AFTER,
+        after_long_help = help::CREDENTIALS_AFTER
+    )]
+    Credentials(credentials::CredentialsArgs),
+    #[command(
         name = "ratelimit",
         about = help::RATELIMIT_ABOUT,
         long_about = help::RATELIMIT_LONG_ABOUT,
@@ -168,6 +176,7 @@ async fn main() -> ExitCode {
         Command::Catalog(args) => catalog::run(&args).await,
         Command::Schema(args) => schema::run(&args).await,
         Command::TableV2(args) => tablev2::run(&args).await,
+        Command::Credentials(args) => credentials::run(&args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,

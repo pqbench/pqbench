@@ -6,10 +6,9 @@ use futures_util::stream::StreamExt;
 use pqbench::table::{Column, TableFormat, TableInfo};
 use pqbench::tablev2::{credentials, info};
 use serde::Serialize;
-use serde_json::Value;
 
-use crate::emit::{write_stdout, Align, Emitter, Format, Row};
-use crate::source::{self, read_input, split_table, table_ref};
+use crate::emit::{Align, Emitter, Format, Row};
+use crate::source::{self, read_input, ref_env, split_table, table_ref};
 use crate::CliError;
 
 /// The default tables in flight for the per-table stages: one per core.
@@ -28,8 +27,6 @@ pub(crate) struct TableV2Args {
 pub(crate) enum TableV2Command {
     /// Show one table's record
     Info(InfoArgs),
-    /// Put vended read credentials on each table-ref
-    VendCredentials(VendCredentialsArgs),
 }
 
 /// Arguments for `tablev2 info`: the `catalog.schema.table` name and the
@@ -49,28 +46,9 @@ pub(crate) struct InfoArgs {
     fan_out: usize,
 }
 
-/// Arguments for `tablev2 vend-credentials`: the output flags.
-#[derive(Args)]
-pub(crate) struct VendCredentialsArgs {
-    /// stdout format: auto (table on a terminal) | table | json
-    #[arg(long, value_enum, default_value_t = Format::Auto)]
-    format: Format,
-    /// also write the lz4 NDJSON stream to FILE
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    output: Option<PathBuf>,
-    /// requests in flight at once
-    #[arg(long, default_value_t = 64)]
-    fan_out: usize,
-    /// write the one ref's env as shell `export` lines for a loop's `eval`,
-    /// not refs
-    #[arg(long = "shell-env")]
-    shell_env: bool,
-}
-
 pub(crate) async fn run(args: &TableV2Args) -> Result<(), CliError> {
     match &args.command {
         TableV2Command::Info(args) => run_info(args).await,
-        TableV2Command::VendCredentials(args) => run_vend_credentials(args).await,
     }
 }
 
@@ -145,159 +123,6 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await
-}
-
-/// Put vended read credentials on each ref: `schema ls | vend-credentials`.
-///
-/// `--shell-env` writes the one ref's env as shell assignments instead, so a
-/// per-table loop can `eval` them into the process environment.
-async fn run_vend_credentials(args: &VendCredentialsArgs) -> Result<(), CliError> {
-    let input = read_input("tablev2 vend-credentials").await?;
-    if !input.piped {
-        return Err(
-            "tablev2 vend-credentials reads pqbench.table-ref v2 refs on standard input".into(),
-        );
-    }
-    if args.shell_env {
-        if args.output.is_some() || args.format != Format::Auto {
-            return Err(
-                "tablev2 vend-credentials --shell-env writes shell assignments to stdout; drop --format / --output"
-                    .into(),
-            );
-        }
-        return export_credentials(input).await;
-    }
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let records = source::records("tablev2 vend-credentials", input.first, input.lines);
-    let source = input.source;
-    let unity = matches!(source.table_format, crate::source::TableFormat::Unity);
-    let mut tables = 0;
-    let mut vends = records
-        .map(|record| async {
-            let record = record?;
-            let (catalog, schema, name) = table_ref("tablev2 vend-credentials", &record)?;
-            let credentials = if unity {
-                credentials::vend(
-                    &source.endpoint,
-                    &catalog,
-                    &schema,
-                    &name,
-                    source.token.as_deref(),
-                )
-                .await?
-            } else {
-                None
-            };
-            Ok::<_, CliError>((record, credentials))
-        })
-        .buffer_unordered(args.fan_out.max(1));
-    while let Some(vend) = vends.next().await {
-        let (record, credentials) = vend?;
-        let vended = credentials.is_some();
-        emit.write_row(&VendedRef {
-            record: add_env(record, credentials, &source.env),
-            vended,
-        })
-        .await?;
-        tables += 1;
-    }
-    emit.finish(&format!("tables: {tables}\n")).await
-}
-
-/// `--shell-env`: one ref's env as shell assignments, for the loop's `eval`.
-///
-/// The env is the lake source's options, the ref's own, then the vended
-/// credentials, so the loop can put them in the process environment once and
-/// run the table's work under them.
-async fn export_credentials(input: source::Input) -> Result<(), CliError> {
-    let source = input.source;
-    let mut records = source::records("tablev2 vend-credentials", input.first, input.lines);
-    let Some(record) = records.next().await else {
-        return Err("tablev2 vend-credentials --shell-env takes one pqbench.table-ref".into());
-    };
-    let record = record?;
-    if records.next().await.transpose()?.is_some() {
-        return Err(
-            "tablev2 vend-credentials --shell-env populates one table's env; feed one ref".into(),
-        );
-    }
-    let (catalog, schema, name) = table_ref("tablev2 vend-credentials", &record)?;
-    let credentials = if matches!(source.table_format, source::TableFormat::Unity) {
-        credentials::vend(
-            &source.endpoint,
-            &catalog,
-            &schema,
-            &name,
-            source.token.as_deref(),
-        )
-        .await?
-    } else {
-        None
-    };
-    let env = table_env(&record, credentials, &source.env);
-    write_stdout(&export_lines(&env)).await
-}
-
-/// The ref's `env` merged over the lake source's: the table's vended options win.
-fn ref_env(record: &Value, source: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let mut env = source.clone();
-    if let Some(values) = record["env"].as_object() {
-        for (key, value) in values {
-            if let Some(value) = value.as_str() {
-                env.insert(key.clone(), value.to_string());
-            }
-        }
-    }
-    env
-}
-
-/// The table's env: the lake source's options, the ref's own, then the vended
-/// credentials. The vended keys win, so a table-scoped lease replaces any
-/// static key for that table.
-fn table_env(
-    record: &Value,
-    credentials: Option<BTreeMap<String, String>>,
-    source: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut env = ref_env(record, source);
-    if let Some(credentials) = credentials {
-        env.extend(credentials);
-    }
-    env
-}
-
-/// The env as shell `export` lines, one variable per line; the value is single
-/// quoted, so `eval` sets it literally (`'` becomes `'\''`).
-fn export_lines(env: &BTreeMap<String, String>) -> String {
-    let mut lines = String::new();
-    for (key, value) in env {
-        lines.push_str(&format!(
-            "export {key}='{}'\n",
-            value.replace('\'', "'\\''")
-        ));
-    }
-    lines
-}
-
-/// The ref's `env` with the vended credentials written over it.
-fn add_env(
-    mut record: Value,
-    credentials: Option<BTreeMap<String, String>>,
-    source: &BTreeMap<String, String>,
-) -> Value {
-    let Some(credentials) = credentials else {
-        return record;
-    };
-    let env = table_env(&record, Some(credentials), source);
-    let Some(object) = record.as_object_mut() else {
-        return record;
-    };
-    let mut values = serde_json::Map::new();
-    for (key, value) in env {
-        values.insert(key, Value::String(value));
-    }
-    object.insert("env".to_string(), Value::Object(values));
-    record
 }
 
 /// The table's env, plus vended credentials when it names none: the credentials
@@ -400,30 +225,5 @@ fn format_name(format: TableFormat) -> &'static str {
         TableFormat::DELTA => "delta",
         TableFormat::ICEBERG => "iceberg",
         _ => "unspecified",
-    }
-}
-
-/// The row `tablev2 vend-credentials` writes: the ref, plus whether creds were
-/// vended. The serialized form is the ref itself.
-struct VendedRef {
-    record: Value,
-    vended: bool,
-}
-
-impl Serialize for VendedRef {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.record.serialize(serializer)
-    }
-}
-
-impl Row for VendedRef {
-    const HEADER: &'static [&'static str] = &["name", "credentials"];
-    const ALIGN: &'static [Align] = &[Align::Left, Align::Left];
-
-    fn cells(&self) -> Vec<String> {
-        vec![
-            self.record["id"].as_str().unwrap_or_default().to_string(),
-            if self.vended { "vended" } else { "-" }.to_string(),
-        ]
     }
 }

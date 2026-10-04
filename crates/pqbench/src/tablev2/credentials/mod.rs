@@ -1,4 +1,4 @@
-//! `tablev2 vend-credentials`: one table's vended storage options.
+//! `credentials get`: one table's vended storage options.
 //!
 //! [`api`] is the public surface: one function, [`api::vend`]. It asks Unity
 //! for temporary read credentials and returns the `AWS_*` storage options for

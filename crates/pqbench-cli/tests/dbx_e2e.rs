@@ -674,12 +674,12 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
-/// `tablev2 vend-credentials` on the live Unity catalog: the `dbx_samples`
+/// `credentials get` on the live Unity catalog: the `dbx_samples`
 /// tables are managed default storage (`TABLE_DB_STORAGE`), which cannot be
 /// read outside Databricks compute, so the ref passes through with no `env`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn vend_credentials_passes_a_managed_table_through() {
+fn credentials_get_passes_a_managed_table_through() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -704,7 +704,7 @@ fn vend_credentials_passes_a_managed_table_through() {
         String::from_utf8_lossy(&refs.stderr)
     );
     let output = pipe_env(
-        &["tablev2", "vend-credentials", "--format", "json"],
+        &["credentials", "get", "--format", "json"],
         &refs.stdout,
         &env,
     );
@@ -722,12 +722,12 @@ fn vend_credentials_passes_a_managed_table_through() {
     assert!(trips["env"].is_null(), "{trips:?}");
 }
 
-/// `tablev2 vend-credentials --shell-env` on the live Unity catalog: the managed
+/// `credentials get --shell-env` on the live Unity catalog: the managed
 /// table passes through, so the loop's `eval` gets the lake source's options
 /// as shell assignments and no vended keys.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn vend_credentials_export_writes_the_loop_env() {
+fn credentials_get_shell_env_writes_the_loop_env() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -758,10 +758,7 @@ fn vend_credentials_export_writes_the_loop_env() {
     let mut document = source(&endpoint, Some(&token));
     document["env"] = json!({"AWS_REGION": "us-east-1"});
     let stdin = format!("{document}\n{trips}\n");
-    let output = pipe(
-        &["tablev2", "vend-credentials", "--shell-env"],
-        stdin.as_bytes(),
-    );
+    let output = pipe(&["credentials", "get", "--shell-env"], stdin.as_bytes());
     assert!(
         output.status.success(),
         "stderr: {}",

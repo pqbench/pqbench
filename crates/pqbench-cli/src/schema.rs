@@ -87,8 +87,9 @@ fn schema_record(schema: &info::Schema) -> SchemaRecord<'_> {
 
 /// The document `schema ls` writes, one line per table. Version 2 is the new
 /// tree's ref: the legacy `table` reads version 1 refs only, so the two trees
-/// never consume each other. The lake source's storage options ride on each
-/// ref, so a later storage read (`tablev2 info`) finds them.
+/// never consume each other. A ref is durable data — no env — so a later stage
+/// (`tablev2 info`, `credentials get`) gets the lake source's options on its
+/// own stdin.
 #[derive(Serialize)]
 struct TableRefRecord<'a> {
     kind: &'static str,
