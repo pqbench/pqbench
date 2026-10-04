@@ -18,9 +18,9 @@ impl From<String> for Error {
     }
 }
 
-/// One request: a URL, an optional bearer token, and an optional JSON body.
-/// A body makes it a POST; without one it is a GET. Build one with
-/// [`Request::get`] or [`Request::post`].
+/// One request: a URL, an optional bearer token, an optional JSON body, and
+/// extra headers. A body makes it a POST; without one it is a GET. Build one
+/// with [`Request::get`] or [`Request::post`], then [`Request::header`].
 pub struct Request {
     /// The URL to request.
     pub url: String,
@@ -28,6 +28,8 @@ pub struct Request {
     pub bearer: Option<String>,
     /// The JSON body; `None` sends a GET, `Some` sends a POST.
     pub body: Option<String>,
+    /// Extra request headers, applied over the defaults.
+    pub headers: Vec<(String, String)>,
 }
 
 impl Request {
@@ -37,6 +39,7 @@ impl Request {
             url: url.into(),
             bearer,
             body: None,
+            headers: Vec::new(),
         }
     }
 
@@ -46,7 +49,15 @@ impl Request {
             url: url.into(),
             bearer,
             body: Some(body.into()),
+            headers: Vec::new(),
         }
+    }
+
+    /// Add one request header.
+    #[must_use]
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 }
 

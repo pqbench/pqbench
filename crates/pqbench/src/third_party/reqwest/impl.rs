@@ -38,6 +38,9 @@ pub(crate) async fn request(request: Request) -> Result<Response, Error> {
     if let Some(bearer) = &request.bearer {
         builder = builder.bearer_auth(bearer);
     }
+    for (name, value) in &request.headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
     let response = builder
         .send()
         .await
