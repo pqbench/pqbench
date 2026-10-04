@@ -76,10 +76,18 @@ async fn unity_record(
         .storage_location
         .filter(|location| !location.is_empty())
         .ok_or_else(|| Error::from(format!("the table {name} has no storage location")))?;
-    let request = LoadRequest::new(location, None, env.clone()).without_files();
-    let mut info = table::load(&request)
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
+    let request = LoadRequest::new(location.clone(), None, env.clone()).without_files();
+    let mut info = table::load(&request).await.map_err(|error| {
+        let hint = if location.starts_with("s3://") {
+            " (s3:// needs credentials on the lake source; Databricks default storage cannot be read outside Databricks compute)"
+        } else {
+            ""
+        };
+        Error::from(format!(
+            "cannot read {name}'s metadata at {location}: {}{hint}",
+            error.0
+        ))
+    })?;
     info.name = name;
     if !record.columns.is_empty() {
         info.columns = record
