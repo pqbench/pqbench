@@ -674,12 +674,10 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
-/// `tablev2 info` on the live Unity catalog: info vends the table's read
-/// credentials in memory, then runs the `without_files()` Delta log read
-/// under them. Databricks serves managed tables to external systems through
-/// its catalog APIs, and Databricks-managed default storage explicitly denies
-/// externally issued sessions on its objects — so the path-based log read
-/// fails outside compute and the error names the table and its location.
+/// `tablev2 info` on the live Unity catalog: the table read runs with the env
+/// it is given — here none — so the `without_files()` Delta log read of the
+/// managed default-storage table fails outside compute and the error names the
+/// table and its location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
@@ -700,6 +698,142 @@ fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("dbx_samples.nyctaxi.trips"), "{stderr}");
     assert!(stderr.contains("s3://"), "{stderr}");
+}
+
+/// `credentials check` on the live Unity catalog: the UniForm Delta fixture
+/// (`pqbench_delta_test`) lists no direct-external-engine capability in its
+/// manifest, so the check errors with the reason; the managed Iceberg tables
+/// carry the capability and pass through.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn credentials_check_gates_the_live_tables() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let endpoint = unity_endpoint(&host);
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+    ];
+    let reference =
+        |id: &str| json!({"kind": "pqbench.table-ref", "version": 2, "id": id}).to_string();
+    let unsupported = pipe_env(
+        &["credentials", "check", "--format", "json"],
+        format!("{}\n", reference("dbx_samples.nyctaxi.pqbench_delta_test")).as_bytes(),
+        &env,
+    );
+    assert!(!unsupported.status.success());
+    let stderr = String::from_utf8_lossy(&unsupported.stderr);
+    assert!(
+        stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("no direct external engine read support"),
+        "{stderr}"
+    );
+    let eligible = pipe_env(
+        &["credentials", "check", "--format", "json"],
+        format!("{}\n", reference("dbx_samples.nyctaxi.trips")).as_bytes(),
+        &env,
+    );
+    assert!(
+        eligible.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&eligible.stderr)
+    );
+    let records = ndjson(&eligible.stdout);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
+}
+
+/// `tablev2 info` on a table in customer storage: `credentials get
+/// --shell-env` materializes the vended lease into shell assignments, the test
+/// puts them in the process environment with the bucket's region, and the
+/// Delta log read runs under them. Gated on `DBX_AWS_TABLE` / `DBX_AWS_REGION`
+/// so a run without the external-location fixture skips it.
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn tablev2_info_reads_the_external_aws_table() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let Some(table) = std::env::var("DBX_AWS_TABLE")
+        .ok()
+        .filter(|table| !table.is_empty())
+    else {
+        eprintln!("skipping: DBX_AWS_TABLE is not set");
+        return;
+    };
+    let Some(region) = std::env::var("DBX_AWS_REGION")
+        .ok()
+        .filter(|region| !region.is_empty())
+    else {
+        eprintln!("skipping: DBX_AWS_REGION is not set");
+        return;
+    };
+    let endpoint = unity_endpoint(&host);
+    let reference = json!({"kind": "pqbench.table-ref", "version": 2, "id": table}).to_string();
+    let vended = pipe_env(
+        &["credentials", "get", "--shell-env"],
+        format!("{reference}\n").as_bytes(),
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+        ],
+    );
+    assert!(
+        vended.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&vended.stderr)
+    );
+    let exports = String::from_utf8(vended.stdout).unwrap();
+    let key = export_value(&exports, "AWS_ACCESS_KEY_ID").to_string();
+    let secret = export_value(&exports, "AWS_SECRET_ACCESS_KEY").to_string();
+    let session = export_value(&exports, "AWS_SESSION_TOKEN").to_string();
+    let output = pipe_env(
+        &["tablev2", "info", "--format", "json"],
+        format!("{reference}\n").as_bytes(),
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("AWS_REGION", region.as_str()),
+            ("AWS_ACCESS_KEY_ID", key.as_str()),
+            ("AWS_SECRET_ACCESS_KEY", secret.as_str()),
+            ("AWS_SESSION_TOKEN", session.as_str()),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record["id"], table.as_str());
+    assert_eq!(record["format"], "delta");
+    assert!(
+        record["storage_path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("s3://"),
+        "{record:?}"
+    );
+    assert!(
+        !record["columns"].as_array().unwrap().is_empty(),
+        "{record:?}"
+    );
 }
 
 /// `credentials get` on the live Unity catalog: the managed Iceberg tables
