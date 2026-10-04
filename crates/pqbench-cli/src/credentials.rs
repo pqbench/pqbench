@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use futures_util::stream::StreamExt;
-use pqbench::tablev2::credentials::vend;
+use pqbench::credentials::vend;
 use serde::Serialize;
 use serde_json::Value;
 

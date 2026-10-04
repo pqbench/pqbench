@@ -1,4 +1,4 @@
-//! URL helpers shared by the table commands.
+//! URL helpers shared by the table and credentials commands.
 //!
 //! The table format is declared by the caller (`PQB_TABLE_FORMAT`); nothing
 //! here probes the endpoint. Iceberg REST endpoints already name the catalog
@@ -10,17 +10,17 @@ use serde::de::DeserializeOwned;
 use crate::third_party::reqwest::{self, Request};
 
 /// The Iceberg REST base, whether or not the endpoint has a trailing slash.
-pub(super) fn iceberg_root(endpoint: &str) -> String {
+pub(crate) fn iceberg_root(endpoint: &str) -> String {
     endpoint.trim_end_matches('/').to_string()
 }
 
 /// A percent-encoded Iceberg namespace: parts joined by the unit separator.
-pub(super) fn iceberg_namespace(schema: &str) -> String {
+pub(crate) fn iceberg_namespace(schema: &str) -> String {
     encode(&schema.split('.').collect::<Vec<_>>().join("\u{1f}"))
 }
 
 /// One GET returning a parsed JSON document.
-pub(super) async fn get_json<T: DeserializeOwned>(
+pub(crate) async fn get_json<T: DeserializeOwned>(
     url: &str,
     token: Option<&str>,
 ) -> Result<T, String> {
@@ -39,7 +39,7 @@ pub(super) async fn get_json<T: DeserializeOwned>(
 }
 
 /// The Unity REST root, whether or not the endpoint already names it.
-pub(super) fn api_root(endpoint: &str) -> String {
+pub(crate) fn api_root(endpoint: &str) -> String {
     let endpoint = endpoint.trim_end_matches('/');
     if endpoint.ends_with("/api/2.1/unity-catalog") {
         endpoint.to_string()
@@ -49,7 +49,7 @@ pub(super) fn api_root(endpoint: &str) -> String {
 }
 
 /// Percent-encode one path or query value (RFC 3986 unreserved bytes pass).
-pub(super) fn encode(value: &str) -> String {
+pub(crate) fn encode(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         match byte {

@@ -6,6 +6,8 @@ pub mod bytemass;
 pub mod catalog;
 pub mod codecs;
 pub mod compression;
+pub mod credentials;
+mod dialect;
 pub mod diff;
 pub mod dump;
 pub mod experiment;

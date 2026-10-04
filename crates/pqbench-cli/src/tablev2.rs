@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use futures_util::stream::StreamExt;
+use pqbench::credentials;
 use pqbench::table::{Column, TableFormat, TableInfo};
-use pqbench::tablev2::{credentials, info};
+use pqbench::tablev2::info;
 use serde::Serialize;
 
 use crate::emit::{Align, Emitter, Format, Row};

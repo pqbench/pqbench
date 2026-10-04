@@ -16,8 +16,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::api::Error;
+use crate::dialect;
 use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
-use crate::tablev2::dialect;
 use crate::tablev2::TableFormat as Dialect;
 
 pub(crate) async fn read(

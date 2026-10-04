@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use super::api::Error;
-use crate::tablev2::dialect;
+use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
 /// The subset of the Unity table record vending needs.
