@@ -68,16 +68,8 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             );
         }
         let (catalog, schema, name) = split_table("tablev2 info", table)?;
-        let record = info::read(
-            &input.source.endpoint,
-            &catalog,
-            &schema,
-            &name,
-            input.source.token.as_deref(),
-            input.source.table_format.into(),
-            &input.source.env,
-        )
-        .await?;
+        let record =
+            read_record(&input.source, &catalog, &schema, &name, &input.source.env).await?;
         emit.write_row(&table_record(&record)).await?;
         return emit.finish("tables: 1\n").await;
     }
@@ -94,18 +86,7 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
             let record = record?;
             let (catalog, schema, name) = table_ref("tablev2 info", &record)?;
             let env = ref_env(&record, &source.env);
-            Ok::<_, CliError>(
-                info::read(
-                    &source.endpoint,
-                    &catalog,
-                    &schema,
-                    &name,
-                    source.token.as_deref(),
-                    source.table_format.into(),
-                    &env,
-                )
-                .await?,
-            )
+            read_record(&source, &catalog, &schema, &name, &env).await
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {
@@ -113,6 +94,27 @@ async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await
+}
+
+/// The table's record, read with `env`: the caller supplies the env the read
+/// runs under (the lake source's, merged with the ref's).
+async fn read_record(
+    source: &source::Source,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<TableInfo, CliError> {
+    Ok(info::read(
+        &source.endpoint,
+        catalog,
+        schema,
+        name,
+        source.token.as_deref(),
+        source.table_format.into(),
+        env,
+    )
+    .await?)
 }
 
 /// The document `tablev2 info` writes: the `schema ls` ref enriched with the
