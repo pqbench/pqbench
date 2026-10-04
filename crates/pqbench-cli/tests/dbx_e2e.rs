@@ -676,9 +676,10 @@ fn tablev2_info_reads_the_live_iceberg_table() {
 
 /// `tablev2 info` on the live Unity catalog: info vends the table's read
 /// credentials in memory, then runs the `without_files()` Delta log read
-/// under them. Databricks default storage's bucket policy explicitly denies
-/// externally issued sessions, so the read still fails outside compute — and
-/// the error names the table and its storage location.
+/// under them. Databricks serves managed tables to external systems through
+/// its catalog APIs, and Databricks-managed default storage explicitly denies
+/// externally issued sessions on its objects — so the path-based log read
+/// fails outside compute and the error names the table and its location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
