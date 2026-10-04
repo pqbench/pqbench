@@ -389,3 +389,22 @@ fn tablev2_info_reports_an_unknown_table() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("404"), "{stderr}");
 }
+
+#[cfg(feature = "delta")]
+#[test]
+fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
+    let address = routes(vec![(
+        "/tables/dbx_samples.nyctaxi.trips",
+        200,
+        unity_record(std::path::Path::new("/nonexistent/table")),
+    )]);
+    let output = pipe_env(
+        &["tablev2", "info", "dbx_samples.nyctaxi.trips"],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("dbx_samples.nyctaxi.trips"), "{stderr}");
+    assert!(stderr.contains("/nonexistent/table"), "{stderr}");
+}
