@@ -71,24 +71,12 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let records = source::records("credentials get", input.first, input.lines);
     let source = input.source;
-    let unity = matches!(source.table_format, source::TableFormat::Unity);
     let mut tables = 0;
     let mut vends = records
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("credentials get", &record)?;
-            let credentials = if unity {
-                vend(
-                    &source.endpoint,
-                    &catalog,
-                    &schema,
-                    &name,
-                    source.token.as_deref(),
-                )
-                .await?
-            } else {
-                None
-            };
+            let credentials = vend_if_unity(&source, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, credentials))
         })
         .buffer_unordered(args.fan_out.max(1));
@@ -121,20 +109,30 @@ async fn export_credentials(input: source::Input) -> Result<(), CliError> {
         return Err("credentials get --shell-env populates one table's env; feed one ref".into());
     }
     let (catalog, schema, name) = table_ref("credentials get", &record)?;
-    let credentials = if matches!(source.table_format, source::TableFormat::Unity) {
-        vend(
-            &source.endpoint,
-            &catalog,
-            &schema,
-            &name,
-            source.token.as_deref(),
-        )
-        .await?
-    } else {
-        None
-    };
+    let credentials = vend_if_unity(&source, &catalog, &schema, &name).await?;
     let env = table_env(&record, credentials, &source.env);
     write_stdout(&export_lines(&env)).await
+}
+
+/// The table's vended read credentials; the Iceberg dialect carries its
+/// metadata inline, so only Unity vends.
+async fn vend_if_unity(
+    source: &source::Source,
+    catalog: &str,
+    schema: &str,
+    name: &str,
+) -> Result<Option<BTreeMap<String, String>>, CliError> {
+    if !matches!(source.table_format, source::TableFormat::Unity) {
+        return Ok(None);
+    }
+    Ok(vend(
+        &source.endpoint,
+        catalog,
+        schema,
+        name,
+        source.token.as_deref(),
+    )
+    .await?)
 }
 
 /// The table's env: the lake source's options, the ref's own, then the vended
