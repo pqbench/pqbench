@@ -9,9 +9,33 @@ use serde::de::DeserializeOwned;
 
 use crate::third_party::reqwest::{self, Request};
 
+/// The Unity REST root, whether or not the endpoint already names it.
+pub(crate) fn api_root(endpoint: &str) -> String {
+    let endpoint = endpoint.trim_end_matches('/');
+    if endpoint.ends_with("/api/2.1/unity-catalog") {
+        endpoint.to_string()
+    } else {
+        format!("{endpoint}/api/2.1/unity-catalog")
+    }
+}
+
 /// The Iceberg REST base, whether or not the endpoint has a trailing slash.
 pub(crate) fn iceberg_root(endpoint: &str) -> String {
     endpoint.trim_end_matches('/').to_string()
+}
+
+/// Percent-encode one path or query value (RFC 3986 unreserved bytes pass).
+pub(crate) fn encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 /// A percent-encoded Iceberg namespace: parts joined by the unit separator.
@@ -36,28 +60,4 @@ pub(crate) async fn get_json<T: DeserializeOwned>(
     }
     serde_json::from_slice(&response.bytes)
         .map_err(|error| format!("the response was not the expected document: {error}"))
-}
-
-/// The Unity REST root, whether or not the endpoint already names it.
-pub(crate) fn api_root(endpoint: &str) -> String {
-    let endpoint = endpoint.trim_end_matches('/');
-    if endpoint.ends_with("/api/2.1/unity-catalog") {
-        endpoint.to_string()
-    } else {
-        format!("{endpoint}/api/2.1/unity-catalog")
-    }
-}
-
-/// Percent-encode one path or query value (RFC 3986 unreserved bytes pass).
-pub(crate) fn encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
