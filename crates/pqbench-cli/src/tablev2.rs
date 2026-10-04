@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::emit::{write_stdout, Align, Emitter, Format, Row};
-use crate::source::{self, read_input};
+use crate::source::{self, read_input, split_table, table_ref};
 use crate::CliError;
 
 /// The default tables in flight for the per-table stages: one per core.
@@ -331,42 +331,6 @@ async fn vend_if_needed(
 fn needs_credentials(env: &BTreeMap<String, String>) -> bool {
     !env.contains_key("AWS_ACCESS_KEY_ID")
         && env.get("AWS_SKIP_SIGNATURE").map(String::as_str) != Some("true")
-}
-
-/// The catalog, schema, and table a `pqbench.table-ref` v2 ref names.
-///
-/// Version 1 refs (the legacy `lake` stream) are rejected, so the old and new
-/// trees never consume each other.
-fn table_ref(command: &str, record: &Value) -> Result<(String, String, String), CliError> {
-    let kind = record["kind"].as_str().unwrap_or_default();
-    if kind != "pqbench.table-ref" {
-        return Err(format!("expected pqbench.table-ref records, found {kind:?}").into());
-    }
-    if record["version"].as_u64() != Some(2) {
-        return Err(
-            format!("{command} reads pqbench.table-ref version 2; run `schema ls` first").into(),
-        );
-    }
-    let id = record["id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or("a pqbench.table-ref record needs an id")?;
-    split_table(command, id)
-}
-
-/// Split `catalog.schema.table` at the first and last dots; an Iceberg
-/// namespace keeps its remaining dots.
-fn split_table(command: &str, fqn: &str) -> Result<(String, String, String), CliError> {
-    let Some((catalog, rest)) = fqn.split_once('.') else {
-        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
-    };
-    let Some((schema, table)) = rest.rsplit_once('.') else {
-        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
-    };
-    if catalog.is_empty() || schema.is_empty() || table.is_empty() {
-        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
-    }
-    Ok((catalog.to_string(), schema.to_string(), table.to_string()))
 }
 
 /// The document `tablev2 info` writes: the `schema ls` ref enriched with the
