@@ -83,9 +83,8 @@ Auth (how to reach data):
     can GetObject. The legacy lake path does not call
     temporary-table-credentials; paste vended STS into AWS_* on env, or use
     a role that already can read the bucket. The tablev2 walk does:
-    `tablev2 info` vends in memory and `credentials get`
-    materializes the keys (or prints them as shell `export` lines for a
-    loop's `eval` with `--shell-env`).
+    `credentials get` materializes the vended keys onto the refs, and
+    `tablev2 info` reads under the env it is given.
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
   Producer pipe
@@ -365,9 +364,6 @@ out.
          it returns, for the next storage read; a catalog that does not serve
          it falls back to the delegated loadTable, and a table the catalog
          cannot serve via Iceberg passes through with its own env.
-         --shell-env writes the one ref's env (the source's options plus the
-         vended keys) as shell `export` lines instead, for the per-table loop
-         to `eval` into the process environment.
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
 forces the stream, and `-o` also writes it.";
@@ -375,7 +371,7 @@ forces the stream, and `-o` also writes it.";
 pub const CREDENTIALS_AFTER: &str = "\
 Examples:
   PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get
-  eval \"$(pqbench credentials get --shell-env < ref.ndjson)\"
+  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get | pqbench tablev2 info
 
 See also:
   pqbench tablev2 --help  read a listed table's record

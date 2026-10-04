@@ -931,11 +931,11 @@ fn credentials_get_vends_the_external_fixture() {
     assert_eq!(tables, 30);
 }
 
-/// `tablev2 info` on a table in customer storage: `credentials get
-/// --shell-env` materializes the vended lease into shell assignments, the test
-/// puts them in the process environment with the bucket's region, and the
-/// Delta log read runs under them. The fixture lives in `us-east-2`; set
-/// `DBX_AWS_TABLE` / `DBX_AWS_REGION` to read another one.
+/// `tablev2 info` on a table in customer storage: `credentials get`
+/// materializes the vended lease on the ref, the test puts the ref's keys in
+/// the process environment with the bucket's region, and the Delta log read
+/// runs under them. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
+/// `DBX_AWS_REGION` to read another one.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn tablev2_info_reads_the_external_aws_table() {
@@ -958,7 +958,7 @@ fn tablev2_info_reads_the_external_aws_table() {
     let endpoint = unity_endpoint(&host);
     let reference = json!({"kind": "pqbench.table-ref", "version": 2, "id": table}).to_string();
     let vended = pipe_env(
-        &["credentials", "get", "--shell-env"],
+        &["credentials", "get", "--format", "json"],
         format!("{reference}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -970,10 +970,19 @@ fn tablev2_info_reads_the_external_aws_table() {
         "stderr: {}",
         String::from_utf8_lossy(&vended.stderr)
     );
-    let exports = String::from_utf8(vended.stdout).unwrap();
-    let key = export_value(&exports, "AWS_ACCESS_KEY_ID").to_string();
-    let secret = export_value(&exports, "AWS_SECRET_ACCESS_KEY").to_string();
-    let session = export_value(&exports, "AWS_SESSION_TOKEN").to_string();
+    let vended = ndjson(&vended.stdout);
+    assert_eq!(vended.len(), 1);
+    let lease = &vended[0]["env"];
+    assert!(
+        lease["AWS_ACCESS_KEY_ID"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "no vended lease: {}",
+        vended[0]
+    );
+    let key = lease["AWS_ACCESS_KEY_ID"].as_str().unwrap();
+    let secret = lease["AWS_SECRET_ACCESS_KEY"].as_str().unwrap();
+    let session = lease["AWS_SESSION_TOKEN"].as_str().unwrap();
     let output = pipe_env(
         &["tablev2", "info", "--format", "json"],
         format!("{reference}\n").as_bytes(),
@@ -981,9 +990,9 @@ fn tablev2_info_reads_the_external_aws_table() {
             ("PQB_ENDPOINT", endpoint.as_str()),
             ("PQB_TOKEN", token.as_str()),
             ("AWS_REGION", region.as_str()),
-            ("AWS_ACCESS_KEY_ID", key.as_str()),
-            ("AWS_SECRET_ACCESS_KEY", secret.as_str()),
-            ("AWS_SESSION_TOKEN", session.as_str()),
+            ("AWS_ACCESS_KEY_ID", key),
+            ("AWS_SECRET_ACCESS_KEY", secret),
+            ("AWS_SESSION_TOKEN", session),
         ],
     );
     assert!(
@@ -1153,170 +1162,6 @@ fn credentials_get_iceberg_vends_the_live_tables() {
         .find(|record| record["id"] == "dbx_samples.nyctaxi.pqbench_delta_test")
         .unwrap_or_else(|| panic!("no pqbench_delta_test: {records:?}"));
     assert!(passed["env"].is_null(), "{passed:?}");
-}
-
-/// The value one `export KEY='…'` line of `credentials get --shell-env`
-/// assigns.
-fn export_value<'a>(stdout: &'a str, key: &str) -> &'a str {
-    stdout
-        .lines()
-        .find_map(|line| line.strip_prefix(&format!("export {key}='")))
-        .and_then(|value| value.strip_suffix('\''))
-        .unwrap_or_else(|| panic!("no export for {key}: {stdout}"))
-}
-
-/// `credentials get --shell-env` on the live Unity catalog: the managed table
-/// vends, so the loop's `eval` gets the lake source's options plus the vended
-/// keys as shell assignments.
-#[test]
-#[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_get_shell_env_writes_the_loop_env() {
-    let Some(host) = dbx_host() else {
-        eprintln!("skipping: DBX_HOST is not set");
-        return;
-    };
-    let Some(token) = any_token(&host) else {
-        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
-        return;
-    };
-    let endpoint = unity_endpoint(&host);
-    let env = [
-        ("PQB_ENDPOINT", endpoint.as_str()),
-        ("PQB_TOKEN", token.as_str()),
-    ];
-    let refs = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
-        &env,
-    );
-    assert!(
-        refs.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&refs.stderr)
-    );
-    let trips = ndjson(&refs.stdout)
-        .into_iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
-        .unwrap_or_else(|| panic!("no trips table"));
-    let mut document = source(&endpoint, Some(&token));
-    document["env"] = json!({"AWS_REGION": "us-east-1"});
-    let stdin = format!("{document}\n{trips}\n");
-    let output = pipe(&["credentials", "get", "--shell-env"], stdin.as_bytes());
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert_eq!(export_value(&stdout, "AWS_REGION"), "us-east-1");
-    for key in [
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-    ] {
-        assert!(!export_value(&stdout, key).is_empty(), "{stdout}");
-    }
-}
-
-/// The whole per-table loop on the live Iceberg REST catalog: `schema ls`
-/// streams refs, `credentials get --shell-env` vends the table's keys into
-/// shell exports, and `tablev2 info` runs under them — the enriched ref keeps
-/// the catalog's inline metadata (snapshot, columns) and never carries env.
-#[test]
-#[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_get_shell_env_arms_the_live_iceberg_loop() {
-    let Some(host) = dbx_host() else {
-        eprintln!("skipping: DBX_HOST is not set");
-        return;
-    };
-    let Some(token) = any_token(&host) else {
-        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
-        return;
-    };
-    let endpoint = format!(
-        "{}/iceberg-rest/v1/catalogs/dbx_samples",
-        unity_endpoint(&host)
-    );
-    let env = [
-        ("PQB_ENDPOINT", endpoint.as_str()),
-        ("PQB_TOKEN", token.as_str()),
-        ("PQB_TABLE_FORMAT", "iceberg"),
-    ];
-    let refs = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
-        &env,
-    );
-    assert!(
-        refs.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&refs.stderr)
-    );
-    let trips = ndjson(&refs.stdout)
-        .into_iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
-        .unwrap_or_else(|| panic!("no trips table"));
-    let mut document = source(&endpoint, Some(&token));
-    document["table_format"] = json!("iceberg");
-    let stdin = format!("{document}\n{trips}\n");
-    let exports = pipe(&["credentials", "get", "--shell-env"], stdin.as_bytes());
-    assert!(
-        exports.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&exports.stderr)
-    );
-    let stdout = String::from_utf8(exports.stdout).unwrap();
-    let lease = [
-        (
-            "AWS_ACCESS_KEY_ID",
-            export_value(&stdout, "AWS_ACCESS_KEY_ID"),
-        ),
-        (
-            "AWS_SECRET_ACCESS_KEY",
-            export_value(&stdout, "AWS_SECRET_ACCESS_KEY"),
-        ),
-        (
-            "AWS_SESSION_TOKEN",
-            export_value(&stdout, "AWS_SESSION_TOKEN"),
-        ),
-    ];
-    assert!(lease.iter().all(|(_, value)| !value.is_empty()), "{stdout}");
-    let mut loop_env = vec![
-        ("PQB_ENDPOINT", endpoint.as_str()),
-        ("PQB_TOKEN", token.as_str()),
-        ("PQB_TABLE_FORMAT", "iceberg"),
-    ];
-    loop_env.extend(lease.iter().copied());
-    let info = pipe_env(
-        &["tablev2", "info", "--format", "json"],
-        stdin.as_bytes(),
-        &loop_env,
-    );
-    assert!(
-        info.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&info.stderr)
-    );
-    let records = ndjson(&info.stdout);
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
-    assert_eq!(record["id"], "dbx_samples.nyctaxi.trips");
-    assert_eq!(record["format"], "iceberg");
-    assert!(
-        record["snapshot_version"].as_u64().unwrap() > 0,
-        "{record:?}"
-    );
-    assert!(
-        !record["columns"].as_array().unwrap().is_empty(),
-        "{record:?}"
-    );
-    assert!(
-        record["storage_path"]
-            .as_str()
-            .is_some_and(|path| !path.is_empty()),
-        "{record:?}"
-    );
-    assert!(record["env"].is_null(), "{record:?}");
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:

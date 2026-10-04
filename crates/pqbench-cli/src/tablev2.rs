@@ -55,8 +55,7 @@ pub(crate) async fn run(args: &TableV2Args) -> Result<(), CliError> {
 /// Read one table's record with the env the stream carries: the lake source's
 /// options, the ref's own, and the process environment the storage client also
 /// reads. Credentials are the `credentials` stage's concern — `credentials get`
-/// materializes them onto refs (or into the process env with `--shell-env`),
-/// and this read only consumes them.
+/// materializes them onto refs, and this read only consumes them.
 async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
     let input = read_input("tablev2 info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;

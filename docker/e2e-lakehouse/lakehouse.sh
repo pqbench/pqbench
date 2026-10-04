@@ -298,23 +298,6 @@ check_unity() {
         exit 1
     }
 
-    # `--shell-env` prints the same env as shell assignments: the loop's `eval`
-    # puts them in the process environment for the table's other commands.
-    local vended_export
-    vended_export=$(
-        ref=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" | head -1)
-        exported=$(printf '%s\n%s\n' "$vended_doc" "$ref" | "$pqbench_bin" credentials get --shell-env) || exit 1
-        eval "$exported" || exit 1
-        printf '%s %s %s' "$AWS_ACCESS_KEY_ID" "${AWS_SESSION_TOKEN:+set}" "$AWS_ENDPOINT"
-    ) || {
-        echo "check failed: credentials get --shell-env failed" >&2
-        exit 1
-    }
-    [ "$vended_export" = "$VENDED_ACCESS_KEY_ID set $s3_endpoint" ] || {
-        echo "check failed (unity credentials get --shell-env): expected $VENDED_ACCESS_KEY_ID set $s3_endpoint; measured ${vended_export:-nothing}" >&2
-        exit 1
-    }
-
     echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info; vended tablev2 info: $vended_info"
 }
 

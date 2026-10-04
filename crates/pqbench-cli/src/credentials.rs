@@ -8,7 +8,7 @@ use futures_util::stream::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::emit::{write_stdout, Align, Emitter, Format, Row};
+use crate::emit::{Align, Emitter, Format, Row};
 use crate::source::{self, read_input, ref_env, table_ref, vend};
 use crate::CliError;
 
@@ -27,15 +27,11 @@ pub(crate) enum CredentialsCommand {
     Check(CheckArgs),
 }
 
-/// Arguments for `credentials get`: the shared output flags and `--shell-env`.
+/// Arguments for `credentials get`: the shared output flags.
 #[derive(Args)]
 pub(crate) struct GetArgs {
     #[command(flatten)]
     stage: StageArgs,
-    /// write the one ref's env as shell `export` lines for a loop's `eval`,
-    /// not refs
-    #[arg(long = "shell-env")]
-    shell_env: bool,
 }
 
 /// Arguments for `credentials check`: the shared output flags.
@@ -67,22 +63,10 @@ pub(crate) async fn run(args: &CredentialsArgs) -> Result<(), CliError> {
 }
 
 /// Put vended read credentials on each ref: `schema ls | credentials get`.
-///
-/// `--shell-env` writes the one ref's env as shell assignments instead, so a
-/// per-table loop can `eval` them into the process environment.
 async fn run_get(args: &GetArgs) -> Result<(), CliError> {
     let input = read_input("credentials get").await?;
     if !input.piped {
         return Err("credentials get reads pqbench.table-ref v2 refs on standard input".into());
-    }
-    if args.shell_env {
-        if args.stage.output.is_some() || args.stage.format != Format::Auto {
-            return Err(
-                "credentials get --shell-env writes shell assignments to stdout; drop --format / --output"
-                    .into(),
-            );
-        }
-        return export_credentials(input).await;
     }
     let mut emit = Emitter::open(
         args.stage.output.as_deref(),
@@ -196,27 +180,6 @@ fn ineligible(name: &str) -> String {
     )
 }
 
-/// `--shell-env`: one ref's env as shell assignments, for the loop's `eval`.
-///
-/// The env is the lake source's options, the ref's own, then the vended
-/// credentials, so the loop can put them in the process environment once and
-/// run the table's work under them.
-async fn export_credentials(input: source::Input) -> Result<(), CliError> {
-    let source = input.source;
-    let mut records = source::records("credentials get", input.first, input.lines);
-    let Some(record) = records.next().await else {
-        return Err("credentials get --shell-env takes one pqbench.table-ref".into());
-    };
-    let record = record?;
-    if records.next().await.transpose()?.is_some() {
-        return Err("credentials get --shell-env populates one table's env; feed one ref".into());
-    }
-    let (catalog, schema, name) = table_ref("credentials get", &record)?;
-    let credentials = vend(&source, &catalog, &schema, &name).await?;
-    let env = table_env(&record, credentials, &source.env);
-    write_stdout(&export_lines(&env)).await
-}
-
 /// The table's env: the lake source's options, the ref's own, then the vended
 /// credentials. The vended keys win, so a table-scoped lease replaces any
 /// static key for that table.
@@ -230,19 +193,6 @@ fn table_env(
         env.extend(credentials);
     }
     env
-}
-
-/// The env as shell `export` lines, one variable per line; the value is single
-/// quoted, so `eval` sets it literally (`'` becomes `'\''`).
-fn export_lines(env: &BTreeMap<String, String>) -> String {
-    let mut lines = String::new();
-    for (key, value) in env {
-        lines.push_str(&format!(
-            "export {key}='{}'\n",
-            value.replace('\'', "'\\''")
-        ));
-    }
-    lines
 }
 
 /// The ref's `env` with the vended credentials written over it.

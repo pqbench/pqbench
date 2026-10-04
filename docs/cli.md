@@ -18,7 +18,7 @@ that command and links back. This file is the durable copy.
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
 | Read one table's record | `pqbench tablev2 info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
-| Vend read credentials (refs or shell exports) | `pqbench credentials get [--shell-env]` (v2 refs on stdin) |
+| Vend read credentials (refs) | `pqbench credentials get` (v2 refs on stdin) |
 | Fill a legacy table-ref's storage path | `pqbench table info` (v1 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -38,9 +38,9 @@ $ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench by
 A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
 the stream clean: only data rows are shown, bounded to 1000 rows, with the
 count of hidden rows reported. Credentials travel on that document (`AWS_*`;
-a catalog `token` on a lake-source); pqbench never writes them into the
-process environment itself — `credentials get --shell-env` prints
-shell assignments for a loop to `eval` when you want them there.
+a catalog `token` on a lake-source) — `credentials get` writes the vended
+keys onto the refs it passes on, and pqbench never writes them into the
+process environment itself.
 
 ## Documents
 
@@ -192,20 +192,17 @@ document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
 Entries with no location (views) are skipped. Refs are durable data only — no
-env — so a per-table stage gets the lake source (endpoint, token, storage
-options) from its own stdin or `PQB_*`, in memory. The walk's per-table work
-runs as a loop over refs, one table per worker; `credentials get --shell-env`
-puts the table's env in the process environment for every command in the
-body:
+env — so each stage gets the lake source (endpoint, token, storage options)
+from its own stdin or `PQB_*`, in memory. The walk is a plain pipeline: every
+command streams refs and keeps `--fan-out` in flight, and `credentials get`
+writes the vended keys onto the refs it passes to `tablev2 info`:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
 $ pqbench schema ls dbx_samples.nyctaxi --format json |
     pqbench credentials check |
-    while IFS= read -r ref; do
-        eval "$(printf '%s\n' "$ref" | pqbench credentials get --shell-env)"
-        printf '%s\n' "$ref" | pqbench tablev2 info --format json
-    done
+    pqbench credentials get |
+    pqbench tablev2 info --format json
 ```
 
 `tablev2 info` enriches that ref — id, format, snapshot, columns, partition
@@ -251,9 +248,7 @@ catalog's `loadCredentials` route (`GET …/tables/{table}/credentials`) and the
 `storage-credentials` it returns (the metadata-inline Iceberg read needs no
 keys, but the next storage operations do); a catalog that does not serve the
 route falls back to the delegated `loadTable`. A table the Iceberg catalog
-cannot serve passes through with its own env. `--shell-env`
-writes the one ref's env — the source's options plus those keys — as shell
-`export` lines instead, for the loop's `eval`:
+cannot serve passes through with its own env.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
