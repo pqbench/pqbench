@@ -32,20 +32,20 @@ pub struct Request {
 
 impl Request {
     /// A GET request: the URL and an optional bearer.
-    pub fn get(url: String, bearer: Option<String>) -> Self {
+    pub fn get(url: impl Into<String>, bearer: Option<String>) -> Self {
         Self {
-            url,
+            url: url.into(),
             bearer,
             body: None,
         }
     }
 
     /// A POST request: the URL, an optional bearer, and a JSON body.
-    pub fn post(url: String, bearer: Option<String>, body: String) -> Self {
+    pub fn post(url: impl Into<String>, bearer: Option<String>, body: impl Into<String>) -> Self {
         Self {
-            url,
+            url: url.into(),
             bearer,
-            body: Some(body),
+            body: Some(body.into()),
         }
     }
 }

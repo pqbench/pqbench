@@ -125,7 +125,7 @@ async fn iceberg_namespaces(endpoint: &str, token: Option<&str>) -> Result<Vec<S
 }
 
 async fn get_json<T: DeserializeOwned>(url: &str, token: Option<&str>) -> Result<T, Error> {
-    let response = reqwest::request(Request::get(url.to_string(), token.map(str::to_owned)))
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if response.status != 200 {

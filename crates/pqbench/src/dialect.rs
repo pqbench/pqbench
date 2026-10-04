@@ -24,7 +24,7 @@ pub(crate) async fn get_json<T: DeserializeOwned>(
     url: &str,
     token: Option<&str>,
 ) -> Result<T, String> {
-    let response = reqwest::request(Request::get(url.to_string(), token.map(str::to_owned)))
+    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
         .await
         .map_err(|error| error.to_string())?;
     if response.status != 200 {
