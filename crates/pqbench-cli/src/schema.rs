@@ -115,17 +115,14 @@ impl Row for TableRefRecord<'_> {
 }
 
 /// The row `schema ls` writes for a table.
-fn table_record<'a>(
-    table: &'a ls::TableRef,
-    env: &'a BTreeMap<String, String>,
-) -> TableRefRecord<'a> {
+fn table_record(table: &ls::TableRef) -> TableRefRecord<'_> {
     TableRefRecord {
         kind: "pqbench.table-ref",
         version: 2,
         id: &table.name,
         uri: &table.uri,
         storage_path: table.storage_path.as_deref(),
-        env,
+        env: &table.env,
     }
 }
 
@@ -201,11 +198,11 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
             &name,
             input.source.token.as_deref(),
             input.source.table_format.into(),
+            &input.source.env,
         )
         .await?;
         for table in &tables {
-            emit.write_row(&table_record(table, &input.source.env))
-                .await?;
+            emit.write_row(&table_record(table)).await?;
         }
         return emit.finish(&format!("tables: {}\n", tables.len())).await;
     }
@@ -225,6 +222,7 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
                     &name,
                     source.token.as_deref(),
                     source.table_format.into(),
+                    &source.env,
                 )
                 .await?,
             )
@@ -232,7 +230,7 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {
         for table in listed? {
-            emit.write_row(&table_record(&table, &source.env)).await?;
+            emit.write_row(&table_record(&table)).await?;
             tables += 1;
         }
     }

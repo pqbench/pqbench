@@ -9,6 +9,8 @@
 //! with no location (views) are skipped. The URLs, the page shapes, and the
 //! pagination are this command's; the transport is the third-party facade.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use super::api::{Error, TableRef};
@@ -60,10 +62,11 @@ pub(crate) async fn list(
     schema: &str,
     token: Option<&str>,
     table_format: TableFormat,
+    env: &BTreeMap<String, String>,
 ) -> Result<Vec<TableRef>, Error> {
     let mut tables = match table_format {
-        TableFormat::Unity => unity_tables(endpoint, catalog, schema, token).await?,
-        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token).await?,
+        TableFormat::Unity => unity_tables(endpoint, catalog, schema, token, env).await?,
+        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token, env).await?,
     };
     tables.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(tables)
@@ -74,6 +77,7 @@ async fn unity_tables(
     catalog: &str,
     schema: &str,
     token: Option<&str>,
+    env: &BTreeMap<String, String>,
 ) -> Result<Vec<TableRef>, Error> {
     let root = dialect::api_root(endpoint);
     let mut tables = Vec::new();
@@ -111,6 +115,7 @@ async fn unity_tables(
                 uri: format!("{root}/tables/{}", dialect::encode(&name)),
                 name,
                 storage_path: Some(storage_path),
+                env: env.clone(),
             });
         }
         match page.next_page_token {
@@ -126,6 +131,7 @@ async fn iceberg_tables(
     catalog: &str,
     schema: &str,
     token: Option<&str>,
+    env: &BTreeMap<String, String>,
 ) -> Result<Vec<TableRef>, Error> {
     let base = dialect::iceberg_root(endpoint);
     let namespace = dialect::iceberg_namespace(schema);
@@ -160,6 +166,7 @@ async fn iceberg_tables(
                 ),
                 name,
                 storage_path: None,
+                env: env.clone(),
             });
         }
         match page.next_page_token {

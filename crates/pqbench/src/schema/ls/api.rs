@@ -3,6 +3,7 @@
 //! [`list`] is the only public function. It returns plain data; the CLI owns
 //! the document it becomes.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::schema::TableFormat;
@@ -16,6 +17,9 @@ pub struct TableRef {
     pub uri: String,
     /// The table's storage location, when the listing reports it.
     pub storage_path: Option<String>,
+    /// Storage options for reading the table, copied from the source; empty
+    /// when the caller has none.
+    pub env: BTreeMap<String, String>,
 }
 
 /// Errors listing a schema's tables.
@@ -40,6 +44,7 @@ impl From<String> for Error {
 ///
 /// Unity pages carry a storage location; Iceberg REST lists identifiers only,
 /// so `storage_path` is `None` there until `pqbench table info` resolves it.
+/// Every ref carries `env`; the CLI writes it onto the wire ref.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
@@ -50,6 +55,7 @@ pub async fn list(
     schema: &str,
     token: Option<&str>,
     table_format: TableFormat,
+    env: &BTreeMap<String, String>,
 ) -> Result<Vec<TableRef>, Error> {
-    super::r#impl::list(endpoint, catalog, schema, token, table_format).await
+    super::r#impl::list(endpoint, catalog, schema, token, table_format, env).await
 }
