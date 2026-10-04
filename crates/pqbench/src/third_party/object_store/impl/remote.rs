@@ -76,11 +76,27 @@ pub(crate) fn open_remote(url: &Url, options: &[(String, String)]) -> Result<Obj
     })))
 }
 
+/// Timeouts for the signed HEAD. The HEAD uses its own client, so it does not
+/// inherit `object_store`'s 5s connect / 30s request defaults; a blackholed
+/// storage endpoint must fail, not hang.
+const HEAD_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const HEAD_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// One pooled client for every signed HEAD, so connections are reused across
 /// the files of a table.
-fn head_client() -> &'static reqwest::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+fn head_client() -> Result<&'static reqwest::Client, Error> {
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
+        std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(HEAD_CONNECT_TIMEOUT)
+                .timeout(HEAD_REQUEST_TIMEOUT)
+                .build()
+                .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| Error(format!("http client: {error}")))
 }
 
 /// object_store 0.13 maps cache/content headers on HEAD but drops
@@ -97,7 +113,7 @@ async fn head_object(
         )
         .await
         .map_err(remote_error)?;
-    let response = head_client()
+    let response = head_client()?
         .head(url)
         .send()
         .await

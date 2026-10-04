@@ -164,6 +164,15 @@ enum Command {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    // pqbench reads tables from outside Databricks with explicit credentials
+    // (vended, or on the lake source); it never relies on EC2 instance
+    // metadata. The AWS SDK's config chain probes IMDS for the region
+    // otherwise, and hangs where that endpoint is blackholed. Default the
+    // probe off before any command builds an AWS client; a caller that sets
+    // AWS_EC2_METADATA_DISABLED wins.
+    if std::env::var_os("AWS_EC2_METADATA_DISABLED").is_none() {
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+    }
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Diff(args) => diff::run(&args).await,
