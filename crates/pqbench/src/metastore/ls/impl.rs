@@ -6,6 +6,7 @@
 use serde::Deserialize;
 
 use super::api::{Catalog, Error};
+use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
 /// Catalog names per page; the walk follows `next_page_token`.
@@ -28,18 +29,8 @@ struct Entry {
     catalog_type: Option<String>,
 }
 
-/// The Unity REST root, whether or not the endpoint already names it.
-fn api_root(endpoint: &str) -> String {
-    let endpoint = endpoint.trim_end_matches('/');
-    if endpoint.ends_with("/api/2.1/unity-catalog") {
-        endpoint.to_string()
-    } else {
-        format!("{endpoint}/api/2.1/unity-catalog")
-    }
-}
-
 pub(crate) async fn list(endpoint: &str, token: Option<&str>) -> Result<Vec<Catalog>, Error> {
-    let root = api_root(endpoint);
+    let root = dialect::api_root(endpoint);
     let mut catalogs = Vec::new();
     let mut page_token: Option<String> = None;
     loop {

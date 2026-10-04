@@ -12,7 +12,7 @@
 use serde::Deserialize;
 
 use super::api::{Error, TableRef};
-use crate::schema::dialect;
+use crate::dialect;
 use crate::schema::TableFormat;
 
 /// Table names per page; both walks follow the endpoint's page token.

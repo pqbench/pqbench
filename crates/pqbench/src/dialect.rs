@@ -1,4 +1,4 @@
-//! URL helpers shared by the table and credentials commands.
+//! URL helpers shared by the walk's commands.
 //!
 //! The table format is declared by the caller (`PQB_TABLE_FORMAT`); nothing
 //! here probes the endpoint. Iceberg REST endpoints already name the catalog

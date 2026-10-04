@@ -6,6 +6,7 @@
 use serde::Deserialize;
 
 use super::api::{Error, Metastore};
+use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
 /// The subset of `GET /metastore_summary` this command reports.
@@ -19,18 +20,8 @@ struct Summary {
     region: String,
 }
 
-/// The Unity REST root, whether or not the endpoint already names it.
-fn api_root(endpoint: &str) -> String {
-    let endpoint = endpoint.trim_end_matches('/');
-    if endpoint.ends_with("/api/2.1/unity-catalog") {
-        endpoint.to_string()
-    } else {
-        format!("{endpoint}/api/2.1/unity-catalog")
-    }
-}
-
 pub(crate) async fn read(endpoint: &str, token: Option<&str>) -> Result<Metastore, Error> {
-    let url = format!("{}/metastore_summary", api_root(endpoint));
+    let url = format!("{}/metastore_summary", dialect::api_root(endpoint));
     let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
         .await
         .map_err(|error| Error::from(error.to_string()))?;
