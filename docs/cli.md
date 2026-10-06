@@ -44,6 +44,9 @@ process environment itself.
 
 ## Documents
 
+The [input and output contracts](io-contracts.md) reference lists each
+command's accepted input, emitted records, version checks, and change log.
+
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
 | `pqbench.lake-source` | you / a producer | `lake`, `metastore`, `catalog`, `schema`, `tablev2` |

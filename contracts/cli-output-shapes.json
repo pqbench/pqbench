@@ -1,0 +1,476 @@
+{
+  "families": {
+    "pqbench.bytemass": {
+      "records": {
+        "pqbench.bytemass-file": {
+          "file": [
+            "string"
+          ],
+          "id": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "metadata": [
+            "object"
+          ],
+          "metadata.creator": [
+            "string"
+          ],
+          "metadata.format_version": [
+            "number"
+          ],
+          "metadata.key_values": [
+            "array"
+          ],
+          "metadata.row_groups": [
+            "array"
+          ],
+          "path": [
+            "string"
+          ],
+          "size": [
+            "number"
+          ]
+        },
+        "pqbench.bytemass-row": {
+          "codec": [
+            "string"
+          ],
+          "column": [
+            "string"
+          ],
+          "compressed_bytes": [
+            "number"
+          ],
+          "compressed_bytes_per_row": [
+            "number"
+          ],
+          "compression_ratio": [
+            "number"
+          ],
+          "dictionary": [
+            "boolean"
+          ],
+          "encodings": [
+            "array"
+          ],
+          "id": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "max_value": [
+            "string"
+          ],
+          "min_value": [
+            "string"
+          ],
+          "null_count": [
+            "number"
+          ],
+          "null_fraction": [
+            "number"
+          ],
+          "num_values": [
+            "number"
+          ],
+          "physical_type": [
+            "string"
+          ],
+          "row_count": [
+            "number"
+          ],
+          "row_group": [
+            "number"
+          ],
+          "row_group_rows": [
+            "number"
+          ],
+          "size_bytes": [
+            "number"
+          ],
+          "uncompressed_bytes": [
+            "number"
+          ],
+          "uncompressed_bytes_per_row": [
+            "number"
+          ],
+          "uri": [
+            "string"
+          ]
+        },
+        "pqbench.bytemass:begin": {
+          "event": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "version": [
+            "number"
+          ]
+        },
+        "pqbench.bytemass:end": {
+          "column_count": [
+            "number"
+          ],
+          "event": [
+            "string"
+          ],
+          "file_count": [
+            "number"
+          ],
+          "kind": [
+            "string"
+          ],
+          "row_count": [
+            "number"
+          ]
+        }
+      },
+      "version": 1
+    },
+    "pqbench.compression": {
+      "records": {
+        "pqbench.compression-row": {
+          "codec": [
+            "string"
+          ],
+          "compress_estimate": [
+            "object"
+          ],
+          "compress_estimate.mean": [
+            "number"
+          ],
+          "compress_estimate.n": [
+            "number"
+          ],
+          "compress_estimate.se2": [
+            "number"
+          ],
+          "compressed_bytes": [
+            "number"
+          ],
+          "decompress_estimate": [
+            "object"
+          ],
+          "decompress_estimate.mean": [
+            "number"
+          ],
+          "decompress_estimate.n": [
+            "number"
+          ],
+          "decompress_estimate.se2": [
+            "number"
+          ],
+          "kind": [
+            "string"
+          ],
+          "level": [
+            "number"
+          ],
+          "ratio": [
+            "number"
+          ],
+          "uncompressed_bytes": [
+            "number"
+          ]
+        },
+        "pqbench.compression:begin": {
+          "event": [
+            "string"
+          ],
+          "file": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "version": [
+            "number"
+          ]
+        },
+        "pqbench.compression:end": {
+          "column_count": [
+            "number"
+          ],
+          "event": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "row_count": [
+            "number"
+          ]
+        }
+      },
+      "version": 1
+    },
+    "pqbench.diff": {
+      "records": {
+        "pqbench.diff-column": {
+          "change_percent": [
+            "number"
+          ],
+          "column": [
+            "string"
+          ],
+          "delta_bytes": [
+            "number"
+          ],
+          "kind": [
+            "string"
+          ],
+          "left_bytes": [
+            "number"
+          ],
+          "left_bytes_per_row": [
+            "number"
+          ],
+          "left_rows": [
+            "number"
+          ],
+          "right_bytes": [
+            "number"
+          ],
+          "right_bytes_per_row": [
+            "number"
+          ],
+          "right_rows": [
+            "number"
+          ]
+        },
+        "pqbench.diff:begin": {
+          "depth": [
+            "null"
+          ],
+          "event": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "left": [
+            "string"
+          ],
+          "right": [
+            "string"
+          ],
+          "version": [
+            "number"
+          ]
+        },
+        "pqbench.diff:end": {
+          "column_count": [
+            "number"
+          ],
+          "event": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ]
+        }
+      },
+      "version": 1
+    },
+    "pqbench.lz": {
+      "records": {
+        "pqbench.lz-row": {
+          "codec": [
+            "string"
+          ],
+          "compress_estimate": [
+            "object"
+          ],
+          "compress_estimate.mean": [
+            "number"
+          ],
+          "compress_estimate.n": [
+            "number"
+          ],
+          "compress_estimate.se2": [
+            "number"
+          ],
+          "compressed_bytes": [
+            "number"
+          ],
+          "decompress_estimate": [
+            "object"
+          ],
+          "decompress_estimate.mean": [
+            "number"
+          ],
+          "decompress_estimate.n": [
+            "number"
+          ],
+          "decompress_estimate.se2": [
+            "number"
+          ],
+          "kind": [
+            "string"
+          ],
+          "level": [
+            "number"
+          ],
+          "ratio": [
+            "number"
+          ],
+          "uncompressed_bytes": [
+            "number"
+          ]
+        },
+        "pqbench.lz:begin": {
+          "event": [
+            "string"
+          ],
+          "file": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "version": [
+            "number"
+          ]
+        },
+        "pqbench.lz:end": {
+          "event": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "row_count": [
+            "number"
+          ]
+        }
+      },
+      "version": 1
+    },
+    "pqbench.profile": {
+      "records": {
+        "pqbench.profile-column": {
+          "adjacent_equal_fraction": [
+            "number"
+          ],
+          "column": [
+            "string"
+          ],
+          "entropy": [
+            "number"
+          ],
+          "id": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "length_max": [
+            "number"
+          ],
+          "length_mean": [
+            "number"
+          ],
+          "length_p50": [
+            "number"
+          ],
+          "length_p90": [
+            "number"
+          ],
+          "max_value": [
+            "string"
+          ],
+          "min_value": [
+            "string"
+          ],
+          "monotonic": [
+            "string"
+          ],
+          "ndv": [
+            "number"
+          ],
+          "ndv_ratio": [
+            "number"
+          ],
+          "null_count": [
+            "number"
+          ],
+          "null_fraction": [
+            "number"
+          ],
+          "num_values": [
+            "number"
+          ],
+          "physical_kind": [
+            "string"
+          ],
+          "run_length_max": [
+            "number"
+          ],
+          "run_length_mean": [
+            "number"
+          ],
+          "top_values": [
+            "array"
+          ]
+        },
+        "pqbench.profile:begin": {
+          "event": [
+            "string"
+          ],
+          "kind": [
+            "string"
+          ],
+          "version": [
+            "number"
+          ]
+        },
+        "pqbench.profile:end": {
+          "column_count": [
+            "number"
+          ],
+          "event": [
+            "string"
+          ],
+          "file_count": [
+            "number"
+          ],
+          "kind": [
+            "string"
+          ],
+          "row_count": [
+            "number"
+          ]
+        }
+      },
+      "version": 1
+    },
+    "pqbench.skill": {
+      "records": {
+        "pqbench.skill": {
+          "description": [
+            "string"
+          ],
+          "documents": [
+            "array"
+          ],
+          "kind": [
+            "string"
+          ],
+          "name": [
+            "string"
+          ],
+          "version": [
+            "number"
+          ]
+        }
+      },
+      "version": 1
+    }
+  }
+}
