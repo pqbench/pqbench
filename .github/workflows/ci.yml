@@ -90,6 +90,24 @@ jobs:
           key: docs
       - run: make check-docs
 
+  contracts:
+    name: CLI contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: contracts
+      - name: Check observable JSON shapes and compatibility
+        env:
+          CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: make check-contracts
+
   # The `third_party` wrappers must keep their feature flags in `impl.rs`; an
   # `api.rs` always compiles and fails at runtime without its feature. A plain
   # textual check (no build or cache needed) that renders findings as inline
@@ -139,7 +157,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [fmt, aipnaming, docs, isolation, lfs]
+    needs: [fmt, aipnaming, docs, contracts, isolation, lfs]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a required job did not succeed

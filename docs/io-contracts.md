@@ -81,6 +81,28 @@ the version on `pqbench.lake-source` and v2 table refs. Some consumers of
 also generally accept extra fields. These are current acceptance behaviors,
 not a promise that arbitrary new fields or versions are compatible.
 
+## Drift check and version policy
+
+`make check-contracts` runs the CLI on a committed local Parquet fixture and
+compares the observed JSON field paths and types with
+[`contracts/cli-output-shapes.json`](../contracts/cli-output-shapes.json).
+It covers `bytemass`, `profile`, `lz`, `compression`, `diff`, and the `skill`
+listing, plus rejection of the wrong table-ref and lake-source versions. The
+shape check ignores measurements, paths, array lengths, and record counts.
+Other commands and inputs rely on their existing black-box tests; this
+snapshot is not a complete schema for every command. CI runs the same check
+and compares a PR's snapshot with its base.
+
+For the same family version, adding a field is allowed; removing a field,
+changing its observed type, or adding/removing a record kind is breaking and
+requires a higher family version. A version decrease is never allowed. Because
+most child records lack their own version, the family version on `begin`
+governs them. A new version must still have an explicit reader compatibility
+decision and migration note; the shape check cannot prove that a new reader
+accepts old inputs. Run `make update-contracts` for an intentional output
+change, inspect the snapshot diff, and add the printed fingerprint to a new
+row below. CI requires that row when the snapshot changes.
+
 ## Contract changes
 
 When a PR changes accepted inputs, JSON fields or record order, versioning,
@@ -91,6 +113,6 @@ version needs explicit producer and consumer behavior; changing a field while
 keeping the same version still needs a change-log entry. Verify boundaries
 through public CLI behavior and pipelines.
 
-| Date | Change | Compatibility | Reference |
+| Date | Change | Compatibility | Fingerprint / reference |
 | --- | --- | --- | --- |
-| 2026-10-06 | Baseline inventory of the current CLI contracts; no behavior change | Existing v1 streams and v1/v2 table-ref split | [`84a66b3`](https://github.com/pqbench/pqbench/commit/84a66b3), [#96](https://github.com/pqbench/pqbench/issues/96) |
+| 2026-10-06 | Baseline inventory and first output-shape snapshot; no CLI behavior change | Existing v1 streams and v1/v2 table-ref split | `7ba17ad02b68b87d3893594a7eda3fb9fd7cbc9672143f61afcb359acfb1f77b`; [`84a66b3`](https://github.com/pqbench/pqbench/commit/84a66b3), [#96](https://github.com/pqbench/pqbench/issues/96) |

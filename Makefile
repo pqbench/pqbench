@@ -15,7 +15,8 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity lakehouse-seed-iceberg \
-	check isolation lfs-check check-python sync-docs check-docs clean
+	check isolation lfs-check check-python sync-docs check-docs \
+	check-contracts update-contracts clean
 
 all: fmt build test lint
 
@@ -74,7 +75,18 @@ lakehouse-seed-unity: lakehouse-up
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
-check: fmt-check check-docs lint isolation lfs-check test
+check: fmt-check check-docs lint isolation lfs-check test check-contracts
+
+# Compare public CLI JSON shapes with the committed snapshot. A deliberate
+# output change starts with `make update-contracts` and a change-log entry.
+check-contracts:
+	$(PYTHON) -m unittest scripts.test_check_io_contracts
+	$(CARGO) build -q -p pqbench-cli $(CARGO_FEATURES)
+	$(PYTHON) scripts/check_io_contracts.py --binary "$(or $(CARGO_TARGET_DIR),target)/debug/pqbench"
+
+update-contracts:
+	$(CARGO) build -q -p pqbench-cli $(CARGO_FEATURES)
+	$(PYTHON) scripts/check_io_contracts.py --binary "$(or $(CARGO_TARGET_DIR),target)/debug/pqbench" --update
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
