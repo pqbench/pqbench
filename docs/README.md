@@ -51,6 +51,8 @@ details.
 
 - [CLI reference](cli.md) — the task-oriented command table, the document
   kinds, repeated flags, and auth for `s3://` and catalogs.
+- [Input and output contracts](io-contracts.md) — accepted documents, emitted
+  streams, version checks, and the contract change log.
 - [`profile`](profile.md) — per-column facts from a decoded row sample.
 - [`experiment`](experiment.md) — rewrite a sample and measure the result.
 - [`viz`](viz.md) — collect a bytemass stream into a static HTML treemap.
