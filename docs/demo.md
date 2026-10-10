@@ -86,10 +86,11 @@ columns: 2
 
 ## Catalogs
 
-A `pqbench.lake-source` names a catalog. `GET /v1/config` with a `defaults`
-object is Iceberg REST; a 200 without `defaults`, or HTTP 404, is Unity. The
-walk descends `metastore ls` → `catalog ls` → `schema ls`, checks and vends
-credentials, then enriches each table and lists its files:
+The catalog comes from the environment (`PQB_ENDPOINT`, `PQB_TOKEN`).
+`GET /v1/config` with a `defaults` object is Iceberg REST; a 200 without
+`defaults`, or HTTP 404, is Unity. The walk descends `metastore ls` → `catalog ls`
+→ `schema ls`, checks and vends credentials, then enriches each table and lists
+its files:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
@@ -103,8 +104,8 @@ $ pqbench schema ls CAT.SCHEMA |
 ```
 
 Every stage of a pipe writes NDJSON for the next stage; the last one prints the
-table (`--format table`). The committed `docs/demos/unity.json` and
-`docs/demos/iceberg-rest.json` point at the local stand (`make lakehouse`). See
+table (`--format table`). The local stand (`make lakehouse`) exports
+`PQB_ENDPOINT` and `AWS_*` for the walk. See
 [docker/e2e-lakehouse/README.md](../docker/e2e-lakehouse/README.md).
 
 ## One Parquet file
@@ -162,9 +163,9 @@ fixture stores data as `s3://lakehouse/...`, so measure it through the stand
 $ pqbench table ls docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst
 ```
 
-With the stand up, walk the Iceberg REST catalog (`docs/demos/iceberg-rest.json`)
-and measure through it: `schema ls | credentials check | credentials get |
-table info | table ls | partition ls | bytemass`.
+With the stand up, walk the Iceberg REST catalog (`PQB_ENDPOINT=…
+PQB_TABLE_FORMAT=iceberg`) and measure through it: `schema ls | credentials
+check | credentials get | table info | table ls | partition ls | bytemass`.
 `docs/demos/pqbench-iceberg-session.sh` runs the REST pipe when the stand answers
 at `localhost:8181`.
 

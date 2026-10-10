@@ -11,8 +11,8 @@ that command and links back. This file is the durable copy.
 | On-disk bytes per column | `pqbench bytemass FILE` |
 | List a table's natural partitions | `pqbench table ls DIR` (or v2 refs on stdin) |
 | List a partition's files | `pqbench partition ls` (partitions on stdin) |
-| Read the endpoint's metastore record | `pqbench metastore info` (lake-source / `PQB_ENDPOINT`) |
-| List the catalogs at a catalog endpoint | `pqbench metastore ls` (lake-source / `PQB_ENDPOINT`) |
+| Read the endpoint's metastore record | `pqbench metastore info` (`PQB_ENDPOINT`) |
+| List the catalogs at a catalog endpoint | `pqbench metastore ls` (`PQB_ENDPOINT`) |
 | Read one catalog's record | `pqbench catalog info [CATALOG]` (refs on stdin) |
 | List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
@@ -35,16 +35,14 @@ $ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench b
 
 A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
 the stream clean: only data rows are shown, bounded to 1000 rows, with the
-count of hidden rows reported. Credentials travel on that document (`AWS_*`;
-a catalog `token` on a lake-source) — `credentials get` writes the vended
-keys onto the refs it passes on, and pqbench never writes them into the
-process environment itself.
+count of hidden rows reported. Credentials travel on the refs (`AWS_*`) —
+`credentials get` writes the vended keys onto the refs it passes on, and
+pqbench never writes them into the process environment itself.
 
 ## Documents
 
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
-| `pqbench.lake-source` | you / a producer | `metastore`, `catalog`, `schema`, `table` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
 | `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
@@ -109,23 +107,21 @@ cat <<'EOF' | pqbench bytemass
 EOF
 ```
 
-### Catalog list (Unity / Databricks / Iceberg REST)
+### Catalog config (Unity / Databricks / Iceberg REST)
 
-A `pqbench.lake-source` lists tables. It names the catalog at the top level:
-`endpoint` and an optional `token`, plus `catalog` / `schema` to narrow the
-list.
+The walk's config comes from the environment — configuration management sets
+it (`pqbench setup` prints it for the shell to eval):
 
-| Field | Role |
+| Variable | Role |
 | --- | --- |
-| `endpoint` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
-| `token` | Bearer PAT (`dapi-…`) or OAuth token; list API only |
-| `catalog` / `schema` | Optional catalog / schema (or glob) to list |
-| `table_format` | Optional `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
+| `PQB_ENDPOINT` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
+| `PQB_TOKEN` | Bearer PAT (`dapi-…`) or OAuth token; list API only |
+| `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
 
 The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
 
-`metastore info` reads the same document and reports the endpoint's metastore
+`metastore info` reads the same endpoint and reports its metastore
 record (name, id, cloud, region) as `pqbench.metastore`; `metastore ls` lists
 the catalogs at the endpoint, one `pqbench.catalog` line each (name,
 catalog_type). `catalog info` reports one catalog's record (name, catalog_type,
@@ -163,8 +159,7 @@ done
 `metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
 catalog info` enriches each catalog instead. `info` emits the same kind as the
 `ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each
-level into the job tree. A `pqbench.lake-source` on stdin overrides the
-environment.
+level into the job tree.
 
 ```console no-run
 $ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
@@ -185,11 +180,11 @@ and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
 A view carries no location, so its ref keeps no storage path;
 `credentials check` is the stage that drops it. Refs are addresses; the walk
-context (endpoint, token, storage options) comes from the lake source or
-`PQB_*`. The walk is a plain pipeline: every command streams refs and keeps
-`--fan-out` in flight, `credentials get` writes the vended keys onto the refs,
-and `table info` passes them on so `bytemass` reads the files under the same
-lease:
+context (endpoint, token, storage options) comes from the environment
+(`PQB_*`, `AWS_*`). The walk is a plain pipeline: every command streams refs
+and keeps `--fan-out` in flight, `credentials get` writes the vended keys onto
+the refs, and `table info` passes them on so `bytemass` reads the files under
+the same lease:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
@@ -227,8 +222,8 @@ given — the lake source's options, the ref's own, and the process environment
 the storage client also reads — and emits that env back on the record, so the
 next stage reads the data files under the same lease. Everything
 credential-shaped is the `credentials` stage's concern. The Delta path needs a
-readable storage location; the local stand, `env` credentials on the lake
-source, and a vended lease all supply one. The Iceberg REST path needs no
+readable storage location; the environment's `AWS_*` and a vended lease both
+supply one. The Iceberg REST path needs no
 storage read.
 
 A vended lease is a storage fact, not a caller choice. Databricks serves
@@ -288,22 +283,11 @@ partitions: 1
 ```
 
 ```console no-run
-$ pqbench table info pqbench.demo.events < lake-source.json
+$ PQB_ENDPOINT=… pqbench table info pqbench.demo.events
 name                 format  snapshot  columns  location
 -------------------  ------  --------  -------  ----------------------
 pqbench.demo.events  delta          0        2  s3://lakehouse/unity/events
 tables: 1
-```
-
-```json
-{
-  "kind": "pqbench.lake-source",
-  "version": 1,
-  "endpoint": "https://example.cloud.databricks.com",
-  "token": "dapi-…",
-  "catalog": "main",
-  "env": { "AWS_REGION": "us-east-1" }
-}
 ```
 
 List a table's partitions by URI; a terminal prints them:

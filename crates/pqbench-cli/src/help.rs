@@ -48,7 +48,6 @@ Examples:
 Documents (kind + version 1):
   pqbench.experiment     begin/end around trial and column lines
   pqbench.profile        begin/end around pqbench.profile-column lines
-  pqbench.lake-source    catalog endpoint + token; the walk reads it
   pqbench.metastore      the endpoint's metastore record
   pqbench.catalog        the endpoint's catalogs (metastore ls)
   pqbench.schema         a catalog's schemas (catalog ls)
@@ -67,8 +66,8 @@ Auth (how to reach data):
 
   s3://  (needs --features aws / delta-s3 / iceberg-s3)
     Default AWS provider chain (process env, shared config, instance role,
-    AWS_PROFILE). A document env overrides that chain and is not exported
-    back into the process. Only AWS_* names are accepted on tables.
+    AWS_PROFILE). A ref's env (a vended lease) overrides that chain; it is
+    not exported into the process. Only AWS_* names are accepted on refs.
 
     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
     AWS_SESSION_TOKEN     STS or catalog-vended temp keys
@@ -78,7 +77,7 @@ Auth (how to reach data):
     AWS_VIRTUAL_HOSTED_STYLE_REQUEST   false for path-style (MinIO, rustfs)
     AWS_SKIP_SIGNATURE    true for a public bucket
 
-  Catalog list  (pqbench.lake-source)
+  Catalog config  (PQB_ENDPOINT / PQB_TOKEN)
     endpoint + token   a Databricks workspace URL + PAT (dapi-…), or a
     Unity OSS / Iceberg REST URL. The token is a Bearer on the list API
     only. Only AWS_* is copied onto listed tables — a PAT is not an S3 key.
@@ -139,9 +138,8 @@ pub const TABLE_ABOUT: &str = "Read one table's record, or list its natural part
 pub const TABLE_LONG_ABOUT: &str = "\
 Read one table at a catalog endpoint, or group its log's commits into natural
 partitions. The table is the entity between schemas and partitions. The
-endpoint, token, and object-store options come from a pqbench.lake-source on
-standard input, or from PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when
-the document leaves them out.
+endpoint, token, dialect, and object-store options come from the environment:
+PQB_ENDPOINT / PQB_TOKEN / PQB_TABLE_FORMAT and AWS_*.
 
   info   the ref enriched with the table's record (format, snapshot, columns,
          partition columns, format properties) as one pqbench.table-ref
@@ -151,8 +149,8 @@ the document leaves them out.
          rejected. Unity REST serves /tables/{full_name}; the catalog's
          declared columns and properties are merged over the Delta log read
          with without_files(), so that path is O(1) in files and needs a
-         readable storage location: the lake source's env, the ref's env, or
-         the process environment. Vended credentials ride the ref (or the
+         readable storage location: the ref's env or the process environment.
+         Vended credentials ride the ref (or the
          process env) from `credentials get`; `credentials check` gates the
          walk on tables the catalog marks readable outside compute. The
          emitted record carries the env it read under, so a later stage reads
@@ -193,8 +191,7 @@ pub const METASTORE_ABOUT: &str = "Read the endpoint's metastore record and list
 
 pub const METASTORE_LONG_ABOUT: &str = "\
 Read the metastore at a catalog endpoint: the entity above catalogs. The
-endpoint and token come from a pqbench.lake-source on standard input, or from
-PQB_ENDPOINT / PQB_TOKEN when the document leaves them out.
+endpoint and token come from PQB_ENDPOINT / PQB_TOKEN.
 
   info   the metastore record (name, id, cloud, region) as one
          pqbench.metastore line
@@ -212,16 +209,15 @@ Examples:
 See also:
   pqbench catalog --help   the schemas of one catalog
   pqbench schema --help    the tables of one schema
-  pqbench --help           catalog auth, lake-source shape
+  pqbench --help           catalog auth, PQB_* config
   docs/cli.md";
 
 pub const CATALOG_ABOUT: &str = "Read one catalog's record or list its schemas";
 
 pub const CATALOG_LONG_ABOUT: &str = "\
 Read one catalog at a catalog endpoint: the entity above schemas. The
-endpoint and token come from a pqbench.lake-source on standard input, or from
-PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them
-out. Without a CATALOG argument the command reads pqbench.catalog refs on
+endpoint and token come from PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT).
+Without a CATALOG argument the command reads pqbench.catalog refs on
 standard input — one catalog per line — so `metastore ls | catalog ls` chains.
 
   info   the catalog's record (name, catalog_type, comment, owner) as one
@@ -242,16 +238,15 @@ Examples:
 
 See also:
   pqbench metastore --help  the endpoint's metastore and its catalogs
-  pqbench --help            catalog auth, lake-source shape
+  pqbench --help            catalog auth, PQB_* config
   docs/cli.md";
 
 pub const SCHEMA_ABOUT: &str = "Read one schema's record or list its tables";
 
 pub const SCHEMA_LONG_ABOUT: &str = "\
 Read one schema at a catalog endpoint: the entity between catalogs and
-tables. The endpoint and token come from a pqbench.lake-source on standard
-input, or from PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the
-document leaves them out. Without a CATALOG.SCHEMA argument the command reads
+tables. The endpoint and token come from PQB_ENDPOINT / PQB_TOKEN (and
+PQB_TABLE_FORMAT). Without a CATALOG.SCHEMA argument the command reads
 pqbench.schema refs on standard input — one schema per line — so `catalog ls |
 schema ls` chains.
 
@@ -276,7 +271,7 @@ Examples:
 See also:
   pqbench catalog --help  the schemas of one catalog
   pqbench table --help  read a listed table's record
-  pqbench --help          catalog auth, lake-source shape
+  pqbench --help          catalog auth, PQB_* config
   docs/cli.md";
 
 pub const PARTITION_ABOUT: &str = "List a partition's files — the ones its commits added";
@@ -303,10 +298,9 @@ See `pqbench table ls --help` (the partitions), `pqbench bytemass --help`
 pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
 
 pub const CREDENTIALS_LONG_ABOUT: &str = "\
-Check and vend read credentials for table-refs. The endpoint, token, and
-object-store options come from a pqbench.lake-source on standard input, or from
-PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them
-out.
+Check and vend read credentials for table-refs. The endpoint, token, dialect,
+and object-store options come from the environment: PQB_ENDPOINT / PQB_TOKEN /
+PQB_TABLE_FORMAT and AWS_*.
 
   check  the walk's single filter: each pqbench.table-ref version 2 ref on
          standard input is checked against the catalog. A `system` catalog
@@ -344,7 +338,7 @@ Examples:
 See also:
   pqbench table --help  read a listed table's record
   pqbench schema --help   the tables of one schema
-  pqbench --help          catalog auth, lake-source shape
+  pqbench --help          catalog auth, PQB_* config
   docs/cli.md";
 
 pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
@@ -565,5 +559,5 @@ Examples:
 See also:
   pqbench credentials --help  check and vend read credentials
   pqbench table --help        read a listed table's record
-  pqbench --help              auth, lake-source shape
+  pqbench --help              auth, PQB_* config
   docs/cli.md";

@@ -15,7 +15,7 @@ fn what_to_run() {
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
-fn catalog_list_unity_databricks_iceberg_rest() {
-    // catalog_list_unity_databricks_iceberg_rest, from line 311
-    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 312, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
+fn catalog_config_unity_databricks_iceberg_rest() {
+    // catalog_config_unity_databricks_iceberg_rest, from line 295
+    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 296, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
 }
