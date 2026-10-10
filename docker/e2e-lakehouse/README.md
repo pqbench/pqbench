@@ -69,16 +69,16 @@ long-lived key in the pipe.
 ```bash
 TABLE=$(curl -s $UC/tables/pqbench.demo.events)
 
-curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/json' \
+# Unity vends a session; put it in the environment and read the table by URI.
+read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(
+  curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/json' \
     -d "$(jq -c '{table_id, operation: "READ"}' <<< "$TABLE")" |
-  jq -c --arg s3 "$S3" \
-    '{kind: "pqbench.lake-source", version: 1,
-      env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
-        AWS_SECRET_ACCESS_KEY: .secret_access_key,
-        AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
-        AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
-        AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
-  "$BIN" table ls "$(jq -r .storage_location <<< "$TABLE")" |
+  jq -r '.aws_temp_credentials | .access_key_id, .secret_access_key, .session_token')
+export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+export AWS_REGION=us-east-1 AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
+export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
+
+"$BIN" table ls "$(jq -r .storage_location <<< "$TABLE")" |
   "$BIN" partition ls |
   "$BIN" bytemass
 ```
@@ -93,9 +93,9 @@ total                                   46.00
 ```
 
 `make lakehouse` runs exactly this walk as its last step, then lists the same
-table with `schema ls` (a `pqbench.lake-source` document for the endpoint) and
-walks it through `table info | table ls | partition ls | bytemass` again, so
-the catalog-listing path is seen to work too.
+table with `schema ls` (with `PQB_ENDPOINT` naming the catalog) and walks it
+through `table info | table ls | partition ls | bytemass` again, so the
+catalog-listing path is seen to work too.
 
 Iceberg REST does not vend credentials. `schema ls` lists namespaces and
 tables, `table info` reads `loadTable`'s inline metadata, and the walk
@@ -106,19 +106,14 @@ ICEBERG=http://localhost:8181/v1
 S3=http://localhost:9000
 BIN=${CARGO_TARGET_DIR:-target}/debug/pqbench
 
-SOURCE=$(jq -c -n --arg endpoint "$ICEBERG" --arg s3 "$S3" \
-  '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
-    env: {AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
-      AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
-      AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}')
+export PQB_ENDPOINT=$ICEBERG PQB_TABLE_FORMAT=iceberg
+export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1
+export AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
+export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 
-printf '%s\n' "$SOURCE" |
-  PQB_TABLE_FORMAT=iceberg "$BIN" schema ls pqbench.demo --format json |
-  while IFS= read -r ref; do
-    printf '%s\n%s\n' "$SOURCE" "$ref" |
-      PQB_TABLE_FORMAT=iceberg "$BIN" table info |
-      "$BIN" table ls | "$BIN" partition ls | "$BIN" bytemass
-  done
+"$BIN" schema ls pqbench.demo --format json |
+  "$BIN" table info |
+  "$BIN" table ls | "$BIN" partition ls | "$BIN" bytemass
 ```
 
 `make lakehouse` runs the Unity table walk, the Unity catalog walk, and this
@@ -128,15 +123,14 @@ partition document itself.
 A producer document is `{"kind": "pqbench.remote-source", "version": 1,
 "inputs": [...], "env": {...}}`; `pqbench bytemass` measures the files it
 names, and a table's files come from the walk, `pqbench table ls | pqbench
-partition ls`. A `pqbench.lake-source` carries the same `env` as the walk's
-context. pqbench keeps no catalog dependency. Storage
-configuration normally comes from the `AWS_*` environment; a producer whose
-catalog vends expiring credentials puts them in `env` instead, which travels
-on the table document to `bytemass`. Only `AWS_*` names are accepted there,
-and anything else is a loud error. Both endpoint names appear because
-pqbench's object store reads `AWS_ENDPOINT` while delta-rs reads
-`AWS_ENDPOINT_URL`; against real AWS neither is needed. `inputs` is one table
-URI.
+partition ls`. The walk's context is the environment: `PQB_ENDPOINT`,
+`PQB_TOKEN`, `PQB_TABLE_FORMAT` for the catalog, and `AWS_*` for storage.
+pqbench keeps no catalog dependency. A producer whose catalog vends expiring
+credentials puts them in `env` instead, which travels on the table document
+to `bytemass`; only `AWS_*` names are accepted there, and anything else is a
+loud error. Both endpoint names appear because pqbench's object store reads
+`AWS_ENDPOINT` while delta-rs reads `AWS_ENDPOINT_URL`; against real AWS
+neither is needed. `inputs` is one table URI.
 
 One caveat before copying this shape onto real infrastructure. Unity Catalog OSS
 mints vended credentials by calling AWS STS `AssumeRole` and cannot send that
@@ -164,12 +158,12 @@ databricks temporary-table-credentials generate-temporary-table-credentials \
     --table-id "$(databricks tables get "$TABLE" -o json | jq -r .table_id)" \
     --operation READ -o json > /tmp/pqbench-vend.json
 
-jq -c '{kind: "pqbench.lake-source", version: 1,
-  env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
-    AWS_SECRET_ACCESS_KEY: .secret_access_key,
-    AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1"})}' \
-  /tmp/pqbench-vend.json |
-  pqbench table ls "$(jq -r .url /tmp/pqbench-vend.json)" |
+read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(
+  jq -r '.aws_temp_credentials | .access_key_id, .secret_access_key, .session_token' \
+    /tmp/pqbench-vend.json)
+export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION=us-east-1
+
+pqbench table ls "$(jq -r .url /tmp/pqbench-vend.json)" |
   pqbench partition ls |
   pqbench bytemass
 ```
