@@ -35,24 +35,27 @@ records by `path`, and `sort`, `head`, or `awk` sample by name:
 $ pqbench table ls docker/e2e-lakehouse/table \
 >   | pqbench partition ls \
 >   | jq -c 'select(.path | startswith("part-"))' \
->   | pqbench bytemass --json | tail -1
-{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
+>   | pqbench bytemass --json \
+>   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
+{"column":"label","compressed_bytes":72}
 
 # first N by path: sort the file URIs, cap them, then measure
 $ pqbench table ls docker/e2e-lakehouse/table \
 >   | pqbench partition ls \
 >   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
 >   | sort | head -10 \
->   | xargs pqbench bytemass --json | tail -1
-{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
+>   | xargs pqbench bytemass --json \
+>   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
+{"column":"label","compressed_bytes":72}
 
 # every Nth file
 $ pqbench table ls docker/e2e-lakehouse/table \
 >   | pqbench partition ls \
 >   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
 >   | awk 'NR % 2 == 1' \
->   | xargs pqbench bytemass --json | tail -1
-{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":3,"column_count":2}
+>   | xargs pqbench bytemass --json \
+>   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
+{"column":"label","compressed_bytes":72}
 ```
 
 The `partition ls` stream keeps each file's `env` (S3/Unity credentials) on the

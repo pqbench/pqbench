@@ -55,8 +55,7 @@ $ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:o
 | `--json` | Stream NDJSON on stdout (same as `--format json`). |
 
 A pipe streams one `pqbench.experiment-trial` per trial and one
-`pqbench.experiment-column` per trial+column, between a `pqbench.experiment`
-begin and end.
+`pqbench.experiment-column` per trial+column.
 
 ## `--aim`
 

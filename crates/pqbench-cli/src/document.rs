@@ -2,11 +2,11 @@
 //!
 //! A producer resolves a table and pqbench measures bytes. Known kinds are
 //! `pqbench.table-ref`, `pqbench.table-file`, `pqbench.remote-source`,
-//! `pqbench.bytemass`, and `pqbench.bytemass-row`. A pipe writes NDJSON; every
-//! record carries a table `id` so rows stay attributable. A terminal prints an
-//! aligned table; a pipe streams NDJSON (override with `--format`). `-o` also
-//! writes the lz4 NDJSON stream. Credentials stay on the document so a pipe can
-//! carry them between processes.
+//! `pqbench.bytemass-file`, and `pqbench.bytemass-row`. A pipe writes NDJSON;
+//! every record carries a table `id` so rows stay attributable. A terminal
+//! prints an aligned table; a pipe streams NDJSON (override with `--format`).
+//! `-o` also writes the lz4 NDJSON stream. Credentials stay on the document so
+//! a pipe can carry them between processes.
 
 use std::collections::BTreeMap;
 use std::ops::AsyncFnMut;
@@ -49,13 +49,11 @@ pub(crate) enum Record {
     },
     Table(TableInfo),
     RemoteSource(RemoteSource),
-    BytemassBegin,
     BytemassFile(pqbench::bytemass::FileStat),
     BytemassRow {
         id: String,
         row: MassRow,
     },
-    BytemassEnd,
     BytemassPage,
 }
 
@@ -164,12 +162,6 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             Ok(Record::File { id, file, env })
         }
         ("pqbench.remote-source", _) => Ok(Record::RemoteSource(parse_remote(value)?)),
-        ("pqbench.bytemass", Some("begin")) => Ok(Record::BytemassBegin),
-        ("pqbench.bytemass", Some("end")) => Ok(Record::BytemassEnd),
-        ("pqbench.bytemass", Some(other)) => {
-            Err(format!("unsupported bytemass event `{other}`").into())
-        }
-        ("pqbench.bytemass", None) => Err("a bytemass stream needs begin/end events".into()),
         ("pqbench.bytemass-file", _) => Ok(Record::BytemassFile(
             serde_json::from_value(value).map_err(invalid_json)?,
         )),
@@ -356,6 +348,6 @@ fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_kind(kind: &str) -> CliError {
-    format!("unsupported document kind `{kind}`; expected pqbench.table-ref, pqbench.table-file, pqbench.remote-source, or pqbench.bytemass")
+    format!("unsupported document kind `{kind}`; expected pqbench.table-ref, pqbench.table-file, pqbench.remote-source, pqbench.bytemass-file, or pqbench.bytemass-row")
         .into()
 }

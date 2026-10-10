@@ -30,13 +30,6 @@ pub(crate) async fn run(args: &CompressionArgs) -> Result<(), CliError> {
     let report = compression::compression(&request)?;
     let resolved = args.bench.format.resolve(args.bench.json);
     let mut emit = Emitter::open(args.bench.output.as_deref(), resolved)?;
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.compression",
-        version: 1,
-        event: "begin",
-        file: args.bench.file.to_string_lossy(),
-    })
-    .await?;
     for row in &report.rows {
         emit.write_row(&RowRecord {
             kind: "pqbench.compression-row",
@@ -51,13 +44,6 @@ pub(crate) async fn run(args: &CompressionArgs) -> Result<(), CliError> {
         })
         .await?;
     }
-    emit.write_event(&EndRecord {
-        kind: "pqbench.compression",
-        event: "end",
-        row_count: report.rows.len(),
-        column_count: report.columns.len(),
-    })
-    .await?;
     let mut summary = format!(
         "file: {}\nrows: {}\ncolumns: {}\n",
         args.bench.file.display(),
@@ -68,14 +54,6 @@ pub(crate) async fn run(args: &CompressionArgs) -> Result<(), CliError> {
         summary.push_str(&format!("output: {}\n", path.display()));
     }
     emit.finish(&summary).await
-}
-
-#[derive(Serialize)]
-struct BeginRecord<'a> {
-    kind: &'static str,
-    version: u32,
-    event: &'static str,
-    file: std::borrow::Cow<'a, str>,
 }
 
 #[derive(Serialize)]
@@ -154,12 +132,4 @@ fn report_cells(row: &ReportRow) -> Vec<String> {
         format!("{:.1}", row.decompress_estimate.megabytes_per_second(bytes)),
         format!("{:.2}", row.ratio),
     ]
-}
-
-#[derive(Serialize)]
-struct EndRecord {
-    kind: &'static str,
-    event: &'static str,
-    row_count: usize,
-    column_count: usize,
 }

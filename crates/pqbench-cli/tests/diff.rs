@@ -35,7 +35,6 @@ fn file_and_saved_stream_comparisons_agree() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(rows.last().unwrap()["event"], "end");
     let columns: Vec<_> = rows
         .iter()
         .filter(|row| row["kind"] == "pqbench.diff-column")
@@ -44,22 +43,17 @@ fn file_and_saved_stream_comparisons_agree() {
     assert!(columns
         .iter()
         .all(|row| row["delta_bytes"] == 0 && row["left_rows"] == 3000));
-    let partial = directory.path().join("partial.ndjson");
-    let stream = String::from_utf8(measured.stdout).unwrap();
+    let wrong = directory.path().join("wrong.ndjson");
     std::fs::write(
-        &partial,
-        stream
-            .lines()
-            .take(stream.lines().count() - 1)
-            .collect::<Vec<_>>()
-            .join("\n"),
+        &wrong,
+        "{\"kind\":\"pqbench.bytemass-page\",\"id\":\"t\"}\n",
     )
     .unwrap();
     let rejected = command()
         .args(["diff", fixture()])
-        .arg(partial)
+        .arg(wrong)
         .output()
         .unwrap();
     assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("without end"));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("bytemass stream"));
 }

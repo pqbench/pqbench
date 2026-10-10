@@ -30,7 +30,6 @@ pub(crate) async fn run(args: &DiffArgs) -> Result<(), CliError> {
     let right = read(&args.right).await?;
     let deltas = diff::compare(&left, &right, args.depth)?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    emit.write_event(&serde_json::json!({"kind":"pqbench.diff", "version":1, "event":"begin", "left":args.left, "right":args.right, "depth":args.depth})).await?;
     for delta in &deltas {
         emit.write_row(&DeltaRecord {
             kind: "pqbench.diff-column",
@@ -38,10 +37,6 @@ pub(crate) async fn run(args: &DiffArgs) -> Result<(), CliError> {
         })
         .await?;
     }
-    emit.write_event(
-        &serde_json::json!({"kind":"pqbench.diff", "event":"end", "column_count":deltas.len()}),
-    )
-    .await?;
     emit.finish(&format!("columns: {}\n", deltas.len())).await
 }
 
@@ -55,30 +50,20 @@ async fn read(input: &str) -> Result<Vec<bytemass::MassRow>, CliError> {
     }
     let mut rows = Vec::new();
     let mut tables = BTreeSet::new();
-    let mut begun = false;
-    let mut ended = false;
     document::visit_input(input, async |record| {
-        if ended {
-            return Err("records after bytemass end".into());
-        }
         match record {
-            Record::BytemassBegin if !begun => begun = true,
-            Record::BytemassEnd if begun => ended = true,
-            Record::BytemassFile(_) if begun => {}
-            Record::BytemassRow { id, row } if begun => {
+            Record::BytemassFile(_) => {}
+            Record::BytemassRow { id, row } => {
                 if !id.is_empty() && id != row.uri {
                     tables.insert(id);
                 }
                 rows.push(row);
             }
-            _ => return Err("diff requires a complete bytemass stream or a Parquet file".into()),
+            _ => return Err("diff requires a bytemass stream or a Parquet file".into()),
         }
         Ok(())
     })
     .await?;
-    if !ended {
-        return Err("bytemass stream ended without end".into());
-    }
     if tables.len() > 1 {
         return Err("diff requires one table per input; select a table before comparing".into());
     }

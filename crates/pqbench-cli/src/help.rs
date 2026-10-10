@@ -46,8 +46,8 @@ Examples:
   pqbench skill parquet-advisor
 
 Documents (kind + version 1):
-  pqbench.experiment     begin/end around trial and column lines
-  pqbench.profile        begin/end around pqbench.profile-column lines
+  pqbench.experiment-trial  one trial's bytes; -column per column
+  pqbench.profile-column one column's profile
   pqbench.metastore      the endpoint's metastore record
   pqbench.catalog        the endpoint's catalogs (metastore ls)
   pqbench.schema         a catalog's schemas (catalog ls)
@@ -55,7 +55,7 @@ Documents (kind + version 1):
   pqbench.partition      a table's natural partitions (table ls)
   pqbench.table-file     one file of a partition (partition ls)
   pqbench.remote-source  one URI + AWS_* from a producer
-  pqbench.bytemass       begin/end around pqbench.bytemass-row lines
+  pqbench.bytemass-file  one file's footer facts; -row one column's mass
   pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
@@ -441,7 +441,7 @@ keeps every column, and a glob matching nothing is an error. --rows is
 column (default 8).
 
 A terminal prints one row per column as a table; a pipe streams one
-`pqbench.profile-column` per column between begin and end. `--format json`
+`pqbench.profile-column` per column. `--format json`
 (or `--json`) forces the stream, and `-o` also writes it.";
 
 pub const PROFILE_AFTER: &str = "\

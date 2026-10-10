@@ -44,12 +44,6 @@ pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
         top: args.top,
     };
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.profile",
-        version: 1,
-        event: "begin",
-    })
-    .await?;
     let mut column_count = 0usize;
     let mut row_count = 0u64;
     for input in &args.inputs {
@@ -66,14 +60,6 @@ pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
             column_count += 1;
         }
     }
-    emit.write_event(&EndRecord {
-        kind: "pqbench.profile",
-        event: "end",
-        file_count: args.inputs.len(),
-        row_count,
-        column_count,
-    })
-    .await?;
     let mut summary = format!(
         "files: {}\nrows: {}\ncolumns: {}\n",
         args.inputs.len(),
@@ -101,13 +87,6 @@ fn parse_rows(method: &str) -> Result<Option<usize>, CliError> {
         return Ok(Some(rows));
     }
     Err(format!("bad --rows `{method}`; expected `all` or `first:N`").into())
-}
-
-#[derive(Serialize)]
-struct BeginRecord {
-    kind: &'static str,
-    version: u32,
-    event: &'static str,
 }
 
 #[derive(Serialize)]
@@ -140,13 +119,4 @@ impl Row for ColumnRecord<'_> {
             column.ndv.to_string(),
         ]
     }
-}
-
-#[derive(Serialize)]
-struct EndRecord {
-    kind: &'static str,
-    event: &'static str,
-    file_count: usize,
-    row_count: u64,
-    column_count: usize,
 }

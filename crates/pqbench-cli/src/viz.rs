@@ -39,13 +39,11 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
 async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliError> {
     let mut rows = Vec::new();
     let mut files = Vec::new();
-    let mut begun = false;
     document::visit_input(input, async |record| {
         match record {
-            Record::BytemassBegin => begun = true,
             Record::BytemassFile(file) => files.push(file),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
-            Record::BytemassEnd | Record::BytemassPage => {}
+            Record::BytemassPage => {}
             Record::Table(_)
             | Record::TableRef(_)
             | Record::Begin(_)
@@ -62,11 +60,6 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliErr
         Ok(())
     })
     .await?;
-    if !begun {
-        return Err(
-            "viz reads a pqbench.bytemass stream; measure with `pqbench bytemass` first".into(),
-        );
-    }
     if rows.is_empty() {
         return Err("bytemass stream has no rows".into());
     }

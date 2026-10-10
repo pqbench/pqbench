@@ -154,12 +154,13 @@ seed_iceberg() {
     fi
 }
 
-# The README's shape: rows, file count, and column names from the bytemass end.
+# The README's shape: rows, file count, and column names from the bytemass stream.
 measurement_shape() {
     jq -rs '
-        (map(select(.event == "end")) | first) as $end
+        ([.[] | select(.kind == "pqbench.bytemass-file")] | length) as $files
+        | ([.[] | select(.kind == "pqbench.bytemass-row") | .row_count] | first) as $rows
         | ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort) as $columns
-        | "\($end.row_count) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"'
+        | "\($rows) rows, \($files) file(s), columns [\($columns | join(", "))]"'
 }
 
 expect_events() {

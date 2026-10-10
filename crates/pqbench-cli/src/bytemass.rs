@@ -53,12 +53,6 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
     let mut stats = MassStats::default();
     let mut envs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut open: BTreeSet<String> = BTreeSet::new();
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.bytemass",
-        version: 1,
-        event: "begin",
-    })
-    .await?;
     document::visit_input(input, async |record| {
         match record {
             Record::RemoteSource(source) => {
@@ -114,11 +108,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
             Record::End { id } => {
                 open.remove(&id);
             }
-            Record::BytemassBegin
-            | Record::BytemassFile(_)
-            | Record::BytemassRow { .. }
-            | Record::BytemassPage
-            | Record::BytemassEnd => {
+            Record::BytemassFile(_) | Record::BytemassRow { .. } | Record::BytemassPage => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
         }
@@ -213,12 +203,6 @@ async fn measure(
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.bytemass",
-        version: 1,
-        event: "begin",
-    })
-    .await?;
     for input in bytemass::expand_inputs(&inputs, &env).await? {
         measure_input(
             &mut emit,
@@ -249,18 +233,10 @@ async fn write_row(
 }
 
 async fn finish_stream(
-    mut emit: Emitter,
+    emit: Emitter,
     stats: &MassStats,
     output: Option<&std::path::Path>,
 ) -> Result<(), CliError> {
-    emit.write_event(&EndRecord {
-        kind: "pqbench.bytemass",
-        event: "end",
-        file_count: stats.file_rows.len(),
-        row_count: stats.row_count(),
-        column_count: stats.column_count,
-    })
-    .await?;
     emit.finish(&stats.summary(output)).await
 }
 
@@ -292,13 +268,6 @@ impl MassStats {
         }
         out
     }
-}
-
-#[derive(Serialize)]
-struct BeginRecord {
-    kind: &'static str,
-    version: u32,
-    event: &'static str,
 }
 
 #[derive(Serialize)]
@@ -339,15 +308,6 @@ impl Row for RowRecord<'_> {
             row.num_values.to_string(),
         ]
     }
-}
-
-#[derive(Serialize)]
-struct EndRecord {
-    kind: &'static str,
-    event: &'static str,
-    file_count: usize,
-    row_count: u64,
-    column_count: usize,
 }
 
 #[derive(Serialize)]

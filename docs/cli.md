@@ -50,9 +50,9 @@ pqbench never writes them into the process environment itself.
 | `pqbench.partition` | `table ls` | `partition ls`, humans / scripts (`--json`) |
 | `pqbench.table-file` | `partition ls` | `bytemass`, humans / scripts (`--json`) |
 | `pqbench.remote-source` | a producer | `bytemass` |
-| `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
-| `pqbench.profile` / `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
-| `pqbench.experiment` / `pqbench.experiment-trial` / `pqbench.experiment-column` | `experiment` | humans / scripts (`--json`) |
+| `pqbench.bytemass-file` / `pqbench.bytemass-row` | `bytemass` | `viz` |
+| `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
+| `pqbench.experiment-trial` / `pqbench.experiment-column` | `experiment` | humans / scripts (`--json`) |
 | `pqbench.skill` | `skill` (list) | an agent |
 
 The metadata walk's table level exchanges `pqbench.table-ref` version `2`;

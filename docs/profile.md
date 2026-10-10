@@ -21,8 +21,8 @@ $ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/pro
 The stream is the explicit machine output, useful for the next command:
 
 ```console run json
-$ pqbench profile examples/quickstart.parquet --rows all --json | head -1
-{"kind":"pqbench.profile","version":1,"event":"begin"}
+$ pqbench profile examples/quickstart.parquet --rows all --json | head -1 | jq -c '{column, physical_kind, ndv}'
+{"column":"id","physical_kind":"integer","ndv":8}
 ```
 
 Inputs are local Parquet files. Each file is opened, up to `--rows` leading
@@ -37,9 +37,7 @@ rows are decoded, and a profile is computed per selected column.
 | `--format` | `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
 | `--json` | Stream NDJSON on stdout (same as `--format json`). |
 
-A pipe streams one `pqbench.profile-column` line per column between a
-`pqbench.profile` begin and end. `row_count` and `column_count` are on the
-end record.
+A pipe streams one `pqbench.profile-column` line per column.
 
 ## Fields
 
@@ -63,7 +61,5 @@ Each `pqbench.profile-column` line carries the input path as `id` and:
 ## Document
 
 ```json
-{"kind":"pqbench.profile","version":1,"event":"begin"}
 {"kind":"pqbench.profile-column","id":"data.parquet","column":"text", "...": "..."}
-{"kind":"pqbench.profile","event":"end","file_count":1,"row_count":3000,"column_count":4}
 ```

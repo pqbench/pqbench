@@ -69,8 +69,7 @@ fn format_json_forces_ndjson() {
     );
     let first = output.stdout.split(|byte| *byte == b'\n').next().unwrap();
     let record: serde_json::Value = serde_json::from_slice(first).expect("ndjson line");
-    assert_eq!(record["kind"], "pqbench.lz");
-    assert_eq!(record["event"], "begin");
+    assert_eq!(record["kind"], "pqbench.lz-row");
 }
 
 #[test]
