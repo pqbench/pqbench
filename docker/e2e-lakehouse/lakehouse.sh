@@ -199,7 +199,7 @@ check_unity() {
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity_catalog/tables/pqbench.demo.events" |
                 jq -c '{table_id, operation: "READ"}')" |
-        jq -r '.aws_temp_credentials | .access_key_id, .secret_access_key, .session_token')
+        jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv')
     walk_env "" "" "$vended_key" "$vended_secret" "$vended_token"
     measurement=$("$pqbench_bin" table ls "$table_location" |
         "$pqbench_bin" partition ls |

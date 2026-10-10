@@ -73,7 +73,7 @@ TABLE=$(curl -s $UC/tables/pqbench.demo.events)
 read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(
   curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/json' \
     -d "$(jq -c '{table_id, operation: "READ"}' <<< "$TABLE")" |
-  jq -r '.aws_temp_credentials | .access_key_id, .secret_access_key, .session_token')
+  jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv')
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export AWS_REGION=us-east-1 AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
 export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
@@ -159,7 +159,7 @@ databricks temporary-table-credentials generate-temporary-table-credentials \
     --operation READ -o json > /tmp/pqbench-vend.json
 
 read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(
-  jq -r '.aws_temp_credentials | .access_key_id, .secret_access_key, .session_token' \
+  jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv' \
     /tmp/pqbench-vend.json)
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION=us-east-1
 
