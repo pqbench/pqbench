@@ -218,8 +218,8 @@ every table before deciding which files to measure. `table ls` lists a table's
 partitions and `partition ls` its files.
 
 The table read knows nothing about credentials: it reads with the env it is
-given — the lake source's options, the ref's own, and the process environment
-the storage client also reads — and emits that env back on the record, so the
+given — the ref's own and the process environment the storage client also
+reads — and emits that env back on the record, so the
 next stage reads the data files under the same lease. Everything
 credential-shaped is the `credentials` stage's concern. The Delta path needs a
 readable storage location; the environment's `AWS_*` and a vended lease both
