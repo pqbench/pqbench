@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use futures_util::StreamExt;
 use pqbench::bytemass::{FileStat, MassRow};
 use pqbench::viz::{self, MassRecord};
 
@@ -39,8 +40,9 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
 async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliError> {
     let mut rows = Vec::new();
     let mut files = Vec::new();
-    document::visit_input(input, async |record| {
-        match record {
+    let mut records = document::records(input).await?;
+    while let Some(record) = records.next().await {
+        match record? {
             Record::BytemassFile(file) => files.push(file),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
             Record::BytemassPage => {}
@@ -51,9 +53,7 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliErr
                 );
             }
         }
-        Ok(())
-    })
-    .await?;
+    }
     if rows.is_empty() {
         return Err("bytemass stream has no rows".into());
     }

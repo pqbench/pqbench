@@ -3,6 +3,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::Args;
+use futures_util::StreamExt;
 use pqbench::bytemass;
 use pqbench::table::TableFile;
 use serde::Serialize;
@@ -54,8 +55,9 @@ pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
 async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    document::visit_input(input, async |record| {
-        match record {
+    let mut records = document::records(input).await?;
+    while let Some(record) = records.next().await {
+        match record? {
             Record::RemoteSource(source) => {
                 for uri in source.inputs {
                     measure_input(
@@ -84,9 +86,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
         }
-        Ok(())
-    })
-    .await?;
+    }
     finish_stream(emit, &stats, args.output.as_deref()).await
 }
 

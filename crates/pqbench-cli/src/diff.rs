@@ -2,6 +2,7 @@ use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
 use clap::Args;
+use futures_util::StreamExt;
 use pqbench::{bytemass, diff};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -50,8 +51,9 @@ async fn read(input: &str) -> Result<Vec<bytemass::MassRow>, CliError> {
     }
     let mut rows = Vec::new();
     let mut tables = BTreeSet::new();
-    document::visit_input(input, async |record| {
-        match record {
+    let mut records = document::records(input).await?;
+    while let Some(record) = records.next().await {
+        match record? {
             Record::BytemassFile(_) => {}
             Record::BytemassRow { id, row } => {
                 if !id.is_empty() && id != row.uri {
@@ -61,9 +63,7 @@ async fn read(input: &str) -> Result<Vec<bytemass::MassRow>, CliError> {
             }
             _ => return Err("diff requires a bytemass stream or a Parquet file".into()),
         }
-        Ok(())
-    })
-    .await?;
+    }
     if tables.len() > 1 {
         return Err("diff requires one table per input; select a table before comparing".into());
     }

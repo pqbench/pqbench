@@ -9,9 +9,9 @@
 //! processes.
 
 use std::collections::BTreeMap;
-use std::ops::AsyncFnMut;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use futures_util::stream::{self, BoxStream, Stream, StreamExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines, Stdin};
 
 use pqbench::bytemass::MassRow;
 use pqbench::table::TableFile;
@@ -46,72 +46,93 @@ pub(crate) enum Record {
     BytemassPage,
 }
 
-/// Call `visit` once per JSON value, as soon as that value is complete.
-///
-/// `-` streams standard input line by line. A path is read whole — documents
-/// are metadata, not data — and an lz4 frame is decoded first.
-pub(crate) async fn visit_input<F>(input: &str, visit: F) -> Result<(), CliError>
-where
-    F: AsyncFnMut(Record) -> Result<(), CliError>,
-{
+/// The records of a document, one at a time: `-` streams standard input, a path
+/// is read whole (documents are metadata, not data). Each value is classified
+/// as it arrives, so a command is a filter over the stream and never buffers
+/// its input.
+pub(crate) async fn records(
+    input: &str,
+) -> Result<BoxStream<'static, Result<Record, CliError>>, CliError> {
     if input == "-" {
-        visit_stdin(visit).await
+        Ok(stdin_records().boxed())
     } else {
-        visit_file(input, visit).await
+        let bytes = tokio::fs::read(input).await?;
+        let bytes = if bytes.starts_with(&LZ4_MAGIC) {
+            decode_lz4(&bytes)?
+        } else {
+            bytes
+        };
+        Ok(stream::iter(file_records(bytes)).boxed())
     }
 }
 
-/// Read NDJSON from standard input, one value at a time.
-async fn visit_stdin<F>(mut visit: F) -> Result<(), CliError>
-where
-    F: AsyncFnMut(Record) -> Result<(), CliError>,
-{
-    let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-    let mut buffer = String::new();
-    let mut empty = true;
-    while let Some(line) = lines.next_line().await? {
-        buffer.push_str(&line);
-        buffer.push('\n');
-        match serde_json::from_str::<serde_json::Value>(&buffer) {
-            Ok(value) => {
-                empty = false;
-                visit(classify(value)?).await?;
-                buffer.clear();
+/// Read standard input one value at a time. A value may span lines, so lines
+/// accumulate until one parses.
+fn stdin_records() -> impl Stream<Item = Result<Record, CliError>> {
+    struct State {
+        lines: Lines<BufReader<Stdin>>,
+        buffer: String,
+        empty: bool,
+        done: bool,
+    }
+    let state = State {
+        lines: BufReader::new(tokio::io::stdin()).lines(),
+        buffer: String::new(),
+        empty: true,
+        done: false,
+    };
+    stream::try_unfold(state, |mut state| async move {
+        if state.done {
+            return Ok(None);
+        }
+        loop {
+            match state.lines.next_line().await? {
+                Some(line) => {
+                    state.buffer.push_str(&line);
+                    state.buffer.push('\n');
+                    match serde_json::from_str::<serde_json::Value>(&state.buffer) {
+                        Ok(value) => {
+                            state.empty = false;
+                            state.buffer.clear();
+                            return Ok(Some((classify(value)?, state)));
+                        }
+                        Err(error) if error.is_eof() => {}
+                        Err(error) => return Err(invalid_json(error)),
+                    }
+                }
+                None => {
+                    state.done = true;
+                    if !state.buffer.trim().is_empty() {
+                        return Err("incomplete document".into());
+                    }
+                    if state.empty {
+                        return Err("empty document".into());
+                    }
+                    return Ok(None);
+                }
             }
-            Err(error) if error.is_eof() => {}
-            Err(error) => return Err(invalid_json(error)),
+        }
+    })
+}
+
+/// The values of a whole document file, classified in order.
+fn file_records(bytes: Vec<u8>) -> Vec<Result<Record, CliError>> {
+    let mut records = Vec::new();
+    for value in serde_json::Deserializer::from_reader(std::io::Cursor::new(bytes))
+        .into_iter::<serde_json::Value>()
+    {
+        match value {
+            Ok(value) => records.push(classify(value)),
+            Err(error) => {
+                records.push(Err(invalid_json(error)));
+                return records;
+            }
         }
     }
-    if !buffer.trim().is_empty() {
-        return Err("incomplete document".into());
+    if records.is_empty() {
+        records.push(Err("empty document".into()));
     }
-    if empty {
-        return Err("empty document".into());
-    }
-    Ok(())
-}
-
-/// Read a document file whole, decoding an lz4 frame first.
-async fn visit_file<F>(input: &str, mut visit: F) -> Result<(), CliError>
-where
-    F: AsyncFnMut(Record) -> Result<(), CliError>,
-{
-    let bytes = tokio::fs::read(input).await?;
-    let bytes = if bytes.starts_with(&LZ4_MAGIC) {
-        decode_lz4(&bytes)?
-    } else {
-        bytes
-    };
-    let values = serde_json::Deserializer::from_reader(std::io::Cursor::new(bytes));
-    let mut empty = true;
-    for value in values.into_iter::<serde_json::Value>() {
-        empty = false;
-        visit(classify(value.map_err(invalid_json)?)?).await?;
-    }
-    if empty {
-        return Err("empty document".into());
-    }
-    Ok(())
+    records
 }
 
 fn classify(value: serde_json::Value) -> Result<Record, CliError> {
