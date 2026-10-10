@@ -17,7 +17,6 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     let info = table::load(&load_request(fixture.path().to_string_lossy(), None))
         .await
         .unwrap();
-    assert_eq!(info.kind, "pqbench.table");
     assert_eq!(info.format, TableFormat::DELTA);
     assert_eq!(info.snapshot_version, 1);
     assert_eq!(info.log.len(), 2);

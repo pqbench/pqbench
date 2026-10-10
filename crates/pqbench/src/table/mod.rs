@@ -7,7 +7,7 @@
 //! [`detect`] names the format from on-disk markers before any format-specific
 //! loader runs. [`load`] then fetches the table metadata. For Delta that is the
 //! transaction log plus the resolved active files; for Iceberg, the metadata
-//! JSON and Avro manifests. Measurement is a later step: pipe the document to
+//! JSON and Avro manifests. Measurement is a later step: pipe the record to
 //! `bytemass`.
 //!
 //! Enable the `delta` feature to load Delta logs. That feature requires Rust
@@ -182,17 +182,12 @@ pub struct Column {
     pub nullable: bool,
 }
 
-/// A versioned table document: format, log, and the files the snapshot names.
+/// A table's record: format, log, and the files the snapshot names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TableInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_selection: Option<FileSelection>,
-    /// Document kind; always `pqbench.table`.
-    pub kind: String,
-    /// Document version; currently `1`.
-    #[serde(rename = "version")]
-    pub document_version: u32,
     /// Detected table format.
     pub format: TableFormat,
     /// Table root as given (path or URI).
@@ -232,7 +227,7 @@ pub struct TableInfo {
 }
 
 impl TableInfo {
-    /// Assemble a table document from its parts.
+    /// Assemble a table record from its parts.
     #[must_use]
     pub fn new(
         format: TableFormat,
@@ -245,8 +240,6 @@ impl TableInfo {
     ) -> Self {
         Self {
             file_selection: None,
-            kind: "pqbench.table".into(),
-            document_version: 1,
             format,
             uri: uri.into(),
             name: String::new(),
@@ -272,7 +265,7 @@ pub struct LoadRequest {
     pub uri: String,
     /// Snapshot version; `None` selects the latest.
     pub snapshot_version: Option<u64>,
-    /// Storage options (`AWS_*` names), copied onto the document.
+    /// Storage options (`AWS_*` names), copied onto the record.
     pub env: BTreeMap<String, String>,
     /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
     pub file_stats: bool,
@@ -283,11 +276,11 @@ pub struct LoadRequest {
     /// When true, read the commit log even when [`Self::require_files`] is
     /// false: `table ls` needs the commits' times, not the files.
     pub require_log: bool,
-    /// When false, do not retain active files on the returned document.
+    /// When false, do not retain active files on the returned record.
     /// [`visit_load`] still emits each file; partition totals are kept.
     // aipnaming: allow(aip-140/verbs)
     pub collect_files: bool,
-    /// When false, emit commits without retaining them on the returned document.
+    /// When false, emit commits without retaining them on the returned record.
     // aipnaming: allow(aip-140/verbs)
     pub collect_log: bool,
 }
@@ -340,7 +333,7 @@ impl LoadRequest {
         self
     }
 
-    /// Drop commits from the returned document after visiting each commit.
+    /// Drop commits from the returned record after visiting each commit.
     // aipnaming: allow(aip-136/method-prepositions)
     #[must_use]
     pub fn with_collect_log(mut self, collect_log: bool) -> Self {
@@ -348,7 +341,7 @@ impl LoadRequest {
         self
     }
 
-    /// Drop the file list from the returned document after visiting each file.
+    /// Drop the file list from the returned record after visiting each file.
     // aipnaming: allow(aip-136/method-prepositions)
     #[must_use]
     pub fn with_collect_files(mut self, collect_files: bool) -> Self {
@@ -361,7 +354,7 @@ impl LoadRequest {
 pub enum LoadEvent<'a> {
     /// Snapshot header. `log` and `files` are empty.
     BEGIN {
-        /// Table document without active files.
+        /// Table record without active files.
         info: &'a TableInfo,
     },
     /// One available log commit (or Iceberg snapshot summary).
@@ -413,7 +406,7 @@ pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
 ///
 /// Delta files are visited from the add-action stream. Iceberg files are
 /// visited after the manifests are read. When [`LoadRequest::collect_files`]
-/// is false the returned document keeps partition totals and drops `files`.
+/// is false the returned record keeps partition totals and drops `files`.
 /// Set [`LoadRequest::collect_log`] to false to drop visited commits as well.
 ///
 /// # Errors

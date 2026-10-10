@@ -142,7 +142,6 @@ class BindingsTest(unittest.TestCase):
 
     def test_table_loads_a_delta_snapshot(self) -> None:
         info = pqbench.table(str(_TABLE))
-        self.assertEqual(info["kind"], "pqbench.table")
         self.assertEqual(info["format"], "delta")
         self.assertGreaterEqual(len(info["files"]), 1)
 
@@ -158,12 +157,6 @@ class BindingsTest(unittest.TestCase):
             self.assertGreaterEqual(summary["file_count"], 1)
             self.assertGreater(summary["byte_count"], 0)
             self.assertTrue(list(Path(directory).rglob("*.parquet")))
-
-    def test_dump_reads_a_table_document(self) -> None:
-        info = pqbench.table(str(_TABLE))
-        with tempfile.TemporaryDirectory() as directory:
-            summary = pqbench.dump(directory, info)
-            self.assertGreaterEqual(summary["file_count"], 1)
 
     def test_dump_rejects_a_lake_that_has_not_been_loaded(self) -> None:
         lake = pqbench.lake(str(_LAKE))
@@ -185,9 +178,9 @@ class BindingsTest(unittest.TestCase):
             self.assertTrue(page.startswith("<!DOCTYPE html>"))
             self.assertIn("d3-hierarchy@3", page)
 
-    def test_viz_rejects_a_table_document(self) -> None:
+    def test_viz_rejects_a_table_file(self) -> None:
         with self.assertRaises(ValueError) as caught:
-            pqbench.viz({"kind": "pqbench.table", "version": 1}, output="report")
+            pqbench.viz({"kind": "pqbench.table-file", "id": "t"}, output="report")
         self.assertIn("bytemass", str(caught.exception))
 
     def test_missing_input_fails(self) -> None:

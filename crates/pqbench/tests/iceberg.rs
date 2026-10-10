@@ -274,7 +274,6 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     let previous = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
         .await
         .unwrap();
-    assert_eq!(previous.kind, "pqbench.table");
     assert_eq!(previous.format, TableFormat::ICEBERG);
     assert_eq!(previous.snapshot_version, 0);
     assert_eq!(previous.files.len(), 1);

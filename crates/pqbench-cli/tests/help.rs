@@ -16,7 +16,7 @@ fn help(args: &[&str]) -> String {
 #[test]
 fn root_help_covers_auth_documents_and_format_skills() {
     let stdout = help(&["--help"]);
-    assert!(stdout.contains("pqbench.table"), "{stdout}");
+    assert!(stdout.contains("pqbench.table-ref"), "{stdout}");
     assert!(stdout.contains("AWS_SESSION_TOKEN"), "{stdout}");
     assert!(stdout.contains("parquet.apache.org"), "{stdout}");
     assert!(stdout.contains("docs/cli.md"), "{stdout}");

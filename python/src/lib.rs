@@ -203,7 +203,7 @@ fn experiment(
 
 /// Run `pqbench table`: detect the format and load one snapshot.
 ///
-/// Returns the `pqbench.table` document.
+/// Returns the table's record.
 #[pyfunction]
 #[pyo3(signature = (uri, *, version=None, env=None, no_stats=false))]
 fn table(
@@ -244,13 +244,13 @@ fn lake(py: Python<'_>, root: String, max_depth: Option<usize>) -> PyResult<Py<P
 /// Run `pqbench dump`: copy the Parquet files a table or lake names into
 /// `output`.
 ///
-/// `inputs` are table URIs or a `pqbench.table` / `pqbench.lake` document.
+/// `inputs` are table URIs or a `pqbench.lake` document.
 /// Returns `{"file_count": N, "byte_count": N}`.
 #[pyfunction]
 #[pyo3(signature = (output, *inputs))]
 fn dump(py: Python<'_>, output: PathBuf, inputs: Vec<Bound<'_, PyAny>>) -> PyResult<Py<PyAny>> {
-    let (tables, lakes, uris) = dump_inputs(&inputs)?;
-    let mut entries = dump_document_entries(&tables, &lakes)?;
+    let (lakes, uris) = dump_inputs(&inputs)?;
+    let mut entries = dump_document_entries(&lakes)?;
     let summary = py
         .detach(|| {
             block_on(async {
@@ -395,9 +395,8 @@ fn aws_env(env: Option<BTreeMap<String, String>>) -> PyResult<BTreeMap<String, S
     Ok(env)
 }
 
-/// Split `dump` inputs into serde documents and table URIs.
-fn dump_inputs(inputs: &[Bound<'_, PyAny>]) -> PyResult<(Vec<TableInfo>, Vec<Lake>, Vec<String>)> {
-    let mut tables = Vec::new();
+/// Split `dump` inputs into a lake document and table URIs.
+fn dump_inputs(inputs: &[Bound<'_, PyAny>]) -> PyResult<(Vec<Lake>, Vec<String>)> {
     let mut lakes = Vec::new();
     let mut uris = Vec::new();
     for input in inputs {
@@ -410,27 +409,23 @@ fn dump_inputs(inputs: &[Bound<'_, PyAny>]) -> PyResult<(Vec<TableInfo>, Vec<Lak
             .and_then(Value::as_str)
             .map(str::to_string);
         match kind.as_deref() {
-            Some("pqbench.table") => tables.push(serde_json::from_value(value).map_err(runtime)?),
             Some("pqbench.lake") => lakes.push(serde_json::from_value(value).map_err(runtime)?),
             _ => uris.push(input.extract::<String>()?),
         }
     }
-    Ok((tables, lakes, uris))
+    Ok((lakes, uris))
 }
 
 /// A file's table id plus the file, in document order.
 type Entry = (String, DumpFile);
 
-fn dump_document_entries(tables: &[TableInfo], lakes: &[Lake]) -> PyResult<Vec<Entry>> {
+fn dump_document_entries(lakes: &[Lake]) -> PyResult<Vec<Entry>> {
     let mut entries = Vec::new();
-    for info in tables {
-        push_table(&mut entries, info, info.uri.clone());
-    }
     for lake in lakes {
         for table in &lake.tables {
             let info = table.info.as_ref().ok_or_else(|| {
                 PyValueError::new_err(format!(
-                    "table {} has no log; pass it to `table` first",
+                    "table {} has no log; load its metadata before dumping",
                     table.name
                 ))
             })?;
