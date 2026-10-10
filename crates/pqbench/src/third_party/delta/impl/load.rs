@@ -61,8 +61,10 @@ pub(super) async fn visit_load(
     visit(LoadEvent::BEGIN { info: &info })
         .await
         .map_err(|error| Error(error.to_string()))?;
-    if request.require_files {
+    if request.require_files || request.require_log {
         info.log = visit_log(&table, snapshot.version, request.collect_log, visit).await?;
+    }
+    if request.require_files {
         let (files, partitions) = active_files(&table, request, visit).await?;
         if request.collect_files {
             info.files = files;
@@ -185,9 +187,11 @@ async fn visit_log(
         else {
             continue;
         };
+        let (actions, commit_time) = parse_commit(&bytes, version)?;
         let commit = LogCommit {
             version,
-            actions: parse_commit(&bytes, version)?,
+            commit_time,
+            actions,
         };
         drop(bytes);
         visit(LoadEvent::COMMIT { commit: &commit })
@@ -200,16 +204,22 @@ async fn visit_log(
     Ok(commits)
 }
 
-fn parse_commit(bytes: &[u8], version: u64) -> Result<Vec<LogAction>, Error> {
+fn parse_commit(bytes: &[u8], version: u64) -> Result<(Vec<LogAction>, Option<i64>), Error> {
     let text = std::str::from_utf8(bytes)
         .map_err(|e| Error(format!("commit {version} is not UTF-8: {e}")))?;
-    text.lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| parse_action(line, version))
-        .collect()
+    let mut actions = Vec::new();
+    let mut commit_time = None;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let (action, time) = parse_action(line, version)?;
+        if commit_time.is_none() {
+            commit_time = time;
+        }
+        actions.push(action);
+    }
+    Ok((actions, commit_time))
 }
 
-fn parse_action(line: &str, version: u64) -> Result<LogAction, Error> {
+fn parse_action(line: &str, version: u64) -> Result<(LogAction, Option<i64>), Error> {
     let value: serde_json::Value = serde_json::from_str(line)
         .map_err(|e| Error(format!("cannot parse commit {version}: {e}")))?;
     let object = value
@@ -219,13 +229,17 @@ fn parse_action(line: &str, version: u64) -> Result<LogAction, Error> {
         .iter()
         .next()
         .ok_or_else(|| Error(format!("commit {version} action is empty")))?;
-    Ok(LogAction {
+    let commit_time = (kind == "commitInfo")
+        .then(|| body.get("timestamp").and_then(serde_json::Value::as_i64))
+        .flatten();
+    let action = LogAction {
         kind: kind.clone(),
         path: body
             .get("path")
             .and_then(|path| path.as_str())
             .map(str::to_owned),
-    })
+    };
+    Ok((action, commit_time))
 }
 
 /// Resolve every active data file to a path `bytemass` can read, emitting each

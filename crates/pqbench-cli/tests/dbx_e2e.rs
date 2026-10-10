@@ -928,6 +928,83 @@ fn credentials_get_vends_the_external_fixture() {
     assert_eq!(tables, 30);
 }
 
+/// The whole walk on the external fixture: `schema ls` → `credentials check`
+/// → `credentials get` → `table ls` groups each table's commits into natural
+/// commit-time windows (one partition per table, in the fixture's single
+/// window).
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn table_ls_groups_the_external_fixture() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let region = std::env::var("DBX_AWS_REGION")
+        .ok()
+        .filter(|region| !region.is_empty())
+        .unwrap_or_else(|| "us-east-2".to_string());
+    let endpoint = unity_endpoint(&host);
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+        ("AWS_REGION", region.as_str()),
+    ];
+
+    let mut partitions = 0;
+    for schema in ["events", "sales", "reference"] {
+        let fqn = format!("pqbench_ext.{schema}");
+        let listed = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", &env);
+        assert!(
+            listed.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&listed.stderr)
+        );
+        let checked = pipe_env(
+            &["credentials", "check", "--format", "json"],
+            &listed.stdout,
+            &env,
+        );
+        assert!(
+            checked.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        let vended = pipe_env(
+            &["credentials", "get", "--format", "json"],
+            &checked.stdout,
+            &env,
+        );
+        assert!(
+            vended.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&vended.stderr)
+        );
+        let grouped = pipe_env(&["table", "ls", "--format", "json"], &vended.stdout, &env);
+        assert!(
+            grouped.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&grouped.stderr)
+        );
+        for record in ndjson(&grouped.stdout) {
+            assert_eq!(record["kind"], "pqbench.partition");
+            assert_eq!(record["definition"]["kind"], "natural");
+            let first = record["definition"]["first_time"].as_i64().unwrap();
+            let last = record["definition"]["last_time"].as_i64().unwrap();
+            assert!(last > first, "{record:?}");
+            assert!(
+                !record["commits"].as_array().unwrap().is_empty(),
+                "{record:?}"
+            );
+            partitions += 1;
+        }
+    }
+    assert_eq!(partitions, 30);
+}
+
 /// `tablev2 info` on a table in customer storage: `credentials get`
 /// materializes the vended lease on the ref, `tablev2 info` reads the Delta
 /// log under it, and the lease rides through on the emitted record for the
