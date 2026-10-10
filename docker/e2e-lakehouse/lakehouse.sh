@@ -217,7 +217,7 @@ check_unity() {
     measurement=$("$pqbench_bin" schema ls pqbench.demo --format json < "$lake_source" |
         while IFS= read -r ref; do
             printf '%s\n%s\n' "$lake_doc" "$ref" |
-                "$pqbench_bin" tablev2 info |
+                "$pqbench_bin" table info |
                 "$pqbench_bin" table ls |
                 "$pqbench_bin" partition ls |
                 "$pqbench_bin" bytemass --json
@@ -251,23 +251,23 @@ check_unity() {
         exit 1
     }
 
-    # `tablev2 info` reads the record without files: the Unity record plus the
+    # `table info` reads the record without files: the Unity record plus the
     # Delta snapshot metadata, as an enriched `pqbench.table-ref` v2.
     local table_info
-    table_info=$("$pqbench_bin" tablev2 info pqbench.demo.events --format json < "$lake_source" |
+    table_info=$("$pqbench_bin" table info pqbench.demo.events --format json < "$lake_source" |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))]"') || {
-        echo "check failed: tablev2 info produced no table" >&2
+        echo "check failed: table info produced no table" >&2
         exit 1
     }
     [ "$table_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label]" ] || {
-        echo "check failed (unity tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label]; measured ${table_info:-nothing}" >&2
+        echo "check failed (unity table info): expected pqbench.demo.events delta snapshot=0 columns=[id,label]; measured ${table_info:-nothing}" >&2
         exit 1
     }
 
     # The per-table loop: refs are durable data only, so each table's worker
     # gets the lake source (endpoint + storage options, no AWS keys) on stdin,
     # in memory. `credentials get` materializes the vended session on the ref;
-    # `tablev2 info` reads the Delta log under it and emits no env.
+    # `table info` reads the Delta log under it and emits no env.
     local vended_source="local/lakehouse/vended-source.json"
     jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
         '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
@@ -296,24 +296,24 @@ check_unity() {
             vended=$(printf '%s\n%s\n' "$vended_doc" "$ref" |
                 "$pqbench_bin" credentials get --format json) || exit 1
             printf '%s\n%s\n' "$vended_doc" "$vended" |
-                "$pqbench_bin" tablev2 info --format json
+                "$pqbench_bin" table info --format json
         done |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))] env=\(if .env then "set" else "none" end)"') || {
         echo "check failed: the vended table loop produced no record" >&2
         exit 1
     }
     [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label] env=set" ] || {
-        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
+        echo "check failed (unity vended table info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info; vended tablev2 info: $vended_info"
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; table info: $table_info; vended table info: $vended_info"
 }
 
 check_iceberg() {
     ensure_pqbench
     local measurement measured
-    # `schema ls` lists the Iceberg REST namespace; `tablev2 info` reads
+    # `schema ls` lists the Iceberg REST namespace; `table info` reads
     # loadTable's inline metadata and fills the storage path, then the walk
     # measures the files the window added.
     local iceberg_source
@@ -323,7 +323,7 @@ check_iceberg() {
         PQB_TABLE_FORMAT=iceberg "$pqbench_bin" schema ls pqbench.demo --format json |
         while IFS= read -r ref; do
             printf '%s\n%s\n' "$iceberg_source" "$ref" |
-                PQB_TABLE_FORMAT=iceberg "$pqbench_bin" tablev2 info |
+                PQB_TABLE_FORMAT=iceberg "$pqbench_bin" table info |
                 "$pqbench_bin" table ls |
                 "$pqbench_bin" partition ls |
                 "$pqbench_bin" bytemass --json
@@ -333,20 +333,20 @@ check_iceberg() {
     }
     measured=$(expect_events "iceberg lake" "$measurement")
 
-    # `tablev2 info` reads loadTable's inline metadata, without files.
+    # `table info` reads loadTable's inline metadata, without files.
     local table_info
     table_info=$(jq -c -n --arg endpoint "$iceberg_rest/v1" --argjson env "$(storage_env)" \
         '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
-        PQB_TABLE_FORMAT=iceberg "$pqbench_bin" tablev2 info pqbench.demo.events --format json |
+        PQB_TABLE_FORMAT=iceberg "$pqbench_bin" table info pqbench.demo.events --format json |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) columns=[\([.columns[].name] | join(","))] snapshot=\(if .snapshot_version > 0 then "set" else "unset" end)"') || {
-        echo "check failed: tablev2 info produced no Iceberg table" >&2
+        echo "check failed: table info produced no Iceberg table" >&2
         exit 1
     }
     [ "$table_info" = "pqbench.demo.events iceberg columns=[id,label] snapshot=set" ] || {
-        echo "check failed (iceberg tablev2 info): expected pqbench.demo.events iceberg columns=[id,label] snapshot=set; measured ${table_info:-nothing}" >&2
+        echo "check failed (iceberg table info): expected pqbench.demo.events iceberg columns=[id,label] snapshot=set; measured ${table_info:-nothing}" >&2
         exit 1
     }
-    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured; tablev2 info: $table_info"
+    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured; table info: $table_info"
 }
 
 check() {

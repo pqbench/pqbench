@@ -18,7 +18,7 @@ sleep 2
 
 # The REST pipe needs the local stand (`make lakehouse`); run it when it answers.
 if curl -sf http://localhost:8181/v1/config >/dev/null 2>&1; then
-    prompt "pqbench schema ls CAT.SCHEMA < docs/demos/iceberg-rest.json | pqbench tablev2 info | pqbench table ls | pqbench partition ls | pqbench bytemass --json"
-    pqbench schema ls CAT.SCHEMA < docs/demos/iceberg-rest.json | pqbench tablev2 info | pqbench table ls | pqbench partition ls | pqbench bytemass --json | cat
+    prompt "pqbench schema ls CAT.SCHEMA < docs/demos/iceberg-rest.json | pqbench table info | pqbench table ls | pqbench partition ls | pqbench bytemass --json"
+    pqbench schema ls CAT.SCHEMA < docs/demos/iceberg-rest.json | pqbench table info | pqbench table ls | pqbench partition ls | pqbench bytemass --json | cat
     sleep 2
 fi

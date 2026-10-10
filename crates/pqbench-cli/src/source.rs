@@ -63,7 +63,7 @@ impl From<TableFormat> for pqbench::schema::TableFormat {
     }
 }
 
-impl From<TableFormat> for pqbench::tablev2::TableFormat {
+impl From<TableFormat> for pqbench::table::info::TableFormat {
     fn from(format: TableFormat) -> Self {
         match format {
             TableFormat::Unity => Self::Unity,

@@ -94,11 +94,11 @@ total                                   46.00
 
 `make lakehouse` runs exactly this walk as its last step, then lists the same
 table with `schema ls` (a `pqbench.lake-source` document for the endpoint) and
-walks it through `tablev2 info | table ls | partition ls | bytemass` again, so
+walks it through `table info | table ls | partition ls | bytemass` again, so
 the catalog-listing path is seen to work too.
 
 Iceberg REST does not vend credentials. `schema ls` lists namespaces and
-tables, `tablev2 info` reads `loadTable`'s inline metadata, and the walk
+tables, `table info` reads `loadTable`'s inline metadata, and the walk
 measures the files:
 
 ```bash
@@ -116,7 +116,7 @@ printf '%s\n' "$SOURCE" |
   PQB_TABLE_FORMAT=iceberg "$BIN" schema ls pqbench.demo --format json |
   while IFS= read -r ref; do
     printf '%s\n%s\n' "$SOURCE" "$ref" |
-      PQB_TABLE_FORMAT=iceberg "$BIN" tablev2 info |
+      PQB_TABLE_FORMAT=iceberg "$BIN" table info |
       "$BIN" table ls | "$BIN" partition ls | "$BIN" bytemass
   done
 ```

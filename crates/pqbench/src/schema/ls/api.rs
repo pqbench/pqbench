@@ -39,7 +39,7 @@ impl From<String> for Error {
 /// List the tables in `schema` of `catalog` at `endpoint`.
 ///
 /// Unity pages carry a storage location; Iceberg REST lists identifiers only,
-/// so `storage_path` is `None` there until `pqbench tablev2 info` resolves it.
+/// so `storage_path` is `None` there until `pqbench table info` resolves it.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected

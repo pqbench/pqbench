@@ -17,7 +17,7 @@ that command and links back. This file is the durable copy.
 | List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
 | Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
-| Read one table's record | `pqbench tablev2 info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
+| Read one table's record | `pqbench table info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
 | Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (v2 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -44,11 +44,11 @@ process environment itself.
 
 | `kind` | Produced by | Consumed by |
 | --- | --- | --- |
-| `pqbench.lake-source` | you / a producer | `metastore`, `catalog`, `schema`, `tablev2` |
+| `pqbench.lake-source` | you / a producer | `metastore`, `catalog`, `schema`, `table` |
 | `pqbench.metastore` | `metastore info` | humans / scripts (`--json`) |
 | `pqbench.catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
 | `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
-| `pqbench.table-ref` v2 | `schema ls`, `tablev2 info`, `credentials get` | `tablev2 info`, `table ls`, `credentials get` |
+| `pqbench.table-ref` v2 | `schema ls`, `table info`, `credentials get` | `table info`, `table ls`, `credentials get` |
 | `pqbench.partition` | `table ls` | `partition ls`, humans / scripts (`--json`) |
 | `pqbench.table-file` | `partition ls` | `bytemass`, humans / scripts (`--json`) |
 | `pqbench.remote-source` | a producer | `bytemass` |
@@ -58,7 +58,7 @@ process environment itself.
 | `pqbench.skill` | `skill` (list) | an agent |
 
 The metadata walk's table level exchanges `pqbench.table-ref` version `2`;
-`tablev2 info` rejects version `1`.
+`table info` rejects version `1`.
 
 ## Flags that repeat
 
@@ -180,7 +180,7 @@ schemas: 3
 `schema info` reads one schema (catalog, name, comment, location, properties)
 from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `schema ls`
 lists the tables in it, one `pqbench.table-ref` version 2 line each — the
-document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
+document `table info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
 A view carries no location, so its ref keeps no storage path;
@@ -188,7 +188,7 @@ A view carries no location, so its ref keeps no storage path;
 context (endpoint, token, storage options) comes from the lake source or
 `PQB_*`. The walk is a plain pipeline: every command streams refs and keeps
 `--fan-out` in flight, `credentials get` writes the vended keys onto the refs,
-and `tablev2 info` passes them on so `bytemass` reads the files under the same
+and `table info` passes them on so `bytemass` reads the files under the same
 lease:
 
 ```console no-run
@@ -196,7 +196,7 @@ $ export PQB_ENDPOINT=… PQB_TOKEN=…
 $ pqbench schema ls dbx_samples.nyctaxi --format json |
     pqbench credentials check |
     pqbench credentials get |
-    pqbench tablev2 info --format json
+    pqbench table info --format json
 ```
 
 `pqbench setup` prints that environment for the shell to evaluate:
@@ -212,16 +212,15 @@ for the region, which hangs where that endpoint is blackholed). A notebook
 kernel's dbutils context is not visible to a subprocess, so a notebook sets
 `DATABRICKS_*` from it first.
 
-`tablev2 info` enriches that ref — id, format, snapshot, columns, partition
+`table info` enriches that ref — id, format, snapshot, columns, partition
 columns, format properties — and keeps the same kind and version, so
-`schema ls | tablev2 info` chains. Unity `/tables/{full_name}` names the
+`schema ls | table info` chains. Unity `/tables/{full_name}` names the
 storage location whose Delta log is read with `without_files()`, and the
 catalog's declared columns and properties are merged over the log's; Iceberg
 REST `loadTable` carries the metadata inline, so the Iceberg path runs no
 storage read at all. The Delta read is O(1) in files, so a walk can descend to
 every table before deciding which files to measure. `table ls` lists a table's
-partitions and `partition ls` its files; this command only reads the table's
-record.
+partitions and `partition ls` its files.
 
 The table read knows nothing about credentials: it reads with the env it is
 given — the lake source's options, the ref's own, and the process environment
@@ -289,7 +288,7 @@ partitions: 1
 ```
 
 ```console no-run
-$ pqbench tablev2 info pqbench.demo.events < lake-source.json
+$ pqbench table info pqbench.demo.events < lake-source.json
 name                 format  snapshot  columns  location
 -------------------  ------  --------  -------  ----------------------
 pqbench.demo.events  delta          0        2  s3://lakehouse/unity/events
@@ -359,7 +358,7 @@ A governed table has two access modes, and pqbench is the second one:
   this; pqbench does not.
 - **Credential-mediated.** An external reader calls the catalog's vending
   route and reads storage itself under a short-lived, downscoped lease — the
-  `credentials check` → `credentials get` → `tablev2 info` walk.
+  `credentials check` → `credentials get` → `table info` walk.
 
 Whether the second mode exists is the storage's property, not the caller's:
 

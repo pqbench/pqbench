@@ -35,7 +35,7 @@ document. The URI may be a table root or the metadata JSON itself.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 only the metadata JSON is read, so the load reports the snapshot id, schema,
-partition columns, and properties at O(1) in files. (`pqbench tablev2 info`
+partition columns, and properties at O(1) in files. (`pqbench table info`
 reads the same metadata inline from the REST `loadTable` response instead.)
 
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring

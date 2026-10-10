@@ -96,7 +96,7 @@ $ export PQB_ENDPOINT=… PQB_TOKEN=…
 $ pqbench schema ls CAT.SCHEMA |
     pqbench credentials check |
     pqbench credentials get |
-    pqbench tablev2 info |
+    pqbench table info |
     pqbench table ls |
     pqbench partition ls |
     pqbench bytemass --format table
@@ -164,7 +164,7 @@ $ pqbench table ls docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst
 
 With the stand up, walk the Iceberg REST catalog (`docs/demos/iceberg-rest.json`)
 and measure through it: `schema ls | credentials check | credentials get |
-tablev2 info | table ls | partition ls | bytemass`.
+table info | table ls | partition ls | bytemass`.
 `docs/demos/pqbench-iceberg-session.sh` runs the REST pipe when the stand answers
 at `localhost:8181`.
 

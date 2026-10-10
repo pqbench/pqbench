@@ -95,7 +95,7 @@ in the CLI. Output writes are awaited, so a slow consumer slows the producer.
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 delta-rs skips the active-file replay, and the load reports the snapshot
 version, schema, partition columns, and properties at O(1) in files.
-`pqbench tablev2 info` is that caller.
+`pqbench table info` is that caller.
 
 Delta-rs still loads its active-file snapshot before the first record. Its lazy
 file stream in the pinned version rejects malformed optional statistics that

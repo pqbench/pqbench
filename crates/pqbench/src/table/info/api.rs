@@ -1,4 +1,4 @@
-//! `tablev2 info`: one table's record.
+//! `table info`: one table's record.
 //!
 //! [`read`] is the only public function. It returns the plain
 //! [`TableInfo`](crate::table::TableInfo); the CLI owns the document it
@@ -8,7 +8,17 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::table::TableInfo;
-use crate::tablev2::TableFormat;
+
+/// The catalog dialect a `table info` read speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableFormat {
+    /// Unity REST: `/tables`.
+    Unity,
+    /// Iceberg REST: `/namespaces…/tables`; the endpoint already names the
+    /// catalog base (`{root}/v1` or `{root}/v1/{prefix}`), so no config probe
+    /// runs.
+    Iceberg,
+}
 
 /// Errors reading a table's record.
 #[derive(Debug)]

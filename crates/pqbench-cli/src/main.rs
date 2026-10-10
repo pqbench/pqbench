@@ -22,7 +22,6 @@ mod setup;
 mod skill;
 mod source;
 mod table;
-mod tablev2;
 mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
@@ -94,14 +93,6 @@ enum Command {
         after_long_help = help::SCHEMA_AFTER
     )]
     Schema(schema::SchemaArgs),
-    #[command(
-        name = "tablev2",
-        about = help::TABLEV2_ABOUT,
-        long_about = help::TABLEV2_LONG_ABOUT,
-        after_help = help::TABLEV2_AFTER,
-        after_long_help = help::TABLEV2_AFTER
-    )]
-    TableV2(tablev2::TableV2Args),
     #[command(
         about = help::CREDENTIALS_ABOUT,
         long_about = help::CREDENTIALS_LONG_ABOUT,
@@ -182,7 +173,6 @@ async fn main() -> ExitCode {
         Command::Metastore(args) => metastore::run(&args).await,
         Command::Catalog(args) => catalog::run(&args).await,
         Command::Schema(args) => schema::run(&args).await,
-        Command::TableV2(args) => tablev2::run(&args).await,
         Command::Credentials(args) => credentials::run(&args).await,
         Command::Partition(args) => partition::run(&args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,

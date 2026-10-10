@@ -22,7 +22,6 @@ pub mod schema;
 pub mod skill;
 pub mod stats;
 pub mod table;
-pub mod tablev2;
 mod text;
 pub mod third_party;
 pub mod viz;

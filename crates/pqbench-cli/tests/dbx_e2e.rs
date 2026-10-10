@@ -606,7 +606,7 @@ fn schema_info_reads_the_live_schema() {
 }
 
 /// `schema ls` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
-/// the storage path in the listing, Iceberg REST leaves it to `tablev2 info`.
+/// the storage path in the listing, Iceberg REST leaves it to `table info`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn schema_ls_lists_the_live_tables() {
@@ -675,10 +675,10 @@ fn schema_ls_lists_the_live_tables() {
         "{trips:?}"
     );
 
-    // The new tree enriches its own v2 refs: `tablev2 info` reads the
+    // The new tree enriches its own v2 refs: `table info` reads the
     // `loadTable` metadata inline, so no storage read runs.
     let info = pipe_env(
-        &["tablev2", "info", "--format", "json"],
+        &["table", "info", "--format", "json"],
         &output.stdout,
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -707,12 +707,12 @@ fn schema_ls_lists_the_live_tables() {
     );
 }
 
-/// `tablev2 info` reads the live Iceberg REST table: the `loadTable` response
+/// `table info` reads the live Iceberg REST table: the `loadTable` response
 /// carries the metadata inline, so the record is complete without any storage
 /// read (the default-storage Delta path cannot read its log).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn tablev2_info_reads_the_live_iceberg_table() {
+fn table_info_reads_the_live_iceberg_table() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -727,7 +727,7 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     );
     let output = pipe_env(
         &[
-            "tablev2",
+            "table",
             "info",
             "dbx_samples.nyctaxi.trips",
             "--format",
@@ -753,13 +753,13 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
-/// `tablev2 info` on the live Unity catalog: the table read runs with the env
+/// `table info` on the live Unity catalog: the table read runs with the env
 /// it is given — here none — so the `without_files()` Delta log read of the
 /// managed default-storage table fails outside compute and the error names the
 /// table and its location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
+fn table_info_names_the_location_when_the_metadata_cannot_be_read() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -770,7 +770,7 @@ fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
     };
     let endpoint = unity_endpoint(&host);
     let output = pipe(
-        &["tablev2", "info", "dbx_samples.nyctaxi.trips"],
+        &["table", "info", "dbx_samples.nyctaxi.trips"],
         source(&endpoint, Some(&token)).to_string().as_bytes(),
     );
     assert!(!output.status.success());
@@ -1005,14 +1005,14 @@ fn table_ls_groups_the_external_fixture() {
     assert_eq!(partitions, 30);
 }
 
-/// `tablev2 info` on a table in customer storage: `credentials get`
-/// materializes the vended lease on the ref, `tablev2 info` reads the Delta
+/// `table info` on a table in customer storage: `credentials get`
+/// materializes the vended lease on the ref, `table info` reads the Delta
 /// log under it, and the lease rides through on the emitted record for the
 /// next stage. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
 /// `DBX_AWS_REGION` to read another one.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn tablev2_info_reads_the_external_aws_table() {
+fn table_info_reads_the_external_aws_table() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1055,7 +1055,7 @@ fn tablev2_info_reads_the_external_aws_table() {
     );
     let enriched = vended[0].to_string();
     let output = pipe_env(
-        &["tablev2", "info", "--format", "json"],
+        &["table", "info", "--format", "json"],
         format!("{enriched}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
