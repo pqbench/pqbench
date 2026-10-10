@@ -1,10 +1,13 @@
 //! The S3 backend. This is the only module that names the `object_store` crate.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::ops::Range;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ::object_store::aws::AmazonS3;
+use ::object_store::client::{ClientOptions, HttpClient, HttpConnector};
 use ::object_store::signer::Signer;
 use ::object_store::{GetOptions, ObjectStore, ObjectStoreExt};
 use url::Url;
@@ -14,18 +17,42 @@ use crate::third_party::object_store::api::{
 };
 use crate::third_party::reqwest as http;
 
-struct S3 {
-    store: Box<dyn ObjectStore>,
-    /// A concrete S3 store so a HEAD can be signed and its
-    /// `x-amz-storage-class` read. Absent when the backend is not S3.
+/// One process-wide `reqwest` client backs every store. `object_store` builds a
+/// fresh client on each `build()`, and `reqwest` re-parses the platform CA
+/// bundle inside every client build; handing it the facade's client keeps one
+/// pool and skips that parse.
+#[derive(Debug)]
+struct SharedConnector;
+
+impl HttpConnector for SharedConnector {
+    fn connect(&self, _options: &ClientOptions) -> ::object_store::Result<HttpClient> {
+        let client =
+            http::r#impl::shared_client().map_err(|error| ::object_store::Error::Generic {
+                store: "http",
+                source: error.to_string().into(),
+            })?;
+        Ok(HttpClient::new(client.clone()))
+    }
+}
+
+/// A built S3 store: the backend every read goes through, and the concrete
+/// store a signed HEAD is minted from. One store owns one client and its
+/// connection pool, so stores are shared through [`store_for`], never built
+/// per object.
+struct Store {
+    backend: Arc<dyn ObjectStore>,
     signer: Option<AmazonS3>,
+}
+
+struct S3 {
+    store: Arc<Store>,
     location: ::object_store::path::Path,
 }
 
 impl Remote for S3 {
     fn exists<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>> {
         Box::pin(async move {
-            match self.store.head(&self.location).await {
+            match self.store.backend.head(&self.location).await {
                 Ok(_) => Ok(true),
                 Err(::object_store::Error::NotFound { .. }) => Ok(false),
                 Err(error) => Err(remote_error(error)),
@@ -35,12 +62,12 @@ impl Remote for S3 {
 
     fn stat<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<ObjectStat, Error>> + Send + 'a>> {
         Box::pin(async move {
-            if let Some(signer) = &self.signer {
+            if let Some(signer) = &self.store.signer {
                 if let Ok(stat) = head_object(signer, &self.location).await {
                     return Ok(stat);
                 }
             }
-            stat_get_opts(self.store.as_ref(), &self.location).await
+            stat_get_opts(self.store.backend.as_ref(), &self.location).await
         })
     }
 
@@ -55,6 +82,7 @@ impl Remote for S3 {
                 .with_if_match(identity);
             let result = self
                 .store
+                .backend
                 .get_opts(&self.location, options)
                 .await
                 .map_err(remote_error)?;
@@ -67,14 +95,11 @@ impl Remote for S3 {
     }
 }
 
-/// Build the S3 reader for `url`.
+/// Build the S3 reader for `url`, reusing the store already built for its
+/// bucket and options.
 pub(crate) fn open_remote(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
-    let (store, signer, location) = s3_store(url, options)?;
-    Ok(ObjectReader::from_remote(Box::new(S3 {
-        store,
-        signer,
-        location,
-    })))
+    let (store, location) = s3_store(url, options)?;
+    Ok(ObjectReader::from_remote(Box::new(S3 { store, location })))
 }
 
 /// object_store 0.13 maps cache/content headers on HEAD but drops
@@ -164,9 +189,10 @@ pub(crate) async fn list_remote(
     url: &Url,
     options: &[(String, String)],
 ) -> Result<PrefixListing, Error> {
-    let (store, _signer, location) = s3_store(url, options)?;
+    let (store, location) = s3_store(url, options)?;
     let prefix = (!location.as_ref().is_empty()).then_some(&location);
     let result = store
+        .backend
         .list_with_delimiter(prefix)
         .await
         .map_err(remote_error)?;
@@ -185,18 +211,50 @@ pub(crate) async fn list_remote(
     })
 }
 
-type S3Store = (
-    Box<dyn ObjectStore>,
-    Option<AmazonS3>,
-    ::object_store::path::Path,
-);
+/// Every store built this run, keyed by bucket and options. A store owns a
+/// client and its connection pool, so building one per object (as this module
+/// once did) threw the pool away on every file. This registry is the single
+/// place a store is obtained; readers share it as an `Arc`.
+static STORES: OnceLock<Mutex<HashMap<StoreKey, Arc<Store>>>> = OnceLock::new();
 
-fn s3_store(url: &Url, options: &[(String, String)]) -> Result<S3Store, Error> {
+/// The registry key: the bucket, and the exact options. Options carry the
+/// vended credentials, so a walk with a distinct lease per table keeps one
+/// store per lease.
+type StoreKey = (String, Vec<(String, String)>);
+
+/// Past this many live keys the registry is emptied whole; a long walk with a
+/// distinct lease per table must not grow it without bound. Emptying only costs
+/// a rebuilt pool, never correctness.
+const STORE_LIMIT: usize = 32;
+
+/// The shared store for `url`'s bucket and `options`, built once and reused.
+fn store_for(url: &Url, options: &[(String, String)]) -> Result<Arc<Store>, Error> {
+    let mut options = options.to_vec();
+    options.sort();
+    let key = (url.host_str().unwrap_or_default().to_string(), options);
+    let registry = STORES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registry = registry
+        .lock()
+        .map_err(|_| Error("the store registry is poisoned".into()))?;
+    if let Some(store) = registry.get(&key) {
+        return Ok(Arc::clone(store));
+    }
+    if registry.len() >= STORE_LIMIT {
+        registry.clear();
+    }
+    let store = Arc::new(build_store(url, &key.1)?);
+    registry.insert(key, Arc::clone(&store));
+    Ok(store)
+}
+
+fn build_store(url: &Url, options: &[(String, String)]) -> Result<Store, Error> {
     use ::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
     // The AWS_* environment supplies the defaults (credentials, region,
     // AWS_SKIP_SIGNATURE=true for public buckets); explicit options override it.
-    let mut builder = AmazonS3Builder::from_env().with_url(url.to_string());
+    let mut builder = AmazonS3Builder::from_env()
+        .with_url(url.to_string())
+        .with_http_connector(SharedConnector);
     for (key, value) in options {
         let config_key: AmazonS3ConfigKey = key
             .to_ascii_lowercase()
@@ -205,9 +263,30 @@ fn s3_store(url: &Url, options: &[(String, String)]) -> Result<S3Store, Error> {
         builder = builder.with_config(config_key, value.clone());
     }
     let store = builder.build().map_err(remote_error)?;
+    Ok(Store {
+        backend: Arc::new(store.clone()),
+        signer: Some(store),
+    })
+}
+
+fn s3_store(
+    url: &Url,
+    options: &[(String, String)],
+) -> Result<(Arc<Store>, ::object_store::path::Path), Error> {
+    let store = store_for(url, options)?;
     let (_, location) =
         ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
-    Ok((Box::new(store.clone()), Some(store), location))
+    Ok((store, location))
+}
+
+/// The bucket-rooted store for `url`, on the one shared client, for a caller
+/// that opens the store itself: the Delta path hands it to delta-rs instead of
+/// letting delta-rs build a native-roots client per table.
+pub(crate) fn root_store(
+    url: &Url,
+    options: &[(String, String)],
+) -> Result<Arc<dyn ObjectStore>, Error> {
+    Ok(Arc::clone(&store_for(url, options)?.backend))
 }
 
 fn child_name(parent: &str, child: &str) -> String {
@@ -233,8 +312,8 @@ pub(crate) async fn expand_glob(
     if !matches!(url.scheme(), "s3" | "s3a") {
         return Err(Error("remote globs require an s3:// or s3a:// URI".into()));
     }
-    let (store, _, location) = s3_store(&url, options)?;
-    let matches = match_objects(store.as_ref(), location.as_ref()).await?;
+    let (store, location) = s3_store(&url, options)?;
+    let matches = match_objects(store.backend.as_ref(), location.as_ref()).await?;
     Ok(matches
         .into_iter()
         .map(|key| {
@@ -285,8 +364,9 @@ mod tests {
     use ::object_store::throttle::{ThrottleConfig, ThrottledStore};
     use ::object_store::ObjectStoreExt;
     use tokio::task::JoinSet;
+    use url::Url;
 
-    use super::S3;
+    use super::{Store, S3};
     use crate::third_party::object_store::api::ObjectReader;
 
     /// Same-region S3 per-request latency: p50 ~25 ms (topicpartition.io 2025
@@ -310,8 +390,10 @@ mod tests {
             .await
             .unwrap();
         ObjectReader::from_remote(Box::new(S3 {
-            store: Box::new(store),
-            signer: None,
+            store: Arc::new(Store {
+                backend: Arc::new(store),
+                signer: None,
+            }),
             location: path,
         }))
     }
@@ -367,5 +449,16 @@ mod tests {
         let stat = super::head_stat(&[("content-length", "8")]).unwrap();
         assert_eq!(stat.size_bytes, 8);
         assert!(stat.storage_class.is_none());
+    }
+
+    /// Two opens for one bucket and options share one store, and so one client
+    /// and connection pool. The store is obtained from one place; this pins
+    /// that it is never rebuilt per object.
+    #[tokio::test]
+    async fn one_store_per_bucket_and_options() {
+        let url = Url::parse("s3://store-sharing-test/key").unwrap();
+        let first = super::store_for(&url, &[]).unwrap();
+        let second = super::store_for(&url, &[]).unwrap();
+        assert!(Arc::ptr_eq(&first, &second), "the store was rebuilt");
     }
 }

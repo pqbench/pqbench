@@ -12,8 +12,10 @@ use super::api::{Error, Method, Request, Response};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// One pooled client for every request.
-fn client() -> Result<&'static Client, Error> {
+/// The one pooled client for every request. Callers that must share it with a
+/// third-party HTTP stack (object_store's `HttpConnector`) reach for it here
+/// rather than building a second client.
+pub(crate) fn shared_client() -> Result<&'static Client, Error> {
     static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
     CLIENT
         .get_or_init(|| {
@@ -27,7 +29,7 @@ fn client() -> Result<&'static Client, Error> {
 }
 
 pub(crate) async fn request(request: Request) -> Result<Response, Error> {
-    let client = client()?;
+    let client = shared_client()?;
     let mut builder = match request.method {
         Method::Post => client
             .post(&request.url)

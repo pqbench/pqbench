@@ -29,7 +29,11 @@ glob = "0.3"
 # Codecs are enabled so `read_sample` can decode compressed files; without
 # them parquet-rs fails at runtime (`Disabled feature at compile time`).
 parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Native roots only: the OS certificate store, where internal/private CAs live.
+# `rustls-tls-native-roots` also brings the rustls backend and the ring
+# provider, so the client still has TLS without `aws` (object_store is what
+# otherwise enables them).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 bytes = "1"
 parquet-format-safe = "0.2.4"
 serde = { version = "1.0.229", features = ["derive"] }
