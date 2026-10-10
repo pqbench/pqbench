@@ -813,10 +813,7 @@ fn credentials_check_gates_the_live_tables() {
         stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
         "{stderr}"
     );
-    assert!(
-        stderr.contains("no direct external engine read support"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("managed default storage"), "{stderr}");
     let eligible = pipe_env(
         &["credentials", "check", "--format", "json"],
         format!("{}\n", reference("dbx_samples.nyctaxi.trips")).as_bytes(),
@@ -855,7 +852,7 @@ fn credentials_check_gates_the_live_tables() {
         "{mixed_stderr}"
     );
     assert!(
-        mixed_stderr.contains("no direct external engine read support"),
+        mixed_stderr.contains("managed default storage"),
         "{mixed_stderr}"
     );
     let mixed_records = ndjson(&mixed.stdout);

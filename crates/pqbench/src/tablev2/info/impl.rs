@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::api::Error;
+use super::api::{Error, Storage};
 use crate::dialect;
 use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
 use crate::tablev2::TableFormat as Dialect;
@@ -27,11 +27,13 @@ pub(crate) async fn read(
     table: &str,
     token: Option<&str>,
     table_format: Dialect,
-    env: &BTreeMap<String, String>,
+    storage: &Storage,
 ) -> Result<TableInfo, Error> {
     match table_format {
-        Dialect::Unity => unity_record(endpoint, catalog, schema, table, token, env).await,
-        Dialect::Iceberg => iceberg_record(endpoint, catalog, schema, table, token, env).await,
+        Dialect::Unity => unity_record(endpoint, catalog, schema, table, token, storage).await,
+        Dialect::Iceberg => {
+            iceberg_record(endpoint, catalog, schema, table, token, &storage.env).await
+        }
     }
 }
 
@@ -63,7 +65,7 @@ async fn unity_record(
     schema: &str,
     table: &str,
     token: Option<&str>,
-    env: &BTreeMap<String, String>,
+    storage: &Storage,
 ) -> Result<TableInfo, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let url = format!(
@@ -71,23 +73,37 @@ async fn unity_record(
         dialect::api_root(endpoint),
         dialect::encode(&name)
     );
-    let record: UnityRecord = dialect::get_json(&url, token).await.map_err(Error::from)?;
-    let location = record
-        .storage_location
+    // The parent ref already names the storage, so start the catalog call, read
+    // the metadata while it is in flight, then reconcile: the catalog's own
+    // location stays authoritative, and a ref that disagrees is read again.
+    let (record, info) = match storage
+        .location
+        .as_deref()
         .filter(|location| !location.is_empty())
-        .ok_or_else(|| Error::from(format!("the table {name} has no storage location")))?;
-    let request = LoadRequest::new(location.clone(), None, env.clone()).without_files();
-    let mut info = table::load(&request).await.map_err(|error| {
-        let hint = if location.starts_with("s3://") {
-            " (s3:// needs credentials on the lake source; Databricks default storage cannot be read outside Databricks compute)"
-        } else {
-            ""
-        };
-        Error::from(format!(
-            "cannot read {name}'s metadata at {location}: {}{hint}",
-            error.0
-        ))
-    })?;
+    {
+        Some(location) => {
+            let catalog = tokio::spawn({
+                let url = url.clone();
+                let token = token.map(str::to_owned);
+                async move { dialect::get_json::<UnityRecord>(&url, token.as_deref()).await }
+            });
+            let info = load_metadata(&name, location, &storage.env).await;
+            let record = catalog.await.map_err(task_error)?.map_err(Error::from)?;
+            let catalog_location = catalog_location(&record, &name)?;
+            let info = match catalog_location == location {
+                true => info?,
+                false => load_metadata(&name, &catalog_location, &storage.env).await?,
+            };
+            (record, info)
+        }
+        None => {
+            let record: UnityRecord = dialect::get_json(&url, token).await.map_err(Error::from)?;
+            let location = catalog_location(&record, &name)?;
+            let info = load_metadata(&name, &location, &storage.env).await?;
+            (record, info)
+        }
+    };
+    let mut info = info;
     info.name = name;
     if !record.columns.is_empty() {
         info.columns = record
@@ -111,6 +127,41 @@ async fn unity_record(
         _ => {}
     }
     Ok(info)
+}
+
+/// The storage location the catalog names; an error when it names none.
+fn catalog_location(record: &UnityRecord, name: &str) -> Result<String, Error> {
+    record
+        .storage_location
+        .clone()
+        .filter(|location| !location.is_empty())
+        .ok_or_else(|| Error::from(format!("the table {name} has no storage location")))
+}
+
+/// The table's metadata at `location`, without files, naming the table and the
+/// location on failure.
+async fn load_metadata(
+    name: &str,
+    location: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<TableInfo, Error> {
+    let request = LoadRequest::new(location.to_string(), None, env.clone()).without_files();
+    table::load(&request).await.map_err(|error| {
+        let hint = if location.starts_with("s3://") {
+            " (s3:// needs credentials on the lake source; Databricks default storage cannot be read outside Databricks compute)"
+        } else {
+            ""
+        };
+        Error::from(format!(
+            "cannot read {name}'s metadata at {location}: {}{hint}",
+            error.0
+        ))
+    })
+}
+
+/// A spawned metadata read that could not be joined.
+fn task_error(error: tokio::task::JoinError) -> Error {
+    Error::from(format!("the metadata read failed: {error}"))
 }
 
 /// The Iceberg REST `loadTable` subset this command reports: the metadata

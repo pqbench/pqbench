@@ -279,7 +279,8 @@ fn schema_ls_prints_the_tables_as_a_table() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dbx_samples.nyctaxi.trips"), "{stdout}");
     assert!(stdout.contains("s3://bucket/trips"), "{stdout}");
-    assert!(stdout.contains("tables: 1"), "{stdout}");
+    assert!(stdout.contains("dbx_samples.nyctaxi.recent"), "{stdout}");
+    assert!(stdout.contains("tables: 2"), "{stdout}");
 }
 
 #[test]
@@ -296,15 +297,18 @@ fn schema_ls_streams_table_refs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 1);
+    assert_eq!(records.len(), 2);
+    // Sorted by name: the view (`recent`) precedes the table (`trips`).
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
     assert_eq!(records[0]["version"], 2);
-    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
-    assert!(records[0]["uri"]
+    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.recent");
+    assert!(records[0]["storage_path"].is_null());
+    assert_eq!(records[1]["id"], "dbx_samples.nyctaxi.trips");
+    assert!(records[1]["uri"]
         .as_str()
         .unwrap()
         .contains("/tables/dbx_samples.nyctaxi.trips"));
-    assert_eq!(records[0]["storage_path"], "s3://bucket/trips");
+    assert_eq!(records[1]["storage_path"], "s3://bucket/trips");
 }
 
 #[test]
@@ -375,7 +379,7 @@ fn schema_ls_reads_a_schema_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 4);
     assert_eq!(records[0]["kind"], "pqbench.table-ref");
 }
 
@@ -395,7 +399,7 @@ fn schema_ls_multiplexes_its_refs() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(ndjson(&output.stdout).len(), 2);
+    assert_eq!(ndjson(&output.stdout).len(), 4);
     assert!(
         peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
         "the two refs' requests did not overlap"

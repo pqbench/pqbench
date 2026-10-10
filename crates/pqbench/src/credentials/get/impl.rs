@@ -1,14 +1,11 @@
 //! The catalog calls behind [`super::api`].
 //!
-//! Unity serves `GET /tables/{catalog}.{schema}.{table}` with
-//! `include_manifest_capabilities=true`; the record names the table id and
-//! the capability manifest. A manifest that lists capabilities without
-//! `HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT` or
-//! `HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT` (managed default storage, a
-//! view) stops there; for an eligible table `POST
-//! /temporary-table-credentials` vends read credentials. A missing or empty
-//! manifest says nothing, so a catalog that reports none (Unity OSS) is
-//! attempted. Serverless notebooks are refused
+//! Unity serves `GET /tables/{catalog}.{schema}.{table}`; the record names the
+//! table id and the securable kind. Databricks default storage
+//! (`TABLE_DB_STORAGE`) is the kind the vending route refuses, so it stops
+//! there; for any other kind `POST /temporary-table-credentials` vends read
+//! credentials. A missing kind says nothing, so a catalog that reports none
+//! (Unity OSS) is attempted. Serverless notebooks are refused
 //! (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); those refs pass
 //! through with no env, since the compute reaches storage itself.
 //!
@@ -35,61 +32,30 @@ use crate::dialect;
 use crate::third_party::reqwest::{self, Request};
 
 /// The subset of the Unity table record vending needs: the table id and the
-/// capability manifest that gates the attempt.
+/// securable kind that gates the attempt.
 #[derive(Deserialize)]
 struct TableRecord {
     #[serde(default)]
     table_id: Option<String>,
     #[serde(default)]
-    securable_kind_manifest: Option<SecurableKindManifest>,
+    securable_kind: Option<String>,
 }
 
 impl TableRecord {
-    /// Whether the manifest marks the table readable outside Databricks
-    /// compute. A missing or empty manifest says nothing, so the table is
-    /// attempted; a manifest that lists capabilities without direct support
-    /// (managed default storage, a view) is not.
+    /// Whether the catalog reports the table readable outside Databricks
+    /// compute. Databricks default storage (`TABLE_DB_STORAGE`) is the kind
+    /// the vending route refuses; a missing kind says nothing, so the table
+    /// is attempted and the route decides.
     fn eligible(&self) -> bool {
-        !matches!(
-            &self.securable_kind_manifest,
-            Some(manifest)
-                if !manifest.capabilities.is_empty()
-                    && !manifest
-                        .capabilities
-                        .iter()
-                        .any(|capability| grants_direct_access(capability))
-        )
+        self.securable_kind.as_deref() != Some("TABLE_DB_STORAGE")
     }
 }
 
-/// The capability manifest Unity returns for
-/// `include_manifest_capabilities=true`.
-#[derive(Deserialize)]
-struct SecurableKindManifest {
-    #[serde(default)]
-    capabilities: Vec<String>,
-}
-
-/// Whether a manifest capability marks the table readable or writable
-/// outside Databricks compute.
-fn grants_direct_access(capability: &str) -> bool {
-    matches!(
-        capability,
-        "HAS_DIRECT_EXTERNAL_ENGINE_READ_SUPPORT" | "HAS_DIRECT_EXTERNAL_ENGINE_WRITE_SUPPORT"
-    )
-}
-
-/// The table's Unity record: the table id and the capability manifest.
+/// The table's Unity record: the table id and the securable kind.
 async fn table_record(root: &str, name: &str, token: Option<&str>) -> Result<TableRecord, Error> {
-    dialect::get_json(
-        &format!(
-            "{root}/tables/{}?include_manifest_capabilities=true",
-            dialect::encode(name)
-        ),
-        token,
-    )
-    .await
-    .map_err(Error::from)
+    dialect::get_json(&format!("{root}/tables/{}", dialect::encode(name)), token)
+        .await
+        .map_err(Error::from)
 }
 
 pub(super) async fn vend_unity(

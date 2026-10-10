@@ -8,9 +8,10 @@ use futures_util::stream::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::emit::{Align, Emitter, Format, Row};
+use crate::emit::{Align, Emitter, Format, Resolved, Row};
 use crate::source::{self, read_input, ref_env, table_ref, vend};
 use crate::CliError;
+use pqbench::credentials::check::{Eligibility, Reason};
 
 /// Arguments for `credentials`: one table's storage options.
 #[derive(Args)]
@@ -55,25 +56,58 @@ pub(crate) struct StageArgs {
     fan_out: usize,
 }
 
+/// The resolved configuration of `credentials get`: the output flags, from the
+/// command line.
+pub(crate) struct CredentialsGetConfig {
+    format: Resolved,
+    output: Option<PathBuf>,
+    fan_out: usize,
+}
+
+impl CredentialsGetConfig {
+    fn resolve(args: &GetArgs) -> Self {
+        Self {
+            format: args.stage.format.resolve(false),
+            output: args.stage.output.clone(),
+            fan_out: args.stage.fan_out.max(1),
+        }
+    }
+}
+
+/// The resolved configuration of `credentials check`: the output flags, from
+/// the command line.
+pub(crate) struct CredentialsCheckConfig {
+    format: Resolved,
+    output: Option<PathBuf>,
+    fan_out: usize,
+}
+
+impl CredentialsCheckConfig {
+    fn resolve(args: &CheckArgs) -> Self {
+        Self {
+            format: args.stage.format.resolve(false),
+            output: args.stage.output.clone(),
+            fan_out: args.stage.fan_out.max(1),
+        }
+    }
+}
+
 pub(crate) async fn run(args: &CredentialsArgs) -> Result<(), CliError> {
     match &args.command {
-        CredentialsCommand::Get(args) => run_get(args).await,
-        CredentialsCommand::Check(args) => run_check(args).await,
+        CredentialsCommand::Get(args) => run_get(&CredentialsGetConfig::resolve(args)).await,
+        CredentialsCommand::Check(args) => run_check(&CredentialsCheckConfig::resolve(args)).await,
     }
 }
 
 /// Put vended read credentials on each ref: `schema ls | credentials get`.
-async fn run_get(args: &GetArgs) -> Result<(), CliError> {
-    let input = read_input("credentials get").await?;
-    if !input.piped {
+async fn run_get(config: &CredentialsGetConfig) -> Result<(), CliError> {
+    let context = read_input("credentials get").await?;
+    if !context.piped {
         return Err("credentials get reads pqbench.table-ref v2 refs on standard input".into());
     }
-    let mut emit = Emitter::open(
-        args.stage.output.as_deref(),
-        args.stage.format.resolve(false),
-    )?;
-    let records = source::records("credentials get", input.first, input.lines);
-    let source = input.source;
+    let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
+    let records = source::records("credentials get", context.first, context.lines);
+    let source = context.source;
     let mut tables = 0;
     let mut vends = records
         .map(|record| async {
@@ -82,7 +116,7 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
             let credentials = vend(&source, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, credentials))
         })
-        .buffer_unordered(args.stage.fan_out.max(1));
+        .buffer_unordered(config.fan_out);
     while let Some(result) = vends.next().await {
         let (record, credentials) = result?;
         let vended = credentials.is_some();
@@ -99,23 +133,19 @@ async fn run_get(args: &GetArgs) -> Result<(), CliError> {
 /// Filter each ref's table on the catalog's eligibility:
 /// `schema ls | credentials check | credentials get`.
 ///
-/// The capability manifest names the tables only Databricks compute reads
-/// (managed default storage, a view). Those have no external read at all, so
-/// the check writes the reason to standard error and drops them instead of
-/// letting a later storage read fail on credentials. Eligible refs pass
-/// through unchanged, so the stage composes ahead of `credentials get` and a
-/// mixed schema keeps going.
-async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
-    let input = read_input("credentials check").await?;
-    if !input.piped {
+/// The check is the walk's single filter. It drops a `system` catalog ref, a
+/// view (the catalog reports no location), and a table whose capability
+/// manifest marks compute-only (managed default storage), writing the reason
+/// to standard error. Eligible refs pass through unchanged, so the stage
+/// composes ahead of `credentials get` and a mixed schema keeps going.
+async fn run_check(config: &CredentialsCheckConfig) -> Result<(), CliError> {
+    let context = read_input("credentials check").await?;
+    if !context.piped {
         return Err("credentials check reads pqbench.table-ref v2 refs on standard input".into());
     }
-    let mut emit = Emitter::open(
-        args.stage.output.as_deref(),
-        args.stage.format.resolve(false),
-    )?;
-    let records = source::records("credentials check", input.first, input.lines);
-    let source = input.source;
+    let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
+    let records = source::records("credentials check", context.first, context.lines);
+    let source = context.source;
     let mut tables = 0;
     let mut dropped = 0;
     let mut checks = records
@@ -125,7 +155,7 @@ async fn run_check(args: &CheckArgs) -> Result<(), CliError> {
             let reason = check(&source, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, reason))
         })
-        .buffer_unordered(args.stage.fan_out.max(1));
+        .buffer_unordered(config.fan_out);
     while let Some(checked) = checks.next().await {
         let (record, reason) = checked?;
         if let Some(reason) = reason {
@@ -164,18 +194,24 @@ async fn check(
         source.token.as_deref(),
     )
     .await?;
-    if eligibility == pqbench::credentials::check::Eligibility::Ineligible {
-        return Ok(Some(ineligible(&format!("{catalog}.{schema}.{name}"))));
+    match eligibility {
+        Eligibility::Eligible => Ok(None),
+        Eligibility::Ineligible(reason) => Ok(Some(ineligible(
+            &format!("{catalog}.{schema}.{name}"),
+            reason,
+        ))),
     }
-    Ok(None)
 }
 
 /// The message an ineligible table reports.
-fn ineligible(name: &str) -> String {
+fn ineligible(name: &str, reason: Reason) -> String {
+    let because = match reason {
+        Reason::SystemTable => "a system table",
+        Reason::NotATable => "a view, not a table",
+        Reason::NoExternalRead => "a table only Databricks compute reads (managed default storage)",
+    };
     format!(
-        "{name} is not readable outside Databricks compute: the catalog reports no direct external \
-         engine read support (managed default storage or a view); read it with Databricks compute, \
-         or copy it to an external location"
+        "{name} is {because}: read it with Databricks compute, or copy it to an external location"
     )
 }
 

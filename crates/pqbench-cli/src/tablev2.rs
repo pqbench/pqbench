@@ -7,7 +7,7 @@ use pqbench::table::{Column, TableFormat, TableInfo};
 use pqbench::tablev2::info;
 use serde::Serialize;
 
-use crate::emit::{Align, Emitter, Format, Row};
+use crate::emit::{Align, Emitter, Format, Resolved, Row};
 use crate::source::{self, read_input, ref_env, split_table, table_ref};
 use crate::CliError;
 
@@ -46,9 +46,29 @@ pub(crate) struct InfoArgs {
     fan_out: usize,
 }
 
+/// The resolved configuration of `tablev2 info`: the table name (or stdin) and
+/// the output flags, from the command line.
+pub(crate) struct TableV2InfoConfig {
+    table: Option<String>,
+    format: Resolved,
+    output: Option<PathBuf>,
+    fan_out: usize,
+}
+
+impl TableV2InfoConfig {
+    fn resolve(args: &InfoArgs) -> Self {
+        Self {
+            table: args.table.clone(),
+            format: args.format.resolve(false),
+            output: args.output.clone(),
+            fan_out: args.fan_out.max(1),
+        }
+    }
+}
+
 pub(crate) async fn run(args: &TableV2Args) -> Result<(), CliError> {
     match &args.command {
-        TableV2Command::Info(args) => run_info(args).await,
+        TableV2Command::Info(args) => run_info(&TableV2InfoConfig::resolve(args)).await,
     }
 }
 
@@ -57,39 +77,45 @@ pub(crate) async fn run(args: &TableV2Args) -> Result<(), CliError> {
 /// reads. Credentials are the `credentials` stage's concern — `credentials get`
 /// materializes them onto refs; this read consumes them and passes them on, so
 /// a later stage reads the table's files under the same lease.
-async fn run_info(args: &InfoArgs) -> Result<(), CliError> {
-    let input = read_input("tablev2 info").await?;
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    if let Some(table) = &args.table {
-        if input.first.is_some() {
+async fn run_info(config: &TableV2InfoConfig) -> Result<(), CliError> {
+    let context = read_input("tablev2 info").await?;
+    let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
+    if let Some(table) = &config.table {
+        if context.first.is_some() {
             return Err(
                 "tablev2 info takes CATALOG.SCHEMA.TABLE or a pqbench.table-ref v2 stream, not both"
                     .into(),
             );
         }
         let (catalog, schema, name) = split_table("tablev2 info", table)?;
-        let env = input.source.env.clone();
-        let record = read_record(&input.source, &catalog, &schema, &name, &env).await?;
-        emit.write_row(&table_record(&record, env)).await?;
+        let storage = info::Storage {
+            location: None,
+            env: context.source.env.clone(),
+        };
+        let record = read_record(&context.source, &catalog, &schema, &name, &storage).await?;
+        emit.write_row(&table_record(&record, storage.env)).await?;
         return emit.finish("tables: 1\n").await;
     }
-    if !input.piped {
+    if !context.piped {
         return Err(
             "tablev2 info needs CATALOG.SCHEMA.TABLE or a pqbench.table-ref v2 stream".into(),
         );
     }
-    let records = source::records("tablev2 info", input.first, input.lines);
-    let source = input.source;
+    let records = source::records("tablev2 info", context.first, context.lines);
+    let source = context.source;
     let mut tables = 0;
     let mut reads = records
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("tablev2 info", &record)?;
-            let env = ref_env(&record, &source.env);
-            let record = read_record(&source, &catalog, &schema, &name, &env).await?;
-            Ok::<_, CliError>((record, env))
+            let storage = info::Storage {
+                location: record["storage_path"].as_str().map(str::to_owned),
+                env: ref_env(&record, &source.env),
+            };
+            let record = read_record(&source, &catalog, &schema, &name, &storage).await?;
+            Ok::<_, CliError>((record, storage.env))
         })
-        .buffer_unordered(args.fan_out.max(1));
+        .buffer_unordered(config.fan_out);
     while let Some(record) = reads.next().await {
         let (record, env) = record?;
         emit.write_row(&table_record(&record, env)).await?;
@@ -105,7 +131,7 @@ async fn read_record(
     catalog: &str,
     schema: &str,
     name: &str,
-    env: &BTreeMap<String, String>,
+    storage: &info::Storage,
 ) -> Result<TableInfo, CliError> {
     Ok(info::read(
         &source.endpoint,
@@ -114,7 +140,7 @@ async fn read_record(
         name,
         source.token.as_deref(),
         source.table_format.into(),
-        env,
+        storage,
     )
     .await?)
 }

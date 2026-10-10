@@ -5,9 +5,11 @@
 //! `full_name` and `storage_location`, so a ref is complete in one page.
 //! Iceberg REST lists `{endpoint}/namespaces/{namespace}/tables` identifiers
 //! only; the ref carries the `loadTable` URL as its `uri`, and
-//! `pqbench table info` dereferences it later. No config probe runs. Entries
-//! with no location (views) are skipped. The URLs, the page shapes, and the
-//! pagination are this command's; the transport is the third-party facade.
+//! `pqbench table info` dereferences it later. No config probe runs. A view
+//! carries no location: the ref keeps `storage_path: None`, and
+//! `credentials check` is the stage that drops it. The URLs, the page shapes,
+//! and the pagination are this command's; the transport is the third-party
+//! facade.
 
 use serde::Deserialize;
 
@@ -94,9 +96,7 @@ async fn unity_tables(
         };
         let page: UnityPage = dialect::get_json(&url, token).await.map_err(Error::from)?;
         for table in page.tables {
-            let Some(storage_path) = table.storage_location.filter(|path| !path.is_empty()) else {
-                continue;
-            };
+            let storage_path = table.storage_location.filter(|path| !path.is_empty());
             let name = table
                 .full_name
                 .filter(|name| !name.is_empty())
@@ -106,11 +106,13 @@ async fn unity_tables(
                         .filter(|name| !name.is_empty())
                         .map(|name| format!("{catalog}.{schema}.{name}"))
                 })
-                .ok_or_else(|| Error::from(format!("the table at {storage_path} has no name")))?;
+                .ok_or_else(|| {
+                    Error::from(format!("the table in {catalog}.{schema} has no name"))
+                })?;
             tables.push(TableRef {
                 uri: format!("{root}/tables/{}", dialect::encode(&name)),
                 name,
-                storage_path: Some(storage_path),
+                storage_path,
             });
         }
         match page.next_page_token {

@@ -9,6 +9,8 @@ use super::api::{Error, ObjectReader, PrefixListing};
 
 #[cfg(feature = "aws")]
 mod remote;
+#[cfg(feature = "aws")]
+pub(crate) use remote::root_store;
 
 pub(crate) fn open_remote(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
     #[cfg(feature = "aws")]

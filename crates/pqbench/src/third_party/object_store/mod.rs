@@ -5,6 +5,6 @@
 //! URI without the `aws` feature fails at runtime.
 
 pub mod api;
-mod r#impl;
+pub(crate) mod r#impl;
 
 pub use api::{copy, list_prefix, open, Error, PrefixListing};

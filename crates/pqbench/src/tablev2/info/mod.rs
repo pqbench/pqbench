@@ -8,4 +8,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{read, Error};
+pub use api::{read, Error, Storage};

@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::logstore::LogStore;
@@ -13,6 +14,9 @@ use deltalake::{DeltaTable, DeltaTableBuilder};
 use futures::TryStreamExt;
 use serde_json::{Map, Value};
 use url::Url;
+
+#[cfg(feature = "aws")]
+use crate::third_party::object_store::r#impl::root_store;
 
 use crate::table::{
     add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadEvent,
@@ -99,9 +103,12 @@ async fn load_local_table(root: &Path, request: &LoadRequest) -> Result<DeltaTab
 }
 
 async fn load_table(url: Url, request: &LoadRequest) -> Result<DeltaTable, Error> {
-    let mut builder = DeltaTableBuilder::from_url(url).map_err(delta_error)?;
+    let mut builder = DeltaTableBuilder::from_url(url.clone()).map_err(delta_error)?;
     if !request.env.is_empty() {
         builder = builder.with_storage_options(request.env.clone().into_iter().collect());
+    }
+    if let Some(store) = shared_store(&url, request)? {
+        builder = builder.with_storage_backend(store, url);
     }
     if let Some(version) = request.snapshot_version {
         builder = builder.with_version(version);
@@ -110,6 +117,26 @@ async fn load_table(url: Url, request: &LoadRequest) -> Result<DeltaTable, Error
         builder = builder.without_files();
     }
     builder.load().await.map_err(delta_error)
+}
+
+/// The store on the one shared HTTP client, for delta-rs to reuse instead of
+/// building a fresh client per table (each build re-parses the platform CA
+/// bundle). Only S3 reaches the S3 backend; other schemes build their own.
+fn shared_store(
+    url: &Url,
+    request: &LoadRequest,
+) -> Result<Option<Arc<dyn deltalake::ObjectStore>>, Error> {
+    #[cfg(feature = "aws")]
+    {
+        if matches!(url.scheme(), "s3" | "s3a") {
+            let options: Vec<(String, String)> = request.env.clone().into_iter().collect();
+            let store = root_store(url, &options).map_err(|error| Error(error.to_string()))?;
+            return Ok(Some(store));
+        }
+    }
+    #[cfg(not(feature = "aws"))]
+    let _ = (url, request);
+    Ok(None)
 }
 
 struct SnapshotMeta {

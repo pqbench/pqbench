@@ -191,7 +191,8 @@ lists the tables in it, one `pqbench.table-ref` version 2 line each — the
 document `tablev2 info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
-Entries with no location (views) are skipped. Refs are addresses; the walk
+A view carries no location, so its ref keeps no storage path;
+`credentials check` is the stage that drops it. Refs are addresses; the walk
 context (endpoint, token, storage options) comes from the lake source or
 `PQB_*`. The walk is a plain pipeline: every command streams refs and keeps
 `--fan-out` in flight, `credentials get` writes the vended keys onto the refs,
@@ -205,6 +206,19 @@ $ pqbench schema ls dbx_samples.nyctaxi --format json |
     pqbench credentials get |
     pqbench tablev2 info --format json
 ```
+
+`pqbench setup` prints that environment for the shell to evaluate:
+
+```console no-run
+$ eval "$(pqbench setup)"
+```
+
+It resolves the endpoint and token the way the Databricks SDKs do — the flag,
+then `PQB_*`, then `DATABRICKS_*` — and adds `AWS_REGION` and
+`AWS_EC2_METADATA_DISABLED=true` (the AWS SDK otherwise probes EC2 metadata
+for the region, which hangs where that endpoint is blackholed). A notebook
+kernel's dbutils context is not visible to a subprocess, so a notebook sets
+`DATABRICKS_*` from it first.
 
 `tablev2 info` enriches that ref — id, format, snapshot, columns, partition
 columns, format properties — and keeps the same kind and version, so
@@ -230,8 +244,8 @@ A vended lease is a storage fact, not a caller choice. Databricks serves
 managed tables to external systems through its catalog APIs; resolving the
 Delta log by path is not that interface, and Databricks-managed default
 storage explicitly denies externally issued sessions on its objects (verified
-for data files, Iceberg manifests, and the Delta log) — the capability
-manifest reports those tables without direct external engine support, so
+for data files, Iceberg manifests, and the Delta log) — the catalog reports
+those tables as Databricks default storage (`TABLE_DB_STORAGE`), so
 `credentials check` stops the walk with the reason and no storage read runs.
 Customer-storage tables read under the lease; compatibility mode publishes a
 read-only copy for path-based clients. Inside Databricks compute the lease is
@@ -240,9 +254,9 @@ outright (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`) and refs
 pass through, while classic compute reaches storage through its own instance
 profile.
 
-`credentials check` and `credentials get` read the same refs. The check asks
-each table's catalog for the capability manifest and drops a table whose
-manifest lists no direct-external-engine read or write support, with the
+`credentials check` and `credentials get` read the same refs. The check is the
+walk's single filter: it drops a `system` catalog ref, a view (the catalog
+reports no location), and a table on Databricks default storage, with the
 reason on standard error; eligible refs pass through unchanged. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
@@ -338,11 +352,12 @@ Whether the second mode exists is the storage's property, not the caller's:
 | --- | --- |
 | External location (customer S3), external table | yes |
 | External location, managed table | yes |
-| Databricks default storage, managed table | no — the capability manifest reports no direct external engine support, and the objects deny externally issued sessions |
+| Databricks default storage, managed table | no — the catalog reports `TABLE_DB_STORAGE`; the vending route refuses, and the objects deny externally issued sessions |
 | Managed volume | files via FUSE in compute or the Files API; not a table read |
 
-`credentials check` reports the manifest's answer with a reason; `credentials
-get` vends the lease. Two environment notes:
+`credentials check` reports the answer (a system table, a view, or Databricks
+default storage) with a reason; `credentials get` vends the lease.
+Two environment notes:
 
 - The vended response carries the keys, a session token, and the storage URL,
   but no region: set `AWS_REGION` (or the client's equivalent) for the read.

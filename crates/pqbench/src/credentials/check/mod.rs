@@ -3,4 +3,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{check, Eligibility, Error, TableFormat};
+pub use api::{check, Eligibility, Error, Reason, TableFormat};

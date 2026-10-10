@@ -342,24 +342,25 @@ object-store options come from a pqbench.lake-source on standard input, or from
 PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them
 out.
 
-  check  each pqbench.table-ref version 2 ref on standard input is checked
-         against the catalog's capability manifest: a table the catalog
-         reports without direct-external-engine read or write support (managed
-         default storage, a view) has no external read at all, so the check
-         drops it with the reason on standard error; eligible refs pass
-         through unchanged, so the stage composes ahead of `credentials get`
-         and a mixed schema keeps going. Under PQB_TABLE_FORMAT=iceberg the
-         metadata read is inline through the catalog, so the check passes.
+  check  the walk's single filter: each pqbench.table-ref version 2 ref on
+         standard input is checked against the catalog. A `system` catalog
+         ref, a view (the catalog reports no location), and a table on
+         Databricks default storage (`TABLE_DB_STORAGE`) all have no external
+         read, so the check drops each with the reason on standard error;
+         eligible refs pass through unchanged, so the stage composes ahead of
+         `credentials get` and a mixed schema keeps going. Under
+         PQB_TABLE_FORMAT=iceberg the metadata read is inline through the
+         catalog, so the check passes.
 
   get    each pqbench.table-ref version 2 ref enriched with the table's
          vended read credentials (AWS_* on env) as one pqbench.table-ref
          version 2 line — the explicit stage that materializes env for the
          table read and other tools. Unity GET /tables/{full_name} reads the
-         table id and capability manifest; a manifest without
-         direct-external-engine read or write support (managed default
-         storage, a view) passes through with its own env, and a catalog that
-         reports no manifest is attempted; inside serverless compute Unity
-         refuses to mint storage credentials, so refs pass through there too.
+         table id and securable kind; Databricks default storage
+         (`TABLE_DB_STORAGE`) passes through with its own env, and any other
+         kind (or a catalog that reports none) is attempted; inside serverless
+         compute Unity refuses to mint storage credentials, so refs pass
+         through there too.
          Under PQB_TABLE_FORMAT=iceberg the command reads the catalog's
          credentials route (loadCredentials) and takes the storage-credentials
          it returns, for the next storage read; a catalog that does not serve
@@ -589,3 +590,35 @@ See also:
   pqbench experiment --help  measure a rewrite
   pqbench --help             documents
   docs/skill.md  docs/cli.md";
+
+pub const SETUP_ABOUT: &str = "Print the walk's environment as shell exports to eval";
+
+pub const SETUP_LONG_ABOUT: &str = "\
+Print the environment the metadata walk needs, as shell `export` lines, for
+the caller to evaluate:
+
+  eval \"$(pqbench setup)\"
+
+The endpoint and token resolve the way the Databricks SDKs do: the flag, then
+PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A notebook
+kernel's dbutils context is not visible to a subprocess, so a notebook sets
+DATABRICKS_* from it first. AWS_REGION comes from the flag or AWS_REGION (a
+vended lease carries no region); AWS_EC2_METADATA_DISABLED=true keeps the AWS
+SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
+
+  endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
+  token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
+  format    --table-format | PQB_TABLE_FORMAT (unity default)
+  region    --region   | AWS_REGION";
+
+pub const SETUP_AFTER: &str = "\
+Examples:
+  eval \"$(pqbench setup --endpoint https://… --token dapi-… --region us-east-1)\"
+  DATABRICKS_HOST=https://… DATABRICKS_TOKEN=dapi-… eval \"$(pqbench setup)\"
+  pqbench setup --table-format iceberg --region us-west-2
+
+See also:
+  pqbench credentials --help  check and vend read credentials
+  pqbench tablev2 --help      read a listed table's record
+  pqbench --help              auth, lake-source shape
+  docs/cli.md";
