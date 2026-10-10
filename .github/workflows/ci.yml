@@ -153,7 +153,8 @@ jobs:
           # -j is every core); `diff -r` pairs them by path, order-independent.
           rca() { "$GITHUB_WORKSPACE/rust-code-analysis-cli" --metrics "$@"; }
           head_metrics="$RUNNER_TEMP/head-metrics"
-          base_metrics="" scope="the workspace"
+          base_metrics=""
+          scope="the workspace"
           mkdir -p "$head_metrics"
           if [ "${{ github.event_name }}" != pull_request ]; then
             rca -O json --pr -o "$head_metrics" -p crates
@@ -164,64 +165,72 @@ jobs:
             git fetch --no-tags --depth=1 origin "$base_sha"
             mapfile -t files < <(git diff --name-only --no-renames \
               --diff-filter=ACM "$base_sha" HEAD -- '*.rs')
-            if [ ${#files[@]} -eq 0 ]; then
-              echo "no Rust files changed"
-              exit 0
-            fi
-            args=(); for file in "${files[@]}"; do args+=(-p "$file"); done
-            rca -O json --pr -o "$head_metrics" "${args[@]}"
-            base_tree="$RUNNER_TEMP/base-tree"
-            base_metrics="$RUNNER_TEMP/base-metrics"
-            mkdir -p "$base_tree" "$base_metrics"
-            # Base versions of the files that exist there; added files have none.
-            base_args=()
-            for file in "${files[@]}"; do
-              if git cat-file -e "$base_sha:$file" 2>/dev/null; then
-                mkdir -p "$base_tree/$(dirname "$file")"
-                git show "$base_sha:$file" > "$base_tree/$file"
-                base_args+=(-p "$file")
+            scope="no Rust files changed"
+            if [ ${#files[@]} -gt 0 ]; then
+              args=(); for file in "${files[@]}"; do args+=(-p "$file"); done
+              rca -O json --pr -o "$head_metrics" "${args[@]}"
+              base_tree="$RUNNER_TEMP/base-tree"
+              base_metrics="$RUNNER_TEMP/base-metrics"
+              mkdir -p "$base_tree" "$base_metrics"
+              # Base versions of the files that exist there; added files have none.
+              base_args=()
+              for file in "${files[@]}"; do
+                if git cat-file -e "$base_sha:$file" 2>/dev/null; then
+                  mkdir -p "$base_tree/$(dirname "$file")"
+                  git show "$base_sha:$file" > "$base_tree/$file"
+                  base_args+=(-p "$file")
+                fi
+              done
+              if [ ${#base_args[@]} -gt 0 ]; then
+                ( cd "$base_tree" && "$GITHUB_WORKSPACE/rust-code-analysis-cli" \
+                    --metrics -O json --pr -o "$base_metrics" "${base_args[@]}" )
               fi
-            done
-            if [ ${#base_args[@]} -gt 0 ]; then
-              ( cd "$base_tree" && "$GITHUB_WORKSPACE/rust-code-analysis-cli" \
-                  --metrics -O json --pr -o "$base_metrics" "${base_args[@]}" )
+              scope="${#files[@]} changed Rust file(s)"
+              echo "changed=true" >> "$GITHUB_OUTPUT"
             fi
-            scope="${#files[@]} changed Rust file(s)"
           fi
           echo "scope: $scope"
 
           # The CLI is per-file; roll the file-level metrics up for the job
-          # summary (the full JSON is ~9 MB, over the 1 MiB cap).
+          # summary (the full JSON is ~9 MB, over the 1 MiB cap). A no-op PR
+          # still gets a line, so the job is never silent.
           {
             echo "### Code analysis — $scope"
             echo
-            echo '```json'
-            find "$head_metrics" -name '*.json' -print0 | xargs -0 jq -s '{
-              files: length,
-              sloc: (map(.metrics.loc.sloc) | add),
-              cloc: (map(.metrics.loc.cloc) | add),
-              functions: (map(.metrics.nom.functions) | add),
-              cyclomatic_total: (map(.metrics.cyclomatic.sum) | add),
-              cyclomatic_max: (map(.metrics.cyclomatic.max) | max),
-              cognitive_total: (map(.metrics.cognitive.sum) | add),
-              mi_average: ((map(.metrics.mi.mi_visual_studio) | add) / length | . * 10 | round / 10)
-            }'
-            echo '```'
+            if find "$head_metrics" -name '*.json' -print -quit | grep -q .; then
+              echo '```json'
+              find "$head_metrics" -name '*.json' -print0 | xargs -0 jq -s '{
+                files: length,
+                sloc: (map(.metrics.loc.sloc) | add),
+                cloc: (map(.metrics.loc.cloc) | add),
+                functions: (map(.metrics.nom.functions) | add),
+                cyclomatic_total: (map(.metrics.cyclomatic.sum) | add),
+                cyclomatic_max: (map(.metrics.cyclomatic.max) | max),
+                cognitive_total: (map(.metrics.cognitive.sum) | add),
+                mi_average: ((map(.metrics.mi.mi_visual_studio) | add) / length | . * 10 | round / 10)
+              }'
+              echo '```'
+            else
+              echo "_No Rust files changed._"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ -n "$base_metrics" ]; then
-            python3 scripts/code_analysis.py comment "$head_metrics" "$base_metrics" \
-              "${{ github.base_ref }}" > "$RUNNER_TEMP/comment.md"
-            echo "::group::Metrics diff vs ${{ github.base_ref }}"
-            diff -ru "$base_metrics" "$head_metrics" || true
-            echo "::endgroup::"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          # Every PR gets a sticky comment — the base→head deltas, or a plain
+          # note when nothing Rust changed — so the job is never invisible.
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            python3 scripts/code_analysis.py comment "$head_metrics" \
+              "$base_metrics" "${{ github.base_ref }}" > "$RUNNER_TEMP/comment.md"
+            if [ -n "$base_metrics" ]; then
+              echo "::group::Metrics diff vs ${{ github.base_ref }}"
+              diff -ru "$base_metrics" "$head_metrics" || true
+              echo "::endgroup::"
+            fi
           fi
       - name: Annotate the changed files
         if: steps.measure.outputs.changed == 'true'
         run: python3 scripts/code_analysis.py annotate "$RUNNER_TEMP/head-metrics"
-      - name: Comment the deltas
-        if: steps.measure.outputs.changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: code-analysis
