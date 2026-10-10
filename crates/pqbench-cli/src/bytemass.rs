@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
@@ -38,7 +38,10 @@ pub(crate) struct BytemassArgs {
 pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
     if args.inputs.is_empty() {
         if std::io::stdin().is_terminal() {
-            return Err("bytemass needs parquet files or a table document".into());
+            return Err(
+                "bytemass needs parquet files or a pqbench.table-file / pqbench.remote-source document"
+                    .into(),
+            );
         }
         return measure_document("-", args).await;
     }
@@ -51,8 +54,6 @@ pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
 async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    let mut envs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    let mut open: BTreeSet<String> = BTreeSet::new();
     document::visit_input(input, async |record| {
         match record {
             Record::RemoteSource(source) => {
@@ -68,32 +69,7 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                     .await?;
                 }
             }
-            Record::Table(info) => {
-                for file in info.files {
-                    measure_file(
-                        &mut emit,
-                        &mut stats,
-                        &info.uri,
-                        file,
-                        info.env.clone(),
-                        (args.indexes, args.pages),
-                    )
-                    .await?;
-                }
-            }
-            Record::TableRef(table) => {
-                envs.insert(table.id, table.env);
-            }
-            Record::Begin(begin) => {
-                envs.insert(begin.id.clone(), begin.env);
-                open.insert(begin.id);
-            }
             Record::File { id, file, env } => {
-                let env = if env.is_empty() {
-                    envs.get(&id).cloned().unwrap_or_default()
-                } else {
-                    env
-                };
                 measure_file(
                     &mut emit,
                     &mut stats,
@@ -104,10 +80,6 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                 )
                 .await?;
             }
-            Record::Commit { .. } => {}
-            Record::End { id } => {
-                open.remove(&id);
-            }
             Record::BytemassFile(_) | Record::BytemassRow { .. } | Record::BytemassPage => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
@@ -115,9 +87,6 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
         Ok(())
     })
     .await?;
-    if !open.is_empty() {
-        return Err("table stream ended without end".into());
-    }
     finish_stream(emit, &stats, args.output.as_deref()).await
 }
 

@@ -44,13 +44,7 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliErr
             Record::BytemassFile(file) => files.push(file),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
             Record::BytemassPage => {}
-            Record::Table(_)
-            | Record::TableRef(_)
-            | Record::Begin(_)
-            | Record::Commit { .. }
-            | Record::File { .. }
-            | Record::End { .. }
-            | Record::RemoteSource(_) => {
+            Record::File { .. } | Record::RemoteSource(_) => {
                 return Err(
                     "viz reads a pqbench.bytemass stream; measure with `pqbench bytemass` first"
                         .into(),

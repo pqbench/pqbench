@@ -32,41 +32,14 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
 }
 
 #[test]
-fn bytemass_reads_a_table_document_from_stdin() {
+fn bytemass_reads_a_table_file_from_stdin() {
     let size = std::fs::metadata(parquet_fixture()).unwrap().len();
     let document = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "format": "delta",
-        "uri": "/tmp/table",
-        "snapshot_version": 0,
-        "partition_columns": [],
-        "log": [{"version": 0, "actions": [{"kind": "add", "path": "small_reddit_none.parquet"}]}],
-        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
-    });
-    let output = pipe(&["bytemass"], &document.to_string());
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("pqbench.bytemass-row"));
-    assert!(stdout.contains("url_encoded"));
-}
-
-#[test]
-fn bytemass_reads_an_iceberg_table_document_from_stdin() {
-    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
-    let document = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "format": "iceberg",
-        "uri": "/tmp/table",
-        "snapshot_version": 1,
-        "partition_columns": [],
-        "log": [{"version": 1, "actions": [{"kind": "snapshot"}]}],
-        "files": [{"path": "data/small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": size}]
+        "kind": "pqbench.table-file",
+        "id": "t1",
+        "path": "small_reddit_none.parquet",
+        "uri": parquet_fixture(),
+        "size_bytes": size
     });
     let output = pipe(&["bytemass"], &document.to_string());
     assert!(
@@ -94,16 +67,13 @@ fn bytemass_rejects_a_non_aws_env_key() {
 }
 
 #[test]
-fn bytemass_rejects_a_size_mismatch_on_a_table_document() {
+fn bytemass_rejects_a_size_mismatch_on_a_table_file() {
     let document = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "format": "delta",
-        "uri": "/tmp/table",
-        "snapshot_version": 0,
-        "partition_columns": [],
-        "log": [],
-        "files": [{"path": "small_reddit_none.parquet", "uri": parquet_fixture(), "size_bytes": 1}]
+        "kind": "pqbench.table-file",
+        "id": "t1",
+        "path": "small_reddit_none.parquet",
+        "uri": parquet_fixture(),
+        "size_bytes": 1
     });
     let output = pipe(&["bytemass"], &document.to_string());
     assert!(!output.status.success());
@@ -112,114 +82,8 @@ fn bytemass_rejects_a_size_mismatch_on_a_table_document() {
 }
 
 #[test]
-fn bytemass_reads_a_table_stream_from_stdin() {
-    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
-    let begin = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "event": "begin",
-        "id": "t1",
-        "format": "delta",
-        "uri": "/tmp/table",
-        "snapshot_version": 0,
-        "partition_columns": []
-    });
-    let file = json!({
-        "kind": "pqbench.table-file",
-        "id": "t1",
-        "path": "small_reddit_none.parquet",
-        "uri": parquet_fixture(),
-        "size_bytes": size
-    });
-    let end = json!({"kind": "pqbench.table", "event": "end", "id": "t1"});
-    let document = format!("{begin}\n{file}\n{end}\n");
-    let output = pipe(&["bytemass"], &document);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("pqbench.bytemass-row"));
-    assert!(stdout.contains("url_encoded"));
-}
-
-#[test]
-fn bytemass_rejects_a_truncated_table_stream() {
-    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
-    let begin = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "event": "begin",
-        "id": "t1",
-        "format": "delta",
-        "uri": "/tmp/table",
-        "snapshot_version": 0,
-        "partition_columns": []
-    });
-    let file = json!({
-        "kind": "pqbench.table-file",
-        "id": "t1",
-        "path": "small_reddit_none.parquet",
-        "uri": parquet_fixture(),
-        "size_bytes": size
-    });
-    let document = format!("{begin}\n{file}\n");
-    let output = pipe(&["bytemass"], &document);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ended without end"), "{stderr}");
-}
-
-#[test]
-fn bytemass_rejects_a_size_mismatch_on_a_table_stream() {
-    let begin = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "event": "begin",
-        "id": "t1",
-        "format": "delta",
-        "uri": "/tmp/table",
-        "snapshot_version": 0,
-        "partition_columns": []
-    });
-    let file = json!({
-        "kind": "pqbench.table-file",
-        "id": "t1",
-        "path": "small_reddit_none.parquet",
-        "uri": parquet_fixture(),
-        "size_bytes": 1
-    });
-    let end = json!({"kind": "pqbench.table", "event": "end", "id": "t1"});
-    let output = pipe(&["bytemass"], &format!("{begin}\n{file}\n{end}\n"));
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("size differs from log"), "{stderr}");
-}
-
-#[test]
 fn bytemass_measures_mixed_table_ids() {
     let size = std::fs::metadata(parquet_fixture()).unwrap().len();
-    let begin_a = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "event": "begin",
-        "id": "a",
-        "format": "delta",
-        "uri": "/tmp/a",
-        "snapshot_version": 0,
-        "partition_columns": []
-    });
-    let begin_b = json!({
-        "kind": "pqbench.table",
-        "version": 1,
-        "event": "begin",
-        "id": "b",
-        "format": "delta",
-        "uri": "/tmp/b",
-        "snapshot_version": 0,
-        "partition_columns": []
-    });
     let file = json!({
         "kind": "pqbench.table-file",
         "path": "small_reddit_none.parquet",
@@ -230,11 +94,7 @@ fn bytemass_measures_mixed_table_ids() {
     file_b["id"] = json!("b");
     let mut file_a = file;
     file_a["id"] = json!("a");
-    let document = format!(
-        "{begin_a}\n{begin_b}\n{file_b}\n{file_a}\n{}\n{}\n",
-        json!({"kind": "pqbench.table", "event": "end", "id": "b"}),
-        json!({"kind": "pqbench.table", "event": "end", "id": "a"}),
-    );
+    let document = format!("{file_b}\n{file_a}\n");
     let output = pipe(&["bytemass"], &document);
     assert!(
         output.status.success(),

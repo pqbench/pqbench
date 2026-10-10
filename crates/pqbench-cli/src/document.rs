@@ -1,12 +1,12 @@
 //! Documents on stdin or a file. `kind` decides what the command does.
 //!
 //! A producer resolves a table and pqbench measures bytes. Known kinds are
-//! `pqbench.table-ref`, `pqbench.table-file`, `pqbench.remote-source`,
-//! `pqbench.bytemass-file`, and `pqbench.bytemass-row`. A pipe writes NDJSON;
-//! every record carries a table `id` so rows stay attributable. A terminal
-//! prints an aligned table; a pipe streams NDJSON (override with `--format`).
-//! `-o` also writes the lz4 NDJSON stream. Credentials stay on the document so
-//! a pipe can carry them between processes.
+//! `pqbench.table-file`, `pqbench.remote-source`, `pqbench.bytemass-file`, and
+//! `pqbench.bytemass-row`. A pipe writes NDJSON; every record carries a table
+//! `id` so rows stay attributable. A terminal prints an aligned table; a pipe
+//! streams NDJSON (override with `--format`). `-o` also writes the lz4 NDJSON
+//! stream. Credentials stay on the document so a pipe can carry them between
+//! processes.
 
 use std::collections::BTreeMap;
 use std::ops::AsyncFnMut;
@@ -14,7 +14,7 @@ use std::ops::AsyncFnMut;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
 use pqbench::bytemass::MassRow;
-use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
+use pqbench::table::TableFile;
 use serde::Deserialize;
 
 use crate::CliError;
@@ -29,25 +29,14 @@ pub(crate) struct RemoteSource {
     pub env: BTreeMap<String, String>,
 }
 
-/// One JSON value from a table stream or a one-object document.
+/// One JSON value from a table-file stream or a one-object document.
 pub(crate) enum Record {
-    /// A table to load (`lake` emits these; `table` loads them one at a time).
-    TableRef(TableRef),
-    Begin(Begin),
-    #[allow(dead_code)]
-    Commit {
-        id: String,
-        commit: LogCommit,
-    },
+    /// One file of a partition, with the env to read it.
     File {
         id: String,
         file: TableFile,
         env: BTreeMap<String, String>,
     },
-    End {
-        id: String,
-    },
-    Table(TableInfo),
     RemoteSource(RemoteSource),
     BytemassFile(pqbench::bytemass::FileStat),
     BytemassRow {
@@ -55,19 +44,6 @@ pub(crate) enum Record {
         row: MassRow,
     },
     BytemassPage,
-}
-
-/// One table name for `table` to load. `id` tags every later line.
-#[derive(Debug, Clone)]
-pub(crate) struct TableRef {
-    pub id: String,
-    pub env: BTreeMap<String, String>,
-}
-
-/// Header of an NDJSON table stream. `log` and `files` follow as later lines.
-pub(crate) struct Begin {
-    pub id: String,
-    pub env: BTreeMap<String, String>,
 }
 
 /// Call `visit` once per JSON value, as soon as that value is complete.
@@ -142,118 +118,24 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
     let kind = value
         .get("kind")
         .and_then(|kind| kind.as_str())
-        .ok_or_else(|| invalid_kind("document has no `kind`"))?
+        .ok_or("document has no `kind`")?
         .to_string();
-    let event = value.get("event").and_then(|event| event.as_str());
-    match (kind.as_str(), event) {
-        ("pqbench.table", Some("begin")) => Ok(Record::Begin(parse_begin(value)?)),
-        ("pqbench.table", Some("end")) => Ok(Record::End {
-            id: string_field(&value, "id"),
-        }),
-        ("pqbench.table", None) => Ok(Record::Table(parse_table(value)?)),
-        ("pqbench.table", Some(other)) => Err(format!("unsupported table event `{other}`").into()),
-        ("pqbench.table-ref", _) => Ok(Record::TableRef(parse_table_ref(value)?)),
-        ("pqbench.table-log", _) => {
-            let (id, commit) = parse_log(value)?;
-            Ok(Record::Commit { id, commit })
-        }
-        ("pqbench.table-file", _) => {
+    match kind.as_str() {
+        "pqbench.table-file" => {
             let (id, file, env) = parse_file(value)?;
             Ok(Record::File { id, file, env })
         }
-        ("pqbench.remote-source", _) => Ok(Record::RemoteSource(parse_remote(value)?)),
-        ("pqbench.bytemass-file", _) => Ok(Record::BytemassFile(
+        "pqbench.remote-source" => Ok(Record::RemoteSource(parse_remote(value)?)),
+        "pqbench.bytemass-file" => Ok(Record::BytemassFile(
             serde_json::from_value(value).map_err(invalid_json)?,
         )),
-        ("pqbench.bytemass-page", _) => Ok(Record::BytemassPage),
-        ("pqbench.bytemass-row", _) => {
+        "pqbench.bytemass-page" => Ok(Record::BytemassPage),
+        "pqbench.bytemass-row" => {
             let (id, row) = parse_mass_row(value)?;
             Ok(Record::BytemassRow { id, row })
         }
-        (other, _) => Err(invalid_kind(other)),
+        other => Err(invalid_kind(other)),
     }
-}
-
-fn string_field(value: &serde_json::Value, name: &str) -> String {
-    value
-        .get(name)
-        .and_then(|value| value.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn parse_begin(value: serde_json::Value) -> Result<Begin, CliError> {
-    #[derive(Deserialize)]
-    #[allow(dead_code)]
-    struct Wire {
-        #[serde(default)]
-        id: String,
-        version: u32,
-        format: TableFormat,
-        uri: String,
-        snapshot_version: u64,
-        #[serde(default)]
-        partition_columns: Vec<String>,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-    }
-    let wire: Wire = serde_json::from_value(value).map_err(invalid_json)?;
-    if wire.version != 1 {
-        return Err("unsupported table document; expected kind `pqbench.table` version 1".into());
-    }
-    ensure_aws_env(&wire.env)?;
-    let id = if wire.id.is_empty() {
-        wire.uri.clone()
-    } else {
-        wire.id
-    };
-    Ok(Begin { id, env: wire.env })
-}
-
-fn parse_table_ref(value: serde_json::Value) -> Result<TableRef, CliError> {
-    #[derive(Deserialize)]
-    struct Wire {
-        #[serde(default)]
-        id: String,
-        version: u32,
-        uri: String,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-    }
-    let wire: Wire = serde_json::from_value(value).map_err(invalid_json)?;
-    if wire.version != 1 {
-        return Err(
-            "unsupported table-ref document; expected kind `pqbench.table-ref` version 1".into(),
-        );
-    }
-    ensure_aws_env(&wire.env)?;
-    let id = if wire.id.is_empty() {
-        wire.uri
-    } else {
-        wire.id
-    };
-    Ok(TableRef { id, env: wire.env })
-}
-
-fn parse_table(value: serde_json::Value) -> Result<TableInfo, CliError> {
-    let table: TableInfo = serde_json::from_value(value).map_err(invalid_json)?;
-    if table.document_version != 1 {
-        return Err("unsupported table document; expected kind `pqbench.table` version 1".into());
-    }
-    ensure_aws_env(&table.env)?;
-    Ok(table)
-}
-
-fn parse_log(value: serde_json::Value) -> Result<(String, LogCommit), CliError> {
-    #[derive(Deserialize)]
-    struct Wire {
-        #[serde(default)]
-        id: String,
-        #[serde(flatten)]
-        commit: LogCommit,
-    }
-    let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
-    Ok((wire.id, wire.commit))
 }
 
 fn parse_mass_row(value: serde_json::Value) -> Result<(String, MassRow), CliError> {
@@ -348,6 +230,6 @@ fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_kind(kind: &str) -> CliError {
-    format!("unsupported document kind `{kind}`; expected pqbench.table-ref, pqbench.table-file, pqbench.remote-source, pqbench.bytemass-file, or pqbench.bytemass-row")
+    format!("unsupported document kind `{kind}`; expected pqbench.table-file, pqbench.remote-source, pqbench.bytemass-file, or pqbench.bytemass-row")
         .into()
 }
