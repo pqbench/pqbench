@@ -175,8 +175,6 @@ struct LoadedTable {
 
 #[derive(Deserialize)]
 struct IcebergMetadata {
-    #[serde(default)]
-    location: Option<String>,
     #[serde(rename = "current-snapshot-id", default)]
     current_snapshot_id: Option<i64>,
     #[serde(rename = "current-schema-id", default)]
@@ -247,10 +245,10 @@ async fn iceberg_record(
         .ok_or_else(|| Error::from(format!("the table {name} has no metadata")))?;
     let columns = columns(&metadata);
     let partition_columns = partition_columns(&metadata);
-    let uri = metadata
-        .location
-        .filter(|location| !location.is_empty())
-        .unwrap_or(loaded.metadata_location);
+    // The metadata JSON is what a later stage reads: an Iceberg table root is
+    // only detectable when it carries `metadata/version-hint.text`, so the
+    // storage path names the metadata JSON instead.
+    let uri = loaded.metadata_location;
     let snapshot_version = metadata
         .current_snapshot_id
         .and_then(|snapshot_id| u64::try_from(snapshot_id).ok())

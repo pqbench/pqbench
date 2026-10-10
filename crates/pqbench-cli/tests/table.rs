@@ -621,7 +621,10 @@ fn table_info_reads_an_iceberg_rest_table() {
     assert_eq!(record["id"], "dbx_samples.nyctaxi.trips");
     assert_eq!(record["format"], "iceberg");
     assert_eq!(record["snapshot_version"], 3268038499157964613i64);
-    assert_eq!(record["storage_path"], "s3://bucket/events");
+    assert_eq!(
+        record["storage_path"],
+        "s3://bucket/events/metadata/00001.metadata.json"
+    );
     let columns: Vec<&str> = record["columns"]
         .as_array()
         .unwrap()
