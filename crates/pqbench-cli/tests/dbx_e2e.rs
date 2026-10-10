@@ -1173,12 +1173,21 @@ fn external_fixture_walks_to_bytemass() {
 
 /// The whole external fixture as one timed walk — the process-partitioned perf
 /// target from issue #58 (many tables, not one big table). Ignored like the
-/// rest of the live e2e; narrow it with `DBX_PERF_SCHEMAS` (comma-separated
-/// `catalog.schema`). It prints per-stage wall time and the counts; the numbers
+/// rest of the live e2e, and skipped unless `DBX_PERF_SCHEMAS` (comma-separated
+/// `catalog.schema`) names what to walk, so the standard e2e never runs the
+/// whole fixture. It prints per-stage wall time and the counts; the numbers
 /// belong in the pull request (`docs/performance.md`).
 #[test]
 #[ignore = "network + perf: reads the live Databricks endpoint"]
 fn external_fixture_walk_is_the_perf_target() {
+    let Some(schemas) = std::env::var("DBX_PERF_SCHEMAS")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        eprintln!("skipping: set DBX_PERF_SCHEMAS to run the perf walk");
+        return;
+    };
+    let schemas: Vec<String> = schemas.split(',').map(str::to_owned).collect();
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1191,18 +1200,6 @@ fn external_fixture_walk_is_the_perf_target() {
         .ok()
         .filter(|region| !region.is_empty())
         .unwrap_or_else(|| "us-east-2".to_string());
-    let schemas: Vec<String> = std::env::var("DBX_PERF_SCHEMAS")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .map(|value| value.split(',').map(str::to_owned).collect())
-        .unwrap_or_else(|| {
-            EXTERNAL_FIXTURE_SCHEMAS
-                .iter()
-                .copied()
-                .filter(|schema| *schema != "information_schema")
-                .map(|schema| format!("pqbench_ext.{schema}"))
-                .collect()
-        });
     let endpoint = unity_endpoint(&host);
     let env = [
         ("PQB_ENDPOINT", endpoint.as_str()),
