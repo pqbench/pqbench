@@ -28,43 +28,24 @@ fn bytemass() {
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
-fn table() {
-    // table, from line 101
-    support::run("pqbench table docker/e2e-lakehouse/table --format table", 102, Some(&["path                                                                 size_bytes  num_records", "-------------------------------------------------------------------  ----------  -----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3", "tables: 1", "files: 1 (796 bytes)"]));
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table", 108, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
-    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 116, None);
+fn table_ls() {
+    // table_ls, from line 102
+    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 103, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
-fn table_2() {
-    // table_2, from line 129
-    support::run("pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table", 130, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
-}
-
-#[cfg(feature = "delta")]
-#[rustfmt::skip]
-#[test]
-fn lake() {
-    // lake, from line 144
-    support::run("pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table", 145, Some(&["name   uri", "-----  ----------------------------------------", "table  file://<root>/docker/e2e-lakehouse/table", "tables: 1"]));
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table", 150, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+fn partition_ls() {
+    // partition_ls, from line 120
+    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table", 121, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 182
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 183, None);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 184, None);
-}
-
-#[cfg(feature = "delta")]
-#[rustfmt::skip]
-#[test]
-fn dump() {
-    // dump, from line 194
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample", 195, Some(&["dump: 1 file(s), 796 bytes -> /tmp/sample"]));
+    // viz, from line 151
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 152, None);
+    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report", 153, None);
 }

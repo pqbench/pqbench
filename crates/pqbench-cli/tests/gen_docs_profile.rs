@@ -16,5 +16,5 @@ fn usage() {
 #[test]
 fn usage_2() {
     // usage_2, from line 23
-    support::run("pqbench profile examples/quickstart.parquet --rows all --json | head -1", 24, Some(&[r#"{"kind":"pqbench.profile","version":1,"event":"begin"}"#]));
+    support::run("pqbench profile examples/quickstart.parquet --rows all --json | head -1 | jq -c '{column, physical_kind, ndv}'", 24, Some(&[r#"{"column":"id","physical_kind":"integer","ndv":8}"#]));
 }

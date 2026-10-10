@@ -3,9 +3,9 @@
 //!
 //! A terminal is interactive, so it gets columns a human can read; a pipe gets
 //! one JSON value per line so the next command can start immediately. `Auto`
-//! follows the stdout kind, so `pqbench table | pqbench bytemass` stays a
-//! machine pipeline while `pqbench table` shows a table. `--format` (and the
-//! older `--json`) override that choice. `-o` always receives the NDJSON
+//! follows the stdout kind, so `pqbench partition ls | pqbench bytemass` stays
+//! a machine pipeline while `pqbench table ls` shows a table. `--format` (and
+//! the older `--json`) override that choice. `-o` always receives the NDJSON
 //! stream, independent of what stdout shows.
 //!
 //! A pipe write awaits the event loop. The `-o` sink compresses with lz4
@@ -59,8 +59,8 @@ pub(crate) enum Align {
 
 /// A data record that renders as a JSON line or a table row.
 ///
-/// Structural records (`begin`/`end`) stay out of the table: they go through
-/// [`Emitter::write_event`] and only reach the NDJSON sinks.
+/// A structural record (a file-level fact) stays out of the table: it goes
+/// through [`Emitter::write_event`] and only reaches the NDJSON sinks.
 pub(crate) trait Row: Serialize {
     /// Column headers; rows with the same headers share one table block.
     const HEADER: &'static [&'static str];

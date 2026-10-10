@@ -9,14 +9,14 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 33
-    support::run("pqbench table docker/e2e-lakehouse/table --format table", 34, Some(&["path                                                                 size_bytes  num_records", "-------------------------------------------------------------------  ----------  -----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3", "tables: 1", "files: 1 (796 bytes)"]));
+    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 34, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn document() {
-    // document, from line 81
-    support::run("pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst", 82, None);
-    support::run("pqbench bytemass /tmp/table.ndjson.zst --format table", 83, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    // document, from line 77
+    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls -o /tmp/partition.ndjson.zst", 78, None);
+    support::run("pqbench bytemass /tmp/partition.ndjson.zst --format table", 79, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }

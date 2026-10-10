@@ -62,11 +62,11 @@ import json
 import sys
 with open(sys.argv[1]) as stream:
     records = [json.loads(line) for line in stream if line.strip()]
-end = next(record for record in records if record.get("event") == "end")
+files = [record for record in records if record.get("kind") == "pqbench.bytemass-file"]
 rows = [record for record in records if record.get("kind") == "pqbench.bytemass-row"]
-assert end["file_count"] == 1, f"file_count is {end.get('file_count')!r}"
-assert end["row_count"] > 0, f"row_count is {end.get('row_count')!r}"
+assert len(files) == 1, f"file_count is {len(files)}"
 assert rows, "no bytemass-row records"
+assert all(row.get("row_count", 0) > 0 for row in rows), "row_count is not positive"
 assert all("column" in row and "compressed_bytes" in row for row in rows)
 PY
 ok "bytemass produced a valid byte-mass JSON report"

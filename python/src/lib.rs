@@ -4,15 +4,12 @@
 //! subcommand and returns the same document, bytes, or paths the CLI would
 //! produce.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use pqbench::dump::DumpFile;
 use pqbench::experiment::{Aim, ExperimentRequest};
-use pqbench::lake::Lake;
 use pqbench::profile::ProfileRequest;
 use pqbench::stats;
-use pqbench::table::{LoadRequest, TableInfo};
 use pqbench::third_party::parquet::api::{read_sample, read_typed_sample};
 use pqbench::viz::MassRecord;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
@@ -203,7 +200,7 @@ fn experiment(
 
 /// Run `pqbench table`: detect the format and load one snapshot.
 ///
-/// Returns the `pqbench.table` document.
+/// Returns the table's record.
 #[pyfunction]
 #[pyo3(signature = (uri, *, version=None, env=None, no_stats=false))]
 fn table(
@@ -219,58 +216,6 @@ fn table(
         .detach(|| block_on(pqbench::table::load(&request)))
         .map_err(runtime)?;
     dumps(py, &info)
-}
-
-/// Run `pqbench lake`: list tables under a directory or URI.
-///
-/// Returns the `pqbench.lake` document.
-#[pyfunction]
-#[pyo3(signature = (root, *, max_depth=None))]
-fn lake(py: Python<'_>, root: String, max_depth: Option<usize>) -> PyResult<Py<PyAny>> {
-    let env = BTreeMap::new();
-    let lake = py
-        .detach(move || {
-            block_on(pqbench::lake::discover_bounded(
-                &root,
-                &env,
-                max_depth,
-                |_| true,
-            ))
-        })
-        .map_err(runtime)?;
-    dumps(py, &lake)
-}
-
-/// Run `pqbench dump`: copy the Parquet files a table or lake names into
-/// `output`.
-///
-/// `inputs` are table URIs or a `pqbench.table` / `pqbench.lake` document.
-/// Returns `{"file_count": N, "byte_count": N}`.
-#[pyfunction]
-#[pyo3(signature = (output, *inputs))]
-fn dump(py: Python<'_>, output: PathBuf, inputs: Vec<Bound<'_, PyAny>>) -> PyResult<Py<PyAny>> {
-    let (tables, lakes, uris) = dump_inputs(&inputs)?;
-    let mut entries = dump_document_entries(&tables, &lakes)?;
-    let summary = py
-        .detach(|| {
-            block_on(async {
-                for uri in &uris {
-                    let info =
-                        pqbench::table::load(&LoadRequest::new(uri.clone(), None, BTreeMap::new()))
-                            .await
-                            .map_err(|error| error.to_string())?;
-                    push_table(&mut entries, &info, info.uri.clone());
-                }
-                pqbench::dump::put(&nest_entries(entries), &output)
-                    .await
-                    .map_err(|error| error.to_string())
-            })
-        })
-        .map_err(runtime)?;
-    let mut result = serde_json::Map::new();
-    result.insert("file_count".into(), Value::from(summary.file_count));
-    result.insert("byte_count".into(), Value::from(summary.byte_count));
-    value_to_py(py, &Value::Object(result))
 }
 
 /// Run `pqbench viz` on a bytemass row stream.
@@ -326,8 +271,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(compression, module)?)?;
     module.add_function(wrap_pyfunction!(bytemass, module)?)?;
     module.add_function(wrap_pyfunction!(table, module)?)?;
-    module.add_function(wrap_pyfunction!(lake, module)?)?;
-    module.add_function(wrap_pyfunction!(dump, module)?)?;
     module.add_function(wrap_pyfunction!(profile, module)?)?;
     module.add_function(wrap_pyfunction!(experiment, module)?)?;
     module.add_function(wrap_pyfunction!(skill, module)?)?;
@@ -341,8 +284,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
                 "compression",
                 "bytemass",
                 "table",
-                "lake",
-                "dump",
                 "profile",
                 "experiment",
                 "skill",
@@ -393,84 +334,6 @@ fn aws_env(env: Option<BTreeMap<String, String>>) -> PyResult<BTreeMap<String, S
         )));
     }
     Ok(env)
-}
-
-/// Split `dump` inputs into serde documents and table URIs.
-fn dump_inputs(inputs: &[Bound<'_, PyAny>]) -> PyResult<(Vec<TableInfo>, Vec<Lake>, Vec<String>)> {
-    let mut tables = Vec::new();
-    let mut lakes = Vec::new();
-    let mut uris = Vec::new();
-    for input in inputs {
-        let Ok(value) = py_to_value(input) else {
-            uris.push(input.extract::<String>()?);
-            continue;
-        };
-        let kind = value
-            .get("kind")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        match kind.as_deref() {
-            Some("pqbench.table") => tables.push(serde_json::from_value(value).map_err(runtime)?),
-            Some("pqbench.lake") => lakes.push(serde_json::from_value(value).map_err(runtime)?),
-            _ => uris.push(input.extract::<String>()?),
-        }
-    }
-    Ok((tables, lakes, uris))
-}
-
-/// A file's table id plus the file, in document order.
-type Entry = (String, DumpFile);
-
-fn dump_document_entries(tables: &[TableInfo], lakes: &[Lake]) -> PyResult<Vec<Entry>> {
-    let mut entries = Vec::new();
-    for info in tables {
-        push_table(&mut entries, info, info.uri.clone());
-    }
-    for lake in lakes {
-        for table in &lake.tables {
-            let info = table.info.as_ref().ok_or_else(|| {
-                PyValueError::new_err(format!(
-                    "table {} has no log; pass it to `table` first",
-                    table.name
-                ))
-            })?;
-            push_table(&mut entries, info, table.name.clone());
-        }
-    }
-    Ok(entries)
-}
-
-fn push_table(entries: &mut Vec<Entry>, info: &TableInfo, id: String) {
-    for file in &info.files {
-        entries.push((
-            id.clone(),
-            DumpFile {
-                path: file.path.clone(),
-                uri: file.uri.clone(),
-                env: info.env.clone(),
-            },
-        ));
-    }
-}
-
-/// Nest files under their table id when more than one table is dumped, so files
-/// with the same relative path do not collide.
-fn nest_entries(entries: Vec<Entry>) -> Vec<DumpFile> {
-    let multiple = entries
-        .iter()
-        .map(|(id, _)| id)
-        .collect::<BTreeSet<_>>()
-        .len()
-        > 1;
-    entries
-        .into_iter()
-        .map(|(id, mut file)| {
-            if multiple {
-                file.path = format!("{id}/{}", file.path);
-            }
-            file
-        })
-        .collect()
 }
 
 fn viz_rows(obj: &Bound<'_, PyAny>) -> PyResult<Vec<MassRecord>> {

@@ -8,11 +8,11 @@ versioned JSON document the next command reads.
 New here? **[Get started](getting-started.md)** walks one file to a byte-mass
 treemap. Every command is in the **[CLI reference](cli.md)**.
 
-The canonical pipe — list a lake, load each table's snapshot, measure its
-files, draw the result:
+The canonical pipe — list a table's partitions, list their files, measure
+them, draw the result:
 
 ```console run delta
-$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table
+$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -32,20 +32,22 @@ details.
 
 ### Tutorial
 
-- [Getting started](getting-started.md) — install, first measurement, the lake
-  pipeline, a treemap. Start here.
+- [Getting started](getting-started.md) — install, first measurement, the
+  metadata walk, a treemap. Start here.
 
 ### How-to guides
 
-- [Visual demos](demo.md) — Parquet, Delta, Iceberg, and lake pipes with real
+- [Visual demos](demo.md) — Parquet, Delta, Iceberg, and catalog pipes with real
   output, and how to select files with Unix tools.
-- [Delta tables](delta.md) — detect a log, load a snapshot, `table | bytemass`,
-  backends, limitations.
-- [Iceberg tables](iceberg.md) — load metadata and manifests, `table |
-  bytemass`, limitations.
+- [Delta tables](delta.md) — detect a log, list its partitions and files,
+  `table ls | partition ls | bytemass`, backends, limitations.
+- [Iceberg tables](iceberg.md) — load metadata and manifests,
+  `table ls | partition ls | bytemass`, limitations.
 - [Databricks auth](auth.md) — create the service principal, grant metadata
   access, mint the OAuth M2M bearer.
 - [Docker](docker.md) — build, run, publish, and benchmark in a container.
+- [Performance](performance.md) — measure the metadata walk with `perf stat` and
+  `perf record`, and read the result.
 
 ### Reference
 

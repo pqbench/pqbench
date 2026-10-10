@@ -56,14 +56,12 @@ fn viz_collects_a_bytemass_stream_into_html() {
 
 #[test]
 fn viz_stores_proxied_file_stats() {
-    let begin = r#"{"kind":"pqbench.bytemass","version":1,"event":"begin"}"#;
     let file = r#"{"kind":"pqbench.bytemass-file","id":"sales","path":"year=2024/part-0.parquet","file":"part-0.parquet","size":40,"storage_class":"STANDARD","partition_values":{"year":"2024"},"stats":{"num_records":10,"bytes_per_row":4.0}}"#;
     let row = format!(
         r#"{{"kind":"pqbench.bytemass-row","id":"sales","uri":"{}","size_bytes":40,"row_count":10,"column":"id","compressed_bytes":8,"uncompressed_bytes":16,"codec":"ZSTD"}}"#,
         parquet_fixture()
     );
-    let end = r#"{"kind":"pqbench.bytemass","event":"end","file_count":1,"row_count":10,"column_count":1}"#;
-    let document = format!("{begin}\n{file}\n{row}\n{end}\n");
+    let document = format!("{file}\n{row}\n");
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
     let output = pipe(
@@ -81,8 +79,9 @@ fn viz_stores_proxied_file_stats() {
 }
 
 #[test]
-fn viz_rejects_a_table_document() {
-    let document = r#"{"kind":"pqbench.table","version":1,"format":"delta","uri":"/tmp/t","snapshot_version":0,"partition_columns":[],"log":[],"files":[]}"#;
+fn viz_rejects_a_table_file() {
+    let document =
+        r#"{"kind":"pqbench.table-file","id":"t","path":"p","uri":"/tmp/t","size_bytes":0}"#;
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
     let output = pipe(

@@ -3,23 +3,27 @@
 
 /// One-line summary for `pqbench -h`.
 pub const ROOT_ABOUT: &str =
-    "Measure Parquet storage and codec speed; pipe lake → table → bytemass → viz";
+    "Measure Parquet storage and codec speed; pipe refs → table ls → partition ls → bytemass";
 
 /// Full summary for `pqbench --help`.
 pub const ROOT_LONG_ABOUT: &str = "\
 pqbench measures how Parquet files spend bytes (bytemass), how well codecs
-compress them (lz, compression), what a Delta or Iceberg snapshot
-currently stores (table, lake), what a decoded row sample holds
+compress them (lz, compression), what a Delta or Iceberg table's partitions
+and files hold (table ls, partition ls), what a decoded row sample holds
 (profile), and how a rewritten sample would store (experiment).
 Commands compose on pipes: each writes a versioned JSON document the
 next command reads.
 
-  lake     →  pqbench.table-ref    list tables (or a catalog)
-  table    →  pqbench.table        load one snapshot's log and files
-  bytemass →  pqbench.bytemass-row footer byte masses (one line per column)
-  viz      →  PREFIX.html          collect the stream into a static treemap
-  dump     →  Parquet files        copy the files the table names
-  skill    →  markdown             bundled agent recipes (write / DDL / codec)
+  metastore    → pqbench.metastore    the endpoint's record
+  catalog      → pqbench.catalog      a catalog's record / its schemas
+  schema       → pqbench.table-ref    one table per line (v2)
+  table info   → pqbench.table-ref    enrich a table's record (v2)
+  credentials  → pqbench.table-ref    check + vend read credentials (v2)
+  table ls     → pqbench.partition    a table's natural partitions
+  partition ls → pqbench.table-file   a partition's added files
+  bytemass     → pqbench.bytemass-row footer byte masses (one line per column)
+  viz          → PREFIX.html          collect the stream into a static treemap
+  skill        → markdown             bundled agent recipes (write / DDL / codec)
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format
 table|json` overrides either. `-o` also writes the lz4 NDJSON stream.
@@ -32,9 +36,9 @@ Guide: docs/cli.md";
 pub const ROOT_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet
-  pqbench table ./delta-table | pqbench bytemass
-  pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
-  pqbench table ./delta-table | pqbench dump ./sample
+  pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass
+  pqbench schema ls CAT.SCHEMA | pqbench credentials check | pqbench credentials get \\
+    | pqbench table info | pqbench table ls | pqbench partition ls | pqbench bytemass
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
@@ -42,16 +46,16 @@ Examples:
   pqbench skill parquet-advisor
 
 Documents (kind + version 1):
-  pqbench.experiment     begin/end around trial and column lines
-  pqbench.profile        begin/end around pqbench.profile-column lines
-  pqbench.lake-source    catalog endpoint + token; lake lists it
+  pqbench.experiment-trial  one trial's bytes; -column per column
+  pqbench.profile-column one column's profile
   pqbench.metastore      the endpoint's metastore record
   pqbench.catalog        the endpoint's catalogs (metastore ls)
-  pqbench.lake           tables (name, uri, env); table loads each log
-  pqbench.table-ref      one table's record address + storage path
-  pqbench.table          format, snapshot, log, active files (streamed)
+  pqbench.schema         a catalog's schemas (catalog ls)
+  pqbench.table-ref      one table's record address + storage path (v2)
+  pqbench.partition      a table's natural partitions (table ls)
+  pqbench.table-file     one file of a partition (partition ls)
   pqbench.remote-source  one URI + AWS_* from a producer
-  pqbench.bytemass       begin/end around pqbench.bytemass-row lines
+  pqbench.bytemass-file  one file's footer facts; -row one column's mass
   pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
@@ -62,8 +66,8 @@ Auth (how to reach data):
 
   s3://  (needs --features aws / delta-s3 / iceberg-s3)
     Default AWS provider chain (process env, shared config, instance role,
-    AWS_PROFILE). A document env overrides that chain and is not exported
-    back into the process. Only AWS_* names are accepted on tables.
+    AWS_PROFILE). A ref's env (a vended lease) overrides that chain; it is
+    not exported into the process. Only AWS_* names are accepted on refs.
 
     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
     AWS_SESSION_TOKEN     STS or catalog-vended temp keys
@@ -73,25 +77,22 @@ Auth (how to reach data):
     AWS_VIRTUAL_HOSTED_STYLE_REQUEST   false for path-style (MinIO, rustfs)
     AWS_SKIP_SIGNATURE    true for a public bucket
 
-  Catalog list  (pqbench.lake-source)
+  Catalog config  (PQB_ENDPOINT / PQB_TOKEN)
     endpoint + token   a Databricks workspace URL + PAT (dapi-…), or a
     Unity OSS / Iceberg REST URL. The token is a Bearer on the list API
     only. Only AWS_* is copied onto listed tables — a PAT is not an S3 key.
 
   Databricks-governed tables
-    lake lists storage_location. Reading objects still needs AWS keys that
-    can GetObject. The legacy lake path does not call
-    temporary-table-credentials; paste vended STS into AWS_* on env, or use
-    a role that already can read the bucket. The tablev2 walk does:
-    `credentials get` materializes the vended keys onto the refs, and
-    `tablev2 info` reads under the env it is given.
+    The walk vends storage credentials: `credentials get` materializes the
+    vended keys onto the refs, and `table info` reads under the env it is
+    given. Reading the objects still needs keys that can GetObject.
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
   Producer pipe
     echo '{\"kind\":\"pqbench.remote-source\",\"version\":1,\"inputs\":[\"s3://b/t\"],
       \"env\":{\"AWS_ACCESS_KEY_ID\":\"…\",\"AWS_SECRET_ACCESS_KEY\":\"…\",
              \"AWS_SESSION_TOKEN\":\"…\",\"AWS_REGION\":\"us-east-1\"}}' \\
-      | pqbench table | pqbench bytemass
+      | pqbench bytemass
 
 Format skills (read these when the input is Parquet or a table):
   Parquet file format      https://parquet.apache.org/docs/file-format/
@@ -111,8 +112,9 @@ pub const BYTEMASS_LONG_ABOUT: &str = "\
 Read Parquet footers only and report on-disk bytes per column per row.
 Works on compressed files (HEAD + ranged GETs on a URI).
 
-Inputs: parquet paths, quoted globs, s3://, a pqbench.table or loaded
-pqbench.lake, or '-' / stdin. A lake must go through `pqbench table` first.
+Inputs: parquet paths, quoted globs, s3://, a pqbench.table-file or
+pqbench.remote-source document, or '-' / stdin. List a table's files with
+`pqbench table ls | pqbench partition ls` first.
 
 A terminal prints one row per column chunk as a table; a pipe streams the
 same rows as `pqbench.bytemass-row` NDJSON. `--format json` (or `--json`)
@@ -122,91 +124,74 @@ pub const BYTEMASS_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet
   pqbench bytemass 'data/*.parquet' -o masses.ndjson.zst
-  pqbench table ./delta-table | pqbench bytemass
-  pqbench table ./delta-table | pqbench bytemass | pqbench viz -o report
+  pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass
+  pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass | pqbench viz -o report
 
 See also:
-  pqbench table --help     load the snapshot this command measures
+  pqbench table --help     list the partitions whose files this command measures
   pqbench viz --help       collect the stream into a static HTML page
-  pqbench dump --help      copy those files to a directory
   pqbench --help           auth, documents, format skills
   docs/cli.md";
 
-pub const TABLE_ABOUT: &str =
-    "Detect Delta or Iceberg and load one snapshot's log and active files";
+pub const TABLE_ABOUT: &str = "Read one table's record, or list its natural partitions";
 
 pub const TABLE_LONG_ABOUT: &str = "\
-Detect the format, then load metadata. Delta: transaction log and active
-files. Iceberg: metadata JSON and Avro manifests (delete files in the log,
-not files[]). Does not measure bytes — pipe to bytemass or dump.
+Read one table at a catalog endpoint, or group its log's commits into natural
+partitions. The table is the entity between schemas and partitions. The
+endpoint, token, dialect, and object-store options come from the environment:
+PQB_ENDPOINT / PQB_TOKEN / PQB_TABLE_FORMAT and AWS_*.
 
-Inputs: table directory or URI, Iceberg metadata JSON, a pqbench.table /
-pqbench.lake / pqbench.remote-source, or '-' / stdin. A pqbench.table-ref
-carries its storage path; a ref from an Iceberg catalog walk does not, so run
-`table info` first to fill it.
+  info   the ref enriched with the table's record (format, snapshot, columns,
+         partition columns, format properties) as one pqbench.table-ref
+         version 2 line. Without a CATALOG.SCHEMA.TABLE argument the command
+         reads pqbench.table-ref version 2 refs on standard input — one table
+         per line — so `schema ls | table info` chains; version 1 refs are
+         rejected. Unity REST serves /tables/{full_name}; the catalog's
+         declared columns and properties are merged over the Delta log read
+         with without_files(), so that path is O(1) in files and needs a
+         readable storage location: the ref's env or the process environment.
+         Vended credentials ride the ref (or the
+         process env) from `credentials get`; `credentials check` gates the
+         walk on tables the catalog marks readable outside compute. The
+         emitted record carries the env it read under, so a later stage reads
+         the table's files under the same lease. PQB_TABLE_FORMAT=iceberg
+         reads loadTable, whose metadata is inline, so no storage read runs.
+  ls     the table's natural partitions, grouped by commit time: reads the
+         Delta / Iceberg log — never the data files — and emits one
+         pqbench.partition per epoch-aligned, half-open UTC window, carrying
+         the commits it holds. Inputs: a table directory or URI, or a
+         pqbench.table-ref version 2 stream on standard input. A ref from a
+         catalog walk must carry its storage path — run `pqbench table info`
+         first if it does not. --every is the window width (1h, 1d, 1w;
+         default 1d). Pipe to `pqbench partition ls` for each partition's
+         files.
 
-  info   read each table-ref's record (Iceberg loadTable) and emit the ref
-         with its storage path; a ref that already has one passes through
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.
 
 Detection: _delta_log is Delta (wins UniForm). Iceberg is
 metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json
-path.
-
---version is a Delta commit or Iceberg snapshot id (default: latest).
-
-Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).";
+path. Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).";
 
 pub const TABLE_AFTER: &str = "\
 Examples:
-  pqbench table ./delta-table -o table.ndjson.zst
-  pqbench table ./delta-table | pqbench bytemass
-  pqbench lake s3://bucket/warehouse | pqbench table | pqbench bytemass
-  pqbench table ./iceberg-table | pqbench bytemass
+  pqbench table info dbx_samples.nyctaxi.trips < source.json
+  PQB_ENDPOINT=… pqbench schema ls | pqbench table info
+  pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass
+  pqbench schema ls CAT.SCHEMA | pqbench table ls
 
 See also:
-  pqbench lake --help      list tables into a document this command loads
-  pqbench tablev2 --help   read a catalog table's record (the new tree)
-  pqbench bytemass --help  measure the files named here
-  pqbench dump --help      copy those files to a directory
+  pqbench schema --help    the tables of one schema
+  pqbench partition ls --help  list a partition's files
+  pqbench bytemass --help  measure the files named there
   pqbench --help           auth (AWS_*, catalog token), documents, format skills
   docs/delta.md  docs/iceberg.md  docs/cli.md";
-
-pub const LAKE_ABOUT: &str = "List Delta/Iceberg tables in a directory, URI, or catalog";
-
-pub const LAKE_LONG_ABOUT: &str = "\
-Walk a warehouse or list a catalog and stream `pqbench.table-ref` lines
-(name, uri, env). `pqbench table` loads each log.
-
-Inputs: directory, file:// or s3:// prefix, a pqbench.lake to re-select, a
-pqbench.lake-source, or '-' / stdin.
-
-Walk: descend until _delta_log or an Iceberg hint / metadata JSON. Do not
-search inside a table. --max-depth bounds a tree with no marker. --include /
---exclude are Unix globs on the relative table name and prune the walk.
-
-Catalog: GET /v1/config — a defaults object is Iceberg REST; 200 without
-defaults, or HTTP 404, is Unity. A lake-source names endpoint + token.
-Only AWS_* is copied onto tables. s3:// listing needs --features aws.";
-
-pub const LAKE_AFTER: &str = "\
-Examples:
-  pqbench lake ./warehouse
-  pqbench lake ./warehouse --include 'sales/**' --exclude tmp
-  pqbench lake s3://bucket/warehouse --max-depth 2
-  pqbench lake source.json
-  pqbench lake ./warehouse | pqbench table | pqbench bytemass
-
-See also:
-  pqbench table --help     load each listed table
-  pqbench --help           catalog vs object auth, lake-source shape
-  docs/cli.md  docs/demos/unity.json";
 
 pub const METASTORE_ABOUT: &str = "Read the endpoint's metastore record and list its catalogs";
 
 pub const METASTORE_LONG_ABOUT: &str = "\
 Read the metastore at a catalog endpoint: the entity above catalogs. The
-endpoint and token come from a pqbench.lake-source on standard input, or from
-PQB_ENDPOINT / PQB_TOKEN when the document leaves them out.
+endpoint and token come from PQB_ENDPOINT / PQB_TOKEN.
 
   info   the metastore record (name, id, cloud, region) as one
          pqbench.metastore line
@@ -223,17 +208,16 @@ Examples:
 
 See also:
   pqbench catalog --help   the schemas of one catalog
-  pqbench lake --help      list the tables the endpoint serves
-  pqbench --help           catalog auth, lake-source shape
+  pqbench schema --help    the tables of one schema
+  pqbench --help           catalog auth, PQB_* config
   docs/cli.md";
 
 pub const CATALOG_ABOUT: &str = "Read one catalog's record or list its schemas";
 
 pub const CATALOG_LONG_ABOUT: &str = "\
 Read one catalog at a catalog endpoint: the entity above schemas. The
-endpoint and token come from a pqbench.lake-source on standard input, or from
-PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them
-out. Without a CATALOG argument the command reads pqbench.catalog refs on
+endpoint and token come from PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT).
+Without a CATALOG argument the command reads pqbench.catalog refs on
 standard input — one catalog per line — so `metastore ls | catalog ls` chains.
 
   info   the catalog's record (name, catalog_type, comment, owner) as one
@@ -254,27 +238,26 @@ Examples:
 
 See also:
   pqbench metastore --help  the endpoint's metastore and its catalogs
-  pqbench --help            catalog auth, lake-source shape
+  pqbench --help            catalog auth, PQB_* config
   docs/cli.md";
 
 pub const SCHEMA_ABOUT: &str = "Read one schema's record or list its tables";
 
 pub const SCHEMA_LONG_ABOUT: &str = "\
 Read one schema at a catalog endpoint: the entity between catalogs and
-tables. The endpoint and token come from a pqbench.lake-source on standard
-input, or from PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the
-document leaves them out. Without a CATALOG.SCHEMA argument the command reads
+tables. The endpoint and token come from PQB_ENDPOINT / PQB_TOKEN (and
+PQB_TABLE_FORMAT). Without a CATALOG.SCHEMA argument the command reads
 pqbench.schema refs on standard input — one schema per line — so `catalog ls |
 schema ls` chains.
 
   info   the schema's record (catalog, name, comment, location, properties)
          as one pqbench.schema line
   ls     the tables in the schema, one pqbench.table-ref version 2 line each
-         (id, uri, storage path, storage options) — the document `tablev2 info`
+         (id, uri, storage path, storage options) — the document `table info`
          enriches. Unity
          REST serves /tables; PQB_TABLE_FORMAT=iceberg lists namespaces'
          tables and carries each loadTable URL (the endpoint names the catalog
-         base). The legacy `table` reads version 1 refs only.
+         base).
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
 forces the stream, and `-o` also writes it.";
@@ -287,51 +270,8 @@ Examples:
 
 See also:
   pqbench catalog --help  the schemas of one catalog
-  pqbench tablev2 --help  read a listed table's record
-  pqbench --help          catalog auth, lake-source shape
-  docs/cli.md";
-
-pub const TABLEV2_ABOUT: &str = "Read one table's record without its files";
-
-pub const TABLEV2_LONG_ABOUT: &str = "\
-Read one table at a catalog endpoint: the entity between schemas and
-partitions. The endpoint, token, and object-store options come from a
-pqbench.lake-source on standard input, or from PQB_ENDPOINT / PQB_TOKEN (and
-PQB_TABLE_FORMAT) when the document leaves them out. Without a
-CATALOG.SCHEMA.TABLE argument the command reads pqbench.table-ref version 2
-refs on standard input — one table per line — so `schema ls | tablev2 info`
-chains. Version 1 refs (the legacy `lake` stream) are rejected.
-
-  info   the ref enriched with the table's record (format, snapshot, columns,
-         partition columns, format properties) as one pqbench.table-ref
-         version 2 line. Unity REST serves /tables/{full_name}; the catalog's
-         declared columns and properties are merged over the Delta log read
-         with without_files(), so that path is O(1) in files and needs a
-         readable storage location: the lake source's env, the ref's env, or
-         the process environment. Vended credentials ride the ref (or the
-         process env) from `credentials get`; `credentials check` gates the
-         walk on tables the catalog marks readable outside compute. The
-         emitted record carries the env it read under, so a later stage reads
-         the table's files under the same lease. PQB_TABLE_FORMAT=iceberg reads
-         loadTable, whose metadata is inline, so the Iceberg path runs no
-         storage read.
-
-The name is temporary: the older `pqbench table` still owns `table info`
-(filling a ref's storage path) and the file-loading command, and exchanges
-version 1 documents only.
-
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
-
-pub const TABLEV2_AFTER: &str = "\
-Examples:
-  pqbench tablev2 info dbx_samples.nyctaxi.trips < source.json
-  PQB_ENDPOINT=… pqbench schema ls | pqbench tablev2 info
-
-See also:
-  pqbench schema --help  the tables of one schema
-  pqbench table --help   load a listed table's files
-  pqbench --help         catalog auth, lake-source shape
+  pqbench table --help  read a listed table's record
+  pqbench --help          catalog auth, PQB_* config
   docs/cli.md";
 
 pub const PARTITION_ABOUT: &str = "List a partition's files — the ones its commits added";
@@ -358,10 +298,9 @@ See `pqbench table ls --help` (the partitions), `pqbench bytemass --help`
 pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
 
 pub const CREDENTIALS_LONG_ABOUT: &str = "\
-Check and vend read credentials for table-refs. The endpoint, token, and
-object-store options come from a pqbench.lake-source on standard input, or from
-PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT) when the document leaves them
-out.
+Check and vend read credentials for table-refs. The endpoint, token, dialect,
+and object-store options come from the environment: PQB_ENDPOINT / PQB_TOKEN /
+PQB_TABLE_FORMAT and AWS_*.
 
   check  the walk's single filter: each pqbench.table-ref version 2 ref on
          standard input is checked against the catalog. A `system` catalog
@@ -394,12 +333,12 @@ forces the stream, and `-o` also writes it.";
 pub const CREDENTIALS_AFTER: &str = "\
 Examples:
   PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get
-  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get | pqbench tablev2 info
+  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get | pqbench table info
 
 See also:
-  pqbench tablev2 --help  read a listed table's record
+  pqbench table --help  read a listed table's record
   pqbench schema --help   the tables of one schema
-  pqbench --help          catalog auth, lake-source shape
+  pqbench --help          catalog auth, PQB_* config
   docs/cli.md";
 
 pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
@@ -427,26 +366,6 @@ See also:
   pqbench schema --help     the walk's third level
   docs/cli.md";
 
-pub const DUMP_ABOUT: &str = "Copy the Parquet files a table names into a directory";
-pub const DUMP_LONG_ABOUT: &str = "\
-Write the Parquet files named by a pqbench.table or pqbench.lake document
-into OUTPUT, each at its table-relative path. A single table keeps its own
-layout; a lake nests each table under its name so equal paths do not
-collide. A path that would escape OUTPUT is refused. s3:// needs
---features aws.";
-
-pub const DUMP_AFTER: &str = "\
-Examples:
-  pqbench table ./delta-table | pqbench dump ./sample
-  pqbench dump ./sample s3://bucket/table
-  pqbench lake ./warehouse | pqbench table | pqbench dump ./mirror
-
-See also:
-  pqbench table --help     name the files to copy
-  pqbench bytemass --help  measure those files instead
-  pqbench --help           auth for s3://
-  docs/cli.md";
-
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into a static HTML treemap";
 
 pub const VIZ_LONG_ABOUT: &str = "\
@@ -457,8 +376,7 @@ treemap per table id. Does not measure files. `-o PREFIX` is required.";
 pub const VIZ_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet | pqbench viz -o report
-  pqbench table ./delta-table | pqbench bytemass | pqbench viz -o report
-  pqbench lake ./warehouse | pqbench table | pqbench bytemass | pqbench viz -o report
+  pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass | pqbench viz -o report
   xdg-open report.html
 
 See also:
@@ -523,7 +441,7 @@ keeps every column, and a glob matching nothing is an error. --rows is
 column (default 8).
 
 A terminal prints one row per column as a table; a pipe streams one
-`pqbench.profile-column` per column between begin and end. `--format json`
+`pqbench.profile-column` per column. `--format json`
 (or `--json`) forces the stream, and `-o` also writes it.";
 
 pub const PROFILE_AFTER: &str = "\
@@ -640,6 +558,6 @@ Examples:
 
 See also:
   pqbench credentials --help  check and vend read credentials
-  pqbench tablev2 --help      read a listed table's record
-  pqbench --help              auth, lake-source shape
+  pqbench table --help        read a listed table's record
+  pqbench --help              auth, PQB_* config
   docs/cli.md";

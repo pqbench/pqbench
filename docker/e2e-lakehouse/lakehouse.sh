@@ -68,11 +68,20 @@ wait_http() {
     exit 1
 }
 
-storage_env() {
-    jq -n --arg s3 "$s3_endpoint" '{
-        AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
-        AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
-        AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}'
+# Set the walk's environment: the catalog endpoint and dialect (PQB_*) and the
+# object-store options (AWS_*), all read from the environment. An empty
+# endpoint, dialect, or key is unset, so a stage that only talks to the catalog
+# (`credentials get`) carries no storage key.
+walk_env() {
+    local endpoint=$1 dialect=$2 key=$3 secret=$4 token=${5:-}
+    if [ -n "$endpoint" ]; then export PQB_ENDPOINT="$endpoint"; else unset PQB_ENDPOINT; fi
+    if [ -n "$dialect" ]; then export PQB_TABLE_FORMAT="$dialect"; else unset PQB_TABLE_FORMAT; fi
+    export AWS_REGION=us-east-1
+    export AWS_ENDPOINT="$s3_endpoint" AWS_ENDPOINT_URL="$s3_endpoint"
+    export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
+    if [ -n "$key" ]; then export AWS_ACCESS_KEY_ID="$key"; else unset AWS_ACCESS_KEY_ID; fi
+    if [ -n "$secret" ]; then export AWS_SECRET_ACCESS_KEY="$secret"; else unset AWS_SECRET_ACCESS_KEY; fi
+    if [ -n "$token" ]; then export AWS_SESSION_TOKEN="$token"; else unset AWS_SESSION_TOKEN; fi
 }
 
 up() {
@@ -154,12 +163,13 @@ seed_iceberg() {
     fi
 }
 
-# The README's shape: rows, file count, and column names from the bytemass end.
+# The README's shape: rows, file count, and column names from the bytemass stream.
 measurement_shape() {
     jq -rs '
-        (map(select(.event == "end")) | first) as $end
+        ([.[] | select(.kind == "pqbench.bytemass-file")] | length) as $files
+        | ([.[] | select(.kind == "pqbench.bytemass-row") | .row_count] | first) as $rows
         | ([.[] | select(.kind == "pqbench.bytemass-row") | .column] | sort) as $columns
-        | "\($end.row_count) rows, \($end.file_count) file(s), columns [\($columns | join(", "))]"'
+        | "\($rows) rows, \($files) file(s), columns [\($columns | join(", "))]"'
 }
 
 expect_events() {
@@ -181,37 +191,31 @@ check_unity() {
     set +a
     local measurement measured
 
-    # Unity vends a temporary credential as a pqbench.remote-source.
-    measurement=$(curl -sS -X POST "$unity_catalog/temporary-table-credentials" \
+    # Unity vends a temporary credential; the walk reads the table's storage
+    # under it, with no catalog endpoint (the table is named by URI).
+    local vended_key vended_secret vended_token
+    read -r vended_key vended_secret vended_token < <(
+        curl -sS -X POST "$unity_catalog/temporary-table-credentials" \
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity_catalog/tables/pqbench.demo.events" |
                 jq -c '{table_id, operation: "READ"}')" |
-        jq -c --arg s3 "$s3_endpoint" --arg table "$table_location" \
-            '{kind: "pqbench.remote-source", version: 1, inputs: [$table],
-            env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
-                AWS_SECRET_ACCESS_KEY: .secret_access_key,
-                AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
-                AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
-                AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
-        "$pqbench_bin" table |
+        jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv')
+    walk_env "" "" "$vended_key" "$vended_secret" "$vended_token"
+    measurement=$("$pqbench_bin" table ls "$table_location" |
+        "$pqbench_bin" partition ls |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "unity table" "$measurement")
 
-    # `lake` lists the same table from Unity, then the same table | bytemass pipe.
-    local lake_source="local/lakehouse/lake-source.json"
-    jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
-        --arg key "$VENDED_ACCESS_KEY_ID" --arg secret "$VENDED_SECRET_ACCESS_KEY" \
-        --arg token "$VENDED_SESSION_TOKEN" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
-        env: {AWS_ACCESS_KEY_ID: $key, AWS_SECRET_ACCESS_KEY: $secret,
-            AWS_SESSION_TOKEN: $token, AWS_REGION: "us-east-1",
-            AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
-            AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' > "$lake_source"
-    measurement=$("$pqbench_bin" lake "$lake_source" --include pqbench.demo.events |
-        "$pqbench_bin" table |
+    # `schema ls` lists the same table from Unity; the walk reads it under the
+    # lease the environment carries, and measures the files the window added.
+    walk_env "$unity_catalog" "" "$VENDED_ACCESS_KEY_ID" "$VENDED_SECRET_ACCESS_KEY" "$VENDED_SESSION_TOKEN"
+    measurement=$("$pqbench_bin" schema ls pqbench.demo --format json |
+        "$pqbench_bin" table info |
+        "$pqbench_bin" table ls |
+        "$pqbench_bin" partition ls |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the lake pipe produced no measurement" >&2
         exit 1
@@ -220,7 +224,7 @@ check_unity() {
 
     # `catalog ls` lists Unity's schemas for the same catalog.
     local schemas
-    schemas=$("$pqbench_bin" catalog ls pqbench --format json < "$lake_source" |
+    schemas=$("$pqbench_bin" catalog ls pqbench --format json |
         jq -r 'select(.kind == "pqbench.schema") | .name') || {
         echo "check failed: catalog ls produced no schemas" >&2
         exit 1
@@ -232,7 +236,7 @@ check_unity() {
 
     # `schema ls` lists Unity's tables for the same schema.
     local tables
-    tables=$("$pqbench_bin" schema ls pqbench.demo --format json < "$lake_source" |
+    tables=$("$pqbench_bin" schema ls pqbench.demo --format json |
         jq -r 'select(.kind == "pqbench.table-ref") | .id + " " + (.storage_path // "-")') || {
         echo "check failed: schema ls produced no tables" >&2
         exit 1
@@ -242,92 +246,80 @@ check_unity() {
         exit 1
     }
 
-    # `tablev2 info` reads the record without files: the Unity record plus the
+    # `table info` reads the record without files: the Unity record plus the
     # Delta snapshot metadata, as an enriched `pqbench.table-ref` v2.
     local table_info
-    table_info=$("$pqbench_bin" tablev2 info pqbench.demo.events --format json < "$lake_source" |
+    table_info=$("$pqbench_bin" table info pqbench.demo.events --format json |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))]"') || {
-        echo "check failed: tablev2 info produced no table" >&2
+        echo "check failed: table info produced no table" >&2
         exit 1
     }
     [ "$table_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label]" ] || {
-        echo "check failed (unity tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label]; measured ${table_info:-nothing}" >&2
+        echo "check failed (unity table info): expected pqbench.demo.events delta snapshot=0 columns=[id,label]; measured ${table_info:-nothing}" >&2
         exit 1
     }
 
-    # The per-table loop: refs are durable data only, so each table's worker
-    # gets the lake source (endpoint + storage options, no AWS keys) on stdin,
-    # in memory. `credentials get` materializes the vended session on the ref;
-    # `tablev2 info` reads the Delta log under it and emits no env.
-    local vended_source="local/lakehouse/vended-source.json"
-    jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
-        env: {AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
-            AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' > "$vended_source"
-    local vended_doc
-    vended_doc=$(cat "$vended_source")
+    # `credentials get` materializes the vended session on each ref; with no
+    # key in the environment it must come from the catalog. The ref carries the
+    # lease (keys + token) only — the endpoint stays in the environment.
+    walk_env "$unity_catalog" "" "" ""
     local vended_ref
-    vended_ref=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
-        while IFS= read -r ref; do
-            printf '%s\n%s\n' "$vended_doc" "$ref" |
-                "$pqbench_bin" credentials get --format json
-        done |
+    vended_ref=$("$pqbench_bin" schema ls pqbench.demo --format json |
+        "$pqbench_bin" credentials get --format json |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) key=\(.env.AWS_ACCESS_KEY_ID // "-") session=\(if .env.AWS_SESSION_TOKEN then "set" else "unset" end) endpoint=\(.env.AWS_ENDPOINT // "-")"') || {
         echo "check failed: credentials get produced no ref" >&2
         exit 1
     }
-    [ "$vended_ref" = "pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=$s3_endpoint" ] || {
-        echo "check failed (unity credentials get): expected pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=$s3_endpoint; measured ${vended_ref:-nothing}" >&2
+    [ "$vended_ref" = "pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=-" ] || {
+        echo "check failed (unity credentials get): expected pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=-; measured ${vended_ref:-nothing}" >&2
         exit 1
     }
 
     local vended_info
-    vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json < "$vended_source" |
-        while IFS= read -r ref; do
-            vended=$(printf '%s\n%s\n' "$vended_doc" "$ref" |
-                "$pqbench_bin" credentials get --format json) || exit 1
-            printf '%s\n%s\n' "$vended_doc" "$vended" |
-                "$pqbench_bin" tablev2 info --format json
-        done |
+    vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json |
+        "$pqbench_bin" credentials get --format json |
+        "$pqbench_bin" table info --format json |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) snapshot=\(.snapshot_version) columns=[\([.columns[].name] | join(","))] env=\(if .env then "set" else "none" end)"') || {
         echo "check failed: the vended table loop produced no record" >&2
         exit 1
     }
     [ "$vended_info" = "pqbench.demo.events delta snapshot=0 columns=[id,label] env=set" ] || {
-        echo "check failed (unity vended tablev2 info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
+        echo "check failed (unity vended table info): expected pqbench.demo.events delta snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; tablev2 info: $table_info; vended tablev2 info: $vended_info"
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; table info: $table_info; vended table info: $vended_info"
 }
 
 check_iceberg() {
     ensure_pqbench
     local measurement measured
-    measurement=$(jq -c -n --arg endpoint "$iceberg_rest" --argjson env "$(storage_env)" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
-        "$pqbench_bin" lake |
-        "$pqbench_bin" table |
+    # `schema ls` lists the Iceberg REST namespace; `table info` reads
+    # loadTable's inline metadata and fills the storage path (the metadata
+    # JSON), then the walk measures the files the window added.
+    walk_env "$iceberg_rest/v1" "iceberg" "test" "test"
+    measurement=$("$pqbench_bin" schema ls pqbench.demo --format json |
+        "$pqbench_bin" table info |
+        "$pqbench_bin" table ls |
+        "$pqbench_bin" partition ls |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the Iceberg lake pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "iceberg lake" "$measurement")
 
-    # `tablev2 info` reads loadTable's inline metadata, without files.
+    # `table info` reads loadTable's inline metadata, without files.
     local table_info
-    table_info=$(jq -c -n --arg endpoint "$iceberg_rest/v1" --argjson env "$(storage_env)" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
-        PQB_TABLE_FORMAT=iceberg "$pqbench_bin" tablev2 info pqbench.demo.events --format json |
+    table_info=$("$pqbench_bin" table info pqbench.demo.events --format json |
         jq -r 'select(.kind == "pqbench.table-ref") | "\(.id) \(.format) columns=[\([.columns[].name] | join(","))] snapshot=\(if .snapshot_version > 0 then "set" else "unset" end)"') || {
-        echo "check failed: tablev2 info produced no Iceberg table" >&2
+        echo "check failed: table info produced no Iceberg table" >&2
         exit 1
     }
     [ "$table_info" = "pqbench.demo.events iceberg columns=[id,label] snapshot=set" ] || {
-        echo "check failed (iceberg tablev2 info): expected pqbench.demo.events iceberg columns=[id,label] snapshot=set; measured ${table_info:-nothing}" >&2
+        echo "check failed (iceberg table info): expected pqbench.demo.events iceberg columns=[id,label] snapshot=set; measured ${table_info:-nothing}" >&2
         exit 1
     }
-    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured; tablev2 info: $table_info"
+    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured; table info: $table_info"
 }
 
 check() {

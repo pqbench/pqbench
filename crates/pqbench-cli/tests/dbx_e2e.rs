@@ -5,6 +5,11 @@
 //! into a job directory of NDJSON files (the issue-#58 shape, one command per
 //! iteration).
 //!
+//! The external fixture (`pqbench_ext`, external Delta on customer S3 — see
+//! `scripts/dbx-ext/`) covers the rest of the walk:
+//! `external_fixture_walks_to_bytemass` runs the full pipeline and
+//! `external_fixture_walk_is_the_perf_target` times it.
+//!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
 //! service principal's credentials come from `DBX_SAMPLES_SP_CLIENT_ID` /
 //! `DBX_SAMPLES_SP_CLIENT_SECRET`, or a ready `DBX_TOKEN` is used instead.
@@ -52,10 +57,6 @@ fn scrubbed() -> Command {
     command
 }
 
-fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
-    pipe_env(args, stdin, &[])
-}
-
 /// pqbench with the walk's context in the environment, stdin piped: the
 /// `PQB_ENDPOINT` / `PQB_TOKEN` half of decision 0004.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
@@ -70,12 +71,17 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
     child.wait_with_output().unwrap()
 }
 
-/// One walk step: run pqbench with `stdin` and write stdout to `path` — the
-/// job tree's NDJSON file for that step.
-fn pipe_output(args: &[&str], stdin: &[u8], path: &std::path::Path) -> std::process::Output {
+/// One walk step with extra environment.
+fn pipe_output_env(
+    args: &[&str],
+    stdin: &[u8],
+    path: &std::path::Path,
+    env: &[(&str, &str)],
+) -> std::process::Output {
     let file = std::fs::File::create(path).unwrap();
     let mut child = scrubbed()
         .args(args)
+        .envs(env.iter().copied())
         .stdout(Stdio::from(file))
         .stderr(Stdio::piped())
         .spawn()
@@ -108,17 +114,18 @@ fn unity_endpoint(host: &str) -> String {
     format!("{}/api/2.1/unity-catalog", host.trim_end_matches('/'))
 }
 
-/// A `pqbench.lake-source` naming the live endpoint.
-fn source(endpoint: &str, token: Option<&str>) -> Value {
-    let mut document = json!({
-        "kind": "pqbench.lake-source",
-        "version": 1,
-        "endpoint": endpoint,
-    });
+/// The walk's config: `PQB_ENDPOINT` / `PQB_TOKEN` for the live endpoint.
+fn source<'a>(endpoint: &'a str, token: Option<&'a str>) -> Vec<(&'a str, &'a str)> {
+    let mut env = vec![("PQB_ENDPOINT", endpoint)];
     if let Some(token) = token {
-        document["token"] = json!(token);
+        env.push(("PQB_TOKEN", token));
     }
-    document
+    env
+}
+
+/// pqbench against the live endpoint, with empty stdin.
+fn pipe_live(args: &[&str], endpoint: &str, token: Option<&str>) -> std::process::Output {
+    pipe_env(args, b"", &source(endpoint, token))
 }
 
 /// The service principal's short-lived OAuth M2M bearer, minted once per test
@@ -178,11 +185,10 @@ fn metastore_info_reads_the_live_metastore() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "info", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -218,10 +224,10 @@ fn metastore_ls_lists_the_live_catalogs() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let document = source(&unity_endpoint(&host), Some(&token)).to_string();
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "ls", "--format", "json"],
-        document.as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -248,9 +254,10 @@ fn metastore_ls_lists_the_live_catalogs() {
         ]
     );
 
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "ls", "--format", "table"],
-        document.as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -263,7 +270,7 @@ fn metastore_ls_lists_the_live_catalogs() {
 
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("catalogs.ndjson.zst");
-    let output = pipe(
+    let output = pipe_live(
         &[
             "metastore",
             "ls",
@@ -272,7 +279,8 @@ fn metastore_ls_lists_the_live_catalogs() {
             "-o",
             file.to_str().unwrap(),
         ],
-        document.as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -299,17 +307,19 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let document = source(&unity_endpoint(&host), Some(&token)).to_string();
+    let endpoint = unity_endpoint(&host);
+    let config = source(&endpoint, Some(&token));
 
     let job = tempfile::tempdir().unwrap();
     let metastore = job.path().join("metastore");
     std::fs::create_dir_all(&metastore).unwrap();
 
     let metastore_info = metastore.join("info.jsonl");
-    let output = pipe_output(
+    let output = pipe_output_env(
         &["metastore", "info", "--format", "json"],
-        document.as_bytes(),
+        b"",
         &metastore_info,
+        &config,
     );
     assert!(
         output.status.success(),
@@ -317,10 +327,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         String::from_utf8_lossy(&output.stderr)
     );
     let catalogs = metastore.join("catalogs.jsonl");
-    let output = pipe_output(
+    let output = pipe_output_env(
         &["metastore", "ls", "--format", "json"],
-        document.as_bytes(),
+        b"",
         &catalogs,
+        &config,
     );
     assert!(
         output.status.success(),
@@ -357,10 +368,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         let dir = job.path().join("catalog").join(name);
         std::fs::create_dir_all(&dir).unwrap();
         let catalog_info = dir.join("info.jsonl");
-        let output = pipe_output(
+        let output = pipe_output_env(
             &["catalog", "info", name, "--format", "json"],
-            document.as_bytes(),
+            b"",
             &catalog_info,
+            &config,
         );
         assert!(
             output.status.success(),
@@ -378,10 +390,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         );
 
         let catalog_schemas = dir.join("schemas.jsonl");
-        let output = pipe_output(
+        let output = pipe_output_env(
             &["catalog", "ls", name, "--format", "json"],
-            document.as_bytes(),
+            b"",
             &catalog_schemas,
+            &config,
         );
         assert!(
             output.status.success(),
@@ -404,10 +417,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             let dir = job.path().join("schema").join(&fqn);
             std::fs::create_dir_all(&dir).unwrap();
             let tables = dir.join("tables.jsonl");
-            let output = pipe_output(
+            let output = pipe_output_env(
                 &["schema", "ls", &fqn, "--format", "json"],
-                document.as_bytes(),
+                b"",
                 &tables,
+                &config,
             );
             assert!(
                 output.status.success(),
@@ -435,11 +449,10 @@ fn catalog_info_reads_the_live_catalog() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["catalog", "info", "dbx_samples", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -474,11 +487,10 @@ fn catalog_ls_lists_the_live_schemas() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -497,9 +509,46 @@ fn catalog_ls_lists_the_live_schemas() {
     assert_eq!(names, DBX_SAMPLES_SCHEMAS);
 }
 
-/// `catalog ls` and `schema ls` on the external-location fixture: three
-/// schemas and thirty external Delta tables in `pqbench_ext`, all registered
-/// on customer S3 through the `pqbench_uc_e2e` external location.
+/// The `pqbench_ext` schemas the e2e service principal can see, sorted: the
+/// synthetic `events`/`sales`/`reference` plus the real sample data copied
+/// server-side from `dbx_samples` (see `scripts/dbx-ext/`).
+const EXTERNAL_FIXTURE_SCHEMAS: [&str; 12] = [
+    "accuweather",
+    "bakehouse",
+    "clickbench",
+    "events",
+    "healthverity",
+    "information_schema",
+    "nyctaxi",
+    "reference",
+    "sales",
+    "tpcds_sf1",
+    "tpch_sf1",
+    "tpch_sf10",
+];
+
+/// The table ids `schema ls` lists for one `pqbench_ext` schema.
+fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
+    let fqn = format!("pqbench_ext.{schema}");
+    let output = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", env);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    ndjson(&output.stdout)
+        .iter()
+        .map(|record| {
+            assert_eq!(record["kind"], "pqbench.table-ref");
+            record["id"].as_str().unwrap().to_string()
+        })
+        .collect()
+}
+
+/// `catalog ls` and `schema ls` on the external-location fixture: the
+/// synthetic `events`/`sales`/`reference` (ten two-column tables each) and the
+/// real sample data copied from `dbx_samples`, all external Delta on customer
+/// S3 through the `pqbench_uc_e2e` external location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn catalog_ls_lists_the_external_fixture() {
@@ -531,31 +580,47 @@ fn catalog_ls_lists_the_external_fixture() {
         .iter()
         .map(|record| record["name"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(
-        schemas,
-        ["events", "information_schema", "reference", "sales"]
-    );
+    assert_eq!(schemas, EXTERNAL_FIXTURE_SCHEMAS);
 
-    let mut tables = 0;
+    // The synthetic tables name t01..t10.
+    let mut synthetic = 0;
     for schema in ["events", "sales", "reference"] {
-        let fqn = format!("pqbench_ext.{schema}");
-        let output = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", &env);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let ids: Vec<String> = ndjson(&output.stdout)
-            .iter()
-            .map(|record| record["id"].as_str().unwrap().to_string())
-            .collect();
+        let ids = external_schema_ids(&env, schema);
         let expected: Vec<String> = (1..=10)
             .map(|i| format!("pqbench_ext.{schema}.t{i:02}"))
             .collect();
         assert_eq!(ids, expected);
-        tables += ids.len();
+        synthetic += ids.len();
     }
-    assert_eq!(tables, 30);
+    assert_eq!(synthetic, 30);
+
+    // The copied sample tables. The counts pin the copy set; the singletons
+    // pin the names the walk tests read.
+    for (schema, count) in [
+        ("bakehouse", 6),
+        ("accuweather", 12),
+        ("healthverity", 1),
+        ("tpcds_sf1", 24),
+        ("tpch_sf1", 8),
+        ("tpch_sf10", 8),
+        ("nyctaxi", 1),
+        ("clickbench", 1),
+    ] {
+        let ids = external_schema_ids(&env, schema);
+        assert_eq!(ids.len(), count, "{schema}: {ids:?}");
+    }
+    assert_eq!(
+        external_schema_ids(&env, "nyctaxi"),
+        ["pqbench_ext.nyctaxi.trips"]
+    );
+    assert_eq!(
+        external_schema_ids(&env, "clickbench"),
+        ["pqbench_ext.clickbench.hits"]
+    );
+    assert_eq!(
+        external_schema_ids(&env, "healthverity"),
+        ["pqbench_ext.healthverity.claims_sample_synthetic"]
+    );
 }
 
 /// `schema info` reads `dbx_samples.nyctaxi` from both dialects.
@@ -578,17 +643,21 @@ fn schema_info_reads_the_live_schema() {
         ),
     ] {
         let iceberg = endpoint.contains("/iceberg-rest");
-        let document = source(&endpoint, Some(&token)).to_string();
         let output = if iceberg {
             pipe_env(
                 &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
-                document.as_bytes(),
-                &[("PQB_TABLE_FORMAT", "iceberg")],
+                b"",
+                &[
+                    ("PQB_ENDPOINT", endpoint.as_str()),
+                    ("PQB_TOKEN", token.as_str()),
+                    ("PQB_TABLE_FORMAT", "iceberg"),
+                ],
             )
         } else {
-            pipe(
+            pipe_env(
                 &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
-                document.as_bytes(),
+                b"",
+                &source(&endpoint, Some(&token)),
             )
         };
         assert!(
@@ -618,11 +687,10 @@ fn schema_ls_lists_the_live_tables() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -655,8 +723,12 @@ fn schema_ls_lists_the_live_tables() {
     );
     let output = pipe_env(
         &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -675,10 +747,10 @@ fn schema_ls_lists_the_live_tables() {
         "{trips:?}"
     );
 
-    // The new tree enriches its own v2 refs: `tablev2 info` reads the
+    // The new tree enriches its own v2 refs: `table info` reads the
     // `loadTable` metadata inline, so no storage read runs.
     let info = pipe_env(
-        &["tablev2", "info", "--format", "json"],
+        &["table", "info", "--format", "json"],
         &output.stdout,
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -707,12 +779,12 @@ fn schema_ls_lists_the_live_tables() {
     );
 }
 
-/// `tablev2 info` reads the live Iceberg REST table: the `loadTable` response
+/// `table info` reads the live Iceberg REST table: the `loadTable` response
 /// carries the metadata inline, so the record is complete without any storage
 /// read (the default-storage Delta path cannot read its log).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn tablev2_info_reads_the_live_iceberg_table() {
+fn table_info_reads_the_live_iceberg_table() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -727,14 +799,18 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     );
     let output = pipe_env(
         &[
-            "tablev2",
+            "table",
             "info",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
         ],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -753,13 +829,13 @@ fn tablev2_info_reads_the_live_iceberg_table() {
     assert!(record["iceberg_properties"].is_object(), "{record:?}");
 }
 
-/// `tablev2 info` on the live Unity catalog: the table read runs with the env
+/// `table info` on the live Unity catalog: the table read runs with the env
 /// it is given — here none — so the `without_files()` Delta log read of the
 /// managed default-storage table fails outside compute and the error names the
 /// table and its location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
+fn table_info_names_the_location_when_the_metadata_cannot_be_read() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -769,9 +845,10 @@ fn tablev2_info_names_the_location_when_the_metadata_cannot_be_read() {
         return;
     };
     let endpoint = unity_endpoint(&host);
-    let output = pipe(
-        &["tablev2", "info", "dbx_samples.nyctaxi.trips"],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
+    let output = pipe_live(
+        &["table", "info", "dbx_samples.nyctaxi.trips"],
+        &endpoint,
+        Some(&token),
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -869,8 +946,9 @@ fn credentials_check_gates_the_live_tables() {
 }
 
 /// The whole credentials stage on the external fixture: every table in the
-/// three schemas is eligible, so `schema ls | credentials check | credentials
-/// get` passes each ref through with a vended lease on `env`.
+/// synthetic schemas and in a copied schema is eligible, so `schema ls |
+/// credentials check | credentials get` passes each ref through with a vended
+/// lease on `env`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn credentials_get_vends_the_external_fixture() {
@@ -889,7 +967,7 @@ fn credentials_get_vends_the_external_fixture() {
     ];
 
     let mut tables = 0;
-    for schema in ["events", "sales", "reference"] {
+    for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"] {
         let fqn = format!("pqbench_ext.{schema}");
         let listed = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", &env);
         assert!(
@@ -925,13 +1003,12 @@ fn credentials_get_vends_the_external_fixture() {
             tables += 1;
         }
     }
-    assert_eq!(tables, 30);
+    assert_eq!(tables, 39);
 }
 
 /// The whole walk on the external fixture: `schema ls` → `credentials check`
 /// → `credentials get` → `table ls` groups each table's commits into natural
-/// commit-time windows (one partition per table, in the fixture's single
-/// window).
+/// commit-time windows (at least one partition per table).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn table_ls_groups_the_external_fixture() {
@@ -955,7 +1032,7 @@ fn table_ls_groups_the_external_fixture() {
     ];
 
     let mut partitions = 0;
-    for schema in ["events", "sales", "reference"] {
+    for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"] {
         let fqn = format!("pqbench_ext.{schema}");
         let listed = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", &env);
         assert!(
@@ -1002,17 +1079,178 @@ fn table_ls_groups_the_external_fixture() {
             partitions += 1;
         }
     }
-    assert_eq!(partitions, 30);
+    assert_eq!(partitions, 39);
 }
 
-/// `tablev2 info` on a table in customer storage: `credentials get`
-/// materializes the vended lease on the ref, `tablev2 info` reads the Delta
+/// Run one walk stage and time it; used by the perf target.
+fn timed_stage(
+    env: &[(&str, &str)],
+    args: &[&str],
+    input: &[u8],
+) -> (Vec<u8>, std::time::Duration) {
+    let started = std::time::Instant::now();
+    let output = pipe_env(args, input, env);
+    let elapsed = started.elapsed();
+    assert!(
+        output.status.success(),
+        "{args:?} stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (output.stdout, elapsed)
+}
+
+/// The whole issue-#58 walk on a copied schema, all the way to `bytemass`:
+/// `schema ls` → `credentials check` → `credentials get` → `table info` →
+/// `table ls` → `partition ls` → `bytemass`, each stage fed the previous
+/// stage's NDJSON. This is the tail the file-level commands exist for; the
+/// other fixture tests stop at `table ls`. Set `DBX_WALK_SCHEMA` to walk
+/// another schema (default `pqbench_ext.tpch_sf1`).
+#[test]
+#[ignore = "network: reads the live Databricks endpoint"]
+fn external_fixture_walks_to_bytemass() {
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let region = std::env::var("DBX_AWS_REGION")
+        .ok()
+        .filter(|region| !region.is_empty())
+        .unwrap_or_else(|| "us-east-2".to_string());
+    let schema = std::env::var("DBX_WALK_SCHEMA")
+        .ok()
+        .filter(|schema| !schema.is_empty())
+        .unwrap_or_else(|| "pqbench_ext.tpch_sf1".to_string());
+    let endpoint = unity_endpoint(&host);
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+        ("AWS_REGION", region.as_str()),
+    ];
+
+    let (listed, _) = timed_stage(&env, &["schema", "ls", &schema, "--format", "json"], b"");
+    let (checked, _) = timed_stage(&env, &["credentials", "check", "--format", "json"], &listed);
+    let (vended, _) = timed_stage(&env, &["credentials", "get", "--format", "json"], &checked);
+    let (info, _) = timed_stage(&env, &["table", "info", "--format", "json"], &vended);
+    let (partitions, _) = timed_stage(&env, &["table", "ls", "--format", "json"], &info);
+    let (files, _) = timed_stage(&env, &["partition", "ls", "--format", "json"], &partitions);
+    let (measured, _) = timed_stage(&env, &["bytemass", "--format", "json"], &files);
+
+    // The walk narrows: tables → partitions → files → columns.
+    let tables = ndjson(&info).len();
+    let partition_count = ndjson(&partitions).len();
+    let file_count = ndjson(&files).len();
+    let records = ndjson(&measured);
+    assert!(tables > 0, "{schema}: no tables");
+    assert!(
+        partition_count >= tables,
+        "{schema}: {partition_count} partitions < {tables} tables"
+    );
+    assert!(
+        file_count >= partition_count,
+        "{schema}: {file_count} files < {partition_count} partitions"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "pqbench.bytemass-file"),
+        "{schema}: no bytemass-file record"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "pqbench.bytemass-row"),
+        "{schema}: no bytemass-row record"
+    );
+    println!(
+        "walk {schema}: {tables} tables, {partition_count} partitions, {file_count} files, {} bytemass records",
+        records.len()
+    );
+}
+
+/// The whole external fixture as one timed walk — the process-partitioned perf
+/// target from issue #58 (many tables, not one big table). Ignored like the
+/// rest of the live e2e, and skipped unless `DBX_PERF_SCHEMAS` (comma-separated
+/// `catalog.schema`) names what to walk, so the standard e2e never runs the
+/// whole fixture. It prints per-stage wall time and the counts; the numbers
+/// belong in the pull request (`docs/performance.md`).
+#[test]
+#[ignore = "network + perf: reads the live Databricks endpoint"]
+fn external_fixture_walk_is_the_perf_target() {
+    let Some(schemas) = std::env::var("DBX_PERF_SCHEMAS")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        eprintln!("skipping: set DBX_PERF_SCHEMAS to run the perf walk");
+        return;
+    };
+    let schemas: Vec<String> = schemas.split(',').map(str::to_owned).collect();
+    let Some(host) = dbx_host() else {
+        eprintln!("skipping: DBX_HOST is not set");
+        return;
+    };
+    let Some(token) = any_token(&host) else {
+        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
+        return;
+    };
+    let region = std::env::var("DBX_AWS_REGION")
+        .ok()
+        .filter(|region| !region.is_empty())
+        .unwrap_or_else(|| "us-east-2".to_string());
+    let endpoint = unity_endpoint(&host);
+    let env = [
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TOKEN", token.as_str()),
+        ("AWS_REGION", region.as_str()),
+    ];
+
+    let started = std::time::Instant::now();
+    let mut refs = Vec::new();
+    let mut list_time = std::time::Duration::ZERO;
+    for schema in &schemas {
+        let (listed, elapsed) =
+            timed_stage(&env, &["schema", "ls", schema, "--format", "json"], b"");
+        refs.extend(listed);
+        list_time += elapsed;
+    }
+    let (checked, check_time) =
+        timed_stage(&env, &["credentials", "check", "--format", "json"], &refs);
+    let (vended, get_time) =
+        timed_stage(&env, &["credentials", "get", "--format", "json"], &checked);
+    let (info, info_time) = timed_stage(&env, &["table", "info", "--format", "json"], &vended);
+    let (partitions, group_time) = timed_stage(&env, &["table", "ls", "--format", "json"], &info);
+    let (files, files_time) =
+        timed_stage(&env, &["partition", "ls", "--format", "json"], &partitions);
+    let (measured, mass_time) = timed_stage(&env, &["bytemass", "--format", "json"], &files);
+    let total = started.elapsed();
+
+    let tables = ndjson(&info).len();
+    let partition_count = ndjson(&partitions).len();
+    let file_count = ndjson(&files).len();
+    let records = ndjson(&measured);
+    let bytemass_files = records
+        .iter()
+        .filter(|record| record["kind"] == "pqbench.bytemass-file")
+        .count();
+    assert!(tables > 0, "no tables listed");
+    assert!(bytemass_files > 0, "no bytemass-file records");
+    println!(
+        "perf walk: {} schemas, {tables} tables, {partition_count} partitions, {file_count} files, {bytemass_files} bytemass files in {total:.2?} (ls {list_time:.2?}, check {check_time:.2?}, get {get_time:.2?}, info {info_time:.2?}, table ls {group_time:.2?}, partition ls {files_time:.2?}, bytemass {mass_time:.2?})",
+        schemas.len()
+    );
+}
+
+/// `table info` on a table in customer storage: `credentials get`
+/// materializes the vended lease on the ref, `table info` reads the Delta
 /// log under it, and the lease rides through on the emitted record for the
 /// next stage. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
 /// `DBX_AWS_REGION` to read another one.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn tablev2_info_reads_the_external_aws_table() {
+fn table_info_reads_the_external_aws_table() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1055,7 +1293,7 @@ fn tablev2_info_reads_the_external_aws_table() {
     );
     let enriched = vended[0].to_string();
     let output = pipe_env(
-        &["tablev2", "info", "--format", "json"],
+        &["table", "info", "--format", "json"],
         format!("{enriched}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -1329,8 +1567,12 @@ fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
     );
     let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -1356,10 +1598,7 @@ fn metastore_info_rejects_a_missing_token() {
         eprintln!("skipping: DBX_HOST is not set");
         return;
     };
-    let output = pipe(
-        &["metastore", "info"],
-        source(&unity_endpoint(&host), None).to_string().as_bytes(),
-    );
+    let output = pipe_live(&["metastore", "info"], &unity_endpoint(&host), None);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -1372,11 +1611,10 @@ fn metastore_info_rejects_an_invalid_token() {
         eprintln!("skipping: DBX_HOST is not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "info"],
-        source(&unity_endpoint(&host), Some("not-a-real-token"))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some("not-a-real-token"),
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

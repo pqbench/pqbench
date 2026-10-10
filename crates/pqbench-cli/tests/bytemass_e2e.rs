@@ -32,8 +32,7 @@ fn bytemass_streams_column_rows() {
         String::from_utf8_lossy(&out.stderr)
     );
     let records = ndjson_records(&out.stdout);
-    assert_eq!(records[0]["kind"], "pqbench.bytemass");
-    assert_eq!(records[0]["event"], "begin");
+    assert_eq!(records[0]["kind"], "pqbench.bytemass-file");
     let columns: Vec<_> = records
         .iter()
         .filter(|record| record["kind"] == "pqbench.bytemass-row")
@@ -63,10 +62,9 @@ fn bytemass_streams_column_rows() {
         .as_array()
         .unwrap()
         .is_empty());
-    let end = records.last().unwrap();
-    assert_eq!(end["event"], "end");
-    assert_eq!(end["file_count"], 1);
-    assert_eq!(end["row_count"], 3000);
+    let last = records.last().unwrap();
+    assert_eq!(last["kind"], "pqbench.bytemass-row");
+    assert_eq!(last["row_count"], 3000);
 }
 
 /// End-to-end: `--json` is the same NDJSON stream.
@@ -83,7 +81,7 @@ fn bytemass_json_is_the_stream() {
         String::from_utf8_lossy(&out.stderr)
     );
     let records = ndjson_records(&out.stdout);
-    assert_eq!(records[0]["event"], "begin");
+    assert_eq!(records[0]["kind"], "pqbench.bytemass-file");
     assert!(records
         .iter()
         .any(|record| record["kind"] == "pqbench.bytemass-row"));

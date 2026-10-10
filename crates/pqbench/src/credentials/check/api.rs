@@ -66,7 +66,7 @@ pub enum TableFormat {
 /// as [`Reason::NotATable`], so `schema ls` can list every securable and the
 /// check is the single filter. The caller passes the dialect it runs under and
 /// gets the same [`Eligibility`] either way. The check separates eligibility
-/// from vending: a caller that needs the table itself (`tablev2 info`) can
+/// from vending: a caller that needs the table itself (`table info`) can
 /// report an [`Eligibility::Ineligible`] table with the reason instead of
 /// running a storage read that cannot succeed.
 ///

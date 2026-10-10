@@ -38,16 +38,6 @@ fn experiment_streams_a_control_and_a_sort_trial() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records[0]["kind"], "pqbench.experiment");
-    assert_eq!(records[0]["event"], "begin");
-    assert_eq!(records[0]["aim"], "storage");
-    let capabilities = records[0]["capabilities"].as_array().unwrap();
-    assert!(!capabilities.is_empty());
-    assert!(capabilities.iter().any(|capability| {
-        capability["returns"]
-            .as_array()
-            .is_some_and(|returns| returns.iter().any(|item| item == "zorder:A,B"))
-    }));
     assert!(records.iter().any(|record| {
         record["kind"] == "pqbench.experiment-trial" && record["name"] == "control"
     }));
@@ -58,10 +48,6 @@ fn experiment_streams_a_control_and_a_sort_trial() {
         .iter()
         .any(|record| record["kind"] == "pqbench.experiment-column"
             && record["column"].as_str().is_some()));
-    let end = records.last().unwrap();
-    assert_eq!(end["event"], "end");
-    assert_eq!(end["kind"], "pqbench.experiment");
-    assert!(end["trial_count"].as_u64().unwrap() >= 2);
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 /// Decode an lz4 frame (`-o` output) into its NDJSON bytes.
 fn decode_lz4(bytes: &[u8]) -> Vec<u8> {
@@ -17,11 +17,16 @@ fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
 
-fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+fn pipe(args: &[&str], source: &[(&str, &str)]) -> std::process::Output {
+    pipe_env(args, b"", source)
+}
+
+/// pqbench with stdin, no extra environment.
+fn pipe_stdin(args: &[&str], stdin: &[u8]) -> std::process::Output {
     pipe_env(args, stdin, &[])
 }
 
-/// pqbench with extra environment: the walk's context can come from `PQB_*`.
+/// pqbench with extra environment: the walk's context comes from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let mut child = pqbench()
         .args(args)
@@ -112,10 +117,9 @@ const CATALOG_REFS: &str = concat!(
     "\n",
 );
 
-fn source(endpoint: &str) -> Vec<u8> {
-    json!({"kind": "pqbench.lake-source", "version": 1, "endpoint": endpoint})
-        .to_string()
-        .into_bytes()
+/// The walk's config: `PQB_ENDPOINT` names the endpoint.
+fn source(endpoint: &str) -> [(&str, &str); 1] {
+    [("PQB_ENDPOINT", endpoint)]
 }
 
 #[test]
@@ -208,10 +212,10 @@ fn catalog_info_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn catalog_info_rejects_an_empty_document() {
-    let output = pipe(&["catalog", "info", "dbx_samples"], b"");
+    let output = pipe_stdin(&["catalog", "info", "dbx_samples"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("lake-source"), "{stderr}");
+    assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
 }
 
 #[test]
@@ -285,8 +289,11 @@ fn catalog_ls_lists_iceberg_rest_namespaces() {
     let address = routes(&[("/namespaces", 200, ICEBERG_NAMESPACES)]);
     let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
-        &source(&address),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -313,8 +320,11 @@ fn catalog_ls_follows_iceberg_page_tokens() {
     ]);
     let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
-        &source(&address),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -379,10 +389,10 @@ fn catalog_ls_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn catalog_ls_rejects_an_empty_document() {
-    let output = pipe(&["catalog", "ls", "dbx_samples"], b"");
+    let output = pipe_stdin(&["catalog", "ls", "dbx_samples"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("lake-source"), "{stderr}");
+    assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
 }
 
 #[test]
@@ -442,24 +452,6 @@ fn catalog_ls_lists_a_catalog_stream() {
 }
 
 #[test]
-fn catalog_info_prefers_the_document_over_the_environment() {
-    let address = server(200, CATALOG);
-    let output = pipe_env(
-        &["catalog", "info", "dbx_samples", "--format", "json"],
-        &source(&address),
-        &[("PQB_ENDPOINT", "http://127.0.0.1:9")],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "dbx_samples");
-}
-
-#[test]
 fn catalog_info_takes_a_catalog_or_a_stream_not_both() {
     let address = server(200, CATALOG);
     let output = pipe_env(
@@ -491,7 +483,7 @@ fn catalog_info_reports_an_empty_stream() {
 
 #[test]
 fn catalog_info_rejects_a_bad_fan_out() {
-    let output = pipe(
+    let output = pipe_stdin(
         &["catalog", "info", "dbx_samples", "--fan-out", "lots"],
         b"",
     );

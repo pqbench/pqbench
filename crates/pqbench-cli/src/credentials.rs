@@ -121,7 +121,7 @@ async fn run_get(config: &CredentialsGetConfig) -> Result<(), CliError> {
         let (record, credentials) = result?;
         let vended = credentials.is_some();
         emit.write_row(&VendedRef {
-            record: add_env(record, credentials, &source.env),
+            record: add_env(record, credentials),
             vended,
         })
         .await?;
@@ -215,15 +215,13 @@ fn ineligible(name: &str, reason: Reason) -> String {
     )
 }
 
-/// The table's env: the lake source's options, the ref's own, then the vended
-/// credentials. The vended keys win, so a table-scoped lease replaces any
-/// static key for that table.
+/// The table's env: the ref's own, then the vended credentials. The vended keys
+/// win, so a table-scoped lease replaces any static key for that table.
 fn table_env(
     record: &Value,
     credentials: Option<BTreeMap<String, String>>,
-    source: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
-    let mut env = ref_env(record, source);
+    let mut env = ref_env(record);
     if let Some(credentials) = credentials {
         env.extend(credentials);
     }
@@ -231,15 +229,11 @@ fn table_env(
 }
 
 /// The ref's `env` with the vended credentials written over it.
-fn add_env(
-    mut record: Value,
-    credentials: Option<BTreeMap<String, String>>,
-    source: &BTreeMap<String, String>,
-) -> Value {
+fn add_env(mut record: Value, credentials: Option<BTreeMap<String, String>>) -> Value {
     let Some(credentials) = credentials else {
         return record;
     };
-    let env = table_env(&record, Some(credentials), source);
+    let env = table_env(&record, Some(credentials));
     let Some(object) = record.as_object_mut() else {
         return record;
     };

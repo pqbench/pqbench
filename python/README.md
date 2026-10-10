@@ -28,22 +28,17 @@ import pqbench
 pqbench.lz("file.bin", codecs=["zstd@3"], samples=10, json=True)
 pqbench.compression("data.parquet", per_column=True, json=True)
 rows = pqbench.bytemass("data.parquet")          # list of bytemass-row dicts
-pqbench.table("./delta-table")                   # pqbench.table document
-pqbench.lake("./warehouse")                      # pqbench.lake document
-pqbench.dump("dump-dir", info)                    # copy the table's files
+pqbench.table("./delta-table")                   # the table's record
 pqbench.viz(rows, output="report")               # report.html
 ```
 
-`pqbench.commands` is `("lz", "compression", "bytemass", "table", "lake",
-"dump", "viz")`.
+`pqbench.commands` is `("lz", "compression", "bytemass", "table", "viz")`.
 
 `codecs` repeats `codec@level`. Defaults match the CLI: `samples` 10,
 `warmup_iterations` 3, `mode` `fastest`. `mode` is `fastest` or `mean`.
-`table` and `lake` always return the versioned document. `dump` accepts a table
-URI or those documents and copies the Parquet files a table or lake names into
-the output directory, returning `file_count` and `byte_count`. `viz` collects a
-bytemass row list into a static HTML treemap. `env` on `bytemass` and `table` may
-only contain `AWS_*` names.
+`table` returns the table's record. `viz` collects a bytemass row list into a
+static HTML treemap. `env` on `bytemass` and `table` may only contain `AWS_*`
+names.
 
 ## Publish to PyPI
 

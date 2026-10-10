@@ -274,7 +274,6 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     let previous = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
         .await
         .unwrap();
-    assert_eq!(previous.kind, "pqbench.table");
     assert_eq!(previous.format, TableFormat::ICEBERG);
     assert_eq!(previous.snapshot_version, 0);
     assert_eq!(previous.files.len(), 1);
@@ -299,6 +298,26 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
         .iter()
         .any(|action| action.kind == "delete"));
     assert_eq!(latest.log.len(), 2);
+}
+
+#[tokio::test]
+async fn partition_ls_names_the_files_a_snapshot_added() {
+    let fixture = Fixture::new();
+    let files = pqbench::partition::ls::list(
+        &fixture.metadata.to_string_lossy(),
+        &Default::default(),
+        &[1],
+    )
+    .await
+    .unwrap();
+    let mut uris: Vec<_> = files.iter().map(|file| file.uri.clone()).collect();
+    uris.sort();
+    let mut expected = vec![
+        file_uri(&fixture.root.join("data").join("first.parquet")),
+        file_uri(&fixture.root.join("data").join("second.parquet")),
+    ];
+    expected.sort();
+    assert_eq!(uris, expected);
 }
 
 #[tokio::test]

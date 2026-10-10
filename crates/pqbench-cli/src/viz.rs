@@ -2,6 +2,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use futures_util::StreamExt;
 use pqbench::bytemass::{FileStat, MassRow};
 use pqbench::viz::{self, MassRecord};
 
@@ -39,37 +40,19 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
 async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliError> {
     let mut rows = Vec::new();
     let mut files = Vec::new();
-    let mut begun = false;
-    document::visit_input(input, async |record| {
-        match record {
-            Record::BytemassBegin => begun = true,
+    let mut records = document::records(input).await?;
+    while let Some(record) = records.next().await {
+        match record? {
             Record::BytemassFile(file) => files.push(file),
             Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
-            Record::BytemassEnd | Record::BytemassPage => {}
-            Record::Table(_)
-            | Record::TableRef(_)
-            | Record::Begin(_)
-            | Record::Commit { .. }
-            | Record::File { .. }
-            | Record::End { .. }
-            | Record::Lake(_)
-            | Record::LakeSource(_)
-            | Record::LakeBegin
-            | Record::LakeEnd
-            | Record::RemoteSource(_) => {
+            Record::BytemassPage => {}
+            Record::File { .. } | Record::RemoteSource(_) => {
                 return Err(
                     "viz reads a pqbench.bytemass stream; measure with `pqbench bytemass` first"
                         .into(),
                 );
             }
         }
-        Ok(())
-    })
-    .await?;
-    if !begun {
-        return Err(
-            "viz reads a pqbench.bytemass stream; measure with `pqbench bytemass` first".into(),
-        );
     }
     if rows.is_empty() {
         return Err("bytemass stream has no rows".into());

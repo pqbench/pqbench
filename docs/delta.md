@@ -1,15 +1,15 @@
 # Delta tables
 
 The `pqbench` library contains an optional Delta Lake table module that detects
-a Delta table, loads its transaction log, and names the active Parquet files.
-Measurement is a separate step: `pqbench table` emits the document, and
-`pqbench bytemass` reads the files. Delta dependencies are feature-gated and
-remain out of the default dependency graph.
+a Delta table, reads its transaction log, and names the active Parquet files.
+Measurement is a separate step: `pqbench table ls | pqbench partition ls`
+emits the files, and `pqbench bytemass` reads them. Delta dependencies are
+feature-gated and remain out of the default dependency graph.
 
 ```mermaid
 flowchart TD
     delta_log[Delta transaction log] --> delta[pqbench::table::delta]
-    delta --> document[pqbench.table document]
+    delta --> document[pqbench.partition document]
     document --> bytemass[pqbench::bytemass]
     bytemass --> isolation[pqbench::object_store]
     isolation --> object_store[object_store crate]
@@ -18,40 +18,38 @@ flowchart TD
     pqbench_cli --> bytemass
 ```
 
-`pqbench table` names the format before it loads anything. `_delta_log` is
+`pqbench table ls` names the format before it reads anything. `_delta_log` is
 Delta and wins UniForm; Iceberg has its own loader. The Delta module uses
-delta-rs to select a table snapshot and names each active file. It does not
-measure footers. The only module that names the `object_store` crate is
-`pqbench::object_store`, which adapts it to the small `ObjectReader` interface
-(`stat` + `read_range`) the rest of the crate uses.
+delta-rs to select a table snapshot and names each commit and its active files.
+It does not measure footers. The only module that names the `object_store` crate
+is `pqbench::object_store`, which adapts it to the small `ObjectReader`
+interface (`stat` + `read_range`) the rest of the crate uses.
 
 ## Usage
 
-Load the latest snapshot, or an explicit version, then measure the named files.
-A terminal prints the active files as a table and a summary:
+List the table's natural partitions, then their files, then measure them. A
+terminal prints the partitions as a table and a summary:
 
 ```console run delta
-$ pqbench table docker/e2e-lakehouse/table --format table
-path                                                                 size_bytes  num_records
--------------------------------------------------------------------  ----------  -----------
-part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3
-tables: 1
-files: 1 (796 bytes)
+$ pqbench table ls docker/e2e-lakehouse/table --format table
+table                          first_time      last_time  commits
+--------------------------  -------------  -------------  -------
+docker/e2e-lakehouse/table  1789862400000  1789948800000        1
+partitions: 1
 ```
 
-`--version N` loads an explicit Delta commit instead of the latest. Build with
-the feature when you run from source, e.g.
-`cargo run -p pqbench-cli --features delta -- table ./path/to/table`, or run
+Build with the feature when you run from source, e.g.
+`cargo run -p pqbench-cli --features delta -- table ls ./path/to/table`, or run
 the same command in a container.
 
 Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
 options travel on the document as `env` (`AWS_*` only); they are not written
 into the process environment. The cargo command is
-`cargo run -p pqbench-cli --features delta-s3 -- table s3://bucket/table`.
+`cargo run -p pqbench-cli --features delta-s3 -- table ls s3://bucket/table`.
 
 A producer can supply the table URI and vended credentials as
-`pqbench.remote-source`. `table` detects the format, loads the log, and the
-document carries `env` to `bytemass`:
+`pqbench.remote-source`. `table ls` reads the log, and the env travels to
+`partition ls` and `bytemass`:
 
 ## Backends
 
@@ -60,27 +58,25 @@ S3 support is compiled behind the `aws` feature inside `pqbench::object_store`
 not compiled in fails at runtime with a message naming the missing feature.
 Adding another scheme is one arm in the factory plus one feature. The `delta`
 feature flag gates the loader; its private `delta_helpers` module is the only
-code that names the `deltalake` crate and is plain async. `pqbench table` drives
-a load on a current-thread runtime, so delta-rs selects its own executor instead
-of borrowing the caller's.
+code that names the `deltalake` crate and is plain async. `pqbench table ls`
+drives a load on a current-thread runtime, so delta-rs selects its own executor
+instead of borrowing the caller's.
 
 ## Document
 
-`pqbench.table` version 1 names the format, the JSON commits that remain on
-disk, and the active files (path, URI, log size). On a pipe that is one JSON object per line, each tagged with a table `id`:
-`begin`, then `pqbench.table-log` commits, then `pqbench.table-file` rows,
-then `end`. `lake` emits `pqbench.table-ref` lines; `table` loads them one at a
-time. A table is the work unit: scan a catalog by running one `table` process
-per table and letting the shell fan out (`xargs -P`). `bytemass` measures each
-file as its line arrives and compares its size to the log. A single
-`pqbench.table` object is still accepted. A terminal prints the active files
-as a table and the summary (format, snapshot, commit count, file count,
+`pqbench.partition` version 1 groups a table's commits into an epoch-aligned
+commit-time window: `definition` (the window), `commits` (the Delta versions it
+holds), and the `env` to read the table's files. `partition ls` re-reads those
+commits and emits the files they **added** as `pqbench.table-file` rows (path,
+URI, log size), each carrying the env; a file a later commit removes is still
+named. `bytemass` measures each file as its line arrives and compares its size
+to the log. A terminal prints the files as a table and the summary (file count,
 bytes); a pipe streams NDJSON. `--format json` forces the stream, and `-o`
 also writes it without delaying stdout:
 
 ```console run delta
-$ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
-$ pqbench bytemass /tmp/table.ndjson.zst --format table
+$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls -o /tmp/partition.ndjson.zst
+$ pqbench bytemass /tmp/partition.ndjson.zst --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -92,31 +88,21 @@ columns: 2
 
 ## Memory use
 
-With NDJSON output, direct table paths and piped table references emit each
-available JSON commit and active file without retaining a second complete
-history or file list in the CLI. Output writes are awaited, so a slow consumer
-slows the producer.
+With NDJSON output, `table ls` emits each partition and `partition ls` each
+available active file without retaining a second complete history or file list
+in the CLI. Output writes are awaited, so a slow consumer slows the producer.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 delta-rs skips the active-file replay, and the load reports the snapshot
 version, schema, partition columns, and properties at O(1) in files.
-`pqbench tablev2 info` is that caller.
+`pqbench table info` is that caller.
 
 Delta-rs still loads its active-file snapshot before the first record. Its lazy
 file stream in the pinned version rejects malformed optional statistics that
 the existing loader tolerates, so it is not a compatible replacement yet.
 Memory also includes the largest individual commit and per-partition totals;
 human table output buffers rows to align columns. All available JSON history
-is still read. The collecting library API retains logs and files by default;
-visitor callers can disable both with `with_collect_log(false)` and
-`with_collect_files(false)`.
-
-## Visitor events
-
-`visit_load` emits `BEGIN` with an empty log and file list, then `COMMIT` for
-each log entry, then `FILE` for each active file. Consumers that previously
-read the log from `BEGIN` should handle `COMMIT` instead. The NDJSON record
-format and the collecting `load` API are unchanged.
+is still read. The library API retains the log and files it reads.
 
 ## Limitations
 

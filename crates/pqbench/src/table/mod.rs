@@ -1,9 +1,13 @@
-//! Table-format discovery and metadata.
+//! The table command: one table's record and its natural partitions.
+//!
+//! [`info`] reads one table's record from a catalog (Unity or Iceberg REST),
+//! without files, so the cost is O(1) in files. [`ls`] groups the table's
+//! commits into natural partitions by commit time.
 //!
 //! [`detect`] names the format from on-disk markers before any format-specific
 //! loader runs. [`load`] then fetches the table metadata. For Delta that is the
 //! transaction log plus the resolved active files; for Iceberg, the metadata
-//! JSON and Avro manifests. Measurement is a later step: pipe the document to
+//! JSON and Avro manifests. Measurement is a later step: pipe the record to
 //! `bytemass`.
 //!
 //! Enable the `delta` feature to load Delta logs. That feature requires Rust
@@ -178,17 +182,12 @@ pub struct Column {
     pub nullable: bool,
 }
 
-/// A versioned table document: format, log, and the files the snapshot names.
+/// A table's record: format, log, and the files the snapshot names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TableInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_selection: Option<FileSelection>,
-    /// Document kind; always `pqbench.table`.
-    pub kind: String,
-    /// Document version; currently `1`.
-    #[serde(rename = "version")]
-    pub document_version: u32,
     /// Detected table format.
     pub format: TableFormat,
     /// Table root as given (path or URI).
@@ -228,7 +227,7 @@ pub struct TableInfo {
 }
 
 impl TableInfo {
-    /// Assemble a table document from its parts.
+    /// Assemble a table record from its parts.
     #[must_use]
     pub fn new(
         format: TableFormat,
@@ -241,8 +240,6 @@ impl TableInfo {
     ) -> Self {
         Self {
             file_selection: None,
-            kind: "pqbench.table".into(),
-            document_version: 1,
             format,
             uri: uri.into(),
             name: String::new(),
@@ -268,24 +265,17 @@ pub struct LoadRequest {
     pub uri: String,
     /// Snapshot version; `None` selects the latest.
     pub snapshot_version: Option<u64>,
-    /// Storage options (`AWS_*` names), copied onto the document.
+    /// Storage options (`AWS_*` names), copied onto the record.
     pub env: BTreeMap<String, String>,
     /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
     pub file_stats: bool,
     /// When false, read only the snapshot metadata: no commit log, no active
-    /// files. [`visit_load`] emits the header and nothing else.
+    /// files.
     // aipnaming: allow(aip-140/verbs)
     pub require_files: bool,
     /// When true, read the commit log even when [`Self::require_files`] is
     /// false: `table ls` needs the commits' times, not the files.
     pub require_log: bool,
-    /// When false, do not retain active files on the returned document.
-    /// [`visit_load`] still emits each file; partition totals are kept.
-    // aipnaming: allow(aip-140/verbs)
-    pub collect_files: bool,
-    /// When false, emit commits without retaining them on the returned document.
-    // aipnaming: allow(aip-140/verbs)
-    pub collect_log: bool,
 }
 
 impl LoadRequest {
@@ -303,8 +293,6 @@ impl LoadRequest {
             file_stats: true,
             require_files: true,
             require_log: false,
-            collect_files: true,
-            collect_log: true,
         }
     }
 
@@ -335,41 +323,6 @@ impl LoadRequest {
         self.require_files = false;
         self
     }
-
-    /// Drop commits from the returned document after visiting each commit.
-    // aipnaming: allow(aip-136/method-prepositions)
-    #[must_use]
-    pub fn with_collect_log(mut self, collect_log: bool) -> Self {
-        self.collect_log = collect_log;
-        self
-    }
-
-    /// Drop the file list from the returned document after visiting each file.
-    // aipnaming: allow(aip-136/method-prepositions)
-    #[must_use]
-    pub fn with_collect_files(mut self, collect_files: bool) -> Self {
-        self.collect_files = collect_files;
-        self
-    }
-}
-
-/// One step of [`visit_load`]: snapshot header, available commits, then active files.
-pub enum LoadEvent<'a> {
-    /// Snapshot header. `log` and `files` are empty.
-    BEGIN {
-        /// Table document without active files.
-        info: &'a TableInfo,
-    },
-    /// One available log commit (or Iceberg snapshot summary).
-    COMMIT {
-        /// Commit just read from the transaction log.
-        commit: &'a LogCommit,
-    },
-    /// One active file, in replay order.
-    FILE {
-        /// File just resolved from the snapshot.
-        file: &'a TableFile,
-    },
 }
 
 /// Name the table format from well-known markers. Does not load the log.
@@ -402,26 +355,10 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
-    visit_load(request, async |_| Ok(())).await
-}
-
-/// Load a table, visiting its header, commits, then active files.
-///
-/// Delta files are visited from the add-action stream. Iceberg files are
-/// visited after the manifests are read. When [`LoadRequest::collect_files`]
-/// is false the returned document keeps partition totals and drops `files`.
-/// Set [`LoadRequest::collect_log`] to false to drop visited commits as well.
-///
-/// # Errors
-/// Same as [`load`].
-pub async fn visit_load(
-    request: &LoadRequest,
-    mut visit: impl AsyncFnMut(LoadEvent<'_>) -> Result<(), Error>,
-) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::visit_load(request, &mut visit).await,
-        TableFormat::ICEBERG => iceberg::visit_load(request, &mut visit).await,
+        TableFormat::DELTA => delta::load(request).await,
+        TableFormat::ICEBERG => iceberg::load(request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
     }
 }
@@ -559,6 +496,11 @@ async fn probe(uri: &str, relative: &str, options: &[(String, String)]) -> Resul
 }
 
 pub(crate) fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
+    // An absolute location is already the answer: a Delta log names a file
+    // relative to the table root, but an Iceberg manifest names it absolute.
+    if relative.contains("://") || relative.starts_with('/') {
+        return Ok(relative.to_string());
+    }
     if is_local(base) {
         return Ok(local_path(base)?
             .join(relative)

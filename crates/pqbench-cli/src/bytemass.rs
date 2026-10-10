@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::Args;
+use futures_util::StreamExt;
 use pqbench::bytemass;
 use pqbench::table::TableFile;
 use serde::Serialize;
@@ -14,7 +15,8 @@ use crate::CliError;
 /// Arguments for `bytemass`.
 #[derive(Args)]
 pub(crate) struct BytemassArgs {
-    /// parquet paths, a `pqbench.table` document, or `-` for standard input
+    /// parquet paths, a `pqbench.table-file` / `pqbench.remote-source`
+    /// document, or `-` for standard input
     inputs: Vec<String>,
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -37,7 +39,10 @@ pub(crate) struct BytemassArgs {
 pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
     if args.inputs.is_empty() {
         if std::io::stdin().is_terminal() {
-            return Err("bytemass needs parquet files or a table document".into());
+            return Err(
+                "bytemass needs parquet files or a pqbench.table-file / pqbench.remote-source document"
+                    .into(),
+            );
         }
         return measure_document("-", args).await;
     }
@@ -50,16 +55,9 @@ pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
 async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    let mut envs: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    let mut open: BTreeSet<String> = BTreeSet::new();
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.bytemass",
-        version: 1,
-        event: "begin",
-    })
-    .await?;
-    document::visit_input(input, async |record| {
-        match record {
+    let mut records = document::records(input).await?;
+    while let Some(record) = records.next().await {
+        match record? {
             Record::RemoteSource(source) => {
                 for uri in source.inputs {
                     measure_input(
@@ -73,57 +71,21 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                     .await?;
                 }
             }
-            Record::Table(info) => {
-                for file in info.files {
-                    measure_file(
-                        &mut emit,
-                        &mut stats,
-                        &info.uri,
-                        file,
-                        info.env.clone(),
-                        (args.indexes, args.pages),
-                    )
-                    .await?;
-                }
-            }
-            Record::TableRef(table) => {
-                envs.insert(table.id, table.env);
-            }
-            Record::Begin(begin) => {
-                envs.insert(begin.id.clone(), begin.env);
-                open.insert(begin.id);
-            }
             Record::File { id, file, env } => {
-                let env = if env.is_empty() {
-                    envs.get(&id).cloned().unwrap_or_default()
-                } else {
-                    env
-                };
-                measure_file(&mut emit, &mut stats, &id, file, env, (args.indexes, args.pages)).await?;
+                measure_file(
+                    &mut emit,
+                    &mut stats,
+                    &id,
+                    file,
+                    env,
+                    (args.indexes, args.pages),
+                )
+                .await?;
             }
-            Record::Commit { .. } => {}
-            Record::End { id } => {
-                open.remove(&id);
-            }
-            Record::Lake(_) | Record::LakeSource(_) | Record::LakeBegin | Record::LakeEnd => {
-                return Err(
-                    "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
-                        .into(),
-                );
-            }
-            Record::BytemassBegin
-            | Record::BytemassFile(_)
-            | Record::BytemassRow { .. }
-            | Record::BytemassPage
-            | Record::BytemassEnd => {
+            Record::BytemassFile(_) | Record::BytemassRow { .. } | Record::BytemassPage => {
                 return Err("a bytemass stream goes to `pqbench viz`".into());
             }
         }
-        Ok(())
-    })
-    .await?;
-    if !open.is_empty() {
-        return Err("table stream ended without end".into());
     }
     finish_stream(emit, &stats, args.output.as_deref()).await
 }
@@ -210,12 +172,6 @@ async fn measure(
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.bytemass",
-        version: 1,
-        event: "begin",
-    })
-    .await?;
     for input in bytemass::expand_inputs(&inputs, &env).await? {
         measure_input(
             &mut emit,
@@ -246,18 +202,10 @@ async fn write_row(
 }
 
 async fn finish_stream(
-    mut emit: Emitter,
+    emit: Emitter,
     stats: &MassStats,
     output: Option<&std::path::Path>,
 ) -> Result<(), CliError> {
-    emit.write_event(&EndRecord {
-        kind: "pqbench.bytemass",
-        event: "end",
-        file_count: stats.file_rows.len(),
-        row_count: stats.row_count(),
-        column_count: stats.column_count,
-    })
-    .await?;
     emit.finish(&stats.summary(output)).await
 }
 
@@ -289,13 +237,6 @@ impl MassStats {
         }
         out
     }
-}
-
-#[derive(Serialize)]
-struct BeginRecord {
-    kind: &'static str,
-    version: u32,
-    event: &'static str,
 }
 
 #[derive(Serialize)]
@@ -336,15 +277,6 @@ impl Row for RowRecord<'_> {
             row.num_values.to_string(),
         ]
     }
-}
-
-#[derive(Serialize)]
-struct EndRecord {
-    kind: &'static str,
-    event: &'static str,
-    file_count: usize,
-    row_count: u64,
-    column_count: usize,
 }
 
 #[derive(Serialize)]

@@ -34,8 +34,7 @@ fn compression_sweeps_codecs() {
         .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_slice(line).expect("ndjson line"))
         .collect();
-    assert_eq!(records[0]["kind"], "pqbench.compression");
-    assert_eq!(records[0]["event"], "begin");
+    assert_eq!(records[0]["kind"], "pqbench.compression-row");
     let codecs: Vec<_> = records
         .iter()
         .filter(|record| record["kind"] == "pqbench.compression-row")
@@ -58,5 +57,4 @@ fn compression_sweeps_codecs() {
             "missing column {column}"
         );
     }
-    assert_eq!(records.last().unwrap()["event"], "end");
 }

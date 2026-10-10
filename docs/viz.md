@@ -6,8 +6,7 @@ commands so either end can change without the other.
 
 ```console run delta
 $ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
-$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
-$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 `-o report` writes `report.html` (here `/tmp/report.html`). A terminal prints a
@@ -15,7 +14,7 @@ short summary. The HTML file embeds the measured rows; open it without a server.
 
 ```mermaid
 flowchart LR
-    files[Parquet / table / lake] --> bytemass[pqbench bytemass]
+    files[Parquet / table files] --> bytemass[pqbench bytemass]
     bytemass --> stream["pqbench.bytemass-row lines"]
     stream --> viz[pqbench viz]
     viz --> html[report.html]

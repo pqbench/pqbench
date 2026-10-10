@@ -10,6 +10,5 @@ mod support;
 fn visualize_a_bytemass_stream() {
     // visualize_a_bytemass_stream, from line 7
     support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 8, None);
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report", 9, None);
-    support::run("pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass | pqbench viz -o /tmp/report", 10, None);
+    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report", 9, None);
 }

@@ -31,8 +31,6 @@ fn profile_streams_column_facts_for_a_sample() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records[0]["kind"], "pqbench.profile");
-    assert_eq!(records[0]["event"], "begin");
     let columns: Vec<&serde_json::Value> = records
         .iter()
         .filter(|record| record["kind"] == "pqbench.profile-column")
@@ -43,8 +41,6 @@ fn profile_streams_column_facts_for_a_sample() {
     assert!(column["column"].is_string());
     assert!(column["null_fraction"].is_number());
     assert!(column["ndv"].is_number());
-    assert_eq!(records.last().unwrap()["event"], "end");
-    assert_eq!(records.last().unwrap()["column_count"], columns.len());
 }
 
 #[test]
@@ -72,7 +68,7 @@ fn profile_honours_columns_and_rows() {
         .collect();
     assert_eq!(columns.len(), 1);
     assert_eq!(columns[0]["column"], "text");
-    assert_eq!(records.last().unwrap()["row_count"], 32);
+    assert_eq!(columns[0]["num_values"], 32);
 }
 
 #[test]

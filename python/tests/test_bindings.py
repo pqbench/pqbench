@@ -11,7 +11,6 @@ import pqbench
 _ROOT = Path(__file__).resolve().parents[2]
 _PARQUET = _ROOT / "crates" / "pqbench-cli" / "tests" / "fixtures" / "small_reddit_none.parquet"
 _TABLE = _ROOT / "docker" / "e2e-lakehouse" / "table"
-_LAKE = _ROOT / "docker" / "e2e-lakehouse"
 
 
 class BindingsTest(unittest.TestCase):
@@ -23,8 +22,6 @@ class BindingsTest(unittest.TestCase):
                 "compression",
                 "bytemass",
                 "table",
-                "lake",
-                "dump",
                 "profile",
                 "experiment",
                 "skill",
@@ -142,35 +139,8 @@ class BindingsTest(unittest.TestCase):
 
     def test_table_loads_a_delta_snapshot(self) -> None:
         info = pqbench.table(str(_TABLE))
-        self.assertEqual(info["kind"], "pqbench.table")
         self.assertEqual(info["format"], "delta")
         self.assertGreaterEqual(len(info["files"]), 1)
-
-    def test_lake_lists_tables(self) -> None:
-        lake = pqbench.lake(str(_LAKE))
-        self.assertEqual(lake["kind"], "pqbench.lake")
-        names = [table["name"] for table in lake["tables"]]
-        self.assertTrue(any("table" in name for name in names), names)
-
-    def test_dump_copies_a_table(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            summary = pqbench.dump(directory, str(_TABLE))
-            self.assertGreaterEqual(summary["file_count"], 1)
-            self.assertGreater(summary["byte_count"], 0)
-            self.assertTrue(list(Path(directory).rglob("*.parquet")))
-
-    def test_dump_reads_a_table_document(self) -> None:
-        info = pqbench.table(str(_TABLE))
-        with tempfile.TemporaryDirectory() as directory:
-            summary = pqbench.dump(directory, info)
-            self.assertGreaterEqual(summary["file_count"], 1)
-
-    def test_dump_rejects_a_lake_that_has_not_been_loaded(self) -> None:
-        lake = pqbench.lake(str(_LAKE))
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaises(ValueError) as caught:
-                pqbench.dump(directory, lake)
-            self.assertIn("table", str(caught.exception).lower())
 
     def test_version_is_the_crate_version(self) -> None:
         self.assertRegex(pqbench.__version__, r"^\d+\.\d+\.\d+$")
@@ -185,9 +155,9 @@ class BindingsTest(unittest.TestCase):
             self.assertTrue(page.startswith("<!DOCTYPE html>"))
             self.assertIn("d3-hierarchy@3", page)
 
-    def test_viz_rejects_a_table_document(self) -> None:
+    def test_viz_rejects_a_table_file(self) -> None:
         with self.assertRaises(ValueError) as caught:
-            pqbench.viz({"kind": "pqbench.table", "version": 1}, output="report")
+            pqbench.viz({"kind": "pqbench.table-file", "id": "t"}, output="report")
         self.assertIn("bytemass", str(caught.exception))
 
     def test_missing_input_fails(self) -> None:

@@ -15,13 +15,6 @@ pub(crate) async fn run(args: &BenchArgs) -> Result<(), CliError> {
     };
     let report = lz::lz(&request)?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.lz",
-        version: 1,
-        event: "begin",
-        file: args.file.to_string_lossy(),
-    })
-    .await?;
     for row in &report.rows {
         emit.write_row(&RowRecord {
             kind: "pqbench.lz-row",
@@ -29,12 +22,6 @@ pub(crate) async fn run(args: &BenchArgs) -> Result<(), CliError> {
         })
         .await?;
     }
-    emit.write_event(&EndRecord {
-        kind: "pqbench.lz",
-        event: "end",
-        row_count: report.rows.len(),
-    })
-    .await?;
     let mut summary = format!(
         "file: {}\nrows: {}\n",
         args.file.display(),
@@ -44,14 +31,6 @@ pub(crate) async fn run(args: &BenchArgs) -> Result<(), CliError> {
         summary.push_str(&format!("output: {}\n", path.display()));
     }
     emit.finish(&summary).await
-}
-
-#[derive(Serialize)]
-struct BeginRecord<'a> {
-    kind: &'static str,
-    version: u32,
-    event: &'static str,
-    file: std::borrow::Cow<'a, str>,
 }
 
 #[derive(Serialize)]
@@ -88,11 +67,4 @@ impl Row for RowRecord<'_> {
             format!("{:.2}", row.ratio),
         ]
     }
-}
-
-#[derive(Serialize)]
-struct EndRecord {
-    kind: &'static str,
-    event: &'static str,
-    row_count: usize,
 }

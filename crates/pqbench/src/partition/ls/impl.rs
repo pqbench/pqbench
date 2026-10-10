@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::table::{self, LoadEvent, LoadRequest, TableFile};
+use crate::table::{self, LoadRequest, TableFile};
 
 use super::api::Error;
 
@@ -12,27 +12,29 @@ pub(crate) async fn list(
     versions: &[u64],
 ) -> Result<Vec<TableFile>, Error> {
     let wanted: BTreeSet<u64> = versions.iter().copied().collect();
-    let request = LoadRequest::new(uri.to_string(), None, env.clone()).with_log();
+    // The files a commit added ride on the log. Delta's log names them itself,
+    // but Iceberg attaches a snapshot's files only when they are resolved, so
+    // the read must request them: `with_log()` alone leaves an Iceberg commit
+    // with no `add` actions and the walk measures nothing.
+    let request = LoadRequest::new(uri.to_string(), None, env.clone());
+    let info = table::load(&request)
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
     let mut files = Vec::new();
-    table::visit_load(&request, async |event| {
-        let LoadEvent::COMMIT { commit } = event else {
-            return Ok(());
-        };
+    for commit in &info.log {
         if !wanted.contains(&commit.version) {
-            return Ok(());
+            continue;
         }
         for action in &commit.actions {
             if action.kind != "add" {
                 continue;
             }
             if let Some(path) = &action.path {
-                let uri = table::join_uri(uri, path)?;
-                files.push(TableFile::new(path.clone(), uri, 0));
+                let file_uri =
+                    table::join_uri(uri, path).map_err(|error| Error::from(error.to_string()))?;
+                files.push(TableFile::new(path.clone(), file_uri, 0));
             }
         }
-        Ok(())
-    })
-    .await
-    .map_err(|error| Error::from(error.to_string()))?;
+    }
     Ok(files)
 }

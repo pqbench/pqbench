@@ -17,11 +17,16 @@ fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
 
-fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+fn pipe(args: &[&str], source: &[(&str, &str)]) -> std::process::Output {
+    pipe_env(args, b"", source)
+}
+
+/// pqbench with stdin, no extra environment.
+fn pipe_stdin(args: &[&str], stdin: &[u8]) -> std::process::Output {
     pipe_env(args, stdin, &[])
 }
 
-/// pqbench with extra environment: the walk's context can come from `PQB_*`.
+/// pqbench with extra environment: the walk's context comes from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let mut child = pqbench()
         .args(args)
@@ -65,10 +70,9 @@ fn server(status: u16, body: &'static str) -> String {
 
 const SUMMARY: &str = r#"{"name":"metastore_aws_us_east_2","metastore_id":"29dded30","cloud":"aws","region":"us-east-2"}"#;
 
-fn source(endpoint: &str) -> Vec<u8> {
-    json!({"kind": "pqbench.lake-source", "version": 1, "endpoint": endpoint})
-        .to_string()
-        .into_bytes()
+/// The walk's config: `PQB_ENDPOINT` names the endpoint.
+fn source(endpoint: &str) -> [(&str, &str); 1] {
+    [("PQB_ENDPOINT", endpoint)]
 }
 
 #[test]
@@ -149,24 +153,11 @@ fn metastore_info_reports_an_unauthorized_endpoint() {
 }
 
 #[test]
-fn metastore_info_rejects_a_document_that_is_not_a_lake_source() {
-    let document = json!({
-        "kind": "pqbench.lake",
-        "version": 1,
-        "tables": [{"name": "events", "uri": "/tmp/events"}]
-    });
-    let output = pipe(&["metastore", "info"], document.to_string().as_bytes());
+fn metastore_info_needs_an_endpoint() {
+    let output = pipe_stdin(&["metastore", "info"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("lake-source"), "{stderr}");
-}
-
-#[test]
-fn metastore_info_rejects_an_empty_document() {
-    let output = pipe(&["metastore", "info"], b"");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("lake-source"), "{stderr}");
+    assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
 }
 
 /// One endpoint that answers one page per request, in order.

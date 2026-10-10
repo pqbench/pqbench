@@ -48,15 +48,6 @@ pub(crate) async fn run(args: &ExperimentArgs) -> Result<(), CliError> {
     let sample = read_typed_sample(std::path::Path::new(&args.input), max_rows)?;
     let report = experiment::experiment(&sample, &request)?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.experiment",
-        version: 1,
-        event: "begin",
-        row_count: report.row_count,
-        aim: report.aim.as_str(),
-        capabilities: &report.capabilities,
-    })
-    .await?;
     for trial in &report.trials {
         emit.write_row(&TrialRecord {
             kind: "pqbench.experiment-trial",
@@ -72,13 +63,6 @@ pub(crate) async fn run(args: &ExperimentArgs) -> Result<(), CliError> {
             .await?;
         }
     }
-    emit.write_event(&EndRecord {
-        kind: "pqbench.experiment",
-        event: "end",
-        trial_count: report.trials.len(),
-        row_count: report.row_count,
-    })
-    .await?;
     emit.finish(&summary(&report, args.output.as_deref())).await
 }
 
@@ -110,16 +94,6 @@ fn summary(experiment: &Experiment, output: Option<&std::path::Path>) -> String 
         out.push_str(&format!("output: {}\n", path.display()));
     }
     out
-}
-
-#[derive(Serialize)]
-struct BeginRecord<'a> {
-    kind: &'static str,
-    version: u32,
-    event: &'static str,
-    row_count: u64,
-    aim: &'a str,
-    capabilities: &'a [pqbench::experiment::Capability],
 }
 
 #[derive(Serialize)]
@@ -190,12 +164,4 @@ impl Row for ColumnRecord<'_> {
             column.dictionary.to_string(),
         ]
     }
-}
-
-#[derive(Serialize)]
-struct EndRecord {
-    kind: &'static str,
-    event: &'static str,
-    trial_count: usize,
-    row_count: u64,
 }
