@@ -52,10 +52,6 @@ fn scrubbed() -> Command {
     command
 }
 
-fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
-    pipe_env(args, stdin, &[])
-}
-
 /// pqbench with the walk's context in the environment, stdin piped: the
 /// `PQB_ENDPOINT` / `PQB_TOKEN` half of decision 0004.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
@@ -70,12 +66,17 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
     child.wait_with_output().unwrap()
 }
 
-/// One walk step: run pqbench with `stdin` and write stdout to `path` — the
-/// job tree's NDJSON file for that step.
-fn pipe_output(args: &[&str], stdin: &[u8], path: &std::path::Path) -> std::process::Output {
+/// One walk step with extra environment.
+fn pipe_output_env(
+    args: &[&str],
+    stdin: &[u8],
+    path: &std::path::Path,
+    env: &[(&str, &str)],
+) -> std::process::Output {
     let file = std::fs::File::create(path).unwrap();
     let mut child = scrubbed()
         .args(args)
+        .envs(env.iter().copied())
         .stdout(Stdio::from(file))
         .stderr(Stdio::piped())
         .spawn()
@@ -108,17 +109,18 @@ fn unity_endpoint(host: &str) -> String {
     format!("{}/api/2.1/unity-catalog", host.trim_end_matches('/'))
 }
 
-/// A `pqbench.lake-source` naming the live endpoint.
-fn source(endpoint: &str, token: Option<&str>) -> Value {
-    let mut document = json!({
-        "kind": "pqbench.lake-source",
-        "version": 1,
-        "endpoint": endpoint,
-    });
+/// The walk's config: `PQB_ENDPOINT` / `PQB_TOKEN` for the live endpoint.
+fn source<'a>(endpoint: &'a str, token: Option<&'a str>) -> Vec<(&'a str, &'a str)> {
+    let mut env = vec![("PQB_ENDPOINT", endpoint)];
     if let Some(token) = token {
-        document["token"] = json!(token);
+        env.push(("PQB_TOKEN", token));
     }
-    document
+    env
+}
+
+/// pqbench against the live endpoint, with empty stdin.
+fn pipe_live(args: &[&str], endpoint: &str, token: Option<&str>) -> std::process::Output {
+    pipe_env(args, b"", &source(endpoint, token))
 }
 
 /// The service principal's short-lived OAuth M2M bearer, minted once per test
@@ -178,11 +180,10 @@ fn metastore_info_reads_the_live_metastore() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "info", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -218,10 +219,10 @@ fn metastore_ls_lists_the_live_catalogs() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let document = source(&unity_endpoint(&host), Some(&token)).to_string();
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "ls", "--format", "json"],
-        document.as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -248,9 +249,10 @@ fn metastore_ls_lists_the_live_catalogs() {
         ]
     );
 
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "ls", "--format", "table"],
-        document.as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -263,7 +265,7 @@ fn metastore_ls_lists_the_live_catalogs() {
 
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("catalogs.ndjson.zst");
-    let output = pipe(
+    let output = pipe_live(
         &[
             "metastore",
             "ls",
@@ -272,7 +274,8 @@ fn metastore_ls_lists_the_live_catalogs() {
             "-o",
             file.to_str().unwrap(),
         ],
-        document.as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -299,17 +302,19 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let document = source(&unity_endpoint(&host), Some(&token)).to_string();
+    let endpoint = unity_endpoint(&host);
+    let config = source(&endpoint, Some(&token));
 
     let job = tempfile::tempdir().unwrap();
     let metastore = job.path().join("metastore");
     std::fs::create_dir_all(&metastore).unwrap();
 
     let metastore_info = metastore.join("info.jsonl");
-    let output = pipe_output(
+    let output = pipe_output_env(
         &["metastore", "info", "--format", "json"],
-        document.as_bytes(),
+        b"",
         &metastore_info,
+        &config,
     );
     assert!(
         output.status.success(),
@@ -317,10 +322,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         String::from_utf8_lossy(&output.stderr)
     );
     let catalogs = metastore.join("catalogs.jsonl");
-    let output = pipe_output(
+    let output = pipe_output_env(
         &["metastore", "ls", "--format", "json"],
-        document.as_bytes(),
+        b"",
         &catalogs,
+        &config,
     );
     assert!(
         output.status.success(),
@@ -357,10 +363,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         let dir = job.path().join("catalog").join(name);
         std::fs::create_dir_all(&dir).unwrap();
         let catalog_info = dir.join("info.jsonl");
-        let output = pipe_output(
+        let output = pipe_output_env(
             &["catalog", "info", name, "--format", "json"],
-            document.as_bytes(),
+            b"",
             &catalog_info,
+            &config,
         );
         assert!(
             output.status.success(),
@@ -378,10 +385,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         );
 
         let catalog_schemas = dir.join("schemas.jsonl");
-        let output = pipe_output(
+        let output = pipe_output_env(
             &["catalog", "ls", name, "--format", "json"],
-            document.as_bytes(),
+            b"",
             &catalog_schemas,
+            &config,
         );
         assert!(
             output.status.success(),
@@ -404,10 +412,11 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             let dir = job.path().join("schema").join(&fqn);
             std::fs::create_dir_all(&dir).unwrap();
             let tables = dir.join("tables.jsonl");
-            let output = pipe_output(
+            let output = pipe_output_env(
                 &["schema", "ls", &fqn, "--format", "json"],
-                document.as_bytes(),
+                b"",
                 &tables,
+                &config,
             );
             assert!(
                 output.status.success(),
@@ -435,11 +444,10 @@ fn catalog_info_reads_the_live_catalog() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["catalog", "info", "dbx_samples", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -474,11 +482,10 @@ fn catalog_ls_lists_the_live_schemas() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -578,17 +585,21 @@ fn schema_info_reads_the_live_schema() {
         ),
     ] {
         let iceberg = endpoint.contains("/iceberg-rest");
-        let document = source(&endpoint, Some(&token)).to_string();
         let output = if iceberg {
             pipe_env(
                 &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
-                document.as_bytes(),
-                &[("PQB_TABLE_FORMAT", "iceberg")],
+                b"",
+                &[
+                    ("PQB_ENDPOINT", endpoint.as_str()),
+                    ("PQB_TOKEN", token.as_str()),
+                    ("PQB_TABLE_FORMAT", "iceberg"),
+                ],
             )
         } else {
-            pipe(
+            pipe_env(
                 &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
-                document.as_bytes(),
+                b"",
+                &source(&endpoint, Some(&token)),
             )
         };
         assert!(
@@ -618,11 +629,10 @@ fn schema_ls_lists_the_live_tables() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        source(&unity_endpoint(&host), Some(&token))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some(&token),
     );
     assert!(
         output.status.success(),
@@ -655,8 +665,12 @@ fn schema_ls_lists_the_live_tables() {
     );
     let output = pipe_env(
         &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -733,8 +747,12 @@ fn table_info_reads_the_live_iceberg_table() {
             "--format",
             "json",
         ],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -769,9 +787,10 @@ fn table_info_names_the_location_when_the_metadata_cannot_be_read() {
         return;
     };
     let endpoint = unity_endpoint(&host);
-    let output = pipe(
+    let output = pipe_live(
         &["table", "info", "dbx_samples.nyctaxi.trips"],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
+        &endpoint,
+        Some(&token),
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1329,8 +1348,12 @@ fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
     );
     let output = pipe_env(
         &["catalog", "ls", "dbx_samples", "--format", "json"],
-        source(&endpoint, Some(&token)).to_string().as_bytes(),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TOKEN", token.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -1356,10 +1379,7 @@ fn metastore_info_rejects_a_missing_token() {
         eprintln!("skipping: DBX_HOST is not set");
         return;
     };
-    let output = pipe(
-        &["metastore", "info"],
-        source(&unity_endpoint(&host), None).to_string().as_bytes(),
-    );
+    let output = pipe_live(&["metastore", "info"], &unity_endpoint(&host), None);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -1372,11 +1392,10 @@ fn metastore_info_rejects_an_invalid_token() {
         eprintln!("skipping: DBX_HOST is not set");
         return;
     };
-    let output = pipe(
+    let output = pipe_live(
         &["metastore", "info"],
-        source(&unity_endpoint(&host), Some("not-a-real-token"))
-            .to_string()
-            .as_bytes(),
+        &unity_endpoint(&host),
+        Some("not-a-real-token"),
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);

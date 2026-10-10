@@ -1,10 +1,10 @@
-//! The walk's input: context, parent refs, and the options a table read needs.
+//! The walk's input: the environment's config and the parent-level refs.
 //!
-//! A metadata command reads one stream. The first record may be a
-//! `pqbench.lake-source` — the walk's context: the endpoint and bearer.
-//! `PQB_ENDPOINT` / `PQB_TOKEN` fill in what the document leaves out. Every
-//! other record is a parent-level ref (`catalog info` and `catalog ls` read
-//! `pqbench.catalog` refs, one catalog per line), so the levels chain:
+//! Every level is a stateless filter: it reads only its parent's records
+//! (`catalog` reads `pqbench.catalog` refs, one per line) and writes its own
+//! kind. Nothing else rides the stream. The endpoint, bearer, dialect, and
+//! object-store options come from the environment — configuration management
+//! sets them (`pqbench setup` prints them for the shell to eval):
 //!
 //! ```text
 //! PQB_ENDPOINT=… PQB_TOKEN=… pqbench metastore ls | pqbench catalog ls | …
@@ -22,20 +22,19 @@ use std::io::IsTerminal;
 
 use futures_util::stream::{self, Stream, StreamExt};
 use pqbench::credentials;
-use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
 use crate::CliError;
 
-/// The endpoint and bearer a metadata command runs under, the catalog
-/// dialect it speaks, and the object-store options its table reads need.
+/// The endpoint and bearer a metadata command runs under, the catalog dialect
+/// it speaks, and the object-store options its table reads need. All of it
+/// comes from the environment.
 #[derive(Debug, Clone)]
 pub(crate) struct Source {
     pub endpoint: String,
     pub token: Option<String>,
     pub table_format: TableFormat,
-    pub env: BTreeMap<String, String>,
 }
 
 /// The catalog dialect the walk runs against.
@@ -87,16 +86,13 @@ pub(crate) struct Context {
     pub source: Source,
     /// Whether stdin was a pipe (a stream), not a terminal.
     pub piped: bool,
-    /// The first record, when it is a ref rather than the lake source.
+    /// The first record, when stdin carried one.
     pub first: Option<Value>,
     /// The lines after the first record.
     pub lines: Lines<BufReader<tokio::io::Stdin>>,
 }
 
 /// The parent records: the peeked first record, then the rest of stdin.
-///
-/// A `pqbench.lake-source` after the first record is an error: the context
-/// must come first for the stream to start.
 pub(crate) fn records(
     command: &'static str,
     first: Option<Value>,
@@ -113,19 +109,13 @@ pub(crate) fn records(
             }
             let record: Value = serde_json::from_str(&line)
                 .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
-            if record["kind"] == "pqbench.lake-source" {
-                return Err(format!("{command} reads one pqbench.lake-source").into());
-            }
             return Ok(Some((record, lines)));
         }
     });
     Box::pin(first.chain(rest))
 }
 
-/// The catalog, schema, and table a `pqbench.table-ref` v2 ref names.
-///
-/// Version 1 refs (the legacy `lake` stream) are rejected, so the old and new
-/// trees never consume each other.
+/// The catalog, schema, and table a `pqbench.table-ref` ref names.
 pub(crate) fn table_ref(
     command: &str,
     record: &Value,
@@ -161,12 +151,10 @@ pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, S
     Ok((catalog.to_string(), schema.to_string(), table.to_string()))
 }
 
-/// The ref's `env` merged over the lake source's: the table's vended options win.
-pub(crate) fn ref_env(
-    record: &Value,
-    source: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut env = source.clone();
+/// The object-store options a ref carries (`AWS_*` names only). The process
+/// environment supplies the rest through the client's own chain.
+pub(crate) fn ref_env(record: &Value) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
     if let Some(values) = record["env"].as_object() {
         for (key, value) in values {
             if let Some(value) = value.as_str() {
@@ -205,28 +193,14 @@ pub(crate) async fn vend(
     }
 }
 
-#[derive(Deserialize)]
-struct Document {
-    version: u32,
-    #[serde(default)]
-    endpoint: Option<String>,
-    #[serde(default)]
-    token: Option<String>,
-    #[serde(default)]
-    table_format: Option<String>,
-    #[serde(default)]
-    env: BTreeMap<String, String>,
-}
-
-/// Read stdin's first record: a `pqbench.lake-source` (context) or a ref
-/// (kept for the command's record stream), and resolve the context once.
+/// Read stdin's first record (a parent ref, kept for the command's stream) and
+/// resolve the environment's config once.
 pub(crate) async fn read_input(command: &'static str) -> Result<Context, CliError> {
     read_context(command, true).await
 }
 
 /// Like `read_input`, but the endpoint is optional: a command that reads a
-/// table by storage path (`table ls`) needs the lake source's env, not a
-/// catalog.
+/// table by storage path (`table ls`) needs no catalog.
 pub(crate) async fn read_storage_input(command: &'static str) -> Result<Context, CliError> {
     read_context(command, false).await
 }
@@ -234,7 +208,6 @@ pub(crate) async fn read_storage_input(command: &'static str) -> Result<Context,
 async fn read_context(command: &'static str, require_endpoint: bool) -> Result<Context, CliError> {
     let piped = !std::io::stdin().is_terminal();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut document: Option<Document> = None;
     let mut first = None;
     if piped {
         while let Some(line) = lines.next_line().await? {
@@ -243,17 +216,11 @@ async fn read_context(command: &'static str, require_endpoint: bool) -> Result<C
             }
             let record: Value = serde_json::from_str(&line)
                 .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
-            if record["kind"] == "pqbench.lake-source" {
-                document = Some(serde_json::from_value(record).map_err(|error| {
-                    format!("{command} reads a pqbench.lake-source document: {error}")
-                })?);
-            } else {
-                first = Some(record);
-            }
+            first = Some(record);
             break;
         }
     }
-    let source = resolve(command, document, require_endpoint)?;
+    let source = resolve(command, require_endpoint)?;
     Ok(Context {
         source,
         piped,
@@ -262,55 +229,24 @@ async fn read_context(command: &'static str, require_endpoint: bool) -> Result<C
     })
 }
 
-/// The document wins field by field; the environment fills in the rest.
-fn resolve(
-    command: &str,
-    document: Option<Document>,
-    require_endpoint: bool,
-) -> Result<Source, CliError> {
-    if let Some(document) = &document {
-        if document.version != 1 {
-            return Err(
-                "unsupported lake source; expected kind `pqbench.lake-source` version 1".into(),
-            );
-        }
-    }
-    let endpoint = document
-        .as_ref()
-        .and_then(|document| document.endpoint.clone())
-        .filter(|endpoint| !endpoint.trim().is_empty())
-        .or_else(env_endpoint);
-    let endpoint = match endpoint {
+/// The environment is the whole configuration: `PQB_ENDPOINT`, `PQB_TOKEN`,
+/// and `PQB_TABLE_FORMAT`.
+fn resolve(command: &str, require_endpoint: bool) -> Result<Source, CliError> {
+    let endpoint = match env_endpoint() {
         Some(endpoint) => endpoint,
         None if require_endpoint => {
-            return Err(format!(
-                "{command} needs a pqbench.lake-source on standard input or PQB_ENDPOINT"
-            )
-            .into())
+            return Err(format!("{command} needs PQB_ENDPOINT (see `pqbench setup`)").into())
         }
         None => String::new(),
     };
-    let token = document
-        .as_ref()
-        .and_then(|document| document.token.clone())
-        .filter(|token| !token.is_empty())
-        .or_else(env_token);
-    let table_format = document
-        .as_ref()
-        .and_then(|document| document.table_format.clone())
-        .or_else(env_table_format)
+    let table_format = env_table_format()
         .map(|value| parse_table_format(command, &value))
         .transpose()?
         .unwrap_or(TableFormat::Unity);
-    let env = document.map(|document| document.env).unwrap_or_default();
-    if let Some(key) = env.keys().find(|key| !key.starts_with("AWS_")) {
-        return Err(format!("a lake source may only set AWS_* variables, not `{key}`").into());
-    }
     Ok(Source {
         endpoint,
-        token,
+        token: env_token(),
         table_format,
-        env,
     })
 }
 

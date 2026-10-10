@@ -92,7 +92,7 @@ async fn run_info(config: &InfoConfig) -> Result<(), CliError> {
         let (catalog, schema, name) = split_table("table info", table)?;
         let storage = info::Storage {
             location: None,
-            env: context.source.env.clone(),
+            env: BTreeMap::new(),
         };
         let record = read_record(&context.source, &catalog, &schema, &name, &storage).await?;
         emit.write_row(&table_record(&record, storage.env)).await?;
@@ -112,7 +112,7 @@ async fn run_info(config: &InfoConfig) -> Result<(), CliError> {
             let (catalog, schema, name) = table_ref("table info", &record)?;
             let storage = info::Storage {
                 location: record["storage_path"].as_str().map(str::to_owned),
-                env: ref_env(&record, &source.env),
+                env: ref_env(&record),
             };
             let record = read_record(&source, &catalog, &schema, &name, &storage).await?;
             Ok::<_, CliError>((record, storage.env))
@@ -254,14 +254,13 @@ async fn run_ls(args: &LsArgs) -> Result<(), CliError> {
                     "table ls takes a table URI or a pqbench.table-ref v2 stream, not both".into(),
                 );
             }
-            let env = context.source.env.clone();
+            let env = BTreeMap::new();
             partitions += list_partitions(uri, &env, window, &mut emit).await?;
         }
         _ => {
             if !context.piped {
                 return Err("table ls needs a table URI or a pqbench.table-ref v2 stream".into());
             }
-            let source = context.source;
             let records = source::records("table ls", context.first, context.lines);
             let mut reads = records
                 .map(|record| async {
@@ -276,7 +275,7 @@ async fn run_ls(args: &LsArgs) -> Result<(), CliError> {
                             )
                         })?
                         .to_string();
-                    let env = ref_env(&record, &source.env);
+                    let env = ref_env(&record);
                     let found = table::ls::list(&uri, &env, window)
                         .await
                         .map_err(|error| CliError::from(error.to_string()))?;

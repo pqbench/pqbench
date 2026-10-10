@@ -52,10 +52,6 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliErr
             | Record::Commit { .. }
             | Record::File { .. }
             | Record::End { .. }
-            | Record::Lake
-            | Record::LakeSource
-            | Record::LakeBegin
-            | Record::LakeEnd
             | Record::RemoteSource(_) => {
                 return Err(
                     "viz reads a pqbench.bytemass stream; measure with `pqbench bytemass` first"

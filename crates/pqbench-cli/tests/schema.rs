@@ -1,17 +1,22 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
 
-fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
+fn pipe(args: &[&str], source: &[(&str, &str)]) -> std::process::Output {
+    pipe_env(args, b"", source)
+}
+
+/// pqbench with stdin, no extra environment.
+fn pipe_stdin(args: &[&str], stdin: &[u8]) -> std::process::Output {
     pipe_env(args, stdin, &[])
 }
 
-/// pqbench with extra environment: the walk's context can come from `PQB_*`.
+/// pqbench with extra environment: the walk's context comes from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let mut child = pqbench()
         .args(args)
@@ -124,10 +129,9 @@ fn overlapping_routes(
     (address, peak)
 }
 
-fn source(endpoint: &str) -> Vec<u8> {
-    json!({"kind": "pqbench.lake-source", "version": 1, "endpoint": endpoint})
-        .to_string()
-        .into_bytes()
+/// The walk's config: `PQB_ENDPOINT` names the endpoint.
+fn source(endpoint: &str) -> [(&str, &str); 1] {
+    [("PQB_ENDPOINT", endpoint)]
 }
 
 const SCHEMA: &str = r#"{"name":"nyctaxi","catalog_name":"dbx_samples","comment":"taxi data","storage_location":"s3://bucket/nyctaxi","properties":{"owner":"data"}}"#;
@@ -195,8 +199,11 @@ fn schema_info_reads_the_iceberg_rest_namespace() {
     let address = routes(&[("/namespaces/", 200, ICEBERG_NAMESPACE)]);
     let output = pipe_env(
         &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
-        &source(&address),
-        &[("PQB_TABLE_FORMAT", "iceberg")],
+        b"",
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -257,10 +264,10 @@ fn schema_info_needs_a_dotted_name() {
 
 #[test]
 fn schema_info_rejects_an_empty_document() {
-    let output = pipe(&["schema", "info", "dbx_samples.nyctaxi"], b"");
+    let output = pipe_stdin(&["schema", "info", "dbx_samples.nyctaxi"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("lake-source"), "{stderr}");
+    assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
 }
 
 #[test]

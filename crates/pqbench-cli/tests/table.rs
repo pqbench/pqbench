@@ -883,11 +883,11 @@ fn table_info_needs_a_dotted_name() {
 }
 
 #[test]
-fn table_info_rejects_an_empty_document() {
+fn table_info_needs_an_endpoint() {
     let output = pipe(&["table", "info", "dbx_samples.nyctaxi.trips"], "");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("lake-source"), "{stderr}");
+    assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
 }
 
 #[test]

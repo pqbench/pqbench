@@ -100,17 +100,19 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                 } else {
                     env
                 };
-                measure_file(&mut emit, &mut stats, &id, file, env, (args.indexes, args.pages)).await?;
+                measure_file(
+                    &mut emit,
+                    &mut stats,
+                    &id,
+                    file,
+                    env,
+                    (args.indexes, args.pages),
+                )
+                .await?;
             }
             Record::Commit { .. } => {}
             Record::End { id } => {
                 open.remove(&id);
-            }
-            Record::Lake | Record::LakeSource | Record::LakeBegin | Record::LakeEnd => {
-                return Err(
-                    "bytemass measures files; list them with `pqbench table ls | pqbench partition ls` first"
-                        .into(),
-                );
             }
             Record::BytemassBegin
             | Record::BytemassFile(_)
