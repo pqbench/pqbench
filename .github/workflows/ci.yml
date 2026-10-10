@@ -123,6 +123,119 @@ jobs:
           # The gate: non-zero if any api.rs carries a feature flag.
           [ "$status" = ok ]
 
+  # Software metrics of the source tree, from a pinned rust-code-analysis
+  # release binary (no workspace dependency, on purpose — see AGENTS.md). On a
+  # pull request it analyzes only the changed Rust files, head and base side by
+  # side: per-function annotations land on the diff, a sticky comment carries
+  # the base→head deltas, and the raw per-file diff goes to the log. On a push
+  # it rolls the whole tree up for the job summary. Report-only: not part of
+  # the required `CI` gate, and not run by `make check`.
+  code-analysis:
+    name: Code analysis
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write   # the sticky delta comment
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install rust-code-analysis-cli
+        run: |
+          # The release archive, fetched over TLS and verified by checksum.
+          curl -sSL -o rca.tar.gz \
+            https://github.com/mozilla/rust-code-analysis/releases/download/v0.0.25/rust-code-analysis-linux-cli-x86_64.tar.gz
+          echo "9ec2a217b8ff191e02dab5d5f2eee6158b63fd975c532b2c5d67c2e6c7249894  rca.tar.gz" | sha256sum -c -
+          tar xzf rca.tar.gz
+          ./rust-code-analysis-cli --version
+      - name: Measure
+        id: measure
+        run: |
+          # One JSON document per source file, in parallel (the CLI's default
+          # -j is every core); `diff -r` pairs them by path, order-independent.
+          rca() { "$GITHUB_WORKSPACE/rust-code-analysis-cli" --metrics "$@"; }
+          head_metrics="$RUNNER_TEMP/head-metrics"
+          base_metrics=""
+          scope="the workspace"
+          mkdir -p "$head_metrics"
+          if [ "${{ github.event_name }}" != pull_request ]; then
+            rca -O json --pr -o "$head_metrics" -p crates
+          else
+            # Only the Rust files this PR changed. The checkout is the merge
+            # commit, so diffing the base tip against HEAD is the PR's change.
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            git fetch --no-tags --depth=1 origin "$base_sha"
+            mapfile -t files < <(git diff --name-only --no-renames \
+              --diff-filter=ACM "$base_sha" HEAD -- '*.rs')
+            scope="no Rust files changed"
+            if [ ${#files[@]} -gt 0 ]; then
+              args=(); for file in "${files[@]}"; do args+=(-p "$file"); done
+              rca -O json --pr -o "$head_metrics" "${args[@]}"
+              base_tree="$RUNNER_TEMP/base-tree"
+              base_metrics="$RUNNER_TEMP/base-metrics"
+              mkdir -p "$base_tree" "$base_metrics"
+              # Base versions of the files that exist there; added files have none.
+              base_args=()
+              for file in "${files[@]}"; do
+                if git cat-file -e "$base_sha:$file" 2>/dev/null; then
+                  mkdir -p "$base_tree/$(dirname "$file")"
+                  git show "$base_sha:$file" > "$base_tree/$file"
+                  base_args+=(-p "$file")
+                fi
+              done
+              if [ ${#base_args[@]} -gt 0 ]; then
+                ( cd "$base_tree" && "$GITHUB_WORKSPACE/rust-code-analysis-cli" \
+                    --metrics -O json --pr -o "$base_metrics" "${base_args[@]}" )
+              fi
+              scope="${#files[@]} changed Rust file(s)"
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "scope: $scope"
+
+          # The CLI is per-file; roll the file-level metrics up for the job
+          # summary (the full JSON is ~9 MB, over the 1 MiB cap). A no-op PR
+          # still gets a line, so the job is never silent.
+          {
+            echo "### Code analysis — $scope"
+            echo
+            if find "$head_metrics" -name '*.json' -print -quit | grep -q .; then
+              echo '```json'
+              find "$head_metrics" -name '*.json' -print0 | xargs -0 jq -s '{
+                files: length,
+                sloc: (map(.metrics.loc.sloc) | add),
+                cloc: (map(.metrics.loc.cloc) | add),
+                functions: (map(.metrics.nom.functions) | add),
+                cyclomatic_total: (map(.metrics.cyclomatic.sum) | add),
+                cyclomatic_max: (map(.metrics.cyclomatic.max) | max),
+                cognitive_total: (map(.metrics.cognitive.sum) | add),
+                mi_average: ((map(.metrics.mi.mi_visual_studio) | add) / length | . * 10 | round / 10)
+              }'
+              echo '```'
+            else
+              echo "_No Rust files changed._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Every PR gets a sticky comment — the base→head deltas, or a plain
+          # note when nothing Rust changed — so the job is never invisible.
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            python3 scripts/code_analysis.py comment "$head_metrics" \
+              "$base_metrics" "${{ github.base_ref }}" > "$RUNNER_TEMP/comment.md"
+            if [ -n "$base_metrics" ]; then
+              echo "::group::Metrics diff vs ${{ github.base_ref }}"
+              diff -ru "$base_metrics" "$head_metrics" || true
+              echo "::endgroup::"
+            fi
+          fi
+      - name: Annotate the changed files
+        if: steps.measure.outputs.changed == 'true'
+        run: python3 scripts/code_analysis.py annotate "$RUNNER_TEMP/head-metrics"
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: code-analysis
+          path: ${{ runner.temp }}/comment.md
+
   # Every LFS-typed file must be committed as a pointer. A raw git blob checks
   # out (the smudge filter warns but does not fail) yet is never uploaded to the
   # LFS server, so it goes unnoticed until someone clones fresh.

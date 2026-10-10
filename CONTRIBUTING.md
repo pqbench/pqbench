@@ -80,6 +80,14 @@ make check        # = fmt-check + check-docs + clippy -D warnings + test
   `make test CARGO_FEATURES="--features aws" TEST_FLAGS=--include-ignored`.
 - `make samples` fetches a few open parquet datasets into `local/samples/` for
   manual testing.
+- `make code-analysis` prints rust-code-analysis metrics for `crates/` (the
+  CLI's own metrics tree). It needs `rust-code-analysis-cli` on `PATH`; `RCA`
+  and `CODE_ANALYSIS_PATHS` override the binary and inputs. It is
+  **report-only** — not part of `make check`. On a PR, CI analyzes only the
+  changed Rust files against the base revision: `scripts/code_analysis.py`
+  annotates functions over cyclomatic 15 and files under maintainability 20,
+  posts a sticky comment with the base→head deltas, and logs the raw diff. On a
+  push it rolls the whole tree up for the job summary.
 - Tests are **blackbox** (observable behavior through the public API), unit
   level, sub-second, no network, no external build steps.
 - During implementation, prefer `cargo check` for fast feedback. The repository
