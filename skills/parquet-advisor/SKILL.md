@@ -30,7 +30,7 @@ $ pqbench skill parquet-advisor recipes | head -1
 | --- | --- | --- | --- |
 | L0 footer | `pqbench bytemass FILE` | per column: compressed/uncompressed bytes, codec, encodings, dictionary, num values, null fraction, min/max, BPR, compression ratio | cheap (footer only) |
 | L1 pages | `pqbench bytemass FILE --indexes` | `page_count`, page compressed bytes | one extra range |
-| Local files | `pqbench table DIR \| pqbench dump OUTPUT` | copies a table's Parquet files under `OUTPUT` | cheap |
+| Table files | `pqbench table ls DIR \| pqbench partition ls` | the files a window's commits added (path, uri, size) | cheap (log only) |
 | L2 columns | `pqbench profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
 | L3 rewrite | `pqbench experiment FILE --rewrite SPEC --aim storage\|skipping\|all` | bytes / BPR and skip-span vs a control rewrite | write + measure |
 
@@ -50,7 +50,7 @@ Keep these separate: **fact** (measured) → **hypothesis** → **experiment**
    locality matters). Rank columns by `compressed_bytes`. Do not tune a
    0.2% column before the 70% column.
 2. **Column facts.** `pqbench profile data.parquet --rows first:8192`.
-   Pass the same local file, or a file `dump` copied out of a table.
+   Pass the same local file, or a file `partition ls` named from a table.
 3. **Hypotheses** from the facts (see the table below).
 4. **Rewrite, then measure.** One `--rewrite` per idea. `--aim storage`
    for BPR; `--aim skipping` for min/max locality; `--aim all` when the

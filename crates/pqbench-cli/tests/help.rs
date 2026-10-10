@@ -50,11 +50,11 @@ fn bytemass_help_points_at_table_and_viz() {
 }
 
 #[test]
-fn lake_help_names_catalog_env_and_points_at_table() {
-    let stdout = help(&["lake", "--help"]);
-    assert!(stdout.contains("endpoint"), "{stdout}");
-    assert!(stdout.contains("pqbench table --help"), "{stdout}");
-    assert!(stdout.contains("pqbench --help"), "{stdout}");
+fn partition_help_points_at_table_ls_and_bytemass() {
+    let stdout = help(&["partition", "--help"]);
+    assert!(stdout.contains("partition"), "{stdout}");
+    assert!(stdout.contains("pqbench table ls --help"), "{stdout}");
+    assert!(stdout.contains("pqbench bytemass --help"), "{stdout}");
     assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
 }
 

@@ -3,8 +3,8 @@
 pqbench measures **how a Parquet file spends bytes** and how well codecs
 compress it. It reads the footer, not the pages, so it is fast on files of any
 size. Every command writes a versioned JSON document, so commands compose on
-pipes: `lake` lists tables, `table` loads one snapshot, `bytemass` measures its
-files, `viz` draws the result.
+pipes: `table ls` lists a table's partitions, `partition ls` their files,
+`bytemass` measures them, `viz` draws the result.
 
 This page is a guided first run. It uses the committed
 [`examples/quickstart.parquet`](../examples/quickstart.parquet) smoke sample and
@@ -59,13 +59,14 @@ rows: 8
 columns: 2
 ```
 
-## The lake pipeline
+## The metadata walk
 
-A *lake* is a list of tables. A *table* is one snapshot's log and active files.
-The same pipe walks that hierarchy to byte masses:
+A *table* is one snapshot's log and active files; a *partition* is a lens on
+those files. The walk lists a table's partitions, then their files, then
+measures them:
 
 ```console run delta
-$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table
+$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -75,7 +76,7 @@ rows: 3
 columns: 2
 ```
 
-Loading a Delta or Iceberg log needs its cargo feature (`delta` / `iceberg`;
+Reading a Delta or Iceberg log needs its cargo feature (`delta` / `iceberg`;
 `delta-s3` / `iceberg-s3` for `s3://`). A missing feature fails at runtime and
 names itself. See [delta.md](delta.md) and [iceberg.md](iceberg.md).
 
@@ -95,6 +96,6 @@ The page lands at `/tmp/report.html`; open it in a browser. See [viz.md](viz.md)
 - **Commands** — [cli.md](cli.md) has the task-oriented table, documents, and
   auth for `s3://` and catalogs.
 - **More walkthroughs** — [demo.md](demo.md) has Parquet, Delta, Iceberg, and
-  lake pipes with real output.
+  catalog pipes with real output.
 - **Tune a layout** — [experiment.md](experiment.md) rewrites a sample and
   measures it; [profile.md](profile.md) reports what is in it.

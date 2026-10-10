@@ -1,27 +1,24 @@
 //! Documents on stdin or a file. `kind` decides what the command does.
 //!
-//! A producer resolves a lake or a table and pqbench measures bytes. Known
-//! kinds are `pqbench.lake`, `pqbench.lake-source`, `pqbench.table`,
-//! `pqbench.table-ref`, `pqbench.remote-source`, `pqbench.bytemass`, and
-//! `pqbench.bytemass-row`. A pipe writes NDJSON;
-//! every record carries a table `id` so rows stay attributable. A terminal
-//! prints an aligned table; a pipe streams NDJSON (override with `--format`).
-//! `-o` also writes the lz4 NDJSON stream. A single
-//! `pqbench.table` object is still accepted. Credentials stay on the document
-//! so a pipe can carry them between processes.
+//! A producer resolves a table and pqbench measures bytes. Known kinds are
+//! `pqbench.lake-source`, `pqbench.table-ref`, `pqbench.table-file`,
+//! `pqbench.remote-source`, `pqbench.bytemass`, and `pqbench.bytemass-row`;
+//! the v1 `pqbench.lake` / `pqbench.table` readers are kept for producers that
+//! still emit them. A pipe writes NDJSON; every record carries a table `id` so
+//! rows stay attributable. A terminal prints an aligned table; a pipe streams
+//! NDJSON (override with `--format`). `-o` also writes the lz4 NDJSON stream.
+//! Credentials stay on the document so a pipe can carry them between processes.
 
 use std::collections::BTreeMap;
 use std::ops::AsyncFnMut;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-use crate::emit::{Align, Emitter, Row};
-
 use pqbench::bytemass::MassRow;
 use pqbench::lake::Lake;
 use pqbench::lake::LakeSource;
-use pqbench::table::{LogCommit, PartitionMass, TableFile, TableFormat, TableInfo};
-use serde::{Deserialize, Serialize};
+use pqbench::table::{LogCommit, TableFile, TableFormat, TableInfo};
+use serde::Deserialize;
 
 use crate::CliError;
 
@@ -54,10 +51,10 @@ pub(crate) enum Record {
         id: String,
     },
     Table(TableInfo),
-    Lake(Lake),
+    Lake,
     LakeBegin,
     LakeEnd,
-    LakeSource(LakeSource),
+    LakeSource,
     RemoteSource(RemoteSource),
     BytemassBegin,
     BytemassFile(pqbench::bytemass::FileStat),
@@ -73,8 +70,6 @@ pub(crate) enum Record {
 #[derive(Debug, Clone)]
 pub(crate) struct TableRef {
     pub id: String,
-    pub uri: String,
-    pub storage_path: Option<String>,
     pub env: BTreeMap<String, String>,
 }
 
@@ -177,9 +172,15 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         }
         ("pqbench.lake", Some("begin")) => Ok(Record::LakeBegin),
         ("pqbench.lake", Some("end")) => Ok(Record::LakeEnd),
-        ("pqbench.lake", None) => Ok(Record::Lake(parse_lake(value)?)),
+        ("pqbench.lake", None) => {
+            parse_lake(value)?;
+            Ok(Record::Lake)
+        }
         ("pqbench.lake", Some(other)) => Err(format!("unsupported lake event `{other}`").into()),
-        ("pqbench.lake-source", _) => Ok(Record::LakeSource(parse_lake_source(value)?)),
+        ("pqbench.lake-source", _) => {
+            parse_lake_source(value)?;
+            Ok(Record::LakeSource)
+        }
         ("pqbench.remote-source", _) => Ok(Record::RemoteSource(parse_remote(value)?)),
         ("pqbench.bytemass", Some("begin")) => Ok(Record::BytemassBegin),
         ("pqbench.bytemass", Some("end")) => Ok(Record::BytemassEnd),
@@ -243,8 +244,6 @@ fn parse_table_ref(value: serde_json::Value) -> Result<TableRef, CliError> {
         version: u32,
         uri: String,
         #[serde(default)]
-        storage_path: Option<String>,
-        #[serde(default)]
         env: BTreeMap<String, String>,
     }
     let wire: Wire = serde_json::from_value(value).map_err(invalid_json)?;
@@ -255,16 +254,11 @@ fn parse_table_ref(value: serde_json::Value) -> Result<TableRef, CliError> {
     }
     ensure_aws_env(&wire.env)?;
     let id = if wire.id.is_empty() {
-        wire.uri.clone()
+        wire.uri
     } else {
         wire.id
     };
-    Ok(TableRef {
-        id,
-        uri: wire.uri,
-        storage_path: wire.storage_path.filter(|path| !path.is_empty()),
-        env: wire.env,
-    })
+    Ok(TableRef { id, env: wire.env })
 }
 
 fn parse_table(value: serde_json::Value) -> Result<TableInfo, CliError> {
@@ -410,151 +404,6 @@ pub(crate) async fn is_document(path: &str) -> bool {
         .copied()
         .find(|byte| !byte.is_ascii_whitespace())
         == Some(b'{')
-}
-
-/// Write one table's records, tagged with `id`.
-pub(crate) async fn write_table_records(
-    emit: &mut Emitter,
-    id: &str,
-    info: &TableInfo,
-) -> Result<(), CliError> {
-    write_table_begin(emit, id, info).await?;
-    for commit in &info.log {
-        write_table_commit(emit, id, commit).await?;
-    }
-    for file in &info.files {
-        write_table_file(emit, id, file).await?;
-    }
-    write_table_end(emit, id, &info.partitions).await
-}
-
-/// Write the snapshot header.
-pub(crate) async fn write_table_begin(
-    emit: &mut Emitter,
-    id: &str,
-    info: &TableInfo,
-) -> Result<(), CliError> {
-    emit.write_event(&BeginRecord {
-        kind: "pqbench.table",
-        version: 1,
-        event: "begin",
-        id,
-        format: info.format,
-        uri: &info.uri,
-        snapshot_version: info.snapshot_version,
-        partition_columns: &info.partition_columns,
-        file_selection: &info.file_selection,
-        env: &info.env,
-    })
-    .await
-}
-
-/// Write one log commit.
-pub(crate) async fn write_table_commit(
-    emit: &mut Emitter,
-    id: &str,
-    commit: &LogCommit,
-) -> Result<(), CliError> {
-    emit.write_event(&CommitRecord {
-        kind: "pqbench.table-log",
-        id,
-        commit,
-    })
-    .await
-}
-
-/// Write one active file.
-pub(crate) async fn write_table_file(
-    emit: &mut Emitter,
-    id: &str,
-    file: &TableFile,
-) -> Result<(), CliError> {
-    emit.write_row(&FileRecord {
-        kind: "pqbench.table-file",
-        id,
-        file,
-    })
-    .await
-}
-
-/// Write the table `end` record, including partition totals.
-pub(crate) async fn write_table_end(
-    emit: &mut Emitter,
-    id: &str,
-    partitions: &[PartitionMass],
-) -> Result<(), CliError> {
-    emit.write_event(&EndRecord {
-        kind: "pqbench.table",
-        event: "end",
-        id,
-        partitions,
-    })
-    .await
-}
-
-#[derive(Serialize)]
-struct BeginRecord<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    file_selection: &'a Option<pqbench::table::FileSelection>,
-    kind: &'static str,
-    version: u32,
-    event: &'static str,
-    id: &'a str,
-    format: TableFormat,
-    uri: &'a str,
-    snapshot_version: u64,
-    partition_columns: &'a [String],
-    #[serde(skip_serializing_if = "is_empty_map")]
-    env: &'a BTreeMap<String, String>,
-}
-
-fn is_empty_map(env: &&BTreeMap<String, String>) -> bool {
-    env.is_empty()
-}
-
-#[derive(Serialize)]
-struct CommitRecord<'a> {
-    kind: &'static str,
-    id: &'a str,
-    #[serde(flatten)]
-    commit: &'a LogCommit,
-}
-
-#[derive(Serialize)]
-struct FileRecord<'a> {
-    kind: &'static str,
-    id: &'a str,
-    #[serde(flatten)]
-    file: &'a TableFile,
-}
-
-impl Row for FileRecord<'_> {
-    const HEADER: &'static [&'static str] = &["path", "size_bytes", "num_records"];
-    const ALIGN: &'static [Align] = &[Align::Left, Align::Right, Align::Right];
-
-    fn cells(&self) -> Vec<String> {
-        vec![
-            self.file.path.clone(),
-            self.file.size_bytes.to_string(),
-            self.file
-                .stats
-                .as_ref()
-                .map_or_else(|| "-".to_string(), |stats| stats.num_records.to_string()),
-        ]
-    }
-}
-
-#[derive(Serialize)]
-struct EndRecord<'a> {
-    kind: &'static str,
-    event: &'static str,
-    id: &'a str,
-    #[serde(skip_serializing_if = "partitions_empty")]
-    partitions: &'a [PartitionMass],
-}
-
-fn partitions_empty(partitions: &&[PartitionMass]) -> bool {
-    partitions.is_empty()
 }
 
 fn invalid_json(error: serde_json::Error) -> CliError {

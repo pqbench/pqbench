@@ -52,8 +52,8 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliErr
             | Record::Commit { .. }
             | Record::File { .. }
             | Record::End { .. }
-            | Record::Lake(_)
-            | Record::LakeSource(_)
+            | Record::Lake
+            | Record::LakeSource
             | Record::LakeBegin
             | Record::LakeEnd
             | Record::RemoteSource(_) => {

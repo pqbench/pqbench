@@ -9,12 +9,9 @@ mod compression;
 mod credentials;
 mod diff;
 mod document;
-mod dump;
 mod emit;
 mod experiment;
-mod file_selection;
 mod help;
-mod lake;
 mod lz;
 mod metastore;
 mod partition;
@@ -77,13 +74,6 @@ enum Command {
     )]
     Table(table::TableArgs),
     #[command(
-        about = help::LAKE_ABOUT,
-        long_about = help::LAKE_LONG_ABOUT,
-        after_help = help::LAKE_AFTER,
-        after_long_help = help::LAKE_AFTER
-    )]
-    Lake(lake::LakeArgs),
-    #[command(
         about = help::METASTORE_ABOUT,
         long_about = help::METASTORE_LONG_ABOUT,
         after_help = help::METASTORE_AFTER,
@@ -134,13 +124,6 @@ enum Command {
         after_long_help = help::RATELIMIT_AFTER
     )]
     RateLimit(ratelimit::RateLimitArgs),
-    #[command(
-        about = help::DUMP_ABOUT,
-        long_about = help::DUMP_LONG_ABOUT,
-        after_help = help::DUMP_AFTER,
-        after_long_help = help::DUMP_AFTER
-    )]
-    Dump(dump::DumpArgs),
     #[command(
         about = help::PROFILE_ABOUT,
         long_about = help::PROFILE_LONG_ABOUT,
@@ -196,7 +179,6 @@ async fn main() -> ExitCode {
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&args).await,
         Command::Table(args) => table::run(&args).await,
-        Command::Lake(args) => lake::run(&args).await,
         Command::Metastore(args) => metastore::run(&args).await,
         Command::Catalog(args) => catalog::run(&args).await,
         Command::Schema(args) => schema::run(&args).await,
@@ -204,7 +186,6 @@ async fn main() -> ExitCode {
         Command::Credentials(args) => credentials::run(&args).await,
         Command::Partition(args) => partition::run(&args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
-        Command::Dump(args) => dump::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),

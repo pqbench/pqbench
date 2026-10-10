@@ -181,26 +181,28 @@ check_unity() {
     set +a
     local measurement measured
 
-    # Unity vends a temporary credential as a pqbench.remote-source.
+    # Unity vends a temporary credential; the walk reads the table under it.
     measurement=$(curl -sS -X POST "$unity_catalog/temporary-table-credentials" \
             -H 'Content-Type: application/json' \
             -d "$(curl -sS "$unity_catalog/tables/pqbench.demo.events" |
                 jq -c '{table_id, operation: "READ"}')" |
-        jq -c --arg s3 "$s3_endpoint" --arg table "$table_location" \
-            '{kind: "pqbench.remote-source", version: 1, inputs: [$table],
+        jq -c --arg s3 "$s3_endpoint" \
+            '{kind: "pqbench.lake-source", version: 1,
             env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
                 AWS_SECRET_ACCESS_KEY: .secret_access_key,
                 AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
                 AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
                 AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
-        "$pqbench_bin" table |
+        "$pqbench_bin" table ls "$table_location" |
+        "$pqbench_bin" partition ls |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "unity table" "$measurement")
 
-    # `lake` lists the same table from Unity, then the same table | bytemass pipe.
+    # `schema ls` lists the same table from Unity; the walk reads it under the
+    # lease the lake source carries, and measures the files the window added.
     local lake_source="local/lakehouse/lake-source.json"
     jq -nc --arg endpoint "$unity_catalog" --arg s3 "$s3_endpoint" \
         --arg key "$VENDED_ACCESS_KEY_ID" --arg secret "$VENDED_SECRET_ACCESS_KEY" \
@@ -210,9 +212,16 @@ check_unity() {
             AWS_SESSION_TOKEN: $token, AWS_REGION: "us-east-1",
             AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
             AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' > "$lake_source"
-    measurement=$("$pqbench_bin" lake "$lake_source" --include pqbench.demo.events |
-        "$pqbench_bin" table |
-        "$pqbench_bin" bytemass --json) || {
+    local lake_doc
+    lake_doc=$(cat "$lake_source")
+    measurement=$("$pqbench_bin" schema ls pqbench.demo --format json < "$lake_source" |
+        while IFS= read -r ref; do
+            printf '%s\n%s\n' "$lake_doc" "$ref" |
+                "$pqbench_bin" tablev2 info |
+                "$pqbench_bin" table ls |
+                "$pqbench_bin" partition ls |
+                "$pqbench_bin" bytemass --json
+        done) || {
         echo "check failed: the lake pipe produced no measurement" >&2
         exit 1
     }
@@ -304,11 +313,21 @@ check_unity() {
 check_iceberg() {
     ensure_pqbench
     local measurement measured
-    measurement=$(jq -c -n --arg endpoint "$iceberg_rest" --argjson env "$(storage_env)" \
-        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}' |
-        "$pqbench_bin" lake |
-        "$pqbench_bin" table |
-        "$pqbench_bin" bytemass --json) || {
+    # `schema ls` lists the Iceberg REST namespace; `tablev2 info` reads
+    # loadTable's inline metadata and fills the storage path, then the walk
+    # measures the files the window added.
+    local iceberg_source
+    iceberg_source=$(jq -c -n --arg endpoint "$iceberg_rest/v1" --argjson env "$(storage_env)" \
+        '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint, env: $env}')
+    measurement=$(printf '%s\n' "$iceberg_source" |
+        PQB_TABLE_FORMAT=iceberg "$pqbench_bin" schema ls pqbench.demo --format json |
+        while IFS= read -r ref; do
+            printf '%s\n%s\n' "$iceberg_source" "$ref" |
+                PQB_TABLE_FORMAT=iceberg "$pqbench_bin" tablev2 info |
+                "$pqbench_bin" table ls |
+                "$pqbench_bin" partition ls |
+                "$pqbench_bin" bytemass --json
+        done) || {
         echo "check failed: the Iceberg lake pipe produced no measurement" >&2
         exit 1
     }

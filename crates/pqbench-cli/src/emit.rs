@@ -3,9 +3,9 @@
 //!
 //! A terminal is interactive, so it gets columns a human can read; a pipe gets
 //! one JSON value per line so the next command can start immediately. `Auto`
-//! follows the stdout kind, so `pqbench table | pqbench bytemass` stays a
-//! machine pipeline while `pqbench table` shows a table. `--format` (and the
-//! older `--json`) override that choice. `-o` always receives the NDJSON
+//! follows the stdout kind, so `pqbench partition ls | pqbench bytemass` stays
+//! a machine pipeline while `pqbench table ls` shows a table. `--format` (and
+//! the older `--json`) override that choice. `-o` always receives the NDJSON
 //! stream, independent of what stdout shows.
 //!
 //! A pipe write awaits the event loop. The `-o` sink compresses with lz4

@@ -2,16 +2,16 @@
 
 The `pqbench` library contains an optional Iceberg table module that detects an
 Iceberg table, loads its metadata JSON and Avro manifests, and names the active
-Parquet files. Measurement is a separate step: `pqbench table` emits the
-document, and `pqbench bytemass` reads the files. Iceberg dependencies are
-feature-gated and remain out of the default dependency graph.
+Parquet files. Measurement is a separate step: `pqbench table ls | pqbench
+partition ls` emits the files, and `pqbench bytemass` reads them. Iceberg
+dependencies are feature-gated and remain out of the default dependency graph.
 
 ```mermaid
 flowchart TD
     detect[pqbench::table::detect] --> metadata[Iceberg metadata JSON]
     metadata --> load[pqbench::table::load]
     manifests[Avro manifests] --> load
-    load --> document[pqbench.table document]
+    load --> document[pqbench.partition document]
     document --> bytemass[pqbench::bytemass]
     bytemass --> isolation[pqbench::object_store]
     isolation --> object_store[object_store crate]
@@ -21,16 +21,16 @@ flowchart TD
     pqbench_cli --> bytemass
 ```
 
-`pqbench table` names the format before it loads anything. Iceberg is recognized
-from `metadata/version-hint.text`, `metadata/*.metadata.json`, or a
+`pqbench table ls` names the format before it reads anything. Iceberg is
+recognized from `metadata/version-hint.text`, `metadata/*.metadata.json`, or a
 `.metadata.json` path. The loader reads that metadata and the snapshot's Avro
 manifests. Delete files are named in the log and omitted from `files`. The only
 module that names the `object_store` crate is `pqbench::object_store`.
 
 ## Usage
 
-Load the current snapshot, or an explicit snapshot id. A terminal prints the
-snapshot's log and files as a table; a pipe writes the full `pqbench.table`
+List the current snapshot's partitions, then their files. A terminal prints the
+snapshot's partitions as a table; a pipe writes the full `pqbench.partition`
 document. The URI may be a table root or the metadata JSON itself.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
@@ -40,8 +40,8 @@ reads the same metadata inline from the REST `loadTable` response instead.)
 
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
 it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
-stand up, `pqbench table <table> | pqbench bytemass --format table` prints the
-same column table as a bare parquet:
+stand up, `pqbench table ls <table> | pqbench partition ls | pqbench bytemass
+--format table` prints the same column table as a bare parquet:
 
 ```console run
 $ pqbench bytemass examples/quickstart.parquet --format table
@@ -56,18 +56,18 @@ columns: 2
 
 Two invocations from the `iceberg` cargo feature:
 
-cargo run -p pqbench-cli --features iceberg -- table ./path/to/table
-cargo run -p pqbench-cli --features iceberg -- table ./path/to/table/metadata/v1.metadata.json --version 1
+cargo run -p pqbench-cli --features iceberg -- table ls ./path/to/table
+cargo run -p pqbench-cli --features iceberg -- table ls ./path/to/table/metadata/v1.metadata.json
 
 Remote metadata and data objects are resolved with `iceberg-s3` (which enables
 `aws`). A remote table root needs `metadata/version-hint.text`; otherwise pass
 the metadata JSON URI:
 
-cargo run -p pqbench-cli --features iceberg-s3 -- table s3://bucket/table
+cargo run -p pqbench-cli --features iceberg-s3 -- table ls s3://bucket/table
 
 A producer can supply the table URI and vended credentials as
-`pqbench.remote-source`; `table` detects the format, loads the snapshot, and the
-document carries `env` to `bytemass`.
+`pqbench.remote-source`; `table ls` reads the snapshot, and the env travels to
+`partition ls` and `bytemass`.
 
 ## Backends
 
@@ -78,11 +78,11 @@ third-party storage types.
 
 ## Report
 
-`pqbench table` describes the snapshot log, the snapshot id, partition columns,
-and the active data files. Delete files appear in the selected snapshot's
-actions. `pqbench bytemass` then reports physical storage of those files: file
-bytes, physical Parquet rows, compressed and uncompressed column bytes, codecs,
-and compressed bytes per row.
+`pqbench table ls` groups the snapshot's commits into commit-time windows;
+`pqbench partition ls` then names the data files those commits added. Delete
+files appear in the selected snapshot's actions. `pqbench bytemass` then reports
+physical storage of those files: file bytes, physical Parquet rows, compressed
+and uncompressed column bytes, codecs, and compressed bytes per row.
 
 ## Limitations
 

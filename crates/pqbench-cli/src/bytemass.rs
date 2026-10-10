@@ -14,7 +14,8 @@ use crate::CliError;
 /// Arguments for `bytemass`.
 #[derive(Args)]
 pub(crate) struct BytemassArgs {
-    /// parquet paths, a `pqbench.table` document, or `-` for standard input
+    /// parquet paths, a `pqbench.table-file` / `pqbench.remote-source`
+    /// document, or `-` for standard input
     inputs: Vec<String>,
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -105,9 +106,9 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
             Record::End { id } => {
                 open.remove(&id);
             }
-            Record::Lake(_) | Record::LakeSource(_) | Record::LakeBegin | Record::LakeEnd => {
+            Record::Lake | Record::LakeSource | Record::LakeBegin | Record::LakeEnd => {
                 return Err(
-                    "bytemass measures files after `pqbench table` loads them; pass a lake to `pqbench table` first"
+                    "bytemass measures files; list them with `pqbench table ls | pqbench partition ls` first"
                         .into(),
                 );
             }

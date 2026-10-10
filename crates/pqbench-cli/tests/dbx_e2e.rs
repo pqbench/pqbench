@@ -606,7 +606,7 @@ fn schema_info_reads_the_live_schema() {
 }
 
 /// `schema ls` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
-/// the storage path in the listing, Iceberg REST leaves it to `table info`.
+/// the storage path in the listing, Iceberg REST leaves it to `tablev2 info`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn schema_ls_lists_the_live_tables() {

@@ -71,14 +71,15 @@ TABLE=$(curl -s $UC/tables/pqbench.demo.events)
 
 curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/json' \
     -d "$(jq -c '{table_id, operation: "READ"}' <<< "$TABLE")" |
-  jq -c --arg table "$(jq -r .storage_location <<< "$TABLE")" --arg s3 "$S3" \
-    '{kind: "pqbench.remote-source", version: 1, inputs: [$table],
+  jq -c --arg s3 "$S3" \
+    '{kind: "pqbench.lake-source", version: 1,
       env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
         AWS_SECRET_ACCESS_KEY: .secret_access_key,
         AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1",
         AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3, AWS_ALLOW_HTTP: "true",
         AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"})}' |
-  "$BIN" table |
+  "$BIN" table ls "$(jq -r .storage_location <<< "$TABLE")" |
+  "$BIN" partition ls |
   "$BIN" bytemass
 ```
 
@@ -91,37 +92,44 @@ id                                      22.00
 total                                   46.00
 ```
 
-`make lakehouse` runs exactly this pipe as its last step, then lists the same
-table with `pqbench lake` (a `pqbench.lake-source` document for the endpoint)
-and pipes it through `table | bytemass` again, so the catalog-listing path is
-seen to work too.
+`make lakehouse` runs exactly this walk as its last step, then lists the same
+table with `schema ls` (a `pqbench.lake-source` document for the endpoint) and
+walks it through `tablev2 info | table ls | partition ls | bytemass` again, so
+the catalog-listing path is seen to work too.
 
-Iceberg REST does not vend credentials. `pqbench lake` lists namespaces and
-tables, then `loadTable` for each metadata location:
+Iceberg REST does not vend credentials. `schema ls` lists namespaces and
+tables, `tablev2 info` reads `loadTable`'s inline metadata, and the walk
+measures the files:
 
 ```bash
-ICEBERG=http://localhost:8181
+ICEBERG=http://localhost:8181/v1
 S3=http://localhost:9000
 BIN=${CARGO_TARGET_DIR:-target}/debug/pqbench
 
-jq -n --arg endpoint "$ICEBERG" --arg s3 "$S3" \
+SOURCE=$(jq -c -n --arg endpoint "$ICEBERG" --arg s3 "$S3" \
   '{kind: "pqbench.lake-source", version: 1, endpoint: $endpoint,
     env: {AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test",
       AWS_REGION: "us-east-1", AWS_ENDPOINT: $s3, AWS_ENDPOINT_URL: $s3,
-      AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}' |
-  "$BIN" lake |
-  "$BIN" table |
-  "$BIN" bytemass
+      AWS_ALLOW_HTTP: "true", AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"}}')
+
+printf '%s\n' "$SOURCE" |
+  PQB_TABLE_FORMAT=iceberg "$BIN" schema ls pqbench.demo --format json |
+  while IFS= read -r ref; do
+    printf '%s\n%s\n' "$SOURCE" "$ref" |
+      PQB_TABLE_FORMAT=iceberg "$BIN" tablev2 info |
+      "$BIN" table ls | "$BIN" partition ls | "$BIN" bytemass
+  done
 ```
 
-`make lakehouse` runs the Unity table pipe, the Unity lake pipe, and this
-Iceberg lake pipe. Pass `--d3` to `bytemass` to get a treemap, or stop after
-`pqbench table` and pipe to `jq .` to read the log document itself.
+`make lakehouse` runs the Unity table walk, the Unity catalog walk, and this
+Iceberg walk. Stop after `pqbench table ls` and pipe to `jq .` to read the
+partition document itself.
 
-The document is `{"kind": "pqbench.remote-source", "version": 1, "inputs": [...],
-"env": {...}}`. The producer answers *which table*, `pqbench table` detects
-the format and loads the log, and `pqbench bytemass` measures the files named
-in that table document. pqbench keeps no catalog dependency. Storage
+A producer document is `{"kind": "pqbench.remote-source", "version": 1,
+"inputs": [...], "env": {...}}`; `pqbench bytemass` measures the files it
+names, and a table's files come from the walk, `pqbench table ls | pqbench
+partition ls`. A `pqbench.lake-source` carries the same `env` as the walk's
+context. pqbench keeps no catalog dependency. Storage
 configuration normally comes from the `AWS_*` environment; a producer whose
 catalog vends expiring credentials puts them in `env` instead, which travels
 on the table document to `bytemass`. Only `AWS_*` names are accepted there,
@@ -146,20 +154,24 @@ role and return a policy-scoped session.
 
 Databricks Unity Catalog vends genuine STS sessions and its CLI has a command for
 that, so the shape survives the move off the stand. The vending response's `url`
-is the table's storage path, which is all `pqbench table` needs — it reads the
-log itself, so nothing has to enumerate files:
+is the table's storage path, which `pqbench table ls` reads — it walks the log
+itself, so nothing has to enumerate files:
 
 ```bash
 TABLE=main.demo.events
 
 databricks temporary-table-credentials generate-temporary-table-credentials \
     --table-id "$(databricks tables get "$TABLE" -o json | jq -r .table_id)" \
-    --operation READ -o json |
-  jq -c '{kind: "pqbench.remote-source", version: 1, inputs: [.url],
-    env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
-      AWS_SECRET_ACCESS_KEY: .secret_access_key,
-      AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1"})}' |
-  pqbench table | pqbench bytemass
+    --operation READ -o json > /tmp/pqbench-vend.json
+
+jq -c '{kind: "pqbench.lake-source", version: 1,
+  env: (.aws_temp_credentials | {AWS_ACCESS_KEY_ID: .access_key_id,
+    AWS_SECRET_ACCESS_KEY: .secret_access_key,
+    AWS_SESSION_TOKEN: .session_token, AWS_REGION: "us-east-1"})}' \
+  /tmp/pqbench-vend.json |
+  pqbench table ls "$(jq -r .url /tmp/pqbench-vend.json)" |
+  pqbench partition ls |
+  pqbench bytemass
 ```
 
 `--table-id` wants the table's UUID, hence the inner `tables get`. `AWS_REGION`
@@ -168,10 +180,10 @@ is the bucket's region. Vending is off until a metastore admin sets
 schema; `databricks tables get "$TABLE" --include-manifest-capabilities -o json`
 says whether a table is eligible at all
 ([credential vending](https://docs.databricks.com/aws/en/external-access/credential-vending)).
-The session expires — `expiration_time` is epoch milliseconds — so vend inside
-the pipe rather than caching it in your shell. Azure and GCP return
-`azure_user_delegation_sas` or `gcp_oauth_token` instead, which an `AWS_*`-only
-`env` cannot carry.
+The session expires — `expiration_time` is epoch milliseconds — so vend just
+before the walk rather than caching it in your shell for long. Azure and GCP
+return `azure_user_delegation_sas` or `gcp_oauth_token` instead, which an
+`AWS_*`-only `env` cannot carry.
 
 ## Endpoints and state
 

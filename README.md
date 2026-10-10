@@ -12,7 +12,7 @@ each column costs.
 One binary for parquet optimizations.
 
 Commands compose on pipes: each writes a versioned JSON document the next reads.
-The usual pipe is `lake` → `table` → `bytemass` → `viz`; `dump` copies the files.
+The usual pipe is `table ls` → `partition ls` → `bytemass` → `viz`.
 
 ## Quick start
 
@@ -86,48 +86,39 @@ columns: 2
 ```
 
 - Reads only the footer, so it works on any file, compressed or not.
-- Accepts paths, quoted globs, `s3://` URIs, and a `table` stream;
-  `--indexes` adds page counts.
+- Accepts paths, quoted globs, `s3://` URIs, and a `pqbench.table-file` /
+  `pqbench.remote-source` document; `--indexes` adds page counts.
 - `s3://` needs the `aws` feature; a pipe streams one NDJSON row per column
   (`--format json`, or `-o FILE`).
 
-Filtering which files to measure is a shell job on the `table` stream — see
-[docs/demo.md](docs/demo.md).
+Filtering which files to measure is a shell job on the `partition ls` stream —
+see [docs/demo.md](docs/demo.md).
 
-### table
+### table ls
 
-Detect the table format and load one snapshot's metadata.
+List a table's natural partitions — its commits grouped into epoch-aligned
+commit-time windows.
 
 ```console run delta
-$ pqbench table docker/e2e-lakehouse/table --format table
-path                                                                 size_bytes  num_records
--------------------------------------------------------------------  ----------  -----------
-part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796            3
-tables: 1
-files: 1 (796 bytes)
-$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-files: 1
-rows: 3
-columns: 2
-$ pqbench table docker/e2e-lakehouse/table -o /tmp/table.ndjson.zst
+$ pqbench table ls docker/e2e-lakehouse/table --format table
+table                          first_time      last_time  commits
+--------------------------  -------------  -------------  -------
+docker/e2e-lakehouse/table  1789862400000  1789948800000        1
+partitions: 1
 ```
 
-- Detects Delta or Iceberg before loading anything.
-- `--version N` picks a Delta commit or Iceberg snapshot id (default: latest).
+- Reads each table's Delta / Iceberg log, never the data files.
+- `--every 1h|1d|1w` sets the window width (default `1d`).
 - Delta needs `--features delta`, Iceberg `iceberg`; add `-s3` to either for
   `s3://`.
-- A pipe streams NDJSON for `bytemass`; scan a catalog by running one process
-  per table (`xargs -P`).
+- A pipe streams `pqbench.partition` NDJSON; feed it to `partition ls`.
 
-A producer can hand `table` a `pqbench.remote-source` document — one table URI
-plus `AWS_*` credentials; the credentials travel on to `bytemass`:
+### partition ls
+
+List the files a partition's commits added — the input to `bytemass`.
 
 ```console run delta
-$ pqbench lake docs/demos/lake.json | pqbench table | pqbench bytemass --format table
+$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -137,41 +128,19 @@ rows: 3
 columns: 2
 ```
 
-### lake
+- `partition ls` re-reads the window's commits and emits the files they
+  **added** — a file a later commit removes is still named.
+- The env rides on every file, so a short-lived lease travels to `bytemass`.
 
-List tables as `pqbench.table-ref` lines, one per table for the shell.
+A producer can hand `bytemass` a `pqbench.remote-source` document — one table
+URI plus `AWS_*` credentials:
 
-```console run delta
-$ pqbench lake docker/e2e-lakehouse --include table --exclude 'iceberg/*' --format table
-name   uri
------  ----------------------------------------
-table  file://<root>/docker/e2e-lakehouse/table
-tables: 1
-$ pqbench lake docker/e2e-lakehouse --include table | pqbench table | pqbench bytemass --format table
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-files: 1
-rows: 3
-columns: 2
-```
-
-- Walks a directory, `file://`, or `s3://` prefix until a table marker;
-  `--max-depth` (default 8) bounds a tree with no marker.
-- `--include` / `--exclude` glob the table name.
-- `s3://` listing needs `--features aws`.
-
-A `pqbench.lake-source` document lists a Unity, Databricks, or Iceberg REST
-catalog. `token` is the catalog bearer token; `env` carries `AWS_*` credentials
-for the listed tables.
-
-```json
-{"kind": "pqbench.lake-source", "version": 1,
- "endpoint": "https://example.cloud.databricks.com",
- "token": "...",
- "catalog": "main",
- "env": {"AWS_REGION": "us-east-1"}}
+```console no-run
+$ cat <<'EOF' | pqbench bytemass --format table
+{"kind":"pqbench.remote-source","version":1,
+ "inputs":["s3://bucket/table/part-0.parquet"],
+ "env":{"AWS_ACCESS_KEY_ID":"…","AWS_SECRET_ACCESS_KEY":"…","AWS_SESSION_TOKEN":"…","AWS_REGION":"us-east-1"}}
+EOF
 ```
 
 ### viz
@@ -181,24 +150,10 @@ browser; no server is needed.
 
 ```console run delta
 $ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
-$ pqbench table docker/e2e-lakehouse/table | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
-
-### dump
-
-Copy the Parquet files a table names to a local directory — an `aws s3 cp`-style
-fetch for a Delta or Iceberg table, local or remote:
-
-```console run delta
-$ pqbench table docker/e2e-lakehouse/table | pqbench dump /tmp/sample
-dump: 1 file(s), 796 bytes -> /tmp/sample
-```
-
-Each file lands at its table-relative path, so partitions are preserved; a lake
-nests each table under its name. A path that would escape the output directory
-is refused. `s3://` needs the `aws` feature.
 
 ## Documentation
 
@@ -207,16 +162,16 @@ Start with [Getting started](docs/getting-started.md). The
 `pqbench --help` is the command guide; `pqbench <command> --help` is local to
 that command.
 
-- [Getting started](docs/getting-started.md) — install, first measurement, the lake pipeline
+- [Getting started](docs/getting-started.md) — install, first measurement, the metadata walk
 - [CLI reference](docs/cli.md) — the command table, documents, flags, and auth
-- [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, lake walk, catalogs
-- [Delta tables](docs/delta.md) — log load, `table | bytemass`, limitations
-- [Iceberg tables](docs/iceberg.md) — metadata load, `table | bytemass`, limitations
+- [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
+- [Delta tables](docs/delta.md) — log load, `table ls | partition ls | bytemass`, limitations
+- [Iceberg tables](docs/iceberg.md) — metadata load, `table ls | partition ls | bytemass`, limitations
 - [Visualization](docs/viz.md) — `pqbench viz`, a static HTML treemap
 - [Python bindings](python/README.md) — install the wheel and call every command
 - [Docker](docs/docker.md) — build, run, and publish a container image
 - [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
-  naming tables for `pqbench table`, over rustfs S3
+  naming tables for `pqbench table ls`, over rustfs S3
 
 ## Python
 

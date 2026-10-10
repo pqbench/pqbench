@@ -21,14 +21,14 @@ fn measure_one_file_2() {
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
-fn the_lake_pipeline() {
-    // the_lake_pipeline, from line 67
-    support::run("pqbench table docker/e2e-lakehouse/table | pqbench bytemass --format table", 68, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+fn the_metadata_walk() {
+    // the_metadata_walk, from line 68
+    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table", 69, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn draw_the_result() {
-    // draw_the_result, from line 87
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 88, None);
+    // draw_the_result, from line 88
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 89, None);
 }
