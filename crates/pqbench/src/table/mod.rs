@@ -558,7 +558,13 @@ async fn probe(uri: &str, relative: &str, options: &[(String, String)]) -> Resul
     reader.exists().await.map_err(|e| Error(e.to_string()))
 }
 
-fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
+pub(crate) fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
+    if is_local(base) {
+        return Ok(local_path(base)?
+            .join(relative)
+            .to_string_lossy()
+            .into_owned());
+    }
     let mut url = Url::parse(base).map_err(|e| Error(format!("invalid table URI: {e}")))?;
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));

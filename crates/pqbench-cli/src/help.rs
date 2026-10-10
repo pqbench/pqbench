@@ -334,6 +334,27 @@ See also:
   pqbench --help         catalog auth, lake-source shape
   docs/cli.md";
 
+pub const PARTITION_ABOUT: &str = "List a partition's files — the ones its commits added";
+
+pub const PARTITION_LONG_ABOUT: &str = "\
+List a partition's files. A partition is a grouping of a table's active files
+by a key; the natural key is time, so `table ls` groups a table's commits into
+epoch-aligned UTC windows and this lists the files those commits added.
+
+  ls     each pqbench.partition record on standard input is re-read: the
+         table's log is loaded, and the files the window's commits named are
+         emitted as pqbench.table-file records — the added-in-window set, so a
+         file a later commit removes is still named. The env rides on every
+         file, so a short-lived lease travels with it, and there is no
+         begin/end envelope. Pipe it to `bytemass` to measure the partition.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
+
+pub const PARTITION_AFTER: &str = "\
+See `pqbench table ls --help` (the partitions), `pqbench bytemass --help`
+(measure them), and `docs/partition.md`.";
+
 pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
 
 pub const CREDENTIALS_LONG_ABOUT: &str = "\

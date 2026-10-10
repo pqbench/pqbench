@@ -48,6 +48,7 @@ pub(crate) enum Record {
     File {
         id: String,
         file: TableFile,
+        env: BTreeMap<String, String>,
     },
     End {
         id: String,
@@ -171,8 +172,8 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             Ok(Record::Commit { id, commit })
         }
         ("pqbench.table-file", _) => {
-            let (id, file) = parse_file(value)?;
-            Ok(Record::File { id, file })
+            let (id, file, env) = parse_file(value)?;
+            Ok(Record::File { id, file, env })
         }
         ("pqbench.lake", Some("begin")) => Ok(Record::LakeBegin),
         ("pqbench.lake", Some("end")) => Ok(Record::LakeEnd),
@@ -299,16 +300,21 @@ fn parse_mass_row(value: serde_json::Value) -> Result<(String, MassRow), CliErro
     Ok((wire.id, wire.row))
 }
 
-fn parse_file(value: serde_json::Value) -> Result<(String, TableFile), CliError> {
+fn parse_file(
+    value: serde_json::Value,
+) -> Result<(String, TableFile, BTreeMap<String, String>), CliError> {
     #[derive(Deserialize)]
     struct Wire {
         #[serde(default)]
         id: String,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
         #[serde(flatten)]
         file: TableFile,
     }
     let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
-    Ok((wire.id, wire.file))
+    ensure_aws_env(&wire.env)?;
+    Ok((wire.id, wire.file, wire.env))
 }
 
 fn parse_lake(value: serde_json::Value) -> Result<Lake, CliError> {
