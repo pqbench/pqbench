@@ -19,8 +19,8 @@ use url::Url;
 use crate::third_party::object_store::r#impl::root_store;
 
 use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadEvent,
-    LoadRequest, LogAction, LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
+    add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadRequest,
+    LogAction, LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
 };
 
 /// Errors resolving a snapshot through delta-rs.
@@ -37,14 +37,6 @@ impl std::error::Error for Error {}
 
 /// Resolve the transaction log and the active files of a Delta table.
 pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
-    visit_load(request, &mut async |_| Ok(())).await
-}
-
-/// Resolve a Delta snapshot, visiting the header, commits, then active files.
-pub(super) async fn visit_load(
-    request: &LoadRequest,
-    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
-) -> Result<TableInfo, Error> {
     let table = open(request).await?;
     let snapshot = snapshot_meta(&table)?;
     let mut info = TableInfo::new(
@@ -58,17 +50,12 @@ pub(super) async fn visit_load(
     );
     info.columns = snapshot.columns;
     info.delta_properties = snapshot.properties;
-    visit(LoadEvent::BEGIN { info: &info })
-        .await
-        .map_err(|error| Error(error.to_string()))?;
     if request.require_files || request.require_log {
-        info.log = visit_log(&table, snapshot.version, request.collect_log, visit).await?;
+        info.log = read_log(&table, snapshot.version).await?;
     }
     if request.require_files {
-        let (files, partitions) = active_files(&table, request, visit).await?;
-        if request.collect_files {
-            info.files = files;
-        }
+        let (files, partitions) = active_files(&table, request).await?;
+        info.files = files;
         info.partitions = partitions;
     }
     Ok(info)
@@ -171,12 +158,7 @@ fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
     })
 }
 
-async fn visit_log(
-    table: &DeltaTable,
-    last_version: u64,
-    collect_log: bool,
-    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
-) -> Result<Vec<LogCommit>, Error> {
+async fn read_log(table: &DeltaTable, last_version: u64) -> Result<Vec<LogCommit>, Error> {
     let store = table.log_store();
     let mut commits = Vec::new();
     for version in 0..=last_version {
@@ -188,18 +170,12 @@ async fn visit_log(
             continue;
         };
         let (actions, commit_time) = parse_commit(&bytes, version)?;
-        let commit = LogCommit {
+        drop(bytes);
+        commits.push(LogCommit {
             version,
             commit_time,
             actions,
-        };
-        drop(bytes);
-        visit(LoadEvent::COMMIT { commit: &commit })
-            .await
-            .map_err(|error| Error(error.to_string()))?;
-        if collect_log {
-            commits.push(commit);
-        }
+        });
     }
     Ok(commits)
 }
@@ -242,12 +218,12 @@ fn parse_action(line: &str, version: u64) -> Result<(LogAction, Option<i64>), Er
     Ok((action, commit_time))
 }
 
-/// Resolve every active data file to a path `bytemass` can read, emitting each
-/// file as the add-action stream yields it and summing per-partition totals.
+/// Resolve every active data file to a path `bytemass` can read, collecting
+/// each file as the add-action stream yields it and summing per-partition
+/// totals.
 async fn active_files(
     table: &DeltaTable,
     request: &LoadRequest,
-    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
 ) -> Result<(Vec<TableFile>, Vec<PartitionMass>), Error> {
     let root = if table.table_url().scheme() == "file" {
         Some(
@@ -288,12 +264,7 @@ async fn active_files(
             stats,
         };
         add_partition_total(&mut totals, &table_file).map_err(|error| Error(error.to_string()))?;
-        visit(LoadEvent::FILE { file: &table_file })
-            .await
-            .map_err(|error| Error(error.to_string()))?;
-        if request.collect_files {
-            active.push(table_file);
-        }
+        active.push(table_file);
     }
     Ok((active, finish_partition_masses(totals)))
 }

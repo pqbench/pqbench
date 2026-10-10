@@ -102,16 +102,7 @@ file stream in the pinned version rejects malformed optional statistics that
 the existing loader tolerates, so it is not a compatible replacement yet.
 Memory also includes the largest individual commit and per-partition totals;
 human table output buffers rows to align columns. All available JSON history
-is still read. The collecting library API retains logs and files by default;
-visitor callers can disable both with `with_collect_log(false)` and
-`with_collect_files(false)`.
-
-## Visitor events
-
-`visit_load` emits `BEGIN` with an empty log and file list, then `COMMIT` for
-each log entry, then `FILE` for each active file. Consumers that previously
-read the log from `BEGIN` should handle `COMMIT` instead. The NDJSON record
-format and the collecting `load` API are unchanged.
+is still read. The library API retains the log and files it reads.
 
 ## Limitations
 

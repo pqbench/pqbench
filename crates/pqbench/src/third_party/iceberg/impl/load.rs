@@ -11,9 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{
-    Column, LoadEvent, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo,
-};
+use crate::table::{Column, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 
@@ -29,7 +27,7 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Load the current or requested Iceberg snapshot into a table document.
+/// Load the current or requested Iceberg snapshot into a table record.
 ///
 /// `request.uri` is a table root (`metadata/version-hint.text` or
 /// `metadata/*.metadata.json`) or a metadata JSON path/URI. Run inside a Tokio
@@ -108,37 +106,6 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     );
     info.columns = columns(&metadata);
     info.iceberg_properties = metadata.properties.clone();
-    Ok(info)
-}
-
-/// Load the snapshot, visiting the header then each active file after the
-/// manifests are read.
-pub(super) async fn visit_load(
-    request: &LoadRequest,
-    visit: &mut impl AsyncFnMut(LoadEvent<'_>) -> Result<(), crate::table::Error>,
-) -> Result<TableInfo, Error> {
-    let mut info = load(request).await?;
-    let files = std::mem::take(&mut info.files);
-    let log = std::mem::take(&mut info.log);
-    visit(LoadEvent::BEGIN { info: &info })
-        .await
-        .map_err(|error| Error(error.to_string()))?;
-    for commit in &log {
-        visit(LoadEvent::COMMIT { commit })
-            .await
-            .map_err(|error| Error(error.to_string()))?;
-    }
-    if request.collect_log {
-        info.log = log;
-    }
-    for file in &files {
-        visit(LoadEvent::FILE { file })
-            .await
-            .map_err(|error| Error(error.to_string()))?;
-    }
-    if request.collect_files {
-        info.files = files;
-    }
     Ok(info)
 }
 

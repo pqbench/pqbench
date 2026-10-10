@@ -422,35 +422,6 @@ async fn load_omits_stat_maps_when_disabled() {
 }
 
 #[tokio::test]
-async fn visit_load_emits_the_header_before_files() {
-    let fixture = Fixture::new();
-    let mut events = Vec::new();
-    let info = table::visit_load(
-        &load_request(fixture.path().to_string_lossy(), None).with_collect_files(false),
-        async |event| {
-            match event {
-                table::LoadEvent::BEGIN { info } => {
-                    assert!(info.files.is_empty());
-                    events.push("begin");
-                }
-                table::LoadEvent::COMMIT { .. } => events.push("commit"),
-                table::LoadEvent::FILE { file } => {
-                    assert!(!file.path.is_empty());
-                    events.push("file");
-                }
-            }
-            Ok(())
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(events[0], "begin");
-    assert!(events.iter().filter(|event| **event == "file").count() >= 2);
-    assert!(info.files.is_empty());
-    assert_eq!(info.partitions.len(), 2);
-}
-
-#[tokio::test]
 async fn load_reports_a_broken_snapshot() {
     let fixture = Fixture::new();
     fixture.commit(
@@ -475,73 +446,7 @@ async fn load_reports_a_broken_snapshot() {
 }
 
 #[tokio::test]
-async fn streamed_snapshot_matches_collected_snapshot() {
-    let fixture = Fixture::new();
-    fixture.commit(2, &[fixture.add("part=a/old file.parquet", "a", 2)]);
-    for version in [Some(0), None] {
-        let request = load_request(fixture.path().to_string_lossy(), version);
-        let expected = table::load(&request).await.unwrap();
-        let mut commits = Vec::new();
-        let mut files = Vec::new();
-        let actual = table::visit_load(
-            &request.with_collect_files(false).with_collect_log(false),
-            async |event| {
-                match event {
-                    table::LoadEvent::BEGIN { info } => {
-                        assert!(info.log.is_empty());
-                        assert!(info.files.is_empty());
-                    }
-                    table::LoadEvent::COMMIT { commit } => {
-                        assert!(files.is_empty());
-                        commits.push(commit.clone());
-                    }
-                    table::LoadEvent::FILE { file } => files.push(file.clone()),
-                }
-                Ok(())
-            },
-        )
-        .await
-        .unwrap();
-        assert!(actual.log.is_empty());
-        assert!(actual.files.is_empty());
-        assert_eq!(
-            serde_json::to_value(commits).unwrap(),
-            serde_json::to_value(expected.log).unwrap()
-        );
-        assert_eq!(
-            serde_json::to_value(files).unwrap(),
-            serde_json::to_value(expected.files).unwrap()
-        );
-        assert_eq!(actual.partitions, expected.partitions);
-    }
-}
-
-#[tokio::test]
-async fn visitor_error_stops_before_reading_later_commits() {
-    let fixture = Fixture::new();
-    // A checkpoint lets snapshot metadata load without the old JSON commit.
-    fixture.checkpoint().await;
-    std::fs::write(
-        fixture.path().join("_delta_log/00000000000000000000.json"),
-        "broken JSON",
-    )
-    .unwrap();
-    let mut calls = 0;
-    let error = table::visit_load(
-        &load_request(fixture.path().to_string_lossy(), None).with_collect_log(false),
-        async |_| {
-            calls += 1;
-            Err(table::Error::new("consumer stopped"))
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("consumer stopped"), "{error}");
-    assert_eq!(calls, 1);
-}
-
-#[tokio::test]
-async fn checkpoint_stream_preserves_active_files_without_json_history() {
+async fn checkpoint_preserves_active_files_without_json_history() {
     let fixture = Fixture::new();
     fixture.checkpoint().await;
     for version in 0..=1 {
@@ -552,22 +457,10 @@ async fn checkpoint_stream_preserves_active_files_without_json_history() {
         )
         .unwrap();
     }
-    let mut paths = Vec::new();
-    let info = table::visit_load(
-        &load_request(fixture.path().to_string_lossy(), None)
-            .with_collect_files(false)
-            .with_collect_log(false),
-        async |event| {
-            if let table::LoadEvent::FILE { file } = event {
-                paths.push(file.path.clone());
-            }
-            Ok(())
-        },
-    )
-    .await
-    .unwrap();
+    let info = table::load(&load_request(fixture.path().to_string_lossy(), None))
+        .await
+        .unwrap();
+    let mut paths: Vec<_> = info.files.iter().map(|file| file.path.clone()).collect();
     paths.sort();
     assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
-    assert!(info.log.is_empty());
-    assert!(info.files.is_empty());
 }

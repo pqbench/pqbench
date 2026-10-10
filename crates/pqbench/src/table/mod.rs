@@ -270,19 +270,12 @@ pub struct LoadRequest {
     /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
     pub file_stats: bool,
     /// When false, read only the snapshot metadata: no commit log, no active
-    /// files. [`visit_load`] emits the header and nothing else.
+    /// files.
     // aipnaming: allow(aip-140/verbs)
     pub require_files: bool,
     /// When true, read the commit log even when [`Self::require_files`] is
     /// false: `table ls` needs the commits' times, not the files.
     pub require_log: bool,
-    /// When false, do not retain active files on the returned record.
-    /// [`visit_load`] still emits each file; partition totals are kept.
-    // aipnaming: allow(aip-140/verbs)
-    pub collect_files: bool,
-    /// When false, emit commits without retaining them on the returned record.
-    // aipnaming: allow(aip-140/verbs)
-    pub collect_log: bool,
 }
 
 impl LoadRequest {
@@ -300,8 +293,6 @@ impl LoadRequest {
             file_stats: true,
             require_files: true,
             require_log: false,
-            collect_files: true,
-            collect_log: true,
         }
     }
 
@@ -332,41 +323,6 @@ impl LoadRequest {
         self.require_files = false;
         self
     }
-
-    /// Drop commits from the returned record after visiting each commit.
-    // aipnaming: allow(aip-136/method-prepositions)
-    #[must_use]
-    pub fn with_collect_log(mut self, collect_log: bool) -> Self {
-        self.collect_log = collect_log;
-        self
-    }
-
-    /// Drop the file list from the returned record after visiting each file.
-    // aipnaming: allow(aip-136/method-prepositions)
-    #[must_use]
-    pub fn with_collect_files(mut self, collect_files: bool) -> Self {
-        self.collect_files = collect_files;
-        self
-    }
-}
-
-/// One step of [`visit_load`]: snapshot header, available commits, then active files.
-pub enum LoadEvent<'a> {
-    /// Snapshot header. `log` and `files` are empty.
-    BEGIN {
-        /// Table record without active files.
-        info: &'a TableInfo,
-    },
-    /// One available log commit (or Iceberg snapshot summary).
-    COMMIT {
-        /// Commit just read from the transaction log.
-        commit: &'a LogCommit,
-    },
-    /// One active file, in replay order.
-    FILE {
-        /// File just resolved from the snapshot.
-        file: &'a TableFile,
-    },
 }
 
 /// Name the table format from well-known markers. Does not load the log.
@@ -399,26 +355,10 @@ pub async fn detect(uri: &str, env: &BTreeMap<String, String>) -> Result<TableFo
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
-    visit_load(request, async |_| Ok(())).await
-}
-
-/// Load a table, visiting its header, commits, then active files.
-///
-/// Delta files are visited from the add-action stream. Iceberg files are
-/// visited after the manifests are read. When [`LoadRequest::collect_files`]
-/// is false the returned record keeps partition totals and drops `files`.
-/// Set [`LoadRequest::collect_log`] to false to drop visited commits as well.
-///
-/// # Errors
-/// Same as [`load`].
-pub async fn visit_load(
-    request: &LoadRequest,
-    mut visit: impl AsyncFnMut(LoadEvent<'_>) -> Result<(), Error>,
-) -> Result<TableInfo, Error> {
     let format = detect(&request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::visit_load(request, &mut visit).await,
-        TableFormat::ICEBERG => iceberg::visit_load(request, &mut visit).await,
+        TableFormat::DELTA => delta::load(request).await,
+        TableFormat::ICEBERG => iceberg::load(request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
     }
 }
