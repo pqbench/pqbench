@@ -11,11 +11,14 @@ CARGO ?= cargo
 CARGO_FEATURES ?=
 TEST_FLAGS ?=
 PYTHON ?= python3
+# rust-code-analysis CLI and inputs; see the `code-analysis` target.
+RCA ?= rust-code-analysis-cli
+CODE_ANALYSIS_PATHS ?= crates
 LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity lakehouse-seed-iceberg \
-	check isolation lfs-check check-python sync-docs check-docs clean
+	check isolation lfs-check check-python sync-docs check-docs code-analysis clean
 
 all: fmt build test lint
 
@@ -107,6 +110,12 @@ sync-docs:
 	$(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
 check-docs:
 	$(CARGO) run -q -p docscheck-cli -- check $(DOCS)
+
+# Software metrics (rust-code-analysis) over the source tree; prints the CLI's
+# own metrics tree. Needs `rust-code-analysis-cli` on PATH — CI pins the
+# release — or set RCA to a binary. Report-only: `make check` does not run it.
+code-analysis:
+	$(RCA) --metrics -p $(CODE_ANALYSIS_PATHS)
 
 clean:
 	$(CARGO) clean
