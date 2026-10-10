@@ -81,8 +81,9 @@ impl From<TableFormat> for pqbench::credentials::check::TableFormat {
     }
 }
 
-/// One command's stdin: the resolved context and the parent records.
-pub(crate) struct Input {
+/// One command's context: the resolved configuration and the parent records,
+/// built once at command start and passed to the stage.
+pub(crate) struct Context {
     pub source: Source,
     /// Whether stdin was a pipe (a stream), not a terminal.
     pub piped: bool,
@@ -218,8 +219,8 @@ struct Document {
 }
 
 /// Read stdin's first record: a `pqbench.lake-source` (context) or a ref
-/// (kept for the command's record stream).
-pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError> {
+/// (kept for the command's record stream), and resolve the context once.
+pub(crate) async fn read_input(command: &'static str) -> Result<Context, CliError> {
     let piped = !std::io::stdin().is_terminal();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut document: Option<Document> = None;
@@ -242,7 +243,7 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
         }
     }
     let source = resolve(command, document)?;
-    Ok(Input {
+    Ok(Context {
         source,
         piped,
         first,
