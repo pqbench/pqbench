@@ -37,7 +37,7 @@ impl HttpConnector for SharedConnector {
 
 /// A built S3 store: the backend every read goes through, and the concrete
 /// store a signed HEAD is minted from. One store owns one client and its
-/// connection pool, so stores are shared through [`store_for`], never built
+/// connection pool, so stores are shared through [`shared_store`], never built
 /// per object.
 struct Store {
     backend: Arc<dyn ObjectStore>,
@@ -228,7 +228,7 @@ type StoreKey = (String, Vec<(String, String)>);
 const STORE_LIMIT: usize = 32;
 
 /// The shared store for `url`'s bucket and `options`, built once and reused.
-fn store_for(url: &Url, options: &[(String, String)]) -> Result<Arc<Store>, Error> {
+fn shared_store(url: &Url, options: &[(String, String)]) -> Result<Arc<Store>, Error> {
     let mut options = options.to_vec();
     options.sort();
     let key = (url.host_str().unwrap_or_default().to_string(), options);
@@ -273,7 +273,7 @@ fn s3_store(
     url: &Url,
     options: &[(String, String)],
 ) -> Result<(Arc<Store>, ::object_store::path::Path), Error> {
-    let store = store_for(url, options)?;
+    let store = shared_store(url, options)?;
     let (_, location) =
         ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
     Ok((store, location))
@@ -286,7 +286,7 @@ pub(crate) fn root_store(
     url: &Url,
     options: &[(String, String)],
 ) -> Result<Arc<dyn ObjectStore>, Error> {
-    Ok(Arc::clone(&store_for(url, options)?.backend))
+    Ok(Arc::clone(&shared_store(url, options)?.backend))
 }
 
 fn child_name(parent: &str, child: &str) -> String {
@@ -457,8 +457,8 @@ mod tests {
     #[tokio::test]
     async fn one_store_per_bucket_and_options() {
         let url = Url::parse("s3://store-sharing-test/key").unwrap();
-        let first = super::store_for(&url, &[]).unwrap();
-        let second = super::store_for(&url, &[]).unwrap();
+        let first = super::shared_store(&url, &[]).unwrap();
+        let second = super::shared_store(&url, &[]).unwrap();
         assert!(Arc::ptr_eq(&first, &second), "the store was rebuilt");
     }
 }
