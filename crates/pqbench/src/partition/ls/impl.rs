@@ -12,7 +12,11 @@ pub(crate) async fn list(
     versions: &[u64],
 ) -> Result<Vec<TableFile>, Error> {
     let wanted: BTreeSet<u64> = versions.iter().copied().collect();
-    let request = LoadRequest::new(uri.to_string(), None, env.clone()).with_log();
+    // The files a commit added ride on the log. Delta's log names them itself,
+    // but Iceberg attaches a snapshot's files only when they are resolved, so
+    // the read must request them: `with_log()` alone leaves an Iceberg commit
+    // with no `add` actions and the walk measures nothing.
+    let request = LoadRequest::new(uri.to_string(), None, env.clone());
     let info = table::load(&request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;

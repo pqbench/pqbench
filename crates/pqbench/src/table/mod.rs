@@ -496,6 +496,11 @@ async fn probe(uri: &str, relative: &str, options: &[(String, String)]) -> Resul
 }
 
 pub(crate) fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
+    // An absolute location is already the answer: a Delta log names a file
+    // relative to the table root, but an Iceberg manifest names it absolute.
+    if relative.contains("://") || relative.starts_with('/') {
+        return Ok(relative.to_string());
+    }
     if is_local(base) {
         return Ok(local_path(base)?
             .join(relative)
