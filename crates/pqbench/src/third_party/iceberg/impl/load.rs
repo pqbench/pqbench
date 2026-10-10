@@ -63,12 +63,13 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         }
         _ => (Vec::new(), Vec::new()),
     };
-    let mut log = if request.require_files {
+    let mut log = if request.require_files || request.require_log {
         ancestry(&metadata, selected)
             .into_iter()
             .map(|snapshot| {
                 Ok(LogCommit {
                     version: create_u64(snapshot.snapshot_id)?,
+                    commit_time: snapshot.snapshot_time,
                     actions: vec![LogAction {
                         kind: "snapshot".into(),
                         path: Some(snapshot.manifest_list.clone()),
@@ -202,6 +203,8 @@ struct Snapshot {
     parent_snapshot_id: Option<i64>,
     #[serde(rename = "manifest-list")]
     manifest_list: String,
+    #[serde(rename = "timestamp-ms", default)]
+    snapshot_time: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

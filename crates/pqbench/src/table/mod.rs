@@ -11,6 +11,7 @@
 //! `iceberg` (`iceberg-s3` for S3).
 
 pub mod info;
+pub mod ls;
 
 mod selection;
 pub use selection::FileSelection;
@@ -77,6 +78,10 @@ pub struct LogAction {
 pub struct LogCommit {
     /// Commit version.
     pub version: u64,
+    /// Commit time in milliseconds since the Unix epoch, when the log records
+    /// one. Delta reads `commitInfo.timestamp`; Iceberg the snapshot time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_time: Option<i64>,
     /// Actions from the commit file, in file order.
     pub actions: Vec<LogAction>,
 }
@@ -271,6 +276,9 @@ pub struct LoadRequest {
     /// files. [`visit_load`] emits the header and nothing else.
     // aipnaming: allow(aip-140/verbs)
     pub require_files: bool,
+    /// When true, read the commit log even when [`Self::require_files`] is
+    /// false: `table ls` needs the commits' times, not the files.
+    pub require_log: bool,
     /// When false, do not retain active files on the returned document.
     /// [`visit_load`] still emits each file; partition totals are kept.
     // aipnaming: allow(aip-140/verbs)
@@ -294,6 +302,7 @@ impl LoadRequest {
             env,
             file_stats: true,
             require_files: true,
+            require_log: false,
             collect_files: true,
             collect_log: true,
         }
@@ -313,6 +322,16 @@ impl LoadRequest {
     // aipnaming: allow(aip-136/method-prepositions)
     #[must_use]
     pub fn without_files(mut self) -> Self {
+        self.require_files = false;
+        self
+    }
+
+    /// Read only the commit log: the commits and their times, no active files.
+    /// This is `table ls`, which needs the commits, not the file replay.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn with_log(mut self) -> Self {
+        self.require_log = true;
         self.require_files = false;
         self
     }

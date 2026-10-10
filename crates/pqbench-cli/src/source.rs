@@ -221,6 +221,17 @@ struct Document {
 /// Read stdin's first record: a `pqbench.lake-source` (context) or a ref
 /// (kept for the command's record stream), and resolve the context once.
 pub(crate) async fn read_input(command: &'static str) -> Result<Context, CliError> {
+    read_context(command, true).await
+}
+
+/// Like `read_input`, but the endpoint is optional: a command that reads a
+/// table by storage path (`table ls`) needs the lake source's env, not a
+/// catalog.
+pub(crate) async fn read_storage_input(command: &'static str) -> Result<Context, CliError> {
+    read_context(command, false).await
+}
+
+async fn read_context(command: &'static str, require_endpoint: bool) -> Result<Context, CliError> {
     let piped = !std::io::stdin().is_terminal();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut document: Option<Document> = None;
@@ -242,7 +253,7 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Context, CliErro
             break;
         }
     }
-    let source = resolve(command, document)?;
+    let source = resolve(command, document, require_endpoint)?;
     Ok(Context {
         source,
         piped,
@@ -252,7 +263,11 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Context, CliErro
 }
 
 /// The document wins field by field; the environment fills in the rest.
-fn resolve(command: &str, document: Option<Document>) -> Result<Source, CliError> {
+fn resolve(
+    command: &str,
+    document: Option<Document>,
+    require_endpoint: bool,
+) -> Result<Source, CliError> {
     if let Some(document) = &document {
         if document.version != 1 {
             return Err(
@@ -264,10 +279,17 @@ fn resolve(command: &str, document: Option<Document>) -> Result<Source, CliError
         .as_ref()
         .and_then(|document| document.endpoint.clone())
         .filter(|endpoint| !endpoint.trim().is_empty())
-        .or_else(env_endpoint)
-        .ok_or_else(|| {
-            format!("{command} needs a pqbench.lake-source on standard input or PQB_ENDPOINT")
-        })?;
+        .or_else(env_endpoint);
+    let endpoint = match endpoint {
+        Some(endpoint) => endpoint,
+        None if require_endpoint => {
+            return Err(format!(
+                "{command} needs a pqbench.lake-source on standard input or PQB_ENDPOINT"
+            )
+            .into())
+        }
+        None => String::new(),
+    };
     let token = document
         .as_ref()
         .and_then(|document| document.token.clone())
