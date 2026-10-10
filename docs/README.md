@@ -46,6 +46,8 @@ details.
 - [Databricks auth](auth.md) — create the service principal, grant metadata
   access, mint the OAuth M2M bearer.
 - [Docker](docker.md) — build, run, publish, and benchmark in a container.
+- [Performance](performance.md) — measure the metadata walk with `perf stat` and
+  `perf record`, and read the result.
 
 ### Reference
 
