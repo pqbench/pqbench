@@ -33,9 +33,12 @@ catalog".
 $ eval "$(pqbench setup --endpoint <url> --token <token> --region us-east-2)"
 ```
 
-`make dbx-e2e` drives the live Databricks workspace and its external fixture
-(`pqbench_ext`, thirty Delta tables on customer S3); `make lakehouse` drives the
-compose stand for the file-level commands.
+`make dbx-e2e` drives the live Databricks workspace and its external fixture:
+`pqbench_ext`, whose external Delta tables on customer S3 are the synthetic
+`events`/`sales`/`reference` plus real sample data copied server-side from
+`dbx_samples` (`scripts/dbx-ext/`). `external_fixture_walk_is_the_perf_target`
+times the whole walk; `make lakehouse` drives the compose stand for the
+file-level commands.
 
 ## Run perf
 
