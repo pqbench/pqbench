@@ -14,6 +14,7 @@ pub mod experiment;
 pub mod lake;
 pub mod lz;
 pub mod metastore;
+pub mod partition;
 pub mod profile;
 pub mod ratelimit;
 pub mod report;

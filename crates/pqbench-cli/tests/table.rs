@@ -698,6 +698,49 @@ fn table_ls_rejects_a_bad_window() {
     );
 }
 
+/// `table ls | partition ls` names the files the window's commits added.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_lists_the_files_a_window_added() {
+    let fixture = dated_delta_fixture(1_700_000_000_000);
+    let listed = pipe(
+        &[
+            "table",
+            "ls",
+            fixture.path.to_str().unwrap(),
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(
+        listed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let files = pipe(
+        &["partition", "ls", "--format", "json"],
+        &String::from_utf8_lossy(&listed.stdout),
+    );
+    assert!(
+        files.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&files.stderr)
+    );
+    let records = ndjson_records(&files.stdout);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["kind"], "pqbench.table-file");
+    assert_eq!(records[0]["path"], "data.parquet");
+    assert!(
+        records[0]["uri"]
+            .as_str()
+            .unwrap()
+            .ends_with("/data.parquet"),
+        "{}",
+        records[0]["uri"]
+    );
+}
+
 #[cfg(feature = "delta")]
 #[test]
 fn table_exits_cleanly_when_stdout_is_closed() {

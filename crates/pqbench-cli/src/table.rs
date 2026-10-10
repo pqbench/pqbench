@@ -430,13 +430,14 @@ async fn run_ls(args: &LsArgs) -> Result<(), CliError> {
                     let found = table::ls::list(&uri, &env, window)
                         .await
                         .map_err(|error| CliError::from(error.to_string()))?;
-                    Ok::<_, CliError>((uri, found))
+                    Ok::<_, CliError>((uri, env, found))
                 })
                 .buffer_unordered(args.fan_out.max(1));
             while let Some(result) = reads.next().await {
-                let (uri, found) = result?;
+                let (uri, env, found) = result?;
                 for partition in &found {
-                    emit.write_row(&partition_record(&uri, partition)).await?;
+                    emit.write_row(&partition_record(&uri, partition, &env))
+                        .await?;
                     partitions += 1;
                 }
             }
@@ -457,7 +458,8 @@ async fn list_partitions(
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;
     for partition in &found {
-        emit.write_row(&partition_record(uri, partition)).await?;
+        emit.write_row(&partition_record(uri, partition, env))
+            .await?;
         count += 1;
     }
     Ok(count)
@@ -493,6 +495,8 @@ struct PartitionRecord<'a> {
     kind: &'static str,
     version: u32,
     table: &'a str,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    env: &'a BTreeMap<String, String>,
     definition: Definition,
     commits: Vec<CommitCell>,
 }
@@ -526,11 +530,16 @@ impl Row for PartitionRecord<'_> {
     }
 }
 
-fn partition_record<'a>(table: &'a str, partition: &table::ls::Partition) -> PartitionRecord<'a> {
+fn partition_record<'a>(
+    table: &'a str,
+    partition: &table::ls::Partition,
+    env: &'a BTreeMap<String, String>,
+) -> PartitionRecord<'a> {
     PartitionRecord {
         kind: "pqbench.partition",
         version: 1,
         table,
+        env,
         definition: Definition {
             kind: "natural",
             first_time: partition.first_time,

@@ -19,6 +19,7 @@ that command and links back. This file is the durable copy.
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
 | Read one table's record | `pqbench tablev2 info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
 | List a table's natural partitions | `pqbench table ls CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
+| List a partition's files | `pqbench partition ls` (partitions on stdin) |
 | Vend read credentials (refs) | `pqbench credentials get` (v2 refs on stdin) |
 | Fill a legacy table-ref's storage path | `pqbench table info` (v1 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
@@ -53,7 +54,7 @@ process environment itself.
 | `pqbench.schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
 | `pqbench.table-ref` v1 | `lake` | `table info`, `table` |
 | `pqbench.table-ref` v2 | `schema ls`, `tablev2 info`, `credentials get` | `tablev2 info`, `credentials get` |
-| `pqbench.partition` | `table ls` | humans / scripts (`--json`) |
+| `pqbench.partition` | `table ls` | `partition ls`, humans / scripts (`--json`) |
 | `pqbench.table` v1 | `table` | `bytemass`, `dump` |
 | `pqbench.remote-source` | a producer | `table`, `bytemass` |
 | `pqbench.bytemass` / `pqbench.bytemass-row` | `bytemass` | `viz` |
@@ -282,6 +283,9 @@ per epoch-aligned, half-open UTC window, carrying the commits it holds.
 `--every` sets the width (`1h`, `1d`, `1w`); a commit the log does not date is
 omitted, so a window never claims a commit it cannot place. A partition is a
 lens on the files, not a thing the table stores — see `docs/partition.md`.
+`partition ls` then re-reads the window's commits and lists the files they
+added — the env rides on every file, and that stream is what `bytemass`
+measures.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…

@@ -93,8 +93,12 @@ async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliErr
                 envs.insert(begin.id.clone(), begin.env);
                 open.insert(begin.id);
             }
-            Record::File { id, file } => {
-                let env = envs.get(&id).cloned().unwrap_or_default();
+            Record::File { id, file, env } => {
+                let env = if env.is_empty() {
+                    envs.get(&id).cloned().unwrap_or_default()
+                } else {
+                    env
+                };
                 measure_file(&mut emit, &mut stats, &id, file, env, (args.indexes, args.pages)).await?;
             }
             Record::Commit { .. } => {}

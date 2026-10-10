@@ -70,12 +70,16 @@ async fn from_document(input: &str) -> Result<Vec<Entry>, CliError> {
             Record::Begin(begin) => {
                 envs.insert(begin.id.clone(), begin.env);
             }
-            Record::File { id, file } => entries.push((
+            Record::File { id, file, env } => entries.push((
                 id.clone(),
                 DumpFile {
                     path: file.path,
                     uri: file.uri,
-                    env: envs.get(&id).cloned().unwrap_or_default(),
+                    env: if env.is_empty() {
+                        envs.get(&id).cloned().unwrap_or_default()
+                    } else {
+                        env
+                    },
                 },
             )),
             Record::Table(info) => {

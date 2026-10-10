@@ -17,6 +17,7 @@ mod help;
 mod lake;
 mod lz;
 mod metastore;
+mod partition;
 mod profile;
 mod ratelimit;
 mod schema;
@@ -119,6 +120,13 @@ enum Command {
     )]
     Credentials(credentials::CredentialsArgs),
     #[command(
+        about = help::PARTITION_ABOUT,
+        long_about = help::PARTITION_LONG_ABOUT,
+        after_help = help::PARTITION_AFTER,
+        after_long_help = help::PARTITION_AFTER
+    )]
+    Partition(partition::PartitionArgs),
+    #[command(
         name = "ratelimit",
         about = help::RATELIMIT_ABOUT,
         long_about = help::RATELIMIT_LONG_ABOUT,
@@ -194,6 +202,7 @@ async fn main() -> ExitCode {
         Command::Schema(args) => schema::run(&args).await,
         Command::TableV2(args) => tablev2::run(&args).await,
         Command::Credentials(args) => credentials::run(&args).await,
+        Command::Partition(args) => partition::run(&args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Dump(args) => dump::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
