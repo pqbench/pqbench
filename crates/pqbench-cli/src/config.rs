@@ -1,10 +1,14 @@
 //! The walk's configuration: the layers that resolve it, least to most
 //! specific — `~/.pqbenchrc`, then the environment, then the command line.
 //!
-//! `pqbench setup` prints the resolved values for the shell to `eval`, and every
-//! command reads the same resolution through its [`pqbench::Context`].
+//! `~/.pqbenchrc` has a shared top-level table (endpoint, token, table_format)
+//! and per-command `[section]` tables (`[table]`, `[ratelimit]`, …) that only
+//! the command they name reads — the same split uv gives `[tool.uv.pip]`. Every
+//! setting is also a flag with a `PQB_*` fallback; the file is the lowest layer.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::Args;
 use pqbench::config::{Combine, Dialect, Layer};
@@ -26,6 +30,14 @@ pub(crate) struct ConfigArgs {
     pub table_format: Option<String>,
 }
 
+/// The resolved configuration and the run-control file's per-command sections.
+pub(crate) struct Resolution {
+    /// The shared connection config, ready for [`pqbench::Context`].
+    pub config: pqbench::Config,
+    /// The `[section]` tables, read by the command they name.
+    pub sections: Sections,
+}
+
 /// Resolve the run's configuration: the run-control file, then the environment,
 /// then the command line.
 ///
@@ -36,8 +48,10 @@ pub(crate) fn resolve(
     command: &str,
     args: &ConfigArgs,
     require_endpoint: bool,
-) -> Result<pqbench::Config, CliError> {
-    let config = read_run_control()?
+) -> Result<Resolution, CliError> {
+    let run_control = read_run_control()?;
+    let config = run_control
+        .shared
         .combine(env_layer())
         .combine(flag_layer(command, args)?)
         .resolve();
@@ -47,17 +61,58 @@ pub(crate) fn resolve(
         )
         .into());
     }
-    Ok(config)
+    Ok(Resolution {
+        config,
+        sections: run_control.sections,
+    })
 }
 
-/// The run-control file's contribution: durable, non-secret preferences.
-fn read_run_control() -> Result<Layer, CliError> {
+/// The run-control file, parsed: the shared top-level table and the per-command
+/// `[section]` tables.
+#[derive(Default)]
+struct RunControl {
+    shared: Layer,
+    sections: Sections,
+}
+
+/// The run-control file's `[section]` tables, keyed by section and then key.
+#[derive(Default)]
+pub(crate) struct Sections(BTreeMap<String, BTreeMap<String, String>>);
+
+impl Sections {
+    /// One value, or `None` when the section or key is absent.
+    pub(crate) fn get(&self, section: &str, key: &str) -> Option<&str> {
+        self.0.get(section)?.get(key).map(String::as_str)
+    }
+
+    /// One value parsed as `T`, naming the source in an error.
+    ///
+    /// # Errors
+    /// Fails when the value cannot be parsed as `T`.
+    pub(crate) fn parse<T: FromStr>(&self, section: &str, key: &str) -> Result<Option<T>, CliError>
+    where
+        <T as FromStr>::Err: std::fmt::Display,
+    {
+        match self.get(section, key) {
+            Some(value) => value
+                .parse::<T>()
+                .map(Some)
+                .map_err(|error| format!("[{section}] {key}: {error}").into()),
+            None => Ok(None),
+        }
+    }
+}
+
+/// The run-control file's contribution: the shared table and the sections.
+fn read_run_control() -> Result<RunControl, CliError> {
     let Some(path) = run_control_path() else {
-        return Ok(Layer::default());
+        return Ok(RunControl::default());
     };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Layer::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RunControl::default())
+        }
         Err(error) => return Err(format!("cannot read {}: {error}", path.display()).into()),
     };
     parse_run_control(&text)
@@ -70,13 +125,21 @@ fn run_control_path() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".pqbenchrc")))
 }
 
-/// One `key = value` line per preference, with `#` comments (taoup's run-control
-/// syntax): `endpoint`, `token`, and `table_format`.
-fn parse_run_control(text: &str) -> Result<Layer, CliError> {
-    let mut layer = Layer::default();
+/// The shared `key = value` lines, then one `[section]` table per command, with
+/// `#` comments (taoup's run-control syntax).
+fn parse_run_control(text: &str) -> Result<RunControl, CliError> {
+    let mut run_control = RunControl::default();
+    let mut section: Option<String> = None;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            section = Some(name.trim().to_string());
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
@@ -86,14 +149,26 @@ fn parse_run_control(text: &str) -> Result<Layer, CliError> {
         if value.is_empty() {
             continue;
         }
-        match key.trim() {
-            "endpoint" => layer.endpoint = Some(value),
-            "token" => layer.token = Some(value),
-            "table_format" => layer.dialect = Some(parse_dialect("~/.pqbenchrc", &value)?),
-            _ => {}
+        match &section {
+            None => match key.trim() {
+                "endpoint" => run_control.shared.endpoint = Some(value),
+                "token" => run_control.shared.token = Some(value),
+                "table_format" => {
+                    run_control.shared.dialect = Some(parse_dialect("~/.pqbenchrc", &value)?);
+                }
+                _ => {}
+            },
+            Some(name) => {
+                run_control
+                    .sections
+                    .0
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(key.trim().to_string(), value);
+            }
         }
     }
-    Ok(layer)
+    Ok(run_control)
 }
 
 /// The environment's contribution. clap already merged the flags over `PQB_*`,
@@ -157,22 +232,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_run_control_file_reads_keys_and_comments() {
-        let layer = parse_run_control(
+    fn the_run_control_file_reads_keys_comments_and_sections() {
+        let run_control = parse_run_control(
             "# pqbench's run-control file\n\
              endpoint = https://example.cloud.databricks.com\n\
              table_format=iceberg\n\
-             region = \"us-east-1\"\n\
+             \n\
+             [table]\n\
+             fan_out = 8\n\
+             every = \"1w\"\n\
+             \n\
+             [ratelimit]\n\
+             rate = 15\n\
              \n\
              nonsense\n",
         )
         .unwrap();
         assert_eq!(
-            layer.endpoint.as_deref(),
+            run_control.shared.endpoint.as_deref(),
             Some("https://example.cloud.databricks.com")
         );
-        assert_eq!(layer.dialect, Some(Dialect::Iceberg));
-        assert_eq!(layer.token, None);
+        assert_eq!(run_control.shared.dialect, Some(Dialect::Iceberg));
+        assert_eq!(run_control.sections.get("table", "fan_out"), Some("8"));
+        assert_eq!(run_control.sections.get("table", "every"), Some("1w"));
+        assert_eq!(
+            run_control
+                .sections
+                .parse::<f64>("ratelimit", "rate")
+                .unwrap(),
+            Some(15.0)
+        );
+        assert_eq!(run_control.sections.get("table", "missing"), None);
     }
 
     #[test]

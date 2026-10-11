@@ -179,24 +179,24 @@ async fn main() -> ExitCode {
 
 /// Resolve the shared configuration and context once, then run the command.
 async fn dispatch(cli: Cli) -> Result<(), CliError> {
-    let config = config::resolve(
+    let resolution = config::resolve(
         cli.command.name(),
         &cli.config,
         cli.command.requires_endpoint(),
     )?;
-    let context = pqbench::Context::new(config)?;
+    let context = pqbench::Context::new(resolution.config)?;
     match cli.command {
         Command::Diff(args) => diff::run(&context, &args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&context, &args).await,
-        Command::Table(args) => table::run(&context, &args).await,
+        Command::Table(args) => table::run(&context, &resolution.sections, &args).await,
         Command::Metastore(args) => metastore::run(&context, &args).await,
         Command::Catalog(args) => catalog::run(&context, &args).await,
         Command::Schema(args) => schema::run(&context, &args).await,
         Command::Credentials(args) => credentials::run(&context, &args).await,
         Command::Partition(args) => partition::run(&context, &args).await,
-        Command::RateLimit(args) => ratelimit::run(&args).await,
+        Command::RateLimit(args) => ratelimit::run(&resolution.sections, &args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),

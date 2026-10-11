@@ -112,8 +112,10 @@ EOF
 The walk's config resolves from three layers, least to most specific:
 `~/.pqbenchrc` (a `key = value` run-control file), then the environment, then
 the command line. `--endpoint`, `--token`, and `--table-format` are global
-flags, each with a `PQB_*` fallback; `pqbench setup` prints the resolved config
-for the shell to eval:
+flags, each with a `PQB_*` fallback. The file has a shared table plus
+per-command `[section]` tables (`[table] fan_out`, `[ratelimit] rate`, …), read
+only by the command they name. `pqbench setup` prints the resolved config for
+the shell to eval:
 
 | Variable | Role |
 | --- | --- |

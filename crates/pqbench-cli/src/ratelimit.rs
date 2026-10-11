@@ -11,21 +11,23 @@ use pqbench::ratelimit::RateLimit;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::config::Sections;
 use crate::CliError;
 
 /// Arguments for `ratelimit`: the target rate.
 #[derive(Args)]
 pub(crate) struct RateLimitArgs {
-    /// records per second per kind; 0 turns pacing off
-    #[arg(long, default_value_t = pqbench::ratelimit::DEFAULT_REQUESTS_PER_SECOND)]
-    rate: f64,
+    /// records per second per kind; 0 turns pacing off [env: PQB_RATE]
+    #[arg(long, value_name = "RATE", env = "PQB_RATE")]
+    rate: Option<f64>,
 }
 
-pub(crate) async fn run(args: &RateLimitArgs) -> Result<(), CliError> {
-    if !args.rate.is_finite() || args.rate < 0.0 {
-        return Err(format!("ratelimit expects a non-negative rate, got {}", args.rate).into());
+pub(crate) async fn run(sections: &Sections, args: &RateLimitArgs) -> Result<(), CliError> {
+    let rate = rate(sections, args)?;
+    if !rate.is_finite() || rate < 0.0 {
+        return Err(format!("ratelimit expects a non-negative rate, got {rate}").into());
     }
-    let mut limit = RateLimit::new(args.rate);
+    let mut limit = RateLimit::new(rate);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await? {
@@ -47,6 +49,14 @@ pub(crate) async fn run(args: &RateLimitArgs) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// The rate: the flag, then `[ratelimit] rate`, then the default.
+fn rate(sections: &Sections, args: &RateLimitArgs) -> Result<f64, CliError> {
+    Ok(args
+        .rate
+        .or(sections.parse("ratelimit", "rate")?)
+        .unwrap_or(pqbench::ratelimit::DEFAULT_REQUESTS_PER_SECOND))
 }
 
 async fn write_record(stdout: &mut tokio::io::Stdout, line: &str) -> std::io::Result<()> {
