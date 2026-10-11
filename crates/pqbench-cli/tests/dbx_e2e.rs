@@ -7,8 +7,8 @@
 //!
 //! The external fixture (`pqbench_ext`, external Delta on customer S3 — see
 //! `scripts/dbx-ext/`) covers the rest of the walk:
-//! `external_fixture_walks_to_bytemass` runs the full pipeline and
-//! `external_fixture_walk_is_the_perf_target` times it.
+//! `external_fixture_walks_to_bytemass` runs the full pipeline. The perf walk
+//! lives in `scripts/dbx-perf-walk.sh` (`make dbx-perf-walk`).
 //!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
 //! service principal's credentials come from `DBX_SAMPLES_SP_CLIENT_ID` /
@@ -860,10 +860,10 @@ fn table_info_names_the_location_when_the_metadata_cannot_be_read() {
 /// (`pqbench_delta_test`) lists no direct-external-engine capability in its
 /// manifest, so the check drops it with the reason on stderr; the managed
 /// Iceberg tables carry the capability and pass through, including from a
-/// mixed schema.
+/// mixed schema. A drop is the filter working, so the stage still succeeds.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_check_gates_the_live_tables() {
+fn credentials_check_filters_the_live_tables() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -884,13 +884,17 @@ fn credentials_check_gates_the_live_tables() {
         format!("{}\n", reference("dbx_samples.nyctaxi.pqbench_delta_test")).as_bytes(),
         &env,
     );
-    assert!(!unsupported.status.success());
+    assert!(unsupported.status.success());
     let stderr = String::from_utf8_lossy(&unsupported.stderr);
     assert!(
         stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
         "{stderr}"
     );
     assert!(stderr.contains("managed default storage"), "{stderr}");
+    assert!(
+        ndjson(&unsupported.stdout).is_empty(),
+        "a drop emits no ref"
+    );
     let eligible = pipe_env(
         &["credentials", "check", "--format", "json"],
         format!("{}\n", reference("dbx_samples.nyctaxi.trips")).as_bytes(),
@@ -922,7 +926,7 @@ fn credentials_check_gates_the_live_tables() {
         &refs.stdout,
         &env,
     );
-    assert!(!mixed.status.success());
+    assert!(mixed.status.success());
     let mixed_stderr = String::from_utf8_lossy(&mixed.stderr);
     assert!(
         mixed_stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
@@ -1168,78 +1172,6 @@ fn external_fixture_walks_to_bytemass() {
     println!(
         "walk {schema}: {tables} tables, {partition_count} partitions, {file_count} files, {} bytemass records",
         records.len()
-    );
-}
-
-/// The whole external fixture as one timed walk — the process-partitioned perf
-/// target from issue #58 (many tables, not one big table). Ignored like the
-/// rest of the live e2e, and skipped unless `DBX_PERF_SCHEMAS` (comma-separated
-/// `catalog.schema`) names what to walk, so the standard e2e never runs the
-/// whole fixture. It prints per-stage wall time and the counts; the numbers
-/// belong in the pull request (`docs/performance.md`).
-#[test]
-#[ignore = "network + perf: reads the live Databricks endpoint"]
-fn external_fixture_walk_is_the_perf_target() {
-    let Some(schemas) = std::env::var("DBX_PERF_SCHEMAS")
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
-        eprintln!("skipping: set DBX_PERF_SCHEMAS to run the perf walk");
-        return;
-    };
-    let schemas: Vec<String> = schemas.split(',').map(str::to_owned).collect();
-    let Some(host) = dbx_host() else {
-        eprintln!("skipping: DBX_HOST is not set");
-        return;
-    };
-    let Some(token) = any_token(&host) else {
-        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
-        return;
-    };
-    let region = std::env::var("DBX_AWS_REGION")
-        .ok()
-        .filter(|region| !region.is_empty())
-        .unwrap_or_else(|| "us-east-2".to_string());
-    let endpoint = unity_endpoint(&host);
-    let env = [
-        ("PQB_ENDPOINT", endpoint.as_str()),
-        ("PQB_TOKEN", token.as_str()),
-        ("AWS_REGION", region.as_str()),
-    ];
-
-    let started = std::time::Instant::now();
-    let mut refs = Vec::new();
-    let mut list_time = std::time::Duration::ZERO;
-    for schema in &schemas {
-        let (listed, elapsed) =
-            timed_stage(&env, &["schema", "ls", schema, "--format", "json"], b"");
-        refs.extend(listed);
-        list_time += elapsed;
-    }
-    let (checked, check_time) =
-        timed_stage(&env, &["credentials", "check", "--format", "json"], &refs);
-    let (vended, get_time) =
-        timed_stage(&env, &["credentials", "get", "--format", "json"], &checked);
-    let (info, info_time) = timed_stage(&env, &["table", "info", "--format", "json"], &vended);
-    let (partitions, group_time) = timed_stage(&env, &["table", "ls", "--format", "json"], &info);
-    let (files, files_time) =
-        timed_stage(&env, &["partition", "ls", "--format", "json"], &partitions);
-    let (measured, mass_time) = timed_stage(&env, &["bytemass", "--format", "json"], &files);
-    let total = started.elapsed();
-
-    let tables = ndjson(&info).len();
-    let partition_count = ndjson(&partitions).len();
-    let file_count = ndjson(&files).len();
-    let records = ndjson(&measured);
-    let bytemass_files = records
-        .iter()
-        .filter(|record| record["kind"] == "pqbench.bytemass-file")
-        .count();
-    assert!(tables > 0, "no tables listed");
-    assert!(bytemass_files > 0, "no bytemass-file records");
-    println!(
-        "perf walk: {} schemas, {tables} tables, {partition_count} partitions, {file_count} files, {bytemass_files} bytemass files in {total:.2?} (ls {list_time:.2?}, check {check_time:.2?}, get {get_time:.2?}, info {info_time:.2?}, table ls {group_time:.2?}, partition ls {files_time:.2?}, bytemass {mass_time:.2?})",
-        schemas.len()
     );
 }
 

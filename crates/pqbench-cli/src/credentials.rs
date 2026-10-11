@@ -137,7 +137,10 @@ async fn run_get(config: &CredentialsGetConfig) -> Result<(), CliError> {
 /// view (the catalog reports no location), and a table whose capability
 /// manifest marks compute-only (managed default storage), writing the reason
 /// to standard error. Eligible refs pass through unchanged, so the stage
-/// composes ahead of `credentials get` and a mixed schema keeps going.
+/// composes ahead of `credentials get` and a mixed schema keeps going. A drop
+/// is the filter working, not a failure: a whole-catalog walk always has
+/// tables it cannot read outside compute, so the stage still succeeds and only
+/// a real error (a missing table, an endpoint fault) fails it.
 async fn run_check(config: &CredentialsCheckConfig) -> Result<(), CliError> {
     let context = read_input("credentials check").await?;
     if !context.piped {
@@ -167,10 +170,12 @@ async fn run_check(config: &CredentialsCheckConfig) -> Result<(), CliError> {
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await?;
+    // A drop is the filter working, not a failure: the walk composes on this
+    // stage for a mixed schema, and a whole-catalog walk always has tables
+    // (system, views, managed default storage) it cannot read outside compute.
+    // Only a real error — a missing table, an endpoint fault — fails the stage.
     if dropped > 0 {
-        return Err(
-            format!("{dropped} table(s) are not readable outside Databricks compute").into(),
-        );
+        eprintln!("{dropped} table(s) are not readable outside Databricks compute");
     }
     Ok(())
 }

@@ -232,7 +232,7 @@ Delta log by path is not that interface, and Databricks-managed default
 storage explicitly denies externally issued sessions on its objects (verified
 for data files, Iceberg manifests, and the Delta log) — the catalog reports
 those tables as Databricks default storage (`TABLE_DB_STORAGE`), so
-`credentials check` stops the walk with the reason and no storage read runs.
+`credentials check` drops the ref with the reason and no storage read runs.
 Customer-storage tables read under the lease; compatibility mode publishes a
 read-only copy for path-based clients. Inside Databricks compute the lease is
 not the mechanism: serverless notebooks are refused storage-credential minting
@@ -243,7 +243,10 @@ profile.
 `credentials check` and `credentials get` read the same refs. The check is the
 walk's single filter: it drops a `system` catalog ref, a view (the catalog
 reports no location), and a table on Databricks default storage, with the
-reason on standard error; eligible refs pass through unchanged. `credentials get` is the stage that materializes the
+reason on standard error; eligible refs pass through unchanged. A drop is the
+filter working, not a failure — a whole-catalog walk always has tables it
+cannot read outside compute — so the stage still succeeds; only a real error (a
+missing table, an endpoint fault) fails it. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
 `temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the
