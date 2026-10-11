@@ -1,8 +1,10 @@
+//! `partition ls`: the files each partition's commits added.
+
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use clap::{Args, Subcommand};
+use clap::Args;
 use futures_util::stream::{self, StreamExt};
 use pqbench::table::TableFile;
 use serde::{Deserialize, Serialize};
@@ -10,19 +12,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
-
-/// Arguments for `partition`: a partition's files.
-#[derive(Args)]
-pub(crate) struct PartitionArgs {
-    #[command(subcommand)]
-    command: PartitionCommand,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum PartitionCommand {
-    /// List a partition's files — the ones its commits added
-    Ls(LsArgs),
-}
 
 /// Arguments for `partition ls`.
 #[derive(Args)]
@@ -38,19 +27,13 @@ pub(crate) struct LsArgs {
     fan_out: usize,
 }
 
-pub(crate) async fn run(lake: &pqbench::Lake, args: &PartitionArgs) -> Result<(), CliError> {
-    match &args.command {
-        PartitionCommand::Ls(ls) => run_ls(lake, ls).await,
-    }
-}
-
 /// List the files each partition's commits added: `table ls | partition ls`.
 ///
 /// Reads a `pqbench.partition` stream, re-reads each table's log, and emits the
 /// files the window's commits named — the **added in window** set, so a file a
 /// later commit removes is still named. The env rides on every file, so a
 /// short-lived lease travels with it; there is no begin/end envelope.
-async fn run_ls(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
+pub(super) async fn run_ls(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
     if std::io::stdin().is_terminal() {
         return Err("partition ls reads pqbench.partition records on standard input".into());
     }
