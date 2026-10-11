@@ -181,9 +181,9 @@ jobs:
   # stat`/`perf record` over the whole-Unity-Catalog metadata walk. It
   # authenticates with the GitHub Actions OIDC token (workload identity
   # federation) — no stored secret — and falls back to the service principal's
-  # client secret. Like `dbx-metastore-e2e` it is deliberately not required: the
-  # walk reads a shared, rate-limited live endpoint, so a flaky run must not
-  # block a merge. Skipped on fork PRs.
+  # client secret. Required: the S3 adapter reclassifies a dropped pooled
+  # connection as retryable, so the walk is stable on the shared, rate-limited
+  # live endpoint. Skipped on fork PRs.
   dbx-perf-walk:
     name: Databricks perf walk
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && (!github.event.pull_request.draft))
@@ -220,7 +220,7 @@ jobs:
   ci-heavy:
     name: Heavy gate
     if: always()
-    needs: [clippy, test, python, lakehouse-stand, dbx-metastore-e2e]
+    needs: [clippy, test, python, lakehouse-stand, dbx-metastore-e2e, dbx-perf-walk]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a heavy job did not succeed
