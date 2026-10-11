@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::table::FileStats;
 use crate::third_party::parquet::api::Error;
-use crate::Context;
+use crate::Lake;
 
 use super::collection;
 
@@ -161,11 +161,11 @@ pub struct MassRow {
 /// # Errors
 /// Fails when there are no inputs, a mask matches no files, an input cannot be
 /// read, or a byte total overflows.
-pub async fn bytemass(context: &Context, request: &BytemassRequest) -> Result<Vec<MassRow>, Error> {
+pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<MassRow>, Error> {
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_inputs(context, &request.inputs, &request.env, request.indexes).await
+    collection::measure_inputs(lake, &request.inputs, &request.env, request.indexes).await
 }
 
 /// One measured file, including metadata even when it has no column chunks.
@@ -181,13 +181,13 @@ pub struct MeasuredFile {
 /// # Errors
 /// Fails for empty inputs, unmatched patterns, invalid footers or I/O failures.
 pub async fn measure_files(
-    context: &Context,
+    lake: &Lake,
     request: &BytemassRequest,
 ) -> Result<Vec<MeasuredFile>, Error> {
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_files(context, &request.inputs, &request.env, request.indexes).await
+    collection::measure_files(lake, &request.inputs, &request.env, request.indexes).await
 }
 
 /// Resolve local and S3 patterns to sorted, unique object paths.
@@ -195,11 +195,11 @@ pub async fn measure_files(
 /// # Errors
 /// Invalid patterns, missing backend, listing errors, or unmatched patterns.
 pub async fn expand_inputs(
-    context: &Context,
+    lake: &Lake,
     inputs: &[String],
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, Error> {
-    Ok(collection::expand_inputs(context, inputs, env)
+    Ok(collection::expand_inputs(lake, inputs, env)
         .await?
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())

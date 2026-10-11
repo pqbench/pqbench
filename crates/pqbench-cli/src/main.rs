@@ -185,24 +185,25 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         &cli.config,
         cli.command.requires_endpoint(),
     )?;
-    let context = pqbench::Context::new(config)?;
+    let workspace = pqbench::Workspace::new(config)?;
+    let lake = pqbench::Lake::new(&workspace);
     match cli.command {
-        Command::Diff(args) => diff::run(&context, &args).await,
+        Command::Diff(args) => diff::run(&lake, &args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
-        Command::Bytemass(args) => bytemass::run(&context, &args).await,
-        Command::Table(args) => table::run(&context, &args).await,
-        Command::Metastore(args) => metastore::run(&context, &args).await,
-        Command::Catalog(args) => catalog::run(&context, &args).await,
-        Command::Schema(args) => schema::run(&context, &args).await,
-        Command::Credentials(args) => credentials::run(&context, &args).await,
-        Command::Partition(args) => partition::run(&context, &args).await,
+        Command::Bytemass(args) => bytemass::run(&lake, &args).await,
+        Command::Table(args) => table::run(&workspace, &lake, &args).await,
+        Command::Metastore(args) => metastore::run(&workspace, &args).await,
+        Command::Catalog(args) => catalog::run(&workspace, &args).await,
+        Command::Schema(args) => schema::run(&workspace, &args).await,
+        Command::Credentials(args) => credentials::run(&workspace, &args).await,
+        Command::Partition(args) => partition::run(&lake, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args).await,
-        Command::Setup(args) => setup::run(&context, &args),
+        Command::Setup(args) => setup::run(&workspace, &args),
     }
 }
 

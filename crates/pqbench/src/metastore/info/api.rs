@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::Context;
+use crate::Workspace;
 
 /// One metastore record.
 #[derive(Debug, Clone)]
@@ -38,11 +38,11 @@ impl From<String> for Error {
     }
 }
 
-/// Read the metastore record from the context's endpoint.
+/// Read the metastore record from the workspace's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed summary.
-pub async fn read(context: &Context) -> Result<Metastore, Error> {
-    super::r#impl::read(context).await
+pub async fn read(workspace: &Workspace) -> Result<Metastore, Error> {
+    super::r#impl::read(workspace).await
 }

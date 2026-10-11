@@ -116,9 +116,9 @@ fn bytemass(
         env: aws_env(env)?,
         indexes,
     };
-    let context = context()?;
+    let lake = lake()?;
     let rows = py
-        .detach(|| block_on(pqbench::bytemass::bytemass(&context, &request)))
+        .detach(|| block_on(pqbench::bytemass::bytemass(&lake, &request)))
         .map_err(runtime)?;
     dumps(py, &rows)
 }
@@ -213,9 +213,9 @@ fn table(
 ) -> PyResult<Py<PyAny>> {
     let request =
         pqbench::table::LoadRequest::new(uri, version, aws_env(env)?).with_file_stats(!no_stats);
-    let context = context()?;
+    let lake = lake()?;
     let info = py
-        .detach(|| block_on(pqbench::table::load(&context, &request)))
+        .detach(|| block_on(pqbench::table::load(&lake, &request)))
         .map_err(runtime)?;
     dumps(py, &info)
 }
@@ -431,9 +431,9 @@ fn u64_field(value: &Value, name: &str) -> PyResult<u64> {
         .ok_or_else(|| PyValueError::new_err(format!("bytemass row needs `{name}`")))
 }
 
-/// The shared context, resolved from the environment as the CLI does: the same
+/// The shared lake, resolved from the environment as the CLI does: the same
 /// `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT` names.
-fn context() -> PyResult<pqbench::Context> {
+fn lake() -> PyResult<pqbench::Lake> {
     let dialect = match std::env::var("PQB_TABLE_FORMAT").as_deref() {
         Ok("iceberg") => pqbench::Dialect::Iceberg,
         _ => pqbench::Dialect::Unity,
@@ -443,7 +443,8 @@ fn context() -> PyResult<pqbench::Context> {
         token: std::env::var("PQB_TOKEN").ok(),
         dialect,
     };
-    pqbench::Context::new(config).map_err(runtime)
+    let workspace = pqbench::Workspace::new(config).map_err(runtime)?;
+    Ok(pqbench::Lake::new(&workspace))
 }
 
 fn block_on<T, E>(future: impl std::future::Future<Output = Result<T, E>>) -> Result<T, String>

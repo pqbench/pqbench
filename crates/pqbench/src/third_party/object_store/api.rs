@@ -13,7 +13,7 @@ use std::pin::Pin;
 
 use url::Url;
 
-use crate::Context;
+use crate::Lake;
 
 /// Errors from the object-storage layer.
 #[derive(Debug)]
@@ -124,14 +124,14 @@ pub struct PrefixListing {
 /// URIs require the `aws` feature. Backend options are passed through as
 /// `(key, value)` pairs.
 pub async fn list_prefix(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     options: &[(String, String)],
 ) -> Result<PrefixListing, Error> {
     let url = Url::parse(uri).map_err(|e| Error(format!("invalid object URI {uri}: {e}")))?;
     match url.scheme() {
         "file" => list_file(&url),
-        "s3" | "s3a" => context.stores().list_remote(&url, options).await,
+        "s3" | "s3a" => lake.stores().list_remote(&url, options).await,
         scheme => Err(Error(format!(
             "listing is not supported for object URI scheme `{scheme}`"
         ))),
@@ -175,11 +175,7 @@ fn list_file(url: &Url) -> Result<PrefixListing, Error> {
 ///
 /// `file` URIs always work; `s3`/`s3a` URIs require the `aws` feature. Backend
 /// options are passed through as `(key, value)` pairs.
-pub fn open(
-    context: &Context,
-    uri: &str,
-    options: &[(String, String)],
-) -> Result<ObjectReader, Error> {
+pub fn open(lake: &Lake, uri: &str, options: &[(String, String)]) -> Result<ObjectReader, Error> {
     let url = Url::parse(uri).map_err(|e| Error(format!("invalid object URI {uri}: {e}")))?;
     match url.scheme() {
         "file" => {
@@ -190,7 +186,7 @@ pub fn open(
                 source: ObjectSource::Local(path),
             })
         }
-        "s3" | "s3a" => context.stores().open_remote(&url, options),
+        "s3" | "s3a" => lake.stores().open_remote(&url, options),
         scheme => Err(Error(format!(
             "unsupported object URI scheme `{scheme}`; supported schemes are file and s3"
         ))),
@@ -211,7 +207,7 @@ const COPY_CHUNK: u64 = 8 * 1024 * 1024;
 /// Fails for an unsupported URI scheme, an unreadable object, or a local write
 /// error.
 pub async fn copy(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     dest: &Path,
     options: &[(String, String)],
@@ -228,7 +224,7 @@ pub async fn copy(
     let url =
         Url::parse(uri).map_err(|error| Error(format!("invalid object URI {uri}: {error}")))?;
     match url.scheme() {
-        "s3" | "s3a" => copy_remote(context, uri, dest, options).await,
+        "s3" | "s3a" => copy_remote(lake, uri, dest, options).await,
         scheme => Err(Error(format!(
             "unsupported object URI scheme `{scheme}`; supported schemes are file and s3"
         ))),
@@ -236,14 +232,14 @@ pub async fn copy(
 }
 
 async fn copy_remote(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     dest: &Path,
     options: &[(String, String)],
 ) -> Result<u64, Error> {
     use std::io::Write;
 
-    let reader = open(context, uri, options)?;
+    let reader = open(lake, uri, options)?;
     let stat = reader.stat().await?;
     let size = stat.size_bytes;
     let identity = stat.identity.as_deref();
@@ -294,14 +290,14 @@ fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Erro
 /// # Errors
 /// Invalid/unsupported URIs, disabled backend, listing failure, or no matches.
 pub async fn expand_glob(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     options: &[(String, String)],
 ) -> Result<Vec<String>, Error> {
     if !uri.contains(['*', '?']) {
         return Ok(vec![uri.to_owned()]);
     }
-    context.stores().expand_glob(uri, options).await
+    lake.stores().expand_glob(uri, options).await
 }
 
 /// A key glob with a literal listing prefix and component-aware matching.

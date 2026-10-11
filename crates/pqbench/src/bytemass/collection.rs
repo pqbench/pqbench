@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{read_file_masses, ColumnMass, Error, FileMass};
-use crate::Context;
+use crate::Lake;
 
 use super::api::MassRow;
 use super::remote;
@@ -63,12 +63,12 @@ impl MassSummary {
 /// Expand the inputs, measure each file's footer, and flatten the collection
 /// into one row per column chunk.
 pub(super) async fn measure_inputs(
-    context: &Context,
+    lake: &Lake,
     inputs: &[String],
     env: &BTreeMap<String, String>,
     indexes: bool,
 ) -> Result<Vec<MassRow>, Error> {
-    Ok(measure_files(context, inputs, env, indexes)
+    Ok(measure_files(lake, inputs, env, indexes)
         .await?
         .into_iter()
         .flat_map(|file| file.columns)
@@ -76,15 +76,15 @@ pub(super) async fn measure_inputs(
 }
 
 pub(super) async fn measure_files(
-    context: &Context,
+    lake: &Lake,
     inputs: &[String],
     env: &BTreeMap<String, String>,
     indexes: bool,
 ) -> Result<Vec<super::api::MeasuredFile>, Error> {
     let mut files = Vec::new();
-    for path in expand_inputs(context, inputs, env).await? {
+    for path in expand_inputs(lake, inputs, env).await? {
         let input = path.to_string_lossy().into_owned();
-        let (stat, mass) = read_input(context, &input, env, indexes).await?;
+        let (stat, mass) = read_input(lake, &input, env, indexes).await?;
         let mut file = super::api::FileStat::new("", &input, &input, stat.size_bytes);
         file.metadata = Some(mass.metadata);
         file.storage_class = stat.storage_class.clone();
@@ -137,7 +137,7 @@ fn per_row(bytes: u64, rows: u64) -> Option<f64> {
 }
 
 pub(super) async fn expand_inputs(
-    context: &Context,
+    lake: &Lake,
     inputs: &[String],
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<PathBuf>, Error> {
@@ -145,7 +145,7 @@ pub(super) async fn expand_inputs(
     for input in inputs {
         if has_glob_metachar(input) && input.contains("://") {
             let options: Vec<_> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            for uri in crate::third_party::object_store::api::expand_glob(context, input, &options)
+            for uri in crate::third_party::object_store::api::expand_glob(lake, input, &options)
                 .await
                 .map_err(|e| Error(e.to_string()))?
             {
@@ -186,14 +186,14 @@ fn escape_literal_brackets(input: &str) -> String {
 }
 
 async fn read_input(
-    context: &Context,
+    lake: &Lake,
     input: &str,
     env: &BTreeMap<String, String>,
     indexes: bool,
 ) -> Result<(ObjectStat, FileMass), Error> {
     if input.contains("://") {
         return remote::read_remote(
-            context,
+            lake,
             input,
             env.iter().map(|(key, value)| (key.clone(), value.clone())),
             indexes,

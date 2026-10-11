@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::Context;
+use crate::Workspace;
 
 /// One schema record.
 #[derive(Debug, Clone)]
@@ -41,11 +41,11 @@ impl From<String> for Error {
     }
 }
 
-/// Read the record of `schema` in `catalog` at the context's endpoint.
+/// Read the record of `schema` in `catalog` at the workspace's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed schema record.
-pub async fn read(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
-    super::r#impl::read(context, catalog, schema).await
+pub async fn read(workspace: &Workspace, catalog: &str, schema: &str) -> Result<Schema, Error> {
+    super::r#impl::read(workspace, catalog, schema).await
 }

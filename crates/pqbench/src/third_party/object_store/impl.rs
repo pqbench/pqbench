@@ -1,6 +1,6 @@
 //! Object storage backends, isolated behind the `aws` feature.
 //!
-//! [`Stores`] is the S3 store registry the shared [`crate::Context`] owns. The
+//! [`Stores`] is the S3 store registry the shared [`crate::Lake`] owns. The
 //! runtime dispatch is its methods: without the feature each returns an error
 //! naming it, so callers never see a `#[cfg]`.
 
@@ -20,7 +20,7 @@ mod remote;
 pub(crate) use remote::Stores;
 
 /// Without the `aws` feature there is no S3 backend; the handle still exists so
-/// [`crate::Context`] is uniform, and every method reports the missing feature.
+/// [`crate::Lake`] is uniform, and every method reports the missing feature.
 #[cfg(not(feature = "aws"))]
 #[derive(Clone)]
 pub(crate) struct Stores;

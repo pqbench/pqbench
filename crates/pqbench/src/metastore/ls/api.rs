@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::Context;
+use crate::Workspace;
 
 /// One catalog record.
 #[derive(Debug, Clone)]
@@ -35,11 +35,11 @@ impl From<String> for Error {
     }
 }
 
-/// List the catalogs at the context's endpoint, in name order.
+/// List the catalogs at the workspace's endpoint, in name order.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed catalog page.
-pub async fn list(context: &Context) -> Result<Vec<Catalog>, Error> {
-    super::r#impl::list(context).await
+pub async fn list(workspace: &Workspace) -> Result<Vec<Catalog>, Error> {
+    super::r#impl::list(workspace).await
 }

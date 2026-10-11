@@ -49,7 +49,7 @@ pub enum Reason {
 
 pub use crate::config::Dialect as TableFormat;
 
-use crate::Context;
+use crate::Workspace;
 
 /// Whether `table` is readable outside Databricks compute, by dialect.
 ///
@@ -68,17 +68,17 @@ use crate::Context;
 /// Fails when the endpoint cannot be reached or answers with an unexpected
 /// status.
 pub async fn check(
-    context: &Context,
+    workspace: &Workspace,
     catalog: &str,
     schema: &str,
     table: &str,
 ) -> Result<Eligibility, Error> {
-    match context.config().dialect {
+    match workspace.config().dialect {
         TableFormat::Unity => {
             if catalog == "system" {
                 return Ok(Eligibility::Ineligible(Reason::SystemTable));
             }
-            super::r#impl::check_unity(context, catalog, schema, table).await
+            super::r#impl::check_unity(workspace, catalog, schema, table).await
         }
         TableFormat::Iceberg => Ok(Eligibility::Eligible),
     }
@@ -92,13 +92,13 @@ mod tests {
     /// eligible without a catalog call — a bogus endpoint is never reached.
     #[tokio::test]
     async fn iceberg_check_is_eligible_without_a_catalog_call() {
-        let context = Context::new(crate::Config {
+        let workspace = Workspace::new(crate::Config {
             endpoint: "http://127.0.0.1:1".into(),
             token: None,
             dialect: crate::Dialect::Iceberg,
         })
-        .expect("the context builds");
-        let eligibility = check(&context, "catalog", "schema", "table")
+        .expect("the workspace builds");
+        let eligibility = check(&workspace, "catalog", "schema", "table")
             .await
             .expect("the Iceberg check does not call the catalog");
         assert_eq!(eligibility, Eligibility::Eligible);

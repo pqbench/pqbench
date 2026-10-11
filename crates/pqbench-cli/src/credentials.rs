@@ -93,22 +93,22 @@ impl CredentialsCheckConfig {
 }
 
 pub(crate) async fn run(
-    context: &pqbench::Context,
+    workspace: &pqbench::Workspace,
     args: &CredentialsArgs,
 ) -> Result<(), CliError> {
     match &args.command {
         CredentialsCommand::Get(args) => {
-            run_get(context, &CredentialsGetConfig::resolve(args)).await
+            run_get(workspace, &CredentialsGetConfig::resolve(args)).await
         }
         CredentialsCommand::Check(args) => {
-            run_check(context, &CredentialsCheckConfig::resolve(args)).await
+            run_check(workspace, &CredentialsCheckConfig::resolve(args)).await
         }
     }
 }
 
 /// Put vended read credentials on each ref: `schema ls | credentials get`.
 async fn run_get(
-    context: &pqbench::Context,
+    workspace: &pqbench::Workspace,
     config: &CredentialsGetConfig,
 ) -> Result<(), CliError> {
     let input = read_input("credentials get").await?;
@@ -122,7 +122,7 @@ async fn run_get(
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("credentials get", &record)?;
-            let credentials = vend(context, &catalog, &schema, &name).await?;
+            let credentials = vend(workspace, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, credentials))
         })
         .buffer_unordered(config.fan_out);
@@ -151,7 +151,7 @@ async fn run_get(
 /// tables it cannot read outside compute, so the stage still succeeds and only
 /// a real error (a missing table, an endpoint fault) fails it.
 async fn run_check(
-    context: &pqbench::Context,
+    workspace: &pqbench::Workspace,
     config: &CredentialsCheckConfig,
 ) -> Result<(), CliError> {
     let input = read_input("credentials check").await?;
@@ -166,7 +166,7 @@ async fn run_check(
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("credentials check", &record)?;
-            let reason = check(context, &catalog, &schema, &name).await?;
+            let reason = check(workspace, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, reason))
         })
         .buffer_unordered(config.fan_out);
@@ -196,12 +196,12 @@ async fn run_check(
 /// manifest; Iceberg REST reads its metadata inline through the catalog, so it
 /// passes — and the CLI only renders the reason.
 async fn check(
-    context: &pqbench::Context,
+    workspace: &pqbench::Workspace,
     catalog: &str,
     schema: &str,
     name: &str,
 ) -> Result<Option<String>, CliError> {
-    let eligibility = pqbench::credentials::check::check(context, catalog, schema, name).await?;
+    let eligibility = pqbench::credentials::check::check(workspace, catalog, schema, name).await?;
     match eligibility {
         Eligibility::Eligible => Ok(None),
         Eligibility::Ineligible(reason) => Ok(Some(ineligible(

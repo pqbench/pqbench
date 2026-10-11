@@ -3,12 +3,12 @@
 use std::collections::BTreeMap;
 
 use crate::table::{self, LoadRequest};
-use crate::Context;
+use crate::Lake;
 
 use super::api::{Commit, Error, Partition};
 
 pub(crate) async fn list(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
     window_millis: i64,
@@ -17,7 +17,7 @@ pub(crate) async fn list(
         return Err(Error::from("partition window must be positive".to_string()));
     }
     let request = LoadRequest::new(uri.to_string(), None, env.clone()).with_log();
-    let info = table::load(context, &request)
+    let info = table::load(lake, &request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     Ok(group(&info.log, window_millis))

@@ -30,7 +30,7 @@ use url::Url;
 use crate::third_party::delta;
 use crate::third_party::iceberg;
 use crate::third_party::object_store;
-use crate::Context;
+use crate::Lake;
 
 /// Errors detecting a table format or loading its metadata.
 #[derive(Debug)]
@@ -351,14 +351,14 @@ impl LoadRequest {
 /// other than a missing marker, or no supported format is present.
 #[must_use = "detecting a format has no effect unless the result is used"]
 pub async fn detect(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
 ) -> Result<TableFormat, Error> {
     if is_local(uri) {
         local_format(&local_path(uri)?)?.ok_or_else(|| unrecognized(uri))
     } else {
-        remote_format(context, uri, env)
+        remote_format(lake, uri, env)
             .await?
             .ok_or_else(|| unrecognized(uri))
     }
@@ -373,11 +373,11 @@ pub async fn detect(
 /// As [`detect`], plus format-specific load failures. Delta needs the `delta`
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
-pub async fn load(context: &Context, request: &LoadRequest) -> Result<TableInfo, Error> {
-    let format = detect(context, &request.uri, &request.env).await?;
+pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
+    let format = detect(lake, &request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::load(context, request).await,
-        TableFormat::ICEBERG => iceberg::load(context, request).await,
+        TableFormat::DELTA => delta::load(lake, request).await,
+        TableFormat::ICEBERG => iceberg::load(lake, request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
     }
 }
@@ -483,7 +483,7 @@ pub(crate) fn local_format(path: &Path) -> Result<Option<TableFormat>, Error> {
 /// otherwise Delta is `_delta_log/_last_checkpoint` or commit `0`, and Iceberg
 /// is `metadata/version-hint.text`.
 pub(crate) async fn remote_format(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
 ) -> Result<Option<TableFormat>, Error> {
@@ -498,31 +498,25 @@ pub(crate) async fn remote_format(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    if probe(context, uri, "_delta_log/_last_checkpoint", &options).await?
-        || probe(
-            context,
-            uri,
-            "_delta_log/00000000000000000000.json",
-            &options,
-        )
-        .await?
+    if probe(lake, uri, "_delta_log/_last_checkpoint", &options).await?
+        || probe(lake, uri, "_delta_log/00000000000000000000.json", &options).await?
     {
         return Ok(Some(TableFormat::DELTA));
     }
-    if probe(context, uri, "metadata/version-hint.text", &options).await? {
+    if probe(lake, uri, "metadata/version-hint.text", &options).await? {
         return Ok(Some(TableFormat::ICEBERG));
     }
     Ok(None)
 }
 
 async fn probe(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     relative: &str,
     options: &[(String, String)],
 ) -> Result<bool, Error> {
     let child = join_uri(uri, relative)?;
-    let reader = object_store::open(context, &child, options).map_err(|e| Error(e.to_string()))?;
+    let reader = object_store::open(lake, &child, options).map_err(|e| Error(e.to_string()))?;
     reader.exists().await.map_err(|e| Error(e.to_string()))
 }
 

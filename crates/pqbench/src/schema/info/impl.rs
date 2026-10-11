@@ -13,7 +13,7 @@ use serde::Deserialize;
 use super::api::{Error, Schema};
 use crate::dialect;
 use crate::schema::TableFormat;
-use crate::Context;
+use crate::Workspace;
 
 /// The subset of Unity `GET /schemas/{full_name}` this command reports.
 #[derive(Deserialize)]
@@ -37,23 +37,28 @@ struct Namespace {
     properties: Option<BTreeMap<String, String>>,
 }
 
-pub(crate) async fn read(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
-    match context.config().dialect {
-        TableFormat::Unity => unity_schema(context, catalog, schema).await,
-        TableFormat::Iceberg => iceberg_schema(context, catalog, schema).await,
+pub(crate) async fn read(
+    workspace: &Workspace,
+    catalog: &str,
+    schema: &str,
+) -> Result<Schema, Error> {
+    match workspace.config().dialect {
+        TableFormat::Unity => unity_schema(workspace, catalog, schema).await,
+        TableFormat::Iceberg => iceberg_schema(workspace, catalog, schema).await,
     }
 }
 
-async fn unity_schema(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
+async fn unity_schema(workspace: &Workspace, catalog: &str, schema: &str) -> Result<Schema, Error> {
     let full_name = format!("{catalog}.{schema}");
     let url = format!(
         "{}/schemas/{}",
-        dialect::api_root(context.config().endpoint.as_str()),
+        dialect::api_root(workspace.config().endpoint.as_str()),
         dialect::encode(&full_name)
     );
-    let record: UnityRecord = dialect::get_json(context, &url, context.config().token.as_deref())
-        .await
-        .map_err(Error::from)?;
+    let record: UnityRecord =
+        dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::from)?;
     Ok(Schema {
         catalog: catalog.to_string(),
         name: record
@@ -68,15 +73,20 @@ async fn unity_schema(context: &Context, catalog: &str, schema: &str) -> Result<
     })
 }
 
-async fn iceberg_schema(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
+async fn iceberg_schema(
+    workspace: &Workspace,
+    catalog: &str,
+    schema: &str,
+) -> Result<Schema, Error> {
     let url = format!(
         "{}/namespaces/{}",
-        dialect::iceberg_root(context.config().endpoint.as_str()),
+        dialect::iceberg_root(workspace.config().endpoint.as_str()),
         dialect::iceberg_namespace(schema)
     );
-    let namespace: Namespace = dialect::get_json(context, &url, context.config().token.as_deref())
-        .await
-        .map_err(Error::from)?;
+    let namespace: Namespace =
+        dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::from)?;
     let mut properties = namespace.properties.unwrap_or_default();
     let location = properties
         .remove("location")

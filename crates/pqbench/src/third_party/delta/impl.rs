@@ -4,24 +4,24 @@
 //! naming it, so callers never see a `#[cfg]`.
 
 use crate::table::{LoadRequest, TableInfo};
-use crate::Context;
+use crate::Lake;
 
 #[cfg(feature = "delta")]
 mod load;
 
 pub(crate) async fn load(
-    context: &Context,
+    lake: &Lake,
     request: &LoadRequest,
 ) -> Result<TableInfo, crate::table::Error> {
     #[cfg(feature = "delta")]
     {
-        load::load(context, request)
+        load::load(lake, request)
             .await
             .map_err(|error| crate::table::Error(error.to_string()))
     }
     #[cfg(not(feature = "delta"))]
     {
-        let _ = (context, request);
+        let _ = (lake, request);
         Err(crate::table::Error(
             "delta tables require the `delta` feature (`delta-s3` for S3)".into(),
         ))

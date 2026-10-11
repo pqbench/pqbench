@@ -1,7 +1,7 @@
 //! The `reqwest` backend behind [`super::api`].
 //!
 //! `reqwest` is the only crate named here. [`Http`] wraps the one client the
-//! shared [`crate::Context`] holds, so connections stay pooled across a
+//! shared [`crate::Workspace`] holds, so connections stay pooled across a
 //! command's requests.
 
 use std::time::Duration;
@@ -12,7 +12,7 @@ use super::api::{Error, Method, Request, Response};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The one pooled client, built once at startup by [`crate::Context::new`].
+/// The one pooled client, built once at startup by [`crate::Workspace::new`].
 /// Cloning is cheap — the client is an `Arc` inside.
 #[derive(Debug, Clone)]
 pub(crate) struct Http(Client);

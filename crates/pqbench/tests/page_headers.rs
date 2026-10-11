@@ -38,7 +38,7 @@ async fn scans_compressed_v1_and_v2_pages_without_indexes_or_payload_decoding() 
         let mass = read_file_masses(file.path(), true).unwrap();
         assert!(mass.columns[0].page_count.is_none());
         let pages = scan_pages(
-            common::context(),
+            common::lake(),
             file.path().to_str().unwrap(),
             &Default::default(),
         )
@@ -87,7 +87,7 @@ async fn scans_compressed_v1_and_v2_pages_without_indexes_or_payload_decoding() 
         }
         std::fs::write(file.path(), bytes).unwrap();
         let corrupted = scan_pages(
-            common::context(),
+            common::lake(),
             file.path().to_str().unwrap(),
             &Default::default(),
         )

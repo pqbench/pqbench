@@ -44,7 +44,7 @@ async fn footer_facts_survive_empty_files_and_match_file_uri_reads() {
             url::Url::from_file_path(file.path()).unwrap().to_string(),
         ] {
             let result = measure_files(
-                common::context(),
+                common::lake(),
                 &BytemassRequest {
                     inputs: vec![input],
                     ..Default::default()

@@ -9,12 +9,12 @@
 //!
 //! The endpoint and token come from the resolved configuration — the flag, then
 //! `PQB_*`, then `DATABRICKS_*`, then `~/.pqbenchrc`. A notebook kernel's
-//! `dbutils` context is not visible to a subprocess, so a notebook exports
+//! `dbutils` workspace is not visible to a subprocess, so a notebook exports
 //! `DATABRICKS_*` from it first. `AWS_REGION` comes from the flag or the
 //! environment; the vended lease carries none.
 
 use clap::Args;
-use pqbench::{Context, Dialect};
+use pqbench::{Dialect, Workspace};
 
 use crate::CliError;
 
@@ -27,8 +27,8 @@ pub(crate) struct SetupArgs {
     region: Option<String>,
 }
 
-pub(crate) fn run(context: &Context, args: &SetupArgs) -> Result<(), CliError> {
-    let config = context.config();
+pub(crate) fn run(workspace: &Workspace, args: &SetupArgs) -> Result<(), CliError> {
+    let config = workspace.config();
     if config.endpoint.is_empty() {
         return Err(
             "setup needs an endpoint: --endpoint, PQB_ENDPOINT, DATABRICKS_HOST, or ~/.pqbenchrc"

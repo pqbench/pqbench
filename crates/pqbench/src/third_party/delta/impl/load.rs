@@ -19,7 +19,7 @@ use crate::table::{
     add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadRequest,
     LogAction, LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
 };
-use crate::Context;
+use crate::Lake;
 
 /// Errors resolving a snapshot through delta-rs.
 #[derive(Debug)]
@@ -34,8 +34,8 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Resolve the transaction log and the active files of a Delta table.
-pub(super) async fn load(context: &Context, request: &LoadRequest) -> Result<TableInfo, Error> {
-    let table = open(context, request).await?;
+pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
+    let table = open(lake, request).await?;
     let snapshot = snapshot_meta(&table)?;
     let mut info = TableInfo::new(
         TableFormat::DELTA,
@@ -61,18 +61,18 @@ pub(super) async fn load(context: &Context, request: &LoadRequest) -> Result<Tab
     Ok(info)
 }
 
-async fn open(context: &Context, request: &LoadRequest) -> Result<DeltaTable, Error> {
+async fn open(lake: &Lake, request: &LoadRequest) -> Result<DeltaTable, Error> {
     if request.uri.contains("://") {
         let url = Url::parse(&request.uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
         if url.scheme() == "file" {
             let path = url
                 .to_file_path()
                 .map_err(|()| Error("invalid local table URI".into()))?;
-            return load_local_table(context, &local_root(&path)?, request).await;
+            return load_local_table(lake, &local_root(&path)?, request).await;
         }
-        return load_table(context, url, request).await;
+        return load_table(lake, url, request).await;
     }
-    load_local_table(context, &local_root(Path::new(&request.uri))?, request).await
+    load_local_table(lake, &local_root(Path::new(&request.uri))?, request).await
 }
 
 fn local_root(path: &Path) -> Result<PathBuf, Error> {
@@ -86,25 +86,21 @@ fn local_root(path: &Path) -> Result<PathBuf, Error> {
 }
 
 async fn load_local_table(
-    context: &Context,
+    lake: &Lake,
     root: &Path,
     request: &LoadRequest,
 ) -> Result<DeltaTable, Error> {
     let url = Url::from_directory_path(root)
         .map_err(|()| Error("cannot convert table path to a local file URL".into()))?;
-    load_table(context, url, request).await
+    load_table(lake, url, request).await
 }
 
-async fn load_table(
-    context: &Context,
-    url: Url,
-    request: &LoadRequest,
-) -> Result<DeltaTable, Error> {
+async fn load_table(lake: &Lake, url: Url, request: &LoadRequest) -> Result<DeltaTable, Error> {
     let mut builder = DeltaTableBuilder::from_url(url.clone()).map_err(delta_error)?;
     if !request.env.is_empty() {
         builder = builder.with_storage_options(request.env.clone().into_iter().collect());
     }
-    if let Some(store) = shared_store(context, &url, request)? {
+    if let Some(store) = shared_store(lake, &url, request)? {
         builder = builder.with_storage_backend(store, url);
     }
     if let Some(version) = request.snapshot_version {
@@ -120,7 +116,7 @@ async fn load_table(
 /// building a fresh client per table (each build re-parses the platform CA
 /// bundle). Only S3 reaches the S3 backend; other schemes build their own.
 fn shared_store(
-    context: &Context,
+    lake: &Lake,
     url: &Url,
     request: &LoadRequest,
 ) -> Result<Option<Arc<dyn deltalake::ObjectStore>>, Error> {
@@ -128,7 +124,7 @@ fn shared_store(
     {
         if matches!(url.scheme(), "s3" | "s3a") {
             let options: Vec<(String, String)> = request.env.clone().into_iter().collect();
-            let store = context
+            let store = lake
                 .stores()
                 .root_store(url, &options)
                 .map_err(|error| Error(error.to_string()))?;
@@ -136,7 +132,7 @@ fn shared_store(
         }
     }
     #[cfg(not(feature = "aws"))]
-    let _ = (context, url, request);
+    let _ = (lake, url, request);
     Ok(None)
 }
 

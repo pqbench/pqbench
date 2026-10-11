@@ -123,14 +123,14 @@ fn table_record(table: &ls::TableRef) -> TableRefRecord<'_> {
     }
 }
 
-pub(crate) async fn run(context: &pqbench::Context, args: &SchemaArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &SchemaArgs) -> Result<(), CliError> {
     match &args.command {
-        SchemaCommand::Info(args) => run_info(context, args).await,
-        SchemaCommand::Ls(args) => run_ls(context, args).await,
+        SchemaCommand::Info(args) => run_info(workspace, args).await,
+        SchemaCommand::Ls(args) => run_ls(workspace, args).await,
     }
 }
 
-async fn run_info(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliError> {
+async fn run_info(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {
@@ -140,7 +140,7 @@ async fn run_info(context: &pqbench::Context, args: &NameArgs) -> Result<(), Cli
             );
         }
         let (catalog, name) = split_schema("schema info", schema)?;
-        let record = info::read(context, &catalog, &name).await?;
+        let record = info::read(workspace, &catalog, &name).await?;
         emit.write_row(&schema_record(&record)).await?;
         return emit.finish("schemas: 1\n").await;
     }
@@ -152,7 +152,7 @@ async fn run_info(context: &pqbench::Context, args: &NameArgs) -> Result<(), Cli
     let mut reads = records
         .map(|record| async {
             let (catalog, name) = schema_ref(&record?)?;
-            Ok::<_, CliError>(info::read(context, &catalog, &name).await?)
+            Ok::<_, CliError>(info::read(workspace, &catalog, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {
@@ -162,7 +162,7 @@ async fn run_info(context: &pqbench::Context, args: &NameArgs) -> Result<(), Cli
     emit.finish(&format!("schemas: {schemas}\n")).await
 }
 
-async fn run_ls(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliError> {
+async fn run_ls(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {
@@ -172,7 +172,7 @@ async fn run_ls(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliEr
             );
         }
         let (catalog, name) = split_schema("schema ls", schema)?;
-        let tables = ls::list(context, &catalog, &name).await?;
+        let tables = ls::list(workspace, &catalog, &name).await?;
         for table in &tables {
             emit.write_row(&table_record(table)).await?;
         }
@@ -186,7 +186,7 @@ async fn run_ls(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliEr
     let mut lists = records
         .map(|record| async {
             let (catalog, name) = schema_ref(&record?)?;
-            Ok::<_, CliError>(ls::list(context, &catalog, &name).await?)
+            Ok::<_, CliError>(ls::list(workspace, &catalog, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {

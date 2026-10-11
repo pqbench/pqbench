@@ -19,7 +19,7 @@ fn request(inputs: Vec<String>) -> BytemassRequest {
 #[tokio::test]
 async fn measures_a_local_file_from_its_footer() {
     let rows = bytemass(
-        common::context(),
+        common::lake(),
         &request(vec![fixture("small_snappy.parquet")]),
     )
     .await
@@ -48,7 +48,7 @@ async fn measures_a_local_file_from_its_footer() {
 #[tokio::test]
 async fn emits_composable_json_per_column() {
     let rows = bytemass(
-        common::context(),
+        common::lake(),
         &request(vec![fixture("small_snappy.parquet")]),
     )
     .await
@@ -69,7 +69,7 @@ async fn emits_composable_json_per_column() {
 #[tokio::test]
 async fn viz_collects_measured_rows() {
     let rows = bytemass(
-        common::context(),
+        common::lake(),
         &request(vec![fixture("small_snappy.parquet")]),
     )
     .await
@@ -109,7 +109,7 @@ async fn viz_collects_measured_rows() {
 #[tokio::test]
 async fn expands_globs_into_one_collection() {
     let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
-    let rows = bytemass(common::context(), &request(vec![mask]))
+    let rows = bytemass(common::lake(), &request(vec![mask]))
         .await
         .unwrap();
 
@@ -124,7 +124,7 @@ async fn treats_brackets_as_literal_path_characters() {
     let literal = dir.path().join("archive[1].parquet");
     std::fs::copy(fixture("small_snappy.parquet"), &literal).unwrap();
     let rows = bytemass(
-        common::context(),
+        common::lake(),
         &request(vec![literal.to_string_lossy().into_owned()]),
     )
     .await
@@ -134,10 +134,10 @@ async fn treats_brackets_as_literal_path_characters() {
 
 #[tokio::test]
 async fn rejects_empty_inputs_and_unmatched_masks() {
-    assert!(bytemass(common::context(), &request(vec![])).await.is_err());
+    assert!(bytemass(common::lake(), &request(vec![])).await.is_err());
 
     let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
-    let error = bytemass(common::context(), &request(vec![missing]))
+    let error = bytemass(common::lake(), &request(vec![missing]))
         .await
         .unwrap_err()
         .to_string();
@@ -147,7 +147,7 @@ async fn rejects_empty_inputs_and_unmatched_masks() {
 #[tokio::test]
 async fn rows_include_footer_facts() {
     let rows = bytemass(
-        common::context(),
+        common::lake(),
         &request(vec![fixture("small_snappy.parquet")]),
     )
     .await
@@ -165,7 +165,7 @@ async fn rows_include_footer_facts() {
 async fn indexes_are_optional() {
     let mut request = request(vec![fixture("small_snappy.parquet")]);
     request.indexes = true;
-    let rows = bytemass(common::context(), &request).await.unwrap();
+    let rows = bytemass(common::lake(), &request).await.unwrap();
     assert!(!rows.is_empty());
     assert!(rows.iter().all(|row| !row.physical_type.is_empty()));
 }
@@ -174,7 +174,7 @@ async fn indexes_are_optional() {
 #[tokio::test]
 async fn remote_inputs_name_the_missing_aws_feature() {
     let error = bytemass(
-        common::context(),
+        common::lake(),
         &request(vec!["s3://bucket/file.parquet".into()]),
     )
     .await

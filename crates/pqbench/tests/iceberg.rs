@@ -231,7 +231,7 @@ async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
     let fixture = Fixture::new();
     assert_eq!(
         table::detect(
-            common::context(),
+            common::lake(),
             &fixture.root.to_string_lossy(),
             &Default::default()
         )
@@ -241,7 +241,7 @@ async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
     );
     assert_eq!(
         table::detect(
-            common::context(),
+            common::lake(),
             &fixture.metadata.to_string_lossy(),
             &Default::default()
         )
@@ -259,7 +259,7 @@ async fn load_resolves_uuid_named_metadata_without_a_hint() {
     fs::rename(&fixture.metadata, &named).unwrap();
     fs::remove_file(metadata.join("version-hint.text")).unwrap();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.root.to_string_lossy(), None),
     )
     .await
@@ -274,7 +274,7 @@ async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
     fs::create_dir(fixture.root.join("_delta_log")).unwrap();
     assert_eq!(
         table::detect(
-            common::context(),
+            common::lake(),
             &fixture.root.to_string_lossy(),
             &Default::default()
         )
@@ -288,7 +288,7 @@ async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
 async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     let fixture = Fixture::new();
     let previous = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.metadata.to_string_lossy(), Some(0)),
     )
     .await
@@ -300,7 +300,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     assert_eq!(previous.log.len(), 1);
 
     let latest = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.root.to_string_lossy(), None),
     )
     .await
@@ -326,7 +326,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
 async fn partition_ls_names_the_files_a_snapshot_added() {
     let fixture = Fixture::new();
     let files = pqbench::partition::ls::list(
-        common::context(),
+        common::lake(),
         &fixture.metadata.to_string_lossy(),
         &Default::default(),
         &[1],
@@ -347,13 +347,13 @@ async fn partition_ls_names_the_files_a_snapshot_added() {
 async fn load_then_bytemass_matches_footer_totals() {
     let fixture = Fixture::new();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.metadata.to_string_lossy(), None),
     )
     .await
     .unwrap();
     let rows = pqbench::bytemass::bytemass(
-        common::context(),
+        common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
             ..Default::default()
@@ -378,7 +378,7 @@ async fn load_then_bytemass_matches_footer_totals() {
 async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
     let fixture = Fixture::new();
     assert!(table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.metadata.to_string_lossy(), Some(99))
     )
     .await
@@ -387,7 +387,7 @@ async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
     let first = fixture.root.join("data/first.parquet");
     fs::write(&first, b"changed").unwrap();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.metadata.to_string_lossy(), Some(0)),
     )
     .await
@@ -417,7 +417,7 @@ async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
     metadata["snapshots"][0]["manifest-list"] = serde_json::json!(file_uri(&list));
     fs::write(&fixture.metadata, serde_json::to_vec(&metadata).unwrap()).unwrap();
     let error = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.metadata.to_string_lossy(), Some(0)),
     )
     .await

@@ -139,17 +139,17 @@ pub(crate) fn ref_env(record: &Value) -> BTreeMap<String, String> {
 /// `temporary-table-credentials`, or the Iceberg REST catalog's
 /// `storage-credentials` for the table's data read.
 pub(crate) async fn vend(
-    context: &pqbench::Context,
+    workspace: &pqbench::Workspace,
     catalog: &str,
     schema: &str,
     name: &str,
 ) -> Result<Option<BTreeMap<String, String>>, CliError> {
-    match context.config().dialect {
+    match workspace.config().dialect {
         pqbench::Dialect::Unity => {
-            Ok(credentials::get::vend_unity(context, catalog, schema, name).await?)
+            Ok(credentials::get::vend_unity(workspace, catalog, schema, name).await?)
         }
         pqbench::Dialect::Iceberg => {
-            Ok(credentials::get::vend_iceberg(context, schema, name).await?)
+            Ok(credentials::get::vend_iceberg(workspace, schema, name).await?)
         }
     }
 }

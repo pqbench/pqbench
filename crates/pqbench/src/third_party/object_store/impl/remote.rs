@@ -139,10 +139,10 @@ impl Remote for S3 {
     }
 }
 
-/// The registry of built S3 stores, owned by [`crate::Context`] rather than a
+/// The registry of built S3 stores, owned by [`crate::Lake`] rather than a
 /// process global. It holds the one shared [`Http`] and one `AmazonS3` per
 /// `(bucket, options)`; readers share each store as an `Arc`. Cloning shares
-/// the registry, so a cloned [`crate::Context`] stays one pool.
+/// the registry, so a cloned [`crate::Lake`] stays one pool.
 #[derive(Clone)]
 pub(crate) struct Stores {
     http: Http,
@@ -161,7 +161,7 @@ const STORE_LIMIT: usize = 32;
 
 impl Stores {
     /// One registry over the shared client. Called once, by
-    /// [`crate::Context::new`].
+    /// [`crate::Lake::new`].
     pub(crate) fn new(http: &Http) -> Self {
         Self {
             http: http.clone(),

@@ -16,7 +16,7 @@ fn load_request(uri: impl Into<String>, version: Option<u64>) -> LoadRequest {
 async fn load_emits_every_json_commit_and_only_active_files() {
     let fixture = Fixture::new();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -32,7 +32,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     paths.sort_unstable();
     assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
     let rows = pqbench::bytemass::bytemass(
-        common::context(),
+        common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
             env: info.env.clone(),
@@ -50,7 +50,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
 async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     let fixture = Fixture::new();
     let previous = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), Some(0)),
     )
     .await
@@ -59,7 +59,7 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     assert_eq!(previous.files.len(), 2);
 
     let latest = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -94,7 +94,7 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     assert_eq!(part_a.size, added.size_bytes);
 
     let rows = pqbench::bytemass::bytemass(
-        common::context(),
+        common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: latest.files.iter().map(|file| file.uri.clone()).collect(),
             env: latest.env.clone(),
@@ -130,7 +130,7 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
 async fn load_accepts_a_file_uri() {
     let fixture = Fixture::new();
     let uri = url::Url::from_directory_path(fixture.path()).unwrap();
-    let info = table::load(common::context(), &load_request(uri.as_str(), None))
+    let info = table::load(common::lake(), &load_request(uri.as_str(), None))
         .await
         .unwrap();
     assert_eq!(info.snapshot_version, 1);
@@ -148,7 +148,7 @@ async fn load_ignores_tombstoned_and_untracked_files() {
     .unwrap();
     std::fs::write(fixture.path().join("untracked.parquet"), b"not parquet").unwrap();
     let latest = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -159,7 +159,7 @@ async fn load_ignores_tombstoned_and_untracked_files() {
         .iter()
         .all(|file| file.path != "part=a/old file.parquet"));
     let rows = pqbench::bytemass::bytemass(
-        common::context(),
+        common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: latest.files.iter().map(|file| file.uri.clone()).collect(),
             ..Default::default()
@@ -169,7 +169,7 @@ async fn load_ignores_tombstoned_and_untracked_files() {
     .unwrap();
     assert_eq!(pqbench::bytemass::aggregate(&rows).unwrap().row_count, 14);
     let previous = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), Some(0)),
     )
     .await
@@ -183,7 +183,7 @@ async fn load_resolves_checkpoint_after_old_json_is_removed() {
     fixture.checkpoint().await;
     std::fs::remove_file(fixture.path().join("_delta_log/00000000000000000000.json")).unwrap();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), Some(1)),
     )
     .await
@@ -209,7 +209,7 @@ async fn empty_snapshot_names_no_files() {
         ],
     );
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -225,7 +225,7 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
     let expected = std::fs::metadata(&path).unwrap().len();
     std::fs::write(&path, b"changed").unwrap();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -237,7 +237,7 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
         .unwrap();
     assert_eq!(added.size_bytes, expected);
     let rows = pqbench::bytemass::bytemass(
-        common::context(),
+        common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: vec![added.uri.clone()],
             ..Default::default()
@@ -247,7 +247,7 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
     assert!(rows.is_err(), "changed file should not measure");
     std::fs::remove_file(path).unwrap();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -258,7 +258,7 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
         .find(|file| file.path == "part=a/added.parquet")
         .unwrap();
     let error = pqbench::bytemass::bytemass(
-        common::context(),
+        common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: vec![added.uri.clone()],
             ..Default::default()
@@ -278,14 +278,14 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
 async fn load_rejects_missing_versions_and_non_tables() {
     let fixture = Fixture::new();
     assert!(table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), Some(99))
     )
     .await
     .is_err());
     let empty = tempfile::tempdir().unwrap();
     let error = table::load(
-        common::context(),
+        common::lake(),
         &load_request(empty.path().to_string_lossy(), None),
     )
     .await
@@ -303,7 +303,7 @@ async fn load_does_not_treat_column_mapping_as_byte_mass() {
     let fixture = Fixture::new();
     fixture.commit(2, &[metadata(json!({"delta.columnMapping.mode": "name"}))]);
     match table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -326,7 +326,7 @@ async fn load_lists_files_that_carry_deletion_vectors() {
     });
     fixture.commit(2, &[add]);
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -350,7 +350,7 @@ async fn load_rejects_external_data_paths() {
     ));
     fixture.commit(2, &[add]);
     let error = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -366,7 +366,7 @@ async fn load_copies_env_onto_the_document() {
     let mut env = std::collections::BTreeMap::new();
     env.insert("AWS_REGION".into(), "us-east-1".into());
     let info = table::load(
-        common::context(),
+        common::lake(),
         &LoadRequest::new(fixture.path().to_string_lossy(), None, env.clone()),
     )
     .await
@@ -388,7 +388,7 @@ async fn load_omits_partition_row_counts_when_a_file_has_no_stats() {
         }})],
     );
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -418,7 +418,7 @@ async fn load_omits_add_stats_that_are_not_json() {
     add["add"]["stats"] = json!("not-json");
     fixture.commit(2, &[add]);
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -446,7 +446,7 @@ async fn load_flattens_nested_null_counts() {
     .to_string());
     fixture.commit(2, &[add]);
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -468,7 +468,7 @@ async fn load_flattens_nested_null_counts() {
 async fn load_omits_stat_maps_when_disabled() {
     let fixture = Fixture::new();
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None).with_file_stats(false),
     )
     .await
@@ -506,7 +506,7 @@ async fn load_reports_a_broken_snapshot() {
         }})],
     );
     let error = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await
@@ -529,7 +529,7 @@ async fn checkpoint_preserves_active_files_without_json_history() {
         .unwrap();
     }
     let info = table::load(
-        common::context(),
+        common::lake(),
         &load_request(fixture.path().to_string_lossy(), None),
     )
     .await

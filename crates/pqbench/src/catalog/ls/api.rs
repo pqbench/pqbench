@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::Context;
+use crate::Workspace;
 
 pub use crate::config::Dialect as TableFormat;
 
@@ -36,11 +36,11 @@ impl From<String> for Error {
     }
 }
 
-/// List the schemas in `catalog` at the context's endpoint.
+/// List the schemas in `catalog` at the workspace's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed schema page.
-pub async fn list(context: &Context, catalog: &str) -> Result<Vec<Schema>, Error> {
-    super::r#impl::list(context, catalog).await
+pub async fn list(workspace: &Workspace, catalog: &str) -> Result<Vec<Schema>, Error> {
+    super::r#impl::list(workspace, catalog).await
 }

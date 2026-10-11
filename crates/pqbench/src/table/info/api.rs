@@ -11,7 +11,7 @@ use crate::table::TableInfo;
 
 pub use crate::config::Dialect as TableFormat;
 
-use crate::Context;
+use crate::{Lake, Workspace};
 
 /// Errors reading a table's record.
 #[derive(Debug)]
@@ -41,7 +41,7 @@ pub struct Storage {
     pub env: BTreeMap<String, String>,
 }
 
-/// Read the record of `table` in `schema` of `catalog` at the context's
+/// Read the record of `table` in `schema` of `catalog` at the workspace's
 /// endpoint.
 ///
 /// The catalog names the table and the location to load; the table's own
@@ -55,11 +55,12 @@ pub struct Storage {
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or the table's metadata cannot be read.
 pub async fn read(
-    context: &Context,
+    workspace: &Workspace,
+    lake: &Lake,
     catalog: &str,
     schema: &str,
     table: &str,
     storage: &Storage,
 ) -> Result<TableInfo, Error> {
-    super::r#impl::read(context, catalog, schema, table, storage).await
+    super::r#impl::read(workspace, lake, catalog, schema, table, storage).await
 }

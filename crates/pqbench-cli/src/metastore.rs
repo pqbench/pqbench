@@ -79,15 +79,18 @@ impl Row for CatalogRecord<'_> {
     }
 }
 
-pub(crate) async fn run(context: &pqbench::Context, args: &MetastoreArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    workspace: &pqbench::Workspace,
+    args: &MetastoreArgs,
+) -> Result<(), CliError> {
     match &args.command {
-        MetastoreCommand::Info(args) => run_info(context, args).await,
-        MetastoreCommand::Ls(args) => run_ls(context, args).await,
+        MetastoreCommand::Info(args) => run_info(workspace, args).await,
+        MetastoreCommand::Ls(args) => run_ls(workspace, args).await,
     }
 }
 
-async fn run_info(context: &pqbench::Context, args: &OutputArgs) -> Result<(), CliError> {
-    let metastore = info::read(context).await?;
+async fn run_info(workspace: &pqbench::Workspace, args: &OutputArgs) -> Result<(), CliError> {
+    let metastore = info::read(workspace).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     emit.write_row(&MetastoreRecord {
         kind: "pqbench.metastore",
@@ -101,8 +104,8 @@ async fn run_info(context: &pqbench::Context, args: &OutputArgs) -> Result<(), C
     emit.finish("metastores: 1\n").await
 }
 
-async fn run_ls(context: &pqbench::Context, args: &OutputArgs) -> Result<(), CliError> {
-    let catalogs = ls::list(context).await?;
+async fn run_ls(workspace: &pqbench::Workspace, args: &OutputArgs) -> Result<(), CliError> {
+    let catalogs = ls::list(workspace).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     for catalog in &catalogs {
         emit.write_row(&CatalogRecord {

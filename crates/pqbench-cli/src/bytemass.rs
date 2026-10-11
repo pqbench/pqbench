@@ -39,7 +39,7 @@ pub(crate) struct BytemassArgs {
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
-pub(crate) async fn run(context: &pqbench::Context, args: &BytemassArgs) -> Result<(), CliError> {
+pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(), CliError> {
     if args.inputs.is_empty() {
         if std::io::stdin().is_terminal() {
             return Err(
@@ -47,16 +47,16 @@ pub(crate) async fn run(context: &pqbench::Context, args: &BytemassArgs) -> Resu
                     .into(),
             );
         }
-        return measure_document(context, "-", args).await;
+        return measure_document(lake, "-", args).await;
     }
     if args.inputs.len() == 1 && document::is_document(&args.inputs[0]).await {
-        return measure_document(context, &args.inputs[0], args).await;
+        return measure_document(lake, &args.inputs[0], args).await;
     }
-    measure(context, args.inputs.clone(), BTreeMap::new(), args).await
+    measure(lake, args.inputs.clone(), BTreeMap::new(), args).await
 }
 
 async fn measure_document(
-    context: &pqbench::Context,
+    lake: &pqbench::Lake,
     input: &str,
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
@@ -65,7 +65,7 @@ async fn measure_document(
     let options = (args.indexes, args.pages);
     let records = document::records(input).await?;
     let mut reads = records
-        .map(|record| measure_record(context, record, options))
+        .map(|record| measure_record(lake, record, options))
         .buffer_unordered(args.fan_out.max(1));
     while let Some(batch) = reads.next().await {
         for measured in batch? {
@@ -76,7 +76,7 @@ async fn measure_document(
 }
 
 async fn measure(
-    context: &pqbench::Context,
+    lake: &pqbench::Lake,
     inputs: Vec<String>,
     env: BTreeMap<String, String>,
     args: &BytemassArgs,
@@ -84,12 +84,12 @@ async fn measure(
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
     let options = (args.indexes, args.pages);
-    let mut reads = stream::iter(bytemass::expand_inputs(context, &inputs, &env).await?)
+    let mut reads = stream::iter(bytemass::expand_inputs(lake, &inputs, &env).await?)
         .map(|input| {
             let env = env.clone();
             async move {
                 measure_one(
-                    context,
+                    lake,
                     input.clone(),
                     TableFile::new(input.clone(), input, 0),
                     env,
@@ -116,22 +116,22 @@ struct Measured {
 /// Measure every file one document record names: a `pqbench.table-file` is one
 /// file; a `pqbench.remote-source` expands its inputs first.
 async fn measure_record(
-    context: &pqbench::Context,
+    lake: &pqbench::Lake,
     record: Result<Record, CliError>,
     options: (bool, bool),
 ) -> Result<Vec<Measured>, CliError> {
     match record? {
         Record::File { id, file, env } => {
-            Ok(vec![measure_one(context, id, file, env, options).await?])
+            Ok(vec![measure_one(lake, id, file, env, options).await?])
         }
         Record::RemoteSource(source) => {
             let mut measured = Vec::new();
             for uri in source.inputs {
                 let inputs = std::slice::from_ref(&uri);
-                for input in bytemass::expand_inputs(context, inputs, &source.env).await? {
+                for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
                     measured.push(
                         measure_one(
-                            context,
+                            lake,
                             uri.clone(),
                             TableFile::new(input.clone(), input, 0),
                             source.env.clone(),
@@ -152,14 +152,14 @@ async fn measure_record(
 /// Read one file's footer and join the log's facts onto it. This is the I/O the
 /// fanout overlaps; [`emit_measured`] writes each result as it finishes.
 async fn measure_one(
-    context: &pqbench::Context,
+    lake: &pqbench::Lake,
     id: String,
     file: TableFile,
     env: BTreeMap<String, String>,
     options: (bool, bool),
 ) -> Result<Measured, CliError> {
     let mut measured = bytemass::measure_files(
-        context,
+        lake,
         &bytemass::BytemassRequest {
             inputs: vec![file.uri.clone()],
             env: env.clone(),
@@ -183,7 +183,7 @@ async fn measure_one(
     measured.file.partition_values = file.partition_values.clone();
     measured.file.stats = file.stats.clone();
     let pages = if options.1 {
-        bytemass::scan_pages(context, &measured.file.file, &env).await?
+        bytemass::scan_pages(lake, &measured.file.file, &env).await?
     } else {
         Vec::new()
     };

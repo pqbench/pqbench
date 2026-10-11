@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::Context;
+use crate::Workspace;
 
 /// Errors vending a table's credentials.
 #[derive(Debug)]
@@ -24,7 +24,7 @@ impl From<String> for Error {
 }
 
 /// Vend Unity read credentials for `table` in `schema` of `catalog` at the
-/// context's endpoint.
+/// workspace's endpoint.
 ///
 /// The returned options are `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
 /// `AWS_SESSION_TOKEN`. `None` means the table cannot be read outside
@@ -37,15 +37,15 @@ impl From<String> for Error {
 /// Fails when the endpoint cannot be reached or answers with an unexpected
 /// status.
 pub async fn vend_unity(
-    context: &Context,
+    workspace: &Workspace,
     catalog: &str,
     schema: &str,
     table: &str,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
-    super::r#impl::vend_unity(context, catalog, schema, table).await
+    super::r#impl::vend_unity(workspace, catalog, schema, table).await
 }
 
-/// Vend Iceberg REST read credentials for `table` in `schema` at the context's
+/// Vend Iceberg REST read credentials for `table` in `schema` at the workspace's
 /// endpoint.
 ///
 /// The endpoint names the catalog base. The command reads the catalog's
@@ -59,9 +59,9 @@ pub async fn vend_unity(
 /// Fails when the endpoint cannot be reached or answers with an unexpected
 /// status.
 pub async fn vend_iceberg(
-    context: &Context,
+    workspace: &Workspace,
     schema: &str,
     table: &str,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
-    super::r#impl::vend_iceberg(context, schema, table).await
+    super::r#impl::vend_iceberg(workspace, schema, table).await
 }

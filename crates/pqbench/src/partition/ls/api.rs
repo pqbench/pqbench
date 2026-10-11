@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::table::TableFile;
-use crate::Context;
+use crate::Lake;
 
 /// Errors listing a partition's files.
 #[derive(Debug)]
@@ -37,10 +37,10 @@ impl From<String> for Error {
 /// # Errors
 /// Fails when the table cannot be loaded.
 pub async fn list(
-    context: &Context,
+    lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
     versions: &[u64],
 ) -> Result<Vec<TableFile>, Error> {
-    super::r#impl::list(context, uri, env, versions).await
+    super::r#impl::list(lake, uri, env, versions).await
 }

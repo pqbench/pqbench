@@ -30,10 +30,14 @@ pub(crate) enum TableCommand {
     Ls(LsArgs),
 }
 
-pub(crate) async fn run(context: &pqbench::Context, args: &TableArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    workspace: &pqbench::Workspace,
+    lake: &pqbench::Lake,
+    args: &TableArgs,
+) -> Result<(), CliError> {
     match &args.command {
-        TableCommand::Info(info) => run_info(context, &InfoConfig::resolve(info)).await,
-        TableCommand::Ls(ls) => run_ls(context, ls).await,
+        TableCommand::Info(info) => run_info(workspace, lake, &InfoConfig::resolve(info)).await,
+        TableCommand::Ls(ls) => run_ls(lake, ls).await,
     }
 }
 
@@ -87,7 +91,11 @@ impl InfoConfig {
 /// reads. Credentials are the `credentials` stage's concern — `credentials get`
 /// materializes them onto refs; this read consumes them and passes them on, so
 /// a later stage reads the table's files under the same lease.
-async fn run_info(context: &pqbench::Context, config: &InfoConfig) -> Result<(), CliError> {
+async fn run_info(
+    workspace: &pqbench::Workspace,
+    lake: &pqbench::Lake,
+    config: &InfoConfig,
+) -> Result<(), CliError> {
     let input = read_input("table info").await?;
     let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
     if let Some(table) = &config.table {
@@ -102,7 +110,7 @@ async fn run_info(context: &pqbench::Context, config: &InfoConfig) -> Result<(),
             location: None,
             env: BTreeMap::new(),
         };
-        let record = read_record(context, &catalog, &schema, &name, &storage).await?;
+        let record = read_record(workspace, lake, &catalog, &schema, &name, &storage).await?;
         emit.write_row(&table_record(&record, storage.env)).await?;
         return emit.finish("tables: 1\n").await;
     }
@@ -121,7 +129,7 @@ async fn run_info(context: &pqbench::Context, config: &InfoConfig) -> Result<(),
                 location: record["storage_path"].as_str().map(str::to_owned),
                 env: ref_env(&record),
             };
-            let record = read_record(context, &catalog, &schema, &name, &storage).await?;
+            let record = read_record(workspace, lake, &catalog, &schema, &name, &storage).await?;
             Ok::<_, CliError>((record, storage.env))
         })
         .buffer_unordered(config.fan_out);
@@ -136,13 +144,14 @@ async fn run_info(context: &pqbench::Context, config: &InfoConfig) -> Result<(),
 /// The table's record, read with `env`: the caller supplies the env the read
 /// runs under (the lake source's, merged with the ref's).
 async fn read_record(
-    context: &pqbench::Context,
+    workspace: &pqbench::Workspace,
+    lake: &pqbench::Lake,
     catalog: &str,
     schema: &str,
     name: &str,
     storage: &info::Storage,
 ) -> Result<TableInfo, CliError> {
-    Ok(info::read(context, catalog, schema, name, storage).await?)
+    Ok(info::read(workspace, lake, catalog, schema, name, storage).await?)
 }
 
 /// The document `table info` writes: the `schema ls` ref enriched with the
@@ -246,7 +255,7 @@ pub(crate) struct LsArgs {
 }
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
-async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliError> {
+async fn run_ls(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
     let input = read_input("table ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut partitions = 0usize;
@@ -258,7 +267,7 @@ async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliErro
                 );
             }
             let env = BTreeMap::new();
-            partitions += list_partitions(context, uri, &env, args.every, &mut emit).await?;
+            partitions += list_partitions(lake, uri, &env, args.every, &mut emit).await?;
         }
         _ => {
             if !input.piped {
@@ -279,7 +288,7 @@ async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliErro
                         })?
                         .to_string();
                     let env = ref_env(&record);
-                    let found = table::ls::list(context, &uri, &env, args.every)
+                    let found = table::ls::list(lake, &uri, &env, args.every)
                         .await
                         .map_err(|error| CliError::from(error.to_string()))?;
                     Ok::<_, CliError>((uri, env, found))
@@ -300,13 +309,13 @@ async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliErro
 
 /// Emit one table's partitions; returns how many were written.
 async fn list_partitions(
-    context: &pqbench::Context,
+    lake: &pqbench::Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
     window: i64,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    let found = table::ls::list(context, uri, env, window)
+    let found = table::ls::list(lake, uri, env, window)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;
