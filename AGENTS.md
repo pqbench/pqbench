@@ -155,9 +155,9 @@ analogy, convention, or precedent:
   and a test matrix over default/aws/delta/iceberg/all-features (default and
   all-features also on arm64), plus a `docs` job that runs `make check-docs`.
   Ignored e2e run via `TEST_FLAGS=--include-ignored`.
-- CI overrides `CXXFLAGS` with a portable baseline (no `-march=native`) so cached
-  codec objects are valid on any runner. Do not remove it: native-tuned objects
-  restored from another runner's cache caused SIGILL.
+- `.cargo/config.toml` sets a portable codec baseline (no `-march=native`) so
+  cached codec objects are valid on any machine. Do not make it native:
+  objects tuned on one machine and restored from another's cache caused SIGILL.
 
 ## Repo layout
 
@@ -171,7 +171,7 @@ analogy, convention, or precedent:
 - `crates/pqbench-cli/tests/gen_*.rs` — generated documentation tests (do not
   edit by hand; `make sync-docs`)
 - `python/` — PyO3 wheel (`pqbench-py`); one function per CLI command. Not a
-  workspace member (Docker builds the CLI only). `make check-python` builds
+  workspace member (maturin builds the wheel from `python/`). `make check-python` builds
   and tests it
 - `skills/` — agent skills compiled into `pqbench skill`
 - `.cursor/skills/` — Cursor pointers to those skills

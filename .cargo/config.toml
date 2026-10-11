@@ -1,8 +1,16 @@
-# Build the bundled C codecs with the exact flags lzbench uses (the e2e
-# reference). snappy_src compiles snappy.cc via the `cc` crate, which injects
-# `-fPIC` in its own defaults BEFORE these flags and `-fPIC` measurably slows
-# snappy's tight decompress loop (~14%): `-fPIE` must come after it
-# (last-one-wins in gcc) — matching lzbench's `-fPIE`.
+# Build the bundled C codecs with the flags lzbench uses (the e2e reference).
+# snappy_src compiles snappy.cc via the `cc` crate, which injects `-fPIC` in its
+# own defaults BEFORE these flags and `-fPIC` measurably slows snappy's tight
+# decompress loop (~14%): `-fPIE` must come after it (last-one-wins in gcc) —
+# matching lzbench's `-fPIE`.
+#
+# This is a *portable* baseline, deliberately without `-march=native`: a binary
+# (or a cached codec object) tuned to one machine SIGILLs on another, so CI and
+# the release must not use native codegen. To reproduce lzbench's native numbers
+# locally, opt in for one build — an exported CXXFLAGS wins over [env] below:
+#
+#   CXXFLAGS="-O3 -DNDEBUG -fPIE -march=native -fomit-frame-pointer \
+#     -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1" make ...
 #
 # Not present: the snappy-specific `SNAPPY_HAVE_SSSE3`/`_X86_CRC32`/`_BMI2`
 # defines. `-march=native` makes snappy auto-derive those from `__SSSE3__`,
@@ -16,4 +24,4 @@
 rustc-wrapper = ".cargo/scripts/rustc-wrapper.sh"
 
 [env]
-CXXFLAGS = "-O3 -DNDEBUG -fPIE -march=native -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
+CXXFLAGS = "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"

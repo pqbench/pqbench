@@ -19,11 +19,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.94.1"
-  # Override .cargo/config.toml's `-march=native` (Cargo [env] does not override
-  # an existing variable). Native-tuned codec objects restored from a cache built
-  # on a differently-featured runner caused SIGILL; a portable baseline is safe
-  # to cache and to share across runners. Same idea as scripts/docker_build.sh.
-  CXXFLAGS: "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
 
 jobs:
   fmt:

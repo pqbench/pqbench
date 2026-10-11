@@ -19,3 +19,7 @@ serde_json = "1.0"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Not distributed: aipnaming is a development lint tool, not a shipped binary.
+[package.metadata.dist]
+dist = false
