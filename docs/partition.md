@@ -42,15 +42,16 @@ file`. A partition is the unit of work below a table: small enough to measure on
 its own, large enough to be worth a process.
 
 - `table ls` groups a table's commits into **natural partitions** — one
-  `pqbench.partition` per window, carrying the commits it holds.
+  `Partition` per window, carrying the commits it holds.
 - `partition ls` lists one partition's files — the input to `bytemass`.
 - `partition info` describes one partition.
-- `bytemass` measures one partition — an environment plus a list of files,
-  nothing more.
+- `bytemass` measures one partition — a lease plus a list of files, nothing
+  more.
 
 A partition record carries its **definition** (the key: e.g. a natural
-interval), the **env** to read its files, and the **files** themselves. Carrying
-the env once per partition — never per file — is what keeps credentials cheap.
+interval) and the table's **storage root and lease**, so the files stage reads
+the log without a catalog call. `partition ls` emits each file as a `TableFile`
+carrying that lease, so a short-lived lease travels with the file it reads.
 
 ## Cost
 
@@ -73,7 +74,7 @@ nothing retains the whole table's file set. That "nothing" is the hard rule: no
 
 - **Not physical-only.** A partition need not match a directory layout.
 - **Not stored.** Nothing writes partitions back to the table.
-- **Not a header.** A partition is a flat record (definition + env + files);
+- **Not a header.** A partition is a flat record (window + storage + lease);
   there is no begin/end envelope carrying state across records.
 
 See also: issue #58 (the target structure).

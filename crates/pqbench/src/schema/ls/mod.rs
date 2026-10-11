@@ -9,4 +9,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{list, Error, TableRef};
+pub use api::{list, Error, Table};

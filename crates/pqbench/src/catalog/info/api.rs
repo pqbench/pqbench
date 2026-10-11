@@ -1,25 +1,13 @@
 //! `catalog info`: one catalog's record.
 //!
-//! [`read`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`read`] is the only public function. It returns the [`Catalog`] resource;
+//! the CLI forwards it as-is.
 
 use std::fmt;
 
-use crate::Workspace;
+pub use crate::v1::Catalog;
 
-/// One catalog record.
-#[derive(Debug, Clone)]
-pub struct Catalog {
-    /// The catalog name.
-    pub name: String,
-    /// The catalog type the endpoint reports (`MANAGED_CATALOG`, …), when it
-    /// reports one.
-    pub catalog_type: Option<String>,
-    /// The catalog comment, when it has one.
-    pub comment: Option<String>,
-    /// The catalog owner, when the endpoint reports one.
-    pub owner: Option<String>,
-}
+use crate::Workspace;
 
 /// Errors reading a catalog.
 #[derive(Debug)]

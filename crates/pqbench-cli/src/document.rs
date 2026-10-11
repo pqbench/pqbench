@@ -1,12 +1,10 @@
-//! Documents on stdin or a file. `kind` decides what the command does.
+//! Documents on stdin or a file. The resource's name decides what it is.
 //!
-//! A producer resolves a table and pqbench measures bytes. Known kinds are
-//! `pqbench.table-file`, `pqbench.remote-source`, `pqbench.bytemass-file`, and
-//! `pqbench.bytemass-row`. A pipe writes NDJSON; every record carries a table
-//! `id` so rows stay attributable. A terminal prints an aligned table; a pipe
-//! streams NDJSON (override with `--format`). `-o` also writes the lz4 NDJSON
-//! stream. Credentials stay on the document so a pipe can carry them between
-//! processes.
+//! A producer resolves a table and pqbench measures bytes. A [`v1::TableFile`]
+//! names the blob to read and carries its lease; a `remote-source` names inputs
+//! and an env; the bytemass kinds are its own output. A pipe writes NDJSON; a
+//! terminal prints an aligned table (override with `--format`). `-o` also writes
+//! the lz4 NDJSON stream.
 
 use std::collections::BTreeMap;
 
@@ -14,7 +12,7 @@ use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines, Stdin};
 
 use pqbench::bytemass::MassRow;
-use pqbench::table::TableFile;
+use pqbench::v1;
 use serde::Deserialize;
 
 use crate::CliError;
@@ -31,12 +29,8 @@ pub(crate) struct RemoteSource {
 
 /// One JSON value from a table-file stream or a one-object document.
 pub(crate) enum Record {
-    /// One file of a partition, with the env to read it.
-    File {
-        id: String,
-        file: TableFile,
-        env: BTreeMap<String, String>,
-    },
+    /// One table file: its blob and the lease to read it.
+    File(v1::TableFile),
     RemoteSource(RemoteSource),
     BytemassFile(pqbench::bytemass::FileStat),
     BytemassRow {
@@ -139,23 +133,19 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
     let kind = value
         .get("kind")
         .and_then(|kind| kind.as_str())
-        .ok_or("document has no `kind`")?
-        .to_string();
-    match kind.as_str() {
-        "pqbench.table-file" => {
-            let (id, file, env) = parse_file(value)?;
-            Ok(Record::File { id, file, env })
-        }
-        "pqbench.remote-source" => Ok(Record::RemoteSource(parse_remote(value)?)),
-        "pqbench.bytemass-file" => Ok(Record::BytemassFile(
+        .map(str::to_owned);
+    match kind.as_deref() {
+        Some("pqbench.bytemass-file") => Ok(Record::BytemassFile(
             serde_json::from_value(value).map_err(invalid_json)?,
         )),
-        "pqbench.bytemass-page" => Ok(Record::BytemassPage),
-        "pqbench.bytemass-row" => {
+        Some("pqbench.bytemass-page") => Ok(Record::BytemassPage),
+        Some("pqbench.bytemass-row") => {
             let (id, row) = parse_mass_row(value)?;
             Ok(Record::BytemassRow { id, row })
         }
-        other => Err(invalid_kind(other)),
+        Some(other) => Err(invalid_kind(other)),
+        None if value.get("inputs").is_some() => Ok(Record::RemoteSource(parse_remote(value)?)),
+        None => Ok(Record::File(parse_file(value)?)),
     }
 }
 
@@ -171,21 +161,13 @@ fn parse_mass_row(value: serde_json::Value) -> Result<(String, MassRow), CliErro
     Ok((wire.id, wire.row))
 }
 
-fn parse_file(
-    value: serde_json::Value,
-) -> Result<(String, TableFile, BTreeMap<String, String>), CliError> {
-    #[derive(Deserialize)]
-    struct Wire {
-        #[serde(default)]
-        id: String,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-        #[serde(flatten)]
-        file: TableFile,
+/// A table-file resource: the blob it names is what gets read.
+fn parse_file(value: serde_json::Value) -> Result<v1::TableFile, CliError> {
+    let file: v1::TableFile = serde_json::from_value(value).map_err(invalid_json)?;
+    if file.blob.is_none() {
+        return Err("a table-file record needs a blob to read".into());
     }
-    let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
-    ensure_aws_env(&wire.env)?;
-    Ok((wire.id, wire.file, wire.env))
+    Ok(file)
 }
 
 fn parse_remote(value: serde_json::Value) -> Result<RemoteSource, CliError> {
@@ -251,6 +233,8 @@ fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_kind(kind: &str) -> CliError {
-    format!("unsupported document kind `{kind}`; expected pqbench.table-file, pqbench.remote-source, pqbench.bytemass-file, or pqbench.bytemass-row")
-        .into()
+    format!(
+        "unsupported document kind `{kind}`; expected a table-file, a remote-source, or a bytemass stream"
+    )
+    .into()
 }

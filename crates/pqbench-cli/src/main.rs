@@ -20,6 +20,7 @@ mod metastore;
 mod partition;
 mod profile;
 mod ratelimit;
+mod render;
 mod rows;
 mod schema;
 mod setup;

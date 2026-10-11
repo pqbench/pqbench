@@ -1,15 +1,14 @@
 //! `table info`: one table's record.
 //!
-//! [`read`] is the only public function. It returns the plain
-//! [`TableInfo`](crate::table::TableInfo); the CLI owns the document it
-//! becomes.
+//! [`read`] is the only public function. It returns the [`Table`] resource —
+//! the wire form of the loaded [`TableInfo`](crate::table::TableInfo) — and the
+//! CLI forwards it as-is.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::table::TableInfo;
-
 pub use crate::config::Dialect as TableFormat;
+pub use crate::v1::Table;
 
 use crate::{Lake, Workspace};
 
@@ -61,6 +60,6 @@ pub async fn read(
     schema: &str,
     table: &str,
     storage: &Storage,
-) -> Result<TableInfo, Error> {
+) -> Result<Table, Error> {
     super::r#impl::read(workspace, lake, catalog, schema, table, storage).await
 }

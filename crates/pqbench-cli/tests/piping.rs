@@ -95,10 +95,14 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     );
     let records = ndjson(&info.stdout);
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["kind"], "pqbench.catalog");
-    assert_eq!(records[0]["name"], "dbx_samples");
-    assert_eq!(records[0]["comment"], "sample catalog");
-    assert_eq!(records[1]["name"], "system");
+    let dbx_samples = records
+        .iter()
+        .find(|record| record["name"] == "catalogs/dbx_samples")
+        .unwrap();
+    assert_eq!(dbx_samples["comment"], "sample catalog");
+    assert!(records
+        .iter()
+        .any(|record| record["name"] == "catalogs/system"));
 
     let schemas = pipe_env(&["catalog", "ls", "--format", "json"], &refs, &env);
     assert!(
@@ -107,14 +111,13 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         String::from_utf8_lossy(&schemas.stderr)
     );
     let records = ndjson(&schemas.stdout);
-    let names: Vec<&str> = records
-        .iter()
-        .map(|record| record["name"].as_str().unwrap())
-        .collect();
     assert_eq!(records.len(), 2);
-    assert_eq!(names, ["nyctaxi", "nyctaxi"]);
-    assert_eq!(records[0]["catalog"], "dbx_samples");
-    assert_eq!(records[1]["catalog"], "system");
+    assert!(records
+        .iter()
+        .any(|record| record["name"] == "catalogs/dbx_samples/schemas/nyctaxi"));
+    assert!(records
+        .iter()
+        .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
     let info = pipe_env(
         &["schema", "info", "--format", "json"],
@@ -128,10 +131,13 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     );
     let records = ndjson(&info.stdout);
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["kind"], "pqbench.schema");
-    assert_eq!(records[0]["name"], "nyctaxi");
-    assert_eq!(records[0]["comment"], "taxi data");
-    assert_eq!(records[1]["catalog"], "system");
+    assert!(records.iter().any(
+        |record| record["name"] == "catalogs/dbx_samples/schemas/nyctaxi"
+            && record["comment"] == "taxi data"
+    ));
+    assert!(records
+        .iter()
+        .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
     let tables = pipe_env(&["schema", "ls", "--format", "json"], &schemas.stdout, &env);
     assert!(
@@ -140,12 +146,10 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         String::from_utf8_lossy(&tables.stderr)
     );
     let records = ndjson(&tables.stdout);
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["kind"], "pqbench.table-ref");
-    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
-    assert!(records[0]["uri"]
-        .as_str()
-        .unwrap()
-        .contains("/tables/dbx_samples.nyctaxi.trips"));
-    assert_eq!(records[0]["storage_path"], "s3://bucket/trips");
+    assert!(records.iter().any(|record| record["name"]
+        == "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
+        && record["uri"] == "s3://bucket/trips"));
+    assert!(records
+        .iter()
+        .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi/tables/trips"));
 }

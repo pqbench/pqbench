@@ -9,7 +9,7 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 33
-    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 34, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
+    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 34, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]

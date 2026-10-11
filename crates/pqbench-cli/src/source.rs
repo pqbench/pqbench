@@ -1,7 +1,7 @@
 //! The walk's input: the environment's config and the parent-level refs.
 //!
 //! Every level is a stateless filter: it reads only its parent's records
-//! (`catalog` reads `pqbench.catalog` refs, one per line) and writes its own
+//! (`catalog` reads `Catalog` names, one per line) and writes its own
 //! kind. Nothing else rides the stream. The endpoint, bearer, and dialect come
 //! from the resolved configuration — `~/.pqbenchrc`, the environment, then the
 //! flags (`pqbench setup` prints it for the shell to eval):
@@ -85,25 +85,30 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
     })
 }
 
-/// The catalog, schema, and table a `pqbench.table-ref` ref names.
+/// The catalog, schema, and table a table ref names: a
+/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name.
 pub(crate) fn table_ref(
     command: &str,
     record: &Value,
 ) -> Result<(String, String, String), CliError> {
-    let kind = record["kind"].as_str().unwrap_or_default();
-    if kind != "pqbench.table-ref" {
-        return Err(format!("expected pqbench.table-ref records, found {kind:?}").into());
-    }
-    if record["version"].as_u64() != Some(2) {
-        return Err(
-            format!("{command} reads pqbench.table-ref version 2; run `schema ls` first").into(),
-        );
-    }
-    let id = record["id"]
+    record["name"]
         .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or("a pqbench.table-ref record needs an id")?;
-    split_table(command, id)
+        .and_then(pqbench::v1::name::parse_table)
+        .ok_or_else(|| {
+            format!(
+                "{command} reads pqbench table resources; a record needs a `catalogs/…/tables/…` name"
+            )
+            .into()
+        })
+}
+
+/// The storage location a table ref names: the [`Table`]'s `uri`. `None` when
+/// the ref names no location (a view, or an Iceberg identifier until
+/// `table info` resolves it).
+///
+/// [`Table`]: pqbench::v1::Table
+pub(crate) fn ref_storage(record: &Value) -> Option<&str> {
+    record["uri"].as_str().filter(|value| !value.is_empty())
 }
 
 /// Split `catalog.schema.table` at the first and last dots; an Iceberg
@@ -121,8 +126,9 @@ pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, S
     Ok((catalog.to_string(), schema.to_string(), table.to_string()))
 }
 
-/// The object-store options a ref carries (`AWS_*` names only). The process
-/// environment supplies the rest through the client's own chain.
+/// The storage lease a ref carries: the proto `Table.credentials` value, or the
+/// older `env` bag. The credentials win, so a table-scoped lease replaces any
+/// static key for that table.
 pub(crate) fn ref_env(record: &Value) -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
     if let Some(values) = record["env"].as_object() {
@@ -131,6 +137,11 @@ pub(crate) fn ref_env(record: &Value) -> BTreeMap<String, String> {
                 env.insert(key.clone(), value.to_string());
             }
         }
+    }
+    if let Ok(credentials) =
+        serde_json::from_value::<pqbench::v1::Credentials>(record["credentials"].clone())
+    {
+        env.extend(credentials.to_env());
     }
     env
 }

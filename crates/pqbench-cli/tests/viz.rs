@@ -80,8 +80,7 @@ fn viz_stores_proxied_file_stats() {
 
 #[test]
 fn viz_rejects_a_table_file() {
-    let document =
-        r#"{"kind":"pqbench.table-file","id":"t","path":"p","uri":"/tmp/t","size_bytes":0}"#;
+    let document = r#"{"name":"catalogs/local/schemas/local/tables/t/files/p","blob":"blobs/file/%2Ftmp%2Ft"}"#;
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
     let output = pipe(

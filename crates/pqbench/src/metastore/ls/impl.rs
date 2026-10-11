@@ -8,6 +8,7 @@ use serde::Deserialize;
 use super::api::{Catalog, Error};
 use crate::dialect;
 use crate::third_party::reqwest::Request;
+use crate::v1::name;
 use crate::Workspace;
 
 /// Catalog names per page; the walk follows `next_page_token`.
@@ -57,9 +58,15 @@ pub(crate) async fn list(workspace: &Workspace) -> Result<Vec<Catalog>, Error> {
         let page: Page = serde_json::from_slice(&response.bytes).map_err(|error| {
             Error::from(format!("the response was not a catalog page: {error}"))
         })?;
-        catalogs.extend(page.catalogs.into_iter().map(|entry| Catalog {
-            name: entry.name,
-            catalog_type: entry.catalog_type,
+        catalogs.extend(page.catalogs.into_iter().map(|entry| {
+            Catalog {
+                name: name::catalog(&entry.name),
+                catalog_type: entry
+                    .catalog_type
+                    .as_deref()
+                    .and_then(dialect::catalog_type),
+                ..Catalog::default()
+            }
         }));
         match page.next_page_token {
             Some(next) if !next.is_empty() => page_token = Some(next),

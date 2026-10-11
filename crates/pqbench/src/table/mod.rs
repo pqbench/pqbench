@@ -30,6 +30,7 @@ use url::Url;
 use crate::third_party::delta;
 use crate::third_party::iceberg;
 use crate::third_party::object_store;
+use crate::v1;
 use crate::Lake;
 
 /// Errors detecting a table format or loading its metadata.
@@ -255,6 +256,62 @@ impl TableInfo {
             env,
         }
     }
+}
+
+impl TableInfo {
+    /// The wire [`v1::Table`] this record describes: what `table info` emits.
+    ///
+    /// `env` is the storage lease the read ran under, when it carried one; the
+    /// record keeps it as [`v1::Table::credentials`].
+    #[must_use]
+    pub fn resource(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        env: &BTreeMap<String, String>,
+    ) -> v1::Table {
+        let mut properties = self.delta_properties.clone();
+        properties.extend(self.iceberg_properties.clone());
+        let credentials = v1::Credentials::from_env(env);
+        v1::Table {
+            name: v1::name::table(catalog, schema, table),
+            uri: non_empty(&self.uri),
+            format: match self.format {
+                TableFormat::DELTA => Some(v1::TableFormat::Delta),
+                TableFormat::ICEBERG => Some(v1::TableFormat::Iceberg),
+                TableFormat::UNSPECIFIED => None,
+            },
+            snapshot_version: Some(self.snapshot_version),
+            partition_columns: self.partition_columns.clone(),
+            declared_columns: self
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(position, column)| v1::DeclaredColumn {
+                    column: column.name.clone(),
+                    data_type: non_empty(&column.data_type),
+                    nullable: column.nullable,
+                    position: Some(position as u64),
+                })
+                .collect(),
+            properties,
+            file_count: non_empty_len(&self.files),
+            partition_count: non_empty_len(&self.partitions),
+            credentials: (!credentials.is_empty()).then_some(credentials),
+            ..v1::Table::default()
+        }
+    }
+}
+
+/// `Some` unless the text is empty.
+fn non_empty(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// The length of a non-empty collection.
+fn non_empty_len<T>(items: &[T]) -> Option<u64> {
+    (!items.is_empty()).then_some(items.len() as u64)
 }
 
 /// Arguments for [`load`].

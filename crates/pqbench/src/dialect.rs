@@ -1,4 +1,5 @@
-//! URL helpers shared by the walk's commands.
+//! Shared helpers for the walk's commands: endpoint URLs and the backend
+//! vocabulary they report.
 //!
 //! The table format is declared by the caller (`PQB_TABLE_FORMAT`); nothing
 //! here probes the endpoint. Iceberg REST endpoints already name the catalog
@@ -8,6 +9,7 @@
 use serde::de::DeserializeOwned;
 
 use crate::third_party::reqwest::Request;
+use crate::v1::CatalogType;
 use crate::Workspace;
 
 /// The Unity REST root, whether or not the endpoint already names it.
@@ -72,4 +74,15 @@ pub(crate) async fn send_json<T: DeserializeOwned>(
     }
     serde_json::from_slice(&response.bytes)
         .map_err(|error| format!("the response was not the expected document: {error}"))
+}
+
+/// The catalog kind the endpoint reports (`MANAGED_CATALOG`, …) as the proto
+/// enum. A kind this build does not name is `None`, not an error.
+pub(crate) fn catalog_type(kind: &str) -> Option<CatalogType> {
+    match kind {
+        "MANAGED_CATALOG" => Some(CatalogType::Managed),
+        "FOREIGN_CATALOG" => Some(CatalogType::Foreign),
+        "SYSTEM_CATALOG" => Some(CatalogType::System),
+        _ => None,
+    }
 }

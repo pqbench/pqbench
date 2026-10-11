@@ -109,11 +109,11 @@ const ICEBERG_NAMESPACES: &str =
 const ICEBERG_PAGE: &str = r#"{"namespaces":[["nyctaxi"]],"next-page-token":"more"}"#;
 const ICEBERG_LAST: &str = r#"{"namespaces":[["bakehouse"]],"next-page-token":null}"#;
 
-/// The parent level's stream: one `pqbench.catalog` ref per catalog.
+/// The parent level's stream: one `Catalog` resource per catalog.
 const CATALOG_REFS: &str = concat!(
-    r#"{"kind":"pqbench.catalog","version":1,"name":"dbx_samples"}"#,
+    r#"{"name":"catalogs/dbx_samples"}"#,
     "\n",
-    r#"{"kind":"pqbench.catalog","version":1,"name":"system"}"#,
+    r#"{"name":"catalogs/system"}"#,
     "\n",
 );
 
@@ -136,7 +136,7 @@ fn catalog_info_prints_the_record_as_a_table() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dbx_samples"), "{stdout}");
-    assert!(stdout.contains("MANAGED_CATALOG"), "{stdout}");
+    assert!(stdout.contains("CATALOG_TYPE_MANAGED"), "{stdout}");
     assert!(stdout.contains("catalogs: 1"), "{stdout}");
 }
 
@@ -154,12 +154,11 @@ fn catalog_info_streams_the_record_as_ndjson() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.catalog");
-    assert_eq!(records[0]["version"], 1);
-    assert_eq!(records[0]["name"], "dbx_samples");
-    assert_eq!(records[0]["catalog_type"], "MANAGED_CATALOG");
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples");
+    assert_eq!(records[0]["catalog_type"], "CATALOG_TYPE_MANAGED");
     assert_eq!(records[0]["comment"], "sample catalog");
     assert_eq!(records[0]["owner"], "owner@example.com");
+    assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
 #[test]
@@ -188,8 +187,7 @@ fn catalog_info_exports_the_ndjson_stream() {
     let decoded = decode_lz4(&bytes);
     let records = ndjson(&decoded);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.catalog");
-    assert_eq!(records[0]["name"], "dbx_samples");
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples");
 }
 
 #[test]
@@ -253,11 +251,15 @@ fn catalog_ls_streams_the_schemas_as_ndjson() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["bakehouse", "nyctaxi"]);
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
+        ]
+    );
     for record in &records {
-        assert_eq!(record["kind"], "pqbench.schema");
-        assert_eq!(record["version"], 1);
-        assert_eq!(record["catalog"], "dbx_samples");
+        assert!(record.get("kind").is_none(), "{record}");
     }
 }
 
@@ -281,7 +283,13 @@ fn catalog_ls_follows_unity_page_tokens() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["bakehouse", "nyctaxi"]);
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
+        ]
+    );
 }
 
 #[test]
@@ -305,10 +313,15 @@ fn catalog_ls_lists_iceberg_rest_namespaces() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["bakehouse", "nyctaxi"]);
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
+        ]
+    );
     for record in &records {
-        assert_eq!(record["kind"], "pqbench.schema");
-        assert_eq!(record["catalog"], "dbx_samples");
+        assert!(record.get("kind").is_none(), "{record}");
     }
 }
 
@@ -336,7 +349,13 @@ fn catalog_ls_follows_iceberg_page_tokens() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["bakehouse", "nyctaxi"]);
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
+        ]
+    );
 }
 
 #[test]
@@ -365,8 +384,8 @@ fn catalog_ls_exports_the_ndjson_stream() {
     let decoded = decode_lz4(&bytes);
     let records = ndjson(&decoded);
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["kind"], "pqbench.schema");
-    assert_eq!(records[1]["name"], "nyctaxi");
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples/schemas/bakehouse");
+    assert_eq!(records[1]["name"], "catalogs/dbx_samples/schemas/nyctaxi");
 }
 
 #[test]
@@ -415,11 +434,12 @@ fn catalog_info_enriches_a_catalog_stream() {
     assert_eq!(records.len(), 2);
     let dbx_samples = records
         .iter()
-        .find(|record| record["name"] == "dbx_samples")
+        .find(|record| record["name"] == "catalogs/dbx_samples")
         .unwrap();
-    assert_eq!(dbx_samples["kind"], "pqbench.catalog");
     assert_eq!(dbx_samples["comment"], "sample catalog");
-    assert!(records.iter().any(|record| record["name"] == "system"));
+    assert!(records
+        .iter()
+        .any(|record| record["name"] == "catalogs/system"));
 }
 
 #[test]
@@ -438,13 +458,14 @@ fn catalog_ls_lists_a_catalog_stream() {
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 4);
     for record in &records {
-        assert_eq!(record["kind"], "pqbench.schema");
+        assert!(record.get("kind").is_none(), "{record}");
     }
     let schemas = |catalog: &str| -> Vec<&str> {
+        let prefix = format!("catalogs/{catalog}/schemas/");
         records
             .iter()
-            .filter(|record| record["catalog"] == catalog)
-            .map(|record| record["name"].as_str().unwrap())
+            .filter_map(|record| record["name"].as_str())
+            .filter_map(|name| name.strip_prefix(&prefix))
             .collect()
     };
     assert_eq!(schemas("dbx_samples"), ["bakehouse", "nyctaxi"]);

@@ -9,7 +9,7 @@ feature-gated and remain out of the default dependency graph.
 ```mermaid
 flowchart TD
     delta_log[Delta transaction log] --> delta[pqbench::table::delta]
-    delta --> document[pqbench.partition document]
+    delta --> document[Partition document]
     document --> bytemass[pqbench::bytemass]
     bytemass --> isolation[pqbench::object_store]
     isolation --> object_store[object_store crate]
@@ -32,9 +32,9 @@ terminal prints the partitions as a table and a summary:
 
 ```console run delta
 $ pqbench table ls docker/e2e-lakehouse/table --format table
-table                          first_time      last_time  commits
+name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
-docker/e2e-lakehouse/table  1789862400000  1789948800000        1
+catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
 partitions: 1
 ```
 
@@ -43,13 +43,13 @@ Build with the feature when you run from source, e.g.
 the same command in a container.
 
 Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
-options travel on the document as `env` (`AWS_*` only); they are not written
-into the process environment. The cargo command is
+A table's vended credentials travel as its `credentials` value (`AWS_*` keys);
+they are not written into the process environment. The cargo command is
 `cargo run -p pqbench-cli --features delta-s3 -- table ls s3://bucket/table`.
 
 A producer can supply the table URI and vended credentials as
-`pqbench.remote-source`. `table ls` reads the log, and the env travels to
-`partition ls` and `bytemass`:
+a `remote-source` document. `table ls` reads the log, and the credentials travel
+to `partition ls` and `bytemass`:
 
 ## Backends
 
@@ -64,11 +64,11 @@ instead of borrowing the caller's.
 
 ## Document
 
-`pqbench.partition` version 1 groups a table's commits into an epoch-aligned
-commit-time window: `definition` (the window), `commits` (the Delta versions it
-holds), and the `env` to read the table's files. `partition ls` re-reads those
-commits and emits the files they **added** as `pqbench.table-file` rows (path,
-URI, log size), each carrying the env; a file a later commit removes is still
+`Partition` groups a table's commits into an epoch-aligned
+commit-time window: the window bounds, the commits (the Delta versions it
+holds), and the table's storage root and lease. `partition ls` re-reads those
+commits and emits the files they **added** as `TableFile` records (name,
+blob, log size), each carrying the lease; a file a later commit removes is still
 named. `bytemass` measures each file as its line arrives and compares its size
 to the log. A terminal prints the files as a table and the summary (file count,
 bytes); a pipe streams NDJSON. `--format json` forces the stream, and `-o`

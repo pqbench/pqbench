@@ -8,7 +8,7 @@ use serde::Deserialize;
 use super::api::{Error, Metastore};
 use crate::dialect;
 use crate::third_party::reqwest::Request;
-use crate::Workspace;
+use crate::{Dialect, Workspace};
 
 /// The subset of `GET /metastore_summary` this command reports.
 #[derive(Deserialize)]
@@ -42,9 +42,23 @@ pub(crate) async fn read(workspace: &Workspace) -> Result<Metastore, Error> {
         Error::from(format!("the response was not a metastore summary: {error}"))
     })?;
     Ok(Metastore {
-        name: summary.name,
-        id: summary.metastore_id,
-        cloud: summary.cloud,
-        region: summary.region,
+        name: crate::v1::name::metastore(metastore_id(workspace)),
+        uid: Some(summary.metastore_id),
+        display_name: Some(summary.name),
+        cloud_provider: non_empty(summary.cloud),
+        region: non_empty(summary.region),
     })
+}
+
+/// The metastore id: the dialect names it (`unity`, `iceberg`).
+fn metastore_id(workspace: &Workspace) -> &'static str {
+    match workspace.config().dialect {
+        Dialect::Unity => "unity",
+        Dialect::Iceberg => "iceberg",
+    }
+}
+
+/// `Some` unless the endpoint reported nothing.
+fn non_empty(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
 }

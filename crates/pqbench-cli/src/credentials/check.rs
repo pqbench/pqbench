@@ -23,7 +23,7 @@ use crate::CliError;
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
     let input = read_input("credentials check").await?;
     if !input.piped {
-        return Err("credentials check reads pqbench.table-ref v2 refs on standard input".into());
+        return Err("credentials check reads table refs on standard input".into());
     }
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let records = source::records("credentials check", input.first, input.lines);

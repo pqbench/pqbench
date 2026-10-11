@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::api::{Error, Storage, TableFormat as Dialect};
+use super::api::{Error, Storage, Table, TableFormat as Dialect};
 use crate::dialect;
 use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
 use crate::{Lake, Workspace};
@@ -27,11 +27,12 @@ pub(crate) async fn read(
     schema: &str,
     table: &str,
     storage: &Storage,
-) -> Result<TableInfo, Error> {
-    match workspace.config().dialect {
+) -> Result<Table, Error> {
+    let info = match workspace.config().dialect {
         Dialect::Unity => unity_record(workspace, lake, catalog, schema, table, storage).await,
         Dialect::Iceberg => iceberg_record(workspace, catalog, schema, table, &storage.env).await,
-    }
+    }?;
+    Ok(info.resource(catalog, schema, table, &storage.env))
 }
 
 /// The subset of Unity `GET /tables/{full_name}` this command reports.

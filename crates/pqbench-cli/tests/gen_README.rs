@@ -30,7 +30,7 @@ fn bytemass() {
 #[test]
 fn table_ls() {
     // table_ls, from line 96
-    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 97, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
+    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 97, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]

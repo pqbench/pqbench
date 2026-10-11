@@ -24,6 +24,7 @@ pub mod stats;
 pub mod table;
 mod text;
 pub mod third_party;
+pub mod v1;
 pub mod viz;
 
 pub use capability::{Lake, Workspace};

@@ -1,16 +1,14 @@
 //! `partition ls`: the files each partition's commits added.
 
-use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream::{self, StreamExt};
-use pqbench::table::TableFile;
-use serde::{Deserialize, Serialize};
+use pqbench::v1;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::emit::{Align, Emitter, Format, Row};
+use crate::emit::{Emitter, Format};
 use crate::CliError;
 
 /// Arguments for `partition ls`.
@@ -29,13 +27,14 @@ pub(crate) struct LsArgs {
 
 /// List the files each partition's commits added: `table ls | partition ls`.
 ///
-/// Reads a `pqbench.partition` stream, re-reads each table's log, and emits the
-/// files the window's commits named — the **added in window** set, so a file a
-/// later commit removes is still named. The env rides on every file, so a
-/// short-lived lease travels with it; there is no begin/end envelope.
+/// Reads a partition stream, re-reads each table's log, and emits the files the
+/// window's commits named — the **added in window** set, so a file a later
+/// commit removes is still named. Each file is a [`v1::TableFile`] naming its
+/// blob and carrying the partition's lease, so the storage stage reads it
+/// without a catalog call.
 pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
     if std::io::stdin().is_terminal() {
-        return Err("partition ls reads pqbench.partition records on standard input".into());
+        return Err("partition ls reads partition records on standard input".into());
     }
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let lines = BufReader::new(tokio::io::stdin()).lines();
@@ -44,28 +43,34 @@ pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
     let mut reads = partition_stream(lines)
         .map(|partition| async {
             let partition = partition?;
-            let versions: Vec<u64> = partition
-                .commits
-                .iter()
-                .map(|commit| commit.version)
-                .collect();
-            let found =
-                pqbench::partition::ls::list(lake, &partition.table, &partition.env, &versions)
-                    .await
-                    .map_err(|error| CliError::from(error.to_string()))?;
-            Ok::<_, CliError>((partition, found))
+            let (catalog, schema, table, _) = v1::name::parse_partition(&partition.name)
+                .ok_or_else(|| not_a_partition(&partition.name))?;
+            let uri = partition
+                .uri
+                .clone()
+                .ok_or("a partition record needs a table storage root")?;
+            let env = partition
+                .credentials
+                .as_ref()
+                .map(v1::Credentials::to_env)
+                .unwrap_or_default();
+            let found = pqbench::partition::ls::list(lake, &uri, &env, &partition.commit_versions)
+                .await
+                .map_err(|error| CliError::from(error.to_string()))?;
+            Ok::<_, CliError>((catalog, schema, table, partition.credentials, found))
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(result) = reads.next().await {
-        let (partition, found) = result?;
+        let (catalog, schema, table, credentials, found) = result?;
         for file in &found {
-            emit.write_row(&FileRecord {
-                kind: "pqbench.table-file",
-                id: &partition.table,
-                env: &partition.env,
-                file,
-            })
-            .await?;
+            let table_file = v1::TableFile {
+                name: v1::name::table_file(&catalog, &schema, &table, &file.path),
+                blob: Some(v1::name::blob_name(&file.uri)),
+                size_bytes: Some(file.size_bytes),
+                credentials: credentials.clone(),
+                ..v1::TableFile::default()
+            };
+            emit.write_row(&table_file).await?;
             files += 1;
         }
         partitions += 1;
@@ -74,10 +79,15 @@ pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
         .await
 }
 
-/// Read `pqbench.partition` records off a line stream, one at a time.
+/// The error for a partition record whose name is not a partition resource.
+fn not_a_partition(name: &str) -> CliError {
+    format!("a partition name must be `…/tables/{{table}}/partitions/{{partition}}`: {name}").into()
+}
+
+/// Read partition records off a line stream, one at a time.
 fn partition_stream(
     lines: tokio::io::Lines<BufReader<tokio::io::Stdin>>,
-) -> impl stream::Stream<Item = Result<Partition, CliError>> + Unpin {
+) -> impl stream::Stream<Item = Result<v1::Partition, CliError>> + Unpin {
     Box::pin(stream::try_unfold(lines, |mut lines| async move {
         loop {
             let Some(line) = lines.next_line().await? else {
@@ -86,72 +96,13 @@ fn partition_stream(
             if line.trim().is_empty() {
                 continue;
             }
-            let partition: Partition = serde_json::from_str(&line).map_err(|error| {
-                CliError::from(format!(
-                    "partition ls reads pqbench.partition NDJSON: {error}"
-                ))
+            let partition: v1::Partition = serde_json::from_str(&line).map_err(|error| {
+                CliError::from(format!("partition ls reads partition NDJSON: {error}"))
             })?;
-            partition.validate()?;
+            if partition.uri.is_none() {
+                return Err("a partition record needs a table storage root".into());
+            }
             return Ok(Some((partition, lines)));
         }
     }))
-}
-
-/// One `pqbench.partition` record: a table, its env, and the window's commits.
-#[derive(Deserialize)]
-struct Partition {
-    kind: String,
-    version: u32,
-    table: String,
-    #[serde(default)]
-    env: BTreeMap<String, String>,
-    #[serde(default)]
-    commits: Vec<Commit>,
-}
-
-#[derive(Deserialize)]
-struct Commit {
-    version: u64,
-}
-
-impl Partition {
-    fn validate(&self) -> Result<(), CliError> {
-        if self.kind != "pqbench.partition" {
-            return Err(format!(
-                "partition ls reads pqbench.partition records, found {:?}",
-                self.kind
-            )
-            .into());
-        }
-        if self.version != 1 {
-            return Err(
-                "unsupported partition document; expected kind `pqbench.partition` version 1"
-                    .into(),
-            );
-        }
-        if self.table.is_empty() {
-            return Err("a pqbench.partition record needs a table".into());
-        }
-        Ok(())
-    }
-}
-
-/// One added file, with the env to read it: the shape `bytemass` measures.
-#[derive(Serialize)]
-struct FileRecord<'a> {
-    kind: &'static str,
-    id: &'a str,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    env: &'a BTreeMap<String, String>,
-    #[serde(flatten)]
-    file: &'a TableFile,
-}
-
-impl Row for FileRecord<'_> {
-    const HEADER: &'static [&'static str] = &["path", "size_bytes"];
-    const ALIGN: &'static [Align] = &[Align::Left, Align::Right];
-
-    fn cells(&self) -> Vec<String> {
-        vec![self.file.path.clone(), self.file.size_bytes.to_string()]
-    }
 }

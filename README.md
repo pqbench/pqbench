@@ -80,8 +80,8 @@ columns: 2
 ```
 
 - Reads only the footer, so it works on any file, compressed or not.
-- Accepts paths, quoted globs, `s3://` URIs, and a `pqbench.table-file` /
-  `pqbench.remote-source` document; `--indexes` adds page counts.
+- Accepts paths, quoted globs, `s3://` URIs, and a `TableFile` /
+  `remote-source` document; `--indexes` adds page counts.
 - `s3://` needs the `aws` feature; a pipe streams one NDJSON row per column
   (`--format json`, or `-o FILE`).
 
@@ -95,9 +95,9 @@ commit-time windows.
 
 ```console run delta
 $ pqbench table ls docker/e2e-lakehouse/table --format table
-table                          first_time      last_time  commits
+name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
-docker/e2e-lakehouse/table  1789862400000  1789948800000        1
+catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
 partitions: 1
 ```
 
@@ -105,7 +105,7 @@ partitions: 1
 - `--every 1h|1d|1w` sets the window width (default `1d`).
 - Delta needs `--features delta`, Iceberg `iceberg`; add `-s3` to either for
   `s3://`.
-- A pipe streams `pqbench.partition` NDJSON; feed it to `partition ls`.
+- A pipe streams `Partition` NDJSON; feed it to `partition ls`.
 
 ### partition ls
 
@@ -124,14 +124,14 @@ columns: 2
 
 - `partition ls` re-reads the window's commits and emits the files they
   **added** — a file a later commit removes is still named.
-- The env rides on every file, so a short-lived lease travels to `bytemass`.
+- The lease rides on every file, so a short-lived lease travels to `bytemass`.
 
-A producer can hand `bytemass` a `pqbench.remote-source` document — one table
+A producer can hand `bytemass` a `remote-source` document — one table
 URI plus `AWS_*` credentials:
 
 ```console no-run
 $ cat <<'EOF' | pqbench bytemass --format table
-{"kind":"pqbench.remote-source","version":1,
+{"version":1,
  "inputs":["s3://bucket/table/part-0.parquet"],
  "env":{"AWS_ACCESS_KEY_ID":"…","AWS_SECRET_ACCESS_KEY":"…","AWS_SESSION_TOKEN":"…","AWS_REGION":"us-east-1"}}
 EOF

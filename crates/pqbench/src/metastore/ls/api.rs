@@ -1,21 +1,13 @@
 //! `metastore ls`: the catalogs at the endpoint.
 //!
-//! [`list`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`list`] is the only public function. It returns [`Catalog`] resources; the
+//! CLI forwards them as-is.
 
 use std::fmt;
 
-use crate::Workspace;
+pub use crate::v1::Catalog;
 
-/// One catalog record.
-#[derive(Debug, Clone)]
-pub struct Catalog {
-    /// The catalog name.
-    pub name: String,
-    /// The catalog type the endpoint reports (`MANAGED_CATALOG`, …), when it
-    /// reports one.
-    pub catalog_type: Option<String>,
-}
+use crate::Workspace;
 
 /// Errors listing catalogs.
 #[derive(Debug)]

@@ -1,22 +1,14 @@
 //! `catalog ls`: the schemas in one catalog.
 //!
-//! [`list`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`list`] is the only public function. It returns [`Schema`] resources; the
+//! CLI forwards them as-is.
 
 use std::fmt;
 
-use crate::Workspace;
-
 pub use crate::config::Dialect as TableFormat;
+pub use crate::v1::Schema;
 
-/// One schema in a catalog.
-#[derive(Debug, Clone)]
-pub struct Schema {
-    /// The catalog the schema belongs to.
-    pub catalog: String,
-    /// The schema name.
-    pub name: String,
-}
+use crate::Workspace;
 
 /// Errors listing a catalog's schemas.
 #[derive(Debug)]

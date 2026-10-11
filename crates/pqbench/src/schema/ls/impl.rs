@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 
-use super::api::{Error, TableRef};
+use super::api::{Error, Table};
 use crate::dialect;
 use crate::schema::TableFormat;
 use crate::Workspace;
@@ -61,7 +61,7 @@ pub(crate) async fn list(
     workspace: &Workspace,
     catalog: &str,
     schema: &str,
-) -> Result<Vec<TableRef>, Error> {
+) -> Result<Vec<Table>, Error> {
     let mut tables = match workspace.config().dialect {
         TableFormat::Unity => unity_tables(workspace, catalog, schema).await?,
         TableFormat::Iceberg => iceberg_tables(workspace, catalog, schema).await?,
@@ -74,7 +74,7 @@ async fn unity_tables(
     workspace: &Workspace,
     catalog: &str,
     schema: &str,
-) -> Result<Vec<TableRef>, Error> {
+) -> Result<Vec<Table>, Error> {
     let root = dialect::api_root(workspace.config().endpoint.as_str());
     let mut tables = Vec::new();
     let mut page_token: Option<String> = None;
@@ -110,10 +110,11 @@ async fn unity_tables(
                 .ok_or_else(|| {
                     Error::from(format!("the table in {catalog}.{schema} has no name"))
                 })?;
-            tables.push(TableRef {
-                uri: format!("{root}/tables/{}", dialect::encode(&name)),
-                name,
-                storage_path,
+            let table = name.rsplit('.').next().unwrap_or(name.as_str());
+            tables.push(Table {
+                name: crate::v1::name::table(catalog, schema, table),
+                uri: storage_path,
+                ..Table::default()
             });
         }
         match page.next_page_token {
@@ -128,7 +129,7 @@ async fn iceberg_tables(
     workspace: &Workspace,
     catalog: &str,
     schema: &str,
-) -> Result<Vec<TableRef>, Error> {
+) -> Result<Vec<Table>, Error> {
     let base = dialect::iceberg_root(workspace.config().endpoint.as_str());
     let namespace = dialect::iceberg_namespace(schema);
     let mut tables = Vec::new();
@@ -156,15 +157,9 @@ async fn iceberg_tables(
             } else {
                 identifier.namespaces.join(".")
             };
-            let name = format!("{catalog}.{namespace}.{}", identifier.name);
-            tables.push(TableRef {
-                uri: format!(
-                    "{base}/namespaces/{}/tables/{}",
-                    dialect::iceberg_namespace(&namespace),
-                    dialect::encode(&identifier.name)
-                ),
-                name,
-                storage_path: None,
+            tables.push(Table {
+                name: crate::v1::name::table(catalog, &namespace, &identifier.name),
+                ..Table::default()
             });
         }
         match page.next_page_token {

@@ -110,6 +110,50 @@ fn dbx_host() -> Option<String> {
         .filter(|host| !host.is_empty())
 }
 
+/// The resource type a record names: the collection segment of its `name`
+/// (the segment before the id).
+fn resource(record: &Value) -> &str {
+    let name = record["name"].as_str().unwrap_or_default();
+    let segments: Vec<&str> = name.split('/').collect();
+    segments
+        .get(segments.len().saturating_sub(2))
+        .copied()
+        .unwrap_or("")
+}
+
+/// A record's bare id: the last segment of its `name`.
+fn id(record: &Value) -> &str {
+    record["name"]
+        .as_str()
+        .unwrap_or_default()
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+}
+
+/// The dotted `catalog.schema[.table]` a record's `name` names.
+fn fqn(record: &Value) -> String {
+    let name = record["name"].as_str().unwrap_or_default();
+    let segments: Vec<&str> = name.split('/').collect();
+    segments
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// A table resource document from a dotted `catalog.schema.table` name.
+fn table_ref(name: &str) -> String {
+    let parts: Vec<&str> = name.split('.').collect();
+    json!({"name": format!(
+        "catalogs/{}/schemas/{}/tables/{}",
+        parts[0], parts[1], parts[2]
+    )})
+    .to_string()
+}
+
 fn unity_endpoint(host: &str) -> String {
     format!("{}/api/2.1/unity-catalog", host.trim_end_matches('/'))
 }
@@ -197,14 +241,16 @@ fn metastore_info_reads_the_live_metastore() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.metastore");
-    assert_eq!(records[0]["version"], 1);
+    assert_eq!(resource(&records[0]), "metastores");
     assert!(
         !records[0]["name"].as_str().unwrap_or_default().is_empty(),
         "{records:?}"
     );
     assert!(
-        !records[0]["cloud"].as_str().unwrap_or_default().is_empty(),
+        !records[0]["cloud_provider"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty(),
         "{records:?}"
     );
     assert!(
@@ -236,13 +282,9 @@ fn metastore_ls_lists_the_live_catalogs() {
     );
     let records = ndjson(&output.stdout);
     for record in &records {
-        assert_eq!(record["kind"], "pqbench.catalog");
-        assert_eq!(record["version"], 1);
+        assert_eq!(resource(record), "catalogs");
     }
-    let names: Vec<&str> = records
-        .iter()
-        .filter_map(|record| record["name"].as_str())
-        .collect();
+    let names: Vec<&str> = records.iter().map(id).collect();
     assert_eq!(
         names,
         [
@@ -341,15 +383,15 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
 
     let records = read_ndjson(&metastore_info);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.metastore");
+    assert_eq!(resource(&records[0]), "metastores");
     println!("metastore: {}", records[0]["name"].as_str().unwrap_or("-"));
 
     let records = read_ndjson(&catalogs);
     let names: Vec<String> = records
         .iter()
         .map(|record| {
-            assert_eq!(record["kind"], "pqbench.catalog");
-            record["name"].as_str().unwrap().to_string()
+            assert_eq!(resource(record), "catalogs");
+            id(record).to_string()
         })
         .collect();
     assert_eq!(
@@ -381,8 +423,8 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         );
         let records = read_ndjson(&catalog_info);
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["kind"], "pqbench.catalog");
-        assert_eq!(records[0]["name"], name.as_str());
+        assert_eq!(resource(&records[0]), "catalogs");
+        assert_eq!(records[0]["name"], format!("catalogs/{name}"));
         println!(
             "catalog: {} ({})",
             name,
@@ -404,15 +446,14 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         let records = read_ndjson(&catalog_schemas);
         assert!(!records.is_empty(), "{name} listed no schemas");
         for record in &records {
-            assert_eq!(record["kind"], "pqbench.schema");
-            assert_eq!(record["version"], 1);
-            assert_eq!(record["catalog"], name.as_str());
+            assert_eq!(resource(record), "schemas");
+            assert_eq!(fqn(record), format!("{name}.{}", id(record)));
         }
         println!("catalog {name}: {} schema(s)", records.len());
 
         // schema → each schema's tables, one directory per catalog.schema
         for record in &records {
-            let schema = record["name"].as_str().unwrap();
+            let schema = id(record);
             let fqn = format!("{name}.{schema}");
             let dir = job.path().join("schema").join(&fqn);
             std::fs::create_dir_all(&dir).unwrap();
@@ -430,8 +471,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             );
             let records = read_ndjson(&tables);
             for record in &records {
-                assert_eq!(record["kind"], "pqbench.table-ref");
-                assert_eq!(record["version"], 2);
+                assert_eq!(resource(record), "tables");
             }
             println!("schema {fqn}: {} table(s)", records.len());
         }
@@ -461,10 +501,9 @@ fn catalog_info_reads_the_live_catalog() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.catalog");
-    assert_eq!(records[0]["version"], 1);
-    assert_eq!(records[0]["name"], "dbx_samples");
-    assert_eq!(records[0]["catalog_type"], "MANAGED_CATALOG");
+    assert_eq!(resource(&records[0]), "catalogs");
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples");
+    assert_eq!(records[0]["catalog_type"], "CATALOG_TYPE_MANAGED");
 }
 
 /// The schemas `dbx_samples` answers with, from either dialect.
@@ -501,9 +540,9 @@ fn catalog_ls_lists_the_live_schemas() {
     let names: Vec<&str> = records
         .iter()
         .map(|record| {
-            assert_eq!(record["kind"], "pqbench.schema");
-            assert_eq!(record["catalog"], "dbx_samples");
-            record["name"].as_str().unwrap()
+            assert_eq!(resource(record), "schemas");
+            assert_eq!(fqn(record), format!("dbx_samples.{}", id(record)));
+            id(record)
         })
         .collect();
     assert_eq!(names, DBX_SAMPLES_SCHEMAS);
@@ -529,8 +568,8 @@ const EXTERNAL_FIXTURE_SCHEMAS: [&str; 12] = [
 
 /// The table ids `schema ls` lists for one `pqbench_ext` schema.
 fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
-    let fqn = format!("pqbench_ext.{schema}");
-    let output = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", env);
+    let qualified = format!("pqbench_ext.{schema}");
+    let output = pipe_env(&["schema", "ls", &qualified, "--format", "json"], b"", env);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -539,8 +578,8 @@ fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
     ndjson(&output.stdout)
         .iter()
         .map(|record| {
-            assert_eq!(record["kind"], "pqbench.table-ref");
-            record["id"].as_str().unwrap().to_string()
+            assert_eq!(resource(record), "tables");
+            fqn(record)
         })
         .collect()
 }
@@ -578,7 +617,7 @@ fn catalog_ls_lists_the_external_fixture() {
     );
     let schemas: Vec<String> = ndjson(&output.stdout)
         .iter()
-        .map(|record| record["name"].as_str().unwrap().to_string())
+        .map(|record| id(record).to_string())
         .collect();
     assert_eq!(schemas, EXTERNAL_FIXTURE_SCHEMAS);
 
@@ -667,10 +706,8 @@ fn schema_info_reads_the_live_schema() {
         );
         let records = ndjson(&output.stdout);
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0]["kind"], "pqbench.schema");
-        assert_eq!(records[0]["version"], 1);
-        assert_eq!(records[0]["catalog"], "dbx_samples");
-        assert_eq!(records[0]["name"], "nyctaxi");
+        assert_eq!(resource(&records[0]), "schemas");
+        assert_eq!(records[0]["name"], "catalogs/dbx_samples/schemas/nyctaxi");
     }
 }
 
@@ -700,22 +737,21 @@ fn schema_ls_lists_the_live_tables() {
     let records = ndjson(&output.stdout);
     assert!(!records.is_empty());
     for record in &records {
-        assert_eq!(record["kind"], "pqbench.table-ref");
-        assert_eq!(record["version"], 2);
+        assert_eq!(resource(record), "tables");
         assert!(
-            record["uri"].as_str().unwrap().contains("/tables/"),
+            record["name"].as_str().unwrap().contains("/tables/"),
             "{record:?}"
         );
         assert!(
-            record["storage_path"].as_str().is_some(),
-            "Unity fills the storage path: {record:?}"
+            record["uri"].as_str().is_some(),
+            "Unity fills the storage URI: {record:?}"
         );
     }
-    let names: Vec<&str> = records
-        .iter()
-        .map(|record| record["id"].as_str().unwrap())
-        .collect();
-    assert!(names.contains(&"dbx_samples.nyctaxi.trips"), "{names:?}");
+    let names: Vec<String> = records.iter().map(fqn).collect();
+    assert!(
+        names.iter().any(|name| name == "dbx_samples.nyctaxi.trips"),
+        "{names:?}"
+    );
 
     let endpoint = format!(
         "{}/iceberg-rest/v1/catalogs/dbx_samples",
@@ -738,14 +774,13 @@ fn schema_ls_lists_the_live_tables() {
     let records = ndjson(&output.stdout);
     let trips = records
         .iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .find(|record| fqn(record) == "dbx_samples.nyctaxi.trips")
         .unwrap_or_else(|| panic!("no trips table: {records:?}"));
-    assert_eq!(trips["version"], 2);
-    assert!(trips["storage_path"].is_null(), "{trips:?}");
-    assert!(
-        trips["uri"].as_str().unwrap().ends_with("/tables/trips"),
-        "{trips:?}"
+    assert_eq!(
+        trips["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     );
+    assert!(trips["uri"].is_null(), "{trips:?}");
 
     // The new tree enriches its own v2 refs: `table info` reads the
     // `loadTable` metadata inline, so no storage read runs.
@@ -766,17 +801,13 @@ fn schema_ls_lists_the_live_tables() {
     let records = ndjson(&info.stdout);
     let trips = records
         .iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.trips")
+        .find(|record| fqn(record) == "dbx_samples.nyctaxi.trips")
         .unwrap_or_else(|| panic!("no trips table: {records:?}"));
-    assert_eq!(trips["kind"], "pqbench.table-ref");
-    assert_eq!(trips["version"], 2);
-    assert_eq!(trips["format"], "iceberg");
-    assert!(!trips["columns"].as_array().unwrap().is_empty());
+    assert_eq!(resource(trips), "tables");
+    assert_eq!(trips["format"], "TABLE_FORMAT_ICEBERG");
+    assert!(!trips["declared_columns"].as_array().unwrap().is_empty());
     assert!(trips["snapshot_version"].as_u64().unwrap() > 0);
-    assert!(
-        !trips["storage_path"].as_str().unwrap().is_empty(),
-        "{trips:?}"
-    );
+    assert!(!trips["uri"].as_str().unwrap().is_empty(), "{trips:?}");
 }
 
 /// `table info` reads the live Iceberg REST table: the `loadTable` response
@@ -820,13 +851,12 @@ fn table_info_reads_the_live_iceberg_table() {
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record["kind"], "pqbench.table-ref");
-    assert_eq!(record["version"], 2);
-    assert_eq!(record["id"], "dbx_samples.nyctaxi.trips");
-    assert_eq!(record["format"], "iceberg");
+    assert_eq!(resource(record), "tables");
+    assert_eq!(fqn(record), "dbx_samples.nyctaxi.trips");
+    assert_eq!(record["format"], "TABLE_FORMAT_ICEBERG");
     assert!(record["snapshot_version"].as_u64().unwrap() > 0);
-    assert!(record["columns"].as_array().unwrap().len() >= 6);
-    assert!(record["iceberg_properties"].is_object(), "{record:?}");
+    assert!(record["declared_columns"].as_array().unwrap().len() >= 6);
+    assert!(record["properties"].is_object(), "{record:?}");
 }
 
 /// `table info` on the live Unity catalog: the table read runs with the env
@@ -877,8 +907,7 @@ fn credentials_check_filters_the_live_tables() {
         ("PQB_ENDPOINT", endpoint.as_str()),
         ("PQB_TOKEN", token.as_str()),
     ];
-    let reference =
-        |id: &str| json!({"kind": "pqbench.table-ref", "version": 2, "id": id}).to_string();
+    let reference = |id: &str| table_ref(id);
     let unsupported = pipe_env(
         &["credentials", "check", "--format", "json"],
         format!("{}\n", reference("dbx_samples.nyctaxi.pqbench_delta_test")).as_bytes(),
@@ -907,7 +936,7 @@ fn credentials_check_filters_the_live_tables() {
     );
     let records = ndjson(&eligible.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
+    assert_eq!(fqn(&records[0]), "dbx_samples.nyctaxi.trips");
 
     // A mixed schema drops the ineligible table and keeps the eligible ones:
     // the filter the walk composes on.
@@ -937,14 +966,18 @@ fn credentials_check_filters_the_live_tables() {
         "{mixed_stderr}"
     );
     let mixed_records = ndjson(&mixed.stdout);
-    let passed: Vec<&str> = mixed_records
-        .iter()
-        .map(|record| record["id"].as_str().unwrap())
-        .collect();
+    let passed: Vec<String> = mixed_records.iter().map(fqn).collect();
     assert_eq!(passed.len(), 2, "{passed:?}");
-    assert!(passed.contains(&"dbx_samples.nyctaxi.trips"), "{passed:?}");
     assert!(
-        passed.contains(&"dbx_samples.nyctaxi.pqbench_iceberg_test"),
+        passed
+            .iter()
+            .any(|table| table == "dbx_samples.nyctaxi.trips"),
+        "{passed:?}"
+    );
+    assert!(
+        passed
+            .iter()
+            .any(|table| table == "dbx_samples.nyctaxi.pqbench_iceberg_test"),
         "{passed:?}"
     );
 }
@@ -1001,7 +1034,7 @@ fn credentials_get_vends_the_external_fixture() {
         );
         for record in ndjson(&vended.stdout) {
             assert!(
-                record["env"]["AWS_ACCESS_KEY_ID"].is_string(),
+                record["credentials"]["access_key_id"].is_string(),
                 "no vended lease: {record}"
             );
             tables += 1;
@@ -1071,13 +1104,12 @@ fn table_ls_groups_the_external_fixture() {
             String::from_utf8_lossy(&grouped.stderr)
         );
         for record in ndjson(&grouped.stdout) {
-            assert_eq!(record["kind"], "pqbench.partition");
-            assert_eq!(record["definition"]["kind"], "natural");
-            let first = record["definition"]["first_time"].as_i64().unwrap();
-            let last = record["definition"]["last_time"].as_i64().unwrap();
+            assert_eq!(resource(&record), "partitions");
+            let first = record["start_time"].as_u64().unwrap();
+            let last = record["end_time"].as_u64().unwrap();
             assert!(last > first, "{record:?}");
             assert!(
-                !record["commits"].as_array().unwrap().is_empty(),
+                !record["commit_versions"].as_array().unwrap().is_empty(),
                 "{record:?}"
             );
             partitions += 1;
@@ -1200,7 +1232,7 @@ fn table_info_reads_the_external_aws_table() {
         .filter(|region| !region.is_empty())
         .unwrap_or_else(|| "us-east-2".to_string());
     let endpoint = unity_endpoint(&host);
-    let reference = json!({"kind": "pqbench.table-ref", "version": 2, "id": table}).to_string();
+    let reference = table_ref(&table);
     let vended = pipe_env(
         &["credentials", "get", "--format", "json"],
         format!("{reference}\n").as_bytes(),
@@ -1217,7 +1249,7 @@ fn table_info_reads_the_external_aws_table() {
     let vended = ndjson(&vended.stdout);
     assert_eq!(vended.len(), 1);
     assert!(
-        vended[0]["env"]["AWS_ACCESS_KEY_ID"]
+        vended[0]["credentials"]["access_key_id"]
             .as_str()
             .is_some_and(|value| !value.is_empty()),
         "no vended lease: {}",
@@ -1241,21 +1273,21 @@ fn table_info_reads_the_external_aws_table() {
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record["id"], table.as_str());
-    assert_eq!(record["format"], "delta");
+    assert_eq!(fqn(record), table);
+    assert_eq!(record["format"], "TABLE_FORMAT_DELTA");
     assert!(
-        record["storage_path"]
+        record["uri"]
             .as_str()
             .unwrap_or_default()
             .starts_with("s3://"),
         "{record:?}"
     );
     assert!(
-        !record["columns"].as_array().unwrap().is_empty(),
+        !record["declared_columns"].as_array().unwrap().is_empty(),
         "{record:?}"
     );
     assert!(
-        record["env"]["AWS_ACCESS_KEY_ID"]
+        record["credentials"]["access_key_id"]
             .as_str()
             .is_some_and(|value| !value.is_empty()),
         "the lease did not ride through: {record:?}"
@@ -1304,33 +1336,29 @@ fn credentials_get_vends_the_live_tables() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    for id in [
+    for table in [
         "dbx_samples.nyctaxi.trips",
         "dbx_samples.nyctaxi.pqbench_iceberg_test",
     ] {
         let vended = records
             .iter()
-            .find(|record| record["id"] == id)
-            .unwrap_or_else(|| panic!("no {id}: {records:?}"));
-        assert_eq!(vended["kind"], "pqbench.table-ref");
-        for key in [
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-        ] {
+            .find(|record| fqn(record) == table)
+            .unwrap_or_else(|| panic!("no {table}: {records:?}"));
+        assert_eq!(resource(vended), "tables");
+        for key in ["access_key_id", "secret_access_key", "session_token"] {
             assert!(
-                vended["env"][key]
+                vended["credentials"][key]
                     .as_str()
                     .is_some_and(|value| !value.is_empty()),
-                "{id} {key}: {vended:?}"
+                "{table} {key}: {vended:?}"
             );
         }
     }
     let passed = records
         .iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.pqbench_delta_test")
+        .find(|record| fqn(record) == "dbx_samples.nyctaxi.pqbench_delta_test")
         .unwrap_or_else(|| panic!("no pqbench_delta_test: {records:?}"));
-    assert!(passed["env"].is_null(), "{passed:?}");
+    assert!(passed["credentials"].is_null(), "{passed:?}");
 }
 
 /// `credentials get` with `PQB_TABLE_FORMAT=iceberg` on the live catalog: the
@@ -1379,33 +1407,29 @@ fn credentials_get_iceberg_vends_the_live_tables() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    for id in [
+    for table in [
         "dbx_samples.nyctaxi.trips",
         "dbx_samples.nyctaxi.pqbench_iceberg_test",
     ] {
         let vended = records
             .iter()
-            .find(|record| record["id"] == id)
-            .unwrap_or_else(|| panic!("no {id}: {records:?}"));
-        assert_eq!(vended["kind"], "pqbench.table-ref");
-        for key in [
-            "AWS_ACCESS_KEY_ID",
-            "AWS_SECRET_ACCESS_KEY",
-            "AWS_SESSION_TOKEN",
-        ] {
+            .find(|record| fqn(record) == table)
+            .unwrap_or_else(|| panic!("no {table}: {records:?}"));
+        assert_eq!(resource(vended), "tables");
+        for key in ["access_key_id", "secret_access_key", "session_token"] {
             assert!(
-                vended["env"][key]
+                vended["credentials"][key]
                     .as_str()
                     .is_some_and(|value| !value.is_empty()),
-                "{id} {key}: {vended:?}"
+                "{table} {key}: {vended:?}"
             );
         }
     }
     let passed = records
         .iter()
-        .find(|record| record["id"] == "dbx_samples.nyctaxi.pqbench_delta_test")
+        .find(|record| fqn(record) == "dbx_samples.nyctaxi.pqbench_delta_test")
         .unwrap_or_else(|| panic!("no pqbench_delta_test: {records:?}"));
-    assert!(passed["env"].is_null(), "{passed:?}");
+    assert!(passed["credentials"].is_null(), "{passed:?}");
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
@@ -1436,7 +1460,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     let refs = catalogs.stdout;
     let names: Vec<String> = ndjson(&refs)
         .iter()
-        .map(|record| record["name"].as_str().unwrap().to_string())
+        .map(|record| id(record).to_string())
         .collect();
     assert_eq!(
         names,
@@ -1458,8 +1482,8 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     let records = ndjson(&info.stdout);
     assert_eq!(records.len(), 5);
     for record in &records {
-        assert_eq!(record["kind"], "pqbench.catalog");
-        assert!(names.contains(&record["name"].as_str().unwrap().to_string()));
+        assert_eq!(resource(record), "catalogs");
+        assert!(names.contains(&id(record).to_string()));
     }
 
     let schemas = pipe_env(&["catalog", "ls", "--format", "json"], &refs, &env);
@@ -1471,13 +1495,14 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     let records = ndjson(&schemas.stdout);
     assert!(!records.is_empty());
     for record in &records {
-        assert_eq!(record["kind"], "pqbench.schema");
-        assert!(names.contains(&record["catalog"].as_str().unwrap().to_string()));
+        assert_eq!(resource(record), "schemas");
+        let catalog = fqn(record);
+        assert!(names.contains(&catalog.split('.').next().unwrap().to_string()));
     }
     let dbx_samples: Vec<&str> = records
         .iter()
-        .filter(|record| record["catalog"] == "dbx_samples")
-        .map(|record| record["name"].as_str().unwrap())
+        .filter(|record| fqn(record).starts_with("dbx_samples."))
+        .map(id)
         .collect();
     assert_eq!(dbx_samples, DBX_SAMPLES_SCHEMAS);
 }
@@ -1515,9 +1540,9 @@ fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
     let names: Vec<&str> = records
         .iter()
         .map(|record| {
-            assert_eq!(record["kind"], "pqbench.schema");
-            assert_eq!(record["catalog"], "dbx_samples");
-            record["name"].as_str().unwrap()
+            assert_eq!(resource(record), "schemas");
+            assert_eq!(fqn(record), format!("dbx_samples.{}", id(record)));
+            id(record)
         })
         .collect();
     assert_eq!(names, DBX_SAMPLES_SCHEMAS);

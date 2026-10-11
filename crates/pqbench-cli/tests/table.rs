@@ -31,16 +31,24 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
     child.wait_with_output().unwrap()
 }
 
+/// A table-file document: the file's resource name, the blob it reads, and
+/// the size the log claims (omitted when the log carries none).
+fn table_file(table: &str, uri: &str, size: Option<u64>) -> serde_json::Value {
+    let path = uri.rsplit('/').next().unwrap();
+    let mut file = json!({
+        "name": pqbench::v1::name::table_file_name(table, path),
+        "blob": pqbench::v1::name::blob_name(uri),
+    });
+    if let Some(size) = size {
+        file["size_bytes"] = json!(size);
+    }
+    file
+}
+
 #[test]
 fn bytemass_reads_a_table_file_from_stdin() {
     let size = std::fs::metadata(parquet_fixture()).unwrap().len();
-    let document = json!({
-        "kind": "pqbench.table-file",
-        "id": "t1",
-        "path": "small_reddit_none.parquet",
-        "uri": parquet_fixture(),
-        "size_bytes": size
-    });
+    let document = table_file(LOCAL_TABLE, parquet_fixture(), Some(size));
     let output = pipe(&["bytemass"], &document.to_string());
     assert!(
         output.status.success(),
@@ -52,10 +60,12 @@ fn bytemass_reads_a_table_file_from_stdin() {
     assert!(stdout.contains("url_encoded"));
 }
 
+/// The table the fixture's files belong to, as the walk would name them.
+const LOCAL_TABLE: &str = "catalogs/local/schemas/local/tables/t";
+
 #[test]
 fn bytemass_rejects_a_non_aws_env_key() {
     let document = json!({
-        "kind": "pqbench.remote-source",
         "version": 1,
         "inputs": [parquet_fixture()],
         "env": {"NOT_AWS": "x"}
@@ -68,13 +78,7 @@ fn bytemass_rejects_a_non_aws_env_key() {
 
 #[test]
 fn bytemass_rejects_a_size_mismatch_on_a_table_file() {
-    let document = json!({
-        "kind": "pqbench.table-file",
-        "id": "t1",
-        "path": "small_reddit_none.parquet",
-        "uri": parquet_fixture(),
-        "size_bytes": 1
-    });
+    let document = table_file(LOCAL_TABLE, parquet_fixture(), Some(1));
     let output = pipe(&["bytemass"], &document.to_string());
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -83,18 +87,13 @@ fn bytemass_rejects_a_size_mismatch_on_a_table_file() {
 
 #[test]
 fn bytemass_measures_mixed_table_ids() {
-    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
-    let file = json!({
-        "kind": "pqbench.table-file",
-        "path": "small_reddit_none.parquet",
-        "uri": parquet_fixture(),
-        "size_bytes": size
-    });
-    let mut file_b = file.clone();
-    file_b["id"] = json!("b");
-    let mut file_a = file;
-    file_a["id"] = json!("a");
-    let document = format!("{file_b}\n{file_a}\n");
+    let a = "catalogs/local/schemas/local/tables/a";
+    let b = "catalogs/local/schemas/local/tables/b";
+    let document = format!(
+        "{}\n{}\n",
+        table_file(b, parquet_fixture(), None),
+        table_file(a, parquet_fixture(), None)
+    );
     let output = pipe(&["bytemass"], &document);
     assert!(
         output.status.success(),
@@ -107,8 +106,8 @@ fn bytemass_measures_mixed_table_ids() {
         .filter(|record| record["kind"] == "pqbench.bytemass-row")
         .map(|record| record["id"].as_str().unwrap().to_string())
         .collect();
-    assert!(ids.contains(&"a".to_string()));
-    assert!(ids.contains(&"b".to_string()));
+    assert!(ids.contains(&a.to_string()), "{ids:?}");
+    assert!(ids.contains(&b.to_string()), "{ids:?}");
 }
 
 fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
@@ -238,14 +237,12 @@ fn table_ls_groups_commits_into_natural_windows() {
     let records = ndjson_records(&output.stdout);
     assert_eq!(records.len(), 1);
     let partition = &records[0];
-    assert_eq!(partition["kind"], "pqbench.partition");
-    assert_eq!(partition["definition"]["kind"], "natural");
     let day = 86_400_000i64;
     let first = timestamp.div_euclid(day) * day;
-    assert_eq!(partition["definition"]["first_time"], first);
-    assert_eq!(partition["definition"]["last_time"], first + day);
-    assert_eq!(partition["commits"][0]["version"], 0);
-    assert_eq!(partition["commits"][0]["commit_time"], timestamp);
+    assert_eq!(partition["start_time"], first);
+    assert_eq!(partition["end_time"], first + day);
+    assert_eq!(partition["commit_versions"][0], 0);
+    assert!(partition.get("kind").is_none(), "{partition}");
 }
 
 /// `--every` sets the window width; the boundary stays epoch-aligned.
@@ -275,8 +272,8 @@ fn table_ls_honors_the_window_width() {
     assert_eq!(records.len(), 1);
     let hour = 3_600_000i64;
     let first = timestamp.div_euclid(hour) * hour;
-    assert_eq!(records[0]["definition"]["first_time"], first);
-    assert_eq!(records[0]["definition"]["last_time"], first + hour);
+    assert_eq!(records[0]["start_time"], first);
+    assert_eq!(records[0]["end_time"], first + hour);
 }
 
 /// A commit the log does not date is omitted: a window never claims a commit
@@ -357,16 +354,15 @@ fn partition_ls_lists_the_files_a_window_added() {
     );
     let records = ndjson_records(&files.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.table-file");
-    assert_eq!(records[0]["path"], "data.parquet");
+    let name = records[0]["name"].as_str().unwrap();
     assert!(
-        records[0]["uri"]
-            .as_str()
-            .unwrap()
-            .ends_with("/data.parquet"),
-        "{}",
-        records[0]["uri"]
+        name.starts_with("catalogs/local/schemas/local/tables/"),
+        "{name}"
     );
+    assert!(name.ends_with("/files/data.parquet"), "{name}");
+    let blob = records[0]["blob"].as_str().unwrap();
+    assert!(blob.starts_with("blobs/file/"), "{blob}");
+    assert!(blob.ends_with("data.parquet"), "{blob}");
 }
 
 #[cfg(feature = "delta")]
@@ -393,12 +389,11 @@ fn table_ls_exits_cleanly_when_stdout_is_closed() {
     );
 }
 
-/// A version 2 table-ref from a catalog walk must carry a storage path; one
-/// without it fails loudly and names the stage that fills it.
+/// A table ref from a catalog walk must carry a storage URI; one without it
+/// fails loudly and names the stage that fills it.
 #[test]
 fn table_ls_rejects_a_ref_without_a_storage_path() {
-    let input =
-        r#"{"kind":"pqbench.table-ref","version":2,"id":"c.s.t","uri":"https://example/table"}"#;
+    let input = r#"{"name":"catalogs/c/schemas/s/tables/t"}"#;
     let output = pipe(&["table", "ls"], input);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -536,24 +531,22 @@ fn table_info_reads_a_unity_table() {
     let records = ndjson_records(&output.stdout);
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record["kind"], "pqbench.table-ref");
-    assert_eq!(record["version"], 2);
-    assert_eq!(record["id"], "dbx_samples.nyctaxi.trips");
-    assert_eq!(record["format"], "delta");
-    assert_eq!(record["snapshot_version"], 0);
     assert_eq!(
-        record["storage_path"],
-        dir.path().to_string_lossy().as_ref()
+        record["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     );
-    let columns: Vec<&str> = record["columns"]
+    assert_eq!(record["format"], "TABLE_FORMAT_DELTA");
+    assert_eq!(record["snapshot_version"], 0);
+    assert_eq!(record["uri"], dir.path().to_string_lossy().as_ref());
+    let columns: Vec<&str> = record["declared_columns"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|column| column["name"].as_str().unwrap())
+        .map(|column| column["column"].as_str().unwrap())
         .collect();
     assert_eq!(columns, ["id", "label"]);
-    assert_eq!(record["delta_properties"]["owner"], "data");
-    assert_eq!(record["delta_properties"]["delta.appendOnly"], "false");
+    assert_eq!(record["properties"]["owner"], "data");
+    assert_eq!(record["properties"]["delta.appendOnly"], "false");
     assert!(record.get("iceberg_properties").is_none(), "{record:?}");
 }
 
@@ -580,7 +573,10 @@ fn table_info_prints_the_record_as_a_table() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("dbx_samples.nyctaxi.trips"), "{stdout}");
+    assert!(
+        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/trips"),
+        "{stdout}"
+    );
     assert!(stdout.contains("delta"), "{stdout}");
     assert!(stdout.contains("tables: 1"), "{stdout}");
 }
@@ -616,24 +612,25 @@ fn table_info_reads_an_iceberg_rest_table() {
     let records = ndjson_records(&output.stdout);
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record["kind"], "pqbench.table-ref");
-    assert_eq!(record["version"], 2);
-    assert_eq!(record["id"], "dbx_samples.nyctaxi.trips");
-    assert_eq!(record["format"], "iceberg");
+    assert_eq!(
+        record["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
+    );
+    assert_eq!(record["format"], "TABLE_FORMAT_ICEBERG");
     assert_eq!(record["snapshot_version"], 3268038499157964613i64);
     assert_eq!(
-        record["storage_path"],
+        record["uri"],
         "s3://bucket/events/metadata/00001.metadata.json"
     );
-    let columns: Vec<&str> = record["columns"]
+    let columns: Vec<&str> = record["declared_columns"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|column| column["name"].as_str().unwrap())
+        .map(|column| column["column"].as_str().unwrap())
         .collect();
     assert_eq!(columns, ["id", "label"]);
-    assert_eq!(record["columns"][1]["nullable"], false);
-    assert_eq!(record["iceberg_properties"]["owner"], "data");
+    assert_eq!(record["declared_columns"][1]["nullable"], false);
+    assert_eq!(record["properties"]["owner"], "data");
     assert!(record.get("delta_properties").is_none(), "{record:?}");
 }
 
@@ -665,7 +662,10 @@ fn table_info_reads_an_iceberg_namespace_with_dots() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson_records(&output.stdout);
-    assert_eq!(records[0]["id"], "dbx_samples.ns.one.trips");
+    assert_eq!(
+        records[0]["name"],
+        "catalogs/dbx_samples/schemas/ns.one/tables/trips"
+    );
 }
 
 /// `schema ls | table info` chains: the refs on stdin name each table.
@@ -680,9 +680,9 @@ fn table_info_reads_a_table_ref_stream() {
         ("/tables/dbx_samples.nyctaxi.trips", 200, record),
     ]);
     let refs = concat!(
-        r#"{"kind":"pqbench.table-ref","version":2,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips"}"#,
+        r#"{"name":"catalogs/dbx_samples/schemas/nyctaxi/tables/trips"}"#,
         "\n",
-        r#"{"kind":"pqbench.table-ref","version":2,"id":"dbx_samples.nyctaxi.zones","uri":"http://x/tables/dbx_samples.nyctaxi.zones"}"#,
+        r#"{"name":"catalogs/dbx_samples/schemas/nyctaxi/tables/zones"}"#,
         "\n",
     );
     let output = pipe_env(
@@ -698,18 +698,21 @@ fn table_info_reads_a_table_ref_stream() {
     let records = ndjson_records(&output.stdout);
     let mut names: Vec<&str> = records
         .iter()
-        .map(|record| record["id"].as_str().unwrap())
+        .map(|record| record["name"].as_str().unwrap())
         .collect();
     names.sort_unstable();
     assert_eq!(
         names,
-        ["dbx_samples.nyctaxi.trips", "dbx_samples.nyctaxi.zones"]
+        [
+            "catalogs/dbx_samples/schemas/nyctaxi/tables/trips",
+            "catalogs/dbx_samples/schemas/nyctaxi/tables/zones"
+        ]
     );
 }
 
 #[test]
-fn table_info_rejects_v1_refs() {
-    let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips"}"#;
+fn table_info_rejects_a_record_without_a_table_name() {
+    let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips"}"#;
     let output = pipe_env(
         &["table", "info"],
         refs.as_bytes(),
@@ -717,7 +720,7 @@ fn table_info_rejects_v1_refs() {
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("version 2"), "{stderr}");
+    assert!(stderr.contains("table resources"), "{stderr}");
 }
 
 #[test]
