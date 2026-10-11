@@ -6,7 +6,6 @@ use futures_util::stream::StreamExt;
 use pqbench::table::{self, info, Column, TableFormat, TableInfo};
 use serde::Serialize;
 
-use crate::config::Sections;
 use crate::emit::{Align, Emitter, Format, Resolved, Row};
 use crate::source::{self, read_input, ref_env, split_table, table_ref};
 use crate::CliError;
@@ -31,14 +30,10 @@ pub(crate) enum TableCommand {
     Ls(LsArgs),
 }
 
-pub(crate) async fn run(
-    context: &pqbench::Context,
-    sections: &Sections,
-    args: &TableArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(context: &pqbench::Context, args: &TableArgs) -> Result<(), CliError> {
     match &args.command {
-        TableCommand::Info(info) => run_info(context, &InfoConfig::resolve(sections, info)?).await,
-        TableCommand::Ls(ls) => run_ls(context, sections, ls).await,
+        TableCommand::Info(info) => run_info(context, &InfoConfig::resolve(info)).await,
+        TableCommand::Ls(ls) => run_ls(context, ls).await,
     }
 }
 
@@ -62,6 +57,9 @@ pub(crate) struct InfoArgs {
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
+    /// tables in flight at once (default: cores) [env: PQB_TABLE_FAN_OUT]
+    #[arg(long, default_value_t = default_fan_out(), env = "PQB_TABLE_FAN_OUT")]
+    fan_out: usize,
 }
 
 /// The resolved configuration of `table info`: the table name (or stdin) and
@@ -74,13 +72,13 @@ pub(crate) struct InfoConfig {
 }
 
 impl InfoConfig {
-    fn resolve(sections: &Sections, args: &InfoArgs) -> Result<Self, CliError> {
-        Ok(Self {
+    fn resolve(args: &InfoArgs) -> Self {
+        Self {
             table: args.table.clone(),
             format: args.format.resolve(false),
             output: args.output.clone(),
-            fan_out: scan_fan_out(sections, default_fan_out())?,
-        })
+            fan_out: args.fan_out.max(1),
+        }
     }
 }
 
@@ -241,16 +239,14 @@ pub(crate) struct LsArgs {
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
+    /// tables in flight at once [env: PQB_TABLE_FAN_OUT]
+    #[arg(long, default_value_t = 64, env = "PQB_TABLE_FAN_OUT")]
+    fan_out: usize,
 }
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
-async fn run_ls(
-    context: &pqbench::Context,
-    sections: &Sections,
-    args: &LsArgs,
-) -> Result<(), CliError> {
+async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliError> {
     let window = parse_window(&args.every)?;
-    let fan_out = scan_fan_out(sections, 64)?;
     let input = read_input("table ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut partitions = 0usize;
@@ -288,7 +284,7 @@ async fn run_ls(
                         .map_err(|error| CliError::from(error.to_string()))?;
                     Ok::<_, CliError>((uri, env, found))
                 })
-                .buffer_unordered(fan_out);
+                .buffer_unordered(args.fan_out.max(1));
             while let Some(result) = reads.next().await {
                 let (uri, env, found) = result?;
                 for partition in &found {
@@ -320,11 +316,6 @@ async fn list_partitions(
         count += 1;
     }
     Ok(count)
-}
-
-/// The tables in flight: `[scan] fan_out`, then `default`.
-fn scan_fan_out(sections: &Sections, default: usize) -> Result<usize, CliError> {
-    Ok(sections.parse("scan", "fan_out")?.unwrap_or(default).max(1))
 }
 
 /// Parse a window width: a positive integer and a unit (`m`, `h`, `d`, `w`).

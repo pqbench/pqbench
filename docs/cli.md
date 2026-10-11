@@ -110,13 +110,12 @@ EOF
 ### Catalog config (Unity / Databricks / Iceberg REST)
 
 The walk's config resolves from three layers, least to most specific:
-`~/.pqbenchrc` (a `key = value` run-control file), then the environment, then
-the command line. `--endpoint`, `--token`, and `--table-format` are global
-flags, each with a `PQB_*` fallback. The file holds only durable settings — a
-shared table plus domain `[section]` tables (e.g. `[scan] fan_out`); per-run
-switches (`--format`, `--every`, `--rate`) are flags, and any setting can be
-overridden for one run with `--set SECTION.KEY=VALUE`. `pqbench setup` prints
-the resolved config for the shell to eval:
+`~/.pqbenchrc` (an INI of named profiles, like `~/.databrickscfg`), then the
+environment, then the command line. A profile names an endpoint, a bearer, and
+a dialect, so one workspace can carry `[unity]` and `[iceberg]` profiles; pick
+one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
+`--table-format` for one run. Everything else is a per-invocation flag.
+`pqbench setup` prints the resolved config for the shell to eval:
 
 | Variable | Role |
 | --- | --- |

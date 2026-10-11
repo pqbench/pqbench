@@ -179,18 +179,18 @@ async fn main() -> ExitCode {
 
 /// Resolve the shared configuration and context once, then run the command.
 async fn dispatch(cli: Cli) -> Result<(), CliError> {
-    let resolution = config::resolve(
+    let config = config::resolve(
         cli.command.name(),
         &cli.config,
         cli.command.requires_endpoint(),
     )?;
-    let context = pqbench::Context::new(resolution.config)?;
+    let context = pqbench::Context::new(config)?;
     match cli.command {
         Command::Diff(args) => diff::run(&context, &args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&context, &args).await,
-        Command::Table(args) => table::run(&context, &resolution.sections, &args).await,
+        Command::Table(args) => table::run(&context, &args).await,
         Command::Metastore(args) => metastore::run(&context, &args).await,
         Command::Catalog(args) => catalog::run(&context, &args).await,
         Command::Schema(args) => schema::run(&context, &args).await,
