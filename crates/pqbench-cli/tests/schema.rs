@@ -156,7 +156,7 @@ const SCHEMA_REFS: &str = concat!(
 fn schema_info_prints_the_record_as_a_table() {
     let address = server(200, SCHEMA);
     let output = pipe(
-        &["schema", "info", "dbx_samples.nyctaxi", "--format", "table"],
+        &["schema", "get", "dbx_samples.nyctaxi", "--format", "table"],
         &source(&address),
     );
     assert!(
@@ -175,7 +175,7 @@ fn schema_info_prints_the_record_as_a_table() {
 fn schema_info_streams_the_record_as_ndjson() {
     let address = server(200, SCHEMA);
     let output = pipe(
-        &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+        &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
         &source(&address),
     );
     assert!(
@@ -196,7 +196,7 @@ fn schema_info_streams_the_record_as_ndjson() {
 fn schema_info_reads_the_iceberg_rest_namespace() {
     let address = routes(&[("/namespaces/", 200, ICEBERG_NAMESPACE)]);
     let output = pipe_env(
-        &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+        &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &[
             ("PQB_ENDPOINT", address.as_str()),
@@ -219,7 +219,7 @@ fn schema_info_reads_the_iceberg_rest_namespace() {
 fn schema_info_reads_a_schema_stream() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
-        &["schema", "info", "--format", "json"],
+        &["schema", "get", "--format", "json"],
         SCHEMA_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -240,7 +240,7 @@ fn schema_info_reads_a_schema_stream() {
 fn schema_info_takes_a_schema_or_a_stream_not_both() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
-        &["schema", "info", "dbx_samples.nyctaxi"],
+        &["schema", "get", "dbx_samples.nyctaxi"],
         SCHEMA_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -253,7 +253,7 @@ fn schema_info_takes_a_schema_or_a_stream_not_both() {
 fn schema_info_needs_a_dotted_name() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
-        &["schema", "info", "nyctaxi"],
+        &["schema", "get", "nyctaxi"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -264,7 +264,7 @@ fn schema_info_needs_a_dotted_name() {
 
 #[test]
 fn schema_info_rejects_an_empty_document() {
-    let output = pipe_stdin(&["schema", "info", "dbx_samples.nyctaxi"], b"");
+    let output = pipe_stdin(&["schema", "get", "dbx_samples.nyctaxi"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");

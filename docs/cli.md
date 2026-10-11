@@ -11,13 +11,13 @@ that command and links back. This file is the durable copy.
 | On-disk bytes per column | `pqbench bytemass FILE` |
 | List a table's natural partitions | `pqbench table ls DIR` (or v2 refs on stdin) |
 | List a partition's files | `pqbench partition ls` (partitions on stdin) |
-| Read the endpoint's metastore record | `pqbench metastore info` (`PQB_ENDPOINT`) |
+| Read the endpoint's metastore record | `pqbench metastore get` (`PQB_ENDPOINT`) |
 | List the catalogs at a catalog endpoint | `pqbench metastore ls` (`PQB_ENDPOINT`) |
-| Read one catalog's record | `pqbench catalog info [CATALOG]` (refs on stdin) |
+| Read one catalog's record | `pqbench catalog get [CATALOG]` (refs on stdin) |
 | List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
-| Read one schema's record | `pqbench schema info CATALOG.SCHEMA` (refs on stdin) |
+| Read one schema's record | `pqbench schema get CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
-| Read one table's record | `pqbench table info CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
+| Read one table's record | `pqbench table get CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
 | Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (v2 refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -43,10 +43,10 @@ pqbench never writes them into the process environment itself.
 
 | resource | Produced by | Consumed by |
 | --- | --- | --- |
-| `Metastore` | `metastore info` | humans / scripts (`--json`) |
-| `Catalog` | `metastore ls`, `catalog info` | `catalog info`, `catalog ls`, humans / scripts (`--json`) |
-| `Schema` | `catalog ls`, `schema info` | `schema info`, `schema ls` |
-| `Table` | `schema ls`, `table info`, `credentials get` | `table info`, `table ls`, `credentials get` |
+| `Metastore` | `metastore get` | humans / scripts (`--json`) |
+| `Catalog` | `metastore ls`, `catalog get` | `catalog get`, `catalog ls`, humans / scripts (`--json`) |
+| `Schema` | `catalog ls`, `schema get` | `schema get`, `schema ls` |
+| `Table` | `schema ls`, `table get`, `credentials get` | `table get`, `table ls`, `credentials get` |
 | `Partition` | `table ls` | `partition ls`, humans / scripts (`--json`) |
 | `TableFile` | `partition ls` | `bytemass`, humans / scripts (`--json`) |
 | `remote-source` | a producer | `bytemass` |
@@ -129,10 +129,10 @@ one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
 The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
 
-`metastore info` reads the same endpoint and reports its metastore
+`metastore get` reads the same endpoint and reports its metastore
 record (name, id, cloud, region) as `Metastore`; `metastore ls` lists
 the catalogs at the endpoint, one `Catalog` line each (name,
-catalog_type). `catalog info` reports one catalog's record (name, catalog_type,
+catalog_type). `catalog get` reports one catalog's record (name, catalog_type,
 comment, owner) as a single `Catalog` line. `catalog ls` lists the
 schemas in the catalog, one `Schema` line each (catalog, name): Unity
 REST serves `/schemas`; with `PQB_TABLE_FORMAT=iceberg` (or `"table_format":
@@ -165,7 +165,7 @@ done
 ```
 
 `metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
-catalog info` enriches each catalog instead. `info` emits the same resource as the
+catalog get` enriches each catalog instead. `info` emits the same resource as the
 `ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each
 level into the job tree.
 
@@ -180,19 +180,19 @@ samples      accuweather
 schemas: 3
 ```
 
-`schema info` reads one schema (catalog, name, comment, location, properties)
+`schema get` reads one schema (catalog, name, comment, location, properties)
 from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `schema ls`
 lists the tables in it, one `Table` line each — the
-document `table info` enriches. Unity's `/tables` pages carry the full name
+document `table get` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
-only, so the ref carries its name and no storage URI — `table info` derives the
+only, so the ref carries its name and no storage URI — `table get` derives the
 `loadTable` URL and reads the metadata inline.
 A view carries no location, so its ref keeps no storage path;
 `credentials check` is the stage that drops it. Refs are addresses; the walk
 context (endpoint, token, storage options) comes from the environment
 (`PQB_*`, `AWS_*`). The walk is a plain pipeline: every command streams refs
 and keeps `--fan-out` in flight, `credentials get` writes the vended keys onto
-the refs, and `table info` passes them on so `bytemass` reads the files under
+the refs, and `table get` passes them on so `bytemass` reads the files under
 the same lease:
 
 ```console no-run
@@ -200,7 +200,7 @@ $ export PQB_ENDPOINT=… PQB_TOKEN=…
 $ pqbench schema ls dbx_samples.nyctaxi --format json |
     pqbench credentials check |
     pqbench credentials get |
-    pqbench table info --format json
+    pqbench table get --format json
 ```
 
 `pqbench setup` prints that environment for the shell to evaluate:
@@ -216,9 +216,9 @@ for the region, which hangs where that endpoint is blackholed). A notebook
 kernel's dbutils context is not visible to a subprocess, so a notebook sets
 `DATABRICKS_*` from it first.
 
-`table info` enriches that ref — name, format, snapshot, columns, partition
+`table get` enriches that ref — name, format, snapshot, columns, partition
 columns, format properties — and keeps the same resource name, so
-`schema ls | table info` chains. Unity `/tables/{full_name}` names the
+`schema ls | table get` chains. Unity `/tables/{full_name}` names the
 storage location whose Delta log is read with `without_files()`, and the
 catalog's declared columns and properties are merged over the log's; Iceberg
 REST `loadTable` carries the metadata inline, so the Iceberg path runs no
@@ -295,7 +295,7 @@ partitions: 1
 ```
 
 ```console no-run
-$ PQB_ENDPOINT=… pqbench table info pqbench.demo.events
+$ PQB_ENDPOINT=… pqbench table get pqbench.demo.events
 name                           format  snapshot_version  columns  uri
 -----------------------------  ------  ----------------  -------  ----------------------
 catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/unity/events
@@ -326,7 +326,7 @@ catalogs: 2
 Read one catalog's record:
 
 ```console no-run
-$ pqbench catalog info dbx_samples < source.json
+$ pqbench catalog get dbx_samples < source.json
 name         catalog_type     comment         owner
 -----------  ---------------  --------------  -----------------
 dbx_samples  MANAGED_CATALOG  sample catalog  owner@example.com
@@ -354,7 +354,7 @@ A governed table has two access modes, and pqbench is the second one:
   this; pqbench does not.
 - **Credential-mediated.** An external reader calls the catalog's vending
   route and reads storage itself under a short-lived, downscoped lease — the
-  `credentials check` → `credentials get` → `table info` walk.
+  `credentials check` → `credentials get` → `table get` walk.
 
 Whether the second mode exists is the storage's property, not the caller's:
 

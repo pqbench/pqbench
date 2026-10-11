@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::emit::Format;
 use crate::CliError;
 
-mod info;
+mod get;
 mod ls;
 
 /// Arguments for `catalog`: one catalog's record.
@@ -21,7 +21,7 @@ pub(crate) struct CatalogArgs {
 #[derive(Subcommand)]
 pub(crate) enum CatalogCommand {
     /// Show one catalog's record
-    Info(NameArgs),
+    Get(NameArgs),
     /// List the schemas in a catalog
     Ls(NameArgs),
 }
@@ -47,7 +47,7 @@ pub(crate) async fn run(
     args: &CatalogArgs,
 ) -> Result<(), CliError> {
     match &args.command {
-        CatalogCommand::Info(args) => info::run(workspace, args).await,
+        CatalogCommand::Get(args) => get::run(workspace, args).await,
         CatalogCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }

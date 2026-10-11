@@ -25,7 +25,7 @@
 # it — what the issue-#58 walk exercises:
 #
 #       schema ls | credentials check | credentials get
-#         | table info | table ls | partition ls | bytemass
+#         | table get | table ls | partition ls | bytemass
 #
 # Copy set (source -> fixture), sized to fit the workspace's storage budget:
 #

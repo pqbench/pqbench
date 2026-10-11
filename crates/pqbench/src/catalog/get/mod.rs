@@ -1,4 +1,4 @@
-//! `metastore info`: the endpoint's metastore record.
+//! `catalog get`: one catalog's record.
 //!
 //! [`api`] is the public surface: one function, [`api::read`]. The private
 //! `impl` module holds the URL and the JSON shape; the HTTP transport is the
@@ -7,4 +7,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{read, Error, Metastore};
+pub use api::{read, Catalog, Error};

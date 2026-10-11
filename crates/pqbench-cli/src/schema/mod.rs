@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::emit::Format;
 use crate::CliError;
 
-mod info;
+mod get;
 mod ls;
 
 /// Arguments for `schema`: one schema's record and the tables in it.
@@ -21,7 +21,7 @@ pub(crate) struct SchemaArgs {
 #[derive(Subcommand)]
 pub(crate) enum SchemaCommand {
     /// Show one schema's record
-    Info(NameArgs),
+    Get(NameArgs),
     /// List the tables in a schema
     Ls(NameArgs),
 }
@@ -45,7 +45,7 @@ pub(crate) struct NameArgs {
 
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &SchemaArgs) -> Result<(), CliError> {
     match &args.command {
-        SchemaCommand::Info(args) => info::run(workspace, args).await,
+        SchemaCommand::Get(args) => get::run(workspace, args).await,
         SchemaCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }

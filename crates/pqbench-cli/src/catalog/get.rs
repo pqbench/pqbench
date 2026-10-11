@@ -1,7 +1,7 @@
-//! `catalog info`: one catalog's record.
+//! `catalog get`: one catalog's record.
 
 use futures_util::stream::StreamExt;
-use pqbench::catalog::info;
+use pqbench::catalog::get;
 
 use super::{catalog_name, NameArgs};
 use crate::emit::Emitter;
@@ -9,25 +9,25 @@ use crate::source::{self, read_input};
 use crate::CliError;
 
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
-    let input = read_input("catalog info").await?;
+    let input = read_input("catalog get").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(name) = &args.catalog {
         if input.first.is_some() {
-            return Err("catalog info takes CATALOG or a catalog stream, not both".into());
+            return Err("catalog get takes CATALOG or a catalog stream, not both".into());
         }
-        let catalog = info::read(workspace, name).await?;
+        let catalog = get::read(workspace, name).await?;
         emit.write_row(&catalog).await?;
         return emit.finish("catalogs: 1\n").await;
     }
     if !input.piped {
-        return Err("catalog info needs CATALOG or a catalog stream".into());
+        return Err("catalog get needs CATALOG or a catalog stream".into());
     }
-    let records = source::records("catalog info", input.first, input.lines);
+    let records = source::records("catalog get", input.first, input.lines);
     let mut catalogs = 0;
     let mut reads = records
         .map(|record| async {
             let name = catalog_name(&record?)?;
-            Ok::<_, CliError>(info::read(workspace, &name).await?)
+            Ok::<_, CliError>(get::read(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(catalog) = reads.next().await {

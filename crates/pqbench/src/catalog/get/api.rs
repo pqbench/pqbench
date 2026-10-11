@@ -1,4 +1,4 @@
-//! `catalog info`: one catalog's record.
+//! `catalog get`: one catalog's record.
 //!
 //! [`read`] is the only public function. It returns the [`Catalog`] resource;
 //! the CLI forwards it as-is.

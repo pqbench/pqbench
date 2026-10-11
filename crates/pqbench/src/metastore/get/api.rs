@@ -1,4 +1,4 @@
-//! `metastore info`: the endpoint's metastore record.
+//! `metastore get`: the endpoint's metastore record.
 //!
 //! [`read`] is the only public function. It returns the [`Metastore`] resource;
 //! the CLI forwards it as-is.

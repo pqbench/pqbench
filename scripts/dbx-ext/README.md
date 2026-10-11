@@ -6,7 +6,7 @@ runs end to end —
 
 ```console no-run
 $ pqbench schema ls <catalog>.<schema> | pqbench credentials check \
-    | pqbench credentials get | pqbench table info \
+    | pqbench credentials get | pqbench table get \
     | pqbench table ls | pqbench partition ls | pqbench bytemass
 ```
 

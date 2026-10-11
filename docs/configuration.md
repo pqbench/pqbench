@@ -79,6 +79,6 @@ endpoint or bearer for one run:
 
 ```console no-run
 $ pqbench --profile unity schema ls dbx_samples.nyctaxi
-$ pqbench --profile iceberg table info dbx_samples.nyctaxi.trips
+$ pqbench --profile iceberg table get dbx_samples.nyctaxi.trips
 $ pqbench metastore ls --endpoint https://dbc-abc123.cloud.databricks.com --token dapi-…
 ```

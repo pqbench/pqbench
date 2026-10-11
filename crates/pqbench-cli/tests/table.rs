@@ -504,7 +504,7 @@ fn loaded_table(location: &str) -> String {
     .to_string()
 }
 
-/// `table info` reads one table's record from Unity: the Delta log without
+/// `table get` reads one table's record from Unity: the Delta log without
 /// files, merged with the catalog's declared columns and properties.
 #[cfg(feature = "delta")]
 #[test]
@@ -515,7 +515,7 @@ fn table_info_reads_a_unity_table() {
     let output = pipe_env(
         &[
             "table",
-            "info",
+            "get",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
@@ -559,7 +559,7 @@ fn table_info_prints_the_record_as_a_table() {
     let output = pipe_env(
         &[
             "table",
-            "info",
+            "get",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "table",
@@ -581,7 +581,7 @@ fn table_info_prints_the_record_as_a_table() {
     assert!(stdout.contains("tables: 1"), "{stdout}");
 }
 
-/// `table info` reads the Iceberg REST `loadTable` metadata inline, so no
+/// `table get` reads the Iceberg REST `loadTable` metadata inline, so no
 /// storage read runs.
 #[test]
 fn table_info_reads_an_iceberg_rest_table() {
@@ -593,7 +593,7 @@ fn table_info_reads_an_iceberg_rest_table() {
     let output = pipe_env(
         &[
             "table",
-            "info",
+            "get",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
@@ -645,7 +645,7 @@ fn table_info_reads_an_iceberg_namespace_with_dots() {
     let output = pipe_env(
         &[
             "table",
-            "info",
+            "get",
             "dbx_samples.ns.one.trips",
             "--format",
             "json",
@@ -668,7 +668,7 @@ fn table_info_reads_an_iceberg_namespace_with_dots() {
     );
 }
 
-/// `schema ls | table info` chains: the refs on stdin name each table.
+/// `schema ls | table get` chains: the refs on stdin name each table.
 #[cfg(feature = "delta")]
 #[test]
 fn table_info_reads_a_table_ref_stream() {
@@ -686,7 +686,7 @@ fn table_info_reads_a_table_ref_stream() {
         "\n",
     );
     let output = pipe_env(
-        &["table", "info", "--format", "json"],
+        &["table", "get", "--format", "json"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -714,7 +714,7 @@ fn table_info_reads_a_table_ref_stream() {
 fn table_info_rejects_a_record_without_a_table_name() {
     let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips"}"#;
     let output = pipe_env(
-        &["table", "info"],
+        &["table", "get"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -727,7 +727,7 @@ fn table_info_rejects_a_record_without_a_table_name() {
 fn table_info_takes_a_name_or_a_stream_not_both() {
     let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips"}"#;
     let output = pipe_env(
-        &["table", "info", "dbx_samples.nyctaxi.trips"],
+        &["table", "get", "dbx_samples.nyctaxi.trips"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -739,7 +739,7 @@ fn table_info_takes_a_name_or_a_stream_not_both() {
 #[test]
 fn table_info_needs_a_dotted_name() {
     let output = pipe_env(
-        &["table", "info", "trips"],
+        &["table", "get", "trips"],
         b"",
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -750,7 +750,7 @@ fn table_info_needs_a_dotted_name() {
 
 #[test]
 fn table_info_needs_an_endpoint() {
-    let output = pipe(&["table", "info", "dbx_samples.nyctaxi.trips"], "");
+    let output = pipe(&["table", "get", "dbx_samples.nyctaxi.trips"], "");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -760,7 +760,7 @@ fn table_info_needs_an_endpoint() {
 fn table_info_reports_an_unknown_table() {
     let address = routes(vec![]);
     let output = pipe_env(
-        &["table", "info", "dbx_samples.nyctaxi.nope"],
+        &["table", "get", "dbx_samples.nyctaxi.nope"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );

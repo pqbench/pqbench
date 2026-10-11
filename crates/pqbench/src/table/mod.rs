@@ -1,6 +1,6 @@
 //! The table command: one table's record and its natural partitions.
 //!
-//! [`info`] reads one table's record from a catalog (Unity or Iceberg REST),
+//! [`get`] reads one table's record from a catalog (Unity or Iceberg REST),
 //! without files, so the cost is O(1) in files. [`ls`] groups the table's
 //! commits into natural partitions by commit time.
 //!
@@ -14,7 +14,7 @@
 //! 1.91.1 or newer because of the Delta snapshot dependencies. Iceberg needs
 //! `iceberg` (`iceberg-s3` for S3).
 
-pub mod info;
+pub mod get;
 pub mod ls;
 
 mod selection;

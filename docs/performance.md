@@ -14,7 +14,7 @@ Each command resolves one level and streams its children to the next stage:
 $ pqbench metastore ls | pqbench catalog ls <catalog> \
     | pqbench schema ls <catalog.schema> \
     | pqbench credentials check | pqbench credentials get \
-    | pqbench table info | pqbench table ls \
+    | pqbench table get | pqbench table ls \
     | pqbench partition ls | pqbench bytemass
 ```
 

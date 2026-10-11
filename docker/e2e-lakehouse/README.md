@@ -94,11 +94,11 @@ total                                   46.00
 
 `make lakehouse` runs exactly this walk as its last step, then lists the same
 table with `schema ls` (with `PQB_ENDPOINT` naming the catalog) and walks it
-through `table info | table ls | partition ls | bytemass` again, so the
+through `table get | table ls | partition ls | bytemass` again, so the
 catalog-listing path is seen to work too.
 
 Iceberg REST does not vend credentials. `schema ls` lists namespaces and
-tables, `table info` reads `loadTable`'s inline metadata, and the walk
+tables, `table get` reads `loadTable`'s inline metadata, and the walk
 measures the files:
 
 ```bash
@@ -112,7 +112,7 @@ export AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
 export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 
 "$BIN" schema ls pqbench.demo --format json |
-  "$BIN" table info |
+  "$BIN" table get |
   "$BIN" table ls | "$BIN" partition ls | "$BIN" bytemass
 ```
 

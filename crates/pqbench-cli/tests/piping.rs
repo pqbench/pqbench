@@ -1,4 +1,4 @@
-//! The metadata walk as a pipe: `metastore ls | catalog info | catalog ls`,
+//! The metadata walk as a pipe: `metastore ls | catalog get | catalog ls`,
 //! context from `PQB_ENDPOINT`, refs on stdin.
 
 use std::io::{Read, Write};
@@ -87,7 +87,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     let refs = catalogs.stdout;
     assert_eq!(ndjson(&refs).len(), 2);
 
-    let info = pipe_env(&["catalog", "info", "--format", "json"], &refs, &env);
+    let info = pipe_env(&["catalog", "get", "--format", "json"], &refs, &env);
     assert!(
         info.status.success(),
         "stderr: {}",
@@ -120,7 +120,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
     let info = pipe_env(
-        &["schema", "info", "--format", "json"],
+        &["schema", "get", "--format", "json"],
         &schemas.stdout,
         &env,
     );

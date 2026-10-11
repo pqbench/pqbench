@@ -6,14 +6,14 @@
 #
 #   metastore ls | ratelimit --rate 15 | catalog ls | ratelimit --rate 15
 #     | schema ls | ratelimit --rate 15 | credentials check | credentials get
-#     | table info | table ls | partition ls | bytemass
+#     | table get | table ls | partition ls | bytemass
 #
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
 # SDK's own ceiling and is safe — decisions/0006-catalog-rate-limit.md), so a
 # `ratelimit --rate` stage paces the refs ahead of each fan-out.
 # `credentials check`/`credentials get` are one-to-one and the storage levels
-# (`table info` down) read object storage, not the catalog, so neither is paced.
+# (`table get` down) read object storage, not the catalog, so neither is paced.
 #
 # The catalog levels span the whole Unity Catalog; the table levels descend the
 # one catalog this principal may read outside compute (PQB_WALK_CATALOG,
@@ -89,7 +89,7 @@ walk() {
         keep_readable_catalog |
         "$PQB" credentials check --format json |
         "$PQB" credentials get --format json |
-        "$PQB" table info --format json |
+        "$PQB" table get --format json |
         "$PQB" table ls --format json |
         "$PQB" partition ls --format json |
         "$PQB" bytemass --format json
@@ -161,7 +161,7 @@ run_shape() {
         keep_readable_catalog | tee "$dir/readable" |
         "$PQB" credentials check --format json | tee "$dir/checked" |
         "$PQB" credentials get --format json | tee "$dir/vended" |
-        "$PQB" table info --format json | tee "$dir/tables" |
+        "$PQB" table get --format json | tee "$dir/tables" |
         "$PQB" table ls --format json | tee "$dir/partitions" |
         "$PQB" partition ls --format json | tee "$dir/files" |
         "$PQB" bytemass --format json >"$dir/bytemass"

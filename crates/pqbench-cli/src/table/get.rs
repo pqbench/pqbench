@@ -1,11 +1,11 @@
-//! `table info`: one table's record, read from its catalog and storage.
+//! `table get`: one table's record, read from its catalog and storage.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream::StreamExt;
-use pqbench::table::info;
+use pqbench::table::get;
 
 use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input, ref_env, ref_storage, split_table, table_ref};
@@ -19,7 +19,7 @@ fn default_fan_out() -> usize {
 /// Arguments for `table info`: the `catalog.schema.table` name and the output
 /// flags.
 #[derive(Args)]
-pub(crate) struct InfoArgs {
+pub(crate) struct GetArgs {
     /// table name (`catalog.schema.table`); without it, read table refs on stdin
     table: Option<String>,
     /// stdout format: auto (table on a terminal) | table | json
@@ -40,39 +40,37 @@ pub(crate) struct InfoArgs {
 pub(super) async fn run(
     workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
-    args: &InfoArgs,
+    args: &GetArgs,
 ) -> Result<(), CliError> {
-    let input = read_input("table info").await?;
+    let input = read_input("table get").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(table) = &args.table {
         if input.first.is_some() {
-            return Err("table info takes CATALOG.SCHEMA.TABLE or a table stream, not both".into());
+            return Err("table get takes CATALOG.SCHEMA.TABLE or a table stream, not both".into());
         }
-        let (catalog, schema, name) = split_table("table info", table)?;
-        let storage = info::Storage {
+        let (catalog, schema, name) = split_table("table get", table)?;
+        let storage = get::Storage {
             location: None,
             env: BTreeMap::new(),
         };
-        let record = info::read(workspace, lake, &catalog, &schema, &name, &storage).await?;
+        let record = get::read(workspace, lake, &catalog, &schema, &name, &storage).await?;
         emit.write_row(&record).await?;
         return emit.finish("tables: 1\n").await;
     }
     if !input.piped {
-        return Err("table info needs CATALOG.SCHEMA.TABLE or a table stream".into());
+        return Err("table get needs CATALOG.SCHEMA.TABLE or a table stream".into());
     }
-    let records = source::records("table info", input.first, input.lines);
+    let records = source::records("table get", input.first, input.lines);
     let mut tables = 0;
     let mut reads = records
         .map(|record| async {
             let record = record?;
-            let (catalog, schema, name) = table_ref("table info", &record)?;
-            let storage = info::Storage {
+            let (catalog, schema, name) = table_ref("table get", &record)?;
+            let storage = get::Storage {
                 location: ref_storage(&record).map(str::to_owned),
                 env: ref_env(&record),
             };
-            Ok::<_, CliError>(
-                info::read(workspace, lake, &catalog, &schema, &name, &storage).await?,
-            )
+            Ok::<_, CliError>(get::read(workspace, lake, &catalog, &schema, &name, &storage).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {

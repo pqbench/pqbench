@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use crate::emit::Format;
 use crate::CliError;
 
-mod info;
+mod get;
 mod ls;
 
 /// Arguments for `metastore`: the endpoint's metastore and its catalogs.
@@ -20,7 +20,7 @@ pub(crate) struct MetastoreArgs {
 #[derive(Subcommand)]
 pub(crate) enum MetastoreCommand {
     /// Show the endpoint's metastore record
-    Info(OutputArgs),
+    Get(OutputArgs),
     /// List the catalogs at the endpoint
     Ls(OutputArgs),
 }
@@ -40,7 +40,7 @@ pub(crate) async fn run(
     args: &MetastoreArgs,
 ) -> Result<(), CliError> {
     match &args.command {
-        MetastoreCommand::Info(args) => info::run(workspace, args).await,
+        MetastoreCommand::Get(args) => get::run(workspace, args).await,
         MetastoreCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }

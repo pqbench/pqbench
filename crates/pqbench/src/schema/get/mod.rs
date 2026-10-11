@@ -1,4 +1,4 @@
-//! `schema info`: one schema's record.
+//! `schema get`: one schema's record.
 //!
 //! [`api`] is the public surface: one function, [`api::read`]. The private
 //! `impl` module holds the URLs and the JSON shapes of both dialects — Unity

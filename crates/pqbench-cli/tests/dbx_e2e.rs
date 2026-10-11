@@ -1,6 +1,6 @@
 //! Live Databricks metastore e2e: mint an OAuth M2M bearer (or take
-//! `DBX_TOKEN`), read the live metastore record with `metastore info`, list
-//! its catalogs with `metastore ls`, read one with `catalog info`, list its
+//! `DBX_TOKEN`), read the live metastore record with `metastore get`, list
+//! its catalogs with `metastore ls`, read one with `catalog get`, list its
 //! schemas with `catalog ls` (Unity REST and Iceberg REST), and walk them
 //! into a job directory of NDJSON files (the issue-#58 shape, one command per
 //! iteration).
@@ -230,7 +230,7 @@ fn metastore_info_reads_the_live_metastore() {
         return;
     };
     let output = pipe_live(
-        &["metastore", "info", "--format", "json"],
+        &["metastore", "get", "--format", "json"],
         &unity_endpoint(&host),
         Some(&token),
     );
@@ -358,7 +358,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
 
     let metastore_info = metastore.join("info.jsonl");
     let output = pipe_output_env(
-        &["metastore", "info", "--format", "json"],
+        &["metastore", "get", "--format", "json"],
         b"",
         &metastore_info,
         &config,
@@ -411,7 +411,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         std::fs::create_dir_all(&dir).unwrap();
         let catalog_info = dir.join("info.jsonl");
         let output = pipe_output_env(
-            &["catalog", "info", name, "--format", "json"],
+            &["catalog", "get", name, "--format", "json"],
             b"",
             &catalog_info,
             &config,
@@ -490,7 +490,7 @@ fn catalog_info_reads_the_live_catalog() {
         return;
     };
     let output = pipe_live(
-        &["catalog", "info", "dbx_samples", "--format", "json"],
+        &["catalog", "get", "dbx_samples", "--format", "json"],
         &unity_endpoint(&host),
         Some(&token),
     );
@@ -662,7 +662,7 @@ fn catalog_ls_lists_the_external_fixture() {
     );
 }
 
-/// `schema info` reads `dbx_samples.nyctaxi` from both dialects.
+/// `schema get` reads `dbx_samples.nyctaxi` from both dialects.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn schema_info_reads_the_live_schema() {
@@ -684,7 +684,7 @@ fn schema_info_reads_the_live_schema() {
         let iceberg = endpoint.contains("/iceberg-rest");
         let output = if iceberg {
             pipe_env(
-                &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+                &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
                 b"",
                 &[
                     ("PQB_ENDPOINT", endpoint.as_str()),
@@ -694,7 +694,7 @@ fn schema_info_reads_the_live_schema() {
             )
         } else {
             pipe_env(
-                &["schema", "info", "dbx_samples.nyctaxi", "--format", "json"],
+                &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
                 b"",
                 &source(&endpoint, Some(&token)),
             )
@@ -712,7 +712,7 @@ fn schema_info_reads_the_live_schema() {
 }
 
 /// `schema ls` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
-/// the storage path in the listing, Iceberg REST leaves it to `table info`.
+/// the storage path in the listing, Iceberg REST leaves it to `table get`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn schema_ls_lists_the_live_tables() {
@@ -782,10 +782,10 @@ fn schema_ls_lists_the_live_tables() {
     );
     assert!(trips["uri"].is_null(), "{trips:?}");
 
-    // The new tree enriches its own v2 refs: `table info` reads the
+    // The new tree enriches its own v2 refs: `table get` reads the
     // `loadTable` metadata inline, so no storage read runs.
     let info = pipe_env(
-        &["table", "info", "--format", "json"],
+        &["table", "get", "--format", "json"],
         &output.stdout,
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -810,7 +810,7 @@ fn schema_ls_lists_the_live_tables() {
     assert!(!trips["uri"].as_str().unwrap().is_empty(), "{trips:?}");
 }
 
-/// `table info` reads the live Iceberg REST table: the `loadTable` response
+/// `table get` reads the live Iceberg REST table: the `loadTable` response
 /// carries the metadata inline, so the record is complete without any storage
 /// read (the default-storage Delta path cannot read its log).
 #[test]
@@ -831,7 +831,7 @@ fn table_info_reads_the_live_iceberg_table() {
     let output = pipe_env(
         &[
             "table",
-            "info",
+            "get",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
@@ -859,7 +859,7 @@ fn table_info_reads_the_live_iceberg_table() {
     assert!(record["properties"].is_object(), "{record:?}");
 }
 
-/// `table info` on the live Unity catalog: the table read runs with the env
+/// `table get` on the live Unity catalog: the table read runs with the env
 /// it is given — here none — so the `without_files()` Delta log read of the
 /// managed default-storage table fails outside compute and the error names the
 /// table and its location.
@@ -876,7 +876,7 @@ fn table_info_names_the_location_when_the_metadata_cannot_be_read() {
     };
     let endpoint = unity_endpoint(&host);
     let output = pipe_live(
-        &["table", "info", "dbx_samples.nyctaxi.trips"],
+        &["table", "get", "dbx_samples.nyctaxi.trips"],
         &endpoint,
         Some(&token),
     );
@@ -1136,7 +1136,7 @@ fn timed_stage(
 }
 
 /// The whole issue-#58 walk on a copied schema, all the way to `bytemass`:
-/// `schema ls` → `credentials check` → `credentials get` → `table info` →
+/// `schema ls` → `credentials check` → `credentials get` → `table get` →
 /// `table ls` → `partition ls` → `bytemass`, each stage fed the previous
 /// stage's NDJSON. This is the tail the file-level commands exist for; the
 /// other fixture tests stop at `table ls`. Set `DBX_WALK_SCHEMA` to walk
@@ -1170,7 +1170,7 @@ fn external_fixture_walks_to_bytemass() {
     let (listed, _) = timed_stage(&env, &["schema", "ls", &schema, "--format", "json"], b"");
     let (checked, _) = timed_stage(&env, &["credentials", "check", "--format", "json"], &listed);
     let (vended, _) = timed_stage(&env, &["credentials", "get", "--format", "json"], &checked);
-    let (info, _) = timed_stage(&env, &["table", "info", "--format", "json"], &vended);
+    let (info, _) = timed_stage(&env, &["table", "get", "--format", "json"], &vended);
     let (partitions, _) = timed_stage(&env, &["table", "ls", "--format", "json"], &info);
     let (files, _) = timed_stage(&env, &["partition", "ls", "--format", "json"], &partitions);
     let (measured, _) = timed_stage(&env, &["bytemass", "--format", "json"], &files);
@@ -1207,8 +1207,8 @@ fn external_fixture_walks_to_bytemass() {
     );
 }
 
-/// `table info` on a table in customer storage: `credentials get`
-/// materializes the vended lease on the ref, `table info` reads the Delta
+/// `table get` on a table in customer storage: `credentials get`
+/// materializes the vended lease on the ref, `table get` reads the Delta
 /// log under it, and the lease rides through on the emitted record for the
 /// next stage. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
 /// `DBX_AWS_REGION` to read another one.
@@ -1257,7 +1257,7 @@ fn table_info_reads_the_external_aws_table() {
     );
     let enriched = vended[0].to_string();
     let output = pipe_env(
-        &["table", "info", "--format", "json"],
+        &["table", "get", "--format", "json"],
         format!("{enriched}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -1433,7 +1433,7 @@ fn credentials_get_iceberg_vends_the_live_tables() {
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
-/// `metastore ls | catalog info | catalog ls` (decision 0004).
+/// `metastore ls | catalog get | catalog ls` (decision 0004).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_ls_pipes_into_catalog_info_and_ls() {
@@ -1473,7 +1473,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         ]
     );
 
-    let info = pipe_env(&["catalog", "info", "--format", "json"], &refs, &env);
+    let info = pipe_env(&["catalog", "get", "--format", "json"], &refs, &env);
     assert!(
         info.status.success(),
         "stderr: {}",
@@ -1555,7 +1555,7 @@ fn metastore_info_rejects_a_missing_token() {
         eprintln!("skipping: DBX_HOST is not set");
         return;
     };
-    let output = pipe_live(&["metastore", "info"], &unity_endpoint(&host), None);
+    let output = pipe_live(&["metastore", "get"], &unity_endpoint(&host), None);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -1569,7 +1569,7 @@ fn metastore_info_rejects_an_invalid_token() {
         return;
     };
     let output = pipe_live(
-        &["metastore", "info"],
+        &["metastore", "get"],
         &unity_endpoint(&host),
         Some("not-a-real-token"),
     );

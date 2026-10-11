@@ -21,7 +21,7 @@ if curl -sf http://localhost:8181/v1/config >/dev/null 2>&1; then
     PQB_ENDPOINT=http://localhost:8181/v1
     PQB_TABLE_FORMAT=iceberg
     export PQB_ENDPOINT PQB_TABLE_FORMAT
-    prompt "PQB_ENDPOINT=$PQB_ENDPOINT PQB_TABLE_FORMAT=$PQB_TABLE_FORMAT pqbench schema ls CAT.SCHEMA | pqbench table info | pqbench table ls | pqbench partition ls | pqbench bytemass --json"
-    pqbench schema ls CAT.SCHEMA | pqbench table info | pqbench table ls | pqbench partition ls | pqbench bytemass --json | cat
+    prompt "PQB_ENDPOINT=$PQB_ENDPOINT PQB_TABLE_FORMAT=$PQB_TABLE_FORMAT pqbench schema ls CAT.SCHEMA | pqbench table get | pqbench table ls | pqbench partition ls | pqbench bytemass --json"
+    pqbench schema ls CAT.SCHEMA | pqbench table get | pqbench table ls | pqbench partition ls | pqbench bytemass --json | cat
     sleep 2
 fi

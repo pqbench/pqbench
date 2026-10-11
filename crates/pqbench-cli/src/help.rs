@@ -17,7 +17,7 @@ next command reads.
   metastore    → Metastore      the endpoint's record
   catalog      → Catalog        a catalog's record / its schemas
   schema       → Table          one table per line
-  table info   → Table          enrich a table's record
+  table get   → Table          enrich a table's record
   credentials  → Table          check + vend read credentials
   table ls     → Partition      a table's natural partitions
   partition ls → TableFile      a partition's added files
@@ -38,7 +38,7 @@ Examples:
   pqbench bytemass data.parquet
   pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass
   pqbench schema ls CAT.SCHEMA | pqbench credentials check | pqbench credentials get \\
-    | pqbench table info | pqbench table ls | pqbench partition ls | pqbench bytemass
+    | pqbench table get | pqbench table ls | pqbench partition ls | pqbench bytemass
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
@@ -49,7 +49,7 @@ Documents:
   Metastore              the endpoint's metastore record
   Catalog                the endpoint's catalogs (metastore ls)
   Schema                 a catalog's schemas (catalog ls)
-  Table                  a table's record (schema ls, table info, credentials get)
+  Table                  a table's record (schema ls, table get, credentials get)
   Partition              a table's natural partitions (table ls)
   TableFile              one file of a partition (partition ls)
   remote-source          one URI + AWS_* from a producer
@@ -84,7 +84,7 @@ Auth (how to reach data):
 
   Databricks-governed tables
     The walk vends storage credentials: `credentials get` materializes the
-    vended keys onto the refs, and `table info` reads under the env it is
+    vended keys onto the refs, and `table get` reads under the env it is
     given. Reading the objects still needs keys that can GetObject.
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
@@ -141,10 +141,10 @@ partitions. The table is the entity between schemas and partitions. The
 endpoint, token, dialect, and object-store options come from the environment:
 PQB_ENDPOINT / PQB_TOKEN / PQB_TABLE_FORMAT and AWS_*.
 
-  info   the ref enriched with the table's record (format, snapshot, columns,
+  get    the ref enriched with the table's record (format, snapshot, columns,
          partition columns, format properties) as one Table. Without a
          CATALOG.SCHEMA.TABLE argument the command reads Table resources on
-         standard input — one table per line — so `schema ls | table info`
+         standard input — one table per line — so `schema ls | table get`
          chains. Unity REST serves /tables/{full_name}; the catalog's
          declared columns and properties are merged over the Delta log read
          with without_files(), so that path is O(1) in files and needs a
@@ -161,7 +161,7 @@ PQB_ENDPOINT / PQB_TOKEN / PQB_TABLE_FORMAT and AWS_*.
          holds. Inputs: a table directory or URI, or a Table stream on
          standard input. A path read names its table in a `local` catalog and
          schema, so every partition has a name. A ref from a
-         catalog walk must carry its storage path — run `pqbench table info`
+         catalog walk must carry its storage path — run `pqbench table get`
          first if it does not. --every is the window width (1h, 1d, 1w;
          default 1d). Pipe to `pqbench partition ls` for each partition's
          files.
@@ -175,8 +175,8 @@ path. Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).";
 
 pub const TABLE_AFTER: &str = "\
 Examples:
-  pqbench table info dbx_samples.nyctaxi.trips < source.json
-  PQB_ENDPOINT=… pqbench schema ls | pqbench table info
+  pqbench table get dbx_samples.nyctaxi.trips < source.json
+  PQB_ENDPOINT=… pqbench schema ls | pqbench table get
   pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass
   pqbench schema ls CAT.SCHEMA | pqbench table ls
 
@@ -193,7 +193,7 @@ pub const METASTORE_LONG_ABOUT: &str = "\
 Read the metastore at a catalog endpoint: the entity above catalogs. The
 endpoint and token come from PQB_ENDPOINT / PQB_TOKEN.
 
-  info   the metastore record (name, uid, cloud, region) as one
+  get    the metastore record (name, uid, cloud, region) as one
          Metastore line
   ls     the catalogs at the endpoint, one Catalog line each
 
@@ -202,7 +202,7 @@ forces the stream, and `-o` also writes it.";
 
 pub const METASTORE_AFTER: &str = "\
 Examples:
-  pqbench metastore info < source.json
+  pqbench metastore get < source.json
   pqbench metastore ls < source.json
   PQB_ENDPOINT=… pqbench metastore ls | pqbench catalog ls
 
@@ -220,7 +220,7 @@ endpoint and token come from PQB_ENDPOINT / PQB_TOKEN (and PQB_TABLE_FORMAT).
 Without a CATALOG argument the command reads Catalog resources on
 standard input — one catalog per line — so `metastore ls | catalog ls` chains.
 
-  info   the catalog's record (name, catalog_type, comment, owner) as one
+  get    the catalog's record (name, catalog_type, comment, owner) as one
          Catalog line
   ls     the schemas in the catalog, one Schema line each (name, comment,
          uri). Unity REST serves /schemas; PQB_TABLE_FORMAT=iceberg speaks
@@ -232,7 +232,7 @@ forces the stream, and `-o` also writes it.";
 
 pub const CATALOG_AFTER: &str = "\
 Examples:
-  pqbench catalog info dbx_samples < source.json
+  pqbench catalog get dbx_samples < source.json
   pqbench catalog ls dbx_samples < source.json
   PQB_ENDPOINT=… pqbench metastore ls | pqbench catalog ls
 
@@ -250,10 +250,10 @@ PQB_TABLE_FORMAT). Without a CATALOG.SCHEMA argument the command reads
 Schema resources on standard input — one schema per line — so `catalog ls |
 schema ls` chains.
 
-  info   the schema's record (name, comment, uri, properties)
+  get    the schema's record (name, comment, uri, properties)
          as one Schema line
   ls     the tables in the schema, one Table line each
-         (name, uri, format) — the record `table info`
+         (name, uri, format) — the record `table get`
          enriches. Unity
          REST serves /tables; PQB_TABLE_FORMAT=iceberg lists namespaces'
          tables and carries each loadTable URL (the endpoint names the catalog
@@ -264,7 +264,7 @@ forces the stream, and `-o` also writes it.";
 
 pub const SCHEMA_AFTER: &str = "\
 Examples:
-  pqbench schema info dbx_samples.nyctaxi < source.json
+  pqbench schema get dbx_samples.nyctaxi < source.json
   pqbench schema ls dbx_samples.nyctaxi < source.json
   PQB_ENDPOINT=… pqbench catalog ls | pqbench schema ls
 
@@ -333,7 +333,7 @@ forces the stream, and `-o` also writes it.";
 pub const CREDENTIALS_AFTER: &str = "\
 Examples:
   PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get
-  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get | pqbench table info
+  PQB_ENDPOINT=… pqbench schema ls | pqbench credentials check | pqbench credentials get | pqbench table get
 
 See also:
   pqbench table --help  read a listed table's record
