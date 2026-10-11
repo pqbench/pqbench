@@ -7,15 +7,21 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ::object_store::aws::AmazonS3;
-use ::object_store::client::{ClientOptions, HttpClient, HttpConnector};
+use ::object_store::client::{
+    ClientOptions, HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpRequest, HttpResponse,
+    HttpService,
+};
 use ::object_store::signer::Signer;
 use ::object_store::{GetOptions, ObjectStore, ObjectStoreExt};
+use async_trait::async_trait;
 use url::Url;
 
 use crate::third_party::object_store::api::{
     Error, ObjectReader, ObjectStat, PrefixListing, Remote,
 };
 use crate::third_party::reqwest as http;
+
+use super::error_chain;
 
 /// One process-wide `reqwest` client backs every store. `object_store` builds a
 /// fresh client on each `build()`, and `reqwest` re-parses the platform CA
@@ -31,8 +37,50 @@ impl HttpConnector for SharedConnector {
                 store: "http",
                 source: error.to_string().into(),
             })?;
-        Ok(HttpClient::new(client.clone()))
+        Ok(HttpClient::new(ClassifySendFailure(client.clone())))
     }
+}
+
+/// object_store's retry loop does not retry a request that failed to be sent on
+/// a pooled connection whose hyper dispatch task had already finished (the
+/// server had closed the connection): it classifies "error sending request" as
+/// `Unknown`. Re-classify it as a transport error so the idempotent
+/// GET/HEAD/LIST is retried, like any other dropped connection.
+#[derive(Debug)]
+struct ClassifySendFailure(reqwest::Client);
+
+impl ClassifySendFailure {
+    fn classify(error: HttpError) -> HttpError {
+        match error.kind() {
+            HttpErrorKind::Unknown if sends_failed(&error) => {
+                HttpError::new(HttpErrorKind::Request, error)
+            }
+            _ => error,
+        }
+    }
+}
+
+#[async_trait]
+impl HttpService for ClassifySendFailure {
+    async fn call(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.0
+            .call(request)
+            .await
+            .map_err(ClassifySendFailure::classify)
+    }
+}
+
+/// Whether the underlying reqwest error is a request that could not be sent
+/// (the socket carried no response), rather than a permanent failure.
+fn sends_failed(error: &HttpError) -> bool {
+    let mut source = std::error::Error::source(error);
+    while let Some(error) = source {
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            return error.is_request();
+        }
+        source = error.source();
+    }
+    false
 }
 
 /// A built S3 store: the backend every read goes through, and the concrete
@@ -300,7 +348,7 @@ fn child_name(parent: &str, child: &str) -> String {
 }
 
 fn remote_error(error: ::object_store::Error) -> Error {
-    Error(error.to_string())
+    Error(error_chain(&error))
 }
 
 pub(crate) async fn expand_glob(

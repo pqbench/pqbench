@@ -2926,6 +2926,7 @@ name = "pqbench"
 version = "0.0.1"
 dependencies = [
  "apache-avro",
+ "async-trait",
  "buoyant_kernel_derive",
  "bytes",
  "deltalake",

@@ -389,5 +389,6 @@ fn local_uri(root: &Path, relative: &str) -> Result<String, Error> {
 }
 
 fn delta_error(error: deltalake::DeltaTableError) -> Error {
-    Error(format!("cannot resolve snapshot: {error}"))
+    use crate::third_party::object_store::r#impl::error_chain;
+    Error(format!("cannot resolve snapshot: {}", error_chain(&error)))
 }
