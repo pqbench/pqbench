@@ -81,16 +81,15 @@ async fn unity_record(
         .filter(|location| !location.is_empty())
     {
         Some(location) => {
-            let catalog = tokio::spawn({
-                let url = url.clone();
-                let token = token.map(str::to_owned);
-                async move { dialect::get_json::<UnityRecord>(&url, token.as_deref()).await }
-            });
-            let info = load_metadata(&name, location, &storage.env).await;
-            let record = catalog.await.map_err(task_error)?.map_err(Error::from)?;
+            let catalog = dialect::get_json::<UnityRecord>(&url, token);
+            let (record, info) = futures_util::future::try_join(
+                async { catalog.await.map_err(Error::from) },
+                load_metadata(&name, location, &storage.env),
+            )
+            .await?;
             let catalog_location = catalog_location(&record, &name)?;
             let info = match catalog_location == location {
-                true => info?,
+                true => info,
                 false => load_metadata(&name, &catalog_location, &storage.env).await?,
             };
             (record, info)
@@ -156,11 +155,6 @@ async fn load_metadata(
             error.0
         ))
     })
-}
-
-/// A spawned metadata read that could not be joined.
-fn task_error(error: tokio::task::JoinError) -> Error {
-    Error::from(format!("the metadata read failed: {error}"))
 }
 
 /// The Iceberg REST `loadTable` subset this command reports: the metadata

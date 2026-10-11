@@ -74,7 +74,7 @@ impl ObjectReader {
     /// Whether the object exists. A missing object is `Ok(false)`.
     pub async fn exists(&self) -> Result<bool, Error> {
         match &self.source {
-            ObjectSource::Local(path) => Ok(tokio::fs::metadata(path).await.is_ok()),
+            ObjectSource::Local(path) => Ok(std::fs::metadata(path).is_ok()),
             ObjectSource::Remote(remote) => remote.exists().await,
         }
     }
@@ -83,8 +83,7 @@ impl ObjectReader {
     pub async fn stat(&self) -> Result<ObjectStat, Error> {
         match &self.source {
             ObjectSource::Local(path) => {
-                let metadata = tokio::fs::metadata(path)
-                    .await
+                let metadata = std::fs::metadata(path)
                     .map_err(|e| Error(format!("cannot stat {}: {e}", path.display())))?;
                 Ok(ObjectStat {
                     size_bytes: metadata.len(),
@@ -103,7 +102,7 @@ impl ObjectReader {
         identity: Option<&str>,
     ) -> Result<Vec<u8>, Error> {
         match &self.source {
-            ObjectSource::Local(path) => read_local(path, range).await,
+            ObjectSource::Local(path) => read_local(path, range),
             ObjectSource::Remote(remote) => {
                 remote.read_range(range, identity.map(str::to_owned)).await
             }
@@ -203,14 +202,12 @@ const COPY_CHUNK: u64 = 8 * 1024 * 1024;
 /// error.
 pub async fn copy(uri: &str, dest: &Path, options: &[(String, String)]) -> Result<u64, Error> {
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
+        std::fs::create_dir_all(parent)
             .map_err(|error| Error(format!("cannot create {}: {error}", parent.display())))?;
     }
     if !is_remote(uri) {
         let source = local_path(uri);
-        return tokio::fs::copy(&source, dest)
-            .await
+        return std::fs::copy(&source, dest)
             .map_err(|error| Error(format!("cannot copy {}: {error}", source.display())));
     }
     let url =
@@ -224,21 +221,19 @@ pub async fn copy(uri: &str, dest: &Path, options: &[(String, String)]) -> Resul
 }
 
 async fn copy_remote(uri: &str, dest: &Path, options: &[(String, String)]) -> Result<u64, Error> {
-    use tokio::io::AsyncWriteExt;
+    use std::io::Write;
 
     let reader = open(uri, options)?;
     let stat = reader.stat().await?;
     let size = stat.size_bytes;
     let identity = stat.identity.as_deref();
-    let mut file = tokio::fs::File::create(dest)
-        .await
+    let mut file = std::fs::File::create(dest)
         .map_err(|error| Error(format!("cannot write {}: {error}", dest.display())))?;
     let mut offset = 0;
     while offset < size {
         let end = (offset + COPY_CHUNK).min(size);
         let bytes = reader.read_range(offset..end, identity).await?;
         file.write_all(&bytes)
-            .await
             .map_err(|error| Error(format!("cannot write {}: {error}", dest.display())))?;
         offset = end;
     }
@@ -256,22 +251,17 @@ fn local_path(uri: &str) -> PathBuf {
     }
 }
 
-async fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Error> {
-    use std::io::SeekFrom;
+fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Error> {
+    use std::io::{Read, Seek, SeekFrom};
 
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
-    let mut file = tokio::fs::File::open(path)
-        .await
+    let mut file = std::fs::File::open(path)
         .map_err(|e| Error(format!("cannot open {}: {e}", path.display())))?;
     file.seek(SeekFrom::Start(range.start))
-        .await
         .map_err(|e| Error(format!("cannot seek {}: {e}", path.display())))?;
     let length = usize::try_from(range.end.saturating_sub(range.start))
         .map_err(|_| Error(format!("range too large for {}", path.display())))?;
     let mut buffer = vec![0; length];
     file.read_exact(&mut buffer)
-        .await
         .map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
     Ok(buffer)
 }
