@@ -8,7 +8,7 @@ use futures_util::stream::StreamExt;
 use pqbench::table::{info, Column, TableFormat, TableInfo};
 use serde::Serialize;
 
-use crate::emit::{Align, Emitter, Format, Resolved, Row};
+use crate::emit::{Align, Emitter, Format, Row};
 use crate::source::{self, read_input, ref_env, split_table, table_ref};
 use crate::CliError;
 
@@ -34,40 +34,19 @@ pub(crate) struct InfoArgs {
     fan_out: usize,
 }
 
-/// The resolved configuration of `table info`: the table name (or stdin) and
-/// the output flags, from the command line.
-struct Config {
-    table: Option<String>,
-    format: Resolved,
-    output: Option<PathBuf>,
-    fan_out: usize,
-}
-
-impl Config {
-    fn resolve(args: &InfoArgs) -> Self {
-        Self {
-            table: args.table.clone(),
-            format: args.format.resolve(false),
-            output: args.output.clone(),
-            fan_out: args.fan_out.max(1),
-        }
-    }
-}
-
 /// Read one table's record with the env the stream carries: the lake source's
 /// options, the ref's own, and the process environment the storage client also
 /// reads. Credentials are the `credentials` stage's concern — `credentials get`
 /// materializes them onto refs; this read consumes them and passes them on, so
 /// a later stage reads the table's files under the same lease.
-pub(super) async fn run_info(
+pub(super) async fn run(
     workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
     args: &InfoArgs,
 ) -> Result<(), CliError> {
-    let config = Config::resolve(args);
     let input = read_input("table info").await?;
-    let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
-    if let Some(table) = &config.table {
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    if let Some(table) = &args.table {
         if input.first.is_some() {
             return Err(
                 "table info takes CATALOG.SCHEMA.TABLE or a pqbench.table-ref v2 stream, not both"
@@ -101,7 +80,7 @@ pub(super) async fn run_info(
             let record = read_record(workspace, lake, &catalog, &schema, &name, &storage).await?;
             Ok::<_, CliError>((record, storage.env))
         })
-        .buffer_unordered(config.fan_out);
+        .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {
         let (record, env) = record?;
         emit.write_row(&table_record(&record, env)).await?;

@@ -33,7 +33,7 @@ pub(crate) struct LsArgs {
 /// files the window's commits named — the **added in window** set, so a file a
 /// later commit removes is still named. The env rides on every file, so a
 /// short-lived lease travels with it; there is no begin/end envelope.
-pub(super) async fn run_ls(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
+pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
     if std::io::stdin().is_terminal() {
         return Err("partition ls reads pqbench.partition records on standard input".into());
     }

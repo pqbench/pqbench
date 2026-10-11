@@ -10,43 +10,22 @@
 //! cannot read outside compute, so the stage still succeeds and only a real
 //! error (a missing table, an endpoint fault) fails it.
 
-use std::path::PathBuf;
-
 use futures_util::stream::StreamExt;
 use pqbench::credentials::check::{Eligibility, Reason};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::CheckArgs;
-use crate::emit::{Align, Emitter, Resolved, Row};
+use super::StageArgs;
+use crate::emit::{Align, Emitter, Row};
 use crate::source::{self, read_input, table_ref};
 use crate::CliError;
 
-/// The resolved configuration of `credentials check`: the output flags, from
-/// the command line.
-struct Config {
-    format: Resolved,
-    output: Option<PathBuf>,
-    fan_out: usize,
-}
-
-impl Config {
-    fn resolve(args: &CheckArgs) -> Self {
-        Self {
-            format: args.stage.format.resolve(false),
-            output: args.stage.output.clone(),
-            fan_out: args.stage.fan_out.max(1),
-        }
-    }
-}
-
-pub(super) async fn run(workspace: &pqbench::Workspace, args: &CheckArgs) -> Result<(), CliError> {
-    let config = Config::resolve(args);
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
     let input = read_input("credentials check").await?;
     if !input.piped {
         return Err("credentials check reads pqbench.table-ref v2 refs on standard input".into());
     }
-    let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let records = source::records("credentials check", input.first, input.lines);
     let mut tables = 0;
     let mut dropped = 0;
@@ -57,7 +36,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &CheckArgs) -> Res
             let reason = check(workspace, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, reason))
         })
-        .buffer_unordered(config.fan_out);
+        .buffer_unordered(args.fan_out.max(1));
     while let Some(checked) = checks.next().await {
         let (record, reason) = checked?;
         if let Some(reason) = reason {

@@ -40,7 +40,7 @@ pub(crate) async fn run(
     args: &MetastoreArgs,
 ) -> Result<(), CliError> {
     match &args.command {
-        MetastoreCommand::Info(args) => info::run_info(workspace, args).await,
-        MetastoreCommand::Ls(args) => ls::run_ls(workspace, args).await,
+        MetastoreCommand::Info(args) => info::run(workspace, args).await,
+        MetastoreCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }

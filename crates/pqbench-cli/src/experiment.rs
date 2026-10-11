@@ -1,3 +1,5 @@
+//! `experiment`: rewrite a row sample and measure the result.
+
 use std::path::PathBuf;
 
 use clap::Args;

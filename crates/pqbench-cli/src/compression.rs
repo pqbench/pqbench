@@ -1,3 +1,5 @@
+//! `compression`: sweep codecs over a page set and report the best.
+
 use clap::Args;
 use pqbench::compression::{self, CompressionRequest};
 use pqbench::report::{ColumnRow, ReportRow};

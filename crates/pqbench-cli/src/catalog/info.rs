@@ -49,10 +49,7 @@ fn catalog_record(catalog: &info::Catalog) -> CatalogRecord<'_> {
     }
 }
 
-pub(super) async fn run_info(
-    workspace: &pqbench::Workspace,
-    args: &NameArgs,
-) -> Result<(), CliError> {
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("catalog info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(name) = &args.catalog {

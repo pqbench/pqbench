@@ -29,10 +29,7 @@ impl Row for CatalogRecord<'_> {
     }
 }
 
-pub(super) async fn run_ls(
-    workspace: &pqbench::Workspace,
-    args: &OutputArgs,
-) -> Result<(), CliError> {
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &OutputArgs) -> Result<(), CliError> {
     let catalogs = ls::list(workspace).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     for catalog in &catalogs {

@@ -47,10 +47,7 @@ fn table_record(table: &ls::TableRef) -> TableRefRecord<'_> {
     }
 }
 
-pub(super) async fn run_ls(
-    workspace: &pqbench::Workspace,
-    args: &NameArgs,
-) -> Result<(), CliError> {
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {

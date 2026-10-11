@@ -47,8 +47,8 @@ pub(crate) async fn run(
     args: &CatalogArgs,
 ) -> Result<(), CliError> {
     match &args.command {
-        CatalogCommand::Info(args) => info::run_info(workspace, args).await,
-        CatalogCommand::Ls(args) => ls::run_ls(workspace, args).await,
+        CatalogCommand::Info(args) => info::run(workspace, args).await,
+        CatalogCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }
 

@@ -2,42 +2,22 @@
 //! `schema ls | credentials get`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use futures_util::stream::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::GetArgs;
-use crate::emit::{Align, Emitter, Resolved, Row};
+use super::StageArgs;
+use crate::emit::{Align, Emitter, Row};
 use crate::source::{self, read_input, ref_env, table_ref, vend};
 use crate::CliError;
 
-/// The resolved configuration of `credentials get`: the output flags, from the
-/// command line.
-struct Config {
-    format: Resolved,
-    output: Option<PathBuf>,
-    fan_out: usize,
-}
-
-impl Config {
-    fn resolve(args: &GetArgs) -> Self {
-        Self {
-            format: args.stage.format.resolve(false),
-            output: args.stage.output.clone(),
-            fan_out: args.stage.fan_out.max(1),
-        }
-    }
-}
-
-pub(super) async fn run(workspace: &pqbench::Workspace, args: &GetArgs) -> Result<(), CliError> {
-    let config = Config::resolve(args);
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
     let input = read_input("credentials get").await?;
     if !input.piped {
         return Err("credentials get reads pqbench.table-ref v2 refs on standard input".into());
     }
-    let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
+    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let records = source::records("credentials get", input.first, input.lines);
     let mut tables = 0;
     let mut vends = records
@@ -47,7 +27,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &GetArgs) -> Resul
             let credentials = vend(workspace, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, credentials))
         })
-        .buffer_unordered(config.fan_out);
+        .buffer_unordered(args.fan_out.max(1));
     while let Some(result) = vends.next().await {
         let (record, credentials) = result?;
         let vended = credentials.is_some();

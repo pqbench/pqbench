@@ -1,3 +1,5 @@
+//! `diff`: compare two bytemass row streams.
+
 use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;

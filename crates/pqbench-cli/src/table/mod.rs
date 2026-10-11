@@ -28,8 +28,8 @@ pub(crate) async fn run(
     args: &TableArgs,
 ) -> Result<(), CliError> {
     match &args.command {
-        TableCommand::Info(info) => info::run_info(workspace, lake, info).await,
-        TableCommand::Ls(ls) => ls::run_ls(lake, ls).await,
+        TableCommand::Info(info) => info::run(workspace, lake, info).await,
+        TableCommand::Ls(ls) => ls::run(lake, ls).await,
     }
 }
 

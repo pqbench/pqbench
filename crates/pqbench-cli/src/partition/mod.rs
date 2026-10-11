@@ -21,6 +21,6 @@ pub(crate) enum PartitionCommand {
 
 pub(crate) async fn run(lake: &pqbench::Lake, args: &PartitionArgs) -> Result<(), CliError> {
     match &args.command {
-        PartitionCommand::Ls(ls) => ls::run_ls(lake, ls).await,
+        PartitionCommand::Ls(ls) => ls::run(lake, ls).await,
     }
 }

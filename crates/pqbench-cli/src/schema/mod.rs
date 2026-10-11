@@ -45,8 +45,8 @@ pub(crate) struct NameArgs {
 
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &SchemaArgs) -> Result<(), CliError> {
     match &args.command {
-        SchemaCommand::Info(args) => info::run_info(workspace, args).await,
-        SchemaCommand::Ls(args) => ls::run_ls(workspace, args).await,
+        SchemaCommand::Info(args) => info::run(workspace, args).await,
+        SchemaCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }
 

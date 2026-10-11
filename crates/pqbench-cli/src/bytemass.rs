@@ -1,3 +1,5 @@
+//! `bytemass`: read a Parquet footer and emit per-column byte masses.
+
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;

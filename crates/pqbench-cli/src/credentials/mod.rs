@@ -20,23 +20,9 @@ pub(crate) struct CredentialsArgs {
 #[derive(Subcommand)]
 pub(crate) enum CredentialsCommand {
     /// Put vended read credentials on each table-ref
-    Get(GetArgs),
+    Get(StageArgs),
     /// Check each table-ref is readable outside Databricks compute
-    Check(CheckArgs),
-}
-
-/// Arguments for `credentials get`: the shared output flags.
-#[derive(Args)]
-pub(crate) struct GetArgs {
-    #[command(flatten)]
-    stage: StageArgs,
-}
-
-/// Arguments for `credentials check`: the shared output flags.
-#[derive(Args)]
-pub(crate) struct CheckArgs {
-    #[command(flatten)]
-    stage: StageArgs,
+    Check(StageArgs),
 }
 
 /// The output flags both credentials stages share.

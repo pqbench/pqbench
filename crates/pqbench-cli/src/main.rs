@@ -1,3 +1,5 @@
+//! `pqbench`: the command-line frontend.
+
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};

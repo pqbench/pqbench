@@ -1,3 +1,5 @@
+//! `viz`: collect a bytemass stream into a static treemap page.
+
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 

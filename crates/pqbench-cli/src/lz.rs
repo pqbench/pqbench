@@ -1,3 +1,5 @@
+//! `lz`: sweep codecs over a file and report speed and ratio.
+
 use pqbench::lz::{self, LzRequest};
 use serde::Serialize;
 

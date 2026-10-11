@@ -1,3 +1,5 @@
+//! `profile`: decode a row sample into per-column facts.
+
 use std::path::PathBuf;
 
 use clap::Args;

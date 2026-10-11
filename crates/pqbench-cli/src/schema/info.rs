@@ -53,10 +53,7 @@ fn schema_record(schema: &info::Schema) -> SchemaRecord<'_> {
     }
 }
 
-pub(super) async fn run_info(
-    workspace: &pqbench::Workspace,
-    args: &NameArgs,
-) -> Result<(), CliError> {
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {
