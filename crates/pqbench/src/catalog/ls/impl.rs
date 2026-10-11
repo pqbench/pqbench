@@ -13,7 +13,8 @@ use serde::Deserialize;
 
 use super::api::{Error, Schema, TableFormat};
 use crate::dialect;
-use crate::third_party::reqwest::{self, Request};
+use crate::third_party::reqwest::Request;
+use crate::Workspace;
 
 /// Schema names per page; both walks follow the endpoint's page token.
 const PAGE_SIZE: u32 = 1000;
@@ -41,15 +42,10 @@ struct NamespacesPage {
     next_page_token: Option<String>,
 }
 
-pub(crate) async fn list(
-    endpoint: &str,
-    catalog: &str,
-    token: Option<&str>,
-    table_format: TableFormat,
-) -> Result<Vec<Schema>, Error> {
-    let names = match table_format {
-        TableFormat::Unity => unity_schemas(endpoint, catalog, token).await?,
-        TableFormat::Iceberg => iceberg_namespaces(endpoint, token).await?,
+pub(crate) async fn list(workspace: &Workspace, catalog: &str) -> Result<Vec<Schema>, Error> {
+    let names = match workspace.config().dialect {
+        TableFormat::Unity => unity_schemas(workspace, catalog).await?,
+        TableFormat::Iceberg => iceberg_namespaces(workspace).await?,
     };
     let mut schemas: Vec<Schema> = names
         .into_iter()
@@ -62,12 +58,8 @@ pub(crate) async fn list(
     Ok(schemas)
 }
 
-async fn unity_schemas(
-    endpoint: &str,
-    catalog: &str,
-    token: Option<&str>,
-) -> Result<Vec<String>, Error> {
-    let root = dialect::api_root(endpoint);
+async fn unity_schemas(workspace: &Workspace, catalog: &str) -> Result<Vec<String>, Error> {
+    let root = dialect::api_root(workspace.config().endpoint.as_str());
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
@@ -82,7 +74,7 @@ async fn unity_schemas(
                 dialect::encode(catalog)
             ),
         };
-        let page: SchemasPage = get_json(&url, token).await?;
+        let page: SchemasPage = get_json(workspace, &url).await?;
         for schema in page.schemas {
             if schema.name.is_empty() {
                 return Err(Error::from(
@@ -99,8 +91,8 @@ async fn unity_schemas(
     Ok(names)
 }
 
-async fn iceberg_namespaces(endpoint: &str, token: Option<&str>) -> Result<Vec<String>, Error> {
-    let base = endpoint.trim_end_matches('/');
+async fn iceberg_namespaces(workspace: &Workspace) -> Result<Vec<String>, Error> {
+    let base = workspace.config().endpoint.trim_end_matches('/');
     let mut names = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
@@ -111,7 +103,7 @@ async fn iceberg_namespaces(endpoint: &str, token: Option<&str>) -> Result<Vec<S
             ),
             None => format!("{base}/namespaces"),
         };
-        let page: NamespacesPage = get_json(&url, token).await?;
+        let page: NamespacesPage = get_json(workspace, &url).await?;
         for parts in page.namespaces {
             if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
                 return Err(Error::from(
@@ -128,8 +120,10 @@ async fn iceberg_namespaces(endpoint: &str, token: Option<&str>) -> Result<Vec<S
     Ok(names)
 }
 
-async fn get_json<T: DeserializeOwned>(url: &str, token: Option<&str>) -> Result<T, Error> {
-    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+async fn get_json<T: DeserializeOwned>(workspace: &Workspace, url: &str) -> Result<T, Error> {
+    let response = workspace
+        .http()
+        .request(Request::get(url, workspace.config().token.clone()))
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if response.status != 200 {

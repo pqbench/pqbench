@@ -6,6 +6,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::Lake;
+
 /// One natural partition: a half-open commit-time window and its commits.
 #[derive(Debug, Clone)]
 pub struct Partition {
@@ -53,9 +55,10 @@ impl From<String> for Error {
 /// # Errors
 /// Fails when the table cannot be loaded, or `window_millis` is not positive.
 pub async fn list(
+    lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
     window_millis: i64,
 ) -> Result<Vec<Partition>, Error> {
-    super::r#impl::list(uri, env, window_millis).await
+    super::r#impl::list(lake, uri, env, window_millis).await
 }

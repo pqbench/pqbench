@@ -109,8 +109,15 @@ EOF
 
 ### Catalog config (Unity / Databricks / Iceberg REST)
 
-The walk's config comes from the environment — configuration management sets
-it (`pqbench setup` prints it for the shell to eval):
+See [configuration.md](configuration.md) for the profile file and precedence.
+
+The walk's config resolves from three layers, least to most specific:
+`~/.pqbenchrc` (an INI of named profiles, like `~/.databrickscfg`), then the
+environment, then the command line. A profile names an endpoint, a bearer, and
+a dialect, so one workspace can carry `[unity]` and `[iceberg]` profiles; pick
+one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
+`--table-format` for one run. Everything else is a per-invocation flag.
+`pqbench setup` prints the resolved config for the shell to eval:
 
 | Variable | Role |
 | --- | --- |

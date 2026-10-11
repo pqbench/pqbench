@@ -3,9 +3,11 @@
 
 pub mod bench;
 pub mod bytemass;
+mod capability;
 pub mod catalog;
 pub mod codecs;
 pub mod compression;
+pub mod config;
 pub mod credentials;
 mod dialect;
 pub mod diff;
@@ -23,3 +25,6 @@ pub mod table;
 mod text;
 pub mod third_party;
 pub mod viz;
+
+pub use capability::{Lake, Workspace};
+pub use config::{Combine, Config, Dialect, Layer};

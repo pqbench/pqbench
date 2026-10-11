@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::Workspace;
+
 /// One metastore record.
 #[derive(Debug, Clone)]
 pub struct Metastore {
@@ -36,11 +38,11 @@ impl From<String> for Error {
     }
 }
 
-/// Read the metastore record from `endpoint`.
+/// Read the metastore record from the workspace's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed summary.
-pub async fn read(endpoint: &str, token: Option<&str>) -> Result<Metastore, Error> {
-    super::r#impl::read(endpoint, token).await
+pub async fn read(workspace: &Workspace) -> Result<Metastore, Error> {
+    super::r#impl::read(workspace).await
 }

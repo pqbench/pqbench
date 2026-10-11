@@ -14,6 +14,7 @@ use url::Url;
 use crate::table::{Column, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
+use crate::Lake;
 
 /// Errors resolving an Iceberg snapshot.
 #[derive(Debug)]
@@ -36,10 +37,10 @@ impl std::error::Error for Error {}
 /// # Errors
 /// Fails for invalid metadata, missing snapshots, non-Parquet data files, or
 /// data paths outside the table location.
-pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
+pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
     let options = env_options(&request.env);
-    let metadata_location = resolve_metadata_location(&request.uri, &options).await?;
-    let metadata_bytes = read_location(&metadata_location, &options).await?;
+    let metadata_location = resolve_metadata_location(lake, &request.uri, &options).await?;
+    let metadata_bytes = read_location(lake, &metadata_location, &options).await?;
     let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes)
         .map_err(|e| Error(format!("cannot parse metadata JSON: {e}")))?;
     if metadata.format_version != 1 && metadata.format_version != 2 {
@@ -57,7 +58,7 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
         .unwrap_or(0);
     let (files, deletes) = match selected {
         Some(snapshot) if request.require_files => {
-            active_files(&metadata.location, &snapshot.manifest_list, &options).await?
+            active_files(lake, &metadata.location, &snapshot.manifest_list, &options).await?
         }
         _ => (Vec::new(), Vec::new()),
     };
@@ -285,6 +286,7 @@ fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> 
 }
 
 async fn resolve_metadata_location(
+    lake: &Lake,
     uri: &str,
     options: &[(String, String)],
 ) -> Result<String, Error> {
@@ -295,11 +297,11 @@ async fn resolve_metadata_location(
         return local_metadata(&local_path(uri)?);
     }
     let hint = join_uri(uri, "metadata/version-hint.text")?;
-    let bytes = read_location(&hint, options).await?;
+    let bytes = read_location(lake, &hint, options).await?;
     let version = parse_hint_version(&String::from_utf8_lossy(&bytes))?;
     for name in hint_names(version) {
         let candidate = join_uri(uri, &format!("metadata/{name}"))?;
-        if object_exists(&candidate, options).await? {
+        if object_exists(lake, &candidate, options).await? {
             return Ok(candidate);
         }
     }
@@ -383,18 +385,19 @@ fn metadata_json_version(name: &str) -> Option<u64> {
 }
 
 async fn active_files(
+    lake: &Lake,
     table_location: &str,
     manifest_list: &str,
     options: &[(String, String)],
 ) -> Result<(Vec<TableFile>, Vec<String>), Error> {
     let root = table_root(table_location)?;
-    let bytes = read_location(manifest_list, options).await?;
+    let bytes = read_location(lake, manifest_list, options).await?;
     let manifests: Vec<ManifestFile> =
         read_avro(&bytes, "manifest list").map_err(|e| Error(e.to_string()))?;
     let mut files = Vec::new();
     let mut deletes = Vec::new();
     for manifest in manifests {
-        let bytes = read_location(&manifest.manifest_path, options).await?;
+        let bytes = read_location(lake, &manifest.manifest_path, options).await?;
         let entries: Vec<ManifestEntry> =
             read_avro(&bytes, "manifest").map_err(|e| Error(e.to_string()))?;
         for entry in entries {
@@ -548,9 +551,14 @@ fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
         .into())
 }
 
-async fn read_location(location: &str, options: &[(String, String)]) -> Result<Vec<u8>, Error> {
+async fn read_location(
+    lake: &Lake,
+    location: &str,
+    options: &[(String, String)],
+) -> Result<Vec<u8>, Error> {
     if looks_like_uri(location) {
-        let reader = object_store::open(location, options).map_err(|e| Error(e.to_string()))?;
+        let reader =
+            object_store::open(lake, location, options).map_err(|e| Error(e.to_string()))?;
         let stat = reader.stat().await.map_err(|e| Error(e.to_string()))?;
         reader
             .read_range(0..stat.size_bytes, stat.identity.as_deref())
@@ -561,8 +569,12 @@ async fn read_location(location: &str, options: &[(String, String)]) -> Result<V
     }
 }
 
-async fn object_exists(location: &str, options: &[(String, String)]) -> Result<bool, Error> {
-    let reader = object_store::open(location, options).map_err(|e| Error(e.to_string()))?;
+async fn object_exists(
+    lake: &Lake,
+    location: &str,
+    options: &[(String, String)],
+) -> Result<bool, Error> {
+    let reader = object_store::open(lake, location, options).map_err(|e| Error(e.to_string()))?;
     reader.exists().await.map_err(|e| Error(e.to_string()))
 }
 

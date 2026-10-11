@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use crate::schema::TableFormat;
+use crate::Workspace;
 
 /// One table in a schema: the `pqbench.table-ref` the CLI emits.
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ impl From<String> for Error {
     }
 }
 
-/// List the tables in `schema` of `catalog` at `endpoint`.
+/// List the tables in `schema` of `catalog` at the workspace's endpoint.
 ///
 /// Unity pages carry a storage location; Iceberg REST lists identifiers only,
 /// so `storage_path` is `None` there until `pqbench table info` resolves it.
@@ -45,11 +45,9 @@ impl From<String> for Error {
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed table page.
 pub async fn list(
-    endpoint: &str,
+    workspace: &Workspace,
     catalog: &str,
     schema: &str,
-    token: Option<&str>,
-    table_format: TableFormat,
 ) -> Result<Vec<TableRef>, Error> {
-    super::r#impl::list(endpoint, catalog, schema, token, table_format).await
+    super::r#impl::list(workspace, catalog, schema).await
 }

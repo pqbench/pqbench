@@ -9,16 +9,9 @@ use std::fmt;
 
 use crate::table::TableInfo;
 
-/// The catalog dialect a `table info` read speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableFormat {
-    /// Unity REST: `/tables`.
-    Unity,
-    /// Iceberg REST: `/namespaces…/tables`; the endpoint already names the
-    /// catalog base (`{root}/v1` or `{root}/v1/{prefix}`), so no config probe
-    /// runs.
-    Iceberg,
-}
+pub use crate::config::Dialect as TableFormat;
+
+use crate::{Lake, Workspace};
 
 /// Errors reading a table's record.
 #[derive(Debug)]
@@ -48,7 +41,8 @@ pub struct Storage {
     pub env: BTreeMap<String, String>,
 }
 
-/// Read the record of `table` in `schema` of `catalog` at `endpoint`.
+/// Read the record of `table` in `schema` of `catalog` at the workspace's
+/// endpoint.
 ///
 /// The catalog names the table and the location to load; the table's own
 /// metadata is read without files (`without_files()` for Delta, the metadata
@@ -61,22 +55,12 @@ pub struct Storage {
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or the table's metadata cannot be read.
 pub async fn read(
-    endpoint: &str,
+    workspace: &Workspace,
+    lake: &Lake,
     catalog: &str,
     schema: &str,
     table: &str,
-    token: Option<&str>,
-    table_format: TableFormat,
     storage: &Storage,
 ) -> Result<TableInfo, Error> {
-    super::r#impl::read(
-        endpoint,
-        catalog,
-        schema,
-        table,
-        token,
-        table_format,
-        storage,
-    )
-    .await
+    super::r#impl::read(workspace, lake, catalog, schema, table, storage).await
 }

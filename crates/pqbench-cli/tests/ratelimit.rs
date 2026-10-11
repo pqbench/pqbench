@@ -100,7 +100,7 @@ fn rejects_a_bad_record() {
 
 #[test]
 fn rejects_a_bad_rate() {
-    let output = run(&["ratelimit", "--rate=-1"], b"");
+    let output = run(&["ratelimit", "--rate", "-1"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("non-negative"), "{stderr}");

@@ -1,3 +1,5 @@
+//! `skill`: print the bundled agent recipes.
+
 use std::io::Write;
 
 use clap::Args;

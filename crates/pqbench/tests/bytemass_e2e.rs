@@ -1,5 +1,7 @@
 //! Blackbox end-to-end tests of the public `bytemass` command.
 
+mod common;
+
 use pqbench::bytemass::{aggregate, bytemass, render_json, render_text, BytemassRequest};
 use pqbench::viz::{self, MassRecord};
 
@@ -16,9 +18,12 @@ fn request(inputs: Vec<String>) -> BytemassRequest {
 
 #[tokio::test]
 async fn measures_a_local_file_from_its_footer() {
-    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
-        .await
-        .unwrap();
+    let rows = bytemass(
+        common::lake(),
+        &request(vec![fixture("small_snappy.parquet")]),
+    )
+    .await
+    .unwrap();
 
     assert!(!rows.is_empty());
     assert!(rows
@@ -42,9 +47,12 @@ async fn measures_a_local_file_from_its_footer() {
 
 #[tokio::test]
 async fn emits_composable_json_per_column() {
-    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
-        .await
-        .unwrap();
+    let rows = bytemass(
+        common::lake(),
+        &request(vec![fixture("small_snappy.parquet")]),
+    )
+    .await
+    .unwrap();
     let output = render_json(&rows).unwrap();
 
     let summary: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -60,9 +68,12 @@ async fn emits_composable_json_per_column() {
 
 #[tokio::test]
 async fn viz_collects_measured_rows() {
-    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
-        .await
-        .unwrap();
+    let rows = bytemass(
+        common::lake(),
+        &request(vec![fixture("small_snappy.parquet")]),
+    )
+    .await
+    .unwrap();
     let records: Vec<MassRecord> = rows
         .into_iter()
         .map(|row| MassRecord {
@@ -98,7 +109,9 @@ async fn viz_collects_measured_rows() {
 #[tokio::test]
 async fn expands_globs_into_one_collection() {
     let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
-    let rows = bytemass(&request(vec![mask])).await.unwrap();
+    let rows = bytemass(common::lake(), &request(vec![mask]))
+        .await
+        .unwrap();
 
     let summary = aggregate(&rows).unwrap();
     assert!(summary.file_count > 1);
@@ -110,18 +123,21 @@ async fn treats_brackets_as_literal_path_characters() {
     let dir = tempfile::tempdir().unwrap();
     let literal = dir.path().join("archive[1].parquet");
     std::fs::copy(fixture("small_snappy.parquet"), &literal).unwrap();
-    let rows = bytemass(&request(vec![literal.to_string_lossy().into_owned()]))
-        .await
-        .unwrap();
+    let rows = bytemass(
+        common::lake(),
+        &request(vec![literal.to_string_lossy().into_owned()]),
+    )
+    .await
+    .unwrap();
     assert!(!rows.is_empty());
 }
 
 #[tokio::test]
 async fn rejects_empty_inputs_and_unmatched_masks() {
-    assert!(bytemass(&request(vec![])).await.is_err());
+    assert!(bytemass(common::lake(), &request(vec![])).await.is_err());
 
     let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
-    let error = bytemass(&request(vec![missing]))
+    let error = bytemass(common::lake(), &request(vec![missing]))
         .await
         .unwrap_err()
         .to_string();
@@ -130,9 +146,12 @@ async fn rejects_empty_inputs_and_unmatched_masks() {
 
 #[tokio::test]
 async fn rows_include_footer_facts() {
-    let rows = bytemass(&request(vec![fixture("small_snappy.parquet")]))
-        .await
-        .unwrap();
+    let rows = bytemass(
+        common::lake(),
+        &request(vec![fixture("small_snappy.parquet")]),
+    )
+    .await
+    .unwrap();
     assert!(rows.iter().all(|row| !row.physical_type.is_empty()));
     assert!(rows.iter().all(|row| !row.encodings.is_empty()));
     assert!(rows.iter().all(|row| row.num_values > 0));
@@ -146,7 +165,7 @@ async fn rows_include_footer_facts() {
 async fn indexes_are_optional() {
     let mut request = request(vec![fixture("small_snappy.parquet")]);
     request.indexes = true;
-    let rows = bytemass(&request).await.unwrap();
+    let rows = bytemass(common::lake(), &request).await.unwrap();
     assert!(!rows.is_empty());
     assert!(rows.iter().all(|row| !row.physical_type.is_empty()));
 }
@@ -154,9 +173,12 @@ async fn indexes_are_optional() {
 #[cfg(not(feature = "aws"))]
 #[tokio::test]
 async fn remote_inputs_name_the_missing_aws_feature() {
-    let error = bytemass(&request(vec!["s3://bucket/file.parquet".into()]))
-        .await
-        .unwrap_err()
-        .to_string();
+    let error = bytemass(
+        common::lake(),
+        &request(vec!["s3://bucket/file.parquet".into()]),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("`aws` feature"), "{error}");
 }

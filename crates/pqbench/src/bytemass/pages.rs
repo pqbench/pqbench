@@ -1,5 +1,6 @@
 //! Optional bounded page-header scanning, independent of page indexes.
 use crate::third_party::{object_store, parquet};
+use crate::Lake;
 use parquet::api::{Error, PageHeader};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -26,6 +27,7 @@ pub struct PageRecord {
 /// # Errors
 /// Invalid chunk/header bounds, unsupported encryption, or storage errors.
 pub async fn scan_pages(
+    lake: &Lake,
     input: &str,
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<PageRecord>, Error> {
@@ -38,8 +40,8 @@ pub async fn scan_pages(
             .to_string()
     };
     let options: Vec<_> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let (stat, mass) = super::remote::read_remote(&uri, options.clone(), false).await?;
-    let reader = object_store::open(&uri, &options).map_err(|e| Error(e.to_string()))?;
+    let (stat, mass) = super::remote::read_remote(lake, &uri, options.clone(), false).await?;
+    let reader = object_store::open(lake, &uri, &options).map_err(|e| Error(e.to_string()))?;
     let mut pages = Vec::new();
     for column in mass.columns {
         let mut offset = column.chunk_offset;

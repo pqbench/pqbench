@@ -7,7 +7,8 @@ use serde::Deserialize;
 
 use super::api::{Catalog, Error};
 use crate::dialect;
-use crate::third_party::reqwest::{self, Request};
+use crate::third_party::reqwest::Request;
+use crate::Workspace;
 
 /// The subset of `GET /catalogs/{name}` this command reports.
 #[derive(Deserialize)]
@@ -21,17 +22,15 @@ struct Record {
     owner: Option<String>,
 }
 
-pub(crate) async fn read(
-    endpoint: &str,
-    catalog: &str,
-    token: Option<&str>,
-) -> Result<Catalog, Error> {
+pub(crate) async fn read(workspace: &Workspace, catalog: &str) -> Result<Catalog, Error> {
     let url = format!(
         "{}/catalogs/{}",
-        dialect::api_root(endpoint),
+        dialect::api_root(workspace.config().endpoint.as_str()),
         catalog.trim_matches('/')
     );
-    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+    let response = workspace
+        .http()
+        .request(Request::get(url, workspace.config().token.clone()))
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if response.status != 200 {

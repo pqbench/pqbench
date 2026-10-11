@@ -1,3 +1,5 @@
+//! `diff`: compare two bytemass row streams.
+
 use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
@@ -23,12 +25,12 @@ pub(crate) struct DiffArgs {
     output: Option<PathBuf>,
 }
 
-pub(crate) async fn run(args: &DiffArgs) -> Result<(), CliError> {
+pub(crate) async fn run(lake: &pqbench::Lake, args: &DiffArgs) -> Result<(), CliError> {
     if args.left == "-" && args.right == "-" {
         return Err("only one diff input may be stdin".into());
     }
-    let left = read(&args.left).await?;
-    let right = read(&args.right).await?;
+    let left = read(lake, &args.left).await?;
+    let right = read(lake, &args.right).await?;
     let deltas = diff::compare(&left, &right, args.depth)?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     for delta in &deltas {
@@ -41,12 +43,15 @@ pub(crate) async fn run(args: &DiffArgs) -> Result<(), CliError> {
     emit.finish(&format!("columns: {}\n", deltas.len())).await
 }
 
-async fn read(input: &str) -> Result<Vec<bytemass::MassRow>, CliError> {
+async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<bytemass::MassRow>, CliError> {
     if input != "-" && !document::is_document(input).await {
-        return Ok(bytemass::bytemass(&bytemass::BytemassRequest {
-            inputs: vec![input.to_owned()],
-            ..Default::default()
-        })
+        return Ok(bytemass::bytemass(
+            lake,
+            &bytemass::BytemassRequest {
+                inputs: vec![input.to_owned()],
+                ..Default::default()
+            },
+        )
         .await?);
     }
     let mut rows = Vec::new();

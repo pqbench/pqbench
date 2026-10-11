@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::table::FileStats;
 use crate::third_party::parquet::api::Error;
+use crate::Lake;
 
 use super::collection;
 
@@ -160,11 +161,11 @@ pub struct MassRow {
 /// # Errors
 /// Fails when there are no inputs, a mask matches no files, an input cannot be
 /// read, or a byte total overflows.
-pub async fn bytemass(request: &BytemassRequest) -> Result<Vec<MassRow>, Error> {
+pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<MassRow>, Error> {
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_inputs(&request.inputs, &request.env, request.indexes).await
+    collection::measure_inputs(lake, &request.inputs, &request.env, request.indexes).await
 }
 
 /// One measured file, including metadata even when it has no column chunks.
@@ -179,11 +180,14 @@ pub struct MeasuredFile {
 ///
 /// # Errors
 /// Fails for empty inputs, unmatched patterns, invalid footers or I/O failures.
-pub async fn measure_files(request: &BytemassRequest) -> Result<Vec<MeasuredFile>, Error> {
+pub async fn measure_files(
+    lake: &Lake,
+    request: &BytemassRequest,
+) -> Result<Vec<MeasuredFile>, Error> {
     if request.inputs.is_empty() {
         return Err(Error("no inputs".into()));
     }
-    collection::measure_files(&request.inputs, &request.env, request.indexes).await
+    collection::measure_files(lake, &request.inputs, &request.env, request.indexes).await
 }
 
 /// Resolve local and S3 patterns to sorted, unique object paths.
@@ -191,10 +195,11 @@ pub async fn measure_files(request: &BytemassRequest) -> Result<Vec<MeasuredFile
 /// # Errors
 /// Invalid patterns, missing backend, listing errors, or unmatched patterns.
 pub async fn expand_inputs(
+    lake: &Lake,
     inputs: &[String],
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, Error> {
-    Ok(collection::expand_inputs(inputs, env)
+    Ok(collection::expand_inputs(lake, inputs, env)
         .await?
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())

@@ -1,3 +1,5 @@
+//! Arguments shared by the `lz` and `compression` sweeps.
+
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};

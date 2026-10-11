@@ -1,3 +1,5 @@
+//! `profile`: decode a row sample into per-column facts.
+
 use std::path::PathBuf;
 
 use clap::Args;
@@ -6,6 +8,7 @@ use pqbench::third_party::parquet::api::read_sample;
 use serde::Serialize;
 
 use crate::emit::{Align, Emitter, Format, Row};
+use crate::rows::{parse_rows, RowLimit};
 use crate::CliError;
 
 /// Arguments for `profile`: read and decode a bounded row sample, then stream
@@ -27,8 +30,8 @@ pub(crate) struct ProfileArgs {
     #[arg(long = "columns", value_name = "GLOB")]
     columns: Vec<String>,
     /// how many leading rows to read: `all` or `first:N`
-    #[arg(long = "rows", default_value = "first:8192", value_name = "METHOD")]
-    rows: String,
+    #[arg(long = "rows", value_parser = parse_rows, default_value = "first:8192", value_name = "METHOD")]
+    row_limit: RowLimit,
     /// number of top values per column
     #[arg(long = "top", default_value_t = 8)]
     top: u32,
@@ -38,7 +41,7 @@ pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
     if args.inputs.is_empty() {
         return Err("profile needs parquet files".into());
     }
-    let max_rows = parse_rows(&args.rows)?;
+    let max_rows = args.row_limit.max_rows();
     let request = ProfileRequest {
         columns: args.columns.clone(),
         top: args.top,
@@ -70,23 +73,6 @@ pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
         summary.push_str(&format!("output: {}\n", path.display()));
     }
     emit.finish(&summary).await
-}
-
-/// Parse `--rows`: `all` reads every row, `first:N` reads N (N >= 1).
-fn parse_rows(method: &str) -> Result<Option<usize>, CliError> {
-    if method == "all" {
-        return Ok(None);
-    }
-    if let Some(rest) = method.strip_prefix("first:") {
-        let rows: usize = rest
-            .parse()
-            .map_err(|_| format!("bad --rows `{method}`; expected `all` or `first:N`"))?;
-        if rows == 0 {
-            return Err(format!("bad --rows `{method}`; N must be at least 1").into());
-        }
-        return Ok(Some(rows));
-    }
-    Err(format!("bad --rows `{method}`; expected `all` or `first:N`").into())
 }
 
 #[derive(Serialize)]

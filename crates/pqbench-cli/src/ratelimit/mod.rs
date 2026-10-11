@@ -16,15 +16,23 @@ use crate::CliError;
 /// Arguments for `ratelimit`: the target rate.
 #[derive(Args)]
 pub(crate) struct RateLimitArgs {
-    /// records per second per kind; 0 turns pacing off
-    #[arg(long, default_value_t = pqbench::ratelimit::DEFAULT_REQUESTS_PER_SECOND)]
+    /// records per second per kind; 0 turns pacing off [env: PQB_RATE]
+    #[arg(long, value_name = "RATE", env = "PQB_RATE", value_parser = parse_rate, allow_negative_numbers = true, default_value_t = pqbench::ratelimit::DEFAULT_REQUESTS_PER_SECOND)]
     rate: f64,
 }
 
-pub(crate) async fn run(args: &RateLimitArgs) -> Result<(), CliError> {
-    if !args.rate.is_finite() || args.rate < 0.0 {
-        return Err(format!("ratelimit expects a non-negative rate, got {}", args.rate).into());
+/// Parse `--rate`: a finite, non-negative requests-per-second.
+fn parse_rate(value: &str) -> Result<f64, CliError> {
+    let rate: f64 = value
+        .parse()
+        .map_err(|_| format!("--rate expects a number, got {value:?}"))?;
+    if !rate.is_finite() || rate < 0.0 {
+        return Err(format!("--rate expects a non-negative rate, got {rate}").into());
     }
+    Ok(rate)
+}
+
+pub(crate) async fn run(args: &RateLimitArgs) -> Result<(), CliError> {
     let mut limit = RateLimit::new(args.rate);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();

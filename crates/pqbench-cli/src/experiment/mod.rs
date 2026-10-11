@@ -1,3 +1,5 @@
+//! `experiment`: rewrite a row sample and measure the result.
+
 use std::path::PathBuf;
 
 use clap::Args;
@@ -6,6 +8,7 @@ use pqbench::third_party::parquet::api::read_typed_sample;
 use serde::Serialize;
 
 use crate::emit::{Align, Emitter, Format, Row};
+use crate::rows::{parse_rows, RowLimit};
 use crate::CliError;
 
 /// Arguments for `experiment`: read a decoded row sample, apply each rewrite,
@@ -24,8 +27,8 @@ pub(crate) struct ExperimentArgs {
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
     /// how many leading rows to read: `all` or `first:N`
-    #[arg(long = "rows", default_value = "first:8192", value_name = "METHOD")]
-    rows: String,
+    #[arg(long = "rows", value_parser = parse_rows, default_value = "first:8192", value_name = "METHOD")]
+    row_limit: RowLimit,
     /// rewrite spec, repeatable; semicolons compose one trial
     #[arg(long = "rewrite", value_name = "SPEC")]
     rewrites: Vec<String>,
@@ -33,17 +36,17 @@ pub(crate) struct ExperimentArgs {
     #[arg(long = "trial", value_name = "SPEC")]
     trials: Vec<String>,
     /// what to measure: storage, skipping, all
-    #[arg(long = "aim", default_value = "storage", value_name = "AIM")]
-    aim: String,
+    #[arg(long = "aim", value_parser = Aim::parse, default_value = "storage", value_name = "AIM")]
+    aim: Aim,
 }
 
 pub(crate) async fn run(args: &ExperimentArgs) -> Result<(), CliError> {
-    let max_rows = parse_rows(&args.rows)?;
+    let max_rows = args.row_limit.max_rows();
     let mut trials = args.rewrites.clone();
     trials.extend(args.trials.iter().cloned());
     let request = ExperimentRequest {
         trials,
-        aim: Aim::parse(&args.aim)?,
+        aim: args.aim,
     };
     let sample = read_typed_sample(std::path::Path::new(&args.input), max_rows)?;
     let report = experiment::experiment(&sample, &request)?;
@@ -64,23 +67,6 @@ pub(crate) async fn run(args: &ExperimentArgs) -> Result<(), CliError> {
         }
     }
     emit.finish(&summary(&report, args.output.as_deref())).await
-}
-
-/// Parse `--rows`: `all` reads every row, `first:N` reads N (N >= 1).
-fn parse_rows(method: &str) -> Result<Option<usize>, CliError> {
-    if method == "all" {
-        return Ok(None);
-    }
-    if let Some(rest) = method.strip_prefix("first:") {
-        let rows: usize = rest
-            .parse()
-            .map_err(|_| format!("bad --rows `{method}`; expected `all` or `first:N`"))?;
-        if rows == 0 {
-            return Err(format!("bad --rows `{method}`; N must be at least 1").into());
-        }
-        return Ok(Some(rows));
-    }
-    Err(format!("bad --rows `{method}`; expected `all` or `first:N`").into())
 }
 
 fn summary(experiment: &Experiment, output: Option<&std::path::Path>) -> String {
