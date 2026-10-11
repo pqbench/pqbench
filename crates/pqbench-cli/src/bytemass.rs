@@ -3,7 +3,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::Args;
-use futures_util::StreamExt;
+use futures_util::stream::{self, StreamExt};
 use pqbench::bytemass;
 use pqbench::table::TableFile;
 use serde::Serialize;
@@ -33,6 +33,9 @@ pub(crate) struct BytemassArgs {
     /// Scan page headers without requiring page indexes (extra reads).
     #[arg(long)]
     pages: bool,
+    /// files in flight at once
+    #[arg(long, default_value_t = 128)]
+    fan_out: usize,
 }
 
 /// Build the typed request, measure, and stream each row as it is ready.
@@ -55,114 +58,17 @@ pub(crate) async fn run(args: &BytemassArgs) -> Result<(), CliError> {
 async fn measure_document(input: &str, args: &BytemassArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    let mut records = document::records(input).await?;
-    while let Some(record) = records.next().await {
-        match record? {
-            Record::RemoteSource(source) => {
-                for uri in source.inputs {
-                    measure_input(
-                        &mut emit,
-                        &mut stats,
-                        &uri,
-                        uri.clone(),
-                        source.env.clone(),
-                        (args.indexes, args.pages),
-                    )
-                    .await?;
-                }
-            }
-            Record::File { id, file, env } => {
-                measure_file(
-                    &mut emit,
-                    &mut stats,
-                    &id,
-                    file,
-                    env,
-                    (args.indexes, args.pages),
-                )
-                .await?;
-            }
-            Record::BytemassFile(_) | Record::BytemassRow { .. } | Record::BytemassPage => {
-                return Err("a bytemass stream goes to `pqbench viz`".into());
-            }
+    let options = (args.indexes, args.pages);
+    let records = document::records(input).await?;
+    let mut reads = records
+        .map(|record| measure_record(record, options))
+        .buffer_unordered(args.fan_out.max(1));
+    while let Some(batch) = reads.next().await {
+        for measured in batch? {
+            emit_measured(&mut emit, &mut stats, measured).await?;
         }
     }
     finish_stream(emit, &stats, args.output.as_deref()).await
-}
-
-async fn measure_file(
-    emit: &mut Emitter,
-    stats: &mut MassStats,
-    id: &str,
-    file: TableFile,
-    env: BTreeMap<String, String>,
-    options: (bool, bool),
-) -> Result<(), CliError> {
-    let measured = bytemass::measure_files(&bytemass::BytemassRequest {
-        inputs: vec![file.uri.clone()],
-        env: env.clone(),
-        indexes: options.0,
-    })
-    .await?;
-    for mut measured in measured {
-        if file.size_bytes != 0 && measured.file.size != file.size_bytes {
-            return Err(format!(
-                "active file size differs from log: {} (expected {}, found {})",
-                file.path, file.size_bytes, measured.file.size
-            )
-            .into());
-        }
-        measured.file.id = id.to_owned();
-        if file.uri == measured.file.file {
-            measured.file.path = file.path.clone();
-        }
-        measured.file.partition_values = file.partition_values.clone();
-        measured.file.stats = file.stats.clone();
-        stats
-            .file_rows
-            .insert(measured.file.file.clone(), measured.row_count);
-        emit.write_event(&FileRecord {
-            kind: "pqbench.bytemass-file",
-            file: &measured.file,
-        })
-        .await?;
-        if options.1 {
-            for page in bytemass::scan_pages(&measured.file.file, &env).await? {
-                emit.write_row(&PageRow {
-                    kind: "pqbench.bytemass-page",
-                    id,
-                    page: &page,
-                })
-                .await?;
-            }
-        }
-        for row in &measured.columns {
-            write_row(emit, id, row, stats).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn measure_input(
-    emit: &mut Emitter,
-    stats: &mut MassStats,
-    id: &str,
-    uri: String,
-    env: BTreeMap<String, String>,
-    options: (bool, bool),
-) -> Result<(), CliError> {
-    for input in bytemass::expand_inputs(&[uri], &env).await? {
-        measure_file(
-            emit,
-            stats,
-            id,
-            TableFile::new(input.clone(), input, 0),
-            env.clone(),
-            options,
-        )
-        .await?;
-    }
-    Ok(())
 }
 
 async fn measure(
@@ -172,18 +78,139 @@ async fn measure(
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    for input in bytemass::expand_inputs(&inputs, &env).await? {
-        measure_input(
-            &mut emit,
-            &mut stats,
-            &input,
-            input.clone(),
-            env.clone(),
-            (args.indexes, args.pages),
-        )
-        .await?;
+    let options = (args.indexes, args.pages);
+    let mut reads = stream::iter(bytemass::expand_inputs(&inputs, &env).await?)
+        .map(|input| {
+            let env = env.clone();
+            async move {
+                measure_one(
+                    input.clone(),
+                    TableFile::new(input.clone(), input, 0),
+                    env,
+                    options,
+                )
+                .await
+            }
+        })
+        .buffer_unordered(args.fan_out.max(1));
+    while let Some(measured) = reads.next().await {
+        emit_measured(&mut emit, &mut stats, measured?).await?;
     }
     finish_stream(emit, &stats, args.output.as_deref()).await
+}
+
+/// One file's footer read, ready to emit: the log's facts joined onto the
+/// measured file, plus the page headers when `--pages` asked for them.
+struct Measured {
+    id: String,
+    measured: bytemass::MeasuredFile,
+    pages: Vec<bytemass::PageRecord>,
+}
+
+/// Measure every file one document record names: a `pqbench.table-file` is one
+/// file; a `pqbench.remote-source` expands its inputs first.
+async fn measure_record(
+    record: Result<Record, CliError>,
+    options: (bool, bool),
+) -> Result<Vec<Measured>, CliError> {
+    match record? {
+        Record::File { id, file, env } => Ok(vec![measure_one(id, file, env, options).await?]),
+        Record::RemoteSource(source) => {
+            let mut measured = Vec::new();
+            for uri in source.inputs {
+                let inputs = std::slice::from_ref(&uri);
+                for input in bytemass::expand_inputs(inputs, &source.env).await? {
+                    measured.push(
+                        measure_one(
+                            uri.clone(),
+                            TableFile::new(input.clone(), input, 0),
+                            source.env.clone(),
+                            options,
+                        )
+                        .await?,
+                    );
+                }
+            }
+            Ok(measured)
+        }
+        Record::BytemassFile(_) | Record::BytemassRow { .. } | Record::BytemassPage => {
+            Err("a bytemass stream goes to `pqbench viz`".into())
+        }
+    }
+}
+
+/// Read one file's footer and join the log's facts onto it. This is the I/O the
+/// fanout overlaps; [`emit_measured`] writes each result as it finishes.
+async fn measure_one(
+    id: String,
+    file: TableFile,
+    env: BTreeMap<String, String>,
+    options: (bool, bool),
+) -> Result<Measured, CliError> {
+    let mut measured = bytemass::measure_files(&bytemass::BytemassRequest {
+        inputs: vec![file.uri.clone()],
+        env: env.clone(),
+        indexes: options.0,
+    })
+    .await?
+    .pop()
+    .ok_or("bytemass read no file")?;
+    if file.size_bytes != 0 && measured.file.size != file.size_bytes {
+        return Err(format!(
+            "active file size differs from log: {} (expected {}, found {})",
+            file.path, file.size_bytes, measured.file.size
+        )
+        .into());
+    }
+    measured.file.id = id.clone();
+    if file.uri == measured.file.file {
+        measured.file.path = file.path.clone();
+    }
+    measured.file.partition_values = file.partition_values.clone();
+    measured.file.stats = file.stats.clone();
+    let pages = if options.1 {
+        bytemass::scan_pages(&measured.file.file, &env).await?
+    } else {
+        Vec::new()
+    };
+    Ok(Measured {
+        id,
+        measured,
+        pages,
+    })
+}
+
+/// Emit one measured file: its file record, then its page headers and rows.
+async fn emit_measured(
+    emit: &mut Emitter,
+    stats: &mut MassStats,
+    measured: Measured,
+) -> Result<(), CliError> {
+    let Measured {
+        id,
+        measured,
+        pages,
+    } = measured;
+    stats
+        .file_rows
+        .insert(measured.file.file.clone(), measured.row_count);
+    emit.write_event(&FileRecord {
+        kind: "pqbench.bytemass-file",
+        file: &measured.file,
+    })
+    .await?;
+    for page in &pages {
+        emit.write_row(&PageRow {
+            kind: "pqbench.bytemass-page",
+            id: &id,
+            page,
+        })
+        .await?;
+    }
+    for row in &measured.columns {
+        write_row(emit, &id, row, stats).await?;
+    }
+    Ok(())
 }
 
 async fn write_row(

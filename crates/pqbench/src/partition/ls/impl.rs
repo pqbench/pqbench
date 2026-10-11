@@ -14,9 +14,12 @@ pub(crate) async fn list(
     let wanted: BTreeSet<u64> = versions.iter().copied().collect();
     // The files a commit added ride on the log. Delta's log names them itself,
     // but Iceberg attaches a snapshot's files only when they are resolved, so
-    // the read must request them: `with_log()` alone leaves an Iceberg commit
-    // with no `add` actions and the walk measures nothing.
-    let request = LoadRequest::new(uri.to_string(), None, env.clone());
+    // the read must still request them: `with_log()` alone leaves an Iceberg
+    // commit with no `add` actions and the walk measures nothing. Naming the
+    // window's commits keeps the read to them: Delta reads only those commits
+    // and skips the snapshot replay its log already carries.
+    let request =
+        LoadRequest::new(uri.to_string(), None, env.clone()).with_commits(wanted.iter().copied());
     let info = table::load(&request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;

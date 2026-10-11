@@ -137,8 +137,8 @@ The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
 input as they arrive — one `pqbench.catalog` line per catalog, then one
 `pqbench.schema` line per schema. Each ref's request starts as its record is
-read; `--fan-out` (64 on the listing levels, one per core on the per-table
-stages) caps the requests in flight — it is a limit,
+read; `--fan-out` (64 on the listing levels, 128 on the file level, one per
+core on the per-table stages) caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
@@ -412,7 +412,8 @@ format version does not identify the data-page version or compression level.
 There is no built-in file filter: `partition ls` streams every file the
 window's commits added, and `bytemass` measures each, so which files to measure
 is a shell job on the stream (`jq`, `sort`, `head`, `xargs`) — see
-[demo.md](demo.md).
+[demo.md](demo.md). `bytemass` reads its files in flight (`--fan-out`, 128 by
+default), so the per-file footer round trips overlap instead of adding up.
 
 ## S3 file patterns
 

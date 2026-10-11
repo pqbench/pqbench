@@ -20,7 +20,7 @@ pub mod ls;
 mod selection;
 pub use selection::FileSelection;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -276,6 +276,10 @@ pub struct LoadRequest {
     /// When true, read the commit log even when [`Self::require_files`] is
     /// false: `table ls` needs the commits' times, not the files.
     pub require_log: bool,
+    /// Read only these commit versions; `None` reads every commit. Naming the
+    /// commits says the log's own file actions are what the caller wants, so
+    /// the snapshot's active files are not replayed.
+    pub commit_versions: Option<BTreeSet<u64>>,
 }
 
 impl LoadRequest {
@@ -293,6 +297,7 @@ impl LoadRequest {
             file_stats: true,
             require_files: true,
             require_log: false,
+            commit_versions: None,
         }
     }
 
@@ -321,6 +326,15 @@ impl LoadRequest {
     pub fn with_log(mut self) -> Self {
         self.require_log = true;
         self.require_files = false;
+        self
+    }
+
+    /// Read only these commit versions. The caller wants the files the log
+    /// itself names, so the snapshot replay is skipped.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn with_commits(mut self, versions: impl IntoIterator<Item = u64>) -> Self {
+        self.commit_versions = Some(versions.into_iter().collect());
         self
     }
 }

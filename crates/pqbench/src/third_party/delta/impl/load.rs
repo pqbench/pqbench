@@ -4,7 +4,7 @@
 //! current-thread runtime: delta-rs then selects its own executor instead of
 //! borrowing the caller's, which its kernel can panic on after a failed load.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -51,9 +51,11 @@ pub(super) async fn load(request: &LoadRequest) -> Result<TableInfo, Error> {
     info.columns = snapshot.columns;
     info.delta_properties = snapshot.properties;
     if request.require_files || request.require_log {
-        info.log = read_log(&table, snapshot.version).await?;
+        info.log = read_log(&table, snapshot.version, request.commit_versions.as_ref()).await?;
     }
-    if request.require_files {
+    // A caller that names the commits wants the files the log itself names; the
+    // snapshot's active-file replay is redundant then (and O(files)).
+    if request.require_files && request.commit_versions.is_none() {
         let (files, partitions) = active_files(&table, request).await?;
         info.files = files;
         info.partitions = partitions;
@@ -158,10 +160,18 @@ fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
     })
 }
 
-async fn read_log(table: &DeltaTable, last_version: u64) -> Result<Vec<LogCommit>, Error> {
+async fn read_log(
+    table: &DeltaTable,
+    last_version: u64,
+    versions: Option<&BTreeSet<u64>>,
+) -> Result<Vec<LogCommit>, Error> {
     let store = table.log_store();
+    let wanted: Vec<u64> = match versions {
+        Some(versions) => versions.iter().copied().collect(),
+        None => (0..=last_version).collect(),
+    };
     let mut commits = Vec::new();
-    for version in 0..=last_version {
+    for version in wanted {
         let Some(bytes) = store
             .read_commit_entry(version)
             .await
