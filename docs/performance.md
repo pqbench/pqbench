@@ -33,18 +33,28 @@ catalog".
 $ eval "$(pqbench setup --endpoint <url> --token <token> --region us-east-2)"
 ```
 
-`make dbx-e2e` drives the live Databricks workspace and its external fixture:
-`pqbench_ext`, whose external Delta tables on customer S3 are the synthetic
-`events`/`sales`/`reference` plus real sample data copied server-side from
-`dbx_samples` (`scripts/dbx-ext/`). `external_fixture_walk_is_the_perf_target`
-times the whole walk; `make lakehouse` drives the compose stand for the
+`make dbx-perf-walk` drives the live Databricks workspace and its external
+fixture: `pqbench_ext`, whose external Delta tables on customer S3 are the
+synthetic `events`/`sales`/`reference` plus real sample data copied server-side
+from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-perf-walk.sh` runs the
+whole walk under `perf` (the `dbx-perf-walk` CI job); `make dbx-e2e` runs the
+live correctness e2e, and `make lakehouse` drives the compose stand for the
 file-level commands.
+
+The walk's catalog levels span the whole Unity Catalog; the table levels
+descend the one catalog this principal may read outside compute
+(`PQB_WALK_CATALOG`, default `pqbench_ext`). Unity refuses
+`EXTERNAL USE SCHEMA` on the sample and managed-default catalogs, and a live run
+shares the endpoint and is rate-limited, so the script paces the catalog
+fan-outs with `ratelimit` and retries the walk at a lower rate on failure.
 
 ## Run perf
 
 `perf stat` measures the cost of a run; `perf record` finds the hot symbols.
-Use the events the issue names — `task-clock` and `context-switches` are not
-valid event names in this perf build:
+`scripts/dbx-perf-walk.sh` wraps both: `PQB_PERF_MODE=shape|stat|record|all`
+(default `all`), with `PQB_PERF_EVENTS`, `PQB_PERF_REPEAT`, and `PQB_PERF_TOP`
+for the report. Use the events the issue names — `task-clock` and
+`context-switches` are not valid event names in this perf build:
 
 ```console no-run
 $ perf stat -e cycles,instructions,duration_time -r 3 <the walk>

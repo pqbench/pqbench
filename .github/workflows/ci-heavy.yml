@@ -177,11 +177,50 @@ jobs:
           DBX_SAMPLES_SP_CLIENT_SECRET: ${{ secrets.DBX_SAMPLES_SP_CLIENT_SECRET }}
         run: make dbx-e2e
 
+  # The perf walk (scripts/dbx-perf-walk.sh, `make dbx-perf-walk`): `perf
+  # stat`/`perf record` over the whole-Unity-Catalog metadata walk. It
+  # authenticates with the GitHub Actions OIDC token (workload identity
+  # federation) — no stored secret — and falls back to the service principal's
+  # client secret. Required: the S3 adapter reclassifies a dropped pooled
+  # connection as retryable, so the walk is stable on the shared, rate-limited
+  # live endpoint. Skipped on fork PRs.
+  dbx-perf-walk:
+    name: Databricks perf walk
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && (!github.event.pull_request.draft))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: amd64-perf-walk
+      - name: Install perf
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y linux-tools-common "linux-tools-$(uname -r)" || sudo apt-get install -y linux-tools-common linux-tools-generic
+          sudo sysctl -w kernel.perf_event_paranoid=-1
+      # Secrets are scoped to this step, so the third-party actions above never
+      # receive them in their environment.
+      - name: Run the perf walk
+        env:
+          DBX_HOST: ${{ secrets.DBX_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DBX_SAMPLES_SP_CLIENT_ID }}
+          DATABRICKS_ACCOUNT_ID: ${{ secrets.DBX_ACCOUNT_ID }}
+          DBX_SAMPLES_SP_CLIENT_ID: ${{ secrets.DBX_SAMPLES_SP_CLIENT_ID }}
+          DBX_SAMPLES_SP_CLIENT_SECRET: ${{ secrets.DBX_SAMPLES_SP_CLIENT_SECRET }}
+        run: make dbx-perf-walk
+
   # Single status for the heavy cycle; skipped jobs are expected on drafts.
   ci-heavy:
     name: Heavy gate
     if: always()
-    needs: [clippy, test, python, lakehouse-stand, dbx-metastore-e2e]
+    needs: [clippy, test, python, lakehouse-stand, dbx-metastore-e2e, dbx-perf-walk]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a heavy job did not succeed
