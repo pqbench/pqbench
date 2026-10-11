@@ -62,9 +62,6 @@ pub(crate) struct InfoArgs {
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// tables in flight at once (default: cores) [env: PQB_TABLE_FAN_OUT]
-    #[arg(long, value_name = "N", env = "PQB_TABLE_FAN_OUT")]
-    fan_out: Option<usize>,
 }
 
 /// The resolved configuration of `table info`: the table name (or stdin) and
@@ -82,7 +79,7 @@ impl InfoConfig {
             table: args.table.clone(),
             format: args.format.resolve(false),
             output: args.output.clone(),
-            fan_out: fan_out(sections, args.fan_out, default_fan_out())?,
+            fan_out: scan_fan_out(sections, default_fan_out())?,
         })
     }
 }
@@ -231,17 +228,19 @@ pub(crate) struct LsArgs {
     /// table URI or a document file; without it, read table refs on stdin
     input: Option<String>,
     /// window width, epoch-aligned: e.g. 1h, 1d, 1w [env: PQB_TABLE_EVERY]
-    #[arg(long, value_name = "WINDOW", env = "PQB_TABLE_EVERY")]
-    every: Option<String>,
+    #[arg(
+        long,
+        value_name = "WINDOW",
+        env = "PQB_TABLE_EVERY",
+        default_value = "1d"
+    )]
+    every: String,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// tables in flight at once [env: PQB_TABLE_FAN_OUT]
-    #[arg(long, value_name = "N", env = "PQB_TABLE_FAN_OUT")]
-    fan_out: Option<usize>,
 }
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
@@ -250,8 +249,8 @@ async fn run_ls(
     sections: &Sections,
     args: &LsArgs,
 ) -> Result<(), CliError> {
-    let window = parse_window(&window(sections, args)?)?;
-    let fan_out = fan_out(sections, args.fan_out, 64)?;
+    let window = parse_window(&args.every)?;
+    let fan_out = scan_fan_out(sections, 64)?;
     let input = read_input("table ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut partitions = 0usize;
@@ -323,21 +322,9 @@ async fn list_partitions(
     Ok(count)
 }
 
-/// The tables in flight: the flag, then `[table] fan_out`, then `default`.
-fn fan_out(sections: &Sections, flag: Option<usize>, default: usize) -> Result<usize, CliError> {
-    Ok(flag
-        .or(sections.parse("table", "fan_out")?)
-        .unwrap_or(default)
-        .max(1))
-}
-
-/// The commit window: the flag, then `[table] every`, then `1d`.
-fn window(sections: &Sections, args: &LsArgs) -> Result<String, CliError> {
-    Ok(args
-        .every
-        .clone()
-        .or_else(|| sections.get("table", "every").map(str::to_owned))
-        .unwrap_or_else(|| "1d".to_owned()))
+/// The tables in flight: `[scan] fan_out`, then `default`.
+fn scan_fan_out(sections: &Sections, default: usize) -> Result<usize, CliError> {
+    Ok(sections.parse("scan", "fan_out")?.unwrap_or(default).max(1))
 }
 
 /// Parse a window width: a positive integer and a unit (`m`, `h`, `d`, `w`).

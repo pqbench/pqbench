@@ -196,7 +196,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Schema(args) => schema::run(&context, &args).await,
         Command::Credentials(args) => credentials::run(&context, &args).await,
         Command::Partition(args) => partition::run(&context, &args).await,
-        Command::RateLimit(args) => ratelimit::run(&resolution.sections, &args).await,
+        Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),

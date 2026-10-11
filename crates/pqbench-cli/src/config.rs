@@ -28,6 +28,9 @@ pub(crate) struct ConfigArgs {
     /// catalog dialect: unity (the default) or iceberg [env: PQB_TABLE_FORMAT]
     #[arg(long, global = true, value_name = "FORMAT", env = "PQB_TABLE_FORMAT")]
     pub table_format: Option<String>,
+    /// override a setting for this run: NAME=VALUE, or SECTION.KEY=VALUE
+    #[arg(long = "set", global = true, value_name = "NAME=VALUE")]
+    pub set: Vec<String>,
 }
 
 /// The resolved configuration and the run-control file's per-command sections.
@@ -50,10 +53,12 @@ pub(crate) fn resolve(
     require_endpoint: bool,
 ) -> Result<Resolution, CliError> {
     let run_control = read_run_control()?;
+    let set = parse_set(&args.set)?;
     let config = run_control
         .shared
         .combine(env_layer())
         .combine(flag_layer(command, args)?)
+        .combine(set.shared)
         .resolve();
     if require_endpoint && config.endpoint.is_empty() {
         return Err(format!(
@@ -63,7 +68,7 @@ pub(crate) fn resolve(
     }
     Ok(Resolution {
         config,
-        sections: run_control.sections,
+        sections: run_control.sections.overlay(set.sections),
     })
 }
 
@@ -101,6 +106,45 @@ impl Sections {
             None => Ok(None),
         }
     }
+
+    /// Layer `higher` over `self`: a section/key present in `higher` wins.
+    fn overlay(&self, higher: Sections) -> Sections {
+        let mut merged = self.0.clone();
+        for (section, keys) in higher.0 {
+            merged.entry(section).or_default().extend(keys);
+        }
+        Sections(merged)
+    }
+}
+
+/// Parse `--set` overrides into a top layer: `SECTION.KEY=VALUE` sets a section
+/// key, a bare `endpoint`/`token`/`table_format` sets the shared table.
+fn parse_set(values: &[String]) -> Result<RunControl, CliError> {
+    let mut run_control = RunControl::default();
+    for value in values {
+        let Some((name, set)) = value.split_once('=') else {
+            return Err(format!("--set expects NAME=VALUE, got {value:?}").into());
+        };
+        match name.rsplit_once('.') {
+            Some((section, key)) => {
+                run_control
+                    .sections
+                    .0
+                    .entry(section.to_string())
+                    .or_default()
+                    .insert(key.to_string(), set.to_string());
+            }
+            None => match name {
+                "endpoint" => run_control.shared.endpoint = Some(set.to_string()),
+                "token" => run_control.shared.token = Some(set.to_string()),
+                "table_format" => {
+                    run_control.shared.dialect = Some(parse_dialect("--set", set)?);
+                }
+                other => return Err(format!("--set: unknown setting {other:?}").into()),
+            },
+        }
+    }
+    Ok(run_control)
 }
 
 /// The run-control file's contribution: the shared table and the sections.
@@ -238,12 +282,8 @@ mod tests {
              endpoint = https://example.cloud.databricks.com\n\
              table_format=iceberg\n\
              \n\
-             [table]\n\
+             [scan]\n\
              fan_out = 8\n\
-             every = \"1w\"\n\
-             \n\
-             [ratelimit]\n\
-             rate = 15\n\
              \n\
              nonsense\n",
         )
@@ -253,16 +293,42 @@ mod tests {
             Some("https://example.cloud.databricks.com")
         );
         assert_eq!(run_control.shared.dialect, Some(Dialect::Iceberg));
-        assert_eq!(run_control.sections.get("table", "fan_out"), Some("8"));
-        assert_eq!(run_control.sections.get("table", "every"), Some("1w"));
         assert_eq!(
             run_control
                 .sections
-                .parse::<f64>("ratelimit", "rate")
+                .parse::<usize>("scan", "fan_out")
                 .unwrap(),
-            Some(15.0)
+            Some(8)
         );
-        assert_eq!(run_control.sections.get("table", "missing"), None);
+        assert_eq!(run_control.sections.get("scan", "missing"), None);
+    }
+
+    #[test]
+    fn set_overrides_the_file() {
+        let set = parse_set(&[
+            "scan.fan_out=4".to_string(),
+            "table_format=unity".to_string(),
+        ])
+        .unwrap();
+        let file = RunControl {
+            shared: Layer {
+                dialect: Some(Dialect::Iceberg),
+                ..Layer::default()
+            },
+            sections: Sections(
+                [(
+                    "scan".to_string(),
+                    [("fan_out".to_string(), "8".to_string())]
+                        .into_iter()
+                        .collect(),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        };
+        let sections = file.sections.overlay(set.sections);
+        assert_eq!(sections.get("scan", "fan_out"), Some("4"));
+        assert_eq!(set.shared.dialect, Some(Dialect::Unity));
     }
 
     #[test]
