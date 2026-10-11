@@ -109,6 +109,8 @@ EOF
 
 ### Catalog config (Unity / Databricks / Iceberg REST)
 
+See [configuration.md](configuration.md) for the profile file and precedence.
+
 The walk's config resolves from three layers, least to most specific:
 `~/.pqbenchrc` (an INI of named profiles, like `~/.databrickscfg`), then the
 environment, then the command line. A profile names an endpoint, a bearer, and
