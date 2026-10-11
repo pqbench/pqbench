@@ -29,9 +29,7 @@ fn data_and_prose_are_not_invocations() {
         "{\"kind\":\"pqbench.bytemass\",\"event\":\"begin\"}\n"
     ));
     assert!(!invokes_pqbench("import pqbench\n"));
-    assert!(!invokes_pqbench(
-        "docker run --rm pqbench/pqbench:latest bytemass /tmp/f.parquet\n"
-    ));
+    assert!(!invokes_pqbench("tar -xzf pqbench.tar.gz\n"));
     assert!(!invokes_pqbench("# run pqbench later\n"));
 }
 

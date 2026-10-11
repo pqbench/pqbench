@@ -7,45 +7,45 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn lz() {
-    // lz, from line 41
-    support::run("pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table", 42, Some(&["codec  level  compress MB/s  decompress MB/s  ratio", "-----  -----  -------------  ---------------  -----", "zstd       3          ±12.5            ±31.8   0.63", "file: examples/quickstart.parquet", "rows: 1"]));
+    // lz, from line 35
+    support::run("pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table", 36, Some(&["codec  level  compress MB/s  decompress MB/s  ratio", "-----  -----  -------------  ---------------  -----", "zstd       3          ±12.5            ±31.8   0.63", "file: examples/quickstart.parquet", "rows: 1"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn compression() {
-    // compression, from line 58
-    support::run("pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table", 59, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "lz4         1          ±71.0            ±89.0   0.78", "snappy      1          ±20.0            ±40.0   0.85", "zstd        1          ±12.0            ±28.0   1.01", "gzip        1           ±0.6             ±4.0   1.26", "file: examples/quickstart.parquet", "rows: 4", "columns: 0"]));
+    // compression, from line 52
+    support::run("pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table", 53, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "lz4         1          ±71.0            ±89.0   0.78", "snappy      1          ±20.0            ±40.0   0.85", "zstd        1          ±12.0            ±28.0   1.01", "gzip        1           ±0.6             ±4.0   1.26", "file: examples/quickstart.parquet", "rows: 4", "columns: 0"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn bytemass() {
-    // bytemass, from line 77
-    support::run("pqbench bytemass examples/quickstart.parquet --format table", 78, Some(&["column  type   codec         encodings                 bytes  values", "------  -----  ------------  ------------------------  -----  ------", "id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "rows: 8", "columns: 2"]));
+    // bytemass, from line 71
+    support::run("pqbench bytemass examples/quickstart.parquet --format table", 72, Some(&["column  type   codec         encodings                 bytes  values", "------  -----  ------------  ------------------------  -----  ------", "id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "rows: 8", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn table_ls() {
-    // table_ls, from line 102
-    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 103, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
+    // table_ls, from line 96
+    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 97, Some(&["table                          first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "docker/e2e-lakehouse/table  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn partition_ls() {
-    // partition_ls, from line 120
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table", 121, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    // partition_ls, from line 114
+    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table", 115, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 151
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 152, None);
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report", 153, None);
+    // viz, from line 145
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 146, None);
+    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report", 147, None);
 }

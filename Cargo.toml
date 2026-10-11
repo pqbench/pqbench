@@ -35,3 +35,8 @@ pqbench = { version = "0.0.1", path = "crates/pqbench" }
 opt-level = 0
 debug = 1
 incremental = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -5,19 +5,21 @@
 #      owner: pqbench, repository: pqbench,
 #      workflow: publish-pypi.yml, environment: pypi
 #   2. GitHub → Settings → Environments → create "pypi"
-#   3. Run this workflow, or publish a GitHub Release
+#   3. Run this workflow manually
 #
 # https://docs.pypi.org/trusted-publishers/
 #
-# CXXFLAGS is the portable codec baseline from ci.yml (no -march=native).
-# A wheel built with native flags SIGILLs on other CPUs.
+# Linux wheels set CXXFLAGS to the portable codec baseline (no -march=native);
+# a wheel built with native flags SIGILLs on other CPUs.
+#
+# Deliberately NOT triggered by `release: published`: release.yml cuts a binary
+# release on a manual dispatch, and PyPI versions are immutable, so riding that
+# event would attempt a duplicate publish (and fail) each time.
 
 name: Publish Python package
 
 on:
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: read

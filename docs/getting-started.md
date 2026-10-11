@@ -13,14 +13,16 @@ reference, read [cli.md](cli.md).
 
 ## Install
 
-Docker is the fastest way to try it — no Rust toolchain, no build:
+Install the released `pqbench` binary (Linux and macOS, x86_64 and arm64):
 
 ```sh
-docker run --rm -v "$PWD:/data:ro" pqbench/pqbench:latest bytemass /data/your.parquet
+curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-cli-installer.sh | sh
 ```
 
-The published image is a portable baseline build; see [docker.md](docker.md)
-for how its numbers compare to a native build. To build from source instead:
+Supported targets and the release process are in
+[Distribution](distribution.md).
+
+To build from source instead:
 
 ```sh
 git clone https://github.com/pqbench/pqbench.git

@@ -45,7 +45,6 @@ details.
   `table ls | partition ls | bytemass`, limitations.
 - [Databricks auth](auth.md) — create the service principal, grant metadata
   access, mint the OAuth M2M bearer.
-- [Docker](docker.md) — build, run, publish, and benchmark in a container.
 - [Performance](performance.md) — measure the metadata walk with `perf stat` and
   `perf record`, and read the result.
 
@@ -53,6 +52,8 @@ details.
 
 - [CLI reference](cli.md) — the task-oriented command table, the document
   kinds, repeated flags, and auth for `s3://` and catalogs.
+- [Distribution](distribution.md) — install the released binary, the targets,
+  and how releases are cut.
 - [`profile`](profile.md) — per-column facts from a decoded row sample.
 - [`experiment`](experiment.md) — rewrite a sample and measure the result.
 - [`viz`](viz.md) — collect a bytemass stream into a static HTML treemap.

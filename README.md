@@ -16,21 +16,15 @@ The usual pipe is `table ls` → `partition ls` → `bytemass` → `viz`.
 
 ## Quick start
 
-Docker is the fastest way to try it — no Rust toolchain, no build:
+Install the released `pqbench` binary (Linux and macOS, x86_64 and arm64):
 
 ```sh
-docker pull pqbench/pqbench:latest
-docker run --rm -v "$PWD:/data:ro" pqbench/pqbench:latest bytemass /data/your.parquet
+curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-cli-installer.sh | sh
 ```
 
-The published image is a portable baseline build; see
-[docs/docker.md](docs/docker.md) for how its numbers compare to a native build.
-
-From a checkout, install the binary on your `PATH`:
-
-```sh
-cargo install --path crates/pqbench-cli
-```
+The installer verifies the download against the release checksums and puts
+`pqbench` in `~/.cargo/bin`. To pin a version, build from source, or read about
+the release process, see [Distribution](docs/distribution.md).
 
 ## Commands
 
@@ -163,13 +157,13 @@ Start with [Getting started](docs/getting-started.md). The
 that command.
 
 - [Getting started](docs/getting-started.md) — install, first measurement, the metadata walk
+- [Distribution](docs/distribution.md) — install the binary, targets, and how releases are cut
 - [CLI reference](docs/cli.md) — the command table, documents, flags, and auth
 - [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
 - [Delta tables](docs/delta.md) — log load, `table ls | partition ls | bytemass`, limitations
 - [Iceberg tables](docs/iceberg.md) — metadata load, `table ls | partition ls | bytemass`, limitations
 - [Visualization](docs/viz.md) — `pqbench viz`, a static HTML treemap
 - [Python bindings](python/README.md) — install the wheel and call every command
-- [Docker](docs/docker.md) — build, run, and publish a container image
 - [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
   naming tables for `pqbench table ls`, over rustfs S3
 

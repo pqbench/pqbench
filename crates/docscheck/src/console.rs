@@ -17,7 +17,7 @@ const COMMAND_SEPARATORS: &[&str] = &["|", "||", "&&", ";", "xargs"];
 /// (after optional `NAME=value` assignments), or after a shell separator or
 /// `xargs`. That keeps prose and data that merely mention the name out: a JSON
 /// `"kind":"pqbench.bytemass"` field, `import pqbench`, and
-/// `pqbench/pqbench:latest` are not commands.
+/// `cargo install pqbench-cli` are not commands.
 pub fn invokes_pqbench(body: &str) -> bool {
     body.lines().any(line_invokes_pqbench)
 }

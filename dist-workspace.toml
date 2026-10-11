@@ -1,0 +1,27 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'. The workspace ships a single binary; `aipnaming-cli` and
+# `docscheck-cli` opt out with `[package.metadata.dist] dist = false` in their
+# own manifests.
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.33.0"
+# CI backends to support
+ci = "github"
+# Releases are cut by a manual workflow dispatch, not a tag push: merge the
+# version bump, then run this workflow. `dist` derives the tag from the crate
+# version and creates the GitHub Release (and the tag) itself.
+dispatch-releases = true
+# The installers to generate for each app
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax). Linux and
+# macOS, x86_64 and arm64 — the platforms the CI can build natively.
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# A downloaded binary cannot be rebuilt by its user, so enable every storage
+# backend (`aws`, `delta`, `iceberg`) rather than shipping partial builds that
+# fail at runtime on `s3://` or a Delta/Iceberg table.
+all-features = true
+# Sigstore-backed build-provenance attestations for the release artifacts
+# (verify with `gh attestation verify <file> --repo pqbench/pqbench`).
+github-attestations = true

@@ -32,8 +32,8 @@ is missing or stale.
 - [x] **Perf** — `perf stat` (+ `perf record` for the hot path) on the command;
   wall time and bytes read for remote; obvious latency flagged, numbers
   recorded in `docs/performance-audit.md`.
-- [x] **Docs** — `docs/cli.md` (+ `docs/delta.md` / `docs/iceberg.md` /
-  `docs/docker.md` / stand README as needed).
+- [x] **Docs** — `docs/cli.md` (+ `docs/delta.md` / `docs/iceberg.md` / stand
+  README as needed).
 
 <!--
 The certification line is per commit: after the last push, re-run the checks
