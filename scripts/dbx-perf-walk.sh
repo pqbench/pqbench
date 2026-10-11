@@ -73,7 +73,7 @@ trap 'rm -rf "$WORK"' EXIT
 # the descent so `credentials get` is not refused for the rest.
 keep_readable_catalog() {
     jq -c --arg catalog "$CATALOG" \
-        'select(.kind == "pqbench.table-ref" and (.id | startswith($catalog + ".")))'
+        'select((.name | startswith("catalogs/\($catalog)/")) and (.name | contains("/tables/")))'
 }
 
 # The walk, as `docs/performance.md` writes it: one pipeline, every level
