@@ -22,8 +22,8 @@ use crate::CliError;
 /// to the storage client.
 #[derive(Args)]
 pub(crate) struct SetupArgs {
-    /// bucket region; defaults to AWS_REGION
-    #[arg(long, value_name = "REGION")]
+    /// bucket region [env: AWS_REGION]
+    #[arg(long, value_name = "REGION", env = "AWS_REGION")]
     region: Option<String>,
 }
 
@@ -44,8 +44,8 @@ pub(crate) fn run(context: &Context, args: &SetupArgs) -> Result<(), CliError> {
     export(&mut out, "PQB_ENDPOINT", &config.endpoint);
     export(&mut out, "PQB_TOKEN", token);
     export(&mut out, "PQB_TABLE_FORMAT", dialect_name(config.dialect));
-    if let Some(region) = region(&args.region) {
-        export(&mut out, "AWS_REGION", &region);
+    if let Some(region) = non_empty(args.region.as_deref()) {
+        export(&mut out, "AWS_REGION", region);
     }
     export(&mut out, "AWS_EC2_METADATA_DISABLED", "true");
     print!("{out}");
@@ -60,15 +60,9 @@ fn dialect_name(dialect: Dialect) -> &'static str {
     }
 }
 
-/// The first non-empty value: the flag, then `AWS_REGION`.
-fn region(flag: &Option<String>) -> Option<String> {
-    flag.clone()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var("AWS_REGION")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
+/// A value with the surrounding whitespace trimmed; blank is nothing.
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 /// One `export NAME='value'` line.
@@ -92,15 +86,5 @@ mod tests {
     #[test]
     fn a_quote_is_escaped() {
         assert_eq!(quote("it's"), r#"'it'\''s'"#);
-    }
-
-    #[test]
-    fn the_flag_beats_the_environment() {
-        std::env::set_var("AWS_REGION", "from-env");
-        assert_eq!(
-            region(&Some("from-flag".into())).as_deref(),
-            Some("from-flag")
-        );
-        std::env::remove_var("AWS_REGION");
     }
 }
