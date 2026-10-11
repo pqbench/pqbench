@@ -7,17 +7,16 @@
 # This is a *portable* baseline, deliberately without `-march=native`: a binary
 # (or a cached codec object) tuned to one machine SIGILLs on another, so CI and
 # the release must not use native codegen. To reproduce lzbench's native numbers
-# locally, opt in for one build — an exported CXXFLAGS wins over [env] below:
+# locally, opt in for one build (an exported CXXFLAGS wins over [env] below):
 #
 #   CXXFLAGS="-O3 -DNDEBUG -fPIE -march=native -fomit-frame-pointer \
 #     -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1" make ...
 #
-# Not present: the snappy-specific `SNAPPY_HAVE_SSSE3`/`_X86_CRC32`/`_BMI2`
-# defines. `-march=native` makes snappy auto-derive those from `__SSSE3__`,
-# `__SSE4_2__`, `__BMI2__` (snappy.cc:32-53), and explicitly defining them
-# measurably changed snappy's decompress codegen vs lzbench (which defines
-# none). `-DHAVE_BUILTIN_CTZ` is the one intrinsic snappy does not auto-detect,
-# which lzbench passes via its own probe.
+# `-march=native` also makes snappy auto-derive `SNAPPY_HAVE_SSSE3`/`_X86_CRC32`/
+# `_BMI2` from `__SSSE3__`/`__SSE4_2__`/`__BMI2__` (snappy.cc:32-53); we do not
+# define them explicitly because doing so measurably changed snappy's decompress
+# codegen vs lzbench (which defines none). `-DHAVE_BUILTIN_CTZ` is the one
+# intrinsic snappy does not auto-detect, which lzbench passes via its own probe.
 [build]
 # Use sccache when installed and invoke rustc directly otherwise. This keeps
 # fresh clones and CI working without mandatory machine-level configuration.
