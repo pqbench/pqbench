@@ -20,6 +20,6 @@ serde_json = "1.0"
 [dev-dependencies]
 tempfile = "3"
 
-# Not distributed: docscheck is a development tool, not a shipped binary.
+# Not distributed: a development tool, not a shipped binary.
 [package.metadata.dist]
 dist = false
