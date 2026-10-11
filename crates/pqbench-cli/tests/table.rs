@@ -36,8 +36,8 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
 fn table_file(table: &str, uri: &str, size: Option<u64>) -> serde_json::Value {
     let path = uri.rsplit('/').next().unwrap();
     let mut file = json!({
-        "name": pqbench::v1::name::table_file_of(table, path),
-        "blob": pqbench::v1::name::blob_of(uri),
+        "name": pqbench::v1::name::table_file_name(table, path),
+        "blob": pqbench::v1::name::blob_name(uri),
     });
     if let Some(size) = size {
         file["size_bytes"] = json!(size);

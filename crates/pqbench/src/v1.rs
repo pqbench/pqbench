@@ -55,24 +55,24 @@ pub mod name {
     /// `…/tables/{table}/partitions/{partition}`.
     #[must_use]
     pub fn partition(catalog: &str, schema: &str, table: &str, partition: &str) -> String {
-        self::partition_of(&self::table(catalog, schema, table), partition)
+        self::partition_name(&self::table(catalog, schema, table), partition)
     }
 
     /// `{table}/partitions/{partition}` — a partition under a known table name.
     #[must_use]
-    pub fn partition_of(table: &str, partition: &str) -> String {
+    pub fn partition_name(table: &str, partition: &str) -> String {
         format!("{table}/partitions/{}", encode(partition))
     }
 
     /// `…/tables/{table}/files/{file}`.
     #[must_use]
     pub fn table_file(catalog: &str, schema: &str, table: &str, file: &str) -> String {
-        self::table_file_of(&self::table(catalog, schema, table), file)
+        self::table_file_name(&self::table(catalog, schema, table), file)
     }
 
     /// `{table}/files/{file}` — a file under a known table name.
     #[must_use]
-    pub fn table_file_of(table: &str, file: &str) -> String {
+    pub fn table_file_name(table: &str, file: &str) -> String {
         format!("{table}/files/{}", encode(file))
     }
 
@@ -181,7 +181,7 @@ pub mod name {
     /// scheme, or `file://`) is `file`. The locator is the rest, so the name
     /// decodes back to what the URI reads.
     #[must_use]
-    pub fn blob_of(uri: &str) -> String {
+    pub fn blob_name(uri: &str) -> String {
         let (service, locator) = storage_parts(uri);
         blob(&service, &locator)
     }
@@ -808,7 +808,7 @@ mod tests {
             "/tmp/x.parquet",
             "file:///tmp/y.parquet",
         ] {
-            let blob = name::blob_of(uri);
+            let blob = name::blob_name(uri);
             assert!(blob.starts_with("blobs/"), "{blob}");
             let read = name::blob_uri(&blob).unwrap();
             assert!(

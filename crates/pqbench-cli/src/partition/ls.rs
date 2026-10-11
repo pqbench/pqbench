@@ -65,7 +65,7 @@ pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
         for file in &found {
             let table_file = v1::TableFile {
                 name: v1::name::table_file(&catalog, &schema, &table, &file.path),
-                blob: Some(v1::name::blob_of(&file.uri)),
+                blob: Some(v1::name::blob_name(&file.uri)),
                 size_bytes: Some(file.size_bytes),
                 credentials: credentials.clone(),
                 ..v1::TableFile::default()

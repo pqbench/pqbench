@@ -51,7 +51,7 @@ fn group(
     groups
         .into_iter()
         .map(|(first_time, commit_versions)| Partition {
-            name: v1::name::partition_of(table_name, &first_time.to_string()),
+            name: v1::name::partition_name(table_name, &first_time.to_string()),
             start_time: u64::try_from(first_time).ok(),
             end_time: u64::try_from(first_time + window_millis).ok(),
             commit_versions,

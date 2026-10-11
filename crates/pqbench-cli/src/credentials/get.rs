@@ -32,7 +32,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         let (record, credentials) = result?;
         let vended = credentials.is_some();
         emit.write_row(&VendedRef {
-            record: with_credentials(record, credentials),
+            record: attach_credentials(record, credentials),
             vended,
         })
         .await?;
@@ -44,7 +44,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
 /// The ref with the vended lease written onto it as its `credentials` value;
 /// the older `env` bag, if any, is dropped, so a table's lease lives in one
 /// place. A table the catalog vends nothing for is passed through unchanged.
-fn with_credentials(mut record: Value, env: Option<BTreeMap<String, String>>) -> Value {
+fn attach_credentials(mut record: Value, env: Option<BTreeMap<String, String>>) -> Value {
     let Some(env) = env else {
         return record;
     };

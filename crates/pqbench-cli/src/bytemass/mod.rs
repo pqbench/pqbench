@@ -90,8 +90,8 @@ async fn measure(
             let env = env.clone();
             async move {
                 let file = v1::TableFile {
-                    name: v1::name::table_file_of(&v1::name::local_table(&input), &input),
-                    blob: Some(v1::name::blob_of(&input)),
+                    name: v1::name::table_file_name(&v1::name::local_table(&input), &input),
+                    blob: Some(v1::name::blob_name(&input)),
                     ..v1::TableFile::default()
                 };
                 measure_one(lake, file, env, options).await
@@ -134,8 +134,8 @@ async fn measure_record(
                 let inputs = std::slice::from_ref(&uri);
                 for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
                     let file = v1::TableFile {
-                        name: v1::name::table_file_of(&v1::name::local_table(&input), &input),
-                        blob: Some(v1::name::blob_of(&input)),
+                        name: v1::name::table_file_name(&v1::name::local_table(&input), &input),
+                        blob: Some(v1::name::blob_name(&input)),
                         ..v1::TableFile::default()
                     };
                     measured.push(measure_one(lake, file, source.env.clone(), options).await?);

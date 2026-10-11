@@ -185,7 +185,8 @@ from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `schema ls`
 lists the tables in it, one `Table` line each — the
 document `table info` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
-only, so the ref carries the `loadTable` URL as its `uri` and no storage path.
+only, so the ref carries its name and no storage URI — `table info` derives the
+`loadTable` URL and reads the metadata inline.
 A view carries no location, so its ref keeps no storage path;
 `credentials check` is the stage that drops it. Refs are addresses; the walk
 context (endpoint, token, storage options) comes from the environment
