@@ -9,6 +9,7 @@ use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{
     page_index_start, read_footer_masses, read_tail_masses, Error, FileMass,
 };
+use crate::Context;
 
 const PARQUET_FOOTER_SIZE: u64 = 8;
 
@@ -21,12 +22,13 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 /// # Errors
 /// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
 pub(super) async fn read_remote(
+    context: &Context,
     uri: &str,
     options: impl IntoIterator<Item = (String, String)>,
     indexes: bool,
 ) -> Result<(ObjectStat, FileMass), Error> {
     let options: Vec<(String, String)> = options.into_iter().collect();
-    let reader = object_store::open(uri, &options).map_err(storage_error)?;
+    let reader = object_store::open(context, uri, &options).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
     let size = stat.size_bytes;
     if size < PARQUET_FOOTER_SIZE {
@@ -102,6 +104,16 @@ fn storage_error(error: object_store::Error) -> Error {
 mod tests {
     use super::read_remote;
     use crate::third_party::parquet::api::{default_metadata_parser, MetadataParser};
+    use crate::{Config, Context, Dialect};
+
+    fn context() -> Context {
+        Context::new(Config {
+            endpoint: String::new(),
+            token: None,
+            dialect: Dialect::Unity,
+        })
+        .expect("the context builds")
+    }
 
     #[tokio::test]
     async fn reads_a_parquet_uri_through_the_public_api() {
@@ -111,7 +123,9 @@ mod tests {
         ));
         let expected = default_metadata_parser().read_masses(path).unwrap();
         let uri = url::Url::from_file_path(path).unwrap();
-        let (stat, actual) = read_remote(uri.as_str(), [], false).await.unwrap();
+        let (stat, actual) = read_remote(&context(), uri.as_str(), [], false)
+            .await
+            .unwrap();
         assert_eq!(stat.size_bytes, std::fs::metadata(path).unwrap().len());
         assert_eq!(actual.row_count, expected.row_count);
         assert_eq!(actual.columns.len(), expected.columns.len());
@@ -124,7 +138,9 @@ mod tests {
             "/tests/fixtures/small_snappy.parquet"
         ));
         let uri = url::Url::from_file_path(path).unwrap();
-        let (_, actual) = read_remote(uri.as_str(), [], true).await.unwrap();
+        let (_, actual) = read_remote(&context(), uri.as_str(), [], true)
+            .await
+            .unwrap();
         assert!(!actual.columns.is_empty());
     }
 }

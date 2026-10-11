@@ -94,11 +94,3 @@ pub struct Response {
     /// The response body.
     pub bytes: Vec<u8>,
 }
-
-/// Send one request.
-///
-/// # Errors
-/// Fails when the request cannot be sent.
-pub async fn request(request: Request) -> Result<Response, Error> {
-    super::r#impl::request(request).await
-}

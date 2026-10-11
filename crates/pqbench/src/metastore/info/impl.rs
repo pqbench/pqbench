@@ -7,7 +7,8 @@ use serde::Deserialize;
 
 use super::api::{Error, Metastore};
 use crate::dialect;
-use crate::third_party::reqwest::{self, Request};
+use crate::third_party::reqwest::Request;
+use crate::Context;
 
 /// The subset of `GET /metastore_summary` this command reports.
 #[derive(Deserialize)]
@@ -20,9 +21,14 @@ struct Summary {
     region: String,
 }
 
-pub(crate) async fn read(endpoint: &str, token: Option<&str>) -> Result<Metastore, Error> {
-    let url = format!("{}/metastore_summary", dialect::api_root(endpoint));
-    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+pub(crate) async fn read(context: &Context) -> Result<Metastore, Error> {
+    let url = format!(
+        "{}/metastore_summary",
+        dialect::api_root(context.config().endpoint.as_str())
+    );
+    let response = context
+        .http()
+        .request(Request::get(url, context.config().token.clone()))
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if response.status != 200 {

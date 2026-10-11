@@ -109,8 +109,11 @@ EOF
 
 ### Catalog config (Unity / Databricks / Iceberg REST)
 
-The walk's config comes from the environment — configuration management sets
-it (`pqbench setup` prints it for the shell to eval):
+The walk's config resolves from three layers, least to most specific:
+`~/.pqbenchrc` (a `key = value` run-control file), then the environment, then
+the command line. `--endpoint`, `--token`, and `--table-format` are global
+flags, each with a `PQB_*` fallback; `pqbench setup` prints the resolved config
+for the shell to eval:
 
 | Variable | Role |
 | --- | --- |

@@ -123,14 +123,14 @@ fn table_record(table: &ls::TableRef) -> TableRefRecord<'_> {
     }
 }
 
-pub(crate) async fn run(args: &SchemaArgs) -> Result<(), CliError> {
+pub(crate) async fn run(context: &pqbench::Context, args: &SchemaArgs) -> Result<(), CliError> {
     match &args.command {
-        SchemaCommand::Info(args) => run_info(args).await,
-        SchemaCommand::Ls(args) => run_ls(args).await,
+        SchemaCommand::Info(args) => run_info(context, args).await,
+        SchemaCommand::Ls(args) => run_ls(context, args).await,
     }
 }
 
-async fn run_info(args: &NameArgs) -> Result<(), CliError> {
+async fn run_info(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {
@@ -140,14 +140,7 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
             );
         }
         let (catalog, name) = split_schema("schema info", schema)?;
-        let record = info::read(
-            &input.source.endpoint,
-            &catalog,
-            &name,
-            input.source.token.as_deref(),
-            input.source.table_format.into(),
-        )
-        .await?;
+        let record = info::read(context, &catalog, &name).await?;
         emit.write_row(&schema_record(&record)).await?;
         return emit.finish("schemas: 1\n").await;
     }
@@ -155,21 +148,11 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
         return Err("schema info needs CATALOG.SCHEMA or a pqbench.schema stream".into());
     }
     let records = source::records("schema info", input.first, input.lines);
-    let source = input.source;
     let mut schemas = 0;
     let mut reads = records
         .map(|record| async {
             let (catalog, name) = schema_ref(&record?)?;
-            Ok::<_, CliError>(
-                info::read(
-                    &source.endpoint,
-                    &catalog,
-                    &name,
-                    source.token.as_deref(),
-                    source.table_format.into(),
-                )
-                .await?,
-            )
+            Ok::<_, CliError>(info::read(context, &catalog, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {
@@ -179,7 +162,7 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
     emit.finish(&format!("schemas: {schemas}\n")).await
 }
 
-async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
+async fn run_ls(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("schema ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {
@@ -189,14 +172,7 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
             );
         }
         let (catalog, name) = split_schema("schema ls", schema)?;
-        let tables = ls::list(
-            &input.source.endpoint,
-            &catalog,
-            &name,
-            input.source.token.as_deref(),
-            input.source.table_format.into(),
-        )
-        .await?;
+        let tables = ls::list(context, &catalog, &name).await?;
         for table in &tables {
             emit.write_row(&table_record(table)).await?;
         }
@@ -206,21 +182,11 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         return Err("schema ls needs CATALOG.SCHEMA or a pqbench.schema stream".into());
     }
     let records = source::records("schema ls", input.first, input.lines);
-    let source = input.source;
     let mut tables = 0;
     let mut lists = records
         .map(|record| async {
             let (catalog, name) = schema_ref(&record?)?;
-            Ok::<_, CliError>(
-                ls::list(
-                    &source.endpoint,
-                    &catalog,
-                    &name,
-                    source.token.as_deref(),
-                    source.table_format.into(),
-                )
-                .await?,
-            )
+            Ok::<_, CliError>(ls::list(context, &catalog, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {

@@ -8,6 +8,7 @@
 //! runtime and names the feature.
 
 use crate::table::{LoadRequest, TableInfo};
+use crate::Context;
 
 /// Load the current or requested Iceberg snapshot into a table record.
 ///
@@ -17,6 +18,9 @@ use crate::table::{LoadRequest, TableInfo};
 /// # Errors
 /// Fails when the `iceberg` feature is off, for invalid metadata, missing
 /// snapshots, non-Parquet data files, or data paths outside the table location.
-pub async fn load(request: &LoadRequest) -> Result<TableInfo, crate::table::Error> {
-    super::r#impl::load(request).await
+pub async fn load(
+    context: &Context,
+    request: &LoadRequest,
+) -> Result<TableInfo, crate::table::Error> {
+    super::r#impl::load(context, request).await
 }

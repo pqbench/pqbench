@@ -2,9 +2,9 @@
 //!
 //! Every level is a stateless filter: it reads only its parent's records
 //! (`catalog` reads `pqbench.catalog` refs, one per line) and writes its own
-//! kind. Nothing else rides the stream. The endpoint, bearer, dialect, and
-//! object-store options come from the environment — configuration management
-//! sets them (`pqbench setup` prints them for the shell to eval):
+//! kind. Nothing else rides the stream. The endpoint, bearer, and dialect come
+//! from the resolved configuration — `~/.pqbenchrc`, the environment, then the
+//! flags (`pqbench setup` prints it for the shell to eval):
 //!
 //! ```text
 //! PQB_ENDPOINT=… PQB_TOKEN=… pqbench metastore ls | pqbench catalog ls | …
@@ -27,63 +27,9 @@ use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
 use crate::CliError;
 
-/// The endpoint and bearer a metadata command runs under, the catalog dialect
-/// it speaks, and the object-store options its table reads need. All of it
-/// comes from the environment.
-#[derive(Debug, Clone)]
-pub(crate) struct Source {
-    pub endpoint: String,
-    pub token: Option<String>,
-    pub table_format: TableFormat,
-}
-
-/// The catalog dialect the walk runs against.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum TableFormat {
-    Unity,
-    Iceberg,
-}
-
-impl From<TableFormat> for pqbench::catalog::ls::TableFormat {
-    fn from(format: TableFormat) -> Self {
-        match format {
-            TableFormat::Unity => Self::Unity,
-            TableFormat::Iceberg => Self::Iceberg,
-        }
-    }
-}
-
-impl From<TableFormat> for pqbench::schema::TableFormat {
-    fn from(format: TableFormat) -> Self {
-        match format {
-            TableFormat::Unity => Self::Unity,
-            TableFormat::Iceberg => Self::Iceberg,
-        }
-    }
-}
-
-impl From<TableFormat> for pqbench::table::info::TableFormat {
-    fn from(format: TableFormat) -> Self {
-        match format {
-            TableFormat::Unity => Self::Unity,
-            TableFormat::Iceberg => Self::Iceberg,
-        }
-    }
-}
-
-impl From<TableFormat> for pqbench::credentials::check::TableFormat {
-    fn from(format: TableFormat) -> Self {
-        match format {
-            TableFormat::Unity => Self::Unity,
-            TableFormat::Iceberg => Self::Iceberg,
-        }
-    }
-}
-
-/// One command's context: the resolved configuration and the parent records,
-/// built once at command start and passed to the stage.
-pub(crate) struct Context {
-    pub source: Source,
+/// The parent records on standard input: whether stdin was a pipe (a stream),
+/// the peeked first record, and the rest of the lines.
+pub(crate) struct Input {
     /// Whether stdin was a pipe (a stream), not a terminal.
     pub piped: bool,
     /// The first record, when stdin carried one.
@@ -113,6 +59,30 @@ pub(crate) fn records(
         }
     });
     Box::pin(first.chain(rest))
+}
+
+/// Read stdin's first record (a parent ref, kept for the command's stream),
+/// without resolving config.
+pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError> {
+    let piped = !std::io::stdin().is_terminal();
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut first = None;
+    if piped {
+        while let Some(line) = lines.next_line().await? {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: Value = serde_json::from_str(&line)
+                .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
+            first = Some(record);
+            break;
+        }
+    }
+    Ok(Input {
+        piped,
+        first,
+        lines,
+    })
 }
 
 /// The catalog, schema, and table a `pqbench.table-ref` ref names.
@@ -169,113 +139,17 @@ pub(crate) fn ref_env(record: &Value) -> BTreeMap<String, String> {
 /// `temporary-table-credentials`, or the Iceberg REST catalog's
 /// `storage-credentials` for the table's data read.
 pub(crate) async fn vend(
-    source: &Source,
+    context: &pqbench::Context,
     catalog: &str,
     schema: &str,
     name: &str,
 ) -> Result<Option<BTreeMap<String, String>>, CliError> {
-    match source.table_format {
-        TableFormat::Unity => Ok(credentials::get::vend_unity(
-            &source.endpoint,
-            catalog,
-            schema,
-            name,
-            source.token.as_deref(),
-        )
-        .await?),
-        TableFormat::Iceberg => Ok(credentials::get::vend_iceberg(
-            &source.endpoint,
-            schema,
-            name,
-            source.token.as_deref(),
-        )
-        .await?),
-    }
-}
-
-/// Read stdin's first record (a parent ref, kept for the command's stream) and
-/// resolve the environment's config once.
-pub(crate) async fn read_input(command: &'static str) -> Result<Context, CliError> {
-    read_context(command, true).await
-}
-
-/// Like `read_input`, but the endpoint is optional: a command that reads a
-/// table by storage path (`table ls`) needs no catalog.
-pub(crate) async fn read_storage_input(command: &'static str) -> Result<Context, CliError> {
-    read_context(command, false).await
-}
-
-async fn read_context(command: &'static str, require_endpoint: bool) -> Result<Context, CliError> {
-    let piped = !std::io::stdin().is_terminal();
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut first = None;
-    if piped {
-        while let Some(line) = lines.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let record: Value = serde_json::from_str(&line)
-                .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
-            first = Some(record);
-            break;
+    match context.config().dialect {
+        pqbench::Dialect::Unity => {
+            Ok(credentials::get::vend_unity(context, catalog, schema, name).await?)
         }
-    }
-    let source = resolve(command, require_endpoint)?;
-    Ok(Context {
-        source,
-        piped,
-        first,
-        lines,
-    })
-}
-
-/// The environment is the whole configuration: `PQB_ENDPOINT`, `PQB_TOKEN`,
-/// and `PQB_TABLE_FORMAT`.
-fn resolve(command: &str, require_endpoint: bool) -> Result<Source, CliError> {
-    let endpoint = match env_endpoint() {
-        Some(endpoint) => endpoint,
-        None if require_endpoint => {
-            return Err(format!("{command} needs PQB_ENDPOINT (see `pqbench setup`)").into())
+        pqbench::Dialect::Iceberg => {
+            Ok(credentials::get::vend_iceberg(context, schema, name).await?)
         }
-        None => String::new(),
-    };
-    let table_format = env_table_format()
-        .map(|value| parse_table_format(command, &value))
-        .transpose()?
-        .unwrap_or(TableFormat::Unity);
-    Ok(Source {
-        endpoint,
-        token: env_token(),
-        table_format,
-    })
-}
-
-fn env_endpoint() -> Option<String> {
-    std::env::var("PQB_ENDPOINT")
-        .ok()
-        .filter(|endpoint| !endpoint.trim().is_empty())
-}
-
-fn env_token() -> Option<String> {
-    std::env::var("PQB_TOKEN")
-        .ok()
-        .filter(|token| !token.is_empty())
-}
-
-fn env_table_format() -> Option<String> {
-    std::env::var("PQB_TABLE_FORMAT")
-        .ok()
-        .filter(|value| !value.is_empty())
-}
-
-/// `unity` (the default) or `iceberg`; the endpoint names the catalog base.
-fn parse_table_format(command: &str, value: &str) -> Result<TableFormat, CliError> {
-    match value {
-        "unity" => Ok(TableFormat::Unity),
-        "iceberg" => Ok(TableFormat::Iceberg),
-        other => Err(format!(
-            "{command}: PQB_TABLE_FORMAT expects `unity` or `iceberg`, got {other:?}"
-        )
-        .into()),
     }
 }

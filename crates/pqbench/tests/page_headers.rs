@@ -1,3 +1,5 @@
+mod common;
+
 use parquet::basic::Compression;
 use parquet::data_type::Int32Type;
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
@@ -35,9 +37,13 @@ async fn scans_compressed_v1_and_v2_pages_without_indexes_or_payload_decoding() 
         writer.close().unwrap();
         let mass = read_file_masses(file.path(), true).unwrap();
         assert!(mass.columns[0].page_count.is_none());
-        let pages = scan_pages(file.path().to_str().unwrap(), &Default::default())
-            .await
-            .unwrap();
+        let pages = scan_pages(
+            common::context(),
+            file.path().to_str().unwrap(),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(pages[0].header.page_type, "DICTIONARY_PAGE");
         assert_eq!(pages[0].header.dictionary_entries, Some(2));
         assert_eq!(pages[0].header.encoding.as_deref(), Some("PLAIN"));
@@ -80,9 +86,13 @@ async fn scans_compressed_v1_and_v2_pages_without_indexes_or_payload_decoding() 
             bytes[start..end].fill(0xff);
         }
         std::fs::write(file.path(), bytes).unwrap();
-        let corrupted = scan_pages(file.path().to_str().unwrap(), &Default::default())
-            .await
-            .unwrap();
+        let corrupted = scan_pages(
+            common::context(),
+            file.path().to_str().unwrap(),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             serde_json::to_value(&pages).unwrap(),
             serde_json::to_value(corrupted).unwrap()

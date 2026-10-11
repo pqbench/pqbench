@@ -38,9 +38,9 @@ pub(crate) struct LsArgs {
     fan_out: usize,
 }
 
-pub(crate) async fn run(args: &PartitionArgs) -> Result<(), CliError> {
+pub(crate) async fn run(context: &pqbench::Context, args: &PartitionArgs) -> Result<(), CliError> {
     match &args.command {
-        PartitionCommand::Ls(ls) => run_ls(ls).await,
+        PartitionCommand::Ls(ls) => run_ls(context, ls).await,
     }
 }
 
@@ -50,7 +50,7 @@ pub(crate) async fn run(args: &PartitionArgs) -> Result<(), CliError> {
 /// files the window's commits named — the **added in window** set, so a file a
 /// later commit removes is still named. The env rides on every file, so a
 /// short-lived lease travels with it; there is no begin/end envelope.
-async fn run_ls(args: &LsArgs) -> Result<(), CliError> {
+async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliError> {
     if std::io::stdin().is_terminal() {
         return Err("partition ls reads pqbench.partition records on standard input".into());
     }
@@ -66,9 +66,10 @@ async fn run_ls(args: &LsArgs) -> Result<(), CliError> {
                 .iter()
                 .map(|commit| commit.version)
                 .collect();
-            let found = pqbench::partition::ls::list(&partition.table, &partition.env, &versions)
-                .await
-                .map_err(|error| CliError::from(error.to_string()))?;
+            let found =
+                pqbench::partition::ls::list(context, &partition.table, &partition.env, &versions)
+                    .await
+                    .map_err(|error| CliError::from(error.to_string()))?;
             Ok::<_, CliError>((partition, found))
         })
         .buffer_unordered(args.fan_out.max(1));

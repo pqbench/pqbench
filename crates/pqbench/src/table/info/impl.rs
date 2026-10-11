@@ -18,21 +18,18 @@ use serde_json::Value;
 use super::api::{Error, Storage, TableFormat as Dialect};
 use crate::dialect;
 use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
+use crate::Context;
 
 pub(crate) async fn read(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
     table: &str,
-    token: Option<&str>,
-    table_format: Dialect,
     storage: &Storage,
 ) -> Result<TableInfo, Error> {
-    match table_format {
-        Dialect::Unity => unity_record(endpoint, catalog, schema, table, token, storage).await,
-        Dialect::Iceberg => {
-            iceberg_record(endpoint, catalog, schema, table, token, &storage.env).await
-        }
+    match context.config().dialect {
+        Dialect::Unity => unity_record(context, catalog, schema, table, storage).await,
+        Dialect::Iceberg => iceberg_record(context, catalog, schema, table, &storage.env).await,
     }
 }
 
@@ -59,17 +56,16 @@ struct UnityColumn {
 }
 
 async fn unity_record(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
     table: &str,
-    token: Option<&str>,
     storage: &Storage,
 ) -> Result<TableInfo, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let url = format!(
         "{}/tables/{}",
-        dialect::api_root(endpoint),
+        dialect::api_root(context.config().endpoint.as_str()),
         dialect::encode(&name)
     );
     // The parent ref already names the storage, so start the catalog call, read
@@ -81,23 +77,27 @@ async fn unity_record(
         .filter(|location| !location.is_empty())
     {
         Some(location) => {
-            let catalog = dialect::get_json::<UnityRecord>(&url, token);
+            let catalog =
+                dialect::get_json::<UnityRecord>(context, &url, context.config().token.as_deref());
             let (record, info) = futures_util::future::try_join(
                 async { catalog.await.map_err(Error::from) },
-                load_metadata(&name, location, &storage.env),
+                load_metadata(context, &name, location, &storage.env),
             )
             .await?;
             let catalog_location = catalog_location(&record, &name)?;
             let info = match catalog_location == location {
                 true => info,
-                false => load_metadata(&name, &catalog_location, &storage.env).await?,
+                false => load_metadata(context, &name, &catalog_location, &storage.env).await?,
             };
             (record, info)
         }
         None => {
-            let record: UnityRecord = dialect::get_json(&url, token).await.map_err(Error::from)?;
+            let record: UnityRecord =
+                dialect::get_json(context, &url, context.config().token.as_deref())
+                    .await
+                    .map_err(Error::from)?;
             let location = catalog_location(&record, &name)?;
-            let info = load_metadata(&name, &location, &storage.env).await?;
+            let info = load_metadata(context, &name, &location, &storage.env).await?;
             (record, info)
         }
     };
@@ -139,12 +139,13 @@ fn catalog_location(record: &UnityRecord, name: &str) -> Result<String, Error> {
 /// The table's metadata at `location`, without files, naming the table and the
 /// location on failure.
 async fn load_metadata(
+    context: &Context,
     name: &str,
     location: &str,
     env: &BTreeMap<String, String>,
 ) -> Result<TableInfo, Error> {
     let request = LoadRequest::new(location.to_string(), None, env.clone()).without_files();
-    table::load(&request).await.map_err(|error| {
+    table::load(context, &request).await.map_err(|error| {
         let hint = if location.starts_with("s3://") {
             " (s3:// needs credentials on the lake source; Databricks default storage cannot be read outside Databricks compute)"
         } else {
@@ -214,21 +215,22 @@ struct IcebergPartitionField {
 }
 
 async fn iceberg_record(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
     table: &str,
-    token: Option<&str>,
     env: &BTreeMap<String, String>,
 ) -> Result<TableInfo, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let url = format!(
         "{}/namespaces/{}/tables/{}",
-        dialect::iceberg_root(endpoint),
+        dialect::iceberg_root(context.config().endpoint.as_str()),
         dialect::iceberg_namespace(schema),
         dialect::encode(table)
     );
-    let loaded: LoadedTable = dialect::get_json(&url, token).await.map_err(Error::from)?;
+    let loaded: LoadedTable = dialect::get_json(context, &url, context.config().token.as_deref())
+        .await
+        .map_err(Error::from)?;
     if loaded.metadata_location.is_empty() {
         return Err(Error::from(format!(
             "the table {name} has no metadata location"

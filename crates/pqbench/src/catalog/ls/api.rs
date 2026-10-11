@@ -5,15 +5,9 @@
 
 use std::fmt;
 
-/// The catalog dialect a command speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableFormat {
-    /// Unity REST: `/schemas`, `/tables`.
-    Unity,
-    /// Iceberg REST: `/namespaces…`; the endpoint already names the catalog
-    /// base (`{root}/v1` or `{root}/v1/{prefix}`), so no config probe runs.
-    Iceberg,
-}
+use crate::Context;
+
+pub use crate::config::Dialect as TableFormat;
 
 /// One schema in a catalog.
 #[derive(Debug, Clone)]
@@ -42,16 +36,11 @@ impl From<String> for Error {
     }
 }
 
-/// List the schemas in `catalog` at `endpoint`.
+/// List the schemas in `catalog` at the context's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed schema page.
-pub async fn list(
-    endpoint: &str,
-    catalog: &str,
-    token: Option<&str>,
-    table_format: TableFormat,
-) -> Result<Vec<Schema>, Error> {
-    super::r#impl::list(endpoint, catalog, token, table_format).await
+pub async fn list(context: &Context, catalog: &str) -> Result<Vec<Schema>, Error> {
+    super::r#impl::list(context, catalog).await
 }

@@ -6,6 +6,7 @@ mod bench;
 mod bytemass;
 mod catalog;
 mod compression;
+mod config;
 mod credentials;
 mod diff;
 mod document;
@@ -37,6 +38,9 @@ pub(crate) type CliError = Box<dyn std::error::Error + Send + Sync>;
     after_long_help = help::ROOT_AFTER
 )]
 struct Cli {
+    /// The configuration every command shares (flags, with a `PQB_*` fallback).
+    #[command(flatten)]
+    config: config::ConfigArgs,
     #[command(subcommand)]
     command: Command,
 }
@@ -164,29 +168,76 @@ async fn main() -> ExitCode {
         std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
     }
     let cli = Cli::parse();
-    let result = match cli.command {
-        Command::Diff(args) => diff::run(&args).await,
+    match dispatch(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Resolve the shared configuration and context once, then run the command.
+async fn dispatch(cli: Cli) -> Result<(), CliError> {
+    let config = config::resolve(
+        cli.command.name(),
+        &cli.config,
+        cli.command.requires_endpoint(),
+    )?;
+    let context = pqbench::Context::new(config)?;
+    match cli.command {
+        Command::Diff(args) => diff::run(&context, &args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
-        Command::Bytemass(args) => bytemass::run(&args).await,
-        Command::Table(args) => table::run(&args).await,
-        Command::Metastore(args) => metastore::run(&args).await,
-        Command::Catalog(args) => catalog::run(&args).await,
-        Command::Schema(args) => schema::run(&args).await,
-        Command::Credentials(args) => credentials::run(&args).await,
-        Command::Partition(args) => partition::run(&args).await,
+        Command::Bytemass(args) => bytemass::run(&context, &args).await,
+        Command::Table(args) => table::run(&context, &args).await,
+        Command::Metastore(args) => metastore::run(&context, &args).await,
+        Command::Catalog(args) => catalog::run(&context, &args).await,
+        Command::Schema(args) => schema::run(&context, &args).await,
+        Command::Credentials(args) => credentials::run(&context, &args).await,
+        Command::Partition(args) => partition::run(&context, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args).await,
-        Command::Setup(args) => setup::run(&args),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
+        Command::Setup(args) => setup::run(&context, &args),
+    }
+}
+
+impl Command {
+    /// The command's name, used in configuration errors.
+    fn name(&self) -> &'static str {
+        match self {
+            Command::Diff(_) => "diff",
+            Command::Lz(_) => "lz",
+            Command::Compression(_) => "compression",
+            Command::Bytemass(_) => "bytemass",
+            Command::Table(_) => "table",
+            Command::Metastore(_) => "metastore",
+            Command::Catalog(_) => "catalog",
+            Command::Schema(_) => "schema",
+            Command::Credentials(_) => "credentials",
+            Command::Partition(_) => "partition",
+            Command::RateLimit(_) => "ratelimit",
+            Command::Profile(_) => "profile",
+            Command::Experiment(_) => "experiment",
+            Command::Skill(_) => "skill",
+            Command::Viz(_) => "viz",
+            Command::Setup(_) => "setup",
+        }
+    }
+
+    /// Whether the command needs `PQB_ENDPOINT`. Only the metadata walk reads
+    /// a catalog; a storage-only command (`table ls`, `bytemass`, …) does not.
+    fn requires_endpoint(&self) -> bool {
+        match self {
+            Command::Metastore(_)
+            | Command::Catalog(_)
+            | Command::Schema(_)
+            | Command::Credentials(_) => true,
+            Command::Table(args) => args.requires_endpoint(),
+            _ => false,
         }
     }
 }

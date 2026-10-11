@@ -6,6 +6,8 @@ pub mod bytemass;
 pub mod catalog;
 pub mod codecs;
 pub mod compression;
+pub mod config;
+mod context;
 pub mod credentials;
 mod dialect;
 pub mod diff;
@@ -23,3 +25,6 @@ pub mod table;
 mod text;
 pub mod third_party;
 pub mod viz;
+
+pub use config::{Combine, Config, Dialect, Layer};
+pub use context::Context;

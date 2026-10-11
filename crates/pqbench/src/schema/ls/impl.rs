@@ -16,6 +16,7 @@ use serde::Deserialize;
 use super::api::{Error, TableRef};
 use crate::dialect;
 use crate::schema::TableFormat;
+use crate::Context;
 
 /// Table names per page; both walks follow the endpoint's page token.
 const PAGE_SIZE: u32 = 1000;
@@ -57,27 +58,24 @@ struct Identifier {
 }
 
 pub(crate) async fn list(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
-    token: Option<&str>,
-    table_format: TableFormat,
 ) -> Result<Vec<TableRef>, Error> {
-    let mut tables = match table_format {
-        TableFormat::Unity => unity_tables(endpoint, catalog, schema, token).await?,
-        TableFormat::Iceberg => iceberg_tables(endpoint, catalog, schema, token).await?,
+    let mut tables = match context.config().dialect {
+        TableFormat::Unity => unity_tables(context, catalog, schema).await?,
+        TableFormat::Iceberg => iceberg_tables(context, catalog, schema).await?,
     };
     tables.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(tables)
 }
 
 async fn unity_tables(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
-    token: Option<&str>,
 ) -> Result<Vec<TableRef>, Error> {
-    let root = dialect::api_root(endpoint);
+    let root = dialect::api_root(context.config().endpoint.as_str());
     let mut tables = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
@@ -94,7 +92,9 @@ async fn unity_tables(
                 dialect::encode(schema)
             ),
         };
-        let page: UnityPage = dialect::get_json(&url, token).await.map_err(Error::from)?;
+        let page: UnityPage = dialect::get_json(context, &url, context.config().token.as_deref())
+            .await
+            .map_err(Error::from)?;
         for table in page.tables {
             let storage_path = table.storage_location.filter(|path| !path.is_empty());
             let name = table
@@ -124,12 +124,11 @@ async fn unity_tables(
 }
 
 async fn iceberg_tables(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
-    token: Option<&str>,
 ) -> Result<Vec<TableRef>, Error> {
-    let base = dialect::iceberg_root(endpoint);
+    let base = dialect::iceberg_root(context.config().endpoint.as_str());
     let namespace = dialect::iceberg_namespace(schema);
     let mut tables = Vec::new();
     let mut page_token: Option<String> = None;
@@ -141,7 +140,10 @@ async fn iceberg_tables(
             ),
             None => format!("{base}/namespaces/{namespace}/tables"),
         };
-        let page: IdentifiersPage = dialect::get_json(&url, token).await.map_err(Error::from)?;
+        let page: IdentifiersPage =
+            dialect::get_json(context, &url, context.config().token.as_deref())
+                .await
+                .map_err(Error::from)?;
         for identifier in page.identifiers {
             if identifier.name.is_empty() {
                 return Err(Error::from(

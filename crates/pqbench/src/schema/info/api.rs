@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::schema::TableFormat;
+use crate::Context;
 
 /// One schema record.
 #[derive(Debug, Clone)]
@@ -41,17 +41,11 @@ impl From<String> for Error {
     }
 }
 
-/// Read the record of `schema` in `catalog` at `endpoint`.
+/// Read the record of `schema` in `catalog` at the context's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed schema record.
-pub async fn read(
-    endpoint: &str,
-    catalog: &str,
-    schema: &str,
-    token: Option<&str>,
-    table_format: TableFormat,
-) -> Result<Schema, Error> {
-    super::r#impl::read(endpoint, catalog, schema, token, table_format).await
+pub async fn read(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
+    super::r#impl::read(context, catalog, schema).await
 }

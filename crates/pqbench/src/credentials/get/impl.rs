@@ -29,7 +29,8 @@ use serde::Deserialize;
 
 use super::api::Error;
 use crate::dialect;
-use crate::third_party::reqwest::{self, Request};
+use crate::third_party::reqwest::Request;
+use crate::Context;
 
 /// The subset of the Unity table record vending needs: the table id and the
 /// securable kind that gates the attempt.
@@ -52,35 +53,40 @@ impl TableRecord {
 }
 
 /// The table's Unity record: the table id and the securable kind.
-async fn table_record(root: &str, name: &str, token: Option<&str>) -> Result<TableRecord, Error> {
-    dialect::get_json(&format!("{root}/tables/{}", dialect::encode(name)), token)
-        .await
-        .map_err(Error::from)
+async fn table_record(context: &Context, root: &str, name: &str) -> Result<TableRecord, Error> {
+    dialect::get_json(
+        context,
+        &format!("{root}/tables/{}", dialect::encode(name)),
+        context.config().token.as_deref(),
+    )
+    .await
+    .map_err(Error::from)
 }
 
 pub(super) async fn vend_unity(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
     table: &str,
-    token: Option<&str>,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
     let name = format!("{catalog}.{schema}.{table}");
-    let root = dialect::api_root(endpoint);
-    let record = table_record(&root, &name, token).await?;
+    let root = dialect::api_root(context.config().endpoint.as_str());
+    let record = table_record(context, &root, &name).await?;
     if !record.eligible() {
         return Ok(None);
     }
     let Some(table_id) = record.table_id.filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
-    let response = reqwest::request(Request::post(
-        format!("{root}/temporary-table-credentials"),
-        token.map(str::to_owned),
-        serde_json::json!({"table_id": table_id, "operation": "READ"}).to_string(),
-    ))
-    .await
-    .map_err(|error| Error::from(error.to_string()))?;
+    let response = context
+        .http()
+        .request(Request::post(
+            format!("{root}/temporary-table-credentials"),
+            context.config().token.clone(),
+            serde_json::json!({"table_id": table_id, "operation": "READ"}).to_string(),
+        ))
+        .await
+        .map_err(|error| Error::from(error.to_string()))?;
     if matches!(response.status, 404 | 501) {
         return Ok(None);
     }
@@ -135,18 +141,19 @@ struct AwsTempCredentials {
 /// catalog that does not serve the route (or cannot mint for the table, like a
 /// UniForm Delta table) falls back to the delegated `loadTable`.
 pub(super) async fn vend_iceberg(
-    endpoint: &str,
+    context: &Context,
     schema: &str,
     table: &str,
-    token: Option<&str>,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
     let url = format!(
         "{}/namespaces/{}/tables/{}/credentials",
-        dialect::iceberg_root(endpoint),
+        dialect::iceberg_root(context.config().endpoint.as_str()),
         dialect::iceberg_namespace(schema),
         dialect::encode(table)
     );
-    let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+    let response = context
+        .http()
+        .request(Request::get(url, context.config().token.clone()))
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if response.status == 200 {
@@ -158,7 +165,7 @@ pub(super) async fn vend_iceberg(
             })?;
         return Ok(credential_options(&loaded.storage_credentials));
     }
-    vend_iceberg_load(endpoint, schema, table, token).await
+    vend_iceberg_load(context, schema, table).await
 }
 
 /// The delegated `loadTable` route: `X-Iceberg-Access-Delegation:
@@ -167,20 +174,21 @@ pub(super) async fn vend_iceberg(
 /// table the catalog cannot serve via Iceberg, an unknown table, and an
 /// unimplemented operation all pass through with no credentials.
 async fn vend_iceberg_load(
-    endpoint: &str,
+    context: &Context,
     schema: &str,
     table: &str,
-    token: Option<&str>,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
     let url = format!(
         "{}/namespaces/{}/tables/{}",
-        dialect::iceberg_root(endpoint),
+        dialect::iceberg_root(context.config().endpoint.as_str()),
         dialect::iceberg_namespace(schema),
         dialect::encode(table)
     );
-    let request = Request::get(url, token.map(str::to_owned))
+    let request = Request::get(url, context.config().token.clone())
         .header("X-Iceberg-Access-Delegation", "vended-credentials");
-    let response = reqwest::request(request)
+    let response = context
+        .http()
+        .request(request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;
     if matches!(response.status, 404 | 501) {

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::ops::Range;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use ::object_store::aws::AmazonS3;
 use ::object_store::client::{
@@ -19,25 +19,22 @@ use url::Url;
 use crate::third_party::object_store::api::{
     Error, ObjectReader, ObjectStat, PrefixListing, Remote,
 };
-use crate::third_party::reqwest as http;
+use crate::third_party::reqwest::r#impl::Http;
 
 use super::error_chain;
 
-/// One process-wide `reqwest` client backs every store. `object_store` builds a
-/// fresh client on each `build()`, and `reqwest` re-parses the platform CA
-/// bundle inside every client build; handing it the facade's client keeps one
-/// pool and skips that parse.
-#[derive(Debug)]
-struct SharedConnector;
+/// The one `reqwest` client backs every store. `object_store` builds a fresh
+/// client on each `build()`, and `reqwest` re-parses the platform CA bundle
+/// inside every client build; handing it the shared [`Http`] keeps one pool and
+/// skips that parse.
+#[derive(Debug, Clone)]
+struct SharedConnector(Http);
 
 impl HttpConnector for SharedConnector {
     fn connect(&self, _options: &ClientOptions) -> ::object_store::Result<HttpClient> {
-        let client =
-            http::r#impl::shared_client().map_err(|error| ::object_store::Error::Generic {
-                store: "http",
-                source: error.to_string().into(),
-            })?;
-        Ok(HttpClient::new(ClassifySendFailure(client.clone())))
+        Ok(HttpClient::new(ClassifySendFailure(
+            self.0.client().clone(),
+        )))
     }
 }
 
@@ -83,13 +80,12 @@ fn sends_failed(error: &HttpError) -> bool {
     false
 }
 
-/// A built S3 store: the backend every read goes through, and the concrete
-/// store a signed HEAD is minted from. One store owns one client and its
-/// connection pool, so stores are shared through [`shared_store`], never built
-/// per object.
+/// A built S3 store: the backend every read goes through, the concrete store a
+/// signed HEAD is minted from, and the shared client that HEAD runs on.
 struct Store {
     backend: Arc<dyn ObjectStore>,
     signer: Option<AmazonS3>,
+    http: Http,
 }
 
 struct S3 {
@@ -111,7 +107,7 @@ impl Remote for S3 {
     fn stat<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<ObjectStat, Error>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(signer) = &self.store.signer {
-                if let Ok(stat) = head_object(signer, &self.location).await {
+                if let Ok(stat) = head_object(&self.store.http, signer, &self.location).await {
                     return Ok(stat);
                 }
             }
@@ -143,17 +139,176 @@ impl Remote for S3 {
     }
 }
 
-/// Build the S3 reader for `url`, reusing the store already built for its
-/// bucket and options.
-pub(crate) fn open_remote(url: &Url, options: &[(String, String)]) -> Result<ObjectReader, Error> {
-    let (store, location) = s3_store(url, options)?;
-    Ok(ObjectReader::from_remote(Box::new(S3 { store, location })))
+/// The registry of built S3 stores, owned by [`crate::Context`] rather than a
+/// process global. It holds the one shared [`Http`] and one `AmazonS3` per
+/// `(bucket, options)`; readers share each store as an `Arc`. Cloning shares
+/// the registry, so a cloned [`crate::Context`] stays one pool.
+#[derive(Clone)]
+pub(crate) struct Stores {
+    http: Http,
+    registry: Arc<Mutex<HashMap<StoreKey, Arc<Store>>>>,
+}
+
+/// The registry key: the bucket, and the exact options. Options carry the
+/// vended credentials, so a walk with a distinct lease per table keeps one
+/// store per lease.
+type StoreKey = (String, Vec<(String, String)>);
+
+/// Past this many live keys the registry is emptied whole; a long walk with a
+/// distinct lease per table must not grow it without bound. Emptying only costs
+/// a rebuilt pool, never correctness.
+const STORE_LIMIT: usize = 32;
+
+impl Stores {
+    /// One registry over the shared client. Called once, by
+    /// [`crate::Context::new`].
+    pub(crate) fn new(http: &Http) -> Self {
+        Self {
+            http: http.clone(),
+            registry: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Build the S3 reader for `url`, reusing the store already built for its
+    /// bucket and options.
+    pub(crate) fn open_remote(
+        &self,
+        url: &Url,
+        options: &[(String, String)],
+    ) -> Result<ObjectReader, Error> {
+        let (store, location) = self.s3_store(url, options)?;
+        Ok(ObjectReader::from_remote(Box::new(S3 { store, location })))
+    }
+
+    /// List one level of children under `url` with S3's delimiter. Listing does
+    /// not recurse, so a table walk reads one prefix per round trip.
+    pub(crate) async fn list_remote(
+        &self,
+        url: &Url,
+        options: &[(String, String)],
+    ) -> Result<PrefixListing, Error> {
+        let (store, location) = self.s3_store(url, options)?;
+        let prefix = (!location.as_ref().is_empty()).then_some(&location);
+        let result = store
+            .backend
+            .list_with_delimiter(prefix)
+            .await
+            .map_err(remote_error)?;
+        Ok(PrefixListing {
+            prefixes: result
+                .common_prefixes
+                .iter()
+                .map(|prefix| child_name(location.as_ref(), prefix.as_ref()))
+                .collect(),
+            objects: result
+                .objects
+                .iter()
+                .map(|object| child_name(location.as_ref(), object.location.as_ref()))
+                .filter(|name| !name.is_empty() && !name.contains('/'))
+                .collect(),
+        })
+    }
+
+    /// The bucket-rooted store for `url`, on the one shared client, for a caller
+    /// that opens the store itself: the Delta path hands it to delta-rs instead
+    /// of letting delta-rs build a native-roots client per table.
+    pub(crate) fn root_store(
+        &self,
+        url: &Url,
+        options: &[(String, String)],
+    ) -> Result<Arc<dyn ObjectStore>, Error> {
+        Ok(Arc::clone(&self.shared_store(url, options)?.backend))
+    }
+
+    pub(crate) async fn expand_glob(
+        &self,
+        uri: &str,
+        options: &[(String, String)],
+    ) -> Result<Vec<String>, Error> {
+        // Escape '?' before URL parsing, since it belongs to the key pattern.
+        let url = Url::parse(&uri.replace('?', "%3F")).map_err(|e| Error(e.to_string()))?;
+        if !matches!(url.scheme(), "s3" | "s3a") {
+            return Err(Error("remote globs require an s3:// or s3a:// URI".into()));
+        }
+        let (store, location) = self.s3_store(&url, options)?;
+        let matches = match_objects(store.backend.as_ref(), location.as_ref()).await?;
+        Ok(matches
+            .into_iter()
+            .map(|key| {
+                let mut result = url.clone();
+                result
+                    .path_segments_mut()
+                    .expect("S3 URI has path segments")
+                    .clear()
+                    .extend(key.split('/'));
+                result.set_query(None);
+                result.set_fragment(None);
+                result.to_string()
+            })
+            .collect())
+    }
+
+    /// The shared store for `url`'s bucket and `options`, built once and reused.
+    fn shared_store(&self, url: &Url, options: &[(String, String)]) -> Result<Arc<Store>, Error> {
+        let mut options = options.to_vec();
+        options.sort();
+        let key = (url.host_str().unwrap_or_default().to_string(), options);
+        let mut registry = self
+            .registry
+            .lock()
+            .map_err(|_| Error("the store registry is poisoned".into()))?;
+        if let Some(store) = registry.get(&key) {
+            return Ok(Arc::clone(store));
+        }
+        if registry.len() >= STORE_LIMIT {
+            registry.clear();
+        }
+        let store = Arc::new(self.build_store(url, &key.1)?);
+        registry.insert(key, Arc::clone(&store));
+        Ok(store)
+    }
+
+    fn build_store(&self, url: &Url, options: &[(String, String)]) -> Result<Store, Error> {
+        use ::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+
+        // The AWS_* environment supplies the defaults (credentials, region,
+        // AWS_SKIP_SIGNATURE=true for public buckets); explicit options override
+        // it.
+        let mut builder = AmazonS3Builder::from_env()
+            .with_url(url.to_string())
+            .with_http_connector(SharedConnector(self.http.clone()));
+        for (key, value) in options {
+            let config_key: AmazonS3ConfigKey = key
+                .to_ascii_lowercase()
+                .parse()
+                .map_err(|_| Error(format!("unknown object store option `{key}`")))?;
+            builder = builder.with_config(config_key, value.clone());
+        }
+        let store = builder.build().map_err(remote_error)?;
+        Ok(Store {
+            backend: Arc::new(store.clone()),
+            signer: Some(store),
+            http: self.http.clone(),
+        })
+    }
+
+    fn s3_store(
+        &self,
+        url: &Url,
+        options: &[(String, String)],
+    ) -> Result<(Arc<Store>, ::object_store::path::Path), Error> {
+        let store = self.shared_store(url, options)?;
+        let (_, location) =
+            ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
+        Ok((store, location))
+    }
 }
 
 /// object_store 0.13 maps cache/content headers on HEAD but drops
 /// `x-amz-storage-class`. Sign a HEAD and read the header ourselves, through
 /// the one HTTP transport (the same pooled client the catalog calls use).
 async fn head_object(
+    http: &Http,
     store: &AmazonS3,
     location: &::object_store::path::Path,
 ) -> Result<ObjectStat, Error> {
@@ -165,7 +320,11 @@ async fn head_object(
         )
         .await
         .map_err(remote_error)?;
-    let response = http::request(http::Request::head(url.to_string(), None))
+    let response = http
+        .request(crate::third_party::reqwest::Request::head(
+            url.to_string(),
+            None,
+        ))
         .await
         .map_err(|error| Error(format!("cannot HEAD object: {error}")))?;
     if !(200..300).contains(&response.status) {
@@ -231,112 +390,6 @@ fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
     })
 }
 
-/// List one level of children under `url` with S3's delimiter. Listing does not
-/// recurse, so a table walk reads one prefix per round trip.
-pub(crate) async fn list_remote(
-    url: &Url,
-    options: &[(String, String)],
-) -> Result<PrefixListing, Error> {
-    let (store, location) = s3_store(url, options)?;
-    let prefix = (!location.as_ref().is_empty()).then_some(&location);
-    let result = store
-        .backend
-        .list_with_delimiter(prefix)
-        .await
-        .map_err(remote_error)?;
-    Ok(PrefixListing {
-        prefixes: result
-            .common_prefixes
-            .iter()
-            .map(|prefix| child_name(location.as_ref(), prefix.as_ref()))
-            .collect(),
-        objects: result
-            .objects
-            .iter()
-            .map(|object| child_name(location.as_ref(), object.location.as_ref()))
-            .filter(|name| !name.is_empty() && !name.contains('/'))
-            .collect(),
-    })
-}
-
-/// Every store built this run, keyed by bucket and options. A store owns a
-/// client and its connection pool, so building one per object (as this module
-/// once did) threw the pool away on every file. This registry is the single
-/// place a store is obtained; readers share it as an `Arc`.
-static STORES: OnceLock<Mutex<HashMap<StoreKey, Arc<Store>>>> = OnceLock::new();
-
-/// The registry key: the bucket, and the exact options. Options carry the
-/// vended credentials, so a walk with a distinct lease per table keeps one
-/// store per lease.
-type StoreKey = (String, Vec<(String, String)>);
-
-/// Past this many live keys the registry is emptied whole; a long walk with a
-/// distinct lease per table must not grow it without bound. Emptying only costs
-/// a rebuilt pool, never correctness.
-const STORE_LIMIT: usize = 32;
-
-/// The shared store for `url`'s bucket and `options`, built once and reused.
-fn shared_store(url: &Url, options: &[(String, String)]) -> Result<Arc<Store>, Error> {
-    let mut options = options.to_vec();
-    options.sort();
-    let key = (url.host_str().unwrap_or_default().to_string(), options);
-    let registry = STORES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut registry = registry
-        .lock()
-        .map_err(|_| Error("the store registry is poisoned".into()))?;
-    if let Some(store) = registry.get(&key) {
-        return Ok(Arc::clone(store));
-    }
-    if registry.len() >= STORE_LIMIT {
-        registry.clear();
-    }
-    let store = Arc::new(build_store(url, &key.1)?);
-    registry.insert(key, Arc::clone(&store));
-    Ok(store)
-}
-
-fn build_store(url: &Url, options: &[(String, String)]) -> Result<Store, Error> {
-    use ::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
-
-    // The AWS_* environment supplies the defaults (credentials, region,
-    // AWS_SKIP_SIGNATURE=true for public buckets); explicit options override it.
-    let mut builder = AmazonS3Builder::from_env()
-        .with_url(url.to_string())
-        .with_http_connector(SharedConnector);
-    for (key, value) in options {
-        let config_key: AmazonS3ConfigKey = key
-            .to_ascii_lowercase()
-            .parse()
-            .map_err(|_| Error(format!("unknown object store option `{key}`")))?;
-        builder = builder.with_config(config_key, value.clone());
-    }
-    let store = builder.build().map_err(remote_error)?;
-    Ok(Store {
-        backend: Arc::new(store.clone()),
-        signer: Some(store),
-    })
-}
-
-fn s3_store(
-    url: &Url,
-    options: &[(String, String)],
-) -> Result<(Arc<Store>, ::object_store::path::Path), Error> {
-    let store = shared_store(url, options)?;
-    let (_, location) =
-        ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
-    Ok((store, location))
-}
-
-/// The bucket-rooted store for `url`, on the one shared client, for a caller
-/// that opens the store itself: the Delta path hands it to delta-rs instead of
-/// letting delta-rs build a native-roots client per table.
-pub(crate) fn root_store(
-    url: &Url,
-    options: &[(String, String)],
-) -> Result<Arc<dyn ObjectStore>, Error> {
-    Ok(Arc::clone(&shared_store(url, options)?.backend))
-}
-
 fn child_name(parent: &str, child: &str) -> String {
     let parent = parent.trim_end_matches('/');
     let child = child.trim_end_matches('/');
@@ -349,33 +402,6 @@ fn child_name(parent: &str, child: &str) -> String {
 
 fn remote_error(error: ::object_store::Error) -> Error {
     Error(error_chain(&error))
-}
-
-pub(crate) async fn expand_glob(
-    uri: &str,
-    options: &[(String, String)],
-) -> Result<Vec<String>, Error> {
-    // Escape '?' before URL parsing, since it belongs to the key pattern.
-    let url = Url::parse(&uri.replace('?', "%3F")).map_err(|e| Error(e.to_string()))?;
-    if !matches!(url.scheme(), "s3" | "s3a") {
-        return Err(Error("remote globs require an s3:// or s3a:// URI".into()));
-    }
-    let (store, location) = s3_store(&url, options)?;
-    let matches = match_objects(store.backend.as_ref(), location.as_ref()).await?;
-    Ok(matches
-        .into_iter()
-        .map(|key| {
-            let mut result = url.clone();
-            result
-                .path_segments_mut()
-                .expect("S3 URI has path segments")
-                .clear()
-                .extend(key.split('/'));
-            result.set_query(None);
-            result.set_fragment(None);
-            result.to_string()
-        })
-        .collect())
 }
 
 async fn match_objects(store: &dyn ObjectStore, mask: &str) -> Result<Vec<String>, Error> {
@@ -414,8 +440,9 @@ mod tests {
     use tokio::task::JoinSet;
     use url::Url;
 
-    use super::{Store, S3};
+    use super::{Store, Stores, S3};
     use crate::third_party::object_store::api::ObjectReader;
+    use crate::third_party::reqwest::r#impl::Http;
 
     /// Same-region S3 per-request latency: p50 ~25 ms (topicpartition.io 2025
     /// measured 26 ms; AWS CloudWatch percentiles ~25 ms), p99 ~100 ms.
@@ -441,6 +468,7 @@ mod tests {
             store: Arc::new(Store {
                 backend: Arc::new(store),
                 signer: None,
+                http: Http::new().expect("http client"),
             }),
             location: path,
         }))
@@ -504,9 +532,11 @@ mod tests {
     /// that it is never rebuilt per object.
     #[tokio::test]
     async fn one_store_per_bucket_and_options() {
+        let http = Http::new().expect("http client");
+        let stores = Stores::new(&http);
         let url = Url::parse("s3://store-sharing-test/key").unwrap();
-        let first = super::shared_store(&url, &[]).unwrap();
-        let second = super::shared_store(&url, &[]).unwrap();
+        let first = stores.shared_store(&url, &[]).unwrap();
+        let second = stores.shared_store(&url, &[]).unwrap();
         assert!(Arc::ptr_eq(&first, &second), "the store was rebuilt");
     }
 }

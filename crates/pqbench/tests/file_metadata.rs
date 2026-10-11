@@ -1,3 +1,5 @@
+mod common;
+
 use std::sync::Arc;
 
 use parquet::data_type::Int32Type;
@@ -41,10 +43,13 @@ async fn footer_facts_survive_empty_files_and_match_file_uri_reads() {
             file.path().to_str().unwrap().to_owned(),
             url::Url::from_file_path(file.path()).unwrap().to_string(),
         ] {
-            let result = measure_files(&BytemassRequest {
-                inputs: vec![input],
-                ..Default::default()
-            })
+            let result = measure_files(
+                common::context(),
+                &BytemassRequest {
+                    inputs: vec![input],
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
             assert_eq!(result.len(), 1);

@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use super::api::{Eligibility, Error, Reason};
 use crate::dialect;
+use crate::Context;
 
 /// The subset of the Unity table record the eligibility check needs.
 #[derive(Deserialize)]
@@ -62,20 +63,20 @@ impl TableRecord {
 /// Whether Unity reports the table readable outside Databricks compute,
 /// without asking for credentials.
 pub(super) async fn check_unity(
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
     table: &str,
-    token: Option<&str>,
 ) -> Result<Eligibility, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let record: TableRecord = dialect::get_json(
+        context,
         &format!(
             "{}/tables/{}",
-            dialect::api_root(endpoint),
+            dialect::api_root(context.config().endpoint.as_str()),
             dialect::encode(&name)
         ),
-        token,
+        context.config().token.as_deref(),
     )
     .await
     .map_err(Error::from)?;

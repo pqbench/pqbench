@@ -6,4 +6,4 @@
 pub mod api;
 pub(crate) mod r#impl;
 
-pub use api::{request, Error, Request, Response};
+pub use api::{Error, Request, Response};

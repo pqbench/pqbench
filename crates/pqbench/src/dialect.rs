@@ -7,7 +7,8 @@
 
 use serde::de::DeserializeOwned;
 
-use crate::third_party::reqwest::{self, Request};
+use crate::third_party::reqwest::Request;
+use crate::Context;
 
 /// The Unity REST root, whether or not the endpoint already names it.
 pub(crate) fn api_root(endpoint: &str) -> String {
@@ -45,15 +46,21 @@ pub(crate) fn iceberg_namespace(schema: &str) -> String {
 
 /// One GET returning a parsed JSON document.
 pub(crate) async fn get_json<T: DeserializeOwned>(
+    context: &Context,
     url: &str,
     token: Option<&str>,
 ) -> Result<T, String> {
-    send_json(Request::get(url, token.map(str::to_owned))).await
+    send_json(context, Request::get(url, token.map(str::to_owned))).await
 }
 
 /// Send one request and parse its JSON body.
-pub(crate) async fn send_json<T: DeserializeOwned>(request: Request) -> Result<T, String> {
-    let response = reqwest::request(request)
+pub(crate) async fn send_json<T: DeserializeOwned>(
+    context: &Context,
+    request: Request,
+) -> Result<T, String> {
+    let response = context
+        .http()
+        .request(request)
         .await
         .map_err(|error| error.to_string())?;
     if response.status != 200 {

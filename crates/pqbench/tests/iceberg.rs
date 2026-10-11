@@ -1,5 +1,6 @@
 #![cfg(feature = "iceberg")]
 
+mod common;
 mod support;
 
 use std::fs;
@@ -229,15 +230,23 @@ fn dir_uri(path: &Path) -> String {
 async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
     let fixture = Fixture::new();
     assert_eq!(
-        table::detect(&fixture.root.to_string_lossy(), &Default::default())
-            .await
-            .unwrap(),
+        table::detect(
+            common::context(),
+            &fixture.root.to_string_lossy(),
+            &Default::default()
+        )
+        .await
+        .unwrap(),
         TableFormat::ICEBERG
     );
     assert_eq!(
-        table::detect(&fixture.metadata.to_string_lossy(), &Default::default())
-            .await
-            .unwrap(),
+        table::detect(
+            common::context(),
+            &fixture.metadata.to_string_lossy(),
+            &Default::default()
+        )
+        .await
+        .unwrap(),
         TableFormat::ICEBERG
     );
 }
@@ -249,9 +258,12 @@ async fn load_resolves_uuid_named_metadata_without_a_hint() {
     let named = metadata.join("00001-22222222-2222-2222-2222-222222222222.metadata.json");
     fs::rename(&fixture.metadata, &named).unwrap();
     fs::remove_file(metadata.join("version-hint.text")).unwrap();
-    let info = table::load(&load_request(fixture.root.to_string_lossy(), None))
-        .await
-        .unwrap();
+    let info = table::load(
+        common::context(),
+        &load_request(fixture.root.to_string_lossy(), None),
+    )
+    .await
+    .unwrap();
     assert_eq!(info.snapshot_version, 1);
     assert!(!info.files.is_empty());
 }
@@ -261,9 +273,13 @@ async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
     let fixture = Fixture::new();
     fs::create_dir(fixture.root.join("_delta_log")).unwrap();
     assert_eq!(
-        table::detect(&fixture.root.to_string_lossy(), &Default::default())
-            .await
-            .unwrap(),
+        table::detect(
+            common::context(),
+            &fixture.root.to_string_lossy(),
+            &Default::default()
+        )
+        .await
+        .unwrap(),
         TableFormat::DELTA
     );
 }
@@ -271,18 +287,24 @@ async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
 #[tokio::test]
 async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     let fixture = Fixture::new();
-    let previous = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
-        .await
-        .unwrap();
+    let previous = table::load(
+        common::context(),
+        &load_request(fixture.metadata.to_string_lossy(), Some(0)),
+    )
+    .await
+    .unwrap();
     assert_eq!(previous.format, TableFormat::ICEBERG);
     assert_eq!(previous.snapshot_version, 0);
     assert_eq!(previous.files.len(), 1);
     assert_eq!(previous.files[0].size_bytes, fixture.first_size);
     assert_eq!(previous.log.len(), 1);
 
-    let latest = table::load(&load_request(fixture.root.to_string_lossy(), None))
-        .await
-        .unwrap();
+    let latest = table::load(
+        common::context(),
+        &load_request(fixture.root.to_string_lossy(), None),
+    )
+    .await
+    .unwrap();
     assert_eq!(latest.snapshot_version, 1);
     assert_eq!(latest.files.len(), 2);
     let mut sizes: Vec<_> = latest.files.iter().map(|file| file.size_bytes).collect();
@@ -304,6 +326,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
 async fn partition_ls_names_the_files_a_snapshot_added() {
     let fixture = Fixture::new();
     let files = pqbench::partition::ls::list(
+        common::context(),
         &fixture.metadata.to_string_lossy(),
         &Default::default(),
         &[1],
@@ -323,13 +346,19 @@ async fn partition_ls_names_the_files_a_snapshot_added() {
 #[tokio::test]
 async fn load_then_bytemass_matches_footer_totals() {
     let fixture = Fixture::new();
-    let info = table::load(&load_request(fixture.metadata.to_string_lossy(), None))
-        .await
-        .unwrap();
-    let rows = pqbench::bytemass::bytemass(&pqbench::bytemass::BytemassRequest {
-        inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
-        ..Default::default()
-    })
+    let info = table::load(
+        common::context(),
+        &load_request(fixture.metadata.to_string_lossy(), None),
+    )
+    .await
+    .unwrap();
+    let rows = pqbench::bytemass::bytemass(
+        common::context(),
+        &pqbench::bytemass::BytemassRequest {
+            inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
+            ..Default::default()
+        },
+    )
     .await
     .unwrap();
     let summary = pqbench::bytemass::aggregate(&rows).unwrap();
@@ -348,17 +377,21 @@ async fn load_then_bytemass_matches_footer_totals() {
 #[tokio::test]
 async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
     let fixture = Fixture::new();
-    assert!(
-        table::load(&load_request(fixture.metadata.to_string_lossy(), Some(99)))
-            .await
-            .is_err()
-    );
+    assert!(table::load(
+        common::context(),
+        &load_request(fixture.metadata.to_string_lossy(), Some(99))
+    )
+    .await
+    .is_err());
 
     let first = fixture.root.join("data/first.parquet");
     fs::write(&first, b"changed").unwrap();
-    let info = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
-        .await
-        .unwrap();
+    let info = table::load(
+        common::context(),
+        &load_request(fixture.metadata.to_string_lossy(), Some(0)),
+    )
+    .await
+    .unwrap();
     assert_eq!(info.files[0].size_bytes, fixture.first_size);
     assert_ne!(fs::metadata(&first).unwrap().len(), fixture.first_size);
 
@@ -383,11 +416,14 @@ async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
     let mut metadata = metadata;
     metadata["snapshots"][0]["manifest-list"] = serde_json::json!(file_uri(&list));
     fs::write(&fixture.metadata, serde_json::to_vec(&metadata).unwrap()).unwrap();
-    let error = table::load(&load_request(fixture.metadata.to_string_lossy(), Some(0)))
-        .await
-        .err()
-        .unwrap()
-        .to_string();
+    let error = table::load(
+        common::context(),
+        &load_request(fixture.metadata.to_string_lossy(), Some(0)),
+    )
+    .await
+    .err()
+    .unwrap()
+    .to_string();
     assert!(
         error.contains("outside the Iceberg table location"),
         "{error}"

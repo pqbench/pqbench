@@ -92,28 +92,37 @@ impl CredentialsCheckConfig {
     }
 }
 
-pub(crate) async fn run(args: &CredentialsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    context: &pqbench::Context,
+    args: &CredentialsArgs,
+) -> Result<(), CliError> {
     match &args.command {
-        CredentialsCommand::Get(args) => run_get(&CredentialsGetConfig::resolve(args)).await,
-        CredentialsCommand::Check(args) => run_check(&CredentialsCheckConfig::resolve(args)).await,
+        CredentialsCommand::Get(args) => {
+            run_get(context, &CredentialsGetConfig::resolve(args)).await
+        }
+        CredentialsCommand::Check(args) => {
+            run_check(context, &CredentialsCheckConfig::resolve(args)).await
+        }
     }
 }
 
 /// Put vended read credentials on each ref: `schema ls | credentials get`.
-async fn run_get(config: &CredentialsGetConfig) -> Result<(), CliError> {
-    let context = read_input("credentials get").await?;
-    if !context.piped {
+async fn run_get(
+    context: &pqbench::Context,
+    config: &CredentialsGetConfig,
+) -> Result<(), CliError> {
+    let input = read_input("credentials get").await?;
+    if !input.piped {
         return Err("credentials get reads pqbench.table-ref v2 refs on standard input".into());
     }
     let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
-    let records = source::records("credentials get", context.first, context.lines);
-    let source = context.source;
+    let records = source::records("credentials get", input.first, input.lines);
     let mut tables = 0;
     let mut vends = records
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("credentials get", &record)?;
-            let credentials = vend(&source, &catalog, &schema, &name).await?;
+            let credentials = vend(context, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, credentials))
         })
         .buffer_unordered(config.fan_out);
@@ -141,21 +150,23 @@ async fn run_get(config: &CredentialsGetConfig) -> Result<(), CliError> {
 /// is the filter working, not a failure: a whole-catalog walk always has
 /// tables it cannot read outside compute, so the stage still succeeds and only
 /// a real error (a missing table, an endpoint fault) fails it.
-async fn run_check(config: &CredentialsCheckConfig) -> Result<(), CliError> {
-    let context = read_input("credentials check").await?;
-    if !context.piped {
+async fn run_check(
+    context: &pqbench::Context,
+    config: &CredentialsCheckConfig,
+) -> Result<(), CliError> {
+    let input = read_input("credentials check").await?;
+    if !input.piped {
         return Err("credentials check reads pqbench.table-ref v2 refs on standard input".into());
     }
     let mut emit = Emitter::open(config.output.as_deref(), config.format)?;
-    let records = source::records("credentials check", context.first, context.lines);
-    let source = context.source;
+    let records = source::records("credentials check", input.first, input.lines);
     let mut tables = 0;
     let mut dropped = 0;
     let mut checks = records
         .map(|record| async {
             let record = record?;
             let (catalog, schema, name) = table_ref("credentials check", &record)?;
-            let reason = check(&source, &catalog, &schema, &name).await?;
+            let reason = check(context, &catalog, &schema, &name).await?;
             Ok::<_, CliError>((record, reason))
         })
         .buffer_unordered(config.fan_out);
@@ -185,20 +196,12 @@ async fn run_check(config: &CredentialsCheckConfig) -> Result<(), CliError> {
 /// manifest; Iceberg REST reads its metadata inline through the catalog, so it
 /// passes — and the CLI only renders the reason.
 async fn check(
-    source: &source::Source,
+    context: &pqbench::Context,
     catalog: &str,
     schema: &str,
     name: &str,
 ) -> Result<Option<String>, CliError> {
-    let eligibility = pqbench::credentials::check::check(
-        source.table_format.into(),
-        &source.endpoint,
-        catalog,
-        schema,
-        name,
-        source.token.as_deref(),
-    )
-    .await?;
+    let eligibility = pqbench::credentials::check::check(context, catalog, schema, name).await?;
     match eligibility {
         Eligibility::Eligible => Ok(None),
         Eligibility::Ineligible(reason) => Ok(Some(ineligible(

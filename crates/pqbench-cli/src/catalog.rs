@@ -109,22 +109,21 @@ fn schema_record(schema: &ls::Schema) -> SchemaRecord<'_> {
     }
 }
 
-pub(crate) async fn run(args: &CatalogArgs) -> Result<(), CliError> {
+pub(crate) async fn run(context: &pqbench::Context, args: &CatalogArgs) -> Result<(), CliError> {
     match &args.command {
-        CatalogCommand::Info(args) => run_info(args).await,
-        CatalogCommand::Ls(args) => run_ls(args).await,
+        CatalogCommand::Info(args) => run_info(context, args).await,
+        CatalogCommand::Ls(args) => run_ls(context, args).await,
     }
 }
 
-async fn run_info(args: &NameArgs) -> Result<(), CliError> {
+async fn run_info(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("catalog info").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(name) = &args.catalog {
         if input.first.is_some() {
             return Err("catalog info takes CATALOG or a pqbench.catalog stream, not both".into());
         }
-        let catalog =
-            info::read(&input.source.endpoint, name, input.source.token.as_deref()).await?;
+        let catalog = info::read(context, name).await?;
         emit.write_row(&catalog_record(&catalog)).await?;
         return emit.finish("catalogs: 1\n").await;
     }
@@ -132,12 +131,11 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
         return Err("catalog info needs CATALOG or a pqbench.catalog stream".into());
     }
     let records = source::records("catalog info", input.first, input.lines);
-    let source = input.source;
     let mut catalogs = 0;
     let mut reads = records
         .map(|record| async {
             let name = catalog_name(&record?)?;
-            Ok::<_, CliError>(info::read(&source.endpoint, &name, source.token.as_deref()).await?)
+            Ok::<_, CliError>(info::read(context, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(catalog) = reads.next().await {
@@ -147,20 +145,14 @@ async fn run_info(args: &NameArgs) -> Result<(), CliError> {
     emit.finish(&format!("catalogs: {catalogs}\n")).await
 }
 
-async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
+async fn run_ls(context: &pqbench::Context, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("catalog ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(name) = &args.catalog {
         if input.first.is_some() {
             return Err("catalog ls takes CATALOG or a pqbench.catalog stream, not both".into());
         }
-        let schemas = ls::list(
-            &input.source.endpoint,
-            name,
-            input.source.token.as_deref(),
-            input.source.table_format.into(),
-        )
-        .await?;
+        let schemas = ls::list(context, name).await?;
         for schema in &schemas {
             emit.write_row(&schema_record(schema)).await?;
         }
@@ -170,20 +162,11 @@ async fn run_ls(args: &NameArgs) -> Result<(), CliError> {
         return Err("catalog ls needs CATALOG or a pqbench.catalog stream".into());
     }
     let records = source::records("catalog ls", input.first, input.lines);
-    let source = input.source;
     let mut schemas = 0;
     let mut lists = records
         .map(|record| async {
             let name = catalog_name(&record?)?;
-            Ok::<_, CliError>(
-                ls::list(
-                    &source.endpoint,
-                    &name,
-                    source.token.as_deref(),
-                    source.table_format.into(),
-                )
-                .await?,
-            )
+            Ok::<_, CliError>(ls::list(context, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {

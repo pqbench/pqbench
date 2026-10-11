@@ -5,7 +5,6 @@ use pqbench::metastore::{info, ls};
 use serde::Serialize;
 
 use crate::emit::{Align, Emitter, Format, Row};
-use crate::source::read_input;
 use crate::CliError;
 
 /// Arguments for `metastore`: the endpoint's metastore and its catalogs.
@@ -80,16 +79,15 @@ impl Row for CatalogRecord<'_> {
     }
 }
 
-pub(crate) async fn run(args: &MetastoreArgs) -> Result<(), CliError> {
+pub(crate) async fn run(context: &pqbench::Context, args: &MetastoreArgs) -> Result<(), CliError> {
     match &args.command {
-        MetastoreCommand::Info(args) => run_info(args).await,
-        MetastoreCommand::Ls(args) => run_ls(args).await,
+        MetastoreCommand::Info(args) => run_info(context, args).await,
+        MetastoreCommand::Ls(args) => run_ls(context, args).await,
     }
 }
 
-async fn run_info(args: &OutputArgs) -> Result<(), CliError> {
-    let input = read_input("metastore info").await?;
-    let metastore = info::read(&input.source.endpoint, input.source.token.as_deref()).await?;
+async fn run_info(context: &pqbench::Context, args: &OutputArgs) -> Result<(), CliError> {
+    let metastore = info::read(context).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     emit.write_row(&MetastoreRecord {
         kind: "pqbench.metastore",
@@ -103,9 +101,8 @@ async fn run_info(args: &OutputArgs) -> Result<(), CliError> {
     emit.finish("metastores: 1\n").await
 }
 
-async fn run_ls(args: &OutputArgs) -> Result<(), CliError> {
-    let input = read_input("metastore ls").await?;
-    let catalogs = ls::list(&input.source.endpoint, input.source.token.as_deref()).await?;
+async fn run_ls(context: &pqbench::Context, args: &OutputArgs) -> Result<(), CliError> {
+    let catalogs = ls::list(context).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     for catalog in &catalogs {
         emit.write_row(&CatalogRecord {

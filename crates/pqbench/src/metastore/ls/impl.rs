@@ -7,7 +7,8 @@ use serde::Deserialize;
 
 use super::api::{Catalog, Error};
 use crate::dialect;
-use crate::third_party::reqwest::{self, Request};
+use crate::third_party::reqwest::Request;
+use crate::Context;
 
 /// Catalog names per page; the walk follows `next_page_token`.
 const PAGE_SIZE: u32 = 1000;
@@ -29,8 +30,9 @@ struct Entry {
     catalog_type: Option<String>,
 }
 
-pub(crate) async fn list(endpoint: &str, token: Option<&str>) -> Result<Vec<Catalog>, Error> {
-    let root = dialect::api_root(endpoint);
+pub(crate) async fn list(context: &Context) -> Result<Vec<Catalog>, Error> {
+    let root = dialect::api_root(context.config().endpoint.as_str());
+    let token = context.config().token.as_deref();
     let mut catalogs = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
@@ -40,7 +42,9 @@ pub(crate) async fn list(endpoint: &str, token: Option<&str>) -> Result<Vec<Cata
             }
             None => format!("{root}/catalogs?max_results={PAGE_SIZE}"),
         };
-        let response = reqwest::request(Request::get(url, token.map(str::to_owned)))
+        let response = context
+            .http()
+            .request(Request::get(url, token.map(str::to_owned)))
             .await
             .map_err(|error| Error::from(error.to_string()))?;
         if response.status != 200 {

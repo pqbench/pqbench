@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::Context;
+
 /// One catalog record.
 #[derive(Debug, Clone)]
 pub struct Catalog {
@@ -37,11 +39,11 @@ impl From<String> for Error {
     }
 }
 
-/// Read the record of `catalog` from `endpoint`.
+/// Read the record of `catalog` from the context's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed catalog record.
-pub async fn read(endpoint: &str, catalog: &str, token: Option<&str>) -> Result<Catalog, Error> {
-    super::r#impl::read(endpoint, catalog, token).await
+pub async fn read(context: &Context, catalog: &str) -> Result<Catalog, Error> {
+    super::r#impl::read(context, catalog).await
 }

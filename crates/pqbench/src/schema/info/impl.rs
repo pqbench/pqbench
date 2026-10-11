@@ -13,6 +13,7 @@ use serde::Deserialize;
 use super::api::{Error, Schema};
 use crate::dialect;
 use crate::schema::TableFormat;
+use crate::Context;
 
 /// The subset of Unity `GET /schemas/{full_name}` this command reports.
 #[derive(Deserialize)]
@@ -36,32 +37,23 @@ struct Namespace {
     properties: Option<BTreeMap<String, String>>,
 }
 
-pub(crate) async fn read(
-    endpoint: &str,
-    catalog: &str,
-    schema: &str,
-    token: Option<&str>,
-    table_format: TableFormat,
-) -> Result<Schema, Error> {
-    match table_format {
-        TableFormat::Unity => unity_schema(endpoint, catalog, schema, token).await,
-        TableFormat::Iceberg => iceberg_schema(endpoint, catalog, schema, token).await,
+pub(crate) async fn read(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
+    match context.config().dialect {
+        TableFormat::Unity => unity_schema(context, catalog, schema).await,
+        TableFormat::Iceberg => iceberg_schema(context, catalog, schema).await,
     }
 }
 
-async fn unity_schema(
-    endpoint: &str,
-    catalog: &str,
-    schema: &str,
-    token: Option<&str>,
-) -> Result<Schema, Error> {
+async fn unity_schema(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
     let full_name = format!("{catalog}.{schema}");
     let url = format!(
         "{}/schemas/{}",
-        dialect::api_root(endpoint),
+        dialect::api_root(context.config().endpoint.as_str()),
         dialect::encode(&full_name)
     );
-    let record: UnityRecord = dialect::get_json(&url, token).await.map_err(Error::from)?;
+    let record: UnityRecord = dialect::get_json(context, &url, context.config().token.as_deref())
+        .await
+        .map_err(Error::from)?;
     Ok(Schema {
         catalog: catalog.to_string(),
         name: record
@@ -76,18 +68,15 @@ async fn unity_schema(
     })
 }
 
-async fn iceberg_schema(
-    endpoint: &str,
-    catalog: &str,
-    schema: &str,
-    token: Option<&str>,
-) -> Result<Schema, Error> {
+async fn iceberg_schema(context: &Context, catalog: &str, schema: &str) -> Result<Schema, Error> {
     let url = format!(
         "{}/namespaces/{}",
-        dialect::iceberg_root(endpoint),
+        dialect::iceberg_root(context.config().endpoint.as_str()),
         dialect::iceberg_namespace(schema)
     );
-    let namespace: Namespace = dialect::get_json(&url, token).await.map_err(Error::from)?;
+    let namespace: Namespace = dialect::get_json(context, &url, context.config().token.as_deref())
+        .await
+        .map_err(Error::from)?;
     let mut properties = namespace.properties.unwrap_or_default();
     let location = properties
         .remove("location")

@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::Context;
+
 /// One catalog record.
 #[derive(Debug, Clone)]
 pub struct Catalog {
@@ -33,11 +35,11 @@ impl From<String> for Error {
     }
 }
 
-/// List the catalogs at `endpoint`, in name order.
+/// List the catalogs at the context's endpoint, in name order.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed catalog page.
-pub async fn list(endpoint: &str, token: Option<&str>) -> Result<Vec<Catalog>, Error> {
-    super::r#impl::list(endpoint, token).await
+pub async fn list(context: &Context) -> Result<Vec<Catalog>, Error> {
+    super::r#impl::list(context).await
 }

@@ -10,6 +10,8 @@
 
 use pqbench::bytemass::{aggregate, bytemass, render_text, BytemassRequest};
 
+mod common;
+
 const REDSET_SAMPLE_0_001: &str = "s3://redshift-downloads/redset/serverless/sample_0.001.parquet";
 
 #[tokio::test]
@@ -20,7 +22,7 @@ async fn measures_the_redset_sample_anonymously() {
         inputs: vec![REDSET_SAMPLE_0_001.to_string()],
         ..Default::default()
     };
-    let rows = bytemass(&request).await.unwrap();
+    let rows = bytemass(common::context(), &request).await.unwrap();
 
     let summary = aggregate(&rows).unwrap();
     assert_eq!(summary.file_count, 1);

@@ -9,12 +9,16 @@
 //! runtime and names the feature.
 
 use crate::table::{LoadRequest, TableInfo};
+use crate::Context;
 
 /// Load the transaction log and the active files of a Delta table.
 ///
 /// # Errors
 /// Fails when the `delta` feature is off, the log cannot be read, the snapshot
 /// is invalid, or a data path leaves the table root.
-pub async fn load(request: &LoadRequest) -> Result<TableInfo, crate::table::Error> {
-    super::r#impl::load(request).await
+pub async fn load(
+    context: &Context,
+    request: &LoadRequest,
+) -> Result<TableInfo, crate::table::Error> {
+    super::r#impl::load(context, request).await
 }

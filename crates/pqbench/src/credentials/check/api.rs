@@ -47,15 +47,9 @@ pub enum Reason {
     NoExternalRead,
 }
 
-/// The catalog dialect a check speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TableFormat {
-    /// Unity Catalog REST: the capability manifest gates external read.
-    Unity,
-    /// Iceberg REST: table metadata is read inline through the catalog, so
-    /// there is no manifest to gate — the table is eligible.
-    Iceberg,
-}
+pub use crate::config::Dialect as TableFormat;
+
+use crate::Context;
 
 /// Whether `table` is readable outside Databricks compute, by dialect.
 ///
@@ -74,19 +68,17 @@ pub enum TableFormat {
 /// Fails when the endpoint cannot be reached or answers with an unexpected
 /// status.
 pub async fn check(
-    format: TableFormat,
-    endpoint: &str,
+    context: &Context,
     catalog: &str,
     schema: &str,
     table: &str,
-    token: Option<&str>,
 ) -> Result<Eligibility, Error> {
-    match format {
+    match context.config().dialect {
         TableFormat::Unity => {
             if catalog == "system" {
                 return Ok(Eligibility::Ineligible(Reason::SystemTable));
             }
-            super::r#impl::check_unity(endpoint, catalog, schema, table, token).await
+            super::r#impl::check_unity(context, catalog, schema, table).await
         }
         TableFormat::Iceberg => Ok(Eligibility::Eligible),
     }
@@ -100,16 +92,15 @@ mod tests {
     /// eligible without a catalog call — a bogus endpoint is never reached.
     #[tokio::test]
     async fn iceberg_check_is_eligible_without_a_catalog_call() {
-        let eligibility = check(
-            TableFormat::Iceberg,
-            "http://127.0.0.1:1",
-            "catalog",
-            "schema",
-            "table",
-            None,
-        )
-        .await
-        .expect("the Iceberg check does not call the catalog");
+        let context = Context::new(crate::Config {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+            dialect: crate::Dialect::Iceberg,
+        })
+        .expect("the context builds");
+        let eligibility = check(&context, "catalog", "schema", "table")
+            .await
+            .expect("the Iceberg check does not call the catalog");
         assert_eq!(eligibility, Eligibility::Eligible);
     }
 }
