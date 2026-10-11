@@ -1,7 +1,9 @@
 [workspace]
 members = ["cargo:."]
 
-# Config for 'dist'
+# Config for 'dist'. The workspace ships a single binary; `aipnaming-cli` and
+# `docscheck-cli` opt out with `[package.metadata.dist] dist = false` in their
+# own manifests.
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.33.0"
@@ -16,8 +18,6 @@ installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax). Linux and
 # macOS, x86_64 and arm64 — the platforms the CI can build natively.
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
-# Only the `pqbench` binary ships; `aipnaming-cli` and `docscheck-cli` set
-# `dist = false` in their own manifests.
 # A downloaded binary cannot be rebuilt by its user, so enable every storage
 # backend (`aws`, `delta`, `iceberg`) rather than shipping partial builds that
 # fail at runtime on `s3://` or a Delta/Iceberg table.
