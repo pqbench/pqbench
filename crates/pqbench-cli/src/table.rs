@@ -228,11 +228,12 @@ pub(crate) struct LsArgs {
     /// window width, epoch-aligned: e.g. 1h, 1d, 1w [env: PQB_TABLE_EVERY]
     #[arg(
         long,
+        value_parser = parse_window,
         value_name = "WINDOW",
         env = "PQB_TABLE_EVERY",
         default_value = "1d"
     )]
-    every: String,
+    every: i64,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
@@ -246,7 +247,6 @@ pub(crate) struct LsArgs {
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
 async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliError> {
-    let window = parse_window(&args.every)?;
     let input = read_input("table ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut partitions = 0usize;
@@ -258,7 +258,7 @@ async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliErro
                 );
             }
             let env = BTreeMap::new();
-            partitions += list_partitions(context, uri, &env, window, &mut emit).await?;
+            partitions += list_partitions(context, uri, &env, args.every, &mut emit).await?;
         }
         _ => {
             if !input.piped {
@@ -279,7 +279,7 @@ async fn run_ls(context: &pqbench::Context, args: &LsArgs) -> Result<(), CliErro
                         })?
                         .to_string();
                     let env = ref_env(&record);
-                    let found = table::ls::list(context, &uri, &env, window)
+                    let found = table::ls::list(context, &uri, &env, args.every)
                         .await
                         .map_err(|error| CliError::from(error.to_string()))?;
                     Ok::<_, CliError>((uri, env, found))

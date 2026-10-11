@@ -29,8 +29,8 @@ pub(crate) struct ConfigArgs {
     #[arg(long, global = true, value_name = "TOKEN", env = "PQB_TOKEN")]
     pub token: Option<String>,
     /// catalog dialect: unity (the default) or iceberg [env: PQB_TABLE_FORMAT]
-    #[arg(long, global = true, value_name = "FORMAT", env = "PQB_TABLE_FORMAT")]
-    pub table_format: Option<String>,
+    #[arg(long, global = true, value_name = "FORMAT", env = "PQB_TABLE_FORMAT", value_parser = parse_dialect)]
+    pub table_format: Option<Dialect>,
 }
 
 /// Resolve the run's configuration: the selected profile, then the environment,
@@ -46,7 +46,7 @@ pub(crate) fn resolve(
 ) -> Result<pqbench::Config, CliError> {
     let config = profile(args)?
         .combine(env_layer())
-        .combine(flag_layer(command, args)?)
+        .combine(flag_layer(args))
         .resolve();
     if require_endpoint && config.endpoint.is_empty() {
         return Err(format!(
@@ -128,7 +128,10 @@ fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
         match key.trim() {
             "endpoint" => layer.endpoint = Some(value),
             "token" => layer.token = Some(value),
-            "table_format" => layer.dialect = Some(parse_dialect("~/.pqbenchrc", &value)?),
+            "table_format" => {
+                layer.dialect =
+                    Some(parse_dialect(&value).map_err(|error| format!("~/.pqbenchrc: {error}"))?);
+            }
             _ => {}
         }
     }
@@ -147,26 +150,20 @@ fn env_layer() -> Layer {
 
 /// The command line's contribution, with clap's `PQB_*` fallback already
 /// applied.
-fn flag_layer(command: &str, args: &ConfigArgs) -> Result<Layer, CliError> {
-    let dialect = match args.table_format.as_deref() {
-        Some(format) => Some(parse_dialect(command, format)?),
-        None => None,
-    };
-    Ok(Layer {
+fn flag_layer(args: &ConfigArgs) -> Layer {
+    Layer {
         endpoint: non_empty(args.endpoint.clone()),
         token: non_empty(args.token.clone()),
-        dialect,
-    })
+        dialect: args.table_format,
+    }
 }
 
-/// Parse a dialect name (`unity` or `iceberg`), naming `source` in the error.
-fn parse_dialect(source: &str, value: &str) -> Result<Dialect, CliError> {
+/// Parse a dialect name: `unity` or `iceberg`.
+fn parse_dialect(value: &str) -> Result<Dialect, CliError> {
     match value {
         "unity" => Ok(Dialect::Unity),
         "iceberg" => Ok(Dialect::Iceberg),
-        other => Err(
-            format!("{source}: table_format expects `unity` or `iceberg`, got {other:?}").into(),
-        ),
+        other => Err(format!("table_format expects `unity` or `iceberg`, got {other:?}").into()),
     }
 }
 

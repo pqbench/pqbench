@@ -18,6 +18,7 @@ mod metastore;
 mod partition;
 mod profile;
 mod ratelimit;
+mod rows;
 mod schema;
 mod setup;
 mod skill;
