@@ -107,23 +107,24 @@ require() {
     }
 }
 
-# Mint the walk's bearer. On GitHub Actions with `id-token: write`, exchange
-# the runner's OIDC token for a Databricks OAuth token (workload identity
-# federation — no stored secret; set DATABRICKS_CLIENT_ID to the service
-# principal's application ID and DATABRICKS_ACCOUNT_ID to the OIDC audience,
-# and the SP must carry a GitHub federation policy). Fall back to the service
-# principal's client secret, then report.
+# Mint the walk's bearer. On GitHub Actions with `id-token: write` and the
+# service principal's application ID (DATABRICKS_CLIENT_ID) and the OIDC
+# audience (DATABRICKS_ACCOUNT_ID), exchange the runner's OIDC token for a
+# Databricks OAuth token (workload identity federation — no stored secret; the
+# SP needs a GitHub federation policy). Fall back to the service principal's
+# client secret otherwise, then report.
 mint_token() {
-    if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-        local audience="${DATABRICKS_ACCOUNT_ID:?set DATABRICKS_ACCOUNT_ID for the OIDC audience}"
+    if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] &&
+        [ -n "${DATABRICKS_CLIENT_ID:-}" ] &&
+        [ -n "${DATABRICKS_ACCOUNT_ID:-}" ]; then
         local id_token token
         id_token="$(curl -fsS \
             -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${audience}" |
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${DATABRICKS_ACCOUNT_ID}" |
             jq -r .value)" || id_token=""
         if [ -n "$id_token" ]; then
             token="$(curl -fsS -X POST "$DBX_HOST/oidc/v1/token" \
-                --data-urlencode "client_id=${DATABRICKS_CLIENT_ID:?set DATABRICKS_CLIENT_ID}" \
+                --data-urlencode "client_id=$DATABRICKS_CLIENT_ID" \
                 --data-urlencode "subject_token=$id_token" \
                 --data-urlencode "subject_token_type=urn:ietf:params:oauth:token-type:jwt" \
                 --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
@@ -134,6 +135,8 @@ mint_token() {
                 return
             fi
             echo "the OIDC token exchange failed; falling back to the client secret" >&2
+        else
+            echo "the OIDC token request failed; falling back to the client secret" >&2
         fi
     fi
     require DBX_SAMPLES_SP_CLIENT_ID
