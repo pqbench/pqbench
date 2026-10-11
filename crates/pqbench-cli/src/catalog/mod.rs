@@ -29,7 +29,7 @@ pub(crate) enum CatalogCommand {
 /// Arguments for a catalog subcommand: the catalog name and the output flags.
 #[derive(Args)]
 pub(crate) struct NameArgs {
-    /// catalog name; without it, read `pqbench.catalog` refs on stdin
+    /// catalog name; without it, read `Catalog` refs on stdin
     catalog: Option<String>,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
@@ -52,15 +52,10 @@ pub(crate) async fn run(
     }
 }
 
-/// The catalog name a `pqbench.catalog` ref names.
+/// The catalog name a catalog ref names: a `catalogs/{catalog}` resource name.
 fn catalog_name(record: &Value) -> Result<String, CliError> {
-    let kind = record["kind"].as_str().unwrap_or_default();
-    if kind != "pqbench.catalog" {
-        return Err(format!("expected pqbench.catalog records, found {kind:?}").into());
-    }
-    let name = record["name"]
+    record["name"]
         .as_str()
-        .filter(|name| !name.is_empty())
-        .ok_or("a pqbench.catalog record needs a name")?;
-    Ok(name.to_string())
+        .and_then(pqbench::v1::name::parse_catalog)
+        .ok_or_else(|| "expected a catalog resource name (`catalogs/{catalog}`)".into())
 }

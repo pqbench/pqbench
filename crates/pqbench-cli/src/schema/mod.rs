@@ -30,7 +30,7 @@ pub(crate) enum SchemaCommand {
 /// flags.
 #[derive(Args)]
 pub(crate) struct NameArgs {
-    /// schema name (`catalog.schema`); without it, read `pqbench.schema` refs on stdin
+    /// schema name (`catalog.schema`); without it, read schema refs on stdin
     schema: Option<String>,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
@@ -50,21 +50,15 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &SchemaArgs) -> Re
     }
 }
 
-/// The catalog and schema a `pqbench.schema` ref names.
+/// The catalog and schema a schema ref names: a
+/// `catalogs/{catalog}/schemas/{schema}` resource name.
 fn schema_ref(record: &Value) -> Result<(String, String), CliError> {
-    let kind = record["kind"].as_str().unwrap_or_default();
-    if kind != "pqbench.schema" {
-        return Err(format!("expected pqbench.schema records, found {kind:?}").into());
-    }
-    let catalog = record["catalog"]
+    record["name"]
         .as_str()
-        .filter(|catalog| !catalog.is_empty())
-        .ok_or("a pqbench.schema record needs a catalog")?;
-    let name = record["name"]
-        .as_str()
-        .filter(|name| !name.is_empty())
-        .ok_or("a pqbench.schema record needs a name")?;
-    Ok((catalog.to_string(), name.to_string()))
+        .and_then(pqbench::v1::name::parse_schema)
+        .ok_or_else(|| {
+            "expected a schema resource name (`catalogs/{catalog}/schemas/{schema}`)".into()
+        })
 }
 
 /// Split `catalog.schema` at the first dot; an Iceberg namespace keeps its

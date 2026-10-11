@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use clap::Args;
 use futures_util::stream::{self, StreamExt};
 use pqbench::bytemass;
-use pqbench::table::TableFile;
+use pqbench::v1;
 use serde::Serialize;
 
 use crate::document::{self, Record};
@@ -17,8 +17,8 @@ use crate::CliError;
 /// Arguments for `bytemass`.
 #[derive(Args)]
 pub(crate) struct BytemassArgs {
-    /// parquet paths, a `pqbench.table-file` / `pqbench.remote-source`
-    /// document, or `-` for standard input
+    /// parquet paths, a table-file / remote-source document, or `-` for
+    /// standard input
     inputs: Vec<String>,
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -45,8 +45,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(),
     if args.inputs.is_empty() {
         if std::io::stdin().is_terminal() {
             return Err(
-                "bytemass needs parquet files or a pqbench.table-file / pqbench.remote-source document"
-                    .into(),
+                "bytemass needs parquet files or a table-file / remote-source document".into(),
             );
         }
         return measure_document(lake, "-", args).await;
@@ -90,14 +89,12 @@ async fn measure(
         .map(|input| {
             let env = env.clone();
             async move {
-                measure_one(
-                    lake,
-                    input.clone(),
-                    TableFile::new(input.clone(), input, 0),
-                    env,
-                    options,
-                )
-                .await
+                let file = v1::TableFile {
+                    name: v1::name::table_file_of(&v1::name::local_table(&input), &input),
+                    blob: Some(v1::name::blob_of(&input)),
+                    ..v1::TableFile::default()
+                };
+                measure_one(lake, file, env, options).await
             }
         })
         .buffer_unordered(args.fan_out.max(1));
@@ -115,32 +112,33 @@ struct Measured {
     pages: Vec<bytemass::PageRecord>,
 }
 
-/// Measure every file one document record names: a `pqbench.table-file` is one
-/// file; a `pqbench.remote-source` expands its inputs first.
+/// Measure every file one document record names: a table-file is one file; a
+/// remote-source expands its inputs first.
 async fn measure_record(
     lake: &pqbench::Lake,
     record: Result<Record, CliError>,
     options: (bool, bool),
 ) -> Result<Vec<Measured>, CliError> {
     match record? {
-        Record::File { id, file, env } => {
-            Ok(vec![measure_one(lake, id, file, env, options).await?])
+        Record::File(file) => {
+            let env = file
+                .credentials
+                .as_ref()
+                .map(v1::Credentials::to_env)
+                .unwrap_or_default();
+            Ok(vec![measure_one(lake, file, env, options).await?])
         }
         Record::RemoteSource(source) => {
             let mut measured = Vec::new();
             for uri in source.inputs {
                 let inputs = std::slice::from_ref(&uri);
                 for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
-                    measured.push(
-                        measure_one(
-                            lake,
-                            uri.clone(),
-                            TableFile::new(input.clone(), input, 0),
-                            source.env.clone(),
-                            options,
-                        )
-                        .await?,
-                    );
+                    let file = v1::TableFile {
+                        name: v1::name::table_file_of(&v1::name::local_table(&input), &input),
+                        blob: Some(v1::name::blob_of(&input)),
+                        ..v1::TableFile::default()
+                    };
+                    measured.push(measure_one(lake, file, source.env.clone(), options).await?);
                 }
             }
             Ok(measured)
@@ -155,15 +153,20 @@ async fn measure_record(
 /// fanout overlaps; [`emit_measured`] writes each result as it finishes.
 async fn measure_one(
     lake: &pqbench::Lake,
-    id: String,
-    file: TableFile,
+    file: v1::TableFile,
     env: BTreeMap<String, String>,
     options: (bool, bool),
 ) -> Result<Measured, CliError> {
+    let blob = file
+        .blob
+        .as_deref()
+        .ok_or("a table-file record needs a blob to read")?;
+    let uri = v1::name::blob_uri(blob)
+        .ok_or_else(|| CliError::from(format!("not a blob name: {blob}")))?;
     let mut measured = bytemass::measure_files(
         lake,
         &bytemass::BytemassRequest {
-            inputs: vec![file.uri.clone()],
+            inputs: vec![uri.clone()],
             env: env.clone(),
             indexes: options.0,
         },
@@ -171,19 +174,22 @@ async fn measure_one(
     .await?
     .pop()
     .ok_or("bytemass read no file")?;
-    if file.size_bytes != 0 && measured.file.size != file.size_bytes {
-        return Err(format!(
-            "active file size differs from log: {} (expected {}, found {})",
-            file.path, file.size_bytes, measured.file.size
-        )
-        .into());
+    if let Some(size) = file.size_bytes {
+        if size != 0 && measured.file.size != size {
+            return Err(format!(
+                "active file size differs from log: {uri} (expected {size}, found {})",
+                measured.file.size
+            )
+            .into());
+        }
     }
+    let (table, path) = v1::name::parse_table_file(&file.name).unzip();
+    let id = table.unwrap_or_else(|| uri.clone());
     measured.file.id = id.clone();
-    if file.uri == measured.file.file {
-        measured.file.path = file.path.clone();
+    if let Some(path) = path {
+        measured.file.path = path;
     }
     measured.file.partition_values = file.partition_values.clone();
-    measured.file.stats = file.stats.clone();
     let pages = if options.1 {
         bytemass::scan_pages(lake, &measured.file.file, &env).await?
     } else {

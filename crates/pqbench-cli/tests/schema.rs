@@ -144,11 +144,11 @@ const ICEBERG_NAMESPACE: &str =
 const ICEBERG_TABLES: &str =
     r#"{"identifiers":[{"namespace":["nyctaxi"],"name":"trips"}],"next-page-token":null}"#;
 
-/// The parent level's stream: one `pqbench.schema` ref per schema.
+/// The parent level's stream: one `Schema` resource per schema.
 const SCHEMA_REFS: &str = concat!(
-    r#"{"kind":"pqbench.schema","version":1,"catalog":"dbx_samples","name":"nyctaxi"}"#,
+    r#"{"name":"catalogs/dbx_samples/schemas/nyctaxi"}"#,
     "\n",
-    r#"{"kind":"pqbench.schema","version":1,"catalog":"dbx_samples","name":"bakehouse"}"#,
+    r#"{"name":"catalogs/dbx_samples/schemas/bakehouse"}"#,
     "\n",
 );
 
@@ -185,13 +185,11 @@ fn schema_info_streams_the_record_as_ndjson() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.schema");
-    assert_eq!(records[0]["version"], 1);
-    assert_eq!(records[0]["catalog"], "dbx_samples");
-    assert_eq!(records[0]["name"], "nyctaxi");
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples/schemas/nyctaxi");
     assert_eq!(records[0]["comment"], "taxi data");
-    assert_eq!(records[0]["location"], "s3://bucket/nyctaxi");
+    assert_eq!(records[0]["uri"], "s3://bucket/nyctaxi");
     assert_eq!(records[0]["properties"]["owner"], "data");
+    assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
 #[test]
@@ -212,8 +210,8 @@ fn schema_info_reads_the_iceberg_rest_namespace() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "nyctaxi");
-    assert_eq!(records[0]["location"], "s3://bucket/nyctaxi");
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples/schemas/nyctaxi");
+    assert_eq!(records[0]["uri"], "s3://bucket/nyctaxi");
     assert_eq!(records[0]["properties"]["owner"], "data");
 }
 
@@ -232,8 +230,10 @@ fn schema_info_reads_a_schema_stream() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["catalog"], "dbx_samples");
-    assert_eq!(records[0]["name"], "nyctaxi");
+    // The canned endpoint answers `nyctaxi` for either ref.
+    assert!(records
+        .iter()
+        .all(|record| record["name"] == "catalogs/dbx_samples/schemas/nyctaxi"));
 }
 
 #[test]
@@ -284,9 +284,15 @@ fn schema_ls_prints_the_tables_as_a_table() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("dbx_samples.nyctaxi.trips"), "{stdout}");
+    assert!(
+        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/trips"),
+        "{stdout}"
+    );
     assert!(stdout.contains("s3://bucket/trips"), "{stdout}");
-    assert!(stdout.contains("dbx_samples.nyctaxi.recent"), "{stdout}");
+    assert!(
+        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/recent"),
+        "{stdout}"
+    );
     assert!(stdout.contains("tables: 2"), "{stdout}");
 }
 
@@ -306,16 +312,16 @@ fn schema_ls_streams_table_refs() {
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 2);
     // Sorted by name: the view (`recent`) precedes the table (`trips`).
-    assert_eq!(records[0]["kind"], "pqbench.table-ref");
-    assert_eq!(records[0]["version"], 2);
-    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.recent");
-    assert!(records[0]["storage_path"].is_null());
-    assert_eq!(records[1]["id"], "dbx_samples.nyctaxi.trips");
-    assert!(records[1]["uri"]
-        .as_str()
-        .unwrap()
-        .contains("/tables/dbx_samples.nyctaxi.trips"));
-    assert_eq!(records[1]["storage_path"], "s3://bucket/trips");
+    assert_eq!(
+        records[0]["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/recent"
+    );
+    assert!(records[0].get("uri").is_none(), "{}", records[0]);
+    assert_eq!(
+        records[1]["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
+    );
+    assert_eq!(records[1]["uri"], "s3://bucket/trips");
 }
 
 #[test]
@@ -336,13 +342,11 @@ fn schema_ls_lists_iceberg_rest_tables() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.table-ref");
-    assert_eq!(records[0]["id"], "dbx_samples.nyctaxi.trips");
     assert_eq!(
-        records[0]["uri"],
-        format!("{address}/namespaces/nyctaxi/tables/trips")
+        records[0]["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     );
-    assert!(records[0]["storage_path"].is_null());
+    assert!(records[0].get("uri").is_none(), "{}", records[0]);
 }
 
 #[test]
@@ -364,11 +368,14 @@ fn schema_ls_follows_unity_page_tokens() {
     let records = ndjson(&output.stdout);
     let names: Vec<&str> = records
         .iter()
-        .map(|record| record["id"].as_str().unwrap())
+        .map(|record| record["name"].as_str().unwrap())
         .collect();
     assert_eq!(
         names,
-        ["dbx_samples.nyctaxi.trips", "dbx_samples.nyctaxi.zones"]
+        [
+            "catalogs/dbx_samples/schemas/nyctaxi/tables/trips",
+            "catalogs/dbx_samples/schemas/nyctaxi/tables/zones"
+        ]
     );
 }
 
@@ -387,7 +394,7 @@ fn schema_ls_reads_a_schema_stream() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 4);
-    assert_eq!(records[0]["kind"], "pqbench.table-ref");
+    assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
 #[test]

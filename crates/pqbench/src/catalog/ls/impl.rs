@@ -49,9 +49,9 @@ pub(crate) async fn list(workspace: &Workspace, catalog: &str) -> Result<Vec<Sch
     };
     let mut schemas: Vec<Schema> = names
         .into_iter()
-        .map(|name| Schema {
-            catalog: catalog.to_string(),
-            name,
+        .map(|schema| Schema {
+            name: crate::v1::name::schema(catalog, &schema),
+            ..Schema::default()
         })
         .collect();
     schemas.sort_by(|left, right| left.name.cmp(&right.name));

@@ -6,10 +6,9 @@ use std::path::PathBuf;
 use clap::Args;
 use futures_util::stream::StreamExt;
 use pqbench::table;
-use serde::Serialize;
 
-use crate::emit::{Align, Emitter, Format, Row};
-use crate::source::{self, read_input, ref_env, table_ref};
+use crate::emit::{Emitter, Format};
+use crate::source::{self, read_input, ref_env, ref_storage, table_ref};
 use crate::CliError;
 
 /// Arguments for `table ls`.
@@ -45,25 +44,23 @@ pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
     match &args.input {
         Some(uri) if uri != "-" => {
             if input.first.is_some() {
-                return Err(
-                    "table ls takes a table URI or a pqbench.table-ref v2 stream, not both".into(),
-                );
+                return Err("table ls takes a table URI or a table stream, not both".into());
             }
             let env = BTreeMap::new();
-            partitions += list_partitions(lake, uri, &env, args.every, &mut emit).await?;
+            let table = pqbench::v1::name::local_table(uri);
+            partitions += list_partitions(lake, &table, uri, &env, args.every, &mut emit).await?;
         }
         _ => {
             if !input.piped {
-                return Err("table ls needs a table URI or a pqbench.table-ref v2 stream".into());
+                return Err("table ls needs a table URI or a table stream".into());
             }
             let records = source::records("table ls", input.first, input.lines);
             let mut reads = records
                 .map(|record| async {
                     let record = record?;
-                    table_ref("table ls", &record)?;
-                    let uri = record["storage_path"]
-                        .as_str()
-                        .filter(|path| !path.is_empty())
+                    let (catalog, schema, table) = table_ref("table ls", &record)?;
+                    let name = pqbench::v1::name::table(&catalog, &schema, &table);
+                    let uri = ref_storage(&record)
                         .ok_or_else(|| {
                             CliError::from(
                                 "a table-ref has no storage path; run `pqbench table info` first",
@@ -71,17 +68,14 @@ pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
                         })?
                         .to_string();
                     let env = ref_env(&record);
-                    let found = table::ls::list(lake, &uri, &env, args.every)
+                    table::ls::list(lake, &name, &uri, &env, args.every)
                         .await
-                        .map_err(|error| CliError::from(error.to_string()))?;
-                    Ok::<_, CliError>((uri, env, found))
+                        .map_err(|error| CliError::from(error.to_string()))
                 })
                 .buffer_unordered(args.fan_out.max(1));
             while let Some(result) = reads.next().await {
-                let (uri, env, found) = result?;
-                for partition in &found {
-                    emit.write_row(&partition_record(&uri, partition, &env))
-                        .await?;
+                for partition in result? {
+                    emit.write_row(&partition).await?;
                     partitions += 1;
                 }
             }
@@ -93,18 +87,18 @@ pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
 /// Emit one table's partitions; returns how many were written.
 async fn list_partitions(
     lake: &pqbench::Lake,
+    table: &str,
     uri: &str,
     env: &BTreeMap<String, String>,
     window: i64,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    let found = table::ls::list(lake, uri, env, window)
+    let found = table::ls::list(lake, table, uri, env, window)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;
     for partition in &found {
-        emit.write_row(&partition_record(uri, partition, env))
-            .await?;
+        emit.write_row(partition).await?;
         count += 1;
     }
     Ok(count)
@@ -132,71 +126,4 @@ fn parse_window(value: &str) -> Result<i64, CliError> {
         _ => return Err(format!("--every unit must be m, h, d, or w: {value}").into()),
     };
     Ok(count * millis)
-}
-
-/// The document `table ls` writes, one line per partition.
-#[derive(Serialize)]
-struct PartitionRecord<'a> {
-    kind: &'static str,
-    version: u32,
-    table: &'a str,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    env: &'a BTreeMap<String, String>,
-    definition: Definition,
-    commits: Vec<CommitCell>,
-}
-
-/// A partition's definition: a natural commit-time window.
-#[derive(Serialize)]
-struct Definition {
-    kind: &'static str,
-    first_time: i64,
-    last_time: i64,
-}
-
-/// One commit in a partition, in the emitted document.
-#[derive(Serialize)]
-struct CommitCell {
-    version: u64,
-    commit_time: i64,
-}
-
-impl Row for PartitionRecord<'_> {
-    const HEADER: &'static [&'static str] = &["table", "first_time", "last_time", "commits"];
-    const ALIGN: &'static [Align] = &[Align::Left, Align::Right, Align::Right, Align::Right];
-
-    fn cells(&self) -> Vec<String> {
-        vec![
-            self.table.to_string(),
-            self.definition.first_time.to_string(),
-            self.definition.last_time.to_string(),
-            self.commits.len().to_string(),
-        ]
-    }
-}
-
-fn partition_record<'a>(
-    table: &'a str,
-    partition: &table::ls::Partition,
-    env: &'a BTreeMap<String, String>,
-) -> PartitionRecord<'a> {
-    PartitionRecord {
-        kind: "pqbench.partition",
-        version: 1,
-        table,
-        env,
-        definition: Definition {
-            kind: "natural",
-            first_time: partition.first_time,
-            last_time: partition.last_time,
-        },
-        commits: partition
-            .commits
-            .iter()
-            .map(|commit| CommitCell {
-                version: commit.version,
-                commit_time: commit.commit_time,
-            })
-            .collect(),
-    }
 }

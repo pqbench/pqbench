@@ -1,27 +1,13 @@
 //! `schema info`: one schema's record.
 //!
-//! [`read`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`read`] is the only public function. It returns the [`Schema`] resource;
+//! the CLI forwards it as-is.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::Workspace;
+pub use crate::v1::Schema;
 
-/// One schema record.
-#[derive(Debug, Clone)]
-pub struct Schema {
-    /// The catalog the schema belongs to.
-    pub catalog: String,
-    /// The schema name (an Iceberg namespace may have several parts).
-    pub name: String,
-    /// The schema comment, when it has one.
-    pub comment: Option<String>,
-    /// The schema's storage location, when it has one.
-    pub location: Option<String>,
-    /// The schema properties the endpoint reports.
-    pub properties: BTreeMap<String, String>,
-}
+use crate::Workspace;
 
 /// Errors reading a schema.
 #[derive(Debug)]

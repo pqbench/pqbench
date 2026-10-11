@@ -8,6 +8,7 @@ use serde::Deserialize;
 use super::api::{Catalog, Error};
 use crate::dialect;
 use crate::third_party::reqwest::Request;
+use crate::v1::name;
 use crate::Workspace;
 
 /// The subset of `GET /catalogs/{name}` this command reports.
@@ -43,9 +44,13 @@ pub(crate) async fn read(workspace: &Workspace, catalog: &str) -> Result<Catalog
     let record: Record = serde_json::from_slice(&response.bytes)
         .map_err(|error| Error::from(format!("the response was not a catalog record: {error}")))?;
     Ok(Catalog {
-        name: record.name,
-        catalog_type: record.catalog_type,
-        comment: record.comment,
-        owner: record.owner,
+        name: name::catalog(&record.name),
+        catalog_type: record
+            .catalog_type
+            .as_deref()
+            .and_then(dialect::catalog_type),
+        comment: record.comment.filter(|comment| !comment.is_empty()),
+        owner: record.owner.filter(|owner| !owner.is_empty()),
+        ..Catalog::default()
     })
 }

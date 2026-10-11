@@ -1,32 +1,14 @@
 //! `table ls`: a table's natural partitions.
 //!
-//! [`list`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`list`] is the only public function. It returns [`Partition`] resources;
+//! the CLI forwards them as-is.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
+pub use crate::v1::Partition;
+
 use crate::Lake;
-
-/// One natural partition: a half-open commit-time window and its commits.
-#[derive(Debug, Clone)]
-pub struct Partition {
-    /// Window start, milliseconds since the Unix epoch (inclusive).
-    pub first_time: i64,
-    /// Window end, milliseconds since the Unix epoch (exclusive).
-    pub last_time: i64,
-    /// Commits in the window, in version order.
-    pub commits: Vec<Commit>,
-}
-
-/// One commit in a partition.
-#[derive(Debug, Clone)]
-pub struct Commit {
-    /// Commit version.
-    pub version: u64,
-    /// Commit time, milliseconds since the Unix epoch.
-    pub commit_time: i64,
-}
 
 /// Errors listing a table's partitions.
 #[derive(Debug)]
@@ -52,13 +34,18 @@ impl From<String> for Error {
 /// daily window is a UTC day. A commit the log does not date is omitted, so a
 /// window never claims a commit it cannot place.
 ///
+/// `table` is the table's resource name; the partition names it as its parent.
+/// `uri` and `env` are the table's storage root and lease, carried on each
+/// partition so the files stage reads the log without a catalog call.
+///
 /// # Errors
 /// Fails when the table cannot be loaded, or `window_millis` is not positive.
 pub async fn list(
     lake: &Lake,
+    table: &str,
     uri: &str,
     env: &BTreeMap<String, String>,
     window_millis: i64,
 ) -> Result<Vec<Partition>, Error> {
-    super::r#impl::list(lake, uri, env, window_millis).await
+    super::r#impl::list(lake, table, uri, env, window_millis).await
 }

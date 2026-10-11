@@ -59,17 +59,18 @@ async fn unity_schema(workspace: &Workspace, catalog: &str, schema: &str) -> Res
         dialect::get_json(workspace, &url, workspace.config().token.as_deref())
             .await
             .map_err(Error::from)?;
+    let name = record
+        .name
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| schema.to_string());
     Ok(Schema {
-        catalog: catalog.to_string(),
-        name: record
-            .name
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| schema.to_string()),
+        name: crate::v1::name::schema(catalog, &name),
         comment: record.comment.filter(|comment| !comment.is_empty()),
-        location: record
+        uri: record
             .storage_location
             .filter(|location| !location.is_empty()),
         properties: record.properties.unwrap_or_default(),
+        ..Schema::default()
     })
 }
 
@@ -97,10 +98,9 @@ async fn iceberg_schema(
         namespace.namespaces.join(".")
     };
     Ok(Schema {
-        catalog: catalog.to_string(),
-        name,
-        comment: None,
-        location,
+        name: crate::v1::name::schema(catalog, &name),
+        uri: location,
         properties,
+        ..Schema::default()
     })
 }

@@ -7,4 +7,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{list, Commit, Error, Partition};
+pub use api::{list, Error, Partition};

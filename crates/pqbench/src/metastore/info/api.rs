@@ -1,24 +1,13 @@
 //! `metastore info`: the endpoint's metastore record.
 //!
-//! [`read`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`read`] is the only public function. It returns the [`Metastore`] resource;
+//! the CLI forwards it as-is.
 
 use std::fmt;
 
-use crate::Workspace;
+pub use crate::v1::Metastore;
 
-/// One metastore record.
-#[derive(Debug, Clone)]
-pub struct Metastore {
-    /// The metastore name.
-    pub name: String,
-    /// The metastore id.
-    pub id: String,
-    /// The cloud the metastore lives in.
-    pub cloud: String,
-    /// The cloud region the metastore lives in.
-    pub region: String,
-}
+use crate::Workspace;
 
 /// Errors reading a metastore.
 #[derive(Debug)]

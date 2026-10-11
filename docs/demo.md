@@ -15,8 +15,8 @@ columns: 2
 $ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
 ```
 
-A terminal prints an aligned table; a pipe streams NDJSON (`pqbench.partition`,
-`pqbench.table-file`, `pqbench.bytemass-row`). `--format json` forces the
+A terminal prints an aligned table; a pipe streams NDJSON (`Partition`,
+`TableFile`, `pqbench.bytemass-row`). `--format json` forces the
 stream, and `-o` also writes it. `pqbench viz` collects the bytemass stream into
 a static HTML treemap.
 
@@ -28,40 +28,37 @@ fixture in the test suite. Catalog pipes need `make lakehouse`.
 
 `bytemass` measures the files the `partition ls` stream names; which files is a
 shell decision. The stream is one JSON record per line, so `jq` prunes file
-records by `path`, and `sort`, `head`, or `awk` sample by name:
+records by `name`, and `sort`, `head`, or `awk` sample by name:
 
 ```console run delta json
 # one file: keep only the part-* records
 $ pqbench table ls docker/e2e-lakehouse/table \
 >   | pqbench partition ls \
->   | jq -c 'select(.path | startswith("part-"))' \
+>   | jq -c 'select(.name | contains("/files/part-"))' \
 >   | pqbench bytemass --json \
 >   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
-# first N by path: sort the file URIs, cap them, then measure
+# first N by name: sort the file records, cap them, then measure
 $ pqbench table ls docker/e2e-lakehouse/table \
 >   | pqbench partition ls \
->   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
 >   | sort | head -10 \
->   | xargs pqbench bytemass --json \
+>   | pqbench bytemass --json \
 >   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # every Nth file
 $ pqbench table ls docker/e2e-lakehouse/table \
 >   | pqbench partition ls \
->   | jq -r 'select(.kind == "pqbench.table-file") | .uri' \
 >   | awk 'NR % 2 == 1' \
->   | xargs pqbench bytemass --json \
+>   | pqbench bytemass --json \
 >   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 ```
 
-The `partition ls` stream keeps each file's `env` (S3/Unity credentials) on the
-record, so the first form works for remote tables. Dropping to bare `uri`s
-(`jq -r`) is local-only: pass credentials in the environment when you use
-`xargs`.
+The `partition ls` stream carries each file's `credentials` on the record, so
+the lease travels with it through `jq`, `sort`, and `head`: `bytemass` reads the
+file its `blob` names.
 
 ## A table's partitions
 

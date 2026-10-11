@@ -88,7 +88,7 @@ fn metastore_info_prints_the_record_as_a_table() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("metastore_aws_us_east_2"), "{stdout}");
+    assert!(stdout.contains("metastores/unity"), "{stdout}");
     assert!(stdout.contains("us-east-2"), "{stdout}");
     assert!(stdout.contains("metastores: 1"), "{stdout}");
 }
@@ -107,12 +107,12 @@ fn metastore_info_streams_the_record_as_ndjson() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.metastore");
-    assert_eq!(records[0]["version"], 1);
-    assert_eq!(records[0]["name"], "metastore_aws_us_east_2");
-    assert_eq!(records[0]["id"], "29dded30");
-    assert_eq!(records[0]["cloud"], "aws");
+    assert_eq!(records[0]["name"], "metastores/unity");
+    assert_eq!(records[0]["uid"], "29dded30");
+    assert_eq!(records[0]["display_name"], "metastore_aws_us_east_2");
+    assert_eq!(records[0]["cloud_provider"], "aws");
     assert_eq!(records[0]["region"], "us-east-2");
+    assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn metastore_info_exports_the_ndjson_stream() {
     let decoded = decode_lz4(&bytes);
     let records = ndjson(&decoded);
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["kind"], "pqbench.metastore");
+    assert_eq!(records[0]["name"], "metastores/unity");
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn metastore_ls_prints_the_catalogs_as_a_table() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dbx_samples"), "{stdout}");
-    assert!(stdout.contains("MANAGED_CATALOG"), "{stdout}");
+    assert!(stdout.contains("CATALOG_TYPE_MANAGED"), "{stdout}");
     assert!(stdout.contains("catalogs: 2"), "{stdout}");
 }
 
@@ -213,11 +213,10 @@ fn metastore_ls_streams_one_catalog_per_line() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["kind"], "pqbench.catalog");
-    assert_eq!(records[0]["version"], 1);
-    assert_eq!(records[0]["name"], "dbx_samples");
-    assert_eq!(records[0]["catalog_type"], "MANAGED_CATALOG");
-    assert_eq!(records[1]["name"], "system");
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples");
+    assert_eq!(records[0]["catalog_type"], "CATALOG_TYPE_MANAGED");
+    assert_eq!(records[1]["name"], "catalogs/system");
+    assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
 #[test]
@@ -234,7 +233,14 @@ fn metastore_ls_follows_the_next_page_token() {
         .iter()
         .filter_map(|record| record["name"].as_str())
         .collect();
-    assert_eq!(names, ["dbx_samples", "samples", "workspace"]);
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples",
+            "catalogs/samples",
+            "catalogs/workspace"
+        ]
+    );
 }
 
 #[test]
@@ -277,7 +283,7 @@ fn metastore_ls_reads_the_endpoint_from_the_environment() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["dbx_samples", "system"]);
+    assert_eq!(names, ["catalogs/dbx_samples", "catalogs/system"]);
 }
 
 #[test]

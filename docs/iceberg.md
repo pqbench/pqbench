@@ -11,7 +11,7 @@ flowchart TD
     detect[pqbench::table::detect] --> metadata[Iceberg metadata JSON]
     metadata --> load[pqbench::table::load]
     manifests[Avro manifests] --> load
-    load --> document[pqbench.partition document]
+    load --> document[Partition document]
     document --> bytemass[pqbench::bytemass]
     bytemass --> isolation[pqbench::object_store]
     isolation --> object_store[object_store crate]
@@ -30,7 +30,7 @@ module that names the `object_store` crate is `pqbench::object_store`.
 ## Usage
 
 List the current snapshot's partitions, then their files. A terminal prints the
-snapshot's partitions as a table; a pipe writes the full `pqbench.partition`
+snapshot's partitions as a table; a pipe writes the full `Partition`
 document. The URI may be a table root or the metadata JSON itself.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
@@ -66,8 +66,8 @@ the metadata JSON URI:
 cargo run -p pqbench-cli --features iceberg-s3 -- table ls s3://bucket/table
 
 A producer can supply the table URI and vended credentials as
-`pqbench.remote-source`; `table ls` reads the snapshot, and the env travels to
-`partition ls` and `bytemass`.
+a `remote-source` document; `table ls` reads the snapshot, and the credentials
+travel to `partition ls` and `bytemass`.
 
 ## Backends
 
