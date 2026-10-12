@@ -1,4 +1,4 @@
-//! `table get`: one table's record, read from its catalog and storage.
+//! `get table`: one table's record, read from its catalog and storage.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -11,12 +11,12 @@ use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input, ref_env, ref_storage, split_table, table_ref};
 use crate::CliError;
 
-/// The default tables in flight for `table get`: one per core.
+/// The default tables in flight for `get table`: one per core.
 fn default_fan_out() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
 }
 
-/// Arguments for `table get`: the `catalog.schema.table` name and the output
+/// Arguments for `get table`: the `catalog.schema.table` name and the output
 /// flags.
 #[derive(Args)]
 pub(crate) struct GetArgs {
@@ -42,13 +42,13 @@ pub(crate) async fn run(
     lake: &pqbench::Lake,
     args: &GetArgs,
 ) -> Result<(), CliError> {
-    let input = read_input("table get").await?;
+    let input = read_input("get table").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(table) = &args.table {
         if input.first.is_some() {
-            return Err("table get takes CATALOG.SCHEMA.TABLE or a table stream, not both".into());
+            return Err("get table takes CATALOG.SCHEMA.TABLE or a table stream, not both".into());
         }
-        let (catalog, schema, name) = split_table("table get", table)?;
+        let (catalog, schema, name) = split_table("get table", table)?;
         let storage = get::Storage {
             location: None,
             env: BTreeMap::new(),
@@ -58,14 +58,14 @@ pub(crate) async fn run(
         return emit.finish("tables: 1\n").await;
     }
     if !input.piped {
-        return Err("table get needs CATALOG.SCHEMA.TABLE or a table stream".into());
+        return Err("get table needs CATALOG.SCHEMA.TABLE or a table stream".into());
     }
-    let records = source::records("table get", input.first, input.lines);
+    let records = source::records("get table", input.first, input.lines);
     let mut tables = 0;
     let mut reads = records
         .map(|record| async {
             let record = record?;
-            let (catalog, schema, name) = table_ref("table get", &record)?;
+            let (catalog, schema, name) = table_ref("get table", &record)?;
             let storage = get::Storage {
                 location: ref_storage(&record).map(str::to_owned),
                 env: ref_env(&record),

@@ -1,4 +1,4 @@
-//! The `partition ls` internals: load the commit log, group by commit time.
+//! The `partition::ls` internals: load the commit log, group by commit time.
 
 use std::collections::BTreeMap;
 

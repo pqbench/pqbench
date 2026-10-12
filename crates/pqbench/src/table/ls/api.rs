@@ -1,4 +1,4 @@
-//! `table ls`: the tables in one schema.
+//! `table::ls`: the tables in one schema.
 //!
 //! [`list`] is the only public function. It returns [`Table`] resources; the
 //! CLI forwards them as-is.
@@ -30,7 +30,7 @@ impl From<String> for Error {
 /// List the tables in `schema` of `catalog` at the workspace's endpoint.
 ///
 /// Unity pages carry a storage location; Iceberg REST lists identifiers only,
-/// so `uri` is unset there until `pqbench table get` resolves it.
+/// so `uri` is unset there until `pqbench get table` resolves it.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected

@@ -210,8 +210,8 @@ impl Command {
     }
 
     /// Whether the command needs `PQB_ENDPOINT`. The catalog levels read a
-    /// catalog; a storage-only command (`partition ls`, `file ls`, `bytemass`,
-    /// …) does not.
+    /// catalog; a storage-only command (`list partitions`, `list files`,
+    /// `bytemass`, …) does not.
     fn requires_endpoint(&self) -> bool {
         match self {
             Command::Get(_) | Command::Credentials(_) => true,

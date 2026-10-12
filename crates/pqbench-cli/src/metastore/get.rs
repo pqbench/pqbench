@@ -1,4 +1,4 @@
-//! `metastore get`: the endpoint's metastore record.
+//! `get metastore`: the endpoint's metastore record.
 
 use pqbench::metastore::get;
 

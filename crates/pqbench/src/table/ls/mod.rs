@@ -1,4 +1,4 @@
-//! `table ls`: the tables in one schema.
+//! `table::ls`: the tables in one schema.
 //!
 //! [`api`] is the public surface: one function, [`api::list`]. The private
 //! `impl` module holds the URLs and the JSON shapes of both dialects — Unity

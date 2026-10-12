@@ -1,4 +1,4 @@
-//! `schema ls`: the schemas in a catalog, one `Schema` line each.
+//! `list schemas`: the schemas in a catalog, one `Schema` line each.
 
 use std::path::PathBuf;
 
@@ -10,7 +10,7 @@ use crate::emit::{Emitter, Format};
 use crate::source::{self, catalog_ref, read_input};
 use crate::CliError;
 
-/// Arguments for `schema ls`.
+/// Arguments for `list schemas`.
 #[derive(Args)]
 pub(crate) struct LsArgs {
     /// catalog name; without it, read `Catalog` refs on stdin
@@ -27,11 +27,11 @@ pub(crate) struct LsArgs {
 }
 
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
-    let input = read_input("schema ls").await?;
+    let input = read_input("list schemas").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(catalog) = &args.catalog {
         if input.first.is_some() {
-            return Err("schema ls takes CATALOG or a catalog stream, not both".into());
+            return Err("list schemas takes CATALOG or a catalog stream, not both".into());
         }
         let schemas = ls::list(workspace, catalog).await?;
         for schema in &schemas {
@@ -40,13 +40,13 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
         return emit.finish(&format!("schemas: {}\n", schemas.len())).await;
     }
     if !input.piped {
-        return Err("schema ls needs CATALOG or a catalog stream".into());
+        return Err("list schemas needs CATALOG or a catalog stream".into());
     }
-    let records = source::records("schema ls", input.first, input.lines);
+    let records = source::records("list schemas", input.first, input.lines);
     let mut schemas = 0;
     let mut lists = records
         .map(|record| async {
-            let catalog = catalog_ref("schema ls", &record?)?;
+            let catalog = catalog_ref("list schemas", &record?)?;
             Ok::<_, CliError>(ls::list(workspace, &catalog).await?)
         })
         .buffer_unordered(args.fan_out.max(1));

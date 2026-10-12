@@ -1,4 +1,4 @@
-//! `catalog ls`: the catalogs at the endpoint, one `Catalog` line each.
+//! `list catalogs`: the catalogs at the endpoint, one `Catalog` line each.
 
 use std::path::PathBuf;
 
@@ -10,7 +10,7 @@ use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input};
 use crate::CliError;
 
-/// Arguments for `catalog ls`.
+/// Arguments for `list catalogs`.
 #[derive(Args)]
 pub(crate) struct LsArgs {
     /// stdout format: auto (table on a terminal) | table | json
@@ -21,18 +21,18 @@ pub(crate) struct LsArgs {
     output: Option<PathBuf>,
 }
 
-/// List the catalogs at the endpoint: `metastore get | catalog ls`.
+/// List the catalogs at the endpoint: `get metastore | list catalogs`.
 ///
 /// The metastore is a singleton, so a `Metastore` stream on standard input only
 /// affords the walk its shape: the refs are validated, and the endpoint's
 /// catalogs are the answer either way.
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
-    let input = read_input("catalog ls").await?;
+    let input = read_input("list catalogs").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if input.piped {
-        let mut records = source::records("catalog ls", input.first, input.lines);
+        let mut records = source::records("list catalogs", input.first, input.lines);
         while let Some(record) = records.next().await {
-            source::metastore_ref("catalog ls", &record?)?;
+            source::metastore_ref("list catalogs", &record?)?;
         }
     }
     let catalogs = ls::list(workspace).await?;

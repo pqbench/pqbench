@@ -1,4 +1,4 @@
-//! `catalog get`: one catalog's record.
+//! `catalog::get`: one catalog's record.
 //!
 //! [`api`] is the public surface: one function, [`api::read`]. The private
 //! `impl` module holds the URL and the JSON shape; the HTTP transport is the

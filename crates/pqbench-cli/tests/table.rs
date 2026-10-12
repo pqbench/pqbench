@@ -335,7 +335,7 @@ fn loaded_table(location: &str) -> String {
     .to_string()
 }
 
-/// `table get` reads one table's record from Unity: the Delta log without
+/// `get table` reads one table's record from Unity: the Delta log without
 /// files, merged with the catalog's declared columns and properties.
 #[cfg(feature = "delta")]
 #[test]
@@ -412,7 +412,7 @@ fn table_get_prints_the_record_as_a_table() {
     assert!(stdout.contains("tables: 1"), "{stdout}");
 }
 
-/// `table get` reads the Iceberg REST `loadTable` metadata inline, so no
+/// `get table` reads the Iceberg REST `loadTable` metadata inline, so no
 /// storage read runs.
 #[test]
 fn table_get_reads_an_iceberg_rest_table() {
@@ -499,7 +499,7 @@ fn table_get_reads_an_iceberg_namespace_with_dots() {
     );
 }
 
-/// `schema ls | table get` chains: the refs on stdin name each table.
+/// `list schemas | get table` chains: the refs on stdin name each table.
 #[cfg(feature = "delta")]
 #[test]
 fn table_get_reads_a_table_ref_stream() {
