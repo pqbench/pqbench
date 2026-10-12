@@ -9,7 +9,7 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 33
-    support::run("pqbench table ls docker/e2e-lakehouse/table --format table", 34, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
+    support::run("pqbench list partitions docker/e2e-lakehouse/table --format table", 34, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]
@@ -17,6 +17,6 @@ fn usage() {
 #[test]
 fn document() {
     // document, from line 77
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls -o /tmp/partition.ndjson.zst", 78, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.zst", 78, None);
     support::run("pqbench bytemass /tmp/partition.ndjson.zst --format table", 79, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }

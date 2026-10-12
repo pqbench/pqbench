@@ -45,6 +45,158 @@ fn table_file(table: &str, uri: &str, size: Option<u64>) -> serde_json::Value {
     file
 }
 
+fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
+    stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
+        .collect()
+}
+
+fn ndjson(stdout: &[u8]) -> Vec<serde_json::Value> {
+    stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
+        .collect()
+}
+
+/// One endpoint that answers every GET with `status` and `body`.
+fn server(status: u16, body: &'static str) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(16) {
+            let mut stream = stream.unwrap();
+            let mut buffer = [0u8; 2048];
+            let _ = stream.read(&mut buffer);
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+        }
+    });
+    address
+}
+
+/// One endpoint that answers by request-line substring: the first matching
+/// route wins, so put the more specific needle first. No match is a 404.
+fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(16) {
+            let mut stream = stream.unwrap();
+            let mut buffer = [0u8; 2048];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let (status, body) = routes
+                .iter()
+                .find(|(needle, _, _)| request.contains(needle))
+                .map(|(_, status, body)| (*status, *body))
+                .unwrap_or((404, "{}"));
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+        }
+    });
+    address
+}
+
+/// One endpoint that answers by request-line substring, with owned bodies so a
+/// fixture path can be embedded. The first matching route wins; no match is a
+/// 404.
+fn routes_owned(routes: Vec<(&'static str, u16, String)>) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(16) {
+            let mut stream = stream.unwrap();
+            let mut buffer = [0u8; 2048];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let (status, body) = routes
+                .iter()
+                .find(|(needle, _, _)| request.contains(needle))
+                .map(|(_, status, body)| (*status, body.as_str()))
+                .unwrap_or((404, "{}"));
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+        }
+    });
+    address
+}
+
+/// Like `routes`, but each request sleeps `delay` and the server records the
+/// highest number of requests in flight — a command that awaits one request
+/// at a time never sees two.
+fn overlapping_routes(
+    routes: &'static [(&'static str, u16, &'static str)],
+    delay: std::time::Duration,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (requests_in_flight, requests_peak) = (in_flight.clone(), peak.clone());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let (in_flight, peak) = (requests_in_flight.clone(), requests_peak.clone());
+            std::thread::spawn(move || {
+                let mut stream = stream.unwrap();
+                let mut buffer = [0u8; 2048];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                std::thread::sleep(delay);
+                let (status, body) = routes
+                    .iter()
+                    .find(|(needle, _, _)| request.contains(needle))
+                    .map(|(_, status, body)| (*status, *body))
+                    .unwrap_or((404, "{}"));
+                let response = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body.as_bytes());
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    (address, peak)
+}
+
+/// The table the fixture's files belong to, as the walk would name them.
+const LOCAL_TABLE: &str = "catalogs/local/schemas/local/tables/t";
+
+const TABLES: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"},{"name":"recent","table_type":"VIEW"}],"next_page_token":null}"#;
+const TABLES_PAGE: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"}],"next_page_token":"more"}"#;
+const TABLES_LAST: &str = r#"{"tables":[{"name":"zones","full_name":"dbx_samples.nyctaxi.zones","data_source_format":"DELTA","storage_location":"s3://bucket/zones"}]}"#;
+const ICEBERG_TABLES: &str =
+    r#"{"identifiers":[{"namespace":["nyctaxi"],"name":"trips"}],"next-page-token":null}"#;
+
+/// The parent level's stream: one `Schema` resource per schema.
+const SCHEMA_REFS: &str = concat!(
+    r#"{"name":"catalogs/dbx_samples/schemas/nyctaxi"}"#,
+    "\n",
+    r#"{"name":"catalogs/dbx_samples/schemas/bakehouse"}"#,
+    "\n",
+);
+
 #[test]
 fn bytemass_reads_a_table_file_from_stdin() {
     let size = std::fs::metadata(parquet_fixture()).unwrap().len();
@@ -59,9 +211,6 @@ fn bytemass_reads_a_table_file_from_stdin() {
     assert!(stdout.contains("pqbench.bytemass-row"));
     assert!(stdout.contains("url_encoded"));
 }
-
-/// The table the fixture's files belong to, as the walk would name them.
-const LOCAL_TABLE: &str = "catalogs/local/schemas/local/tables/t";
 
 #[test]
 fn bytemass_rejects_a_non_aws_env_key() {
@@ -108,324 +257,6 @@ fn bytemass_measures_mixed_table_ids() {
         .collect();
     assert!(ids.contains(&a.to_string()), "{ids:?}");
     assert!(ids.contains(&b.to_string()), "{ids:?}");
-}
-
-fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
-    stdout
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
-        .collect()
-}
-
-#[cfg(feature = "delta")]
-struct DeltaFixture {
-    // Held only to keep the temporary directory alive for the test's duration.
-    // aipnaming: allow(aip-140/underscores)
-    _directory: tempfile::TempDir,
-    path: std::path::PathBuf,
-}
-
-#[cfg(feature = "delta")]
-fn delta_fixture() -> DeltaFixture {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().to_path_buf();
-    std::fs::create_dir(root.join("_delta_log")).unwrap();
-    let data = root.join("data.parquet");
-    std::fs::copy(parquet_fixture(), &data).unwrap();
-    let size = std::fs::metadata(&data).unwrap().len();
-    let commit = json!([
-        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
-        {"metaData": {
-            "id": "11111111-1111-1111-1111-111111111111",
-            "format": {"provider": "parquet", "options": {}},
-            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
-            "partitionColumns": [],
-            "configuration": {},
-            "createdTime": 0
-        }},
-        {"add": {
-            "path": "data.parquet",
-            "partitionValues": {},
-            "size": size,
-            "modificationTime": 0,
-            "dataChange": true,
-            "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
-        }}
-    ]);
-    let text = commit
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(serde_json::Value::to_string)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    std::fs::write(root.join("_delta_log/00000000000000000000.json"), text).unwrap();
-    DeltaFixture {
-        _directory: directory,
-        path: root,
-    }
-}
-
-/// A Delta table whose single commit records `commitInfo.timestamp` (ms).
-#[cfg(feature = "delta")]
-fn dated_delta_fixture(timestamp: i64) -> DeltaFixture {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().to_path_buf();
-    std::fs::create_dir(root.join("_delta_log")).unwrap();
-    let data = root.join("data.parquet");
-    std::fs::copy(parquet_fixture(), &data).unwrap();
-    let size = std::fs::metadata(&data).unwrap().len();
-    let commit = json!([
-        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
-        {"metaData": {
-            "id": "11111111-1111-1111-1111-111111111111",
-            "format": {"provider": "parquet", "options": {}},
-            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
-            "partitionColumns": [],
-            "configuration": {},
-            "createdTime": 0
-        }},
-        {"add": {
-            "path": "data.parquet",
-            "partitionValues": {},
-            "size": size,
-            "modificationTime": 0,
-            "dataChange": true,
-            "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
-        }},
-        {"commitInfo": {"timestamp": timestamp, "operation": "WRITE"}}
-    ]);
-    let text = commit
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(serde_json::Value::to_string)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    std::fs::write(root.join("_delta_log/00000000000000000000.json"), text).unwrap();
-    DeltaFixture {
-        _directory: directory,
-        path: root,
-    }
-}
-
-/// `table ls` dates each commit by its `commitInfo.timestamp` and groups it
-/// into an epoch-aligned, half-open UTC window.
-#[cfg(feature = "delta")]
-#[test]
-fn table_ls_groups_commits_into_natural_windows() {
-    let timestamp = 1_700_000_000_000i64;
-    let fixture = dated_delta_fixture(timestamp);
-    let output = pipe(
-        &[
-            "table",
-            "ls",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson_records(&output.stdout);
-    assert_eq!(records.len(), 1);
-    let partition = &records[0];
-    let day = 86_400_000i64;
-    let first = timestamp.div_euclid(day) * day;
-    assert_eq!(partition["start_time"], first);
-    assert_eq!(partition["end_time"], first + day);
-    assert_eq!(partition["commit_versions"][0], 0);
-    assert!(partition.get("kind").is_none(), "{partition}");
-}
-
-/// `--every` sets the window width; the boundary stays epoch-aligned.
-#[cfg(feature = "delta")]
-#[test]
-fn table_ls_honors_the_window_width() {
-    let timestamp = 1_700_000_000_000i64;
-    let fixture = dated_delta_fixture(timestamp);
-    let output = pipe(
-        &[
-            "table",
-            "ls",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1h",
-            "--format",
-            "json",
-        ],
-        "",
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson_records(&output.stdout);
-    assert_eq!(records.len(), 1);
-    let hour = 3_600_000i64;
-    let first = timestamp.div_euclid(hour) * hour;
-    assert_eq!(records[0]["start_time"], first);
-    assert_eq!(records[0]["end_time"], first + hour);
-}
-
-/// A commit the log does not date is omitted: a window never claims a commit
-/// it cannot place.
-#[cfg(feature = "delta")]
-#[test]
-fn table_ls_skips_commits_without_a_time() {
-    let fixture = delta_fixture();
-    let output = pipe(
-        &[
-            "table",
-            "ls",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(ndjson_records(&output.stdout).is_empty());
-}
-
-/// A malformed `--every` fails loudly before any table is read.
-#[cfg(feature = "delta")]
-#[test]
-fn table_ls_rejects_a_bad_window() {
-    let fixture = dated_delta_fixture(0);
-    let output = pipe(
-        &[
-            "table",
-            "ls",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1x",
-        ],
-        "",
-    );
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("--every unit"),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// `table ls | partition ls` names the files the window's commits added.
-#[cfg(feature = "delta")]
-#[test]
-fn partition_ls_lists_the_files_a_window_added() {
-    let fixture = dated_delta_fixture(1_700_000_000_000);
-    let listed = pipe(
-        &[
-            "table",
-            "ls",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
-    assert!(
-        listed.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&listed.stderr)
-    );
-    let files = pipe(
-        &["partition", "ls", "--format", "json"],
-        &String::from_utf8_lossy(&listed.stdout),
-    );
-    assert!(
-        files.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&files.stderr)
-    );
-    let records = ndjson_records(&files.stdout);
-    assert_eq!(records.len(), 1);
-    let name = records[0]["name"].as_str().unwrap();
-    assert!(
-        name.starts_with("catalogs/local/schemas/local/tables/"),
-        "{name}"
-    );
-    assert!(name.ends_with("/files/data.parquet"), "{name}");
-    let blob = records[0]["blob"].as_str().unwrap();
-    assert!(blob.starts_with("blobs/file/"), "{blob}");
-    assert!(blob.ends_with("data.parquet"), "{blob}");
-}
-
-#[cfg(feature = "delta")]
-#[test]
-fn table_ls_exits_cleanly_when_stdout_is_closed() {
-    let fixture = dated_delta_fixture(1_700_000_000_000);
-    let mut child = pqbench()
-        .args(["table", "ls", fixture.path.to_str().unwrap()])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    drop(child.stdout.take());
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stderr.is_empty(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// A table ref from a catalog walk must carry a storage URI; one without it
-/// fails loudly and names the stage that fills it.
-#[test]
-fn table_ls_rejects_a_ref_without_a_storage_path() {
-    let input = r#"{"name":"catalogs/c/schemas/s/tables/t"}"#;
-    let output = pipe(&["table", "ls"], input);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("storage path"), "{stderr}");
-}
-
-/// One endpoint that answers by request-line substring: the first matching
-/// route wins, so put the more specific needle first. No match is a 404.
-/// Bodies are owned so a fixture path can be embedded.
-fn routes(routes: Vec<(&'static str, u16, String)>) -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = format!("http://{}", listener.local_addr().unwrap());
-    std::thread::spawn(move || {
-        for stream in listener.incoming().take(16) {
-            let mut stream = stream.unwrap();
-            let mut buffer = [0u8; 2048];
-            let read = stream.read(&mut buffer).unwrap_or(0);
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            let (status, body) = routes
-                .iter()
-                .find(|(needle, _, _)| request.contains(needle))
-                .map(|(_, status, body)| (*status, body.as_str()))
-                .unwrap_or((404, "{}"));
-            let response = format!(
-                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            let _ = stream.write_all(response.as_bytes());
-            let _ = stream.write_all(body.as_bytes());
-        }
-    });
-    address
 }
 
 /// A minimal Delta table on disk: one commit with a protocol and metadata and
@@ -504,18 +335,18 @@ fn loaded_table(location: &str) -> String {
     .to_string()
 }
 
-/// `table info` reads one table's record from Unity: the Delta log without
+/// `table get` reads one table's record from Unity: the Delta log without
 /// files, merged with the catalog's declared columns and properties.
 #[cfg(feature = "delta")]
 #[test]
-fn table_info_reads_a_unity_table() {
+fn table_get_reads_a_unity_table() {
     let dir = tempfile::tempdir().unwrap();
     delta_table(dir.path());
-    let address = routes(vec![("/tables/", 200, unity_record(dir.path()))]);
+    let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
     let output = pipe_env(
         &[
+            "get",
             "table",
-            "info",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
@@ -552,14 +383,14 @@ fn table_info_reads_a_unity_table() {
 
 #[cfg(feature = "delta")]
 #[test]
-fn table_info_prints_the_record_as_a_table() {
+fn table_get_prints_the_record_as_a_table() {
     let dir = tempfile::tempdir().unwrap();
     delta_table(dir.path());
-    let address = routes(vec![("/tables/", 200, unity_record(dir.path()))]);
+    let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
     let output = pipe_env(
         &[
+            "get",
             "table",
-            "info",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "table",
@@ -581,19 +412,19 @@ fn table_info_prints_the_record_as_a_table() {
     assert!(stdout.contains("tables: 1"), "{stdout}");
 }
 
-/// `table info` reads the Iceberg REST `loadTable` metadata inline, so no
+/// `table get` reads the Iceberg REST `loadTable` metadata inline, so no
 /// storage read runs.
 #[test]
-fn table_info_reads_an_iceberg_rest_table() {
-    let address = routes(vec![(
+fn table_get_reads_an_iceberg_rest_table() {
+    let address = routes_owned(vec![(
         "/namespaces/nyctaxi/tables/trips",
         200,
         loaded_table("s3://bucket/events"),
     )]);
     let output = pipe_env(
         &[
+            "get",
             "table",
-            "info",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
@@ -636,16 +467,16 @@ fn table_info_reads_an_iceberg_rest_table() {
 
 /// An Iceberg namespace with dots is one path segment, escaped as `%1F`.
 #[test]
-fn table_info_reads_an_iceberg_namespace_with_dots() {
-    let address = routes(vec![(
+fn table_get_reads_an_iceberg_namespace_with_dots() {
+    let address = routes_owned(vec![(
         "/namespaces/ns%1Fone/tables/trips",
         200,
         loaded_table("s3://bucket/events"),
     )]);
     let output = pipe_env(
         &[
+            "get",
             "table",
-            "info",
             "dbx_samples.ns.one.trips",
             "--format",
             "json",
@@ -668,14 +499,14 @@ fn table_info_reads_an_iceberg_namespace_with_dots() {
     );
 }
 
-/// `schema ls | table info` chains: the refs on stdin name each table.
+/// `schema ls | table get` chains: the refs on stdin name each table.
 #[cfg(feature = "delta")]
 #[test]
-fn table_info_reads_a_table_ref_stream() {
+fn table_get_reads_a_table_ref_stream() {
     let dir = tempfile::tempdir().unwrap();
     delta_table(dir.path());
     let record = unity_record(dir.path());
-    let address = routes(vec![
+    let address = routes_owned(vec![
         ("/tables/dbx_samples.nyctaxi.zones", 200, record.clone()),
         ("/tables/dbx_samples.nyctaxi.trips", 200, record),
     ]);
@@ -686,7 +517,7 @@ fn table_info_reads_a_table_ref_stream() {
         "\n",
     );
     let output = pipe_env(
-        &["table", "info", "--format", "json"],
+        &["get", "table", "--format", "json"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -711,10 +542,10 @@ fn table_info_reads_a_table_ref_stream() {
 }
 
 #[test]
-fn table_info_rejects_a_record_without_a_table_name() {
+fn table_get_rejects_a_record_without_a_table_name() {
     let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips"}"#;
     let output = pipe_env(
-        &["table", "info"],
+        &["get", "table"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -724,10 +555,10 @@ fn table_info_rejects_a_record_without_a_table_name() {
 }
 
 #[test]
-fn table_info_takes_a_name_or_a_stream_not_both() {
+fn table_get_takes_a_name_or_a_stream_not_both() {
     let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips"}"#;
     let output = pipe_env(
-        &["table", "info", "dbx_samples.nyctaxi.trips"],
+        &["get", "table", "dbx_samples.nyctaxi.trips"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -737,9 +568,9 @@ fn table_info_takes_a_name_or_a_stream_not_both() {
 }
 
 #[test]
-fn table_info_needs_a_dotted_name() {
+fn table_get_needs_a_dotted_name() {
     let output = pipe_env(
-        &["table", "info", "trips"],
+        &["get", "table", "trips"],
         b"",
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -749,18 +580,181 @@ fn table_info_needs_a_dotted_name() {
 }
 
 #[test]
-fn table_info_needs_an_endpoint() {
-    let output = pipe(&["table", "info", "dbx_samples.nyctaxi.trips"], "");
+fn table_get_needs_an_endpoint() {
+    let output = pipe(&["get", "table", "dbx_samples.nyctaxi.trips"], "");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
 }
 
 #[test]
-fn table_info_reports_an_unknown_table() {
-    let address = routes(vec![]);
+fn table_get_reports_an_unknown_table() {
+    let address = routes_owned(vec![]);
     let output = pipe_env(
-        &["table", "info", "dbx_samples.nyctaxi.nope"],
+        &["get", "table", "dbx_samples.nyctaxi.nope"],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("404"), "{stderr}");
+}
+
+#[test]
+fn table_ls_prints_the_tables_as_a_table() {
+    let address = routes(&[("/tables", 200, TABLES)]);
+    let output = pipe_env(
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "table"],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/trips"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("s3://bucket/trips"), "{stdout}");
+    assert!(
+        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/recent"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("tables: 2"), "{stdout}");
+}
+
+#[test]
+fn table_ls_streams_table_refs() {
+    let address = routes(&[("/tables", 200, TABLES)]);
+    let output = pipe_env(
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 2);
+    // Sorted by name: the view (`recent`) precedes the table (`trips`).
+    assert_eq!(
+        records[0]["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/recent"
+    );
+    assert!(records[0].get("uri").is_none(), "{}", records[0]);
+    assert_eq!(
+        records[1]["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
+    );
+    assert_eq!(records[1]["uri"], "s3://bucket/trips");
+}
+
+#[test]
+fn table_ls_lists_iceberg_rest_tables() {
+    let address = routes(&[("/namespaces/nyctaxi/tables", 200, ICEBERG_TABLES)]);
+    let output = pipe_env(
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0]["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
+    );
+    assert!(records[0].get("uri").is_none(), "{}", records[0]);
+}
+
+#[test]
+fn table_ls_follows_unity_page_tokens() {
+    let address = routes(&[
+        ("page_token=", 200, TABLES_LAST),
+        ("/tables", 200, TABLES_PAGE),
+    ]);
+    let output = pipe_env(
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| record["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/nyctaxi/tables/trips",
+            "catalogs/dbx_samples/schemas/nyctaxi/tables/zones"
+        ]
+    );
+}
+
+#[test]
+fn table_ls_reads_a_schema_stream() {
+    let address = routes(&[("/tables", 200, TABLES)]);
+    let output = pipe_env(
+        &["list", "tables", "--format", "json"],
+        SCHEMA_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 4);
+    assert!(records[0].get("kind").is_none(), "{}", records[0]);
+}
+
+#[test]
+fn table_ls_multiplexes_its_refs() {
+    let (address, peak) = overlapping_routes(
+        &[("/tables", 200, TABLES)],
+        std::time::Duration::from_millis(50),
+    );
+    let output = pipe_env(
+        &["list", "tables", "--format", "json"],
+        SCHEMA_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(ndjson(&output.stdout).len(), 4);
+    assert!(
+        peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "the two refs' requests did not overlap"
+    );
+}
+
+#[test]
+fn table_ls_reports_an_unknown_schema() {
+    let address = server(404, r#"{"message":"Schema 'nope' does not exist."}"#);
+    let output = pipe_env(
+        &["list", "tables", "dbx_samples.nope"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );

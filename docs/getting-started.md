@@ -3,7 +3,7 @@
 pqbench measures **how a Parquet file spends bytes** and how well codecs
 compress it. It reads the footer, not the pages, so it is fast on files of any
 size. Every command writes a versioned JSON document, so commands compose on
-pipes: `table ls` lists a table's partitions, `partition ls` their files,
+pipes: `list partitions` lists a table's partitions, `list files` their files,
 `bytemass` measures them, `viz` draws the result.
 
 This page is a guided first run. It uses the committed
@@ -68,7 +68,7 @@ those files. The walk lists a table's partitions, then their files, then
 measures them:
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
+$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3

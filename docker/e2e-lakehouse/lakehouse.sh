@@ -201,61 +201,61 @@ check_unity() {
                 jq -c '{table_id, operation: "READ"}')" |
         jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv')
     walk_env "" "" "$vended_key" "$vended_secret" "$vended_token"
-    measurement=$("$pqbench_bin" table ls "$table_location" |
-        "$pqbench_bin" partition ls |
+    measurement=$("$pqbench_bin" list partitions "$table_location" |
+        "$pqbench_bin" list files |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "unity table" "$measurement")
 
-    # `schema ls` lists the same table from Unity; the walk reads it under the
+    # `list tables` lists the same table from Unity; the walk reads it under the
     # lease the environment carries, and measures the files the window added.
     walk_env "$unity_catalog" "" "$VENDED_ACCESS_KEY_ID" "$VENDED_SECRET_ACCESS_KEY" "$VENDED_SESSION_TOKEN"
-    measurement=$("$pqbench_bin" schema ls pqbench.demo --format json |
-        "$pqbench_bin" table info |
-        "$pqbench_bin" table ls |
-        "$pqbench_bin" partition ls |
+    measurement=$("$pqbench_bin" list tables pqbench.demo --format json |
+        "$pqbench_bin" get table |
+        "$pqbench_bin" list partitions |
+        "$pqbench_bin" list files |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the lake pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "unity lake" "$measurement")
 
-    # `catalog ls` lists Unity's schemas for the same catalog.
+    # `list schemas` lists Unity's schemas for the same catalog.
     local schemas
-    schemas=$("$pqbench_bin" catalog ls pqbench --format json |
+    schemas=$("$pqbench_bin" list schemas pqbench --format json |
         jq -r 'select(.name | startswith("catalogs/pqbench/schemas/")) | .name | split("/") | last') || {
-        echo "check failed: catalog ls produced no schemas" >&2
+        echo "check failed: list schemas produced no schemas" >&2
         exit 1
     }
     [ "$schemas" = "demo" ] || {
-        echo "check failed (unity catalog ls): expected demo; measured ${schemas:-nothing}" >&2
+        echo "check failed (unity list schemas): expected demo; measured ${schemas:-nothing}" >&2
         exit 1
     }
 
-    # `schema ls` lists Unity's tables for the same schema.
+    # `list tables` lists Unity's tables for the same schema.
     local tables
-    tables=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    tables=$("$pqbench_bin" list tables pqbench.demo --format json |
         jq -r 'select(.name | contains("/tables/")) | (.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) " + (.uri // "-")') || {
-        echo "check failed: schema ls produced no tables" >&2
+        echo "check failed: list tables produced no tables" >&2
         exit 1
     }
     [ "$tables" = "pqbench.demo.events $table_location" ] || {
-        echo "check failed (unity schema ls): expected pqbench.demo.events $table_location; measured ${tables:-nothing}" >&2
+        echo "check failed (unity list tables): expected pqbench.demo.events $table_location; measured ${tables:-nothing}" >&2
         exit 1
     }
 
-    # `table info` reads the record without files: the Unity record plus the
+    # `get table` reads the record without files: the Unity record plus the
     # Delta snapshot metadata, as an enriched `pqbench.table-ref` v2.
     local table_info
-    table_info=$("$pqbench_bin" table info pqbench.demo.events --format json |
+    table_info=$("$pqbench_bin" get table pqbench.demo.events --format json |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) snapshot=\(.snapshot_version) columns=[\([.declared_columns[].column] | join(","))]"') || {
-        echo "check failed: table info produced no table" >&2
+        echo "check failed: get table produced no table" >&2
         exit 1
     }
     [ "$table_info" = "pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label]" ] || {
-        echo "check failed (unity table info): expected pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label]; measured ${table_info:-nothing}" >&2
+        echo "check failed (unity get table): expected pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label]; measured ${table_info:-nothing}" >&2
         exit 1
     }
 
@@ -264,7 +264,7 @@ check_unity() {
     # lease (keys + token) only — the endpoint stays in the environment.
     walk_env "$unity_catalog" "" "" ""
     local vended_ref
-    vended_ref=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    vended_ref=$("$pqbench_bin" list tables pqbench.demo --format json |
         "$pqbench_bin" credentials get --format json |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) key=\(.credentials.access_key_id // "-") session=\(if .credentials.session_token then "set" else "unset" end) endpoint=-"') || {
         echo "check failed: credentials get produced no ref" >&2
@@ -276,50 +276,50 @@ check_unity() {
     }
 
     local vended_info
-    vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    vended_info=$("$pqbench_bin" list tables pqbench.demo --format json |
         "$pqbench_bin" credentials get --format json |
-        "$pqbench_bin" table info --format json |
+        "$pqbench_bin" get table --format json |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) snapshot=\(.snapshot_version) columns=[\([.declared_columns[].column] | join(","))] env=\(if .credentials then "set" else "none" end)"') || {
         echo "check failed: the vended table loop produced no record" >&2
         exit 1
     }
     [ "$vended_info" = "pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label] env=set" ] || {
-        echo "check failed (unity vended table info): expected pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
+        echo "check failed (unity vended get table): expected pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; table info: $table_info; vended table info: $vended_info"
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; list schemas pqbench: $schemas; list tables pqbench.demo: $tables; get table: $table_info; vended get table: $vended_info"
 }
 
 check_iceberg() {
     ensure_pqbench
     local measurement measured
-    # `schema ls` lists the Iceberg REST namespace; `table info` reads
+    # `list tables` lists the Iceberg REST namespace; `get table` reads
     # loadTable's inline metadata and fills the storage path (the metadata
     # JSON), then the walk measures the files the window added.
     walk_env "$iceberg_rest/v1" "iceberg" "test" "test"
-    measurement=$("$pqbench_bin" schema ls pqbench.demo --format json |
-        "$pqbench_bin" table info |
-        "$pqbench_bin" table ls |
-        "$pqbench_bin" partition ls |
+    measurement=$("$pqbench_bin" list tables pqbench.demo --format json |
+        "$pqbench_bin" get table |
+        "$pqbench_bin" list partitions |
+        "$pqbench_bin" list files |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the Iceberg lake pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "iceberg lake" "$measurement")
 
-    # `table info` reads loadTable's inline metadata, without files.
+    # `get table` reads loadTable's inline metadata, without files.
     local table_info
-    table_info=$("$pqbench_bin" table info pqbench.demo.events --format json |
+    table_info=$("$pqbench_bin" get table pqbench.demo.events --format json |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) columns=[\([.declared_columns[].column] | join(","))] snapshot=\(if .snapshot_version > 0 then "set" else "unset" end)"') || {
-        echo "check failed: table info produced no Iceberg table" >&2
+        echo "check failed: get table produced no Iceberg table" >&2
         exit 1
     }
     [ "$table_info" = "pqbench.demo.events TABLE_FORMAT_ICEBERG columns=[id,label] snapshot=set" ] || {
-        echo "check failed (iceberg table info): expected pqbench.demo.events TABLE_FORMAT_ICEBERG columns=[id,label] snapshot=set; measured ${table_info:-nothing}" >&2
+        echo "check failed (iceberg get table): expected pqbench.demo.events TABLE_FORMAT_ICEBERG columns=[id,label] snapshot=set; measured ${table_info:-nothing}" >&2
         exit 1
     }
-    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured; table info: $table_info"
+    echo "Iceberg REST ready: $iceberg_rest/v1/namespaces/demo/tables/events: $measured; get table: $table_info"
 }
 
 check() {

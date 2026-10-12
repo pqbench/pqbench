@@ -1,15 +1,16 @@
-//! `schema ls`: the tables in one schema.
+//! `schema ls`: the schemas in one catalog.
 //!
-//! [`list`] is the only public function. It returns [`Table`] resources; the
+//! [`list`] is the only public function. It returns [`Schema`] resources; the
 //! CLI forwards them as-is.
 
 use std::fmt;
 
-pub use crate::v1::Table;
+pub use crate::config::Dialect as TableFormat;
+pub use crate::v1::Schema;
 
 use crate::Workspace;
 
-/// Errors listing a schema's tables.
+/// Errors listing a catalog's schemas.
 #[derive(Debug)]
 pub struct Error(String);
 
@@ -27,14 +28,11 @@ impl From<String> for Error {
     }
 }
 
-/// List the tables in `schema` of `catalog` at the workspace's endpoint.
-///
-/// Unity pages carry a storage location; Iceberg REST lists identifiers only,
-/// so `uri` is unset there until `pqbench table info` resolves it.
+/// List the schemas in `catalog` at the workspace's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or returns a malformed table page.
-pub async fn list(workspace: &Workspace, catalog: &str, schema: &str) -> Result<Vec<Table>, Error> {
-    super::r#impl::list(workspace, catalog, schema).await
+/// status, or returns a malformed schema page.
+pub async fn list(workspace: &Workspace, catalog: &str) -> Result<Vec<Schema>, Error> {
+    super::r#impl::list(workspace, catalog).await
 }

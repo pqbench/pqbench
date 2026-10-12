@@ -12,7 +12,7 @@ each column costs.
 One binary for parquet optimizations.
 
 Commands compose on pipes: each writes a versioned JSON document the next reads.
-The usual pipe is `table ls` → `partition ls` → `bytemass` → `viz`.
+The usual pipe is `list partitions` → `list files` → `bytemass` → `viz`.
 
 ## Quick start
 
@@ -85,16 +85,16 @@ columns: 2
 - `s3://` needs the `aws` feature; a pipe streams one NDJSON row per column
   (`--format json`, or `-o FILE`).
 
-Filtering which files to measure is a shell job on the `partition ls` stream —
+Filtering which files to measure is a shell job on the `list files` stream —
 see [docs/demo.md](docs/demo.md).
 
-### table ls
+### list partitions
 
 List a table's natural partitions — its commits grouped into epoch-aligned
 commit-time windows.
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table --format table
+$ pqbench list partitions docker/e2e-lakehouse/table --format table
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
@@ -105,14 +105,14 @@ partitions: 1
 - `--every 1h|1d|1w` sets the window width (default `1d`).
 - Delta needs `--features delta`, Iceberg `iceberg`; add `-s3` to either for
   `s3://`.
-- A pipe streams `Partition` NDJSON; feed it to `partition ls`.
+- A pipe streams `Partition` NDJSON; feed it to `list files`.
 
-### partition ls
+### list files
 
 List the files a partition's commits added — the input to `bytemass`.
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
+$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -122,7 +122,7 @@ rows: 3
 columns: 2
 ```
 
-- `partition ls` re-reads the window's commits and emits the files they
+- `list files` re-reads the window's commits and emits the files they
   **added** — a file a later commit removes is still named.
 - The lease rides on every file, so a short-lived lease travels to `bytemass`.
 
@@ -144,7 +144,7 @@ browser; no server is needed.
 
 ```console run delta
 $ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
@@ -160,12 +160,12 @@ that command.
 - [Distribution](docs/distribution.md) — install the binary, targets, and how releases are cut
 - [CLI reference](docs/cli.md) — the command table, documents, flags, and auth
 - [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
-- [Delta tables](docs/delta.md) — log load, `table ls | partition ls | bytemass`, limitations
-- [Iceberg tables](docs/iceberg.md) — metadata load, `table ls | partition ls | bytemass`, limitations
+- [Delta tables](docs/delta.md) — log load, `list partitions | list files | bytemass`, limitations
+- [Iceberg tables](docs/iceberg.md) — metadata load, `list partitions | list files | bytemass`, limitations
 - [Visualization](docs/viz.md) — `pqbench viz`, a static HTML treemap
 - [Python bindings](python/README.md) — install the wheel and call every command
 - [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
-  naming tables for `pqbench table ls`, over rustfs S3
+  naming tables for `pqbench list partitions`, over rustfs S3
 
 ## Python
 

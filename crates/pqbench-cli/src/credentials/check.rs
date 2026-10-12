@@ -1,5 +1,5 @@
 //! `credentials check`: filter each ref's table on the catalog's eligibility:
-//! `schema ls | credentials check | credentials get`.
+//! `table ls | credentials check | credentials get`.
 //!
 //! The check is the walk's single filter. It drops a `system` catalog ref, a
 //! view (the catalog reports no location), and a table whose capability

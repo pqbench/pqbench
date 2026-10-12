@@ -1,4 +1,4 @@
-//! `table info`: one table's record.
+//! `table get`: one table's record.
 //!
 //! [`api`] is the public surface: one function, [`api::read`], and the
 //! [`api::TableFormat`] dialect it speaks. The private `impl` module holds the

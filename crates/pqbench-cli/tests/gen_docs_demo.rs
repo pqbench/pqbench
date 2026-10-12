@@ -17,18 +17,18 @@ fn visual_demos() {
 #[test]
 fn selecting_files_with_unix_tools() {
     // selecting_files_with_unix_tools, from line 33
-    support::run(r#"pqbench table ls docker/e2e-lakehouse/table \
-  | pqbench partition ls \
+    support::run(r#"pqbench list partitions docker/e2e-lakehouse/table \
+  | pqbench list files \
   | jq -c 'select(.name | contains("/files/part-"))' \
   | pqbench bytemass --json \
   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1"#, 35, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
-    support::run(r#"pqbench table ls docker/e2e-lakehouse/table \
-  | pqbench partition ls \
+    support::run(r#"pqbench list partitions docker/e2e-lakehouse/table \
+  | pqbench list files \
   | sort | head -10 \
   | pqbench bytemass --json \
   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1"#, 43, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
-    support::run(r#"pqbench table ls docker/e2e-lakehouse/table \
-  | pqbench partition ls \
+    support::run(r#"pqbench list partitions docker/e2e-lakehouse/table \
+  | pqbench list files \
   | awk 'NR % 2 == 1' \
   | pqbench bytemass --json \
   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1"#, 51, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
@@ -39,8 +39,8 @@ fn selecting_files_with_unix_tools() {
 #[test]
 fn a_table_s_partitions() {
     // a_table_s_partitions, from line 69
-    support::run("pqbench table ls docker/e2e-lakehouse/table -o /tmp/partition.ndjson.zst", 70, None);
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report", 71, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table -o /tmp/partition.ndjson.zst", 70, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 71, None);
 }
 
 #[cfg(feature = "delta")]
@@ -48,7 +48,7 @@ fn a_table_s_partitions() {
 #[test]
 fn a_table_s_partitions_2() {
     // a_table_s_partitions_2, from line 76
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table", 77, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 77, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[rustfmt::skip]
@@ -64,7 +64,7 @@ fn one_parquet_file() {
 #[test]
 fn one_delta_snapshot() {
     // one_delta_snapshot, from line 139
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls -o /tmp/partition.ndjson.zst", 140, None);
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table", 141, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
-    support::run("pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report", 149, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.zst", 140, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 141, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 149, None);
 }

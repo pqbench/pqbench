@@ -1,15 +1,15 @@
-//! `metastore ls`: the catalogs at the endpoint.
+//! `metastore get`: the endpoint's metastore record.
 //!
-//! [`list`] is the only public function. It returns [`Catalog`] resources; the
-//! CLI forwards them as-is.
+//! [`read`] is the only public function. It returns the [`Metastore`] resource;
+//! the CLI forwards it as-is.
 
 use std::fmt;
 
-pub use crate::v1::Catalog;
+pub use crate::v1::Metastore;
 
 use crate::Workspace;
 
-/// Errors listing catalogs.
+/// Errors reading a metastore.
 #[derive(Debug)]
 pub struct Error(String);
 
@@ -27,11 +27,11 @@ impl From<String> for Error {
     }
 }
 
-/// List the catalogs at the workspace's endpoint, in name order.
+/// Read the metastore record from the workspace's endpoint.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or returns a malformed catalog page.
-pub async fn list(workspace: &Workspace) -> Result<Vec<Catalog>, Error> {
-    super::r#impl::list(workspace).await
+/// status, or returns a malformed summary.
+pub async fn read(workspace: &Workspace) -> Result<Metastore, Error> {
+    super::r#impl::read(workspace).await
 }

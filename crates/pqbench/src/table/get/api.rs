@@ -1,4 +1,4 @@
-//! `table info`: one table's record.
+//! `table get`: one table's record.
 //!
 //! [`read`] is the only public function. It returns the [`Table`] resource —
 //! the wire form of the loaded [`TableInfo`](crate::table::TableInfo) — and the

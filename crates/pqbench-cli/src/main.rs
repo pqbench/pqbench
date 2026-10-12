@@ -14,7 +14,10 @@ mod diff;
 mod document;
 mod emit;
 mod experiment;
+mod file;
+mod get;
 mod help;
+mod list;
 mod lz;
 mod metastore;
 mod partition;
@@ -74,33 +77,19 @@ enum Command {
     )]
     Bytemass(bytemass::BytemassArgs),
     #[command(
-        about = help::TABLE_ABOUT,
-        long_about = help::TABLE_LONG_ABOUT,
-        after_help = help::TABLE_AFTER,
-        after_long_help = help::TABLE_AFTER
+        about = help::GET_ABOUT,
+        long_about = help::GET_LONG_ABOUT,
+        after_help = help::GET_AFTER,
+        after_long_help = help::GET_AFTER
     )]
-    Table(table::TableArgs),
+    Get(get::GetArgs),
     #[command(
-        about = help::METASTORE_ABOUT,
-        long_about = help::METASTORE_LONG_ABOUT,
-        after_help = help::METASTORE_AFTER,
-        after_long_help = help::METASTORE_AFTER
+        about = help::LIST_ABOUT,
+        long_about = help::LIST_LONG_ABOUT,
+        after_help = help::LIST_AFTER,
+        after_long_help = help::LIST_AFTER
     )]
-    Metastore(metastore::MetastoreArgs),
-    #[command(
-        about = help::CATALOG_ABOUT,
-        long_about = help::CATALOG_LONG_ABOUT,
-        after_help = help::CATALOG_AFTER,
-        after_long_help = help::CATALOG_AFTER
-    )]
-    Catalog(catalog::CatalogArgs),
-    #[command(
-        about = help::SCHEMA_ABOUT,
-        long_about = help::SCHEMA_LONG_ABOUT,
-        after_help = help::SCHEMA_AFTER,
-        after_long_help = help::SCHEMA_AFTER
-    )]
-    Schema(schema::SchemaArgs),
+    List(list::ListArgs),
     #[command(
         about = help::CREDENTIALS_ABOUT,
         long_about = help::CREDENTIALS_LONG_ABOUT,
@@ -108,13 +97,6 @@ enum Command {
         after_long_help = help::CREDENTIALS_AFTER
     )]
     Credentials(credentials::CredentialsArgs),
-    #[command(
-        about = help::PARTITION_ABOUT,
-        long_about = help::PARTITION_LONG_ABOUT,
-        after_help = help::PARTITION_AFTER,
-        after_long_help = help::PARTITION_AFTER
-    )]
-    Partition(partition::PartitionArgs),
     #[command(
         name = "ratelimit",
         about = help::RATELIMIT_ABOUT,
@@ -195,12 +177,9 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &args).await,
-        Command::Table(args) => table::run(&workspace, &lake, &args).await,
-        Command::Metastore(args) => metastore::run(&workspace, &args).await,
-        Command::Catalog(args) => catalog::run(&workspace, &args).await,
-        Command::Schema(args) => schema::run(&workspace, &args).await,
+        Command::Get(args) => get::run(&workspace, &lake, &args).await,
+        Command::List(args) => list::run(&workspace, &lake, &args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
-        Command::Partition(args) => partition::run(&lake, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
@@ -218,12 +197,9 @@ impl Command {
             Command::Lz(_) => "lz",
             Command::Compression(_) => "compression",
             Command::Bytemass(_) => "bytemass",
-            Command::Table(_) => "table",
-            Command::Metastore(_) => "metastore",
-            Command::Catalog(_) => "catalog",
-            Command::Schema(_) => "schema",
+            Command::Get(args) => args.name(),
+            Command::List(args) => args.name(),
             Command::Credentials(_) => "credentials",
-            Command::Partition(_) => "partition",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
             Command::Experiment(_) => "experiment",
@@ -233,15 +209,13 @@ impl Command {
         }
     }
 
-    /// Whether the command needs `PQB_ENDPOINT`. Only the metadata walk reads
-    /// a catalog; a storage-only command (`table ls`, `bytemass`, …) does not.
+    /// Whether the command needs `PQB_ENDPOINT`. The catalog levels read a
+    /// catalog; a storage-only command (`partition ls`, `file ls`, `bytemass`,
+    /// …) does not.
     fn requires_endpoint(&self) -> bool {
         match self {
-            Command::Metastore(_)
-            | Command::Catalog(_)
-            | Command::Schema(_)
-            | Command::Credentials(_) => true,
-            Command::Table(args) => args.requires_endpoint(),
+            Command::Get(_) | Command::Credentials(_) => true,
+            Command::List(args) => args.requires_endpoint(),
             _ => false,
         }
     }

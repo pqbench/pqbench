@@ -1,6 +1,8 @@
-//! `partition`: one natural partition and the files its commits added.
+//! The partition command: a table's natural partitions and the files they added.
 //!
-//! [`ls::list`] re-reads the table's log and the snapshot's files, and returns
-//! the files the given commits named. The CLI owns the document it becomes.
+//! A partition is a grouping of a table's active files; the natural key is
+//! time, so [`ls::list`] groups the table's commits into epoch-aligned windows
+//! and returns one `Partition` each. [`crate::file::ls::list`] then reads the
+//! files those commits named. The CLI owns the documents they become.
 
 pub mod ls;

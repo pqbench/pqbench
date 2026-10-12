@@ -1,16 +1,15 @@
-//! `table ls`: a table's natural partitions.
+//! `table ls`: the tables in one schema.
 //!
-//! [`list`] is the only public function. It returns [`Partition`] resources;
-//! the CLI forwards them as-is.
+//! [`list`] is the only public function. It returns [`Table`] resources; the
+//! CLI forwards them as-is.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
-pub use crate::v1::Partition;
+pub use crate::v1::Table;
 
-use crate::Lake;
+use crate::Workspace;
 
-/// Errors listing a table's partitions.
+/// Errors listing a schema's tables.
 #[derive(Debug)]
 pub struct Error(String);
 
@@ -28,24 +27,14 @@ impl From<String> for Error {
     }
 }
 
-/// Group a table's commits into natural partitions of `window_millis`.
+/// List the tables in `schema` of `catalog` at the workspace's endpoint.
 ///
-/// Windows are half-open `[first, last)` and aligned to the Unix epoch, so a
-/// daily window is a UTC day. A commit the log does not date is omitted, so a
-/// window never claims a commit it cannot place.
-///
-/// `table` is the table's resource name; the partition names it as its parent.
-/// `uri` and `env` are the table's storage root and lease, carried on each
-/// partition so the files stage reads the log without a catalog call.
+/// Unity pages carry a storage location; Iceberg REST lists identifiers only,
+/// so `uri` is unset there until `pqbench table get` resolves it.
 ///
 /// # Errors
-/// Fails when the table cannot be loaded, or `window_millis` is not positive.
-pub async fn list(
-    lake: &Lake,
-    table: &str,
-    uri: &str,
-    env: &BTreeMap<String, String>,
-    window_millis: i64,
-) -> Result<Vec<Partition>, Error> {
-    super::r#impl::list(lake, table, uri, env, window_millis).await
+/// Fails when the endpoint cannot be reached, answers with an unexpected
+/// status, or returns a malformed table page.
+pub async fn list(workspace: &Workspace, catalog: &str, schema: &str) -> Result<Vec<Table>, Error> {
+    super::r#impl::list(workspace, catalog, schema).await
 }

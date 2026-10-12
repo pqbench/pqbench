@@ -1,10 +1,12 @@
-//! `table ls`: a table's natural partitions, grouped by commit time.
+//! `table ls`: the tables in one schema.
 //!
-//! [`api`] is the public surface: one function, [`api::list`]. Partitions are
-//! derived from the commit log — the commits' times, not the files — so the
-//! cost is O(#commits), not O(#files). The wire document belongs to the CLI.
+//! [`api`] is the public surface: one function, [`api::list`]. The private
+//! `impl` module holds the URLs and the JSON shapes of both dialects — Unity
+//! REST and Iceberg REST, chosen by the shared `GET /v1/config` probe; the
+//! HTTP transport is the third-party facade. The wire document belongs to the
+//! CLI.
 
 pub mod api;
 mod r#impl;
 
-pub use api::{list, Error, Partition};
+pub use api::{list, Error, Table};

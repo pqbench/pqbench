@@ -1,8 +1,8 @@
-//! The table command: one table's record and its natural partitions.
+//! The table command: one table's record and the tables in a schema.
 //!
-//! [`info`] reads one table's record from a catalog (Unity or Iceberg REST),
-//! without files, so the cost is O(1) in files. [`ls`] groups the table's
-//! commits into natural partitions by commit time.
+//! [`get`] reads one table's record from a catalog (Unity or Iceberg REST),
+//! without files, so the cost is O(1) in files. [`ls`] lists the tables in a
+//! schema, one `Table` each — the record [`get`] enriches.
 //!
 //! [`detect`] names the format from on-disk markers before any format-specific
 //! loader runs. [`load`] then fetches the table metadata. For Delta that is the
@@ -14,7 +14,7 @@
 //! 1.91.1 or newer because of the Delta snapshot dependencies. Iceberg needs
 //! `iceberg` (`iceberg-s3` for S3).
 
-pub mod info;
+pub mod get;
 pub mod ls;
 
 mod selection;
@@ -259,7 +259,7 @@ impl TableInfo {
 }
 
 impl TableInfo {
-    /// The wire [`v1::Table`] this record describes: what `table info` emits.
+    /// The wire [`v1::Table`] this record describes: what `table get` emits.
     ///
     /// `env` is the storage lease the read ran under, when it carried one; the
     /// record keeps it as [`v1::Table::credentials`].
@@ -332,7 +332,7 @@ pub struct LoadRequest {
     // aipnaming: allow(aip-140/verbs)
     pub require_files: bool,
     /// When true, read the commit log even when [`Self::require_files`] is
-    /// false: `table ls` needs the commits' times, not the files.
+    /// false: `partition ls` needs the commits' times, not the files.
     pub require_log: bool,
     /// Read only these commit versions; `None` reads every commit. Naming the
     /// commits says the log's own file actions are what the caller wants, so
@@ -378,7 +378,7 @@ impl LoadRequest {
     }
 
     /// Read only the commit log: the commits and their times, no active files.
-    /// This is `table ls`, which needs the commits, not the file replay.
+    /// This is `partition ls`, which needs the commits, not the file replay.
     // aipnaming: allow(aip-136/method-prepositions)
     #[must_use]
     pub fn with_log(mut self) -> Self {

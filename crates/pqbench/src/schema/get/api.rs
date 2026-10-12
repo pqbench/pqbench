@@ -1,4 +1,4 @@
-//! `schema info`: one schema's record.
+//! `schema get`: one schema's record.
 //!
 //! [`read`] is the only public function. It returns the [`Schema`] resource;
 //! the CLI forwards it as-is.
