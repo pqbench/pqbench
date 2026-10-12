@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 mod bench;
 mod bytemass;
@@ -192,25 +192,31 @@ async fn main() -> ExitCode {
 
 /// Rewrite the verb-first spelling of a walk read (`pqbench get table X`) into
 /// the noun tree (`pqbench table get X`) before clap parses it, so both
-/// spellings run through one command definition. The verb may follow the
-/// root's value-taking global flags; anything else is left for clap.
+/// spellings run through one command definition.
+///
+/// The nouns and the value-taking global flags are read back out of the
+/// command tree, so a new subcommand or flag needs no change here; the only
+/// literals are the two sugar verbs, which have no clap command of their own.
 fn normalize(args: impl Iterator<Item = OsString>) -> Vec<OsString> {
-    const NOUNS: [&str; 6] = [
-        "metastore",
-        "catalog",
-        "schema",
-        "table",
-        "partition",
-        "file",
-    ];
-    const VALUE_FLAGS: [&str; 4] = ["--profile", "--endpoint", "--token", "--table-format"];
+    const VERBS: [&str; 2] = ["get", "ls"];
+    let root = Cli::command();
+    let nouns: Vec<&str> = root
+        .get_subcommands()
+        .map(clap::Command::get_name)
+        .collect();
+    let value_flags: Vec<String> = root
+        .get_arguments()
+        .filter(|arg| arg.get_action().takes_values())
+        .filter_map(|arg| arg.get_long().map(|name| format!("--{name}")))
+        .collect();
+
     let mut args: Vec<OsString> = args.collect();
     let mut index = 1;
     while index < args.len() {
         let Some(arg) = args[index].to_str() else {
             break;
         };
-        if VALUE_FLAGS.contains(&arg) {
+        if value_flags.iter().any(|flag| flag == arg) {
             // A value-taking global flag: skip the flag and its value.
             index += 2;
         } else if arg.starts_with('-') {
@@ -224,14 +230,14 @@ fn normalize(args: impl Iterator<Item = OsString>) -> Vec<OsString> {
         .get(index)
         .and_then(|arg| arg.to_str())
         .unwrap_or_default();
-    if !matches!(verb, "get" | "ls") {
+    if !VERBS.contains(&verb) {
         return args;
     }
     let noun = args
         .get(index + 1)
         .and_then(|arg| arg.to_str())
         .unwrap_or_default();
-    if NOUNS.contains(&noun) {
+    if nouns.contains(&noun) {
         args.swap(index, index + 1);
     } else if noun.is_empty() || matches!(noun, "-h" | "--help") {
         // A bare verb asks what it can read/list: show the root page, which
