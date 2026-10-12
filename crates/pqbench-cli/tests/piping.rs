@@ -1,4 +1,4 @@
-//! The metadata walk as a pipe: `catalog ls | catalog get | schema ls`,
+//! The metadata walk as a pipe: `list catalogs | get catalog | list schemas`,
 //! context from `PQB_ENDPOINT`, refs on stdin.
 
 use std::io::{Read, Write};

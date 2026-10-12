@@ -136,7 +136,7 @@ fn dated_delta_fixture(timestamp: i64) -> DeltaFixture {
     }
 }
 
-/// `partition ls` dates each commit by its `commitInfo.timestamp` and groups it
+/// `list partitions` dates each commit by its `commitInfo.timestamp` and groups it
 /// into an epoch-aligned, half-open UTC window.
 #[cfg(feature = "delta")]
 #[test]

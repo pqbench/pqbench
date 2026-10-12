@@ -259,7 +259,7 @@ impl TableInfo {
 }
 
 impl TableInfo {
-    /// The wire [`v1::Table`] this record describes: what `table get` emits.
+    /// The wire [`v1::Table`] this record describes: what `table::get` emits.
     ///
     /// `env` is the storage lease the read ran under, when it carried one; the
     /// record keeps it as [`v1::Table::credentials`].
@@ -332,7 +332,7 @@ pub struct LoadRequest {
     // aipnaming: allow(aip-140/verbs)
     pub require_files: bool,
     /// When true, read the commit log even when [`Self::require_files`] is
-    /// false: `partition ls` needs the commits' times, not the files.
+    /// false: `partition::ls` needs the commits' times, not the files.
     pub require_log: bool,
     /// Read only these commit versions; `None` reads every commit. Naming the
     /// commits says the log's own file actions are what the caller wants, so
@@ -378,7 +378,7 @@ impl LoadRequest {
     }
 
     /// Read only the commit log: the commits and their times, no active files.
-    /// This is `partition ls`, which needs the commits, not the file replay.
+    /// This is `partition::ls`, which needs the commits, not the file replay.
     // aipnaming: allow(aip-136/method-prepositions)
     #[must_use]
     pub fn with_log(mut self) -> Self {

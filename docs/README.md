@@ -9,7 +9,7 @@ New here? **[Get started](getting-started.md)** walks one file to a byte-mass
 treemap. Every command is in the **[CLI reference](cli.md)**.
 
 The canonical pipe — list a table's partitions, list their files, measure
-them, draw the result:
+them:
 
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
@@ -24,11 +24,13 @@ columns: 2
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format table|json`
 overrides either, and `-o` additionally writes the lz4 NDJSON stream.
+The [landing page](../README.md#the-walk-end-to-end) has the full walk, from the
+catalog down.
 
 ## The docs, by kind
 
-A tutorial to learn from, how-to guides for a task, and reference for the
-details.
+A tutorial to learn from, how-to guides for a task, reference for the details,
+and explanation for the background.
 
 ### Tutorial
 
@@ -52,14 +54,23 @@ details.
 
 - [CLI reference](cli.md) — the task-oriented command table, the document
   kinds, repeated flags, and auth for `s3://` and catalogs.
+- [Configuration](configuration.md) — the `~/.pqbenchrc` profiles, the
+  environment, and their precedence.
 - [Distribution](distribution.md) — install the released binary, the targets,
   and how releases are cut.
 - [`profile`](profile.md) — per-column facts from a decoded row sample.
 - [`experiment`](experiment.md) — rewrite a sample and measure the result.
+- [`diff`](diff.md) — compare two Parquet files or saved bytemass streams,
+  column by column.
 - [`viz`](viz.md) — collect a bytemass stream into a static HTML treemap.
 - [Agent skills](skill.md) — the skills compiled into `pqbench skill`.
 - [Python bindings](../python/README.md) — install the wheel and call every
   command in-process.
+
+### Explanation
+
+- [What is a partition?](partition.md) — why a partition is a lens on a table's
+  files, not a thing it stores.
 
 ## Repository documents
 

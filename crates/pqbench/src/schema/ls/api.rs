@@ -1,4 +1,4 @@
-//! `schema ls`: the schemas in one catalog.
+//! `schema::ls`: the schemas in one catalog.
 //!
 //! [`list`] is the only public function. It returns [`Schema`] resources; the
 //! CLI forwards them as-is.

@@ -1,4 +1,4 @@
-//! The `file ls` internals: read the log, keep the named commits' adds.
+//! The `file::ls` internals: read the log, keep the named commits' adds.
 
 use std::collections::{BTreeMap, BTreeSet};
 

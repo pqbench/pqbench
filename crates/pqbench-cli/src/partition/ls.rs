@@ -1,4 +1,4 @@
-//! `partition ls`: a table's natural partitions, grouped by commit time.
+//! `list partitions`: a table's natural partitions, grouped by commit time.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input, ref_env, ref_storage, table_ref};
 use crate::CliError;
 
-/// Arguments for `partition ls`.
+/// Arguments for `list partitions`.
 #[derive(Args)]
 pub(crate) struct LsArgs {
     /// table URI or a document file; without it, read table refs on stdin
@@ -38,13 +38,13 @@ pub(crate) struct LsArgs {
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
-    let input = read_input("partition ls").await?;
+    let input = read_input("list partitions").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut partitions = 0usize;
     match &args.input {
         Some(uri) if uri != "-" => {
             if input.first.is_some() {
-                return Err("partition ls takes a table URI or a table stream, not both".into());
+                return Err("list partitions takes a table URI or a table stream, not both".into());
             }
             let env = BTreeMap::new();
             let table = pqbench::v1::name::local_table(uri);
@@ -52,18 +52,18 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
         }
         _ => {
             if !input.piped {
-                return Err("partition ls needs a table URI or a table stream".into());
+                return Err("list partitions needs a table URI or a table stream".into());
             }
-            let records = source::records("partition ls", input.first, input.lines);
+            let records = source::records("list partitions", input.first, input.lines);
             let mut reads = records
                 .map(|record| async {
                     let record = record?;
-                    let (catalog, schema, table) = table_ref("partition ls", &record)?;
+                    let (catalog, schema, table) = table_ref("list partitions", &record)?;
                     let name = pqbench::v1::name::table(&catalog, &schema, &table);
                     let uri = ref_storage(&record)
                         .ok_or_else(|| {
                             CliError::from(
-                                "a table-ref has no storage path; run `pqbench table get` first",
+                                "a table-ref has no storage path; run `pqbench get table` first",
                             )
                         })?
                         .to_string();

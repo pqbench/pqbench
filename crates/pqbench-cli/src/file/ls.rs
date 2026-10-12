@@ -1,4 +1,4 @@
-//! `file ls`: the files each partition's commits added.
+//! `list files`: the files each partition's commits added.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::emit::{Emitter, Format};
 use crate::CliError;
 
-/// Arguments for `file ls`.
+/// Arguments for `list files`.
 #[derive(Args)]
 pub(crate) struct LsArgs {
     /// stdout format: auto (table on a terminal) | table | json
@@ -25,7 +25,7 @@ pub(crate) struct LsArgs {
     fan_out: usize,
 }
 
-/// List the files each partition's commits added: `partition ls | file ls`.
+/// List the files each partition's commits added: `list partitions | list files`.
 ///
 /// Reads a partition stream, re-reads each table's log, and emits the files the
 /// window's commits named — the **added in window** set, so a file a later
@@ -34,7 +34,7 @@ pub(crate) struct LsArgs {
 /// without a catalog call.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
     if std::io::stdin().is_terminal() {
-        return Err("file ls reads partition records on standard input".into());
+        return Err("list files reads partition records on standard input".into());
     }
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let lines = BufReader::new(tokio::io::stdin()).lines();
@@ -97,7 +97,7 @@ fn partition_stream(
                 continue;
             }
             let partition: v1::Partition = serde_json::from_str(&line).map_err(|error| {
-                CliError::from(format!("file ls reads partition NDJSON: {error}"))
+                CliError::from(format!("list files reads partition NDJSON: {error}"))
             })?;
             if partition.uri.is_none() {
                 return Err("a partition record needs a table storage root".into());

@@ -1,4 +1,4 @@
-//! `partition ls`: a table's natural partitions.
+//! `partition::ls`: a table's natural partitions.
 //!
 //! [`list`] is the only public function. It returns [`Partition`] resources;
 //! the CLI forwards them as-is.

@@ -33,7 +33,7 @@ input, or takes the parent as its argument, so the walk is a pipe:
 
 ```console no-run
 $ pqbench list catalogs | pqbench list schemas | pqbench list tables
-$ pqbench get table dbx_samples.nyctaxi.trips < source.json
+$ pqbench get table dbx_samples.nyctaxi.trips
 ```
 
 The usual walk:
@@ -154,8 +154,8 @@ The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
 input as they arrive — one `Catalog` line per catalog, then one
 `Schema` line per schema. Each ref's request starts as its record is
-read; `--fan-out` (64 on the listing levels, 128 on the file level, one per
-core on the per-table stages) caps the requests in flight — it is a limit,
+read; `--fan-out` (64 on the listing levels, one per core on `get table`)
+caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
@@ -174,9 +174,9 @@ done
 ```
 
 `list catalogs | list schemas` lists every schema at the endpoint; `list catalogs |
-get catalog` enriches each catalog instead. `get` emits the same resource as the `ls` it
-reads, so it can be inserted or skipped; `tee` (or `-o`) writes each
-level into the job tree.
+get catalog` enriches each catalog instead. `get` emits the same kind of resource
+as the `list` it reads from, so you can insert it into a walk or skip it; `tee`
+(or `-o`) writes each level into the job tree.
 
 ```console no-run
 $ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
@@ -324,7 +324,7 @@ partitions: 1
 List the catalogs at the endpoint:
 
 ```console no-run
-$ pqbench list catalogs < source.json
+$ pqbench list catalogs
 name                  catalog_type
 --------------------  -----------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
@@ -335,7 +335,7 @@ catalogs: 2
 Read one catalog's record:
 
 ```console no-run
-$ pqbench get catalog dbx_samples < source.json
+$ pqbench get catalog dbx_samples
 name                  catalog_type           comment         owner
 --------------------  ---------------------  --------------  -----------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED   sample catalog  owner@example.com
@@ -345,7 +345,7 @@ catalogs: 1
 List the schemas in a catalog:
 
 ```console no-run
-$ pqbench list schemas dbx_samples < source.json
+$ pqbench list schemas dbx_samples
 name                                   comment  uri
 -------------------------------------  -------  ----------------------
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse

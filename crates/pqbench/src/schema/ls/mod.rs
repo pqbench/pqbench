@@ -1,4 +1,4 @@
-//! `schema ls`: the schemas in one catalog.
+//! `schema::ls`: the schemas in one catalog.
 //!
 //! [`api`] is the public surface: one function, [`api::list`]. The private
 //! `impl` module holds the URLs and the JSON shapes of both dialects — Unity

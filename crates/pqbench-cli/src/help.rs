@@ -13,21 +13,17 @@ and files hold (list partitions, list files), what a decoded row sample holds
 (profile), and how a rewritten sample would store (experiment).
 Commands compose on pipes: each writes a resource the next command reads.
 
-  get metastore → Metastore      the endpoint's record
-  catalog       → Catalog        the endpoint's catalogs / one catalog's record
-  schema        → Schema         a catalog's schemas / one schema's record
-  list tables      → Table          a schema's tables
-  get table     → Table          enrich a table's record
+  get           → Metastore / Catalog / Schema / Table
+                  one resource of the walk
+  list          → Catalog / Schema / Table / Partition / TableFile
+                  a collection of the walk
   credentials   → Table          check + vend read credentials
-  list partitions  → Partition      a table's natural partitions
-  list files       → TableFile      a partition's added files
   bytemass      → pqbench.bytemass-row footer byte masses (one line per column)
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
 
-`get` and `ls` take the noun first (`get table X`, `ls schema CAT`) — the same
-calls as `get table X` and `list schemas CAT`, for scripts that hold the noun in a
-variable.
+The walk reads with two verbs: `get` reads one resource, `list` lists a
+collection.
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format
 table|json` overrides either. `-o` also writes the lz4 NDJSON stream.
@@ -41,9 +37,9 @@ pub const ROOT_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet
   pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass
+  pqbench list catalogs | pqbench list schemas | pqbench list tables
   pqbench list tables CAT.SCHEMA | pqbench credentials check | pqbench credentials get \\
     | pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass
-  pqbench ls catalog | pqbench ls schema           verb-first: get|ls <noun>
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
@@ -173,9 +169,10 @@ forces the stream, and `-o` also writes it.";
 pub const GET_AFTER: &str = "\
 Examples:
   pqbench get metastore
-  pqbench get catalog dbx_samples < source.json
-  pqbench get schema dbx_samples.nyctaxi < source.json
-  pqbench get table dbx_samples.nyctaxi.trips < source.json
+  pqbench get catalog dbx_samples
+  pqbench get schema dbx_samples.nyctaxi
+  pqbench get table dbx_samples.nyctaxi.trips
+  pqbench list tables dbx_samples.nyctaxi | pqbench get table
 
 See also:
   pqbench list --help      the walk's collections

@@ -1,17 +1,18 @@
 //! The walk's input: the environment's config and the parent-level refs.
 //!
 //! Every level is a stateless filter: it reads only its parent's records
-//! (`schema ls` reads `Catalog` names, one per line) and writes its own. The
+//! (`list schemas` reads `Catalog` names, one per line) and writes its own. The
 //! endpoint, bearer, and dialect come from the resolved configuration —
 //! `~/.pqbenchrc`, the environment, then the flags (`pqbench setup` prints it
 //! for the shell to eval):
 //!
 //! ```text
-//! PQB_ENDPOINT=… PQB_TOKEN=… pqbench catalog ls | pqbench schema ls | …
+//! PQB_ENDPOINT=… PQB_TOKEN=… pqbench list catalogs | pqbench list schemas | …
 //! ```
 //!
 //! `tee` (or `-o`) writes each level into the job tree; `get` stages emit the
-//! same resource as the `ls` above them, so they enrich a stream in place.
+//! same resource as the `list` they read from, so they enrich a stream in
+//! place.
 //!
 //! Records are read one at a time as the command consumes them, so a level
 //! never buffers its parent: a slow consumer stops reading, and the pipe
@@ -155,7 +156,7 @@ pub(crate) fn table_ref(
 
 /// The storage location a table ref names: the [`Table`]'s `uri`. `None` when
 /// the ref names no location (a view, or an Iceberg identifier until
-/// `table get` resolves it).
+/// `get table` resolves it).
 ///
 /// [`Table`]: pqbench::v1::Table
 pub(crate) fn ref_storage(record: &Value) -> Option<&str> {

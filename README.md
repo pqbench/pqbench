@@ -6,13 +6,13 @@
 
 *lzbench for parquet.*
 
-Measure how well each codec compresses a parquet file and how many on-disk bytes
-each column costs.
+Measure how well each codec compresses a Parquet file and how many on-disk
+bytes each column costs. One binary for Parquet optimization: it reads footers
+and table metadata, never the data pages, so it is fast on files of any size.
 
-One binary for parquet optimizations.
-
-Commands compose on pipes: each writes a versioned JSON document the next reads.
-The usual pipe is `list partitions` → `list files` → `bytemass` → `viz`.
+Commands compose on pipes — each writes a versioned JSON document the next
+reads — so the whole job is one pipeline. The [walk](#the-walk-end-to-end) goes
+from a catalog's tables to the bytes each column costs.
 
 ## Quick start
 
@@ -26,7 +26,46 @@ The installer verifies the download against the release checksums and puts
 `pqbench` in `~/.cargo/bin`. To pin a version, build from source, or read about
 the release process, see [Distribution](docs/distribution.md).
 
+## The walk, end to end
+
+pqbench's whole job is one walk: descend a catalog, narrow to a table's files,
+and measure the bytes each column costs. Every stage streams JSON to the next,
+so the walk is one bash pipeline.
+
+```console no-run
+$ set -euo pipefail
+$ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
+$ pqbench list catalogs | pqbench list schemas | pqbench list tables \
+    | pqbench credentials check | pqbench credentials get | pqbench get table \
+    | pqbench list partitions | pqbench list files | pqbench bytemass --format table
+```
+
+Read it left to right:
+
+- `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
+  rate-limited endpoint wants `pqbench ratelimit --rate 15` between two levels;
+  the retry-at-half-the-rate recipe is in the [CLI reference](docs/cli.md).
+- `credentials check` drops the tables you can't read outside compute — a view,
+  a system catalog, Databricks default storage — and prints the reason;
+  `credentials get` vends a short-lived lease onto each remaining ref.
+- `get table` enriches each ref with its format and snapshot; the Delta log is
+  read with `without_files()`, so the read is O(1) in files. `list partitions`
+  groups a table's commits into commit-time windows, and `list files` names the
+  files those commits added.
+- `bytemass` reads each file's footer and prints the on-disk bytes per column,
+  the table in [bytemass](#bytemass). In a pipe it streams
+  `pqbench.bytemass-row` NDJSON instead; `pqbench viz` draws that stream as a
+  treemap.
+
+The same walk runs offline against the local Delta and Iceberg stand,
+`make lakehouse`. [Getting started](docs/getting-started.md) takes one Parquet
+file to a treemap, and the [CLI reference](docs/cli.md) documents every command.
+
 ## Commands
+
+The core measurements. The walk's [`get` and `list`](#the-walk-end-to-end) come
+first; the [CLI reference](docs/cli.md) covers `profile`, `experiment`, `diff`,
+`skill`, `credentials`, `ratelimit`, and `setup`.
 
 ### lz
 
@@ -139,15 +178,15 @@ EOF
 
 ### viz
 
-Collect a bytemass stream into a static HTML treemap. Open the file in a
-browser; no server is needed.
+Collect a bytemass stream into a static HTML treemap — no server, no build
+step.
 
 ```console run delta
 $ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
-The page lands at `/tmp/report.html`. Open it in a browser; no server is needed.
+The page lands at `/tmp/report.html`. Open it in a browser.
 
 ## Documentation
 

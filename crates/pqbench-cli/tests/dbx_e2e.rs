@@ -1,7 +1,7 @@
 //! Live Databricks metastore e2e: mint an OAuth M2M bearer (or take
-//! `DBX_TOKEN`), read the live metastore record with `metastore get`, list
-//! its catalogs with `catalog ls`, read one with `catalog get`, list its
-//! schemas with `schema ls` (Unity REST and Iceberg REST), and walk them
+//! `DBX_TOKEN`), read the live metastore record with `get metastore`, list
+//! its catalogs with `list catalogs`, read one with `get catalog`, list its
+//! schemas with `list schemas` (Unity REST and Iceberg REST), and walk them
 //! into a job directory of NDJSON files (the issue-#58 shape, one command per
 //! iteration).
 //!
@@ -337,7 +337,7 @@ fn catalog_ls_lists_the_live_catalogs() {
 /// The issue-#58 walk, for the commands that exist: a job directory holds
 /// each step's NDJSON, and the walk prints the result from the tree. Auth is
 /// the bearer the whole walk runs under; the missing/invalid-token tests
-/// cover its failures. `table ls` and below extend this tree next.
+/// cover its failures. `list tables` and below extend this tree next.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
@@ -566,7 +566,7 @@ const EXTERNAL_FIXTURE_SCHEMAS: [&str; 12] = [
     "tpch_sf10",
 ];
 
-/// The table ids `table ls` lists for one `pqbench_ext` schema.
+/// The table ids `list tables` lists for one `pqbench_ext` schema.
 fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
     let qualified = format!("pqbench_ext.{schema}");
     let output = pipe_env(
@@ -588,7 +588,7 @@ fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
         .collect()
 }
 
-/// `schema ls` and `table ls` on the external-location fixture: the
+/// `list schemas` and `list tables` on the external-location fixture: the
 /// synthetic `events`/`sales`/`reference` (ten two-column tables each) and the
 /// real sample data copied from `dbx_samples`, all external Delta on customer
 /// S3 through the `pqbench_uc_e2e` external location.
@@ -666,7 +666,7 @@ fn schema_ls_lists_the_external_fixture() {
     );
 }
 
-/// `schema get` reads `dbx_samples.nyctaxi` from both dialects.
+/// `get schema` reads `dbx_samples.nyctaxi` from both dialects.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn schema_get_reads_the_live_schema() {
@@ -715,8 +715,8 @@ fn schema_get_reads_the_live_schema() {
     }
 }
 
-/// `table ls` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
-/// the storage path in the listing, Iceberg REST leaves it to `table get`.
+/// `list tables` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
+/// the storage path in the listing, Iceberg REST leaves it to `get table`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn table_ls_lists_the_live_tables() {
@@ -786,7 +786,7 @@ fn table_ls_lists_the_live_tables() {
     );
     assert!(trips["uri"].is_null(), "{trips:?}");
 
-    // The new tree enriches its own v2 refs: `table get` reads the
+    // The new tree enriches its own v2 refs: `get table` reads the
     // `loadTable` metadata inline, so no storage read runs.
     let info = pipe_env(
         &["get", "table", "--format", "json"],
@@ -814,7 +814,7 @@ fn table_ls_lists_the_live_tables() {
     assert!(!trips["uri"].as_str().unwrap().is_empty(), "{trips:?}");
 }
 
-/// `table get` reads the live Iceberg REST table: the `loadTable` response
+/// `get table` reads the live Iceberg REST table: the `loadTable` response
 /// carries the metadata inline, so the record is complete without any storage
 /// read (the default-storage Delta path cannot read its log).
 #[test]
@@ -863,7 +863,7 @@ fn table_get_reads_the_live_iceberg_table() {
     assert!(record["properties"].is_object(), "{record:?}");
 }
 
-/// `table get` on the live Unity catalog: the table read runs with the env
+/// `get table` on the live Unity catalog: the table read runs with the env
 /// it is given — here none — so the `without_files()` Delta log read of the
 /// managed default-storage table fails outside compute and the error names the
 /// table and its location.
@@ -987,7 +987,7 @@ fn credentials_check_filters_the_live_tables() {
 }
 
 /// The whole credentials stage on the external fixture: every table in the
-/// synthetic schemas and in a copied schema is eligible, so `schema ls |
+/// synthetic schemas and in a copied schema is eligible, so `list schemas |
 /// credentials check | credentials get` passes each ref through with a vended
 /// lease on `env`.
 #[test]
@@ -1047,8 +1047,8 @@ fn credentials_get_vends_the_external_fixture() {
     assert_eq!(tables, 39);
 }
 
-/// The whole walk on the external fixture: `table ls` → `credentials check`
-/// → `credentials get` → `partition ls` groups each table's commits into natural
+/// The whole walk on the external fixture: `list tables` → `credentials check`
+/// → `credentials get` → `list partitions` groups each table's commits into natural
 /// commit-time windows (at least one partition per table).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
@@ -1144,10 +1144,10 @@ fn timed_stage(
 }
 
 /// The whole issue-#58 walk on a copied schema, all the way to `bytemass`:
-/// `table ls` → `credentials check` → `credentials get` → `table get` →
-/// `partition ls` → `file ls` → `bytemass`, each stage fed the previous
+/// `list tables` → `credentials check` → `credentials get` → `get table` →
+/// `list partitions` → `list files` → `bytemass`, each stage fed the previous
 /// stage's NDJSON. This is the tail the file-level commands exist for; the
-/// other fixture tests stop at `partition ls`. Set `DBX_WALK_SCHEMA` to walk
+/// other fixture tests stop at `list partitions`. Set `DBX_WALK_SCHEMA` to walk
 /// another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
@@ -1215,8 +1215,8 @@ fn external_fixture_walks_to_bytemass() {
     );
 }
 
-/// `table get` on a table in customer storage: `credentials get`
-/// materializes the vended lease on the ref, `table get` reads the Delta
+/// `get table` on a table in customer storage: `credentials get`
+/// materializes the vended lease on the ref, `get table` reads the Delta
 /// log under it, and the lease rides through on the emitted record for the
 /// next stage. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
 /// `DBX_AWS_REGION` to read another one.
@@ -1441,7 +1441,7 @@ fn credentials_get_iceberg_vends_the_live_tables() {
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
-/// `catalog ls | catalog get | schema ls` (decision 0004).
+/// `list catalogs | get catalog | list schemas` (decision 0004).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn catalog_ls_pipes_into_catalog_get_and_ls() {

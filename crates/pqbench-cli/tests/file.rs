@@ -91,7 +91,7 @@ fn dated_delta_fixture(timestamp: i64) -> DeltaFixture {
     }
 }
 
-/// `partition ls | file ls` names the files the window's commits added.
+/// `list partitions | list files` names the files the window's commits added.
 #[test]
 fn file_ls_lists_the_files_a_window_added() {
     let fixture = dated_delta_fixture(1_700_000_000_000);

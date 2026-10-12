@@ -60,7 +60,7 @@ $ eval "$(pqbench setup --profile iceberg)"
 
 ## Flags
 
-Each layer above is also a global flag, accepted before or after the
+Every layer is also a global flag, accepted before or after the
 subcommand:
 
 - `--profile NAME`
