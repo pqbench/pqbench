@@ -3,6 +3,16 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
+/// Decode an lz4 frame (`-o` output) into its NDJSON bytes.
+fn decode_lz4(bytes: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::new();
+    lz4::Decoder::new(std::io::Cursor::new(bytes))
+        .unwrap()
+        .read_to_end(&mut decoded)
+        .unwrap();
+    decoded
+}
+
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
@@ -85,50 +95,6 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
     address
 }
 
-/// Like `routes`, but each request sleeps `delay` and the server records the
-/// highest number of requests in flight — a command that awaits one request
-/// at a time never sees two.
-fn overlapping_routes(
-    routes: &'static [(&'static str, u16, &'static str)],
-    delay: std::time::Duration,
-) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-    use std::sync::atomic::Ordering;
-    use std::sync::Arc;
-
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = format!("http://{}", listener.local_addr().unwrap());
-    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (requests_in_flight, requests_peak) = (in_flight.clone(), peak.clone());
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let (in_flight, peak) = (requests_in_flight.clone(), requests_peak.clone());
-            std::thread::spawn(move || {
-                let mut stream = stream.unwrap();
-                let mut buffer = [0u8; 2048];
-                let read = stream.read(&mut buffer).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buffer[..read]);
-                let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                peak.fetch_max(current, Ordering::SeqCst);
-                std::thread::sleep(delay);
-                let (status, body) = routes
-                    .iter()
-                    .find(|(needle, _, _)| request.contains(needle))
-                    .map(|(_, status, body)| (*status, *body))
-                    .unwrap_or((404, "{}"));
-                let response = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(body.as_bytes());
-                in_flight.fetch_sub(1, Ordering::SeqCst);
-            });
-        }
-    });
-    (address, peak)
-}
-
 /// The walk's config: `PQB_ENDPOINT` names the endpoint.
 fn source(endpoint: &str) -> [(&str, &str); 1] {
     [("PQB_ENDPOINT", endpoint)]
@@ -136,13 +102,8 @@ fn source(endpoint: &str) -> [(&str, &str); 1] {
 
 const SCHEMA: &str = r#"{"name":"nyctaxi","catalog_name":"dbx_samples","comment":"taxi data","storage_location":"s3://bucket/nyctaxi","properties":{"owner":"data"}}"#;
 
-const TABLES: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"},{"name":"recent","table_type":"VIEW"}],"next_page_token":null}"#;
-const TABLES_PAGE: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"}],"next_page_token":"more"}"#;
-const TABLES_LAST: &str = r#"{"tables":[{"name":"zones","full_name":"dbx_samples.nyctaxi.zones","data_source_format":"DELTA","storage_location":"s3://bucket/zones"}]}"#;
 const ICEBERG_NAMESPACE: &str =
     r#"{"namespace":["nyctaxi"],"properties":{"location":"s3://bucket/nyctaxi","owner":"data"}}"#;
-const ICEBERG_TABLES: &str =
-    r#"{"identifiers":[{"namespace":["nyctaxi"],"name":"trips"}],"next-page-token":null}"#;
 
 /// The parent level's stream: one `Schema` resource per schema.
 const SCHEMA_REFS: &str = concat!(
@@ -152,8 +113,25 @@ const SCHEMA_REFS: &str = concat!(
     "\n",
 );
 
+const SCHEMAS: &str =
+    r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"}],"next_page_token":null}"#;
+const SCHEMAS_PAGE: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":"more"}"#;
+const SCHEMAS_LAST: &str = r#"{"schemas":[{"name":"bakehouse"}]}"#;
+const ICEBERG_NAMESPACES: &str =
+    r#"{"namespaces":[["nyctaxi"],["bakehouse"]],"next-page-token":null}"#;
+const ICEBERG_PAGE: &str = r#"{"namespaces":[["nyctaxi"]],"next-page-token":"more"}"#;
+const ICEBERG_LAST: &str = r#"{"namespaces":[["bakehouse"]],"next-page-token":null}"#;
+
+/// The parent level's stream: one `Catalog` resource per catalog.
+const CATALOG_REFS: &str = concat!(
+    r#"{"name":"catalogs/dbx_samples"}"#,
+    "\n",
+    r#"{"name":"catalogs/system"}"#,
+    "\n",
+);
+
 #[test]
-fn schema_info_prints_the_record_as_a_table() {
+fn schema_get_prints_the_record_as_a_table() {
     let address = server(200, SCHEMA);
     let output = pipe(
         &["schema", "get", "dbx_samples.nyctaxi", "--format", "table"],
@@ -172,7 +150,7 @@ fn schema_info_prints_the_record_as_a_table() {
 }
 
 #[test]
-fn schema_info_streams_the_record_as_ndjson() {
+fn schema_get_streams_the_record_as_ndjson() {
     let address = server(200, SCHEMA);
     let output = pipe(
         &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
@@ -193,7 +171,7 @@ fn schema_info_streams_the_record_as_ndjson() {
 }
 
 #[test]
-fn schema_info_reads_the_iceberg_rest_namespace() {
+fn schema_get_reads_the_iceberg_rest_namespace() {
     let address = routes(&[("/namespaces/", 200, ICEBERG_NAMESPACE)]);
     let output = pipe_env(
         &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
@@ -216,7 +194,7 @@ fn schema_info_reads_the_iceberg_rest_namespace() {
 }
 
 #[test]
-fn schema_info_reads_a_schema_stream() {
+fn schema_get_reads_a_schema_stream() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
         &["schema", "get", "--format", "json"],
@@ -237,7 +215,7 @@ fn schema_info_reads_a_schema_stream() {
 }
 
 #[test]
-fn schema_info_takes_a_schema_or_a_stream_not_both() {
+fn schema_get_takes_a_schema_or_a_stream_not_both() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
         &["schema", "get", "dbx_samples.nyctaxi"],
@@ -250,7 +228,7 @@ fn schema_info_takes_a_schema_or_a_stream_not_both() {
 }
 
 #[test]
-fn schema_info_needs_a_dotted_name() {
+fn schema_get_needs_a_dotted_name() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
         &["schema", "get", "nyctaxi"],
@@ -263,7 +241,7 @@ fn schema_info_needs_a_dotted_name() {
 }
 
 #[test]
-fn schema_info_rejects_an_empty_document() {
+fn schema_get_rejects_an_empty_document() {
     let output = pipe_stdin(&["schema", "get", "dbx_samples.nyctaxi"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -271,12 +249,11 @@ fn schema_info_rejects_an_empty_document() {
 }
 
 #[test]
-fn schema_ls_prints_the_tables_as_a_table() {
-    let address = routes(&[("/tables", 200, TABLES)]);
-    let output = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "table"],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
+fn schema_ls_prints_the_schemas_as_a_table() {
+    let address = server(200, SCHEMAS);
+    let output = pipe(
+        &["schema", "ls", "dbx_samples", "--format", "table"],
+        &source(&address),
     );
     assert!(
         output.status.success(),
@@ -284,81 +261,17 @@ fn schema_ls_prints_the_tables_as_a_table() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/trips"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("s3://bucket/trips"), "{stdout}");
-    assert!(
-        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/recent"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("tables: 2"), "{stdout}");
+    assert!(stdout.contains("dbx_samples"), "{stdout}");
+    assert!(stdout.contains("bakehouse"), "{stdout}");
+    assert!(stdout.contains("schemas: 2"), "{stdout}");
 }
 
 #[test]
-fn schema_ls_streams_table_refs() {
-    let address = routes(&[("/tables", 200, TABLES)]);
-    let output = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2);
-    // Sorted by name: the view (`recent`) precedes the table (`trips`).
-    assert_eq!(
-        records[0]["name"],
-        "catalogs/dbx_samples/schemas/nyctaxi/tables/recent"
-    );
-    assert!(records[0].get("uri").is_none(), "{}", records[0]);
-    assert_eq!(
-        records[1]["name"],
-        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
-    );
-    assert_eq!(records[1]["uri"], "s3://bucket/trips");
-}
-
-#[test]
-fn schema_ls_lists_iceberg_rest_tables() {
-    let address = routes(&[("/namespaces/nyctaxi/tables", 200, ICEBERG_TABLES)]);
-    let output = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
-        &[
-            ("PQB_ENDPOINT", address.as_str()),
-            ("PQB_TABLE_FORMAT", "iceberg"),
-        ],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 1);
-    assert_eq!(
-        records[0]["name"],
-        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
-    );
-    assert!(records[0].get("uri").is_none(), "{}", records[0]);
-}
-
-#[test]
-fn schema_ls_follows_unity_page_tokens() {
-    let address = routes(&[
-        ("page_token=", 200, TABLES_LAST),
-        ("/tables", 200, TABLES_PAGE),
-    ]);
-    let output = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
+fn schema_ls_streams_the_schemas_as_ndjson() {
+    let address = server(200, SCHEMAS);
+    let output = pipe(
+        &["schema", "ls", "dbx_samples", "--format", "json"],
+        &source(&address),
     );
     assert!(
         output.status.success(),
@@ -373,18 +286,172 @@ fn schema_ls_follows_unity_page_tokens() {
     assert_eq!(
         names,
         [
-            "catalogs/dbx_samples/schemas/nyctaxi/tables/trips",
-            "catalogs/dbx_samples/schemas/nyctaxi/tables/zones"
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
+        ]
+    );
+    for record in &records {
+        assert!(record.get("kind").is_none(), "{record}");
+    }
+}
+
+#[test]
+fn schema_ls_follows_unity_page_tokens() {
+    let address = routes(&[
+        ("page_token=", 200, SCHEMAS_LAST),
+        ("/schemas", 200, SCHEMAS_PAGE),
+    ]);
+    let output = pipe(
+        &["schema", "ls", "dbx_samples", "--format", "json"],
+        &source(&address),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| record["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
         ]
     );
 }
 
 #[test]
-fn schema_ls_reads_a_schema_stream() {
-    let address = routes(&[("/tables", 200, TABLES)]);
+fn schema_ls_lists_iceberg_rest_namespaces() {
+    let address = routes(&[("/namespaces", 200, ICEBERG_NAMESPACES)]);
+    let output = pipe_env(
+        &["schema", "ls", "dbx_samples", "--format", "json"],
+        b"",
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| record["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
+        ]
+    );
+    for record in &records {
+        assert!(record.get("kind").is_none(), "{record}");
+    }
+}
+
+#[test]
+fn schema_ls_follows_iceberg_page_tokens() {
+    let address = routes(&[
+        ("pageToken=", 200, ICEBERG_LAST),
+        ("/namespaces", 200, ICEBERG_PAGE),
+    ]);
+    let output = pipe_env(
+        &["schema", "ls", "dbx_samples", "--format", "json"],
+        b"",
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    let names: Vec<&str> = records
+        .iter()
+        .map(|record| record["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "catalogs/dbx_samples/schemas/bakehouse",
+            "catalogs/dbx_samples/schemas/nyctaxi"
+        ]
+    );
+}
+
+#[test]
+fn schema_ls_exports_the_ndjson_stream() {
+    let address = server(200, SCHEMAS);
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("schemas.ndjson.zst");
+    let output = pipe(
+        &[
+            "schema",
+            "ls",
+            "dbx_samples",
+            "--format",
+            "table",
+            "-o",
+            file.to_str().unwrap(),
+        ],
+        &source(&address),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = std::fs::read(&file).unwrap();
+    let decoded = decode_lz4(&bytes);
+    let records = ndjson(&decoded);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["name"], "catalogs/dbx_samples/schemas/bakehouse");
+    assert_eq!(records[1]["name"], "catalogs/dbx_samples/schemas/nyctaxi");
+}
+
+#[test]
+fn schema_ls_reports_an_unknown_catalog() {
+    let address = server(404, r#"{"message":"Catalog 'nope' does not exist."}"#);
+    let output = pipe(&["schema", "ls", "nope"], &source(&address));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("404"), "{stderr}");
+}
+
+#[test]
+fn schema_ls_reports_an_unauthorized_endpoint() {
+    let address = server(401, r#"{"message":"Unauthorized"}"#);
+    let output = pipe(&["schema", "ls", "dbx_samples"], &source(&address));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("401"), "{stderr}");
+}
+
+#[test]
+fn schema_ls_rejects_an_empty_document() {
+    let output = pipe_stdin(&["schema", "ls", "dbx_samples"], b"");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
+}
+
+#[test]
+fn schema_ls_lists_a_catalog_stream() {
+    let address = server(200, SCHEMAS);
     let output = pipe_env(
         &["schema", "ls", "--format", "json"],
-        SCHEMA_REFS.as_bytes(),
+        CATALOG_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
     assert!(
@@ -394,41 +461,17 @@ fn schema_ls_reads_a_schema_stream() {
     );
     let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 4);
-    assert!(records[0].get("kind").is_none(), "{}", records[0]);
-}
-
-#[test]
-fn schema_ls_multiplexes_its_refs() {
-    let (address, peak) = overlapping_routes(
-        &[("/tables", 200, TABLES)],
-        std::time::Duration::from_millis(50),
-    );
-    let output = pipe_env(
-        &["schema", "ls", "--format", "json"],
-        SCHEMA_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(ndjson(&output.stdout).len(), 4);
-    assert!(
-        peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
-        "the two refs' requests did not overlap"
-    );
-}
-
-#[test]
-fn schema_ls_reports_an_unknown_schema() {
-    let address = server(404, r#"{"message":"Schema 'nope' does not exist."}"#);
-    let output = pipe_env(
-        &["schema", "ls", "dbx_samples.nope"],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("404"), "{stderr}");
+    for record in &records {
+        assert!(record.get("kind").is_none(), "{record}");
+    }
+    let schemas = |catalog: &str| -> Vec<&str> {
+        let prefix = format!("catalogs/{catalog}/schemas/");
+        records
+            .iter()
+            .filter_map(|record| record["name"].as_str())
+            .filter_map(|name| name.strip_prefix(&prefix))
+            .collect()
+    };
+    assert_eq!(schemas("dbx_samples"), ["bakehouse", "nyctaxi"]);
+    assert_eq!(schemas("system"), ["bakehouse", "nyctaxi"]);
 }

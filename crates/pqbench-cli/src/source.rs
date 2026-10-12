@@ -1,17 +1,17 @@
 //! The walk's input: the environment's config and the parent-level refs.
 //!
 //! Every level is a stateless filter: it reads only its parent's records
-//! (`catalog` reads `Catalog` names, one per line) and writes its own
-//! kind. Nothing else rides the stream. The endpoint, bearer, and dialect come
-//! from the resolved configuration — `~/.pqbenchrc`, the environment, then the
-//! flags (`pqbench setup` prints it for the shell to eval):
+//! (`schema ls` reads `Catalog` names, one per line) and writes its own. The
+//! endpoint, bearer, and dialect come from the resolved configuration —
+//! `~/.pqbenchrc`, the environment, then the flags (`pqbench setup` prints it
+//! for the shell to eval):
 //!
 //! ```text
-//! PQB_ENDPOINT=… PQB_TOKEN=… pqbench metastore ls | pqbench catalog ls | …
+//! PQB_ENDPOINT=… PQB_TOKEN=… pqbench catalog ls | pqbench schema ls | …
 //! ```
 //!
-//! `tee` (or `-o`) writes each level into the job tree; `info` stages emit the
-//! same kind as the `ls` above them, so they enrich a stream in place.
+//! `tee` (or `-o`) writes each level into the job tree; `get` stages emit the
+//! same resource as the `ls` above them, so they enrich a stream in place.
 //!
 //! Records are read one at a time as the command consumes them, so a level
 //! never buffers its parent: a slow consumer stops reading, and the pipe
@@ -85,6 +85,57 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
     })
 }
 
+/// The metastore id a metastore ref names: a `metastores/{metastore}` resource
+/// name. The metastore is a singleton, so the value only validates the input.
+pub(crate) fn metastore_ref(command: &str, record: &Value) -> Result<String, CliError> {
+    record["name"]
+        .as_str()
+        .and_then(pqbench::v1::name::parse_metastore)
+        .ok_or_else(|| {
+            format!(
+                "{command} reads pqbench metastore resources; a record needs a `metastores/…` name"
+            )
+            .into()
+        })
+}
+
+/// The catalog id a catalog ref names: a `catalogs/{catalog}` resource name.
+pub(crate) fn catalog_ref(command: &str, record: &Value) -> Result<String, CliError> {
+    record["name"]
+        .as_str()
+        .and_then(pqbench::v1::name::parse_catalog)
+        .ok_or_else(|| {
+            format!("{command} reads pqbench catalog resources; a record needs a `catalogs/…` name")
+                .into()
+        })
+}
+
+/// The catalog and schema a schema ref names: a
+/// `catalogs/{catalog}/schemas/{schema}` resource name.
+pub(crate) fn schema_ref(command: &str, record: &Value) -> Result<(String, String), CliError> {
+    record["name"]
+        .as_str()
+        .and_then(pqbench::v1::name::parse_schema)
+        .ok_or_else(|| {
+            format!(
+                "{command} reads pqbench schema resources; a record needs a `catalogs/…/schemas/…` name"
+            )
+            .into()
+        })
+}
+
+/// Split `catalog.schema` at the first dot; an Iceberg namespace keeps its
+/// remaining dots.
+pub(crate) fn split_schema(command: &str, fqn: &str) -> Result<(String, String), CliError> {
+    let Some((catalog, schema)) = fqn.split_once('.') else {
+        return Err(format!("{command} takes CATALOG.SCHEMA; got {fqn:?}").into());
+    };
+    if catalog.is_empty() || schema.is_empty() {
+        return Err(format!("{command} takes CATALOG.SCHEMA; got {fqn:?}").into());
+    }
+    Ok((catalog.to_string(), schema.to_string()))
+}
+
 /// The catalog, schema, and table a table ref names: a
 /// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name.
 pub(crate) fn table_ref(
@@ -104,7 +155,7 @@ pub(crate) fn table_ref(
 
 /// The storage location a table ref names: the [`Table`]'s `uri`. `None` when
 /// the ref names no location (a view, or an Iceberg identifier until
-/// `table info` resolves it).
+/// `table get` resolves it).
 ///
 /// [`Table`]: pqbench::v1::Table
 pub(crate) fn ref_storage(record: &Value) -> Option<&str> {

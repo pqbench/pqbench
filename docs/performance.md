@@ -11,11 +11,11 @@ request (see the Perf box in the template).
 Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
-$ pqbench metastore ls | pqbench catalog ls <catalog> \
-    | pqbench schema ls <catalog.schema> \
+$ pqbench catalog ls | pqbench schema ls <catalog> \
+    | pqbench table ls <catalog.schema> \
     | pqbench credentials check | pqbench credentials get \
-    | pqbench table get | pqbench table ls \
-    | pqbench partition ls | pqbench bytemass
+    | pqbench table get | pqbench partition ls \
+    | pqbench file ls | pqbench bytemass
 ```
 
 `credentials check` is the walk's single filter: it drops a `system` catalog

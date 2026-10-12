@@ -1,42 +1,44 @@
-//! `catalog ls`: the schemas in a catalog, one `Schema` line each.
+//! `catalog ls`: the catalogs at the endpoint, one `Catalog` line each.
 
+use std::path::PathBuf;
+
+use clap::Args;
 use futures_util::stream::StreamExt;
 use pqbench::catalog::ls;
 
-use super::{catalog_name, NameArgs};
-use crate::emit::Emitter;
+use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input};
 use crate::CliError;
 
-pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
+/// Arguments for `catalog ls`.
+#[derive(Args)]
+pub(crate) struct LsArgs {
+    /// stdout format: auto (table on a terminal) | table | json
+    #[arg(long, value_enum, default_value_t = Format::Auto)]
+    format: Format,
+    /// also write the lz4 NDJSON stream to FILE
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    output: Option<PathBuf>,
+}
+
+/// List the catalogs at the endpoint: `metastore get | catalog ls`.
+///
+/// The metastore is a singleton, so a `Metastore` stream on standard input only
+/// affords the walk its shape: the refs are validated, and the endpoint's
+/// catalogs are the answer either way.
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
     let input = read_input("catalog ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    if let Some(name) = &args.catalog {
-        if input.first.is_some() {
-            return Err("catalog ls takes CATALOG or a catalog stream, not both".into());
-        }
-        let schemas = ls::list(workspace, name).await?;
-        for schema in &schemas {
-            emit.write_row(schema).await?;
-        }
-        return emit.finish(&format!("schemas: {}\n", schemas.len())).await;
-    }
-    if !input.piped {
-        return Err("catalog ls needs CATALOG or a catalog stream".into());
-    }
-    let records = source::records("catalog ls", input.first, input.lines);
-    let mut schemas = 0;
-    let mut lists = records
-        .map(|record| async {
-            let name = catalog_name(&record?)?;
-            Ok::<_, CliError>(ls::list(workspace, &name).await?)
-        })
-        .buffer_unordered(args.fan_out.max(1));
-    while let Some(listed) = lists.next().await {
-        for schema in listed? {
-            emit.write_row(&schema).await?;
-            schemas += 1;
+    if input.piped {
+        let mut records = source::records("catalog ls", input.first, input.lines);
+        while let Some(record) = records.next().await {
+            source::metastore_ref("catalog ls", &record?)?;
         }
     }
-    emit.finish(&format!("schemas: {schemas}\n")).await
+    let catalogs = ls::list(workspace).await?;
+    for catalog in &catalogs {
+        emit.write_row(catalog).await?;
+    }
+    emit.finish(&format!("catalogs: {}\n", catalogs.len()))
+        .await
 }

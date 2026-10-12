@@ -9,16 +9,16 @@ that command and links back. This file is the durable copy.
 | Goal | Command |
 | --- | --- |
 | On-disk bytes per column | `pqbench bytemass FILE` |
-| List a table's natural partitions | `pqbench table ls DIR` (or v2 refs on stdin) |
-| List a partition's files | `pqbench partition ls` (partitions on stdin) |
+| List a table's natural partitions | `pqbench partition ls DIR` (Table refs on stdin) |
+| List a partition's files | `pqbench file ls` (partitions on stdin) |
 | Read the endpoint's metastore record | `pqbench metastore get` (`PQB_ENDPOINT`) |
-| List the catalogs at a catalog endpoint | `pqbench metastore ls` (`PQB_ENDPOINT`) |
+| List the catalogs at a catalog endpoint | `pqbench catalog ls` (`PQB_ENDPOINT`) |
 | Read one catalog's record | `pqbench catalog get [CATALOG]` (refs on stdin) |
-| List the schemas in a catalog | `pqbench catalog ls [CATALOG]` (refs on stdin) |
+| List the schemas in a catalog | `pqbench schema ls [CATALOG]` (refs on stdin) |
 | Read one schema's record | `pqbench schema get CATALOG.SCHEMA` (refs on stdin) |
-| List the tables in a schema | `pqbench schema ls CATALOG.SCHEMA` (refs on stdin) |
-| Read one table's record | `pqbench table get CATALOG.SCHEMA.TABLE` (v2 refs on stdin) |
-| Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (v2 refs on stdin) |
+| List the tables in a schema | `pqbench table ls CATALOG.SCHEMA` (refs on stdin) |
+| Read one table's record | `pqbench table get CATALOG.SCHEMA.TABLE` (Table refs on stdin) |
+| Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
@@ -30,7 +30,7 @@ that command and links back. This file is the durable copy.
 The usual walk:
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
@@ -44,11 +44,11 @@ pqbench never writes them into the process environment itself.
 | resource | Produced by | Consumed by |
 | --- | --- | --- |
 | `Metastore` | `metastore get` | humans / scripts (`--json`) |
-| `Catalog` | `metastore ls`, `catalog get` | `catalog get`, `catalog ls`, humans / scripts (`--json`) |
-| `Schema` | `catalog ls`, `schema get` | `schema get`, `schema ls` |
-| `Table` | `schema ls`, `table get`, `credentials get` | `table get`, `table ls`, `credentials get` |
-| `Partition` | `table ls` | `partition ls`, humans / scripts (`--json`) |
-| `TableFile` | `partition ls` | `bytemass`, humans / scripts (`--json`) |
+| `Catalog` | `catalog ls`, `catalog get` | `catalog get`, `schema ls`, humans / scripts (`--json`) |
+| `Schema` | `schema ls`, `schema get` | `schema get`, `table ls` |
+| `Table` | `table ls`, `table get`, `credentials get` | `table get`, `partition ls`, `credentials get` |
+| `Partition` | `partition ls` | `file ls`, humans / scripts (`--json`) |
+| `TableFile` | `file ls` | `bytemass`, humans / scripts (`--json`) |
 | `remote-source` | a producer | `bytemass` |
 | `pqbench.bytemass-file` / `pqbench.bytemass-row` | `bytemass` | `viz` |
 | `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
@@ -130,10 +130,10 @@ The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
 
 `metastore get` reads the same endpoint and reports its metastore
-record (name, id, cloud, region) as `Metastore`; `metastore ls` lists
+record (name, id, cloud, region) as `Metastore`; `catalog ls` lists
 the catalogs at the endpoint, one `Catalog` line each (name,
 catalog_type). `catalog get` reports one catalog's record (name, catalog_type,
-comment, owner) as a single `Catalog` line. `catalog ls` lists the
+comment, owner) as a single `Catalog` line. `schema ls` lists the
 schemas in the catalog, one `Schema` line each (catalog, name): Unity
 REST serves `/schemas`; with `PQB_TABLE_FORMAT=iceberg` (or `"table_format":
 "iceberg"` in the document) the command speaks Iceberg REST instead — the
@@ -159,35 +159,35 @@ shell:
 ```console
 set -o pipefail
 rate=15
-until pqbench metastore ls | pqbench ratelimit --rate "$rate" | pqbench catalog ls; do
+until pqbench catalog ls | pqbench ratelimit --rate "$rate" | pqbench schema ls; do
     rate=$((rate / 2))
 done
 ```
 
-`metastore ls | catalog ls` lists every schema at the endpoint; `metastore ls |
-catalog get` enriches each catalog instead. `info` emits the same resource as the
-`ls` above it, so it can be inserted or skipped; `tee` (or `-o`) writes each
+`catalog ls | schema ls` lists every schema at the endpoint; `catalog ls |
+catalog get` enriches each catalog instead. `get` emits the same resource as the `ls` it
+reads, so it can be inserted or skipped; `tee` (or `-o`) writes each
 level into the job tree.
 
 ```console no-run
 $ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
-    pqbench metastore ls | pqbench catalog ls
-catalog      name
------------  ----------------
-dbx_samples  bakehouse
-dbx_samples  nyctaxi
-samples      accuweather
+    pqbench catalog ls | pqbench schema ls
+name                                   comment  uri
+-------------------------------------  -------  ----------------------
+catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
+catalogs/dbx_samples/schemas/nyctaxi    …        s3://lakehouse/nyctaxi
+catalogs/samples/schemas/accuweather    …        s3://lakehouse/weather
 schemas: 3
 ```
 
 `schema get` reads one schema (catalog, name, comment, location, properties)
-from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `schema ls`
+from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `table ls`
 lists the tables in it, one `Table` line each — the
 document `table get` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries its name and no storage URI — `table get` derives the
 `loadTable` URL and reads the metadata inline.
-A view carries no location, so its ref keeps no storage path;
+A view carries no location, so its ref keeps its `uri` unset;
 `credentials check` is the stage that drops it. Refs are addresses; the walk
 context (endpoint, token, storage options) comes from the environment
 (`PQB_*`, `AWS_*`). The walk is a plain pipeline: every command streams refs
@@ -197,7 +197,7 @@ the same lease:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench schema ls dbx_samples.nyctaxi --format json |
+$ pqbench table ls dbx_samples.nyctaxi --format json |
     pqbench credentials check |
     pqbench credentials get |
     pqbench table get --format json
@@ -218,13 +218,13 @@ kernel's dbutils context is not visible to a subprocess, so a notebook sets
 
 `table get` enriches that ref — name, format, snapshot, columns, partition
 columns, format properties — and keeps the same resource name, so
-`schema ls | table get` chains. Unity `/tables/{full_name}` names the
+`table ls | table get` chains. Unity `/tables/{full_name}` names the
 storage location whose Delta log is read with `without_files()`, and the
 catalog's declared columns and properties are merged over the log's; Iceberg
 REST `loadTable` carries the metadata inline, so the Iceberg path runs no
 storage read at all. The Delta read is O(1) in files, so a walk can descend to
-every table before deciding which files to measure. `table ls` lists a table's
-partitions and `partition ls` its files.
+every table before deciding which files to measure. `partition ls` lists a table's
+partitions and `file ls` its files.
 
 The table read knows nothing about credentials: it reads with the lease it is
 given — the table's own `credentials` and the process environment the storage
@@ -267,27 +267,27 @@ cannot serve passes through with its own credentials.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench schema ls dbx_samples.nyctaxi --format json |
+$ pqbench table ls dbx_samples.nyctaxi --format json |
     pqbench credentials check | pqbench credentials get
 ```
 
-`table ls` reads each ref's Delta / Iceberg log — never the data files — and
+`partition ls` reads each ref's Delta / Iceberg log — never the data files — and
 groups the table's commits into **natural partitions** by commit time (Delta
 `commitInfo.timestamp`; Iceberg the snapshot time): one `Partition`
 per epoch-aligned, half-open UTC window, carrying the commits it holds.
 `--every` sets the width (`1h`, `1d`, `1w`); a commit the log does not date is
 omitted, so a window never claims a commit it cannot place. A partition is a
 lens on the files, not a thing the table stores — see `docs/partition.md`.
-`partition ls` then re-reads the window's commits and lists the files they
+`file ls` then re-reads the window's commits and lists the files they
 added — the lease rides on every file, and that stream is what `bytemass`
 measures.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench schema ls dbx_samples.nyctaxi --format json |
+$ pqbench table ls dbx_samples.nyctaxi --format json |
     pqbench credentials check |
     pqbench credentials get |
-    pqbench table ls
+    pqbench partition ls
 name                  first_time     last_time  commits
 --------------------  -----------  ------------  -------
 …                     …            …                   1
@@ -305,7 +305,7 @@ tables: 1
 List a table's partitions by URI; a terminal prints them:
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table --format table
+$ pqbench partition ls docker/e2e-lakehouse/table --format table
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
@@ -315,11 +315,11 @@ partitions: 1
 List the catalogs at the endpoint:
 
 ```console no-run
-$ pqbench metastore ls < source.json
-name         catalog_type
------------  ---------------
-dbx_samples  MANAGED_CATALOG
-samples      SYSTEM_CATALOG
+$ pqbench catalog ls < source.json
+name                  catalog_type
+--------------------  -----------------
+catalogs/dbx_samples  CATALOG_TYPE_MANAGED
+catalogs/samples      CATALOG_TYPE_SYSTEM
 catalogs: 2
 ```
 
@@ -327,20 +327,20 @@ Read one catalog's record:
 
 ```console no-run
 $ pqbench catalog get dbx_samples < source.json
-name         catalog_type     comment         owner
------------  ---------------  --------------  -----------------
-dbx_samples  MANAGED_CATALOG  sample catalog  owner@example.com
+name                  catalog_type           comment         owner
+--------------------  ---------------------  --------------  -----------------
+catalogs/dbx_samples  CATALOG_TYPE_MANAGED   sample catalog  owner@example.com
 catalogs: 1
 ```
 
 List the schemas in a catalog:
 
 ```console no-run
-$ pqbench catalog ls dbx_samples < source.json
-catalog      name
------------  ----------------
-dbx_samples  bakehouse
-dbx_samples  nyctaxi
+$ pqbench schema ls dbx_samples < source.json
+name                                   comment  uri
+-------------------------------------  -------  ----------------------
+catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
+catalogs/dbx_samples/schemas/nyctaxi    …        s3://lakehouse/nyctaxi
 schemas: 2
 ```
 
@@ -421,7 +421,7 @@ format version does not identify the data-page version or compression level.
 
 ## Selecting files
 
-There is no built-in file filter: `partition ls` streams every file the
+There is no built-in file filter: `file ls` streams every file the
 window's commits added, and `bytemass` measures each, so which files to measure
 is a shell job on the stream (`jq`, `sort`, `head`, `xargs`) — see
 [demo.md](demo.md). `bytemass` reads its files in flight (`--fan-out`, 128 by
@@ -442,7 +442,7 @@ $ pqbench bytemass 's3://bucket/table/**/*.parquet'
 ```
 
 These patterns enumerate physical objects, not a table's active snapshot.
-Use `table ls | partition ls` for Delta/Iceberg analysis to avoid counting
+Use `partition ls | file ls` for Delta/Iceberg analysis to avoid counting
 obsolete files.
 
 ## Page headers without indexes

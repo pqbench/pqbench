@@ -323,9 +323,9 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
 }
 
 #[tokio::test]
-async fn partition_ls_names_the_files_a_snapshot_added() {
+async fn file_ls_names_the_files_a_snapshot_added() {
     let fixture = Fixture::new();
-    let files = pqbench::partition::ls::list(
+    let files = pqbench::file::ls::list(
         common::lake(),
         &fixture.metadata.to_string_lossy(),
         &Default::default(),

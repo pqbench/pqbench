@@ -1,4 +1,4 @@
-//! `metastore`: the endpoint's metastore record and its catalogs.
+//! `metastore`: the endpoint's metastore record.
 
 use std::path::PathBuf;
 
@@ -8,9 +8,8 @@ use crate::emit::Format;
 use crate::CliError;
 
 mod get;
-mod ls;
 
-/// Arguments for `metastore`: the endpoint's metastore and its catalogs.
+/// Arguments for `metastore`: the endpoint's metastore.
 #[derive(Args)]
 pub(crate) struct MetastoreArgs {
     #[command(subcommand)]
@@ -21,8 +20,6 @@ pub(crate) struct MetastoreArgs {
 pub(crate) enum MetastoreCommand {
     /// Show the endpoint's metastore record
     Get(OutputArgs),
-    /// List the catalogs at the endpoint
-    Ls(OutputArgs),
 }
 
 #[derive(Args)]
@@ -41,6 +38,5 @@ pub(crate) async fn run(
 ) -> Result<(), CliError> {
     match &args.command {
         MetastoreCommand::Get(args) => get::run(workspace, args).await,
-        MetastoreCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }

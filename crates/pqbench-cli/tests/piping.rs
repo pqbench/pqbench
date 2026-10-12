@@ -1,4 +1,4 @@
-//! The metadata walk as a pipe: `metastore ls | catalog get | catalog ls`,
+//! The metadata walk as a pipe: `catalog ls | catalog get | schema ls`,
 //! context from `PQB_ENDPOINT`, refs on stdin.
 
 use std::io::{Read, Write};
@@ -67,18 +67,18 @@ const SCHEMA: &str =
 const TABLES: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"}],"next_page_token":null}"#;
 
 #[test]
-fn metastore_ls_pipes_into_catalog_info_and_ls() {
+fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
     let address = routes(&[
         ("/schemas?", 200, SCHEMAS),
         ("/schemas/", 200, SCHEMA),
         ("/tables", 200, TABLES),
         ("/catalogs/dbx_samples", 200, DBX_SAMPLES),
         ("/catalogs/system", 200, SYSTEM),
-        ("/catalogs", 200, CATALOGS),
+        ("/catalogs?", 200, CATALOGS),
     ]);
     let env = [("PQB_ENDPOINT", address.as_str())];
 
-    let catalogs = pipe_env(&["metastore", "ls", "--format", "json"], b"", &env);
+    let catalogs = pipe_env(&["catalog", "ls", "--format", "json"], b"", &env);
     assert!(
         catalogs.status.success(),
         "stderr: {}",
@@ -87,13 +87,13 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
     let refs = catalogs.stdout;
     assert_eq!(ndjson(&refs).len(), 2);
 
-    let info = pipe_env(&["catalog", "get", "--format", "json"], &refs, &env);
+    let enriched = pipe_env(&["catalog", "get", "--format", "json"], &refs, &env);
     assert!(
-        info.status.success(),
+        enriched.status.success(),
         "stderr: {}",
-        String::from_utf8_lossy(&info.stderr)
+        String::from_utf8_lossy(&enriched.stderr)
     );
-    let records = ndjson(&info.stdout);
+    let records = ndjson(&enriched.stdout);
     assert_eq!(records.len(), 2);
     let dbx_samples = records
         .iter()
@@ -104,7 +104,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         .iter()
         .any(|record| record["name"] == "catalogs/system"));
 
-    let schemas = pipe_env(&["catalog", "ls", "--format", "json"], &refs, &env);
+    let schemas = pipe_env(&["schema", "ls", "--format", "json"], &refs, &env);
     assert!(
         schemas.status.success(),
         "stderr: {}",
@@ -119,17 +119,17 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
-    let info = pipe_env(
+    let enriched = pipe_env(
         &["schema", "get", "--format", "json"],
         &schemas.stdout,
         &env,
     );
     assert!(
-        info.status.success(),
+        enriched.status.success(),
         "stderr: {}",
-        String::from_utf8_lossy(&info.stderr)
+        String::from_utf8_lossy(&enriched.stderr)
     );
-    let records = ndjson(&info.stdout);
+    let records = ndjson(&enriched.stdout);
     assert_eq!(records.len(), 2);
     assert!(records.iter().any(
         |record| record["name"] == "catalogs/dbx_samples/schemas/nyctaxi"
@@ -139,7 +139,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
-    let tables = pipe_env(&["schema", "ls", "--format", "json"], &schemas.stdout, &env);
+    let tables = pipe_env(&["table", "ls", "--format", "json"], &schemas.stdout, &env);
     assert!(
         tables.status.success(),
         "stderr: {}",

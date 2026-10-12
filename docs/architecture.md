@@ -43,8 +43,9 @@ Rules:
 ## Resource hierarchy
 
 Commands mirror the resource hierarchy of the data model — metastore, catalog,
-schema, table, partition. Listing a resource lists its children; reading one
-resource is the `info` command.
+schema, table, partition, file. Each level's `ls` lists that level's resources
+(the parent rides the argument, or parent refs on standard input); `get` reads
+one resource.
 
 ## Interfaces
 
@@ -79,10 +80,10 @@ resource is the `info` command.
 
 ## Serialization
 
-- The documents commands exchange are the CLI's communication language: their
-  types and serialization live in `crates/pqbench-cli`.
-- Library commands take and return plain data and carry no serialization
-  concerns.
+- The documents commands exchange are the CLI's communication language: the
+  resource types live in `pqbench::v1`, and the CLI renders them.
+- Library commands take and return those resources; presentation stays in the
+  CLI.
 - The CLI parses an input document, calls one command function, and formats the
   result.
 

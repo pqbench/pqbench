@@ -78,8 +78,8 @@ export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export AWS_REGION=us-east-1 AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
 export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 
-"$BIN" table ls "$(jq -r .storage_location <<< "$TABLE")" |
-  "$BIN" partition ls |
+"$BIN" partition ls "$(jq -r .storage_location <<< "$TABLE")" |
+  "$BIN" file ls |
   "$BIN" bytemass
 ```
 
@@ -93,11 +93,11 @@ total                                   46.00
 ```
 
 `make lakehouse` runs exactly this walk as its last step, then lists the same
-table with `schema ls` (with `PQB_ENDPOINT` naming the catalog) and walks it
-through `table get | table ls | partition ls | bytemass` again, so the
+table with `table ls` (with `PQB_ENDPOINT` naming the catalog) and walks it
+through `table get | partition ls | file ls | bytemass` again, so the
 catalog-listing path is seen to work too.
 
-Iceberg REST does not vend credentials. `schema ls` lists namespaces and
+Iceberg REST does not vend credentials. `table ls` lists namespaces and
 tables, `table get` reads `loadTable`'s inline metadata, and the walk
 measures the files:
 
@@ -111,19 +111,19 @@ export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1
 export AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
 export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 
-"$BIN" schema ls pqbench.demo --format json |
+"$BIN" table ls pqbench.demo --format json |
   "$BIN" table get |
-  "$BIN" table ls | "$BIN" partition ls | "$BIN" bytemass
+  "$BIN" partition ls | "$BIN" file ls | "$BIN" bytemass
 ```
 
 `make lakehouse` runs the Unity table walk, the Unity catalog walk, and this
-Iceberg walk. Stop after `pqbench table ls` and pipe to `jq .` to read the
+Iceberg walk. Stop after `pqbench partition ls` and pipe to `jq .` to read the
 partition document itself.
 
 A producer document is `{"kind": "pqbench.remote-source", "version": 1,
 "inputs": [...], "env": {...}}`; `pqbench bytemass` measures the files it
-names, and a table's files come from the walk, `pqbench table ls | pqbench
-partition ls`. The walk's context is the environment: `PQB_ENDPOINT`,
+names, and a table's files come from the walk, `pqbench partition ls | pqbench
+file ls`. The walk's context is the environment: `PQB_ENDPOINT`,
 `PQB_TOKEN`, `PQB_TABLE_FORMAT` for the catalog, and `AWS_*` for storage.
 pqbench keeps no catalog dependency. A producer whose catalog vends expiring
 credentials puts them in `env` instead, which travels on the table document
@@ -148,7 +148,7 @@ role and return a policy-scoped session.
 
 Databricks Unity Catalog vends genuine STS sessions and its CLI has a command for
 that, so the shape survives the move off the stand. The vending response's `url`
-is the table's storage path, which `pqbench table ls` reads — it walks the log
+is the table's storage path, which `pqbench partition ls` reads — it walks the log
 itself, so nothing has to enumerate files:
 
 ```bash
@@ -163,8 +163,8 @@ read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(
     /tmp/pqbench-vend.json)
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION=us-east-1
 
-pqbench table ls "$(jq -r .url /tmp/pqbench-vend.json)" |
-  pqbench partition ls |
+pqbench partition ls "$(jq -r .url /tmp/pqbench-vend.json)" |
+  pqbench file ls |
   pqbench bytemass
 ```
 

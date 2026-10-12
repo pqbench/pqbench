@@ -201,48 +201,48 @@ check_unity() {
                 jq -c '{table_id, operation: "READ"}')" |
         jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv')
     walk_env "" "" "$vended_key" "$vended_secret" "$vended_token"
-    measurement=$("$pqbench_bin" table ls "$table_location" |
-        "$pqbench_bin" partition ls |
+    measurement=$("$pqbench_bin" partition ls "$table_location" |
+        "$pqbench_bin" file ls |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "unity table" "$measurement")
 
-    # `schema ls` lists the same table from Unity; the walk reads it under the
+    # `table ls` lists the same table from Unity; the walk reads it under the
     # lease the environment carries, and measures the files the window added.
     walk_env "$unity_catalog" "" "$VENDED_ACCESS_KEY_ID" "$VENDED_SECRET_ACCESS_KEY" "$VENDED_SESSION_TOKEN"
-    measurement=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    measurement=$("$pqbench_bin" table ls pqbench.demo --format json |
         "$pqbench_bin" table get |
-        "$pqbench_bin" table ls |
         "$pqbench_bin" partition ls |
+        "$pqbench_bin" file ls |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the lake pipe produced no measurement" >&2
         exit 1
     }
     measured=$(expect_events "unity lake" "$measurement")
 
-    # `catalog ls` lists Unity's schemas for the same catalog.
+    # `schema ls` lists Unity's schemas for the same catalog.
     local schemas
-    schemas=$("$pqbench_bin" catalog ls pqbench --format json |
+    schemas=$("$pqbench_bin" schema ls pqbench --format json |
         jq -r 'select(.name | startswith("catalogs/pqbench/schemas/")) | .name | split("/") | last') || {
-        echo "check failed: catalog ls produced no schemas" >&2
+        echo "check failed: schema ls produced no schemas" >&2
         exit 1
     }
     [ "$schemas" = "demo" ] || {
-        echo "check failed (unity catalog ls): expected demo; measured ${schemas:-nothing}" >&2
+        echo "check failed (unity schema ls): expected demo; measured ${schemas:-nothing}" >&2
         exit 1
     }
 
-    # `schema ls` lists Unity's tables for the same schema.
+    # `table ls` lists Unity's tables for the same schema.
     local tables
-    tables=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    tables=$("$pqbench_bin" table ls pqbench.demo --format json |
         jq -r 'select(.name | contains("/tables/")) | (.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) " + (.uri // "-")') || {
-        echo "check failed: schema ls produced no tables" >&2
+        echo "check failed: table ls produced no tables" >&2
         exit 1
     }
     [ "$tables" = "pqbench.demo.events $table_location" ] || {
-        echo "check failed (unity schema ls): expected pqbench.demo.events $table_location; measured ${tables:-nothing}" >&2
+        echo "check failed (unity table ls): expected pqbench.demo.events $table_location; measured ${tables:-nothing}" >&2
         exit 1
     }
 
@@ -264,7 +264,7 @@ check_unity() {
     # lease (keys + token) only — the endpoint stays in the environment.
     walk_env "$unity_catalog" "" "" ""
     local vended_ref
-    vended_ref=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    vended_ref=$("$pqbench_bin" table ls pqbench.demo --format json |
         "$pqbench_bin" credentials get --format json |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) key=\(.credentials.access_key_id // "-") session=\(if .credentials.session_token then "set" else "unset" end) endpoint=-"') || {
         echo "check failed: credentials get produced no ref" >&2
@@ -276,7 +276,7 @@ check_unity() {
     }
 
     local vended_info
-    vended_info=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    vended_info=$("$pqbench_bin" table ls pqbench.demo --format json |
         "$pqbench_bin" credentials get --format json |
         "$pqbench_bin" table get --format json |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) snapshot=\(.snapshot_version) columns=[\([.declared_columns[].column] | join(","))] env=\(if .credentials then "set" else "none" end)"') || {
@@ -288,20 +288,20 @@ check_unity() {
         exit 1
     }
 
-    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; catalog ls pqbench: $schemas; schema ls pqbench.demo: $tables; table get: $table_info; vended table get: $vended_info"
+    echo "Unity Catalog ready: $unity_catalog/tables/pqbench.demo.events (storage $s3_endpoint): $measured; schema ls pqbench: $schemas; table ls pqbench.demo: $tables; table get: $table_info; vended table get: $vended_info"
 }
 
 check_iceberg() {
     ensure_pqbench
     local measurement measured
-    # `schema ls` lists the Iceberg REST namespace; `table get` reads
+    # `table ls` lists the Iceberg REST namespace; `table get` reads
     # loadTable's inline metadata and fills the storage path (the metadata
     # JSON), then the walk measures the files the window added.
     walk_env "$iceberg_rest/v1" "iceberg" "test" "test"
-    measurement=$("$pqbench_bin" schema ls pqbench.demo --format json |
+    measurement=$("$pqbench_bin" table ls pqbench.demo --format json |
         "$pqbench_bin" table get |
-        "$pqbench_bin" table ls |
         "$pqbench_bin" partition ls |
+        "$pqbench_bin" file ls |
         "$pqbench_bin" bytemass --json) || {
         echo "check failed: the Iceberg lake pipe produced no measurement" >&2
         exit 1

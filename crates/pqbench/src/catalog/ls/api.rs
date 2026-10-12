@@ -1,16 +1,15 @@
-//! `catalog ls`: the schemas in one catalog.
+//! `catalog ls`: the catalogs at the endpoint.
 //!
-//! [`list`] is the only public function. It returns [`Schema`] resources; the
+//! [`list`] is the only public function. It returns [`Catalog`] resources; the
 //! CLI forwards them as-is.
 
 use std::fmt;
 
-pub use crate::config::Dialect as TableFormat;
-pub use crate::v1::Schema;
+pub use crate::v1::Catalog;
 
 use crate::Workspace;
 
-/// Errors listing a catalog's schemas.
+/// Errors listing catalogs.
 #[derive(Debug)]
 pub struct Error(String);
 
@@ -28,11 +27,11 @@ impl From<String> for Error {
     }
 }
 
-/// List the schemas in `catalog` at the workspace's endpoint.
+/// List the catalogs at the workspace's endpoint, in name order.
 ///
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or returns a malformed schema page.
-pub async fn list(workspace: &Workspace, catalog: &str) -> Result<Vec<Schema>, Error> {
-    super::r#impl::list(workspace, catalog).await
+/// status, or returns a malformed catalog page.
+pub async fn list(workspace: &Workspace) -> Result<Vec<Catalog>, Error> {
+    super::r#impl::list(workspace).await
 }

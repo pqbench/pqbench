@@ -57,10 +57,10 @@ use crate::Workspace;
 /// without asking for credentials; Iceberg REST reads its metadata inline
 /// through the catalog, so the table is eligible and no catalog call is made.
 /// Unity also drops a `system` catalog ref without a call and reports a view
-/// as [`Reason::NotATable`], so `schema ls` can list every securable and the
+/// as [`Reason::NotATable`], so `table ls` can list every securable and the
 /// check is the single filter. The caller passes the dialect it runs under and
 /// gets the same [`Eligibility`] either way. The check separates eligibility
-/// from vending: a caller that needs the table itself (`table info`) can
+/// from vending: a caller that needs the table itself (`table get`) can
 /// report an [`Eligibility::Ineligible`] table with the reason instead of
 /// running a storage read that cannot succeed.
 ///

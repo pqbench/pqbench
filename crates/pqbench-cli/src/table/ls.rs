@@ -1,129 +1,63 @@
-//! `table ls`: a table's natural partitions, grouped by commit time.
+//! `table ls`: the tables in a schema, one `Table` line each.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream::StreamExt;
-use pqbench::table;
+use pqbench::table::ls;
 
 use crate::emit::{Emitter, Format};
-use crate::source::{self, read_input, ref_env, ref_storage, table_ref};
+use crate::source::{self, read_input, schema_ref, split_schema};
 use crate::CliError;
 
 /// Arguments for `table ls`.
 #[derive(Args)]
 pub(crate) struct LsArgs {
-    /// table URI or a document file; without it, read table refs on stdin
-    input: Option<String>,
-    /// window width, epoch-aligned: e.g. 1h, 1d, 1w [env: PQB_TABLE_EVERY]
-    #[arg(
-        long,
-        value_parser = parse_window,
-        value_name = "WINDOW",
-        env = "PQB_TABLE_EVERY",
-        default_value = "1d"
-    )]
-    every: i64,
+    /// schema name (`catalog.schema`); without it, read schema refs on stdin
+    schema: Option<String>,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
     /// also write the lz4 NDJSON stream to FILE
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     output: Option<PathBuf>,
-    /// tables in flight at once [env: PQB_TABLE_FAN_OUT]
-    #[arg(long, default_value_t = 64, env = "PQB_TABLE_FAN_OUT")]
+    /// schemas in flight at once
+    #[arg(long, default_value_t = 64)]
     fan_out: usize,
 }
 
-/// List a table's natural partitions: commits grouped into commit-time windows.
-pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
+/// List a schema's tables: one `Table` line each, the record `table get`
+/// enriches.
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
     let input = read_input("table ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let mut partitions = 0usize;
-    match &args.input {
-        Some(uri) if uri != "-" => {
-            if input.first.is_some() {
-                return Err("table ls takes a table URI or a table stream, not both".into());
-            }
-            let env = BTreeMap::new();
-            let table = pqbench::v1::name::local_table(uri);
-            partitions += list_partitions(lake, &table, uri, &env, args.every, &mut emit).await?;
+    if let Some(schema) = &args.schema {
+        if input.first.is_some() {
+            return Err("table ls takes CATALOG.SCHEMA or a schema stream, not both".into());
         }
-        _ => {
-            if !input.piped {
-                return Err("table ls needs a table URI or a table stream".into());
-            }
-            let records = source::records("table ls", input.first, input.lines);
-            let mut reads = records
-                .map(|record| async {
-                    let record = record?;
-                    let (catalog, schema, table) = table_ref("table ls", &record)?;
-                    let name = pqbench::v1::name::table(&catalog, &schema, &table);
-                    let uri = ref_storage(&record)
-                        .ok_or_else(|| {
-                            CliError::from(
-                                "a table-ref has no storage path; run `pqbench table info` first",
-                            )
-                        })?
-                        .to_string();
-                    let env = ref_env(&record);
-                    table::ls::list(lake, &name, &uri, &env, args.every)
-                        .await
-                        .map_err(|error| CliError::from(error.to_string()))
-                })
-                .buffer_unordered(args.fan_out.max(1));
-            while let Some(result) = reads.next().await {
-                for partition in result? {
-                    emit.write_row(&partition).await?;
-                    partitions += 1;
-                }
-            }
+        let (catalog, name) = split_schema("table ls", schema)?;
+        let tables = ls::list(workspace, &catalog, &name).await?;
+        for table in &tables {
+            emit.write_row(table).await?;
+        }
+        return emit.finish(&format!("tables: {}\n", tables.len())).await;
+    }
+    if !input.piped {
+        return Err("table ls needs CATALOG.SCHEMA or a schema stream".into());
+    }
+    let records = source::records("table ls", input.first, input.lines);
+    let mut tables = 0;
+    let mut lists = records
+        .map(|record| async {
+            let (catalog, name) = schema_ref("table ls", &record?)?;
+            Ok::<_, CliError>(ls::list(workspace, &catalog, &name).await?)
+        })
+        .buffer_unordered(args.fan_out.max(1));
+    while let Some(listed) = lists.next().await {
+        for table in listed? {
+            emit.write_row(&table).await?;
+            tables += 1;
         }
     }
-    emit.finish(&format!("partitions: {partitions}\n")).await
-}
-
-/// Emit one table's partitions; returns how many were written.
-async fn list_partitions(
-    lake: &pqbench::Lake,
-    table: &str,
-    uri: &str,
-    env: &BTreeMap<String, String>,
-    window: i64,
-    emit: &mut Emitter,
-) -> Result<usize, CliError> {
-    let found = table::ls::list(lake, table, uri, env, window)
-        .await
-        .map_err(|error| CliError::from(error.to_string()))?;
-    let mut count = 0;
-    for partition in &found {
-        emit.write_row(partition).await?;
-        count += 1;
-    }
-    Ok(count)
-}
-
-/// Parse a window width: a positive integer and a unit (`m`, `h`, `d`, `w`).
-fn parse_window(value: &str) -> Result<i64, CliError> {
-    let (number, unit) = value.split_at(
-        value
-            .len()
-            .checked_sub(1)
-            .ok_or_else(|| CliError::from("--every is empty"))?,
-    );
-    let count: i64 = number
-        .parse()
-        .map_err(|_| CliError::from(format!("--every `{value}` needs a number and a unit")))?;
-    if count <= 0 {
-        return Err(format!("--every must be positive: {value}").into());
-    }
-    let millis = match unit {
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        "w" => 604_800_000,
-        _ => return Err(format!("--every unit must be m, h, d, or w: {value}").into()),
-    };
-    Ok(count * millis)
+    emit.finish(&format!("tables: {tables}\n")).await
 }

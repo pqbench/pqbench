@@ -3,9 +3,9 @@
 use futures_util::stream::StreamExt;
 use pqbench::schema::get;
 
-use super::{schema_ref, split_schema, NameArgs};
+use super::NameArgs;
 use crate::emit::Emitter;
-use crate::source::{self, read_input};
+use crate::source::{self, read_input, schema_ref, split_schema};
 use crate::CliError;
 
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
@@ -27,7 +27,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Resu
     let mut schemas = 0;
     let mut reads = records
         .map(|record| async {
-            let (catalog, name) = schema_ref(&record?)?;
+            let (catalog, name) = schema_ref("schema get", &record?)?;
             Ok::<_, CliError>(get::read(workspace, &catalog, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));

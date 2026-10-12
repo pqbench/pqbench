@@ -1,15 +1,16 @@
-//! `partition ls`: the files a partition's commits added.
+//! `partition ls`: a table's natural partitions.
 //!
-//! [`list`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`list`] is the only public function. It returns [`Partition`] resources;
+//! the CLI forwards them as-is.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::table::TableFile;
+pub use crate::v1::Partition;
+
 use crate::Lake;
 
-/// Errors listing a partition's files.
+/// Errors listing a table's partitions.
 #[derive(Debug)]
 pub struct Error(String);
 
@@ -27,20 +28,24 @@ impl From<String> for Error {
     }
 }
 
-/// The files the given commits added, in log order.
+/// Group a table's commits into natural partitions of `window_millis`.
 ///
-/// A commit's `add` actions name the files it wrote; a file a later commit
-/// removes is still named, so the result is the **added in the window** set,
-/// not the table's active files. The size is left zero: the log's `add` size
-/// is only a cross-check, and `bytemass` reads the true size from the footer.
+/// Windows are half-open `[first, last)` and aligned to the Unix epoch, so a
+/// daily window is a UTC day. A commit the log does not date is omitted, so a
+/// window never claims a commit it cannot place.
+///
+/// `table` is the table's resource name; the partition names it as its parent.
+/// `uri` and `env` are the table's storage root and lease, carried on each
+/// partition so the files stage reads the log without a catalog call.
 ///
 /// # Errors
-/// Fails when the table cannot be loaded.
+/// Fails when the table cannot be loaded, or `window_millis` is not positive.
 pub async fn list(
     lake: &Lake,
+    table: &str,
     uri: &str,
     env: &BTreeMap<String, String>,
-    versions: &[u64],
-) -> Result<Vec<TableFile>, Error> {
-    super::r#impl::list(lake, uri, env, versions).await
+    window_millis: i64,
+) -> Result<Vec<Partition>, Error> {
+    super::r#impl::list(lake, table, uri, env, window_millis).await
 }

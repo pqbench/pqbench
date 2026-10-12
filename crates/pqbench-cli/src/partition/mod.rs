@@ -1,4 +1,4 @@
-//! `partition`: a partition's files.
+//! `partition`: a table's natural partitions.
 
 use clap::{Args, Subcommand};
 
@@ -6,7 +6,7 @@ use crate::CliError;
 
 mod ls;
 
-/// Arguments for `partition`: a partition's files.
+/// Arguments for `partition`: a table's natural partitions.
 #[derive(Args)]
 pub(crate) struct PartitionArgs {
     #[command(subcommand)]
@@ -15,7 +15,7 @@ pub(crate) struct PartitionArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum PartitionCommand {
-    /// List a partition's files — the ones its commits added
+    /// List a table's natural partitions, grouped by commit time
     Ls(ls::LsArgs),
 }
 

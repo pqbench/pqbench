@@ -1,9 +1,8 @@
-//! `catalog`: one catalog's record, or the schemas in it.
+//! `catalog`: one catalog's record, or the catalogs at the endpoint.
 
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use serde_json::Value;
 
 use crate::emit::Format;
 use crate::CliError;
@@ -11,7 +10,8 @@ use crate::CliError;
 mod get;
 mod ls;
 
-/// Arguments for `catalog`: one catalog's record.
+/// Arguments for `catalog`: one catalog's record and the catalogs at the
+/// endpoint.
 #[derive(Args)]
 pub(crate) struct CatalogArgs {
     #[command(subcommand)]
@@ -22,11 +22,11 @@ pub(crate) struct CatalogArgs {
 pub(crate) enum CatalogCommand {
     /// Show one catalog's record
     Get(NameArgs),
-    /// List the schemas in a catalog
-    Ls(NameArgs),
+    /// List the catalogs at the endpoint
+    Ls(ls::LsArgs),
 }
 
-/// Arguments for a catalog subcommand: the catalog name and the output flags.
+/// Arguments for `catalog get`: the catalog name and the output flags.
 #[derive(Args)]
 pub(crate) struct NameArgs {
     /// catalog name; without it, read `Catalog` refs on stdin
@@ -50,12 +50,4 @@ pub(crate) async fn run(
         CatalogCommand::Get(args) => get::run(workspace, args).await,
         CatalogCommand::Ls(args) => ls::run(workspace, args).await,
     }
-}
-
-/// The catalog name a catalog ref names: a `catalogs/{catalog}` resource name.
-fn catalog_name(record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .and_then(pqbench::v1::name::parse_catalog)
-        .ok_or_else(|| "expected a catalog resource name (`catalogs/{catalog}`)".into())
 }

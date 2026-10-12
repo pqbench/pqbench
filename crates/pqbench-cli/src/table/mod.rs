@@ -1,4 +1,4 @@
-//! `table`: one table's record, or its natural partitions.
+//! `table`: one table's record, or the tables in a schema.
 
 use clap::{Args, Subcommand};
 
@@ -7,7 +7,7 @@ use crate::CliError;
 mod get;
 mod ls;
 
-/// Arguments for `table`: one table's record, or its natural partitions.
+/// Arguments for `table`: one table's record, or the tables in a schema.
 #[derive(Args)]
 pub(crate) struct TableArgs {
     #[command(subcommand)]
@@ -18,7 +18,7 @@ pub(crate) struct TableArgs {
 pub(crate) enum TableCommand {
     /// Read one table's record
     Get(get::GetArgs),
-    /// List the table's natural partitions, grouped by commit time
+    /// List the tables in a schema
     Ls(ls::LsArgs),
 }
 
@@ -29,14 +29,6 @@ pub(crate) async fn run(
 ) -> Result<(), CliError> {
     match &args.command {
         TableCommand::Get(args) => get::run(workspace, lake, args).await,
-        TableCommand::Ls(ls) => ls::run(lake, ls).await,
-    }
-}
-
-impl TableArgs {
-    /// Whether the table subcommand needs `PQB_ENDPOINT`: `table info` reads a
-    /// catalog; `table ls` reads only storage.
-    pub(crate) fn requires_endpoint(&self) -> bool {
-        matches!(self.command, TableCommand::Get(_))
+        TableCommand::Ls(args) => ls::run(workspace, args).await,
     }
 }

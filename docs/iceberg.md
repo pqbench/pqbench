@@ -2,8 +2,8 @@
 
 The `pqbench` library contains an optional Iceberg table module that detects an
 Iceberg table, loads its metadata JSON and Avro manifests, and names the active
-Parquet files. Measurement is a separate step: `pqbench table ls | pqbench
-partition ls` emits the files, and `pqbench bytemass` reads them. Iceberg
+Parquet files. Measurement is a separate step: `pqbench partition ls | pqbench
+file ls` emits the files, and `pqbench bytemass` reads them. Iceberg
 dependencies are feature-gated and remain out of the default dependency graph.
 
 ```mermaid
@@ -21,7 +21,7 @@ flowchart TD
     pqbench_cli --> bytemass
 ```
 
-`pqbench table ls` names the format before it reads anything. Iceberg is
+`pqbench partition ls` names the format before it reads anything. Iceberg is
 recognized from `metadata/version-hint.text`, `metadata/*.metadata.json`, or a
 `.metadata.json` path. The loader reads that metadata and the snapshot's Avro
 manifests. Delete files are named in the log and omitted from `files`. The only
@@ -40,7 +40,7 @@ reads the same metadata inline from the REST `loadTable` response instead.)
 
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
 it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
-stand up, `pqbench table ls <table> | pqbench partition ls | pqbench bytemass
+stand up, `pqbench partition ls <table> | pqbench file ls | pqbench bytemass
 --format table` prints the same column table as a bare parquet:
 
 ```console run
@@ -56,18 +56,18 @@ columns: 2
 
 Two invocations from the `iceberg` cargo feature:
 
-cargo run -p pqbench-cli --features iceberg -- table ls ./path/to/table
-cargo run -p pqbench-cli --features iceberg -- table ls ./path/to/table/metadata/v1.metadata.json
+cargo run -p pqbench-cli --features iceberg -- partition ls ./path/to/table
+cargo run -p pqbench-cli --features iceberg -- partition ls ./path/to/table/metadata/v1.metadata.json
 
 Remote metadata and data objects are resolved with `iceberg-s3` (which enables
 `aws`). A remote table root needs `metadata/version-hint.text`; otherwise pass
 the metadata JSON URI:
 
-cargo run -p pqbench-cli --features iceberg-s3 -- table ls s3://bucket/table
+cargo run -p pqbench-cli --features iceberg-s3 -- partition ls s3://bucket/table
 
 A producer can supply the table URI and vended credentials as
-a `remote-source` document; `table ls` reads the snapshot, and the credentials
-travel to `partition ls` and `bytemass`.
+a `remote-source` document; `partition ls` reads the snapshot, and the credentials
+travel to `file ls` and `bytemass`.
 
 ## Backends
 
@@ -78,8 +78,8 @@ third-party storage types.
 
 ## Report
 
-`pqbench table ls` groups the snapshot's commits into commit-time windows;
-`pqbench partition ls` then names the data files those commits added. Delete
+`pqbench partition ls` groups the snapshot's commits into commit-time windows;
+`pqbench file ls` then names the data files those commits added. Delete
 files appear in the selected snapshot's actions. `pqbench bytemass` then reports
 physical storage of those files: file bytes, physical Parquet rows, compressed
 and uncompressed column bytes, codecs, and compressed bytes per row.

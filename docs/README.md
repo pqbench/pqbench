@@ -12,7 +12,7 @@ The canonical pipe — list a table's partitions, list their files, measure
 them, draw the result:
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
+$ pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -40,9 +40,9 @@ details.
 - [Visual demos](demo.md) — Parquet, Delta, Iceberg, and catalog pipes with real
   output, and how to select files with Unix tools.
 - [Delta tables](delta.md) — detect a log, list its partitions and files,
-  `table ls | partition ls | bytemass`, backends, limitations.
+  `partition ls | file ls | bytemass`, backends, limitations.
 - [Iceberg tables](iceberg.md) — load metadata and manifests,
-  `table ls | partition ls | bytemass`, limitations.
+  `partition ls | file ls | bytemass`, limitations.
 - [Databricks auth](auth.md) — create the service principal, grant metadata
   access, mint the OAuth M2M bearer.
 - [Performance](performance.md) — measure the metadata walk with `perf stat` and

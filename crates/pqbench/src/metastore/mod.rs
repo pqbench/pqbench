@@ -1,7 +1,5 @@
-//! The metastore command: one endpoint's metastore and its catalogs.
+//! The metastore command: one endpoint's metastore.
 //!
-//! The metastore is the entity above catalogs. [`get`] reads its record;
-//! [`ls`] lists the catalogs at the endpoint.
+//! The metastore is the entity above catalogs. [`get`] reads its record.
 
 pub mod get;
-pub mod ls;

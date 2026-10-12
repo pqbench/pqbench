@@ -11,12 +11,12 @@ use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input, ref_env, ref_storage, split_table, table_ref};
 use crate::CliError;
 
-/// The default tables in flight for `table info`: one per core.
+/// The default tables in flight for `table get`: one per core.
 fn default_fan_out() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
 }
 
-/// Arguments for `table info`: the `catalog.schema.table` name and the output
+/// Arguments for `table get`: the `catalog.schema.table` name and the output
 /// flags.
 #[derive(Args)]
 pub(crate) struct GetArgs {

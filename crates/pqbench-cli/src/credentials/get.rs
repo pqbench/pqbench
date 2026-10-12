@@ -1,5 +1,5 @@
 //! `credentials get`: put vended read credentials on each table-ref:
-//! `schema ls | credentials get`.
+//! `table ls | credentials get`.
 
 use std::collections::BTreeMap;
 

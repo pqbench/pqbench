@@ -26,55 +26,55 @@ fixture in the test suite. Catalog pipes need `make lakehouse`.
 
 ## Selecting files with Unix tools
 
-`bytemass` measures the files the `partition ls` stream names; which files is a
+`bytemass` measures the files the `file ls` stream names; which files is a
 shell decision. The stream is one JSON record per line, so `jq` prunes file
 records by `name`, and `sort`, `head`, or `awk` sample by name:
 
 ```console run delta json
 # one file: keep only the part-* records
-$ pqbench table ls docker/e2e-lakehouse/table \
->   | pqbench partition ls \
+$ pqbench partition ls docker/e2e-lakehouse/table \
+>   | pqbench file ls \
 >   | jq -c 'select(.name | contains("/files/part-"))' \
 >   | pqbench bytemass --json \
 >   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # first N by name: sort the file records, cap them, then measure
-$ pqbench table ls docker/e2e-lakehouse/table \
->   | pqbench partition ls \
+$ pqbench partition ls docker/e2e-lakehouse/table \
+>   | pqbench file ls \
 >   | sort | head -10 \
 >   | pqbench bytemass --json \
 >   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # every Nth file
-$ pqbench table ls docker/e2e-lakehouse/table \
->   | pqbench partition ls \
+$ pqbench partition ls docker/e2e-lakehouse/table \
+>   | pqbench file ls \
 >   | awk 'NR % 2 == 1' \
 >   | pqbench bytemass --json \
 >   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 ```
 
-The `partition ls` stream carries each file's `credentials` on the record, so
+The `file ls` stream carries each file's `credentials` on the record, so
 the lease travels with it through `jq`, `sort`, and `head`: `bytemass` reads the
 file its `blob` names.
 
 ## A table's partitions
 
-`table ls` groups a table's commits into epoch-aligned commit-time windows;
-`partition ls` re-reads each window's commits and names the files they added.
+`partition ls` groups a table's commits into epoch-aligned commit-time windows;
+`file ls` re-reads each window's commits and names the files they added.
 The whole walk is three commands:
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table -o /tmp/partition.ndjson.zst
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench partition ls docker/e2e-lakehouse/table -o /tmp/partition.ndjson.zst
+$ pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![one table viz page](images/pqbench-lake-treemap.gif)
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
+$ pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -88,18 +88,18 @@ columns: 2
 
 The catalog comes from the environment (`PQB_ENDPOINT`, `PQB_TOKEN`).
 `GET /v1/config` with a `defaults` object is Iceberg REST; a 200 without
-`defaults`, or HTTP 404, is Unity. The walk descends `metastore ls` → `catalog ls`
-→ `schema ls`, checks and vends credentials, then enriches each table and lists
+`defaults`, or HTTP 404, is Unity. The walk descends `catalog ls` → `schema ls`
+→ `table ls`, checks and vends credentials, then enriches each table and lists
 its files:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench schema ls CAT.SCHEMA |
+$ pqbench table ls CAT.SCHEMA |
     pqbench credentials check |
     pqbench credentials get |
     pqbench table get |
-    pqbench table ls |
     pqbench partition ls |
+    pqbench file ls |
     pqbench bytemass --format table
 ```
 
@@ -133,12 +133,12 @@ columns: 7
 
 ## One Delta snapshot
 
-`pqbench table ls` needs `--features delta` to read a log. A terminal prints the
-partitions as a table; a pipe streams NDJSON for `partition ls` and `bytemass`:
+`pqbench partition ls` needs `--features delta` to read a log. A terminal prints the
+partitions as a table; a pipe streams NDJSON for `file ls` and `bytemass`:
 
 ```console run delta
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls -o /tmp/partition.ndjson.zst
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass --format table
+$ pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls -o /tmp/partition.ndjson.zst
+$ pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -146,7 +146,7 @@ label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 files: 1
 rows: 3
 columns: 2
-$ pqbench table ls docker/e2e-lakehouse/table | pqbench partition ls | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![pqbench table CLI walkthrough](images/pqbench-delta-bytemass.gif)
@@ -160,12 +160,12 @@ fixture stores data as `s3://lakehouse/...`, so measure it through the stand
 (`make lakehouse`), not just the feature:
 
 ```console no-run
-$ pqbench table ls docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst
+$ pqbench partition ls docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst
 ```
 
 With the stand up, walk the Iceberg REST catalog (`PQB_ENDPOINT=…
-PQB_TABLE_FORMAT=iceberg`) and measure through it: `schema ls | credentials
-check | credentials get | table get | table ls | partition ls | bytemass`.
+PQB_TABLE_FORMAT=iceberg`) and measure through it: `table ls | credentials
+check | credentials get | table get | partition ls | file ls | bytemass`.
 `docs/demos/pqbench-iceberg-session.sh` runs the REST pipe when the stand answers
 at `localhost:8181`.
 

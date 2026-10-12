@@ -14,6 +14,7 @@ mod diff;
 mod document;
 mod emit;
 mod experiment;
+mod file;
 mod help;
 mod lz;
 mod metastore;
@@ -116,6 +117,13 @@ enum Command {
     )]
     Partition(partition::PartitionArgs),
     #[command(
+        about = help::FILE_ABOUT,
+        long_about = help::FILE_LONG_ABOUT,
+        after_help = help::FILE_AFTER,
+        after_long_help = help::FILE_AFTER
+    )]
+    File(file::FileArgs),
+    #[command(
         name = "ratelimit",
         about = help::RATELIMIT_ABOUT,
         long_about = help::RATELIMIT_LONG_ABOUT,
@@ -201,6 +209,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Schema(args) => schema::run(&workspace, &args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::Partition(args) => partition::run(&lake, &args).await,
+        Command::File(args) => file::run(&lake, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
@@ -224,6 +233,7 @@ impl Command {
             Command::Schema(_) => "schema",
             Command::Credentials(_) => "credentials",
             Command::Partition(_) => "partition",
+            Command::File(_) => "file",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
             Command::Experiment(_) => "experiment",
@@ -233,16 +243,17 @@ impl Command {
         }
     }
 
-    /// Whether the command needs `PQB_ENDPOINT`. Only the metadata walk reads
-    /// a catalog; a storage-only command (`table ls`, `bytemass`, …) does not.
+    /// Whether the command needs `PQB_ENDPOINT`. The catalog levels read a
+    /// catalog; a storage-only command (`partition ls`, `file ls`, `bytemass`,
+    /// …) does not.
     fn requires_endpoint(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Command::Metastore(_)
-            | Command::Catalog(_)
-            | Command::Schema(_)
-            | Command::Credentials(_) => true,
-            Command::Table(args) => args.requires_endpoint(),
-            _ => false,
-        }
+                | Command::Catalog(_)
+                | Command::Schema(_)
+                | Command::Table(_)
+                | Command::Credentials(_)
+        )
     }
 }

@@ -78,7 +78,7 @@ The catalog levels read a profile; a single command can still override the
 endpoint or bearer for one run:
 
 ```console no-run
-$ pqbench --profile unity schema ls dbx_samples.nyctaxi
+$ pqbench --profile unity table ls dbx_samples.nyctaxi
 $ pqbench --profile iceberg table get dbx_samples.nyctaxi.trips
-$ pqbench metastore ls --endpoint https://dbc-abc123.cloud.databricks.com --token dapi-…
+$ pqbench catalog ls --endpoint https://dbc-abc123.cloud.databricks.com --token dapi-…
 ```

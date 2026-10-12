@@ -3,9 +3,9 @@
 use futures_util::stream::StreamExt;
 use pqbench::catalog::get;
 
-use super::{catalog_name, NameArgs};
+use super::NameArgs;
 use crate::emit::Emitter;
-use crate::source::{self, read_input};
+use crate::source::{self, catalog_ref, read_input};
 use crate::CliError;
 
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
@@ -26,7 +26,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Resu
     let mut catalogs = 0;
     let mut reads = records
         .map(|record| async {
-            let name = catalog_name(&record?)?;
+            let name = catalog_ref("catalog get", &record?)?;
             Ok::<_, CliError>(get::read(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
