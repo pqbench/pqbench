@@ -37,7 +37,7 @@ pub(crate) struct LsArgs {
 }
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
-pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
     let input = read_input("partition ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut partitions = 0usize;

@@ -26,7 +26,7 @@ pub(crate) struct LsArgs {
     fan_out: usize,
 }
 
-pub(super) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
     let input = read_input("schema ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(catalog) = &args.catalog {

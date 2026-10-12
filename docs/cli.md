@@ -27,6 +27,15 @@ that command and links back. This file is the durable copy.
 | Rewrite a sample and measure it | `pqbench experiment FILE --rewrite sort:text --aim all` |
 | Agent skill (write / DDL / codec recipes) | `pqbench skill parquet-advisor` |
 
+Each read has two spellings: the noun tree (`pqbench table get X`) and the
+verb-first one (`pqbench get table X`). They are the same call — one parser, one
+implementation — so a script can hold the noun in a variable:
+
+```console no-run
+$ pqbench ls schema dbx_samples | pqbench ls table
+$ pqbench get table dbx_samples.nyctaxi.trips < source.json
+```
+
 The usual walk:
 
 ```console run delta

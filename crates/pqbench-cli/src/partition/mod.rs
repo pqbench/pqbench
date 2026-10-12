@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 
 use crate::CliError;
 
-mod ls;
+pub(crate) mod ls;
 
 /// Arguments for `partition`: a table's natural partitions.
 #[derive(Args)]

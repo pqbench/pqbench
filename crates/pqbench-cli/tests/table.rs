@@ -381,6 +381,57 @@ fn table_get_reads_a_unity_table() {
     assert!(record.get("iceberg_properties").is_none(), "{record:?}");
 }
 
+/// The verb-first `get table` is the same call as `table get`: one parser,
+/// one implementation.
+#[cfg(feature = "delta")]
+#[test]
+fn get_table_and_table_get_agree() {
+    let dir = tempfile::tempdir().unwrap();
+    delta_table(dir.path());
+    let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
+    let env = [("PQB_ENDPOINT", address.as_str())];
+
+    let noun_first = pipe_env(
+        &[
+            "table",
+            "get",
+            "dbx_samples.nyctaxi.trips",
+            "--format",
+            "json",
+        ],
+        b"",
+        &env,
+    );
+    let verb_first = pipe_env(
+        &[
+            "get",
+            "table",
+            "dbx_samples.nyctaxi.trips",
+            "--format",
+            "json",
+        ],
+        b"",
+        &env,
+    );
+    assert!(
+        noun_first.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&noun_first.stderr)
+    );
+    assert!(
+        verb_first.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&verb_first.stderr)
+    );
+    assert_eq!(noun_first.stdout, verb_first.stdout);
+    let records = ndjson_records(&verb_first.stdout);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0]["name"],
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
+    );
+}
+
 #[cfg(feature = "delta")]
 #[test]
 fn table_get_prints_the_record_as_a_table() {

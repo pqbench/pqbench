@@ -37,7 +37,7 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
-        for stream in listener.incoming().take(16) {
+        for stream in listener.incoming().take(64) {
             let mut stream = stream.unwrap();
             let mut buffer = [0u8; 2048];
             let read = stream.read(&mut buffer).unwrap_or(0);
@@ -152,4 +152,53 @@ fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
     assert!(records
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi/tables/trips"));
+}
+
+/// The verb-first spellings are the same calls: one walk, spelled both ways,
+/// produces byte-identical streams.
+#[test]
+fn the_verb_first_spellings_agree_with_the_noun_tree() {
+    let address = routes(&[
+        ("/schemas?", 200, SCHEMAS),
+        ("/schemas/", 200, SCHEMA),
+        ("/tables", 200, TABLES),
+        ("/catalogs/dbx_samples", 200, DBX_SAMPLES),
+        ("/catalogs/system", 200, SYSTEM),
+        ("/catalogs?", 200, CATALOGS),
+    ]);
+    let env = [("PQB_ENDPOINT", address.as_str())];
+
+    // Run a pipeline stage by stage, feeding each stage the previous stdout.
+    let walk = |stages: &[&[&str]]| -> Vec<u8> {
+        let mut stdin: Vec<u8> = Vec::new();
+        let mut stdout: Vec<u8> = Vec::new();
+        for stage in stages {
+            let output = pipe_env(stage, &stdin, &env);
+            assert!(
+                output.status.success(),
+                "{stage:?} stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            stdout = output.stdout.clone();
+            stdin = output.stdout;
+        }
+        stdout
+    };
+
+    let noun_first = walk(&[
+        &["catalog", "ls", "--format", "json"],
+        &["catalog", "get", "--format", "json"],
+        &["schema", "ls", "--format", "json"],
+        &["schema", "get", "--format", "json"],
+        &["table", "ls", "--format", "json"],
+    ]);
+    let verb_first = walk(&[
+        &["ls", "catalog", "--format", "json"],
+        &["get", "catalog", "--format", "json"],
+        &["ls", "schema", "--format", "json"],
+        &["get", "schema", "--format", "json"],
+        &["ls", "table", "--format", "json"],
+    ]);
+    assert_eq!(ndjson(&noun_first).len(), 2);
+    assert_eq!(noun_first, verb_first);
 }

@@ -28,6 +28,7 @@ mod setup;
 mod skill;
 mod source;
 mod table;
+mod verbs;
 mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
@@ -74,6 +75,20 @@ enum Command {
         after_long_help = help::BYTEMASS_AFTER
     )]
     Bytemass(bytemass::BytemassArgs),
+    #[command(
+        about = help::GET_ABOUT,
+        long_about = help::GET_LONG_ABOUT,
+        after_help = help::GET_AFTER,
+        after_long_help = help::GET_AFTER
+    )]
+    Get(verbs::GetArgs),
+    #[command(
+        about = help::LS_ABOUT,
+        long_about = help::LS_LONG_ABOUT,
+        after_help = help::LS_AFTER,
+        after_long_help = help::LS_AFTER
+    )]
+    Ls(verbs::LsArgs),
     #[command(
         about = help::TABLE_ABOUT,
         long_about = help::TABLE_LONG_ABOUT,
@@ -203,6 +218,8 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &args).await,
+        Command::Get(args) => verbs::run_get(&workspace, &lake, &args).await,
+        Command::Ls(args) => verbs::run_ls(&workspace, &lake, &args).await,
         Command::Table(args) => table::run(&workspace, &lake, &args).await,
         Command::Metastore(args) => metastore::run(&workspace, &args).await,
         Command::Catalog(args) => catalog::run(&workspace, &args).await,
@@ -227,6 +244,8 @@ impl Command {
             Command::Lz(_) => "lz",
             Command::Compression(_) => "compression",
             Command::Bytemass(_) => "bytemass",
+            Command::Get(_) => "get",
+            Command::Ls(_) => "ls",
             Command::Table(_) => "table",
             Command::Metastore(_) => "metastore",
             Command::Catalog(_) => "catalog",
@@ -247,13 +266,15 @@ impl Command {
     /// catalog; a storage-only command (`partition ls`, `file ls`, `bytemass`,
     /// …) does not.
     fn requires_endpoint(&self) -> bool {
-        matches!(
-            self,
+        match self {
             Command::Metastore(_)
-                | Command::Catalog(_)
-                | Command::Schema(_)
-                | Command::Table(_)
-                | Command::Credentials(_)
-        )
+            | Command::Catalog(_)
+            | Command::Schema(_)
+            | Command::Table(_)
+            | Command::Credentials(_)
+            | Command::Get(_) => true,
+            Command::Ls(args) => args.requires_endpoint(),
+            _ => false,
+        }
     }
 }

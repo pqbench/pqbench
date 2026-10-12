@@ -8,7 +8,7 @@ use crate::emit::Emitter;
 use crate::source::{self, catalog_ref, read_input};
 use crate::CliError;
 
-pub(super) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
     let input = read_input("catalog get").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(name) = &args.catalog {

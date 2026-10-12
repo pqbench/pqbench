@@ -25,6 +25,10 @@ Commands compose on pipes: each writes a resource the next command reads.
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
 
+`get` and `ls` take the noun first (`get table X`, `ls schema CAT`) — the same
+calls as `table get X` and `schema ls CAT`, for scripts that hold the noun in a
+variable.
+
 A terminal prints an aligned table; a pipe streams NDJSON. `--format
 table|json` overrides either. `-o` also writes the lz4 NDJSON stream.
 Subcommand help is local (`pqbench table --help`).
@@ -39,6 +43,7 @@ Examples:
   pqbench partition ls ./delta-table | pqbench file ls | pqbench bytemass
   pqbench schema ls CAT.SCHEMA | pqbench credentials check | pqbench credentials get \\
     | pqbench table get | pqbench partition ls | pqbench file ls | pqbench bytemass
+  pqbench ls catalog | pqbench ls schema           verb-first: get|ls <noun>
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
@@ -131,6 +136,61 @@ See also:
   pqbench partition --help  list the partitions whose files this command measures
   pqbench viz --help       collect the stream into a static HTML page
   pqbench --help           auth, documents, format skills
+  docs/cli.md";
+
+pub const GET_ABOUT: &str = "Read one resource: the verb-first spelling of `<noun> get`";
+
+pub const GET_LONG_ABOUT: &str = "\
+Read one resource by noun: `get metastore`, `get catalog CATALOG`,
+`get schema CATALOG.SCHEMA`, or `get table CATALOG.SCHEMA.TABLE`. The same
+call as `pqbench <noun> get …`; the noun tree stays the primary spelling, and
+this one is here for scripts that hold the noun in a variable.
+
+A `get` reads a catalog, so issue it under PQB_ENDPOINT / PQB_TOKEN (and
+PQB_TABLE_FORMAT). Without a name it reads that noun's resources on standard
+input, so `get catalog` enriches a `catalog ls` stream.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
+
+pub const GET_AFTER: &str = "\
+Examples:
+  pqbench get metastore
+  pqbench get catalog dbx_samples < source.json
+  pqbench get schema dbx_samples.nyctaxi < source.json
+  pqbench get table dbx_samples.nyctaxi.trips < source.json
+
+See also:
+  pqbench catalog --help  the noun-first spelling
+  pqbench table --help    the tables in a schema
+  pqbench --help          catalog auth, PQB_* config
+  docs/cli.md";
+
+pub const LS_ABOUT: &str = "List a collection: the verb-first spelling of `<noun> ls`";
+
+pub const LS_LONG_ABOUT: &str = "\
+List a resource's collection by noun: `ls catalog`, `ls schema CATALOG`,
+`ls table CATALOG.SCHEMA`, `ls partition DIR`, or `ls file`. The same calls as
+`pqbench <noun> ls …`; the noun tree stays the primary spelling.
+
+Each level reads its parent's refs on standard input, or takes the parent as
+its argument, and writes one resource per line — so
+`ls catalog | ls schema | ls table | ls partition | ls file` is the walk.
+
+A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
+forces the stream, and `-o` also writes it.";
+
+pub const LS_AFTER: &str = "\
+Examples:
+  pqbench ls catalog
+  pqbench ls schema dbx_samples
+  pqbench ls table dbx_samples.nyctaxi
+  pqbench ls partition docker/e2e-lakehouse/table
+
+See also:
+  pqbench catalog --help    the catalogs at the endpoint
+  pqbench partition --help  a table's natural partitions
+  pqbench --help            catalog auth, PQB_* config
   docs/cli.md";
 
 pub const TABLE_ABOUT: &str = "Read one table's record, or list the tables in a schema";

@@ -32,7 +32,7 @@ pub(crate) struct LsArgs {
 /// commit removes is still named. Each file is a [`v1::TableFile`] naming its
 /// blob and carrying the partition's lease, so the storage stage reads it
 /// without a catalog call.
-pub(super) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
     if std::io::stdin().is_terminal() {
         return Err("file ls reads partition records on standard input".into());
     }
