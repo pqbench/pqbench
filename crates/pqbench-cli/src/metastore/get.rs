@@ -6,7 +6,7 @@ use super::OutputArgs;
 use crate::emit::Emitter;
 use crate::CliError;
 
-pub(crate) async fn run(workspace: &pqbench::Workspace, args: &OutputArgs) -> Result<(), CliError> {
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &OutputArgs) -> Result<(), CliError> {
     let metastore = get::read(workspace).await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     emit.write_row(&metastore).await?;

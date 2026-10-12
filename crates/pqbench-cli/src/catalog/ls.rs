@@ -26,7 +26,7 @@ pub(crate) struct LsArgs {
 /// The metastore is a singleton, so a `Metastore` stream on standard input only
 /// affords the walk its shape: the refs are validated, and the endpoint's
 /// catalogs are the answer either way.
-pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
     let input = read_input("catalog ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if input.piped {

@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use crate::emit::Format;
 use crate::CliError;
 
-pub(crate) mod get;
+mod get;
 
 /// Arguments for `metastore`: the endpoint's metastore.
 #[derive(Args)]

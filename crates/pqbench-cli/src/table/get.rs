@@ -37,7 +37,7 @@ pub(crate) struct GetArgs {
 /// source's options and the ref's own. The record keeps the lease as its
 /// `credentials`, so a later stage reads the table's files under the same
 /// lease.
-pub(crate) async fn run(
+pub(super) async fn run(
     workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
     args: &GetArgs,

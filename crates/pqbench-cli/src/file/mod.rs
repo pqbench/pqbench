@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 
 use crate::CliError;
 
-pub(crate) mod ls;
+mod ls;
 
 /// Arguments for `file`: a partition's files.
 #[derive(Args)]

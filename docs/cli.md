@@ -28,8 +28,10 @@ that command and links back. This file is the durable copy.
 | Agent skill (write / DDL / codec recipes) | `pqbench skill parquet-advisor` |
 
 Each read has two spellings: the noun tree (`pqbench table get X`) and the
-verb-first one (`pqbench get table X`). They are the same call — one parser, one
-implementation — so a script can hold the noun in a variable:
+verb-first one (`pqbench get table X`). `main` reorders the verb to the front
+before the parser runs, so both are one command — a script can hold the noun in
+a variable. The help pages are the noun tree's (`pqbench table --help`); a bare
+`pqbench get` prints the root page.
 
 ```console no-run
 $ pqbench ls schema dbx_samples | pqbench ls table

@@ -1,5 +1,6 @@
 //! `pqbench`: the command-line frontend.
 
+use std::ffi::OsString;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -28,7 +29,6 @@ mod setup;
 mod skill;
 mod source;
 mod table;
-mod verbs;
 mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
@@ -75,20 +75,6 @@ enum Command {
         after_long_help = help::BYTEMASS_AFTER
     )]
     Bytemass(bytemass::BytemassArgs),
-    #[command(
-        about = help::GET_ABOUT,
-        long_about = help::GET_LONG_ABOUT,
-        after_help = help::GET_AFTER,
-        after_long_help = help::GET_AFTER
-    )]
-    Get(verbs::GetArgs),
-    #[command(
-        about = help::LS_ABOUT,
-        long_about = help::LS_LONG_ABOUT,
-        after_help = help::LS_AFTER,
-        after_long_help = help::LS_AFTER
-    )]
-    Ls(verbs::LsArgs),
     #[command(
         about = help::TABLE_ABOUT,
         long_about = help::TABLE_LONG_ABOUT,
@@ -194,7 +180,7 @@ async fn main() -> ExitCode {
     if std::env::var_os("AWS_EC2_METADATA_DISABLED").is_none() {
         std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
     }
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize(std::env::args_os()));
     match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -202,6 +188,57 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Rewrite the verb-first spelling of a walk read (`pqbench get table X`) into
+/// the noun tree (`pqbench table get X`) before clap parses it, so both
+/// spellings run through one command definition. The verb may follow the
+/// root's value-taking global flags; anything else is left for clap.
+fn normalize(args: impl Iterator<Item = OsString>) -> Vec<OsString> {
+    const NOUNS: [&str; 6] = [
+        "metastore",
+        "catalog",
+        "schema",
+        "table",
+        "partition",
+        "file",
+    ];
+    const VALUE_FLAGS: [&str; 4] = ["--profile", "--endpoint", "--token", "--table-format"];
+    let mut args: Vec<OsString> = args.collect();
+    let mut index = 1;
+    while index < args.len() {
+        let Some(arg) = args[index].to_str() else {
+            break;
+        };
+        if VALUE_FLAGS.contains(&arg) {
+            // A value-taking global flag: skip the flag and its value.
+            index += 2;
+        } else if arg.starts_with('-') {
+            // Another flag, or a `--flag=value` pair: skip the flag only.
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    let verb = args
+        .get(index)
+        .and_then(|arg| arg.to_str())
+        .unwrap_or_default();
+    if !matches!(verb, "get" | "ls") {
+        return args;
+    }
+    let noun = args
+        .get(index + 1)
+        .and_then(|arg| arg.to_str())
+        .unwrap_or_default();
+    if NOUNS.contains(&noun) {
+        args.swap(index, index + 1);
+    } else if noun.is_empty() || matches!(noun, "-h" | "--help") {
+        // A bare verb asks what it can read/list: show the root page, which
+        // names the walk's nouns. Anything else is clap's error to report.
+        args[index] = OsString::from("--help");
+    }
+    args
 }
 
 /// Resolve the shared configuration and context once, then run the command.
@@ -218,8 +255,6 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &args).await,
-        Command::Get(args) => verbs::run_get(&workspace, &lake, &args).await,
-        Command::Ls(args) => verbs::run_ls(&workspace, &lake, &args).await,
         Command::Table(args) => table::run(&workspace, &lake, &args).await,
         Command::Metastore(args) => metastore::run(&workspace, &args).await,
         Command::Catalog(args) => catalog::run(&workspace, &args).await,
@@ -244,8 +279,6 @@ impl Command {
             Command::Lz(_) => "lz",
             Command::Compression(_) => "compression",
             Command::Bytemass(_) => "bytemass",
-            Command::Get(_) => "get",
-            Command::Ls(_) => "ls",
             Command::Table(_) => "table",
             Command::Metastore(_) => "metastore",
             Command::Catalog(_) => "catalog",
@@ -266,15 +299,76 @@ impl Command {
     /// catalog; a storage-only command (`partition ls`, `file ls`, `bytemass`,
     /// …) does not.
     fn requires_endpoint(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Command::Metastore(_)
-            | Command::Catalog(_)
-            | Command::Schema(_)
-            | Command::Table(_)
-            | Command::Credentials(_)
-            | Command::Get(_) => true,
-            Command::Ls(args) => args.requires_endpoint(),
-            _ => false,
-        }
+                | Command::Catalog(_)
+                | Command::Schema(_)
+                | Command::Table(_)
+                | Command::Credentials(_)
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::normalize;
+
+    fn words(args: &[&str]) -> Vec<String> {
+        normalize(args.iter().map(OsString::from))
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_verb_first_spelling_becomes_the_noun_tree() {
+        assert_eq!(
+            words(&["pqbench", "get", "table", "X"]),
+            ["pqbench", "table", "get", "X"]
+        );
+        assert_eq!(
+            words(&["pqbench", "ls", "schema", "CAT"]),
+            ["pqbench", "schema", "ls", "CAT"]
+        );
+    }
+
+    #[test]
+    fn the_noun_tree_is_untouched() {
+        assert_eq!(
+            words(&["pqbench", "table", "get", "X"]),
+            ["pqbench", "table", "get", "X"]
+        );
+        assert_eq!(
+            words(&["pqbench", "catalog", "ls"]),
+            ["pqbench", "catalog", "ls"]
+        );
+    }
+
+    #[test]
+    fn a_verb_after_the_global_flags_is_rewritten() {
+        assert_eq!(
+            words(&["pqbench", "--endpoint", "https://x", "get", "catalog"]),
+            ["pqbench", "--endpoint", "https://x", "catalog", "get"]
+        );
+        assert_eq!(
+            words(&["pqbench", "--token=abc", "ls", "catalog"]),
+            ["pqbench", "--token=abc", "catalog", "ls"]
+        );
+    }
+
+    #[test]
+    fn a_bare_verb_asks_for_help() {
+        assert_eq!(words(&["pqbench", "get"]), ["pqbench", "--help"]);
+        assert_eq!(
+            words(&["pqbench", "ls", "--help"]),
+            ["pqbench", "--help", "--help"]
+        );
+        assert_eq!(
+            words(&["pqbench", "get", "typo"]),
+            ["pqbench", "get", "typo"]
+        );
     }
 }

@@ -7,8 +7,8 @@ use clap::{Args, Subcommand};
 use crate::emit::Format;
 use crate::CliError;
 
-pub(crate) mod get;
-pub(crate) mod ls;
+mod get;
+mod ls;
 
 /// Arguments for `catalog`: one catalog's record and the catalogs at the
 /// endpoint.

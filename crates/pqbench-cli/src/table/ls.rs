@@ -28,7 +28,7 @@ pub(crate) struct LsArgs {
 
 /// List a schema's tables: one `Table` line each, the record `table get`
 /// enriches.
-pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
+pub(super) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
     let input = read_input("table ls").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {

@@ -4,8 +4,8 @@ use clap::{Args, Subcommand};
 
 use crate::CliError;
 
-pub(crate) mod get;
-pub(crate) mod ls;
+mod get;
+mod ls;
 
 /// Arguments for `table`: one table's record, or the tables in a schema.
 #[derive(Args)]

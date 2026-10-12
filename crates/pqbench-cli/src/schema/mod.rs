@@ -7,8 +7,8 @@ use clap::{Args, Subcommand};
 use crate::emit::Format;
 use crate::CliError;
 
-pub(crate) mod get;
-pub(crate) mod ls;
+mod get;
+mod ls;
 
 /// Arguments for `schema`: one schema's record and the schemas in a catalog.
 #[derive(Args)]
