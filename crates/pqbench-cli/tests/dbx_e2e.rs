@@ -1,7 +1,7 @@
 //! Live Databricks metastore e2e: mint an OAuth M2M bearer (or take
 //! `DBX_TOKEN`), read the live metastore record with `metastore get`, list
-//! its catalogs with `metastore ls`, read one with `catalog get`, list its
-//! schemas with `catalog ls` (Unity REST and Iceberg REST), and walk them
+//! its catalogs with `catalog ls`, read one with `catalog get`, list its
+//! schemas with `schema ls` (Unity REST and Iceberg REST), and walk them
 //! into a job directory of NDJSON files (the issue-#58 shape, one command per
 //! iteration).
 //!
@@ -220,7 +220,7 @@ fn mint_token(host: &str, client_id: &str, client_secret: &str) -> Option<String
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn metastore_info_reads_the_live_metastore() {
+fn metastore_get_reads_the_live_metastore() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -261,7 +261,7 @@ fn metastore_info_reads_the_live_metastore() {
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn metastore_ls_lists_the_live_catalogs() {
+fn catalog_ls_lists_the_live_catalogs() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -271,7 +271,7 @@ fn metastore_ls_lists_the_live_catalogs() {
         return;
     };
     let output = pipe_live(
-        &["metastore", "ls", "--format", "json"],
+        &["catalog", "ls", "--format", "json"],
         &unity_endpoint(&host),
         Some(&token),
     );
@@ -297,7 +297,7 @@ fn metastore_ls_lists_the_live_catalogs() {
     );
 
     let output = pipe_live(
-        &["metastore", "ls", "--format", "table"],
+        &["catalog", "ls", "--format", "table"],
         &unity_endpoint(&host),
         Some(&token),
     );
@@ -314,7 +314,7 @@ fn metastore_ls_lists_the_live_catalogs() {
     let file = dir.path().join("catalogs.ndjson.zst");
     let output = pipe_live(
         &[
-            "metastore",
+            "catalog",
             "ls",
             "--format",
             "json",
@@ -337,7 +337,7 @@ fn metastore_ls_lists_the_live_catalogs() {
 /// The issue-#58 walk, for the commands that exist: a job directory holds
 /// each step's NDJSON, and the walk prints the result from the tree. Auth is
 /// the bearer the whole walk runs under; the missing/invalid-token tests
-/// cover its failures. `schema ls` and below extend this tree next.
+/// cover its failures. `table ls` and below extend this tree next.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
@@ -370,7 +370,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
     );
     let catalogs = metastore.join("catalogs.jsonl");
     let output = pipe_output_env(
-        &["metastore", "ls", "--format", "json"],
+        &["catalog", "ls", "--format", "json"],
         b"",
         &catalogs,
         &config,
@@ -433,7 +433,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
 
         let catalog_schemas = dir.join("schemas.jsonl");
         let output = pipe_output_env(
-            &["catalog", "ls", name, "--format", "json"],
+            &["schema", "ls", name, "--format", "json"],
             b"",
             &catalog_schemas,
             &config,
@@ -459,7 +459,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             std::fs::create_dir_all(&dir).unwrap();
             let tables = dir.join("tables.jsonl");
             let output = pipe_output_env(
-                &["schema", "ls", &fqn, "--format", "json"],
+                &["table", "ls", &fqn, "--format", "json"],
                 b"",
                 &tables,
                 &config,
@@ -480,7 +480,7 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn catalog_info_reads_the_live_catalog() {
+fn catalog_get_reads_the_live_catalog() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -517,7 +517,7 @@ const DBX_SAMPLES_SCHEMAS: [&str; 5] = [
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn catalog_ls_lists_the_live_schemas() {
+fn schema_ls_lists_the_live_schemas() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -527,7 +527,7 @@ fn catalog_ls_lists_the_live_schemas() {
         return;
     };
     let output = pipe_live(
-        &["catalog", "ls", "dbx_samples", "--format", "json"],
+        &["schema", "ls", "dbx_samples", "--format", "json"],
         &unity_endpoint(&host),
         Some(&token),
     );
@@ -566,10 +566,10 @@ const EXTERNAL_FIXTURE_SCHEMAS: [&str; 12] = [
     "tpch_sf10",
 ];
 
-/// The table ids `schema ls` lists for one `pqbench_ext` schema.
+/// The table ids `table ls` lists for one `pqbench_ext` schema.
 fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
     let qualified = format!("pqbench_ext.{schema}");
-    let output = pipe_env(&["schema", "ls", &qualified, "--format", "json"], b"", env);
+    let output = pipe_env(&["table", "ls", &qualified, "--format", "json"], b"", env);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -584,13 +584,13 @@ fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
         .collect()
 }
 
-/// `catalog ls` and `schema ls` on the external-location fixture: the
+/// `schema ls` and `table ls` on the external-location fixture: the
 /// synthetic `events`/`sales`/`reference` (ten two-column tables each) and the
 /// real sample data copied from `dbx_samples`, all external Delta on customer
 /// S3 through the `pqbench_uc_e2e` external location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn catalog_ls_lists_the_external_fixture() {
+fn schema_ls_lists_the_external_fixture() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -606,7 +606,7 @@ fn catalog_ls_lists_the_external_fixture() {
     ];
 
     let output = pipe_env(
-        &["catalog", "ls", "pqbench_ext", "--format", "json"],
+        &["schema", "ls", "pqbench_ext", "--format", "json"],
         b"",
         &env,
     );
@@ -665,7 +665,7 @@ fn catalog_ls_lists_the_external_fixture() {
 /// `schema get` reads `dbx_samples.nyctaxi` from both dialects.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn schema_info_reads_the_live_schema() {
+fn schema_get_reads_the_live_schema() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -711,11 +711,11 @@ fn schema_info_reads_the_live_schema() {
     }
 }
 
-/// `schema ls` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
+/// `table ls` lists `dbx_samples.nyctaxi` from both dialects: Unity fills
 /// the storage path in the listing, Iceberg REST leaves it to `table get`.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn schema_ls_lists_the_live_tables() {
+fn table_ls_lists_the_live_tables() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -725,7 +725,7 @@ fn schema_ls_lists_the_live_tables() {
         return;
     };
     let output = pipe_live(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         &unity_endpoint(&host),
         Some(&token),
     );
@@ -758,7 +758,7 @@ fn schema_ls_lists_the_live_tables() {
         unity_endpoint(&host)
     );
     let output = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -815,7 +815,7 @@ fn schema_ls_lists_the_live_tables() {
 /// read (the default-storage Delta path cannot read its log).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn table_info_reads_the_live_iceberg_table() {
+fn table_get_reads_the_live_iceberg_table() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -865,7 +865,7 @@ fn table_info_reads_the_live_iceberg_table() {
 /// table and its location.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn table_info_names_the_location_when_the_metadata_cannot_be_read() {
+fn table_get_names_the_location_when_the_metadata_cannot_be_read() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -941,7 +941,7 @@ fn credentials_check_filters_the_live_tables() {
     // A mixed schema drops the ineligible table and keeps the eligible ones:
     // the filter the walk composes on.
     let refs = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &env,
     );
@@ -1006,7 +1006,7 @@ fn credentials_get_vends_the_external_fixture() {
     let mut tables = 0;
     for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"] {
         let fqn = format!("pqbench_ext.{schema}");
-        let listed = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", &env);
+        let listed = pipe_env(&["table", "ls", &fqn, "--format", "json"], b"", &env);
         assert!(
             listed.status.success(),
             "stderr: {}",
@@ -1043,12 +1043,12 @@ fn credentials_get_vends_the_external_fixture() {
     assert_eq!(tables, 39);
 }
 
-/// The whole walk on the external fixture: `schema ls` → `credentials check`
-/// → `credentials get` → `table ls` groups each table's commits into natural
+/// The whole walk on the external fixture: `table ls` → `credentials check`
+/// → `credentials get` → `partition ls` groups each table's commits into natural
 /// commit-time windows (at least one partition per table).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn table_ls_groups_the_external_fixture() {
+fn partition_ls_groups_the_external_fixture() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1071,7 +1071,7 @@ fn table_ls_groups_the_external_fixture() {
     let mut partitions = 0;
     for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"] {
         let fqn = format!("pqbench_ext.{schema}");
-        let listed = pipe_env(&["schema", "ls", &fqn, "--format", "json"], b"", &env);
+        let listed = pipe_env(&["table", "ls", &fqn, "--format", "json"], b"", &env);
         assert!(
             listed.status.success(),
             "stderr: {}",
@@ -1097,7 +1097,11 @@ fn table_ls_groups_the_external_fixture() {
             "stderr: {}",
             String::from_utf8_lossy(&vended.stderr)
         );
-        let grouped = pipe_env(&["table", "ls", "--format", "json"], &vended.stdout, &env);
+        let grouped = pipe_env(
+            &["partition", "ls", "--format", "json"],
+            &vended.stdout,
+            &env,
+        );
         assert!(
             grouped.status.success(),
             "stderr: {}",
@@ -1136,10 +1140,10 @@ fn timed_stage(
 }
 
 /// The whole issue-#58 walk on a copied schema, all the way to `bytemass`:
-/// `schema ls` → `credentials check` → `credentials get` → `table get` →
-/// `table ls` → `partition ls` → `bytemass`, each stage fed the previous
+/// `table ls` → `credentials check` → `credentials get` → `table get` →
+/// `partition ls` → `file ls` → `bytemass`, each stage fed the previous
 /// stage's NDJSON. This is the tail the file-level commands exist for; the
-/// other fixture tests stop at `table ls`. Set `DBX_WALK_SCHEMA` to walk
+/// other fixture tests stop at `partition ls`. Set `DBX_WALK_SCHEMA` to walk
 /// another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
@@ -1167,12 +1171,12 @@ fn external_fixture_walks_to_bytemass() {
         ("AWS_REGION", region.as_str()),
     ];
 
-    let (listed, _) = timed_stage(&env, &["schema", "ls", &schema, "--format", "json"], b"");
+    let (listed, _) = timed_stage(&env, &["table", "ls", &schema, "--format", "json"], b"");
     let (checked, _) = timed_stage(&env, &["credentials", "check", "--format", "json"], &listed);
     let (vended, _) = timed_stage(&env, &["credentials", "get", "--format", "json"], &checked);
     let (info, _) = timed_stage(&env, &["table", "get", "--format", "json"], &vended);
-    let (partitions, _) = timed_stage(&env, &["table", "ls", "--format", "json"], &info);
-    let (files, _) = timed_stage(&env, &["partition", "ls", "--format", "json"], &partitions);
+    let (partitions, _) = timed_stage(&env, &["partition", "ls", "--format", "json"], &info);
+    let (files, _) = timed_stage(&env, &["file", "ls", "--format", "json"], &partitions);
     let (measured, _) = timed_stage(&env, &["bytemass", "--format", "json"], &files);
 
     // The walk narrows: tables → partitions → files → columns.
@@ -1214,7 +1218,7 @@ fn external_fixture_walks_to_bytemass() {
 /// `DBX_AWS_REGION` to read another one.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn table_info_reads_the_external_aws_table() {
+fn table_get_reads_the_external_aws_table() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1316,7 +1320,7 @@ fn credentials_get_vends_the_live_tables() {
         ("PQB_TOKEN", token.as_str()),
     ];
     let refs = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &env,
     );
@@ -1387,7 +1391,7 @@ fn credentials_get_iceberg_vends_the_live_tables() {
         ("PQB_TABLE_FORMAT", "iceberg"),
     ];
     let refs = pipe_env(
-        &["schema", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &env,
     );
@@ -1433,10 +1437,10 @@ fn credentials_get_iceberg_vends_the_live_tables() {
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:
-/// `metastore ls | catalog get | catalog ls` (decision 0004).
+/// `catalog ls | catalog get | schema ls` (decision 0004).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn metastore_ls_pipes_into_catalog_info_and_ls() {
+fn catalog_ls_pipes_into_catalog_get_and_ls() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1451,7 +1455,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         ("PQB_TOKEN", token.as_str()),
     ];
 
-    let catalogs = pipe_env(&["metastore", "ls", "--format", "json"], b"", &env);
+    let catalogs = pipe_env(&["catalog", "ls", "--format", "json"], b"", &env);
     assert!(
         catalogs.status.success(),
         "stderr: {}",
@@ -1486,7 +1490,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
         assert!(names.contains(&id(record).to_string()));
     }
 
-    let schemas = pipe_env(&["catalog", "ls", "--format", "json"], &refs, &env);
+    let schemas = pipe_env(&["schema", "ls", "--format", "json"], &refs, &env);
     assert!(
         schemas.status.success(),
         "stderr: {}",
@@ -1509,7 +1513,7 @@ fn metastore_ls_pipes_into_catalog_info_and_ls() {
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
+fn schema_ls_lists_the_live_iceberg_rest_namespaces() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1523,7 +1527,7 @@ fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
         unity_endpoint(&host)
     );
     let output = pipe_env(
-        &["catalog", "ls", "dbx_samples", "--format", "json"],
+        &["schema", "ls", "dbx_samples", "--format", "json"],
         b"",
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -1550,7 +1554,7 @@ fn catalog_ls_lists_the_live_iceberg_rest_namespaces() {
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn metastore_info_rejects_a_missing_token() {
+fn metastore_get_rejects_a_missing_token() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1563,7 +1567,7 @@ fn metastore_info_rejects_a_missing_token() {
 
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn metastore_info_rejects_an_invalid_token() {
+fn metastore_get_rejects_an_invalid_token() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
