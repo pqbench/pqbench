@@ -5,9 +5,9 @@ The live Databricks half of the e2e: a Unity Catalog catalog whose tables are
 runs end to end —
 
 ```console no-run
-$ pqbench table ls <catalog>.<schema> | pqbench credentials check \
-    | pqbench credentials get | pqbench table get \
-    | pqbench partition ls | pqbench file ls | pqbench bytemass
+$ pqbench list tables <catalog>.<schema> | pqbench credentials check \
+    | pqbench credentials get | pqbench get table \
+    | pqbench list partitions | pqbench list files | pqbench bytemass
 ```
 
 Two layers, because CloudFormation cannot create Unity Catalog objects:

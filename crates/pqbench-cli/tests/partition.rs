@@ -145,8 +145,8 @@ fn partition_ls_groups_commits_into_natural_windows() {
     let fixture = dated_delta_fixture(timestamp);
     let output = pipe(
         &[
-            "partition",
-            "ls",
+            "list",
+            "partitions",
             fixture.path.to_str().unwrap(),
             "--format",
             "json",
@@ -177,8 +177,8 @@ fn partition_ls_honors_the_window_width() {
     let fixture = dated_delta_fixture(timestamp);
     let output = pipe(
         &[
-            "partition",
-            "ls",
+            "list",
+            "partitions",
             fixture.path.to_str().unwrap(),
             "--every",
             "1h",
@@ -208,8 +208,8 @@ fn partition_ls_skips_commits_without_a_time() {
     let fixture = delta_fixture();
     let output = pipe(
         &[
-            "partition",
-            "ls",
+            "list",
+            "partitions",
             fixture.path.to_str().unwrap(),
             "--format",
             "json",
@@ -231,8 +231,8 @@ fn partition_ls_rejects_a_bad_window() {
     let fixture = dated_delta_fixture(0);
     let output = pipe(
         &[
-            "partition",
-            "ls",
+            "list",
+            "partitions",
             fixture.path.to_str().unwrap(),
             "--every",
             "1x",
@@ -252,7 +252,7 @@ fn partition_ls_rejects_a_bad_window() {
 fn partition_ls_exits_cleanly_when_stdout_is_closed() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
     let mut child = pqbench()
-        .args(["partition", "ls", fixture.path.to_str().unwrap()])
+        .args(["list", "partitions", fixture.path.to_str().unwrap()])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -276,7 +276,7 @@ fn partition_ls_exits_cleanly_when_stdout_is_closed() {
 #[test]
 fn partition_ls_rejects_a_ref_without_a_storage_path() {
     let input = r#"{"name":"catalogs/c/schemas/s/tables/t"}"#;
-    let output = pipe(&["partition", "ls"], input);
+    let output = pipe(&["list", "partitions"], input);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("storage path"), "{stderr}");

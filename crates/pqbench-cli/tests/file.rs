@@ -97,8 +97,8 @@ fn file_ls_lists_the_files_a_window_added() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
     let listed = pipe(
         &[
-            "partition",
-            "ls",
+            "list",
+            "partitions",
             fixture.path.to_str().unwrap(),
             "--format",
             "json",
@@ -111,7 +111,7 @@ fn file_ls_lists_the_files_a_window_added() {
         String::from_utf8_lossy(&listed.stderr)
     );
     let files = pipe(
-        &["file", "ls", "--format", "json"],
+        &["list", "files", "--format", "json"],
         &String::from_utf8_lossy(&listed.stdout),
     );
     assert!(

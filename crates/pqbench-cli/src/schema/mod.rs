@@ -1,31 +1,15 @@
-//! `schema`: one schema's record, or the schemas in a catalog.
+//! `schema`: the schemas in a catalog, and one schema's record.
 
 use std::path::PathBuf;
 
-use clap::{Args, Subcommand};
+use clap::Args;
 
 use crate::emit::Format;
-use crate::CliError;
 
-mod get;
-mod ls;
+pub(crate) mod get;
+pub(crate) mod ls;
 
-/// Arguments for `schema`: one schema's record and the schemas in a catalog.
-#[derive(Args)]
-pub(crate) struct SchemaArgs {
-    #[command(subcommand)]
-    command: SchemaCommand,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum SchemaCommand {
-    /// Show one schema's record
-    Get(NameArgs),
-    /// List the schemas in a catalog
-    Ls(ls::LsArgs),
-}
-
-/// Arguments for `schema get`: the `catalog.schema` name and the output flags.
+/// Arguments for `get schema`: the `catalog.schema` name and the output flags.
 #[derive(Args)]
 pub(crate) struct NameArgs {
     /// schema name (`catalog.schema`); without it, read schema refs on stdin
@@ -39,11 +23,4 @@ pub(crate) struct NameArgs {
     /// requests in flight at once
     #[arg(long, default_value_t = 64)]
     fan_out: usize,
-}
-
-pub(crate) async fn run(workspace: &pqbench::Workspace, args: &SchemaArgs) -> Result<(), CliError> {
-    match &args.command {
-        SchemaCommand::Get(args) => get::run(workspace, args).await,
-        SchemaCommand::Ls(args) => ls::run(workspace, args).await,
-    }
 }

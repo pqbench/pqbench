@@ -67,7 +67,7 @@ const SCHEMA: &str =
 const TABLES: &str = r#"{"tables":[{"name":"trips","full_name":"dbx_samples.nyctaxi.trips","data_source_format":"DELTA","storage_location":"s3://bucket/trips"}],"next_page_token":null}"#;
 
 #[test]
-fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
+fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
     let address = routes(&[
         ("/schemas?", 200, SCHEMAS),
         ("/schemas/", 200, SCHEMA),
@@ -78,7 +78,7 @@ fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
     ]);
     let env = [("PQB_ENDPOINT", address.as_str())];
 
-    let catalogs = pipe_env(&["catalog", "ls", "--format", "json"], b"", &env);
+    let catalogs = pipe_env(&["list", "catalogs", "--format", "json"], b"", &env);
     assert!(
         catalogs.status.success(),
         "stderr: {}",
@@ -87,7 +87,7 @@ fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
     let refs = catalogs.stdout;
     assert_eq!(ndjson(&refs).len(), 2);
 
-    let enriched = pipe_env(&["catalog", "get", "--format", "json"], &refs, &env);
+    let enriched = pipe_env(&["get", "catalog", "--format", "json"], &refs, &env);
     assert!(
         enriched.status.success(),
         "stderr: {}",
@@ -104,7 +104,7 @@ fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
         .iter()
         .any(|record| record["name"] == "catalogs/system"));
 
-    let schemas = pipe_env(&["schema", "ls", "--format", "json"], &refs, &env);
+    let schemas = pipe_env(&["list", "schemas", "--format", "json"], &refs, &env);
     assert!(
         schemas.status.success(),
         "stderr: {}",
@@ -120,7 +120,7 @@ fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
     let enriched = pipe_env(
-        &["schema", "get", "--format", "json"],
+        &["get", "schema", "--format", "json"],
         &schemas.stdout,
         &env,
     );
@@ -139,7 +139,11 @@ fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
-    let tables = pipe_env(&["table", "ls", "--format", "json"], &schemas.stdout, &env);
+    let tables = pipe_env(
+        &["list", "tables", "--format", "json"],
+        &schemas.stdout,
+        &env,
+    );
     assert!(
         tables.status.success(),
         "stderr: {}",
@@ -152,53 +156,4 @@ fn catalog_ls_pipes_into_catalog_get_and_schema_ls() {
     assert!(records
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi/tables/trips"));
-}
-
-/// The verb-first spellings are the same calls: one walk, spelled both ways,
-/// produces byte-identical streams.
-#[test]
-fn the_verb_first_spellings_agree_with_the_noun_tree() {
-    let address = routes(&[
-        ("/schemas?", 200, SCHEMAS),
-        ("/schemas/", 200, SCHEMA),
-        ("/tables", 200, TABLES),
-        ("/catalogs/dbx_samples", 200, DBX_SAMPLES),
-        ("/catalogs/system", 200, SYSTEM),
-        ("/catalogs?", 200, CATALOGS),
-    ]);
-    let env = [("PQB_ENDPOINT", address.as_str())];
-
-    // Run a pipeline stage by stage, feeding each stage the previous stdout.
-    let walk = |stages: &[&[&str]]| -> Vec<u8> {
-        let mut stdin: Vec<u8> = Vec::new();
-        let mut stdout: Vec<u8> = Vec::new();
-        for stage in stages {
-            let output = pipe_env(stage, &stdin, &env);
-            assert!(
-                output.status.success(),
-                "{stage:?} stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            stdout = output.stdout.clone();
-            stdin = output.stdout;
-        }
-        stdout
-    };
-
-    let noun_first = walk(&[
-        &["catalog", "ls", "--format", "json"],
-        &["catalog", "get", "--format", "json"],
-        &["schema", "ls", "--format", "json"],
-        &["schema", "get", "--format", "json"],
-        &["table", "ls", "--format", "json"],
-    ]);
-    let verb_first = walk(&[
-        &["ls", "catalog", "--format", "json"],
-        &["get", "catalog", "--format", "json"],
-        &["ls", "schema", "--format", "json"],
-        &["get", "schema", "--format", "json"],
-        &["ls", "table", "--format", "json"],
-    ]);
-    assert_eq!(ndjson(&noun_first).len(), 2);
-    assert_eq!(noun_first, verb_first);
 }

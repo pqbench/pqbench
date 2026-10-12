@@ -134,7 +134,7 @@ const CATALOG_REFS: &str = concat!(
 fn schema_get_prints_the_record_as_a_table() {
     let address = server(200, SCHEMA);
     let output = pipe(
-        &["schema", "get", "dbx_samples.nyctaxi", "--format", "table"],
+        &["get", "schema", "dbx_samples.nyctaxi", "--format", "table"],
         &source(&address),
     );
     assert!(
@@ -153,7 +153,7 @@ fn schema_get_prints_the_record_as_a_table() {
 fn schema_get_streams_the_record_as_ndjson() {
     let address = server(200, SCHEMA);
     let output = pipe(
-        &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
+        &["get", "schema", "dbx_samples.nyctaxi", "--format", "json"],
         &source(&address),
     );
     assert!(
@@ -174,7 +174,7 @@ fn schema_get_streams_the_record_as_ndjson() {
 fn schema_get_reads_the_iceberg_rest_namespace() {
     let address = routes(&[("/namespaces/", 200, ICEBERG_NAMESPACE)]);
     let output = pipe_env(
-        &["schema", "get", "dbx_samples.nyctaxi", "--format", "json"],
+        &["get", "schema", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &[
             ("PQB_ENDPOINT", address.as_str()),
@@ -197,7 +197,7 @@ fn schema_get_reads_the_iceberg_rest_namespace() {
 fn schema_get_reads_a_schema_stream() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
-        &["schema", "get", "--format", "json"],
+        &["get", "schema", "--format", "json"],
         SCHEMA_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -218,7 +218,7 @@ fn schema_get_reads_a_schema_stream() {
 fn schema_get_takes_a_schema_or_a_stream_not_both() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
-        &["schema", "get", "dbx_samples.nyctaxi"],
+        &["get", "schema", "dbx_samples.nyctaxi"],
         SCHEMA_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -231,7 +231,7 @@ fn schema_get_takes_a_schema_or_a_stream_not_both() {
 fn schema_get_needs_a_dotted_name() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
-        &["schema", "get", "nyctaxi"],
+        &["get", "schema", "nyctaxi"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -242,7 +242,7 @@ fn schema_get_needs_a_dotted_name() {
 
 #[test]
 fn schema_get_rejects_an_empty_document() {
-    let output = pipe_stdin(&["schema", "get", "dbx_samples.nyctaxi"], b"");
+    let output = pipe_stdin(&["get", "schema", "dbx_samples.nyctaxi"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -252,7 +252,7 @@ fn schema_get_rejects_an_empty_document() {
 fn schema_ls_prints_the_schemas_as_a_table() {
     let address = server(200, SCHEMAS);
     let output = pipe(
-        &["schema", "ls", "dbx_samples", "--format", "table"],
+        &["list", "schemas", "dbx_samples", "--format", "table"],
         &source(&address),
     );
     assert!(
@@ -270,7 +270,7 @@ fn schema_ls_prints_the_schemas_as_a_table() {
 fn schema_ls_streams_the_schemas_as_ndjson() {
     let address = server(200, SCHEMAS);
     let output = pipe(
-        &["schema", "ls", "dbx_samples", "--format", "json"],
+        &["list", "schemas", "dbx_samples", "--format", "json"],
         &source(&address),
     );
     assert!(
@@ -302,7 +302,7 @@ fn schema_ls_follows_unity_page_tokens() {
         ("/schemas", 200, SCHEMAS_PAGE),
     ]);
     let output = pipe(
-        &["schema", "ls", "dbx_samples", "--format", "json"],
+        &["list", "schemas", "dbx_samples", "--format", "json"],
         &source(&address),
     );
     assert!(
@@ -328,7 +328,7 @@ fn schema_ls_follows_unity_page_tokens() {
 fn schema_ls_lists_iceberg_rest_namespaces() {
     let address = routes(&[("/namespaces", 200, ICEBERG_NAMESPACES)]);
     let output = pipe_env(
-        &["schema", "ls", "dbx_samples", "--format", "json"],
+        &["list", "schemas", "dbx_samples", "--format", "json"],
         b"",
         &[
             ("PQB_ENDPOINT", address.as_str()),
@@ -364,7 +364,7 @@ fn schema_ls_follows_iceberg_page_tokens() {
         ("/namespaces", 200, ICEBERG_PAGE),
     ]);
     let output = pipe_env(
-        &["schema", "ls", "dbx_samples", "--format", "json"],
+        &["list", "schemas", "dbx_samples", "--format", "json"],
         b"",
         &[
             ("PQB_ENDPOINT", address.as_str()),
@@ -397,8 +397,8 @@ fn schema_ls_exports_the_ndjson_stream() {
     let file = dir.path().join("schemas.ndjson.zst");
     let output = pipe(
         &[
-            "schema",
-            "ls",
+            "list",
+            "schemas",
             "dbx_samples",
             "--format",
             "table",
@@ -423,7 +423,7 @@ fn schema_ls_exports_the_ndjson_stream() {
 #[test]
 fn schema_ls_reports_an_unknown_catalog() {
     let address = server(404, r#"{"message":"Catalog 'nope' does not exist."}"#);
-    let output = pipe(&["schema", "ls", "nope"], &source(&address));
+    let output = pipe(&["list", "schemas", "nope"], &source(&address));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("404"), "{stderr}");
@@ -432,7 +432,7 @@ fn schema_ls_reports_an_unknown_catalog() {
 #[test]
 fn schema_ls_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
-    let output = pipe(&["schema", "ls", "dbx_samples"], &source(&address));
+    let output = pipe(&["list", "schemas", "dbx_samples"], &source(&address));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -440,7 +440,7 @@ fn schema_ls_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn schema_ls_rejects_an_empty_document() {
-    let output = pipe_stdin(&["schema", "ls", "dbx_samples"], b"");
+    let output = pipe_stdin(&["list", "schemas", "dbx_samples"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -450,7 +450,7 @@ fn schema_ls_rejects_an_empty_document() {
 fn schema_ls_lists_a_catalog_stream() {
     let address = server(200, SCHEMAS);
     let output = pipe_env(
-        &["schema", "ls", "--format", "json"],
+        &["list", "schemas", "--format", "json"],
         CATALOG_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );

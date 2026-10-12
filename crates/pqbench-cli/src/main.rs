@@ -1,9 +1,8 @@
 //! `pqbench`: the command-line frontend.
 
-use std::ffi::OsString;
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 mod bench;
 mod bytemass;
@@ -16,7 +15,9 @@ mod document;
 mod emit;
 mod experiment;
 mod file;
+mod get;
 mod help;
+mod list;
 mod lz;
 mod metastore;
 mod partition;
@@ -76,33 +77,19 @@ enum Command {
     )]
     Bytemass(bytemass::BytemassArgs),
     #[command(
-        about = help::TABLE_ABOUT,
-        long_about = help::TABLE_LONG_ABOUT,
-        after_help = help::TABLE_AFTER,
-        after_long_help = help::TABLE_AFTER
+        about = help::GET_ABOUT,
+        long_about = help::GET_LONG_ABOUT,
+        after_help = help::GET_AFTER,
+        after_long_help = help::GET_AFTER
     )]
-    Table(table::TableArgs),
+    Get(get::GetArgs),
     #[command(
-        about = help::METASTORE_ABOUT,
-        long_about = help::METASTORE_LONG_ABOUT,
-        after_help = help::METASTORE_AFTER,
-        after_long_help = help::METASTORE_AFTER
+        about = help::LIST_ABOUT,
+        long_about = help::LIST_LONG_ABOUT,
+        after_help = help::LIST_AFTER,
+        after_long_help = help::LIST_AFTER
     )]
-    Metastore(metastore::MetastoreArgs),
-    #[command(
-        about = help::CATALOG_ABOUT,
-        long_about = help::CATALOG_LONG_ABOUT,
-        after_help = help::CATALOG_AFTER,
-        after_long_help = help::CATALOG_AFTER
-    )]
-    Catalog(catalog::CatalogArgs),
-    #[command(
-        about = help::SCHEMA_ABOUT,
-        long_about = help::SCHEMA_LONG_ABOUT,
-        after_help = help::SCHEMA_AFTER,
-        after_long_help = help::SCHEMA_AFTER
-    )]
-    Schema(schema::SchemaArgs),
+    List(list::ListArgs),
     #[command(
         about = help::CREDENTIALS_ABOUT,
         long_about = help::CREDENTIALS_LONG_ABOUT,
@@ -110,20 +97,6 @@ enum Command {
         after_long_help = help::CREDENTIALS_AFTER
     )]
     Credentials(credentials::CredentialsArgs),
-    #[command(
-        about = help::PARTITION_ABOUT,
-        long_about = help::PARTITION_LONG_ABOUT,
-        after_help = help::PARTITION_AFTER,
-        after_long_help = help::PARTITION_AFTER
-    )]
-    Partition(partition::PartitionArgs),
-    #[command(
-        about = help::FILE_ABOUT,
-        long_about = help::FILE_LONG_ABOUT,
-        after_help = help::FILE_AFTER,
-        after_long_help = help::FILE_AFTER
-    )]
-    File(file::FileArgs),
     #[command(
         name = "ratelimit",
         about = help::RATELIMIT_ABOUT,
@@ -180,7 +153,7 @@ async fn main() -> ExitCode {
     if std::env::var_os("AWS_EC2_METADATA_DISABLED").is_none() {
         std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
     }
-    let cli = Cli::parse_from(normalize(std::env::args_os()));
+    let cli = Cli::parse();
     match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -188,63 +161,6 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// Rewrite the verb-first spelling of a walk read (`pqbench get table X`) into
-/// the noun tree (`pqbench table get X`) before clap parses it, so both
-/// spellings run through one command definition.
-///
-/// The nouns and the value-taking global flags are read back out of the
-/// command tree, so a new subcommand or flag needs no change here; the only
-/// literals are the two sugar verbs, which have no clap command of their own.
-fn normalize(args: impl Iterator<Item = OsString>) -> Vec<OsString> {
-    const VERBS: [&str; 2] = ["get", "ls"];
-    let root = Cli::command();
-    let nouns: Vec<&str> = root
-        .get_subcommands()
-        .map(clap::Command::get_name)
-        .collect();
-    let value_flags: Vec<String> = root
-        .get_arguments()
-        .filter(|arg| arg.get_action().takes_values())
-        .filter_map(|arg| arg.get_long().map(|name| format!("--{name}")))
-        .collect();
-
-    let mut args: Vec<OsString> = args.collect();
-    let mut index = 1;
-    while index < args.len() {
-        let Some(arg) = args[index].to_str() else {
-            break;
-        };
-        if value_flags.iter().any(|flag| flag == arg) {
-            // A value-taking global flag: skip the flag and its value.
-            index += 2;
-        } else if arg.starts_with('-') {
-            // Another flag, or a `--flag=value` pair: skip the flag only.
-            index += 1;
-        } else {
-            break;
-        }
-    }
-    let verb = args
-        .get(index)
-        .and_then(|arg| arg.to_str())
-        .unwrap_or_default();
-    if !VERBS.contains(&verb) {
-        return args;
-    }
-    let noun = args
-        .get(index + 1)
-        .and_then(|arg| arg.to_str())
-        .unwrap_or_default();
-    if nouns.contains(&noun) {
-        args.swap(index, index + 1);
-    } else if noun.is_empty() || matches!(noun, "-h" | "--help") {
-        // A bare verb asks what it can read/list: show the root page, which
-        // names the walk's nouns. Anything else is clap's error to report.
-        args[index] = OsString::from("--help");
-    }
-    args
 }
 
 /// Resolve the shared configuration and context once, then run the command.
@@ -261,13 +177,9 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &args).await,
-        Command::Table(args) => table::run(&workspace, &lake, &args).await,
-        Command::Metastore(args) => metastore::run(&workspace, &args).await,
-        Command::Catalog(args) => catalog::run(&workspace, &args).await,
-        Command::Schema(args) => schema::run(&workspace, &args).await,
+        Command::Get(args) => get::run(&workspace, &lake, &args).await,
+        Command::List(args) => list::run(&workspace, &lake, &args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
-        Command::Partition(args) => partition::run(&lake, &args).await,
-        Command::File(args) => file::run(&lake, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Experiment(args) => experiment::run(&args).await,
@@ -285,13 +197,9 @@ impl Command {
             Command::Lz(_) => "lz",
             Command::Compression(_) => "compression",
             Command::Bytemass(_) => "bytemass",
-            Command::Table(_) => "table",
-            Command::Metastore(_) => "metastore",
-            Command::Catalog(_) => "catalog",
-            Command::Schema(_) => "schema",
+            Command::Get(args) => args.name(),
+            Command::List(args) => args.name(),
             Command::Credentials(_) => "credentials",
-            Command::Partition(_) => "partition",
-            Command::File(_) => "file",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
             Command::Experiment(_) => "experiment",
@@ -305,76 +213,10 @@ impl Command {
     /// catalog; a storage-only command (`partition ls`, `file ls`, `bytemass`,
     /// …) does not.
     fn requires_endpoint(&self) -> bool {
-        matches!(
-            self,
-            Command::Metastore(_)
-                | Command::Catalog(_)
-                | Command::Schema(_)
-                | Command::Table(_)
-                | Command::Credentials(_)
-        )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-
-    use super::normalize;
-
-    fn words(args: &[&str]) -> Vec<String> {
-        normalize(args.iter().map(OsString::from))
-            .into_iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn the_verb_first_spelling_becomes_the_noun_tree() {
-        assert_eq!(
-            words(&["pqbench", "get", "table", "X"]),
-            ["pqbench", "table", "get", "X"]
-        );
-        assert_eq!(
-            words(&["pqbench", "ls", "schema", "CAT"]),
-            ["pqbench", "schema", "ls", "CAT"]
-        );
-    }
-
-    #[test]
-    fn the_noun_tree_is_untouched() {
-        assert_eq!(
-            words(&["pqbench", "table", "get", "X"]),
-            ["pqbench", "table", "get", "X"]
-        );
-        assert_eq!(
-            words(&["pqbench", "catalog", "ls"]),
-            ["pqbench", "catalog", "ls"]
-        );
-    }
-
-    #[test]
-    fn a_verb_after_the_global_flags_is_rewritten() {
-        assert_eq!(
-            words(&["pqbench", "--endpoint", "https://x", "get", "catalog"]),
-            ["pqbench", "--endpoint", "https://x", "catalog", "get"]
-        );
-        assert_eq!(
-            words(&["pqbench", "--token=abc", "ls", "catalog"]),
-            ["pqbench", "--token=abc", "catalog", "ls"]
-        );
-    }
-
-    #[test]
-    fn a_bare_verb_asks_for_help() {
-        assert_eq!(words(&["pqbench", "get"]), ["pqbench", "--help"]);
-        assert_eq!(
-            words(&["pqbench", "ls", "--help"]),
-            ["pqbench", "--help", "--help"]
-        );
-        assert_eq!(
-            words(&["pqbench", "get", "typo"]),
-            ["pqbench", "get", "typo"]
-        );
+        match self {
+            Command::Get(_) | Command::Credentials(_) => true,
+            Command::List(args) => args.requires_endpoint(),
+            _ => false,
+        }
     }
 }

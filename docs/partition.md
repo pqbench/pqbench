@@ -41,16 +41,16 @@ The resource hierarchy is `metastore → catalog → schema → table → partit
 file`. A partition is the unit of work below a table: small enough to measure on
 its own, large enough to be worth a process.
 
-- `partition ls` groups a table's commits into **natural partitions** — one
+- `list partitions` groups a table's commits into **natural partitions** — one
   `Partition` per window, carrying the commits it holds.
-- `file ls` lists one partition's files — the input to `bytemass`.
+- `list files` lists one partition's files — the input to `bytemass`.
 - `partition info` describes one partition.
 - `bytemass` measures one partition — a lease plus a list of files, nothing
   more.
 
 A partition record carries its **definition** (the key: e.g. a natural
 interval) and the table's **storage root and lease**, so the files stage reads
-the log without a catalog call. `file ls` emits each file as a `TableFile`
+the log without a catalog call. `list files` emits each file as a `TableFile`
 carrying that lease, so a short-lived lease travels with the file it reads.
 
 ## Cost

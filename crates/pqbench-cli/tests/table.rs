@@ -345,8 +345,8 @@ fn table_get_reads_a_unity_table() {
     let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
     let output = pipe_env(
         &[
-            "table",
             "get",
+            "table",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
@@ -381,57 +381,6 @@ fn table_get_reads_a_unity_table() {
     assert!(record.get("iceberg_properties").is_none(), "{record:?}");
 }
 
-/// The verb-first `get table` is the same call as `table get`: one parser,
-/// one implementation.
-#[cfg(feature = "delta")]
-#[test]
-fn get_table_and_table_get_agree() {
-    let dir = tempfile::tempdir().unwrap();
-    delta_table(dir.path());
-    let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
-    let env = [("PQB_ENDPOINT", address.as_str())];
-
-    let noun_first = pipe_env(
-        &[
-            "table",
-            "get",
-            "dbx_samples.nyctaxi.trips",
-            "--format",
-            "json",
-        ],
-        b"",
-        &env,
-    );
-    let verb_first = pipe_env(
-        &[
-            "get",
-            "table",
-            "dbx_samples.nyctaxi.trips",
-            "--format",
-            "json",
-        ],
-        b"",
-        &env,
-    );
-    assert!(
-        noun_first.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&noun_first.stderr)
-    );
-    assert!(
-        verb_first.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&verb_first.stderr)
-    );
-    assert_eq!(noun_first.stdout, verb_first.stdout);
-    let records = ndjson_records(&verb_first.stdout);
-    assert_eq!(records.len(), 1);
-    assert_eq!(
-        records[0]["name"],
-        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
-    );
-}
-
 #[cfg(feature = "delta")]
 #[test]
 fn table_get_prints_the_record_as_a_table() {
@@ -440,8 +389,8 @@ fn table_get_prints_the_record_as_a_table() {
     let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
     let output = pipe_env(
         &[
-            "table",
             "get",
+            "table",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "table",
@@ -474,8 +423,8 @@ fn table_get_reads_an_iceberg_rest_table() {
     )]);
     let output = pipe_env(
         &[
-            "table",
             "get",
+            "table",
             "dbx_samples.nyctaxi.trips",
             "--format",
             "json",
@@ -526,8 +475,8 @@ fn table_get_reads_an_iceberg_namespace_with_dots() {
     )]);
     let output = pipe_env(
         &[
-            "table",
             "get",
+            "table",
             "dbx_samples.ns.one.trips",
             "--format",
             "json",
@@ -568,7 +517,7 @@ fn table_get_reads_a_table_ref_stream() {
         "\n",
     );
     let output = pipe_env(
-        &["table", "get", "--format", "json"],
+        &["get", "table", "--format", "json"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -596,7 +545,7 @@ fn table_get_reads_a_table_ref_stream() {
 fn table_get_rejects_a_record_without_a_table_name() {
     let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips"}"#;
     let output = pipe_env(
-        &["table", "get"],
+        &["get", "table"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -609,7 +558,7 @@ fn table_get_rejects_a_record_without_a_table_name() {
 fn table_get_takes_a_name_or_a_stream_not_both() {
     let refs = r#"{"kind":"pqbench.table-ref","version":1,"id":"dbx_samples.nyctaxi.trips","uri":"http://x/tables/dbx_samples.nyctaxi.trips"}"#;
     let output = pipe_env(
-        &["table", "get", "dbx_samples.nyctaxi.trips"],
+        &["get", "table", "dbx_samples.nyctaxi.trips"],
         refs.as_bytes(),
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -621,7 +570,7 @@ fn table_get_takes_a_name_or_a_stream_not_both() {
 #[test]
 fn table_get_needs_a_dotted_name() {
     let output = pipe_env(
-        &["table", "get", "trips"],
+        &["get", "table", "trips"],
         b"",
         &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
     );
@@ -632,7 +581,7 @@ fn table_get_needs_a_dotted_name() {
 
 #[test]
 fn table_get_needs_an_endpoint() {
-    let output = pipe(&["table", "get", "dbx_samples.nyctaxi.trips"], "");
+    let output = pipe(&["get", "table", "dbx_samples.nyctaxi.trips"], "");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -642,7 +591,7 @@ fn table_get_needs_an_endpoint() {
 fn table_get_reports_an_unknown_table() {
     let address = routes_owned(vec![]);
     let output = pipe_env(
-        &["table", "get", "dbx_samples.nyctaxi.nope"],
+        &["get", "table", "dbx_samples.nyctaxi.nope"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -655,7 +604,7 @@ fn table_get_reports_an_unknown_table() {
 fn table_ls_prints_the_tables_as_a_table() {
     let address = routes(&[("/tables", 200, TABLES)]);
     let output = pipe_env(
-        &["table", "ls", "dbx_samples.nyctaxi", "--format", "table"],
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "table"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -681,7 +630,7 @@ fn table_ls_prints_the_tables_as_a_table() {
 fn table_ls_streams_table_refs() {
     let address = routes(&[("/tables", 200, TABLES)]);
     let output = pipe_env(
-        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -709,7 +658,7 @@ fn table_ls_streams_table_refs() {
 fn table_ls_lists_iceberg_rest_tables() {
     let address = routes(&[("/namespaces/nyctaxi/tables", 200, ICEBERG_TABLES)]);
     let output = pipe_env(
-        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &[
             ("PQB_ENDPOINT", address.as_str()),
@@ -737,7 +686,7 @@ fn table_ls_follows_unity_page_tokens() {
         ("/tables", 200, TABLES_PAGE),
     ]);
     let output = pipe_env(
-        &["table", "ls", "dbx_samples.nyctaxi", "--format", "json"],
+        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -764,7 +713,7 @@ fn table_ls_follows_unity_page_tokens() {
 fn table_ls_reads_a_schema_stream() {
     let address = routes(&[("/tables", 200, TABLES)]);
     let output = pipe_env(
-        &["table", "ls", "--format", "json"],
+        &["list", "tables", "--format", "json"],
         SCHEMA_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -785,7 +734,7 @@ fn table_ls_multiplexes_its_refs() {
         std::time::Duration::from_millis(50),
     );
     let output = pipe_env(
-        &["table", "ls", "--format", "json"],
+        &["list", "tables", "--format", "json"],
         SCHEMA_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -805,7 +754,7 @@ fn table_ls_multiplexes_its_refs() {
 fn table_ls_reports_an_unknown_schema() {
     let address = server(404, r#"{"message":"Schema 'nope' does not exist."}"#);
     let output = pipe_env(
-        &["table", "ls", "dbx_samples.nope"],
+        &["list", "tables", "dbx_samples.nope"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );

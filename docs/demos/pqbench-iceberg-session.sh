@@ -12,8 +12,8 @@ prompt() {
     sleep 1
 }
 
-prompt "pqbench partition ls docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.ndjson.zst"
-pqbench partition ls docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.ndjson.zst
+prompt "pqbench list partitions docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.ndjson.zst"
+pqbench list partitions docker/e2e-lakehouse/iceberg -o /tmp/pqbench-demo-iceberg.ndjson.zst
 sleep 2
 
 # The REST pipe needs the local stand (`make lakehouse`); run it when it answers.
@@ -21,7 +21,7 @@ if curl -sf http://localhost:8181/v1/config >/dev/null 2>&1; then
     PQB_ENDPOINT=http://localhost:8181/v1
     PQB_TABLE_FORMAT=iceberg
     export PQB_ENDPOINT PQB_TABLE_FORMAT
-    prompt "PQB_ENDPOINT=$PQB_ENDPOINT PQB_TABLE_FORMAT=$PQB_TABLE_FORMAT pqbench table ls CAT.SCHEMA | pqbench table get | pqbench partition ls | pqbench file ls | pqbench bytemass --json"
-    pqbench table ls CAT.SCHEMA | pqbench table get | pqbench partition ls | pqbench file ls | pqbench bytemass --json | cat
+    prompt "PQB_ENDPOINT=$PQB_ENDPOINT PQB_TABLE_FORMAT=$PQB_TABLE_FORMAT pqbench list tables CAT.SCHEMA | pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass --json"
+    pqbench list tables CAT.SCHEMA | pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass --json | cat
     sleep 2
 fi

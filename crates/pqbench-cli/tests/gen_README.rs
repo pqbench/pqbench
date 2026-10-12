@@ -28,17 +28,17 @@ fn bytemass() {
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
-fn partition_ls() {
-    // partition_ls, from line 96
-    support::run("pqbench partition ls docker/e2e-lakehouse/table --format table", 97, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
+fn list_partitions() {
+    // list_partitions, from line 96
+    support::run("pqbench list partitions docker/e2e-lakehouse/table --format table", 97, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
-fn file_ls() {
-    // file_ls, from line 114
-    support::run("pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass --format table", 115, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+fn list_files() {
+    // list_files, from line 114
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 115, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
@@ -47,5 +47,5 @@ fn file_ls() {
 fn viz() {
     // viz, from line 145
     support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 146, None);
-    support::run("pqbench partition ls docker/e2e-lakehouse/table | pqbench file ls | pqbench bytemass | pqbench viz -o /tmp/report", 147, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 147, None);
 }

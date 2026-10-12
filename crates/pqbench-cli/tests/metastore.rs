@@ -79,7 +79,7 @@ fn source(endpoint: &str) -> [(&str, &str); 1] {
 fn metastore_get_prints_the_record_as_a_table() {
     let address = server(200, SUMMARY);
     let output = pipe(
-        &["metastore", "get", "--format", "table"],
+        &["get", "metastore", "--format", "table"],
         &source(&address),
     );
     assert!(
@@ -96,7 +96,7 @@ fn metastore_get_prints_the_record_as_a_table() {
 #[test]
 fn metastore_get_streams_the_record_as_ndjson() {
     let address = server(200, SUMMARY);
-    let output = pipe(&["metastore", "get", "--format", "json"], &source(&address));
+    let output = pipe(&["get", "metastore", "--format", "json"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -119,8 +119,8 @@ fn metastore_get_exports_the_ndjson_stream() {
     let file = dir.path().join("metastore.ndjson.zst");
     let output = pipe(
         &[
-            "metastore",
             "get",
+            "metastore",
             "--format",
             "table",
             "-o",
@@ -143,7 +143,7 @@ fn metastore_get_exports_the_ndjson_stream() {
 #[test]
 fn metastore_get_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
-    let output = pipe(&["metastore", "get"], &source(&address));
+    let output = pipe(&["get", "metastore"], &source(&address));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -151,7 +151,7 @@ fn metastore_get_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn metastore_get_needs_an_endpoint() {
-    let output = pipe_stdin(&["metastore", "get"], b"");
+    let output = pipe_stdin(&["get", "metastore"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");

@@ -23,8 +23,8 @@ fn root_help_covers_auth_documents_and_format_skills() {
 }
 
 #[test]
-fn table_help_stays_local_and_points_at_neighbors() {
-    let stdout = help(&["table", "--help"]);
+fn get_help_stays_local_and_points_at_neighbors() {
+    let stdout = help(&["get", "--help"]);
     assert!(stdout.contains("Delta"), "{stdout}");
     assert!(stdout.contains("Iceberg"), "{stdout}");
     assert!(stdout.contains("pqbench bytemass --help"), "{stdout}");
@@ -40,20 +40,20 @@ fn table_help_stays_local_and_points_at_neighbors() {
 }
 
 #[test]
-fn bytemass_help_points_at_partition_and_viz() {
+fn bytemass_help_points_at_list_and_viz() {
     let stdout = help(&["bytemass", "--help"]);
     assert!(stdout.contains("--json"), "{stdout}");
-    assert!(stdout.contains("pqbench partition --help"), "{stdout}");
+    assert!(stdout.contains("pqbench list --help"), "{stdout}");
     assert!(stdout.contains("pqbench viz --help"), "{stdout}");
     assert!(stdout.contains("pqbench --help"), "{stdout}");
     assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
 }
 
 #[test]
-fn partition_help_points_at_file_ls_and_bytemass() {
-    let stdout = help(&["partition", "--help"]);
-    assert!(stdout.contains("partition"), "{stdout}");
-    assert!(stdout.contains("pqbench file ls --help"), "{stdout}");
+fn list_help_points_at_get_and_bytemass() {
+    let stdout = help(&["list", "--help"]);
+    assert!(stdout.contains("catalogs"), "{stdout}");
+    assert!(stdout.contains("pqbench get --help"), "{stdout}");
     assert!(stdout.contains("pqbench bytemass --help"), "{stdout}");
     assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
 }

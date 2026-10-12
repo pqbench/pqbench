@@ -3,35 +3,35 @@
 
 /// One-line summary for `pqbench -h`.
 pub const ROOT_ABOUT: &str =
-    "Measure Parquet storage and codec speed; pipe refs → partition ls → file ls → bytemass";
+    "Measure Parquet storage and codec speed; pipe refs → list partitions → list files → bytemass";
 
 /// Full summary for `pqbench --help`.
 pub const ROOT_LONG_ABOUT: &str = "\
 pqbench measures how Parquet files spend bytes (bytemass), how well codecs
 compress them (lz, compression), what a Delta or Iceberg table's partitions
-and files hold (partition ls, file ls), what a decoded row sample holds
+and files hold (list partitions, list files), what a decoded row sample holds
 (profile), and how a rewritten sample would store (experiment).
 Commands compose on pipes: each writes a resource the next command reads.
 
-  metastore get → Metastore      the endpoint's record
+  get metastore → Metastore      the endpoint's record
   catalog       → Catalog        the endpoint's catalogs / one catalog's record
   schema        → Schema         a catalog's schemas / one schema's record
-  table ls      → Table          a schema's tables
-  table get     → Table          enrich a table's record
+  list tables      → Table          a schema's tables
+  get table     → Table          enrich a table's record
   credentials   → Table          check + vend read credentials
-  partition ls  → Partition      a table's natural partitions
-  file ls       → TableFile      a partition's added files
+  list partitions  → Partition      a table's natural partitions
+  list files       → TableFile      a partition's added files
   bytemass      → pqbench.bytemass-row footer byte masses (one line per column)
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
 
 `get` and `ls` take the noun first (`get table X`, `ls schema CAT`) — the same
-calls as `table get X` and `schema ls CAT`, for scripts that hold the noun in a
+calls as `get table X` and `list schemas CAT`, for scripts that hold the noun in a
 variable.
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format
 table|json` overrides either. `-o` also writes the lz4 NDJSON stream.
-Subcommand help is local (`pqbench table --help`).
+Subcommand help is local (`pqbench get --help`).
 Auth, documents, and format skills are here.
 
 Guide: docs/cli.md";
@@ -40,9 +40,9 @@ Guide: docs/cli.md";
 pub const ROOT_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet
-  pqbench partition ls ./delta-table | pqbench file ls | pqbench bytemass
-  pqbench schema ls CAT.SCHEMA | pqbench credentials check | pqbench credentials get \\
-    | pqbench table get | pqbench partition ls | pqbench file ls | pqbench bytemass
+  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass
+  pqbench list tables CAT.SCHEMA | pqbench credentials check | pqbench credentials get \\
+    | pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass
   pqbench ls catalog | pqbench ls schema           verb-first: get|ls <noun>
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
@@ -51,12 +51,12 @@ Examples:
   pqbench skill parquet-advisor
 
 Documents:
-  Metastore              the endpoint's metastore record (metastore get)
-  Catalog                the endpoint's catalogs (catalog ls) / one record (catalog get)
-  Schema                 a catalog's schemas (schema ls) / one record (schema get)
-  Table                  a schema's tables (table ls) / one record (table get, credentials get)
-  Partition              a table's natural partitions (partition ls)
-  TableFile              one file of a partition (file ls)
+  Metastore              the endpoint's metastore record (get metastore)
+  Catalog                the endpoint's catalogs (list catalogs) / one record (get catalog)
+  Schema                 a catalog's schemas (list schemas) / one record (get schema)
+  Table                  a schema's tables (list tables) / one record (get table, credentials get)
+  Partition              a table's natural partitions (list partitions)
+  TableFile              one file of a partition (list files)
   remote-source          one URI + AWS_* from a producer
   pqbench.bytemass-file  one file's footer facts; -row one column's mass
   pqbench.experiment-trial  one trial's bytes; -column per column
@@ -89,7 +89,7 @@ Auth (how to reach data):
 
   Databricks-governed tables
     The walk vends storage credentials: `credentials get` materializes the
-    vended keys onto the refs, and `table get` reads under the env it is
+    vended keys onto the refs, and `get table` reads under the env it is
     given. Reading the objects still needs keys that can GetObject.
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
@@ -119,7 +119,7 @@ Works on compressed files (HEAD + ranged GETs on a URI).
 
 Inputs: parquet paths, quoted globs, s3://, a TableFile or
 remote-source document, or '-' / stdin. List a table's files with
-`pqbench partition ls | pqbench file ls` first.
+`pqbench list partitions | pqbench list files` first.
 
 A terminal prints one row per column chunk as a table; a pipe streams the
 same rows as `pqbench.bytemass-row` NDJSON. `--format json` (or `--json`)
@@ -129,193 +129,115 @@ pub const BYTEMASS_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet
   pqbench bytemass 'data/*.parquet' -o masses.ndjson.zst
-  pqbench partition ls ./delta-table | pqbench file ls | pqbench bytemass
-  pqbench partition ls ./delta-table | pqbench file ls | pqbench bytemass | pqbench viz -o report
+  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass
+  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass | pqbench viz -o report
 
 See also:
-  pqbench partition --help  list the partitions whose files this command measures
+  pqbench list --help      list the partitions whose files this command measures
   pqbench viz --help       collect the stream into a static HTML page
   pqbench --help           auth, documents, format skills
   docs/cli.md";
 
-pub const TABLE_ABOUT: &str = "Read one table's record, or list the tables in a schema";
+pub const GET_ABOUT: &str = "Read one resource of the walk";
 
-pub const TABLE_LONG_ABOUT: &str = "\
-Read one table at a catalog endpoint, or list the tables in a schema. The table
-is the entity between schemas and partitions. The endpoint, token, dialect, and
-object-store options come from the environment: PQB_ENDPOINT / PQB_TOKEN /
-PQB_TABLE_FORMAT and AWS_*.
+pub const GET_LONG_ABOUT: &str = "\
+Read one resource of the walk, by type:
 
-  get    the ref enriched with the table's record (format, snapshot, columns,
-         partition columns, format properties) as one Table. Without a
-         CATALOG.SCHEMA.TABLE argument the command reads Table resources on
-         standard input — one table per line — so `table ls | table get`
-         chains. Unity REST serves /tables/{full_name}; the catalog's
-         declared columns and properties are merged over the Delta log read
-         with without_files(), so that path is O(1) in files and needs a
-         readable storage location: the ref's uri or the process environment.
-         Vended credentials ride the ref (or the process env) from
-         `credentials get`; `credentials check` gates the walk on tables the
-         catalog marks readable outside compute. The emitted record carries
-         its credentials, so a later stage reads the table's files under the
-         same lease. PQB_TABLE_FORMAT=iceberg reads loadTable, whose metadata
-         is inline, so no storage read runs.
-  ls     the tables in a schema (CATALOG.SCHEMA), one Table line each — the
-         record `table get` enriches. Without a CATALOG.SCHEMA argument the
-         command reads Schema resources on standard input, so `schema ls |
-         table ls` chains. Unity REST serves /tables;
-         PQB_TABLE_FORMAT=iceberg lists namespaces' tables; a ref carries its
-         name and no storage URI until `table get` resolves it.
+  metastore  the endpoint's record (name, uid, cloud, region), one line
+  catalog    one catalog's record (name, catalog_type, comment, owner)
+  schema     one schema's record (name, comment, uri, properties), from
+             CATALOG.SCHEMA
+  table      one table's record (format, snapshot, columns, partition columns,
+             format properties), from CATALOG.SCHEMA.TABLE
+
+The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
+PQB_TABLE_FORMAT; a `get` reads a catalog, so it needs an endpoint. Without a
+name the command reads that type's resources on standard input — one per line —
+so it enriches a listing: `pqbench list catalogs | pqbench get catalog`.
+
+Unity REST serves /schemas/{full_name} and /tables/{full_name}; the catalog's
+declared columns and properties are merged over the Delta log, which is read
+with without_files() — O(1) in files — so the table read needs a readable
+storage location: the ref's uri or the process environment. Under Iceberg REST
+(PQB_TABLE_FORMAT=iceberg) the schema level reads loadNamespace and the table
+level reads loadTable, whose metadata is inline, so no storage read runs.
+
+Vended credentials ride the refs from `credentials get`, and `credentials
+check` gates the walk on tables the catalog marks readable outside compute. The
+emitted record keeps its credentials, so a later stage reads the table's files
+under the same lease.
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.
+forces the stream, and `-o` also writes it.";
+
+pub const GET_AFTER: &str = "\
+Examples:
+  pqbench get metastore
+  pqbench get catalog dbx_samples < source.json
+  pqbench get schema dbx_samples.nyctaxi < source.json
+  pqbench get table dbx_samples.nyctaxi.trips < source.json
+
+See also:
+  pqbench list --help      the walk's collections
+  pqbench bytemass --help  measure the files the walk names
+  pqbench --help           auth (AWS_*, catalog token), documents, format skills
+  docs/cli.md  docs/delta.md  docs/iceberg.md";
+
+pub const LIST_ABOUT: &str = "List a collection of the walk";
+
+pub const LIST_LONG_ABOUT: &str = "\
+List a collection of the walk, by name:
+
+  catalogs    the catalogs at the endpoint, one Catalog line each
+  schemas     the schemas in a catalog (CATALOG), one Schema line each
+  tables      the tables in a schema (CATALOG.SCHEMA), one Table line each —
+              the record `get table` enriches
+  partitions  a table's natural partitions (DIR, or a Table stream on standard
+              input): its commits grouped into epoch-aligned, half-open UTC
+              windows
+  files       a partition's files — the ones its commits added
+
+Unity REST serves /catalogs, /schemas, and /tables. Under
+PQB_TABLE_FORMAT=iceberg the schema and table levels speak Iceberg REST
+instead: the endpoint then names the catalog base ({root}/v1 or
+{root}/v1/{prefix}) and they read /namespaces under it. No config probe runs.
+Unity fills a table's storage location in the listing; Iceberg leaves it to
+`get table`.
+
+`list partitions` reads the Delta / Iceberg log — never the data files — and
+groups the commits by commit time (Delta commitInfo.timestamp; Iceberg the
+snapshot time); --every sets the window width (1h, 1d, 1w; default 1d), and a
+commit the log does not date is omitted, so a window never claims a commit it
+cannot place. A partition is a lens on the files, not a thing the table stores —
+see docs/partition.md. `list files` re-reads the window's commits and names the
+files they added; each file carries the partition's credentials, and that
+stream is what `bytemass` measures.
+
+Every level reads its parent's refs on standard input, or takes the parent as
+its argument, and writes one resource per line, so the walk is a pipe:
+
+  pqbench list catalogs | pqbench list schemas | pqbench list tables |
+  pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass
 
 Detection: _delta_log is Delta (wins UniForm). Iceberg is
-metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json
-path. Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).";
-
-pub const TABLE_AFTER: &str = "\
-Examples:
-  pqbench table get dbx_samples.nyctaxi.trips < source.json
-  PQB_ENDPOINT=… pqbench table ls | pqbench table get
-  pqbench partition ls ./delta-table | pqbench file ls | pqbench bytemass
-  pqbench schema ls CAT.SCHEMA | pqbench table ls
-
-See also:
-  pqbench schema --help    the schemas in a catalog
-  pqbench partition --help  list a table's natural partitions
-  pqbench bytemass --help  measure the files named there
-  pqbench --help           auth (AWS_*, catalog token), documents, format skills
-  docs/delta.md  docs/iceberg.md  docs/cli.md";
-
-pub const METASTORE_ABOUT: &str = "Read the endpoint's metastore record";
-
-pub const METASTORE_LONG_ABOUT: &str = "\
-Read the metastore at a catalog endpoint: the entity above catalogs. The
-endpoint and token come from PQB_ENDPOINT / PQB_TOKEN.
-
-  get    the metastore record (name, uid, cloud, region) as one
-         Metastore line
+metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json path.
+Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).
 
 A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
 forces the stream, and `-o` also writes it.";
 
-pub const METASTORE_AFTER: &str = "\
+pub const LIST_AFTER: &str = "\
 Examples:
-  pqbench metastore get < source.json
-  PQB_ENDPOINT=… pqbench metastore get | pqbench catalog ls
+  pqbench list catalogs
+  pqbench list schemas dbx_samples
+  pqbench list tables dbx_samples.nyctaxi
+  pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass
 
 See also:
-  pqbench catalog --help   the endpoint's catalogs
-  pqbench schema --help    the schemas in a catalog
+  pqbench get --help       read one resource
+  pqbench bytemass --help  measure the files listed here
   pqbench --help           catalog auth, PQB_* config
-  docs/cli.md";
-
-pub const CATALOG_ABOUT: &str = "Read one catalog's record or list the catalogs at the endpoint";
-
-pub const CATALOG_LONG_ABOUT: &str = "\
-Read one catalog, or list the catalogs at a catalog endpoint: the entity above
-schemas. The endpoint and token come from PQB_ENDPOINT / PQB_TOKEN (and
-PQB_TABLE_FORMAT).
-
-  get    the catalog's record (name, catalog_type, comment, owner) as one
-         Catalog line. Without a CATALOG argument the command reads Catalog
-         resources on standard input — one catalog per line.
-  ls     the catalogs at the endpoint, one Catalog line each. A Metastore
-         stream on standard input (`metastore get`) affords the walk its shape;
-         the endpoint's catalogs are the answer either way.
-
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
-
-pub const CATALOG_AFTER: &str = "\
-Examples:
-  pqbench catalog get dbx_samples < source.json
-  pqbench catalog ls
-  PQB_ENDPOINT=… pqbench metastore get | pqbench catalog ls
-
-See also:
-  pqbench metastore --help  the endpoint's metastore record
-  pqbench schema --help     the schemas in a catalog
-  pqbench --help            catalog auth, PQB_* config
-  docs/cli.md";
-
-pub const SCHEMA_ABOUT: &str = "Read one schema's record or list the schemas in a catalog";
-
-pub const SCHEMA_LONG_ABOUT: &str = "\
-Read one schema, or list the schemas in a catalog. The schema is the entity
-between catalogs and tables. The endpoint and token come from PQB_ENDPOINT /
-PQB_TOKEN (and PQB_TABLE_FORMAT).
-
-  get    the schema's record (name, comment, uri, properties) as one Schema
-         line. Without a CATALOG.SCHEMA argument the command reads Schema
-         resources on standard input — one schema per line.
-  ls     the schemas in a catalog (CATALOG), one Schema line each (name,
-         comment, uri) — the record `schema get` enriches. Without a CATALOG
-         argument the command reads Catalog resources on standard input, so
-         `catalog ls | schema ls` chains. Unity REST serves /schemas;
-         PQB_TABLE_FORMAT=iceberg speaks Iceberg REST instead, reading
-         /namespaces under the endpoint (which then names the catalog base:
-         {root}/v1 or {root}/v1/{prefix}).
-
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
-
-pub const SCHEMA_AFTER: &str = "\
-Examples:
-  pqbench schema get dbx_samples.nyctaxi < source.json
-  pqbench schema ls dbx_samples
-  PQB_ENDPOINT=… pqbench catalog ls | pqbench schema ls
-
-See also:
-  pqbench catalog --help  the catalogs at the endpoint
-  pqbench table --help  the tables in a schema
-  pqbench --help          catalog auth, PQB_* config
-  docs/cli.md";
-
-pub const PARTITION_ABOUT: &str = "List a table's natural partitions, grouped by commit time";
-
-pub const PARTITION_LONG_ABOUT: &str = "\
-List a table's natural partitions: reads the Delta / Iceberg log — never the
-data files — and emits one Partition per epoch-aligned, half-open UTC window,
-carrying the commits it holds. A partition is a grouping of a table's active
-files; the natural key is time.
-
-  ls     Inputs: a table directory or URI, or a Table stream on standard input.
-         A path read names its table in a `local` catalog and schema, so every
-         partition has a name. A ref from a catalog walk must carry its storage
-         URI — run `pqbench table get` first if it does not. --every is the
-         window width (1h, 1d, 1w; default 1d). Pipe to `pqbench file ls` for
-         each partition's files.
-
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
-
-pub const PARTITION_AFTER: &str = "\
-See `pqbench file ls --help` (the files), `pqbench bytemass --help` (measure
-them), and `docs/partition.md`.";
-
-pub const FILE_ABOUT: &str = "List a partition's files — the ones its commits added";
-
-pub const FILE_LONG_ABOUT: &str = "\
-List a partition's files. A partition is a grouping of a table's active files
-by a key; the natural key is time, so `partition ls` groups a table's commits
-into epoch-aligned UTC windows and this lists the files those commits added.
-
-  ls     each Partition record on standard input is re-read: the table's log is
-         loaded, and the files the window's commits named are emitted as
-         TableFile records — the added-in-window set, so a file a later commit
-         removes is still named. Each file names its blob and carries the
-         partition's credentials, so a short-lived lease travels with it, and
-         there is no begin/end envelope. Pipe it to `bytemass` to measure the
-         partition.
-
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
-
-pub const FILE_AFTER: &str = "\
-See `pqbench partition ls --help` (the partitions), `pqbench bytemass --help`
-(measure them), and `docs/partition.md`.";
+  docs/cli.md  docs/partition.md";
 
 pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
 
@@ -353,11 +275,11 @@ forces the stream, and `-o` also writes it.";
 
 pub const CREDENTIALS_AFTER: &str = "\
 Examples:
-  PQB_ENDPOINT=… pqbench table ls | pqbench credentials check | pqbench credentials get
-  PQB_ENDPOINT=… pqbench table ls | pqbench credentials check | pqbench credentials get | pqbench table get
+  PQB_ENDPOINT=… pqbench list tables | pqbench credentials check | pqbench credentials get
+  PQB_ENDPOINT=… pqbench list tables | pqbench credentials check | pqbench credentials get | pqbench get table
 
 See also:
-  pqbench table --help  the tables in a schema
+  pqbench list --help  the tables in a schema
   pqbench --help          catalog auth, PQB_* config
   docs/cli.md";
 
@@ -369,21 +291,20 @@ record kind observes at most --rate records per second (15 by default; 0
 turns pacing off). Nothing is dropped. One bucket per kind, so catalogs,
 schemas, and table refs pace independently — the walk's per-endpoint pace.
 
-  catalog ls | pqbench ratelimit | schema ls
-  schema ls | pqbench ratelimit --rate 5 | table ls
+  list catalogs | pqbench ratelimit | list schemas
+  list schemas | pqbench ratelimit --rate 5 | list tables
 
 A consumer that issues one request per record as it arrives sees the same
 rate. A 429 fails the level; retry it at a lower --rate.";
 
 pub const RATELIMIT_AFTER: &str = "\
 Examples:
-  pqbench catalog ls | pqbench ratelimit | pqbench schema ls
-  pqbench schema ls | pqbench ratelimit --rate 5 | pqbench table ls
+  pqbench list catalogs | pqbench ratelimit | pqbench list schemas
+  pqbench list schemas | pqbench ratelimit --rate 5 | pqbench list tables
 
 See also:
-  pqbench catalog --help  the walk's first level
-  pqbench schema --help   the walk's second level
-  pqbench table --help    the walk's third level
+  pqbench list --help     the walk's collections
+  pqbench get --help      read one resource of it
   docs/cli.md";
 
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into a static HTML treemap";
@@ -396,7 +317,7 @@ treemap per table id. Does not measure files. `-o PREFIX` is required.";
 pub const VIZ_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet | pqbench viz -o report
-  pqbench table ls ./delta-table | pqbench partition ls | pqbench bytemass | pqbench viz -o report
+  pqbench list tables ./delta-table | pqbench list partitions | pqbench bytemass | pqbench viz -o report
   xdg-open report.html
 
 See also:
@@ -578,6 +499,6 @@ Examples:
 
 See also:
   pqbench credentials --help  check and vend read credentials
-  pqbench table --help        read a listed table's record
+  pqbench get --help          read a listed table's record
   pqbench --help              auth, PQB_* config
   docs/cli.md";

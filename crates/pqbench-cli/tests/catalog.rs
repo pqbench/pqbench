@@ -144,7 +144,7 @@ fn source(endpoint: &str) -> [(&str, &str); 1] {
 fn catalog_get_prints_the_record_as_a_table() {
     let address = server(200, CATALOG);
     let output = pipe(
-        &["catalog", "get", "dbx_samples", "--format", "table"],
+        &["get", "catalog", "dbx_samples", "--format", "table"],
         &source(&address),
     );
     assert!(
@@ -162,7 +162,7 @@ fn catalog_get_prints_the_record_as_a_table() {
 fn catalog_get_streams_the_record_as_ndjson() {
     let address = server(200, CATALOG);
     let output = pipe(
-        &["catalog", "get", "dbx_samples", "--format", "json"],
+        &["get", "catalog", "dbx_samples", "--format", "json"],
         &source(&address),
     );
     assert!(
@@ -186,8 +186,8 @@ fn catalog_get_exports_the_ndjson_stream() {
     let file = dir.path().join("catalog.ndjson.zst");
     let output = pipe(
         &[
-            "catalog",
             "get",
+            "catalog",
             "dbx_samples",
             "--format",
             "table",
@@ -211,7 +211,7 @@ fn catalog_get_exports_the_ndjson_stream() {
 #[test]
 fn catalog_get_reports_an_unknown_catalog() {
     let address = server(404, r#"{"message":"Catalog 'nope' does not exist."}"#);
-    let output = pipe(&["catalog", "get", "nope"], &source(&address));
+    let output = pipe(&["get", "catalog", "nope"], &source(&address));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("404"), "{stderr}");
@@ -220,7 +220,7 @@ fn catalog_get_reports_an_unknown_catalog() {
 #[test]
 fn catalog_get_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
-    let output = pipe(&["catalog", "get", "dbx_samples"], &source(&address));
+    let output = pipe(&["get", "catalog", "dbx_samples"], &source(&address));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -228,7 +228,7 @@ fn catalog_get_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn catalog_get_rejects_an_empty_document() {
-    let output = pipe_stdin(&["catalog", "get", "dbx_samples"], b"");
+    let output = pipe_stdin(&["get", "catalog", "dbx_samples"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -241,7 +241,7 @@ fn catalog_get_enriches_a_catalog_stream() {
         ("/catalogs/system", 200, SYSTEM_CATALOG),
     ]);
     let output = pipe_env(
-        &["catalog", "get", "--format", "json"],
+        &["get", "catalog", "--format", "json"],
         CATALOG_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -266,7 +266,7 @@ fn catalog_get_enriches_a_catalog_stream() {
 fn catalog_get_takes_a_catalog_or_a_stream_not_both() {
     let address = server(200, CATALOG);
     let output = pipe_env(
-        &["catalog", "get", "dbx_samples"],
+        &["get", "catalog", "dbx_samples"],
         CATALOG_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -279,7 +279,7 @@ fn catalog_get_takes_a_catalog_or_a_stream_not_both() {
 fn catalog_get_reports_an_empty_stream() {
     let address = server(200, CATALOG);
     let output = pipe_env(
-        &["catalog", "get", "--format", "table"],
+        &["get", "catalog", "--format", "table"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -294,7 +294,7 @@ fn catalog_get_reports_an_empty_stream() {
 
 #[test]
 fn catalog_get_rejects_a_bad_fan_out() {
-    let output = pipe_stdin(&["catalog", "get", "dbx_samples", "--fan-out", "lots"], b"");
+    let output = pipe_stdin(&["get", "catalog", "dbx_samples", "--fan-out", "lots"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("fan-out"), "{stderr}");
@@ -303,7 +303,10 @@ fn catalog_get_rejects_a_bad_fan_out() {
 #[test]
 fn catalog_ls_prints_the_catalogs_as_a_table() {
     let address = server(200, CATALOGS);
-    let output = pipe(&["catalog", "ls", "--format", "table"], &source(&address));
+    let output = pipe(
+        &["list", "catalogs", "--format", "table"],
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -318,7 +321,7 @@ fn catalog_ls_prints_the_catalogs_as_a_table() {
 #[test]
 fn catalog_ls_streams_one_catalog_per_line() {
     let address = server(200, CATALOGS);
-    let output = pipe(&["catalog", "ls", "--format", "json"], &source(&address));
+    let output = pipe(&["list", "catalogs", "--format", "json"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -335,7 +338,7 @@ fn catalog_ls_streams_one_catalog_per_line() {
 #[test]
 fn catalog_ls_follows_the_next_page_token() {
     let address = server_pages(&PAGES);
-    let output = pipe(&["catalog", "ls", "--format", "json"], &source(&address));
+    let output = pipe(&["list", "catalogs", "--format", "json"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -359,7 +362,10 @@ fn catalog_ls_follows_the_next_page_token() {
 #[test]
 fn catalog_ls_reports_an_empty_catalog_list() {
     let address = server(200, r#"{"catalogs":[]}"#);
-    let output = pipe(&["catalog", "ls", "--format", "table"], &source(&address));
+    let output = pipe(
+        &["list", "catalogs", "--format", "table"],
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -372,7 +378,7 @@ fn catalog_ls_reports_an_empty_catalog_list() {
 #[test]
 fn catalog_ls_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
-    let output = pipe(&["catalog", "ls"], &source(&address));
+    let output = pipe(&["list", "catalogs"], &source(&address));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -382,7 +388,7 @@ fn catalog_ls_reports_an_unauthorized_endpoint() {
 fn catalog_ls_reads_the_endpoint_from_the_environment() {
     let address = server(200, CATALOGS);
     let output = pipe_env(
-        &["catalog", "ls", "--format", "json"],
+        &["list", "catalogs", "--format", "json"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -404,7 +410,7 @@ fn catalog_ls_reads_a_metastore_stream() {
     let address = server(200, CATALOGS);
     let record = json!({"name": "metastores/unity"});
     let output = pipe_env(
-        &["catalog", "ls", "--format", "json"],
+        &["list", "catalogs", "--format", "json"],
         record.to_string().as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -421,7 +427,7 @@ fn catalog_ls_rejects_a_non_metastore_stream() {
     let address = server(200, CATALOGS);
     let record = json!({"name": "catalogs/dbx_samples"});
     let output = pipe_env(
-        &["catalog", "ls", "--format", "json"],
+        &["list", "catalogs", "--format", "json"],
         record.to_string().as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
