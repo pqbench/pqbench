@@ -43,9 +43,9 @@ Rules:
 ## Resource hierarchy
 
 Commands mirror the resource hierarchy of the data model — metastore, catalog,
-schema, table, partition, file. Each level's `ls` lists that level's resources
-(the parent rides the argument, or parent refs on standard input); `get` reads
-one resource.
+schema, table, partition, file. Each level's `ls` module lists that level's
+resources (the parent rides the argument, or parent refs on standard input);
+`get` reads one resource.
 
 ## Interfaces
 

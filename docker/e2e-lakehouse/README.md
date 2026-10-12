@@ -84,12 +84,13 @@ export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 ```
 
 ```text
-bytemass: part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet
-column                              bytes/row
-label                                   24.00
-id                                      22.00
---------------------------------------------
-total                                   46.00
+column  type        codec   encodings                 bytes  values
+------  ----------  ------  ------------------------  -----  ------
+id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+files: 1
+rows: 3
+columns: 2
 ```
 
 `make lakehouse` runs exactly this walk as its last step, then lists the same
