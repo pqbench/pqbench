@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aipnaming"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "tree-sitter",
  "tree-sitter-rust",
@@ -47,7 +47,7 @@ dependencies = [
 
 [[package]]
 name = "aipnaming-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aipnaming",
  "clap",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "docscheck"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "tempfile",
  "tree-sitter",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "docscheck-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "docscheck",
@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "apache-avro",
  "async-trait",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "futures-util",
