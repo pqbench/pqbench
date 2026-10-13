@@ -19,7 +19,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 rust-version = "1.91.1"
 license = "MIT OR Apache-2.0"
@@ -27,9 +27,9 @@ authors = ["pqbench contributors"]
 repository = "https://github.com/pqbench/pqbench"
 
 [workspace.dependencies]
-aipnaming = { version = "0.0.1", path = "crates/aipnaming" }
-docscheck = { version = "0.0.1", path = "crates/docscheck" }
-pqbench = { version = "0.0.1", path = "crates/pqbench" }
+aipnaming = { version = "0.0.2", path = "crates/aipnaming" }
+docscheck = { version = "0.0.2", path = "crates/docscheck" }
+pqbench = { version = "0.0.2", path = "crates/pqbench" }
 
 [profile.dev]
 opt-level = 0
