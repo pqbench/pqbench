@@ -10,10 +10,11 @@ use std::sync::Arc;
 
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::Snapshot;
-use deltalake::logstore::object_store::ObjectStoreExt;
+use deltalake::logstore::object_store::path::Path as ObjectPath;
+use deltalake::logstore::object_store::{ObjectStore, ObjectStoreExt};
 use deltalake::logstore::{commit_uri_from_version, LogStore, LogStoreRef};
 use deltalake::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -59,7 +60,13 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     if !request.require_files {
         return Ok(info);
     }
-    info.log = read_log(&store, meta.version, request.commit_versions.as_ref()).await?;
+    info.log = read_log(
+        &store,
+        &request.uri,
+        Some(meta.version),
+        request.commit_versions.as_ref(),
+    )
+    .await?;
     // A caller that names the commits wants the files the log itself names; the
     // snapshot's active-file replay is redundant then (and O(files)).
     if request.commit_versions.is_none() {
@@ -173,127 +180,158 @@ fn snapshot_meta(snapshot: &Snapshot) -> SnapshotMeta {
     }
 }
 
+/// Read the log's commits, actions and all, in version order.
+///
+/// The caller either names the commits it wants or takes them all; either way
+/// the versions are a list, so the reads are a map over it and come back in
+/// version order as they were asked for.
 async fn read_log(
     store: &LogStoreRef,
-    last_version: u64,
+    uri: &str,
+    head: Option<u64>,
     versions: Option<&BTreeSet<u64>>,
 ) -> Result<Vec<LogCommit>, Error> {
-    if let Some(versions) = versions {
-        // The named commits, in version order.
-        let mut commits = Vec::new();
-        for &version in versions {
+    let versions: Vec<u64> = match versions {
+        Some(named) => named.iter().copied().collect(),
+        None => commit_versions(store, uri, head).await?,
+    };
+    let store = store.clone();
+    // As in `stream_commits`: the versions are known, so every read goes at once
+    // and the commits come back in version order.
+    let commits = futures::future::try_join_all(versions.into_iter().map(|version| {
+        let store = store.clone();
+        async move {
             let Some(bytes) = store
                 .read_commit_entry(version)
                 .await
                 .map_err(delta_error)?
             else {
-                continue;
+                // Named but gone: the log kept no actions to read.
+                return Ok(None);
             };
             let parsed = parse_commit(&bytes, version)?;
             drop(bytes);
-            commits.push(LogCommit {
+            Ok(Some(LogCommit {
                 version,
                 commit_time: parsed.commit_time,
                 actions: parsed.actions,
-            });
+            }))
         }
-        return Ok(commits);
-    }
-    // A JSON commit per version is contiguous up to log retention (the kernel's
-    // log segment enforces no gaps), so reading newest-first and stopping at the
-    // first retained-boundary hole reads every available commit and probes no
-    // missing version — the difference between O(retained) and O(#versions).
-    let mut commits = Vec::new();
-    let mut version = last_version as i64;
-    while version >= 0 {
-        let index = version as u64;
-        match store.read_commit_entry(index).await.map_err(delta_error)? {
-            Some(bytes) => {
-                let parsed = parse_commit(&bytes, index)?;
-                drop(bytes);
-                commits.push(LogCommit {
-                    version: index,
-                    commit_time: parsed.commit_time,
-                    actions: parsed.actions,
-                });
-            }
-            // A hole only above the retained boundary; the head itself may be
-            // summarized by a checkpoint with no JSON left.
-            None if !commits.is_empty() => break,
-            None => {}
-        }
-        version -= 1;
-    }
-    commits.reverse();
-    Ok(commits)
+    }))
+    .await?;
+    Ok(commits.into_iter().flatten().collect())
 }
 
-/// Stream the table's commits, newest first, without collecting them.
+/// Stream the table's commits in version order, oldest first.
 ///
-/// Each retained commit file is read one version at a time straight from the
-/// log store, so nothing grows with the log's length and no active-file
-/// metadata is materialized. This is the walk the library's `history` makes
-/// internally; `DeltaTable::history` reaches it only through a loaded, and so
-/// fully materialized, table.
+/// The log names its commits, so the versions come from one listing of it: every
+/// retained version, none probed, nothing asked for below retention, no hole to
+/// step over. Each version's time then comes from the commit itself, read with
+/// the store's own concurrency rather than one round trip at a time, so the walk
+/// costs the log's latency over the commits in reach and not the sum of it.
 pub(super) async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
 ) -> Result<impl Stream<Item = Result<LogCommit, Error>>, Error> {
     let store = open_store(lake, request)?;
-    // A plain snapshot is lazy: it reads the table's metadata and lists the log
-    // segment, and has no files of its own to materialize.
-    let head = Snapshot::try_new(store.as_ref(), request.snapshot_version)
-        .await
-        .map_err(delta_error)?
-        .version();
-    Ok(commits_newest_first(store, head))
-}
-
-/// Stream the log's commits newest first, ending at the retention hole.
-///
-/// A version with no JSON file above the retained boundary is only a checkpoint
-/// that outran the commits it summarizes, so the walk steps over it; the first
-/// hole below a file that did read ends the stream. A commit the log does not
-/// date has no time to contribute, so it is not yielded.
-fn commits_newest_first(
-    store: LogStoreRef,
-    head: u64,
-) -> impl Stream<Item = Result<LogCommit, Error>> {
-    futures::stream::try_unfold((Some(head), false), move |(mut version, mut started)| {
-        let store = store.clone();
-        async move {
-            loop {
-                let Some(current) = version else {
-                    return Ok(None);
-                };
-                version = current.checked_sub(1);
-                let time = match commit_head(&store, current).await? {
-                    CommitHead::Missing if started => return Ok(None),
-                    CommitHead::Missing => continue,
-                    CommitHead::Present(time) => {
-                        started = true;
-                        time
-                    }
-                };
-                let Some(time) = time else {
-                    continue;
-                };
-                return Ok(Some((
-                    LogCommit {
-                        version: current,
-                        commit_time: Some(time),
-                        actions: Vec::new(),
-                    },
-                    (version, started),
-                )));
+    let versions = commit_versions(&store, &request.uri, request.snapshot_version).await?;
+    // The log names every commit, so no read waits on another: they all go at
+    // once and are yielded in version order, newest first, as they land. A commit
+    // the log does not date has no time to contribute, and one the listing named
+    // that a read no longer finds has nothing left to read, so neither is yielded.
+    Ok(futures::stream::iter(versions.into_iter().rev())
+        .map(move |version| {
+            let store = store.clone();
+            async move {
+                commit_head(&store, version)
+                    .await
+                    .map(|head| (version, head))
             }
-        }
-    })
+        })
+        .buffered(commit_reads_in_flight())
+        .try_filter_map(|(version, head)| async move {
+            Ok(match head {
+                CommitHead::Present(Some(commit_time)) => Some(LogCommit {
+                    version,
+                    commit_time: Some(commit_time),
+                    actions: Vec::new(),
+                }),
+                CommitHead::Missing | CommitHead::Present(None) => None,
+            })
+        }))
 }
 
-/// Bytes of a commit file to read for its head: `commitInfo` is a few hundred
-/// bytes and Delta writers put it first, so a prefix carries it.
-const COMMIT_HEADER_BYTES: u64 = 4096;
+/// The table's commit versions, oldest first, from the log's own listing.
+///
+/// A JSON commit is named `00000000000000000042.json` and nothing else is: a
+/// checkpoint, a compiled log, a sidecar, and an archiver's droppings all have
+/// other shapes, so the name alone names the commit. Retention removes a prefix,
+/// so the retained versions are contiguous and a gap is a log that lost commits
+/// — a read either side of it would report a table that never existed.
+async fn commit_versions(
+    store: &LogStoreRef,
+    uri: &str,
+    head: Option<u64>,
+) -> Result<Vec<u64>, Error> {
+    let log = ObjectPath::from("_delta_log");
+    // Folded rather than collected: a version is eight bytes, the object listing
+    // is not, and a log can name millions of files.
+    let (mut versions, listed) = store
+        .object_store(None)
+        .list_with_offset(Some(&log), &log)
+        .try_fold(
+            (Vec::new(), false),
+            |(mut versions, _), object| async move {
+                let name = object.location.filename().unwrap_or_default();
+                if let Some(version) = commit_file_version(name) {
+                    versions.push(version);
+                }
+                Ok::<_, ObjectStoreError>((versions, true))
+            },
+        )
+        .await
+        .map_err(|error| Error(error.to_string()))?;
+    if !listed {
+        return Err(Error(format!("no _delta_log in {uri}")));
+    }
+    versions.retain(|version| head.is_none_or(|head| *version <= head));
+    versions.sort_unstable();
+    versions.dedup();
+    if let Some(gap) = versions.windows(2).find(|pair| pair[1] > pair[0] + 1) {
+        return Err(Error(format!(
+            "the log misses commit {}: versions {} and {} are not contiguous",
+            gap[0] + 1,
+            gap[0],
+            gap[1]
+        )));
+    }
+    Ok(versions)
+}
+
+/// The version a commit file name carries, or `None` when the name is not a
+/// commit's.
+fn commit_file_version(name: &str) -> Option<u64> {
+    let stem = name.strip_suffix(".json")?;
+    let digits = stem.len() == 20 && stem.bytes().all(|byte| byte.is_ascii_digit());
+    digits.then(|| stem.parse().ok()).flatten()
+}
+
+/// How many commit reads one walk keeps in flight: the store's own concurrency,
+/// as delta-rs takes it for its own commit stream. Unbounded, every read's body
+/// is resident at once — a million-commit log would be gigabytes — and windowed
+/// it is flat in the log.
+fn commit_reads_in_flight() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        * 4
+}
+
+/// How far into a commit file to read for its head, in stages: `commitInfo` is a
+/// few hundred bytes and Delta writers put it first, so the first read carries
+/// it for almost every commit; a commit whose header is longer is read further
+/// — 4 KB covers the long ones — before the file is read whole.
+const COMMIT_HEADER_STAGES: [u64; 2] = [1024, 4096];
 
 /// What one log version's commit file says about itself.
 #[derive(Debug, Clone, Copy)]
@@ -307,24 +345,25 @@ enum CommitHead {
 
 /// The head of one log version, read as a prefix of its commit file.
 ///
-/// Only a commit whose `commitInfo` is not first, or whose header runs past the
-/// prefix, is read whole: the log's own order decides, and a read shorter than
-/// the prefix is the whole file.
+/// The prefix grows by stages and only then whole: the log's own order decides,
+/// and a read shorter than the stage asked for is the whole file.
 async fn commit_head(store: &LogStoreRef, version: u64) -> Result<CommitHead, Error> {
     let object = store.object_store(None);
     let path = commit_uri_from_version(Some(version));
-    match object.get_range(&path, 0..COMMIT_HEADER_BYTES).await {
-        Ok(prefix) => {
-            if let Some(time) = parse_commit_time(&prefix) {
-                return Ok(CommitHead::Present(Some(time)));
+    for end in COMMIT_HEADER_STAGES {
+        match object.get_range(&path, 0..end).await {
+            Ok(prefix) => {
+                if let Some(time) = parse_commit_time(&prefix) {
+                    return Ok(CommitHead::Present(Some(time)));
+                }
+                if (prefix.len() as u64) < end {
+                    return Ok(CommitHead::Present(None));
+                }
             }
-            if (prefix.len() as u64) < COMMIT_HEADER_BYTES {
-                return Ok(CommitHead::Present(None));
-            }
+            Err(ObjectStoreError::NotFound { .. }) => return Ok(CommitHead::Missing),
+            // Anything else is the whole read's to report.
+            Err(_) => break,
         }
-        Err(ObjectStoreError::NotFound { .. }) => return Ok(CommitHead::Missing),
-        // Anything else is the whole read's to report.
-        Err(_) => {}
     }
     match store
         .read_commit_entry(version)
