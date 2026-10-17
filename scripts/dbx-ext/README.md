@@ -76,7 +76,7 @@ re-running after a failure continues where it stopped.
 ## Running the e2e against it
 
 `make dbx-e2e` drives the fixture with the service principal's OAuth M2M bearer
-(mint one with the `dbx-samples-sp` profile, `experiments/exp33_databricks_credential_vending.md`):
+(mint one with the `dbx-samples-sp` profile; see [`docs/auth.md`](../../docs/auth.md)):
 
 ```bash
 export DBX_HOST=https://<workspace>.cloud.databricks.com

@@ -1,0 +1,137 @@
+# The documentation site, built with MkDocs Material and served from GitHub Pages.
+#
+# The pages are the repository's own Markdown under `docs/`, so the site cannot
+# drift from what `make check` gates: `docscheck` reads the same files and turns
+# their `console run` blocks into tests. The home page (`docs/index.md`) is the
+# root README and `python.md` / `contributing.md` are `python/README.md` /
+# `CONTRIBUTING.md`, pulled in with `pymdownx.snippets` rather than copied, so
+# every document has one source.
+#
+# Build locally:
+#
+#     python3 -m venv .venv-docs
+#     .venv-docs/bin/pip install -r requirements-docs.txt
+#     .venv-docs/bin/mkdocs serve
+
+site_name: pqbench
+site_description: One binary for Parquet optimization — measure how well each codec compresses a Parquet file, and how many on-disk bytes each column costs.
+site_url: https://pqbench.github.io/pqbench/
+repo_url: https://github.com/pqbench/pqbench
+repo_name: pqbench/pqbench
+edit_uri: edit/main/docs/
+copyright: MIT OR Apache-2.0
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: en
+  logo: assets/logo.png
+  # A multi-size ICO at the site root, so it also answers the `/favicon.ico`
+  # request a browser makes when it cannot use a vector icon. `overrides/`
+  # lists the SVG after it for browsers that can.
+  favicon: favicon.ico
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/pqbench/pqbench
+      name: pqbench on GitHub
+  generator: true
+
+# The docs link to repository files that live outside `docs/` (the README, the
+# examples, the lakehouse fixtures). Those links are correct on GitHub, where
+# the tree they point into exists; on the site they resolve to the repository
+# rather than to a page, so they are not errors. Nav and anchors stay checked.
+validation:
+  nav:
+    omitted_files: ignore
+    not_found: warn
+  links:
+    not_found: ignore
+    absolute_links: ignore
+    unrecognized_links: ignore
+    anchors: warn
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path:
+        - .
+      check_paths: true
+  # The docs fence runnable transcripts as `console run`, `console no-run`, and
+  # `console run <feature>` (see AGENTS.md). superfences reads the words after
+  # the language as option key/values and would abandon the fence; relaxed
+  # headers keep them as plain `console` blocks, which is what they are.
+  - pymdownx.superfences:
+      relaxed_headers: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Overview: index.md
+  - Getting started: getting-started.md
+  - Guides:
+      - guides/index.md
+      - Visual demos: demo.md
+      - Delta tables: delta.md
+      - Iceberg tables: iceberg.md
+      - Databricks authentication: auth.md
+      - Performance: performance.md
+  - Reference:
+      - reference/index.md
+      - CLI: cli.md
+      - Configuration: configuration.md
+      - Distribution: distribution.md
+      - profile: profile.md
+      - experiment: experiment.md
+      - diff: diff.md
+      - viz: viz.md
+      - Agent skills: skill.md
+      - Python bindings: python.md
+  - Concepts:
+      - concepts/index.md
+      - What is a partition?: partition.md
+      - Architecture: architecture.md
+  - Contributing: contributing.md

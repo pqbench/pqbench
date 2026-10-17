@@ -1,0 +1,97 @@
+{#-
+  Landing hero for the home page. `docs/index.md` opts in with
+  `template: home.html`; every other page extends the stock `main.html`, so the
+  hero appears only on the home page.
+
+  The hero renders inside `{% block tabs %}` after `super()`, so it sits below
+  the top navigation bar and above the content column, spanning the viewport
+  while the copy stays on the grid.
+-#}
+{% extends "main.html" %}
+
+{% block tabs %}
+  {{ super() }}
+  <section class="pqb-hero">
+    {#- The ground: force lines, echoing curves, speed strokes, and a
+        divisionist hatch — the abstract read off Boccioni's study, drawn
+        inline so every stroke takes `currentColor` and the palette. -#}
+    <svg class="pqb-hero__art" viewBox="0 0 1200 560" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Echoing curves: the wheel, set down as nested, off-centre arcs. -->
+      <g opacity="0.10">
+        <ellipse cx="872" cy="300" rx="150" ry="104" stroke-width="1.6"/>
+        <ellipse cx="867" cy="300" rx="236" ry="163" stroke-width="1.4"/>
+        <ellipse cx="862" cy="300" rx="322" ry="222" stroke-width="1.25"/>
+        <ellipse cx="857" cy="300" rx="408" ry="281" stroke-width="1.1"/>
+        <ellipse cx="852" cy="300" rx="494" ry="342" stroke-width="1.0"/>
+      </g>
+      <!-- Force lines: where the object resolves if it follows its own forces. -->
+      <g opacity="0.14" stroke-width="1.7">
+        <path d="M-40 524 C 260 500 520 380 1240 148"/>
+        <path d="M-40 566 C 300 530 560 402 1250 206"/>
+        <path d="M-30 468 C 220 440 470 318 1180 92"/>
+      </g>
+      <g opacity="0.085" stroke-width="1.1">
+        <path d="M-40 244 C 250 246 500 208 1160 -24"/>
+        <path d="M-40 176 C 220 184 470 148 1120 -44"/>
+        <path d="M-40 332 C 240 338 520 300 1200 58"/>
+        <path d="M-40 402 C 260 404 540 360 1220 128"/>
+      </g>
+      <!-- Speed: trailing strokes off the curves. -->
+      <g opacity="0.24" stroke-width="2.3">
+        <path d="M 984 118 h 86"/>
+        <path d="M 1014 166 h 72"/>
+        <path d="M 1046 214 h 60"/>
+        <path d="M 1080 262 h 46"/>
+      </g>
+      <!-- Divisionist shading: a hatch off the lower-left corner. -->
+      <g opacity="0.13" stroke-width="1.2">
+        <path d="M 56 468 l 70 -70"/>
+        <path d="M 88 486 l 78 -78"/>
+        <path d="M 120 504 l 86 -86"/>
+        <path d="M 152 522 l 94 -94"/>
+        <path d="M 184 540 l 102 -102"/>
+      </g>
+    </svg>
+    <div class="md-grid">
+      <div class="pqb-hero__grid">
+        <div class="pqb-hero__copy">
+          <p class="pqb-hero__eyebrow">One binary for Parquet optimization</p>
+          <h1>Measure how a Parquet file spends bytes.</h1>
+          <p class="pqb-hero__actions">
+            <a href="getting-started/" class="md-button md-button--primary">Get started</a>
+            <a href="cli/" class="md-button">CLI reference</a>
+            <a href="https://github.com/pqbench/pqbench" class="md-button">GitHub</a>
+          </p>
+          <p class="pqb-hero__badges">
+            Apache-2.0 OR MIT &middot;
+            <a href="https://github.com/pqbench/pqbench/actions/workflows/ci.yml">CI</a> &middot;
+            <a href="distribution/">native binaries</a> for Linux and macOS, x86_64 and arm64 &middot;
+            <a href="python/">Python bindings</a>
+          </p>
+          <p class="pqb-hero__credit">
+            After Umberto Boccioni, <em>Dynamism of a Cyclist</em>, 1913: the mark
+            is the study itself, the ground is drawn from its motifs.
+          </p>
+        </div>
+        <div class="pqb-hero__terminal">
+          <div class="pqb-term">
+            <div class="pqb-term__bar">
+              <span class="pqb-term__dot pqb-term__dot--r"></span>
+              <span class="pqb-term__dot pqb-term__dot--y"></span>
+              <span class="pqb-term__dot pqb-term__dot--g"></span>
+              <span class="pqb-term__title">bytemass &mdash; bytes per column</span>
+            </div>
+            <pre><code><span class="pqb-term__prompt">$</span> <span class="pqb-term__cmd">pqbench bytemass examples/quickstart.parquet --format table</span>
+column  type   codec         encodings                 bytes  values
+------  -----  ------------  ------------------------  -----  ------
+id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+<span class="pqb-term__dim">files: 1
+rows: 8
+columns: 2</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}

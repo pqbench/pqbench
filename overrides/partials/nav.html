@@ -1,0 +1,40 @@
+{#-
+  Overrides Material's `partials/nav.html` (from Material 9.7.7).
+
+  Material wraps the sidebar's title — the logo and site name that sit directly
+  above the nav list — in an anchor to the site root. On the home page that
+  looks like a sidebar control but only navigates to the page you are already
+  on. This keeps the title a plain label instead: on a narrow screen it closes
+  the drawer (via its `for` target), and on a wide one it is inert. The header
+  logo and the top tabs stay the ways home.
+
+  Re-diff against upstream on a Material upgrade: the upstream file is a
+  generated partial, so this override can drift.
+-#}
+{% import "partials/nav-item.html" as item with context %}
+{% set class = "md-nav md-nav--primary" %}
+{% if "navigation.tabs" in features %}
+  {% set class = class ~ " md-nav--lifted" %}
+{% endif %}
+{% if "toc.integrate" in features %}
+  {% set class = class ~ " md-nav--integrated" %}
+{% endif %}
+<nav class="{{ class }}" aria-label="{{ lang.t('nav') }}" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <span class="md-nav__button md-logo" aria-hidden="true">
+      {% include "partials/logo.html" %}
+    </span>
+    {{ config.site_name }}
+  </label>
+  {% if config.repo_url %}
+    <div class="md-nav__source">
+      {% include "partials/source.html" %}
+    </div>
+  {% endif %}
+  <ul class="md-nav__list" data-md-scrollfix>
+    {% for nav_item in nav.items %}
+      {% set path = "__nav_" ~ loop.index %}
+      {{ item.render(nav_item, path, 1) }}
+    {% endfor %}
+  </ul>
+</nav>
