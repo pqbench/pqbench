@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::Args;
-use futures_util::stream::StreamExt;
+use futures_util::stream::{StreamExt, TryStreamExt};
 use pqbench::partition;
 
 use crate::emit::{Emitter, Format};
@@ -55,7 +55,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
                 return Err("list partitions needs a table URI or a table stream".into());
             }
             let records = source::records("list partitions", input.first, input.lines);
-            let mut reads = records
+            let reads = records
                 .map(|record| async {
                     let record = record?;
                     let (catalog, schema, table) = table_ref("list partitions", &record)?;
@@ -68,23 +68,30 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
                         })?
                         .to_string();
                     let env = ref_env(&record);
-                    partition::ls::list(lake, &name, &uri, &env, args.every)
+                    let found = partition::ls::list(lake, &name, &uri, &env, args.every)
                         .await
-                        .map_err(|error| CliError::from(error.to_string()))
+                        .map_err(|error| CliError::from(error.to_string()))?;
+                    Ok::<_, CliError>(
+                        found
+                            .map_err(|error| CliError::from(error.to_string()))
+                            .boxed(),
+                    )
                 })
-                .buffer_unordered(args.fan_out.max(1));
-            while let Some(result) = reads.next().await {
-                for partition in result? {
-                    emit.write_row(&partition).await?;
-                    partitions += 1;
-                }
+                .buffer_unordered(args.fan_out.max(1))
+                .boxed();
+            // Tables in flight at once, each streaming its partitions as its
+            // windows close.
+            let mut found = reads.try_flatten_unordered(Some(args.fan_out.max(1)));
+            while let Some(partition) = found.try_next().await? {
+                emit.write_row(&partition).await?;
+                partitions += 1;
             }
         }
     }
     emit.finish(&format!("partitions: {partitions}\n")).await
 }
 
-/// Emit one table's partitions; returns how many were written.
+/// Emit one table's partitions as they arrive; returns how many were written.
 async fn list_partitions(
     lake: &pqbench::Lake,
     table: &str,
@@ -93,12 +100,16 @@ async fn list_partitions(
     window: i64,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    let found = partition::ls::list(lake, table, uri, env, window)
+    let mut found = partition::ls::list(lake, table, uri, env, window)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;
-    for partition in &found {
-        emit.write_row(partition).await?;
+    while let Some(partition) = found
+        .try_next()
+        .await
+        .map_err(|error| CliError::from(error.to_string()))?
+    {
+        emit.write_row(&partition).await?;
         count += 1;
     }
     Ok(count)
