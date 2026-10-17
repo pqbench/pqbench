@@ -14,7 +14,7 @@ publish = false
 [workspace]
 
 [lib]
-name = "_native"
+name = "native"
 crate-type = ["cdylib"]
 
 [features]
@@ -29,6 +29,9 @@ iceberg-s3 = ["iceberg", "aws", "pqbench/iceberg-s3"]
 futures = "0.3"
 pqbench = { path = "../crates/pqbench" }
 pyo3 = { version = "0.29.2", features = ["abi3-py39"] }
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }
 serde = { version = "1", default-features = false }
 serde_json = "1"
-tokio = { version = "1", features = ["rt"] }
+# `sync` and `rt-multi-thread` back the bridge: the shared runtime plus the
+# channel that streams a partition/file iterator to Python.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync"] }

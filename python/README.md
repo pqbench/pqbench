@@ -1,8 +1,14 @@
 # pqbench
 
 PyO3 bindings for [pqbench](https://github.com/pqbench/pqbench). `pip install`
-builds a native wheel; each function calls the same library entry point as the
-matching CLI subcommand, and a separate `pqbench` binary is not required.
+builds a native wheel; a separate `pqbench` binary is not required. Two
+surfaces, one wheel:
+
+* **`pqbench.native`** — the commands: one function per library path, with the
+  same arguments. Every name is the Rust function of the same path.
+* **`pqbench`** — the ergonomic surface over them: the client handles every
+  command takes (`Config`, `Dialect`, `Lake`, `Layer`, `Workspace`) and `walk`,
+  the whole-metastore walk composed once.
 
 ## Install
 
@@ -21,71 +27,109 @@ pip install maturin
 maturin develop --manifest-path python/Cargo.toml
 ```
 
-## Commands
+## The commands
 
-The walk is verb-first, mirroring `pqbench get …` and `pqbench list …`: each
-`get_*` reads one resource and each `list_*` enumerates a collection. They
-return the `pqbench.v1` wire types as dicts, so a value round-trips into the
-next call or a CLI stage.
+Each command is the library function of the same path, under `pqbench.native`,
+and takes the handles and the resource like the Rust signature: `credentials.get`
+returns the `AWS_*` lease map, and the values are the library's serde types as
+dicts.
 
 ```python
+import asyncio
 import pqbench
+import pqbench.native
 
-# The catalog walk. Needs an endpoint: pass endpoint=/token= or set
-# PQB_ENDPOINT / PQB_TOKEN (DATABRICKS_HOST / DATABRICKS_TOKEN also work).
-pqbench.get_metastore()
-pqbench.get_catalog("dbx_samples")
-pqbench.get_schema("dbx_samples", "nyctaxi")
-pqbench.get_table("dbx_samples", "nyctaxi", "trips")
-pqbench.list_catalogs()
-pqbench.list_schemas("dbx_samples")
-pqbench.list_tables("dbx_samples", "nyctaxi")
+async def main():
+    workspace = pqbench.Workspace(pqbench.Config("https://…", token="…"))
+    lake = pqbench.Lake(workspace)
 
-# The storage levels read a table by path; no endpoint is needed.
-partitions = pqbench.list_partitions("./events", every="1d")
-files = pqbench.list_files(partitions[0])       # the window's added files
+    # The walk, one function per resource. The I/O verbs are awaitable.
+    await pqbench.native.metastore.get.read(workspace)
+    await pqbench.native.catalog.get.read(workspace, "dbx_samples")
+    await pqbench.native.catalog.ls.list(workspace)
+    await pqbench.native.schema.ls.list(workspace, "dbx_samples")
+    await pqbench.native.table.ls.list(workspace, "dbx_samples", "nyctaxi")
+    await pqbench.native.credentials.check.check(workspace, "dbx_samples", "nyctaxi", "trips")
+    lease = await pqbench.native.credentials.get.vend_unity(
+        workspace, "dbx_samples", "nyctaxi", "trips"
+    )
+    table = await pqbench.native.table.get.read(
+        workspace, lake, "dbx_samples", "nyctaxi", "trips",
+        pqbench.native.Storage(env=lease or {}),
+    )
 
-# Credentials: gate on the catalog, then attach the vended lease.
-tables = pqbench.list_tables("dbx_samples", "nyctaxi")
-tables = pqbench.credentials_check(tables)       # drop what compute reads
-tables = pqbench.credentials_get(tables)         # attach the AWS_* lease
+    # `partition.ls.list` and `file.ls.list` stream (async iterators); the
+    # single-value verbs are awaitable.
+    async for partition in pqbench.native.partition.ls.list(
+        lake, table["name"], table["uri"], lease or {}, 86_400_000
+    ):
+        async for file in pqbench.native.file.ls.list(
+            lake, partition["uri"], lease or {}, partition["commit_versions"]
+        ):
+            print(file["uri"])
 
-# Analysis.
-pqbench.lz("file.bin", codecs=["zstd@3"], samples=10, json=True)
-pqbench.compression("data.parquet", per_column=True, json=True)
-rows = pqbench.bytemass("data.parquet")          # list of bytemass-row dicts
-pqbench.diff(rows, other_rows, depth=2)          # two row lists, or two files
-pqbench.profile("data.parquet", rows="first:8192")
-pqbench.experiment("data.parquet", rewrite=["sort:text"])
-pqbench.ratelimit(rows, rate=15.0)               # pace a record stream
-pqbench.viz(rows, output="report")               # report.html
-pqbench.skill("parquet-advisor", "recipes")      # the writer's recipes
+asyncio.run(main())
 ```
 
-`pqbench.commands` lists every bound name.
+### The walk
 
-[`samples/walk.py`](samples/walk.py) is a runnable walk: one generator composes
-`list tables → credentials check → credentials get → get table → list
-partitions → list files`, on the calling thread.
+`walk` is the one composition rather than a binding: it spans the catalog
+levels and descends every table the principal may read outside compute, with
+the tables in flight together (bounded by `concurrency`, 32 by default), and
+yields each table file.
+
+```python
+async for file in pqbench.walk(workspace):
+    print(file["uri"])
+```
+
+`catalog=` descends one catalog instead of every readable one. A table that
+cannot be read is skipped (logged at `debug`), so a mixed metastore still
+walks; records stream, so the walk holds no more than a bounded queue of them.
+
+The Unity Catalog API limits requests per endpoint and per workspace, so its
+calls are paced at `requests_per_second` — 15, one bucket per endpoint, and `0`
+turns pacing off. The storage reads are not paced: object storage has no such
+limit and retries its own. Anything skipped is counted in a `warning` when the
+walk ends, so a rate limit shows up as a count rather than as silently missing
+files.
+
+The analysis commands are synchronous and take their Rust request structs:
+
+```python
+report = pqbench.native.lz.lz(pqbench.native.LzRequest(file="file.bin", codec_specs=["zstd@3"]))
+report = pqbench.native.compression.compression(
+    pqbench.native.CompressionRequest(file="data.parquet", per_column=True)
+)
+sample = pqbench.native.third_party.parquet.read_sample("data.parquet", None)
+pqbench.native.profile.profile(sample, pqbench.native.ProfileRequest(top=5))
+typed = pqbench.native.third_party.parquet.read_typed_sample("data.parquet", 512)
+pqbench.native.experiment.experiment(typed, pqbench.native.ExperimentRequest(trials=["sort:text"]))
+pqbench.native.diff.compare(rows, rows, 2)
+pqbench.native.skill.document("parquet-advisor", "recipes")
+pqbench.native.viz.write_report("report", rows)
+```
+
+[`samples/walk.py`](samples/walk.py) is a runnable walk over the **whole
+metastore**: it calls `walk`, spans every catalog and schema, descends the one
+catalog the principal may read outside compute, and prints each table file.
 
 ```sh
 PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=<bearer> \
-  AWS_REGION=us-east-2 python samples/walk.py pqbench_ext.tpch_sf1
+  AWS_REGION=us-east-2 python samples/walk.py
 ```
 
 ## Configuration
 
-The endpoint and token keyword arguments mirror the CLI's global flags and
-resolve in the same order: the argument, then `PQB_ENDPOINT` / `PQB_TOKEN` /
-`PQB_TABLE_FORMAT`, then `DATABRICKS_HOST` / `DATABRICKS_TOKEN`. `table_format`
-is `unity` (the default) or `iceberg`.
+`Config(endpoint, token=None, dialect=Dialect.UNITY)` carries the endpoint, the
+bearer, and the dialect (`UNITY` or `ICEBERG`); `Layer(endpoint=None,
+token=None, dialect=None).resolve()` combines configuration layers into a
+`Config`.
 
-`env=` on `bytemass`, `get_table`, `list_partitions`, `list_files`, and `diff`
-may only contain `AWS_*` names. `setup()` returns the environment the CLI's
-`setup` exports, as a dict.
-
-`codecs` repeats `codec@level`; `samples` defaults to 10, `warmup_iterations`
-to 3, `mode` to `fastest` (`fastest` or `mean`).
+`env` is the library's `BTreeMap<String, String>` and is passed straight
+through, so a vended lease (`credentials.get`) or the process environment rides
+as given. `codec_specs` repeats `codec@level`; `samples` defaults to 10,
+`warmup_iterations` to 3, `mode` to `Mode.FASTEST`.
 
 ## Publish to PyPI
 

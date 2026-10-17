@@ -1,10 +1,15 @@
-"""Live Databricks e2e for the walk, composed as a single-threaded generator.
+"""Live Databricks e2e for the walk over the whole metastore.
 
-The walk mirrors the CLI's pipeline — ``list tables | credentials check |
-credentials get | get table | list partitions | list files`` — as one Python
-generator: each stage feeds the next, and the whole chain runs on the calling
-thread (the bindings drive a current-thread runtime per call, and the generator
-adds no threads of its own).
+``pqbench.walk`` composes the library's per-resource functions —
+``catalog.ls.list | schema.ls.list | table.ls.list | credentials.check.check |
+credentials.get.vend_unity | table.get.read | partition.ls.list |
+file.ls.list`` — as one async generator that multiplexes the tables and yields
+their files. The catalog levels span the whole Unity Catalog; the table levels
+descend the one catalog the principal may read outside compute
+(``DBX_WALK_CATALOG``, default ``pqbench_ext``), because Unity refuses
+``EXTERNAL USE SCHEMA`` on the sample and managed-default catalogs and
+``credentials.check.check`` filters by eligibility, not by grant. The library
+work runs on the shared tokio runtime and the walk adds no threads of its own.
 
 Skipped unless an endpoint and bearer are configured:
 
@@ -13,8 +18,9 @@ Skipped unless an endpoint and bearer are configured:
   ``DBX_SAMPLES_SP_CLIENT_ID`` / ``DBX_SAMPLES_SP_CLIENT_SECRET`` (minted as an
   OAuth M2M bearer).
 
-``DBX_WALK_SCHEMA`` (default ``pqbench_ext.tpch_sf1``) and ``DBX_AWS_REGION``
-(default ``us-east-2``) point the walk at another external fixture.
+``DBX_WALK_CATALOG`` (default ``pqbench_ext``, the external fixture) and
+``DBX_AWS_REGION`` (default ``us-east-2``) point the walk at another readable
+catalog.
 """
 
 from __future__ import annotations
@@ -73,88 +79,48 @@ def _live() -> tuple[str, str]:
     )
 
 
-def _aws_env(record: dict) -> dict:
-    """A ref's vended lease as the ``AWS_*`` options a storage read needs."""
-    credentials = record.get("credentials") or {}
-    return {
-        key: value
-        for key, value in {
-            "AWS_ACCESS_KEY_ID": credentials.get("access_key_id"),
-            "AWS_SECRET_ACCESS_KEY": credentials.get("secret_access_key"),
-            "AWS_SESSION_TOKEN": credentials.get("session_token"),
-        }.items()
-        if value
-    }
-
-
-def walk(endpoint: str, token: str, schema_fqn: str):
-    """Walk one schema to its files, lazily, on the calling thread.
-
-    Yields ``(level, record)`` for the metastore, the schema's catalog and
-    schema, each readable table, its partitions, and their files.
-    """
-    catalog, schema = schema_fqn.split(".", 1)
-    yield "metastore", pqbench.get_metastore(endpoint=endpoint, token=token)
-    yield "catalog", pqbench.get_catalog(catalog, endpoint=endpoint, token=token)
-    yield "schema", pqbench.get_schema(catalog, schema, endpoint=endpoint, token=token)
-    listed = pqbench.list_tables(catalog, schema, endpoint=endpoint, token=token)
-    readable = pqbench.credentials_check(listed, endpoint=endpoint, token=token)
-    vended = pqbench.credentials_get(readable, endpoint=endpoint, token=token)
-    for ref in vended:
-        name = ref["name"].rsplit("/", 1)[-1]
-        env = _aws_env(ref)
-        table = pqbench.get_table(
-            catalog, schema, name, env=env, endpoint=endpoint, token=token
-        )
-        yield "table", table
-        uri = table.get("uri")
-        if not uri:
-            continue
-        partitions = pqbench.list_partitions(
-            uri, table=table["name"], env=env, endpoint=endpoint, token=token
-        )
-        for partition in partitions:
-            yield "partition", partition
-            for file in pqbench.list_files(partition, endpoint=endpoint, token=token):
-                yield "file", file
+def _workspace() -> pqbench.Workspace:
+    return pqbench.Workspace(pqbench.Config(*_live()))
 
 
 @unittest.skipUnless(_has_credentials(), "no Databricks endpoint/token configured")
-class WalkE2ETest(unittest.TestCase):
-    schema = os.environ.get("DBX_WALK_SCHEMA") or "pqbench_ext.tpch_sf1"
+class WalkE2ETest(unittest.IsolatedAsyncioTestCase):
+    catalog = os.environ.get("DBX_WALK_CATALOG") or "pqbench_ext"
     region = os.environ.get("DBX_AWS_REGION") or "us-east-2"
 
     def setUp(self) -> None:
         os.environ.setdefault("AWS_REGION", self.region)
 
-    def test_catalogs_include_the_walk_catalog(self) -> None:
-        endpoint, token = _live()
-        catalog = self.schema.split(".", 1)[0]
-        names = [item["name"] for item in pqbench.list_catalogs(endpoint=endpoint, token=token)]
-        self.assertIn(f"catalogs/{catalog}", names)
+    async def test_catalog_ls_includes_the_walk_catalog(self) -> None:
+        names = [
+            item["name"] for item in await pqbench.native.catalog.ls.list(_workspace())
+        ]
+        self.assertIn(f"catalogs/{self.catalog}", names)
 
-    def test_walk_reaches_files(self) -> None:
-        endpoint, token = _live()
+    async def test_walk_yields_the_files(self) -> None:
+        workspace = _workspace()
         before = threading.active_count()
-        levels: dict[str, int] = {}
-        for level, record in walk(endpoint, token, self.schema):
-            levels[level] = levels.get(level, 0) + 1
-            if level == "file":
-                self.assertTrue(record["blob"].startswith("blobs/"), record["blob"])
-                break
+        files = [file async for file in pqbench.walk(workspace, catalog=self.catalog)]
+        # The walk descended more than one table of the readable catalog.
+        tables = {file["uri"].rsplit("/", 1)[0] for file in files}
+        self.assertGreaterEqual(len(tables), 2, f"{self.catalog}: {len(tables)} tables")
+        for file in files:
+            self.assertTrue(file["path"].endswith(".parquet"), file)
+            self.assertTrue(file["uri"], file)
         # The generator added no threads: the walk is single-threaded.
         self.assertEqual(threading.active_count(), before)
-        for level in ("metastore", "catalog", "schema", "table", "partition", "file"):
-            self.assertGreaterEqual(levels.get(level, 0), 1, f"{self.schema}: {levels}")
 
-    def test_credentials_check_drops_managed_storage(self) -> None:
-        endpoint, token = _live()
-        external = {"name": "catalogs/pqbench_ext/schemas/nyctaxi/tables/trips"}
-        managed = {"name": "catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"}
-        kept = pqbench.credentials_check(
-            [managed, external], endpoint=endpoint, token=token
+    async def test_check_drops_managed_storage(self) -> None:
+        workspace = _workspace()
+        external = await pqbench.native.credentials.check.check(
+            workspace, "pqbench_ext", "nyctaxi", "trips"
         )
-        self.assertEqual([ref["name"] for ref in kept], [external["name"]])
+        managed = await pqbench.native.credentials.check.check(
+            workspace, "dbx_samples", "nyctaxi", "pqbench_delta_test"
+        )
+        self.assertTrue(external.eligible)
+        self.assertFalse(managed.eligible)
+        self.assertIsNotNone(managed.reason)
 
 
 if __name__ == "__main__":

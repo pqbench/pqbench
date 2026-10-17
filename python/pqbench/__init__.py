@@ -1,64 +1,45 @@
-"""Python bindings for the pqbench command line.
+"""The ``pqbench`` API: the client handles, and the walk.
 
-Each function runs one command inside this process and returns the same text
-or JSON the CLI would print. ``pip install`` builds the native extension; a
-separate ``pqbench`` binary is not required.
+The library's commands are the crate's modules, one function per path, under
+``pqbench.native``::
 
-The walk is the verb-first surface: ``get_*`` reads one resource and
-``list_*`` enumerates a collection, mirroring ``pqbench get …`` and
-``pqbench list …``. The resources are the ``pqbench.v1`` wire types, so a value
-returned here round-trips as JSON into ``bytemass``, ``list_files``, or any CLI
-stage.
+    import pqbench.native
+
+    pqbench.native.metastore.get.read(workspace)
+    pqbench.native.catalog.ls.list(workspace)
+    pqbench.native.file.ls.list(lake, uri, env, versions)
+    pqbench.native.credentials.check.check(workspace, catalog, schema, table)
+
+Every name there is the library function of the same path, with the same
+arguments — a separate ``pqbench`` binary is not required. The records are the
+library's serde types, marshalled as dicts; the commands whose library entry
+point is async — the walk verbs, ``bytemass`` — return awaitables, and the
+collections the library streams — ``partition.ls.list`` and ``file.ls.list`` —
+are async iterators.
+
+This package is the ergonomic surface over them: the client handles every
+command takes, re-exported so they sit with ``walk``, the whole-metastore walk
+composed once::
+
+    workspace = pqbench.Workspace(pqbench.Config(endpoint, token))
+
+    async for file in pqbench.walk(workspace):
+        print(file["uri"])
 """
 
-from pqbench._native import (
-    __version__,
-    bytemass,
-    commands,
-    compression,
-    credentials_check,
-    credentials_get,
-    diff,
-    experiment,
-    get_catalog,
-    get_metastore,
-    get_schema,
-    get_table,
-    list_catalogs,
-    list_files,
-    list_partitions,
-    list_schemas,
-    list_tables,
-    lz,
-    profile,
-    ratelimit,
-    setup,
-    skill,
-    viz,
-)
+from pqbench import native
+from pqbench.native import Config, Dialect, Lake, Layer, Workspace
+from pqbench.walk import walk
+
+__version__ = native.__version__
 
 __all__ = [
     "__version__",
-    "bytemass",
-    "commands",
-    "compression",
-    "credentials_check",
-    "credentials_get",
-    "diff",
-    "experiment",
-    "get_catalog",
-    "get_metastore",
-    "get_schema",
-    "get_table",
-    "list_catalogs",
-    "list_files",
-    "list_partitions",
-    "list_schemas",
-    "list_tables",
-    "lz",
-    "profile",
-    "ratelimit",
-    "setup",
-    "skill",
-    "viz",
+    "native",
+    "walk",
+    "Config",
+    "Dialect",
+    "Lake",
+    "Layer",
+    "Workspace",
 ]

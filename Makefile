@@ -104,11 +104,8 @@ lfs-check:
 
 # python/ is its own crate (not a workspace member); share the repo target
 # dir so it does not grow python/target. Local to python/.venv for PEP 668.
-# Its lock is seeded from the workspace pins (python/ has no committed lock):
-# the shared dependencies (delta-rs, arrow, parquet) resolve to the versions
-# the binaries ship, and a stale local lock cannot skew the build.
+# Its lock is committed, as the workspace's is.
 check-python:
-	cp Cargo.lock python/Cargo.lock
 	$(CARGO) fmt --manifest-path python/Cargo.toml -- --check
 	CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" $(CARGO) clippy --manifest-path python/Cargo.toml --all-targets -- -D warnings
 	test -d python/.venv || $(PYTHON) -m venv python/.venv

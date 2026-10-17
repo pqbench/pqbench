@@ -17,10 +17,6 @@
 # aarch64 to the `neoverse-n1` generation, so a wheel built on a newer CPU
 # still runs on an older one.
 #
-# The workspace Cargo.lock is copied into python/ before the build: python/ is
-# its own crate, and seeding its lock from the workspace's pins the shared
-# dependencies (delta-rs, arrow, parquet) to the versions the binaries ship.
-#
 # Deliberately NOT triggered by `release: published`: release.yml cuts a binary
 # release on a manual dispatch, and PyPI versions are immutable, so riding that
 # event would attempt a duplicate publish (and fail) each time.
@@ -57,8 +53,6 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v6
-      - name: Seed python/Cargo.lock from the workspace pins
-        run: cp Cargo.lock python/Cargo.lock
       - uses: PyO3/maturin-action@v1
         env:
           CXXFLAGS: ${{ matrix.cxxflags }}
@@ -78,8 +72,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Seed python/Cargo.lock from the workspace pins
-        run: cp Cargo.lock python/Cargo.lock
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist

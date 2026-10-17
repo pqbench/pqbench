@@ -1,93 +1,150 @@
-"""Blackbox tests for the PyO3 command bindings."""
+"""Blackbox tests for the pqbench bindings.
+
+``pqbench.native`` mirrors the ``pqbench`` library — every command is the
+function of the same path — while ``pqbench`` is the ergonomic surface over it
+(the client handles, and ``walk``). The walk verbs are awaitable and
+``partition.ls.list`` is an async iterator, so the tests are async
+(``IsolatedAsyncioTestCase`` gives each one a running loop).
+"""
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import pqbench
 
 _ROOT = Path(__file__).resolve().parents[2]
-_PARQUET = _ROOT / "crates" / "pqbench-cli" / "tests" / "fixtures" / "small_reddit_none.parquet"
+_PARQUET = (
+    _ROOT
+    / "crates"
+    / "pqbench-cli"
+    / "tests"
+    / "fixtures"
+    / "small_reddit_none.parquet"
+)
 _TABLE = _ROOT / "docker" / "e2e-lakehouse" / "table"
+_DAY_MILLIS = 86_400_000
+# The resource name `v1::name::local_table(str(_TABLE))` builds for the fixture.
+_TABLE_NAME = f"catalogs/local/schemas/local/tables/{_TABLE.name}"
 
 
-class BindingsTest(unittest.TestCase):
-    def test_commands_match_the_cli(self) -> None:
-        self.assertEqual(
-            pqbench.commands,
-            (
-                "lz",
-                "compression",
-                "bytemass",
-                "profile",
-                "experiment",
-                "diff",
-                "ratelimit",
-                "setup",
-                "skill",
-                "viz",
-                "get_metastore",
-                "get_catalog",
-                "get_schema",
-                "get_table",
-                "list_catalogs",
-                "list_schemas",
-                "list_tables",
-                "list_partitions",
-                "list_files",
-                "credentials_get",
-                "credentials_check",
-            ),
-        )
-        for name in pqbench.commands:
-            self.assertTrue(callable(getattr(pqbench, name)))
+def _workspace() -> pqbench.Workspace:
+    """A workspace good enough for local reads: no catalog call is made."""
+    return pqbench.Workspace(pqbench.Config(endpoint="http://127.0.0.1:1"))
 
-    def test_lz_json_report(self) -> None:
-        report = pqbench.lz(
-            _PARQUET,
-            codecs=["snappy"],
-            samples=1,
-            warmup_iterations=0,
-            json=True,
+
+class BindingsTest(unittest.IsolatedAsyncioTestCase):
+    def test_surface_mirrors_the_crate(self) -> None:
+        paths = [
+            "metastore.get.read",
+            "catalog.get.read",
+            "catalog.ls.list",
+            "schema.get.read",
+            "schema.ls.list",
+            "table.get.read",
+            "table.ls.list",
+            "partition.ls.list",
+            "file.ls.list",
+            "credentials.check.check",
+            "credentials.get.vend_unity",
+            "credentials.get.vend_iceberg",
+            "lz.lz",
+            "compression.compression",
+            "bytemass.bytemass",
+            "profile.profile",
+            "experiment.experiment",
+            "diff.compare",
+            "skill.skills",
+            "skill.skill",
+            "skill.document",
+            "viz.write_report",
+            "third_party.parquet.read_sample",
+            "third_party.parquet.read_typed_sample",
+        ]
+        for path in paths:
+            target = pqbench.native
+            for part in path.split("."):
+                target = getattr(target, part)
+            self.assertTrue(callable(target), path)
+
+    def test_surface_keeps_the_handles_and_the_walk(self) -> None:
+        # Every command lives under `pqbench.native`, once; `pqbench` carries
+        # the handles the commands and `walk` take, and `walk` itself.
+        self.assertTrue(callable(pqbench.native.catalog.ls.list))
+        for name in ("metastore", "catalog", "table", "credentials", "lz", "file"):
+            self.assertFalse(hasattr(pqbench, name), name)
+        for name in ("Config", "Dialect", "Lake", "Layer", "Workspace"):
+            self.assertTrue(hasattr(pqbench, name), name)
+        self.assertTrue(callable(pqbench.walk))
+        self.assertIn("walk", pqbench.__all__)
+
+    def test_config_and_workspace(self) -> None:
+        config = pqbench.Config("https://example.test", token="secret")
+        self.assertEqual(config.endpoint, "https://example.test")
+        self.assertEqual(config.token, "secret")
+        self.assertEqual(config.dialect, pqbench.Dialect.UNITY)
+        workspace = pqbench.Workspace(config)
+        self.assertEqual(workspace.config.endpoint, "https://example.test")
+        self.assertIsInstance(pqbench.Lake(workspace), pqbench.Lake)
+
+    async def test_walk_rejects_a_bad_bound(self) -> None:
+        # The bounds are checked before any level is listed, so no endpoint is
+        # needed and nothing is sent.
+        workspace = _workspace()
+        with self.assertRaises(ValueError):
+            async for _ in pqbench.walk(workspace, concurrency=0):
+                pass
+        with self.assertRaises(ValueError):
+            async for _ in pqbench.walk(workspace, window_millis=0):
+                pass
+        for rate in (-1.0, float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                async for _ in pqbench.walk(workspace, requests_per_second=rate):
+                    pass
+
+    def test_lz_report(self) -> None:
+        report = pqbench.native.lz.lz(
+            pqbench.native.LzRequest(
+                file=_PARQUET,
+                codec_specs=["snappy"],
+                samples=1,
+                warmup_iterations=0,
+            )
         )
         self.assertEqual(len(report["rows"]), 1)
         self.assertEqual(report["rows"][0]["codec"], "snappy")
 
-    def test_lz_text_and_mean_mode(self) -> None:
-        text = pqbench.lz(
-            _PARQUET,
-            codecs=["snappy"],
-            samples=1,
-            warmup_iterations=0,
-            mode="mean",
-        )
-        self.assertIsInstance(text, str)
-        self.assertIn("snappy", text)
+    def test_lz_rejects_an_unknown_codec(self) -> None:
+        with self.assertRaises(RuntimeError):
+            pqbench.native.lz.lz(
+                pqbench.native.LzRequest(
+                    file=_PARQUET,
+                    codec_specs=["nonesuch"],
+                    samples=1,
+                    warmup_iterations=0,
+                )
+            )
 
-    def test_lz_invalid_mode(self) -> None:
-        with self.assertRaises(ValueError) as caught:
-            pqbench.lz(_PARQUET, mode="median")
-        self.assertIn("mean", str(caught.exception))
-
-    def test_compression_json_report(self) -> None:
-        report = pqbench.compression(
-            _PARQUET,
-            codecs=["snappy"],
-            samples=1,
-            warmup_iterations=0,
-            per_column=True,
-            json=True,
+    def test_compression_per_column(self) -> None:
+        report = pqbench.native.compression.compression(
+            pqbench.native.CompressionRequest(
+                file=_PARQUET,
+                codec_specs=["snappy"],
+                samples=1,
+                warmup_iterations=0,
+                per_column=True,
+            )
         )
         self.assertIn("rows", report)
         self.assertIn("columns", report)
 
-    def test_bytemass_streams_column_rows(self) -> None:
-        rows = pqbench.bytemass(str(_PARQUET))
-        self.assertIsInstance(rows, list)
+    async def test_bytemass_streams_column_rows(self) -> None:
+        rows = await pqbench.native.bytemass.bytemass(
+            pqbench.Lake(_workspace()),
+            pqbench.native.BytemassRequest(inputs=[str(_PARQUET)]),
+        )
         self.assertGreaterEqual(len(rows), 1)
         self.assertIn("column", rows[0])
         self.assertIn("compressed_bytes", rows[0])
@@ -95,175 +152,103 @@ class BindingsTest(unittest.TestCase):
         self.assertTrue(rows[0]["encodings"])
         self.assertTrue(any(row["column"] == "text" for row in rows))
 
-    def test_bytemass_indexes_is_optional(self) -> None:
-        rows = pqbench.bytemass(str(_PARQUET), indexes=True)
-        self.assertGreaterEqual(len(rows), 1)
-        self.assertIn("physical_type", rows[0])
-
-    def test_bytemass_requires_an_input(self) -> None:
-        with self.assertRaises(RuntimeError):
-            pqbench.bytemass()
-
-    def test_bytemass_rejects_a_non_aws_env_key(self) -> None:
-        with self.assertRaises(ValueError) as caught:
-            pqbench.bytemass(str(_PARQUET), env={"PATH": "/"})
-        self.assertIn("AWS_", str(caught.exception))
-
     def test_profile_streams_column_facts(self) -> None:
-        columns = pqbench.profile(str(_PARQUET), rows="first:32", top=5)
-        self.assertIsInstance(columns, list)
-        self.assertGreaterEqual(len(columns), 1)
-        self.assertIn("column", columns[0])
-        self.assertIn("null_fraction", columns[0])
-        self.assertIn("ndv", columns[0])
-        self.assertIn("id", columns[0])
-        filtered = pqbench.profile(str(_PARQUET), columns=["text"], rows="first:8")
-        self.assertEqual([column["column"] for column in filtered], ["text"])
-
-    def test_profile_rejects_a_bad_rows_method(self) -> None:
-        with self.assertRaises(ValueError) as caught:
-            pqbench.profile(str(_PARQUET), rows="last:5")
-        self.assertIn("rows", str(caught.exception))
+        sample = pqbench.native.third_party.parquet.read_sample(_PARQUET, 32)
+        profile = pqbench.native.profile.profile(
+            sample, pqbench.native.ProfileRequest(columns=[], top=5)
+        )
+        self.assertGreaterEqual(len(profile["columns"]), 1)
+        self.assertIn("column", profile["columns"][0])
+        self.assertIn("null_fraction", profile["columns"][0])
+        self.assertIn("ndv", profile["columns"][0])
 
     def test_experiment_streams_trials(self) -> None:
-        trials = pqbench.experiment(
-            str(_PARQUET),
-            rewrite=["sort:text"],
-            rows="first:512",
+        sample = pqbench.native.third_party.parquet.read_typed_sample(_PARQUET, 512)
+        experiment = pqbench.native.experiment.experiment(
+            sample, pqbench.native.ExperimentRequest(trials=["sort:text"], aim=pqbench.native.Aim.ALL)
         )
-        self.assertIsInstance(trials, list)
-        self.assertGreaterEqual(len(trials), 2)
-        names = [trial["name"] for trial in trials]
+        names = [trial["name"] for trial in experiment["trials"]]
         self.assertEqual(names[0], "control")
         self.assertIn("sort:text", names)
-        self.assertIn("bytes", trials[0])
-        self.assertIn("columns", trials[0])
 
-    def test_experiment_rejects_an_unknown_rewrite(self) -> None:
-        with self.assertRaises(RuntimeError) as caught:
-            pqbench.experiment(str(_PARQUET), rewrite=["correlate:text"])
-        self.assertIn("rewrite", str(caught.exception))
-
-    def test_diff_measures_two_inputs(self) -> None:
-        deltas = pqbench.diff(str(_PARQUET), str(_PARQUET))
-        self.assertGreaterEqual(len(deltas), 1)
-        self.assertEqual(deltas[0]["kind"], "pqbench.diff-column")
-        self.assertIn("column", deltas[0])
-        self.assertEqual(deltas[0]["delta_bytes"], 0)
-
-    def test_diff_compares_row_lists(self) -> None:
-        rows = pqbench.bytemass(str(_PARQUET))
-        deltas = pqbench.diff(rows, rows, depth=1)
-        self.assertGreaterEqual(len(deltas), 1)
-        self.assertEqual(deltas[0]["delta_bytes"], 0)
-
-    def test_diff_rejects_depth_zero(self) -> None:
-        with self.assertRaises(RuntimeError) as caught:
-            pqbench.diff(str(_PARQUET), str(_PARQUET), depth=0)
-        self.assertIn("depth", str(caught.exception))
-
-    def test_ratelimit_passes_records_through(self) -> None:
-        records = [{"kind": "pqbench.table", "name": "catalogs/c"}]
-        self.assertEqual(pqbench.ratelimit(records, rate=0), records)
-
-    def test_ratelimit_rejects_a_negative_rate(self) -> None:
-        with self.assertRaises(ValueError):
-            pqbench.ratelimit([{}], rate=-1)
-
-    def test_setup_exports_the_configuration(self) -> None:
-        env = pqbench.setup(
-            endpoint="https://example.test",
-            token="secret",
-            table_format="unity",
-            region="us-east-1",
+    async def test_diff_compares_row_lists(self) -> None:
+        rows = await pqbench.native.bytemass.bytemass(
+            pqbench.Lake(_workspace()),
+            pqbench.native.BytemassRequest(inputs=[str(_PARQUET)]),
         )
-        self.assertEqual(env["PQB_ENDPOINT"], "https://example.test")
-        self.assertEqual(env["PQB_TOKEN"], "secret")
-        self.assertEqual(env["PQB_TABLE_FORMAT"], "unity")
-        self.assertEqual(env["AWS_REGION"], "us-east-1")
-        self.assertEqual(env["AWS_EC2_METADATA_DISABLED"], "true")
+        deltas = pqbench.native.diff.compare(rows, rows, 1)
+        self.assertGreaterEqual(len(deltas), 1)
+        self.assertEqual(deltas[0]["delta_bytes"], 0)
 
-    def test_setup_needs_a_token(self) -> None:
-        blank = {"PQB_TOKEN": "", "DATABRICKS_TOKEN": ""}
-        with mock.patch.dict(os.environ, blank):
-            with self.assertRaises(ValueError) as caught:
-                pqbench.setup(endpoint="https://example.test")
-            self.assertIn("token", str(caught.exception))
+    def test_ratelimit_paces_by_kind(self) -> None:
+        limit = pqbench.native.ratelimit.RateLimit(10.0)
+        self.assertEqual(limit.delay("catalog"), 0.0)
+        self.assertEqual(limit.delay("schema"), 0.0)
+        self.assertGreater(limit.delay("catalog"), 0.0)
 
-    def test_skill_returns_the_advisor(self) -> None:
-        listed = pqbench.skill()
-        self.assertTrue(any(item["name"] == "parquet-advisor" for item in listed))
-        body = pqbench.skill("parquet-advisor")
-        self.assertIn("pqbench experiment", body)
-        recipes = pqbench.skill("parquet-advisor", "recipes")
-        self.assertIn("zstd@3", recipes)
-
-    def test_list_partitions_groups_the_log(self) -> None:
-        partitions = pqbench.list_partitions(str(_TABLE))
+    async def test_list_partitions_groups_the_log(self) -> None:
+        lake = pqbench.Lake(_workspace())
+        partitions = [
+            partition
+            async for partition in pqbench.native.partition.ls.list(
+                lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
+            )
+        ]
         self.assertGreaterEqual(len(partitions), 1)
         self.assertTrue(
-            partitions[0]["name"].startswith("catalogs/local/schemas/local/tables/")
+            partitions[0]["name"].startswith(f"{_TABLE_NAME}/partitions/"),
+            partitions[0]["name"],
         )
         self.assertEqual(partitions[0]["commit_versions"], [0])
         self.assertIn("commit_info", partitions[0])
 
-    def test_list_partitions_rejects_a_bad_window(self) -> None:
-        with self.assertRaises(ValueError) as caught:
-            pqbench.list_partitions(str(_TABLE), every="1y")
-        self.assertIn("every", str(caught.exception))
-
-    def test_list_files_names_the_blobs(self) -> None:
-        partitions = pqbench.list_partitions(str(_TABLE))
-        files = pqbench.list_files(partitions[0])
+    async def test_list_files_names_the_paths(self) -> None:
+        lake = pqbench.Lake(_workspace())
+        partition = [
+            partition
+            async for partition in pqbench.native.partition.ls.list(
+                lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
+            )
+        ][0]
+        files = [
+            file
+            async for file in pqbench.native.file.ls.list(
+                lake, partition["uri"], {}, partition["commit_versions"]
+            )
+        ]
         self.assertEqual(len(files), 1)
-        self.assertTrue(files[0]["name"].endswith(".parquet"))
-        self.assertTrue(files[0]["blob"].startswith("blobs/"))
-        # The files stage leaves the size to bytemass, which reads the footer.
-        self.assertEqual(files[0]["size_bytes"], 0)
+        self.assertTrue(files[0]["path"].endswith(".parquet"), files[0])
+        self.assertTrue(files[0]["uri"], files[0])
 
-    def test_list_files_rejects_a_table_file(self) -> None:
-        with self.assertRaises(ValueError):
-            pqbench.list_files({"kind": "pqbench.table-file", "id": "t"})
-
-    def test_credentials_check_passes_iceberg_refs(self) -> None:
-        ref = {"name": "catalogs/c/schemas/s/tables/t"}
-        self.assertEqual(
-            pqbench.credentials_check(
-                [ref],
-                endpoint="http://127.0.0.1:1",
-                table_format="iceberg",
-            ),
-            [ref],
+    async def test_viz_writes_the_report(self) -> None:
+        rows = await pqbench.native.bytemass.bytemass(
+            pqbench.Lake(_workspace()),
+            pqbench.native.BytemassRequest(inputs=[str(_PARQUET)]),
         )
-
-    def test_get_requires_an_endpoint(self) -> None:
-        with self.assertRaises(ValueError) as caught:
-            pqbench.get_metastore(endpoint="")
-        self.assertIn("endpoint", str(caught.exception))
-
-    def test_version_is_the_crate_version(self) -> None:
-        self.assertRegex(pqbench.__version__, r"^\d+\.\d+\.\d+$")
-
-    def test_viz_collects_bytemass_rows(self) -> None:
-        rows = pqbench.bytemass(str(_PARQUET))
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory) / "report"
-            paths = pqbench.viz(rows, output=str(prefix))
-            html = Path(paths["html"])
-            page = html.read_text()
+            pqbench.native.viz.write_report(prefix, rows)
+            page = prefix.with_suffix(".html").read_text()
             self.assertTrue(page.startswith("<!DOCTYPE html>"))
             self.assertIn("d3-hierarchy@3", page)
 
-    def test_viz_rejects_a_table_file(self) -> None:
-        with self.assertRaises(ValueError) as caught:
-            pqbench.viz({"kind": "pqbench.table-file", "id": "t"}, output="report")
-        self.assertIn("bytemass", str(caught.exception))
+    def test_skill_returns_the_advisor(self) -> None:
+        listed = pqbench.native.skill.skills()
+        self.assertTrue(any(item["name"] == "parquet-advisor" for item in listed))
+        body = pqbench.native.skill.skill("parquet-advisor")
+        self.assertEqual(body["name"], "parquet-advisor")
+        recipes = pqbench.native.skill.document("parquet-advisor", "recipes")
+        self.assertIn("zstd@3", recipes)
 
-    def test_missing_input_fails(self) -> None:
+    async def test_missing_input_fails(self) -> None:
         with self.assertRaises(RuntimeError):
-            pqbench.lz("/nonexistent/pqbench-input")
+            pqbench.native.lz.lz(pqbench.native.LzRequest(file=Path("/nonexistent/pqbench-input")))
+        lake = pqbench.Lake(_workspace())
         with self.assertRaises(RuntimeError):
-            pqbench.list_partitions("/nonexistent/pqbench-table")
+            async for _ in pqbench.native.partition.ls.list(
+                lake, "local", "/nonexistent/pqbench-table", {}, _DAY_MILLIS
+            ):
+                pass
 
 
 if __name__ == "__main__":

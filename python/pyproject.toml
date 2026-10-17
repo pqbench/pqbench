@@ -26,7 +26,7 @@ Documentation = "https://github.com/pqbench/pqbench/tree/main/python"
 
 [tool.maturin]
 bindings = "pyo3"
-module-name = "pqbench._native"
+module-name = "pqbench.native"
 python-packages = ["pqbench"]
 # A published wheel cannot be rebuilt by its user, so it carries every storage
 # backend: `s3://` reads and Delta/Iceberg tables work out of the box. The
