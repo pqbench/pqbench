@@ -14,7 +14,7 @@
 #     .venv-docs/bin/mkdocs serve
 
 site_name: pqbench
-site_description: lzbench for parquet — measure how well each codec compresses a Parquet file, and how many on-disk bytes each column costs.
+site_description: One binary for Parquet optimization — measure how well each codec compresses a Parquet file, and how many on-disk bytes each column costs.
 site_url: https://pqbench.github.io/pqbench/
 repo_url: https://github.com/pqbench/pqbench
 repo_name: pqbench/pqbench

@@ -5,12 +5,12 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://github.com/pqbench/pqbench/blob/main/LICENSE-MIT)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/pqbench/pqbench/blob/main/LICENSE-APACHE)
 
-*lzbench for parquet.*
+*One binary for Parquet optimization.*
 
 <!-- --8<-- [start:landing] -->
 Measure how well each codec compresses a Parquet file and how many on-disk
-bytes each column costs. One binary for Parquet optimization: it reads footers
-and table metadata, never the data pages, so it is fast on files of any size.
+bytes each column costs. It reads footers and table metadata, never the data
+pages, so it is fast on files of any size.
 
 Commands compose on pipes — each writes a versioned JSON document the next
 reads — so the whole job is one pipeline. The [walk](#the-walk-end-to-end) goes
