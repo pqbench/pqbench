@@ -9,9 +9,12 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use deltalake::kernel::scalars::ScalarExt;
-use deltalake::logstore::LogStore;
-use deltalake::{DeltaTable, DeltaTableBuilder};
-use futures::TryStreamExt;
+use deltalake::kernel::Snapshot;
+use deltalake::logstore::object_store::path::Path as ObjectPath;
+use deltalake::logstore::object_store::{ObjectStore, ObjectStoreExt};
+use deltalake::logstore::{commit_uri_from_version, LogStore, LogStoreRef};
+use deltalake::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -35,25 +38,43 @@ impl std::error::Error for Error {}
 
 /// Resolve the transaction log and the active files of a Delta table.
 pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
-    let table = open(lake, request).await?;
-    let snapshot = snapshot_meta(&table)?;
+    let store = open_store(lake, request)?;
+    // A plain snapshot is lazy: it reads the log's actions, not its files, so
+    // even a header read never materializes the active-file set. A loaded
+    // `DeltaTable` would, at O(files) memory.
+    let snapshot = Snapshot::try_new(store.as_ref(), request.snapshot_version)
+        .await
+        .map_err(delta_error)?;
+    let meta = snapshot_meta(&snapshot);
     let mut info = TableInfo::new(
         TableFormat::DELTA,
         request.uri.clone(),
-        snapshot.version,
-        snapshot.partition_columns,
+        meta.version,
+        meta.partition_columns,
         Vec::new(),
         Vec::new(),
         request.env.clone(),
     );
-    info.columns = snapshot.columns;
-    info.delta_properties = snapshot.properties;
-    if request.require_files || request.require_log {
-        info.log = read_log(&table, snapshot.version, request.commit_versions.as_ref()).await?;
+    info.columns = meta.columns;
+    info.delta_properties = meta.properties;
+    if !request.require_files {
+        return Ok(info);
     }
+    info.log = read_log(
+        &store,
+        &request.uri,
+        Some(meta.version),
+        request.commit_versions.as_ref(),
+    )
+    .await?;
     // A caller that names the commits wants the files the log itself names; the
     // snapshot's active-file replay is redundant then (and O(files)).
-    if request.require_files && request.commit_versions.is_none() {
+    if request.commit_versions.is_none() {
+        let mut table = DeltaTable::new(store);
+        table
+            .load_version(meta.version)
+            .await
+            .map_err(delta_error)?;
         let (files, partitions) = active_files(&table, request).await?;
         info.files = files;
         info.partitions = partitions;
@@ -61,18 +82,25 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     Ok(info)
 }
 
-async fn open(lake: &Lake, request: &LoadRequest) -> Result<DeltaTable, Error> {
+/// The table's location as a URL: a URI as given, or a local directory made
+/// absolute.
+fn table_url(request: &LoadRequest) -> Result<Url, Error> {
     if request.uri.contains("://") {
         let url = Url::parse(&request.uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
-        if url.scheme() == "file" {
-            let path = url
-                .to_file_path()
-                .map_err(|()| Error("invalid local table URI".into()))?;
-            return load_local_table(lake, &local_root(&path)?, request).await;
+        if url.scheme() != "file" {
+            return Ok(url);
         }
-        return load_table(lake, url, request).await;
+        let path = url
+            .to_file_path()
+            .map_err(|()| Error("invalid local table URI".into()))?;
+        return directory_url(&local_root(&path)?);
     }
-    load_local_table(lake, &local_root(Path::new(&request.uri))?, request).await
+    directory_url(&local_root(Path::new(&request.uri))?)
+}
+
+fn directory_url(root: &Path) -> Result<Url, Error> {
+    Url::from_directory_path(root)
+        .map_err(|()| Error("cannot convert table path to a local file URL".into()))
 }
 
 fn local_root(path: &Path) -> Result<PathBuf, Error> {
@@ -85,17 +113,10 @@ fn local_root(path: &Path) -> Result<PathBuf, Error> {
     Ok(root)
 }
 
-async fn load_local_table(
-    lake: &Lake,
-    root: &Path,
-    request: &LoadRequest,
-) -> Result<DeltaTable, Error> {
-    let url = Url::from_directory_path(root)
-        .map_err(|()| Error("cannot convert table path to a local file URL".into()))?;
-    load_table(lake, url, request).await
-}
-
-async fn load_table(lake: &Lake, url: Url, request: &LoadRequest) -> Result<DeltaTable, Error> {
+/// Resolve the table's log store, under the request's storage options and (for
+/// S3) the shared client: no snapshot, so the open materializes no files.
+fn open_store(lake: &Lake, request: &LoadRequest) -> Result<LogStoreRef, Error> {
+    let url = table_url(request)?;
     let mut builder = DeltaTableBuilder::from_url(url.clone()).map_err(delta_error)?;
     if !request.env.is_empty() {
         builder = builder.with_storage_options(request.env.clone().into_iter().collect());
@@ -103,13 +124,7 @@ async fn load_table(lake: &Lake, url: Url, request: &LoadRequest) -> Result<Delt
     if let Some(store) = shared_store(lake, &url, request)? {
         builder = builder.with_storage_backend(store, url);
     }
-    if let Some(version) = request.snapshot_version {
-        builder = builder.with_version(version);
-    }
-    if !request.require_files {
-        builder = builder.without_files();
-    }
-    builder.load().await.map_err(delta_error)
+    builder.build_storage().map_err(delta_error)
 }
 
 /// The store on the one shared HTTP client, for delta-rs to reuse instead of
@@ -143,9 +158,8 @@ struct SnapshotMeta {
     properties: BTreeMap<String, String>,
 }
 
-fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
-    let snapshot = table.snapshot().map_err(delta_error)?;
-    Ok(SnapshotMeta {
+fn snapshot_meta(snapshot: &Snapshot) -> SnapshotMeta {
+    SnapshotMeta {
         version: snapshot.version(),
         partition_columns: snapshot.metadata().partition_columns().to_vec(),
         columns: snapshot
@@ -163,75 +177,268 @@ fn snapshot_meta(table: &DeltaTable) -> Result<SnapshotMeta, Error> {
             .clone()
             .into_iter()
             .collect(),
-    })
+    }
 }
 
+/// Read the log's commits, actions and all, in version order.
+///
+/// The caller either names the commits it wants or takes them all; either way
+/// the versions are a list, so the reads are a map over it and come back in
+/// version order as they were asked for.
 async fn read_log(
-    table: &DeltaTable,
-    last_version: u64,
+    store: &LogStoreRef,
+    uri: &str,
+    head: Option<u64>,
     versions: Option<&BTreeSet<u64>>,
 ) -> Result<Vec<LogCommit>, Error> {
-    let store = table.log_store();
-    let wanted: Vec<u64> = match versions {
-        Some(versions) => versions.iter().copied().collect(),
-        None => (0..=last_version).collect(),
+    let versions: Vec<u64> = match versions {
+        Some(named) => named.iter().copied().collect(),
+        None => commit_versions(store, uri, head).await?,
     };
-    let mut commits = Vec::new();
-    for version in wanted {
-        let Some(bytes) = store
-            .read_commit_entry(version)
-            .await
-            .map_err(delta_error)?
-        else {
-            continue;
-        };
-        let (actions, commit_time) = parse_commit(&bytes, version)?;
-        drop(bytes);
-        commits.push(LogCommit {
-            version,
-            commit_time,
-            actions,
-        });
-    }
-    Ok(commits)
+    let store = store.clone();
+    // As in `stream_commits`: the versions are known, so every read goes at once
+    // and the commits come back in version order.
+    let commits = futures::future::try_join_all(versions.into_iter().map(|version| {
+        let store = store.clone();
+        async move {
+            let Some(bytes) = store
+                .read_commit_entry(version)
+                .await
+                .map_err(delta_error)?
+            else {
+                // Named but gone: the log kept no actions to read.
+                return Ok(None);
+            };
+            let parsed = parse_commit(&bytes, version)?;
+            drop(bytes);
+            Ok(Some(LogCommit {
+                version,
+                commit_time: parsed.commit_time,
+                commit_info: parsed.commit_info,
+                actions: parsed.actions,
+            }))
+        }
+    }))
+    .await?;
+    Ok(commits.into_iter().flatten().collect())
 }
 
-fn parse_commit(bytes: &[u8], version: u64) -> Result<(Vec<LogAction>, Option<i64>), Error> {
+/// Stream the table's commits in version order, oldest first.
+///
+/// The log names its commits, so the versions come from one listing of it: every
+/// retained version, none probed, nothing asked for below retention, no hole to
+/// step over. Each version's time then comes from the commit itself, read with
+/// the store's own concurrency rather than one round trip at a time, so the walk
+/// costs the log's latency over the commits in reach and not the sum of it.
+pub(super) async fn stream_commits(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<LogCommit, Error>>, Error> {
+    let store = open_store(lake, request)?;
+    let versions = commit_versions(&store, &request.uri, request.snapshot_version).await?;
+    // The log names every commit, so no read waits on another: they all go at
+    // once and are yielded in version order, newest first, as they land. A commit
+    // the log does not date has no time to contribute, and one the listing named
+    // that a read no longer finds has nothing left to read, so neither is yielded.
+    Ok(futures::stream::iter(versions.into_iter().rev())
+        .map(move |version| {
+            let store = store.clone();
+            async move {
+                commit_head(&store, version)
+                    .await
+                    .map(|head| (version, head))
+            }
+        })
+        .buffered(commit_read_width())
+        .try_filter_map(|(version, head)| async move {
+            Ok(match head {
+                CommitHead::Present(Some(info)) => {
+                    // A commit the log does not date has no window to fall in.
+                    info.get("timestamp")
+                        .and_then(Value::as_i64)
+                        .map(|commit_time| LogCommit {
+                            version,
+                            commit_time: Some(commit_time),
+                            commit_info: Some(info),
+                            actions: Vec::new(),
+                        })
+                }
+                CommitHead::Missing | CommitHead::Present(None) => None,
+            })
+        }))
+}
+
+/// The table's commit versions, oldest first, from the log's own listing.
+///
+/// A JSON commit is named `00000000000000000042.json` and nothing else is: a
+/// checkpoint, a compiled log, a sidecar, and an archiver's droppings all have
+/// other shapes, so the name alone names the commit. Retention removes a prefix,
+/// so the retained versions are contiguous and a gap is a log that lost commits
+/// — a read either side of it would report a table that never existed.
+async fn commit_versions(
+    store: &LogStoreRef,
+    uri: &str,
+    head: Option<u64>,
+) -> Result<Vec<u64>, Error> {
+    let log = ObjectPath::from("_delta_log");
+    // Folded rather than collected: a version is eight bytes, the object listing
+    // is not, and a log can name millions of files.
+    let (mut versions, listed) = store
+        .object_store(None)
+        .list_with_offset(Some(&log), &log)
+        .try_fold(
+            (Vec::new(), false),
+            |(mut versions, _), object| async move {
+                let name = object.location.filename().unwrap_or_default();
+                if let Some(version) = commit_file_version(name) {
+                    versions.push(version);
+                }
+                Ok::<_, ObjectStoreError>((versions, true))
+            },
+        )
+        .await
+        .map_err(|error| Error(error.to_string()))?;
+    if !listed {
+        return Err(Error(format!("no _delta_log in {uri}")));
+    }
+    versions.retain(|version| head.is_none_or(|head| *version <= head));
+    versions.sort_unstable();
+    versions.dedup();
+    if let Some(gap) = versions.windows(2).find(|pair| pair[1] > pair[0] + 1) {
+        return Err(Error(format!(
+            "the log misses commit {}: versions {} and {} are not contiguous",
+            gap[0] + 1,
+            gap[0],
+            gap[1]
+        )));
+    }
+    Ok(versions)
+}
+
+/// The version a commit file name carries, or `None` when the name is not a
+/// commit's.
+fn commit_file_version(name: &str) -> Option<u64> {
+    let stem = name.strip_suffix(".json")?;
+    let digits = stem.len() == 20 && stem.bytes().all(|byte| byte.is_ascii_digit());
+    digits.then(|| stem.parse().ok()).flatten()
+}
+
+/// How many commit reads one walk keeps in flight: the store's own concurrency,
+/// as delta-rs takes it for its own commit stream. Unbounded, every read's body
+/// is resident at once — a million-commit log would be gigabytes — and windowed
+/// it is flat in the log.
+fn commit_read_width() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        * 4
+}
+
+/// How far into a commit file to read for its head, in stages: `commitInfo` is a
+/// few hundred bytes and Delta writers put it first, so the first read carries
+/// it for almost every commit; a commit whose header is longer is read further
+/// — 4 KB covers the long ones — before the file is read whole.
+const COMMIT_HEADER_STAGES: [u64; 2] = [1024, 4096];
+
+/// What one log version's commit file says about itself.
+#[derive(Debug, Clone)]
+enum CommitHead {
+    /// No JSON file at this version: log retention, or a commit that only a
+    /// checkpoint still summarizes.
+    Missing,
+    /// The file is there; its `commitInfo`, when the log records one.
+    Present(Option<Value>),
+}
+
+/// The head of one log version, read as a prefix of its commit file.
+///
+/// The prefix grows by stages and only then whole: the log's own order decides,
+/// and a read shorter than the stage asked for is the whole file.
+async fn commit_head(store: &LogStoreRef, version: u64) -> Result<CommitHead, Error> {
+    let object = store.object_store(None);
+    let path = commit_uri_from_version(Some(version));
+    for end in COMMIT_HEADER_STAGES {
+        match object.get_range(&path, 0..end).await {
+            Ok(prefix) => {
+                if let Some(info) = parse_commit_info(&prefix) {
+                    return Ok(CommitHead::Present(Some(info)));
+                }
+                if (prefix.len() as u64) < end {
+                    return Ok(CommitHead::Present(None));
+                }
+            }
+            Err(ObjectStoreError::NotFound { .. }) => return Ok(CommitHead::Missing),
+            // Anything else is the whole read's to report.
+            Err(_) => break,
+        }
+    }
+    match store
+        .read_commit_entry(version)
+        .await
+        .map_err(delta_error)?
+    {
+        Some(bytes) => Ok(CommitHead::Present(parse_commit_info(&bytes))),
+        None => Ok(CommitHead::Missing),
+    }
+}
+
+/// A commit's `commitInfo` action, decoded from its own line: the actions of a
+/// long commit are not parsed. A read that stops mid-line — a prefix, or a log
+/// that does not end in a newline — simply holds no `commitInfo` yet.
+fn parse_commit_info(bytes: &[u8]) -> Option<Value> {
+    for line in bytes.split(|byte| *byte == b'\n') {
+        let line = String::from_utf8_lossy(line);
+        if !line.contains("\"commitInfo\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        return value.get("commitInfo").cloned();
+    }
+    None
+}
+
+/// The parts of a commit file a read keeps.
+struct ParsedCommit {
+    actions: Vec<LogAction>,
+    commit_time: Option<i64>,
+    commit_info: Option<serde_json::Value>,
+}
+
+fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
     let text = std::str::from_utf8(bytes)
         .map_err(|e| Error(format!("commit {version} is not UTF-8: {e}")))?;
     let mut actions = Vec::new();
     let mut commit_time = None;
+    let mut commit_info = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let (action, time) = parse_action(line, version)?;
-        if commit_time.is_none() {
-            commit_time = time;
+        let value: serde_json::Value = serde_json::from_str(line)
+            .map_err(|e| Error(format!("cannot parse commit {version}: {e}")))?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| Error(format!("commit {version} action is not an object")))?;
+        let (kind, body) = object
+            .iter()
+            .next()
+            .ok_or_else(|| Error(format!("commit {version} action is empty")))?;
+        if kind == "commitInfo" && commit_info.is_none() {
+            commit_info = Some(body.clone());
+            commit_time = body.get("timestamp").and_then(serde_json::Value::as_i64);
         }
-        actions.push(action);
+        actions.push(LogAction {
+            kind: kind.clone(),
+            path: body
+                .get("path")
+                .and_then(|path| path.as_str())
+                .map(str::to_owned),
+        });
     }
-    Ok((actions, commit_time))
-}
-
-fn parse_action(line: &str, version: u64) -> Result<(LogAction, Option<i64>), Error> {
-    let value: serde_json::Value = serde_json::from_str(line)
-        .map_err(|e| Error(format!("cannot parse commit {version}: {e}")))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| Error(format!("commit {version} action is not an object")))?;
-    let (kind, body) = object
-        .iter()
-        .next()
-        .ok_or_else(|| Error(format!("commit {version} action is empty")))?;
-    let commit_time = (kind == "commitInfo")
-        .then(|| body.get("timestamp").and_then(serde_json::Value::as_i64))
-        .flatten();
-    let action = LogAction {
-        kind: kind.clone(),
-        path: body
-            .get("path")
-            .and_then(|path| path.as_str())
-            .map(str::to_owned),
-    };
-    Ok((action, commit_time))
+    Ok(ParsedCommit {
+        actions,
+        commit_time,
+        commit_info,
+    })
 }
 
 /// Resolve every active data file to a path `bytemass` can read, collecting
