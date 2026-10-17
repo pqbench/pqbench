@@ -1,7 +1,7 @@
 //! Iceberg snapshot resolution, isolated behind the `iceberg` feature.
 //!
-//! [`load`] is the runtime dispatch: without the feature it returns an error
-//! naming it, so callers never see a `#[cfg]`.
+//! [`load`] and [`stream_commits`] are the runtime dispatch: without the
+//! feature they return an error naming it, so callers never see a `#[cfg]`.
 
 use crate::table::{LoadRequest, TableInfo};
 use crate::Lake;
@@ -18,6 +18,30 @@ pub(crate) async fn load(
         load::load(lake, request)
             .await
             .map_err(|error| crate::table::Error(error.to_string()))
+    }
+    #[cfg(not(feature = "iceberg"))]
+    {
+        let _ = (lake, request);
+        Err(crate::table::Error(
+            "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
+        ))
+    }
+}
+
+pub(crate) async fn stream_commits(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::CommitStream<'static>, crate::table::Error> {
+    #[cfg(feature = "iceberg")]
+    {
+        use futures_util::{StreamExt as _, TryStreamExt as _};
+
+        let commits = load::stream_commits(lake, request)
+            .await
+            .map_err(|error| crate::table::Error(error.to_string()))?;
+        Ok(commits
+            .map_err(|error| crate::table::Error(error.to_string()))
+            .boxed())
     }
     #[cfg(not(feature = "iceberg"))]
     {

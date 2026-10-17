@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
+use futures_util::Stream;
 use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
@@ -62,7 +63,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         }
         _ => (Vec::new(), Vec::new()),
     };
-    let mut log = if request.require_files || request.require_log {
+    let mut log = if request.require_files {
         ancestry(&metadata, selected)
             .into_iter()
             .map(|snapshot| {
@@ -258,6 +259,50 @@ fn select_snapshot(
         .find(|snapshot| snapshot.snapshot_id == snapshot_id)
         .map(Some)
         .ok_or_else(|| Error(format!("Iceberg snapshot does not exist: {snapshot_id}")))
+}
+
+/// Visit the table's snapshots, newest first, without collecting them.
+///
+/// The metadata JSON carries the snapshot ancestry, so no manifest or data file
+/// is read.
+///
+/// Iceberg's history is the selected snapshot's ancestry — a list the metadata
+/// JSON already fixes — so the read resolves it and streams it in order.
+pub(super) async fn stream_commits(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<LogCommit, Error>>, Error> {
+    let options = env_options(&request.env);
+    let metadata_location = resolve_metadata_location(lake, &request.uri, &options).await?;
+    let metadata_bytes = read_location(lake, &metadata_location, &options).await?;
+    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| Error(format!("cannot parse metadata JSON: {e}")))?;
+    if metadata.format_version != 1 && metadata.format_version != 2 {
+        return Err(Error(format!(
+            "unsupported Iceberg format version: {}",
+            metadata.format_version
+        )));
+    }
+    let requested = request.snapshot_version.map(create_i64).transpose()?;
+    let selected = select_snapshot(&metadata, requested)?;
+    // `ancestry` walks from the selected snapshot back through its parents, so
+    // the newest snapshot comes first.
+    let mut floor: Option<i64> = None;
+    let mut commits = Vec::new();
+    for snapshot in ancestry(&metadata, selected) {
+        if let (Some(window), Some(time)) = (request.commit_window_millis, snapshot.snapshot_time) {
+            let floor = *floor.get_or_insert(time.saturating_sub(window));
+            if time < floor {
+                break;
+            }
+        }
+        commits.push(LogCommit {
+            version: create_u64(snapshot.snapshot_id)?,
+            commit_time: snapshot.snapshot_time,
+            actions: Vec::new(),
+        });
+    }
+    Ok(futures_util::stream::iter(commits.into_iter().map(Ok)))
 }
 
 fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> Vec<&'a Snapshot> {

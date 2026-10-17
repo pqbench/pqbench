@@ -3,6 +3,7 @@
 mod common;
 mod support;
 
+use futures_util::TryStreamExt;
 use pqbench::table::{self, LoadRequest, TableFormat};
 use pqbench::third_party::parquet::api::{default_metadata_parser, MetadataParser};
 use serde_json::json;
@@ -44,6 +45,107 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     let summary = pqbench::bytemass::aggregate(&rows).unwrap();
     assert_eq!(summary.row_count, 14);
     assert_eq!(summary.file_count, 2);
+}
+
+/// `list partitions` streams the log for commit times: each commit arrives with
+/// its version and time and no action, so nothing grows with a commit's file
+/// list. A commit the log does not date is not visited.
+#[tokio::test]
+async fn log_only_read_streams_times_without_actions() {
+    let fixture = Fixture::new();
+    let base = 1_700_000_000_000i64;
+    fixture.commit(
+        2,
+        &[json!({"commitInfo": {"timestamp": base, "operation": "WRITE"}})],
+    );
+    fixture.commit(3, &[json!({"commitInfo": {"timestamp": base + 1_000}})]);
+
+    let request = load_request(fixture.path().to_string_lossy(), None).without_files();
+    let mut seen: Vec<(u64, Option<i64>, usize)> = Vec::new();
+    let mut commits = table::stream_commits(common::lake(), &request)
+        .await
+        .unwrap();
+    while let Some(commit) = commits.try_next().await.unwrap() {
+        seen.push((commit.version, commit.commit_time, commit.actions.len()));
+    }
+
+    // The walk is newest first, and the newest commit is the snapshot version.
+    assert_eq!(
+        seen.iter()
+            .map(|(version, _, _)| *version)
+            .collect::<Vec<_>>(),
+        [3, 2]
+    );
+    assert_eq!(seen[0].1, Some(base + 1_000));
+    assert_eq!(seen[1].1, Some(base));
+    assert!(seen.iter().all(|(_, _, actions)| *actions == 0));
+}
+
+/// A commit whose `commitInfo` is not the first action is still dated: the walk
+/// reads past the header when the log does not lead with it.
+#[tokio::test]
+async fn log_only_read_dates_a_header_that_is_not_first() {
+    let fixture = Fixture::new();
+    let base = 1_700_000_000_000i64;
+    fixture.commit(
+        2,
+        &[
+            // Longer than the header the walk reads first.
+            json!({"add": {
+                "path": "padded.parquet",
+                "partitionValues": {"part": "a"},
+                "size": 1,
+                "modificationTime": 0,
+                "dataChange": true,
+                "stats": "x".repeat(8_192),
+            }}),
+            json!({"commitInfo": {"timestamp": base}}),
+        ],
+    );
+
+    let request = load_request(fixture.path().to_string_lossy(), None).without_files();
+    let mut commits = table::stream_commits(common::lake(), &request)
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    while let Some(commit) = commits.try_next().await.unwrap() {
+        seen.push((commit.version, commit.commit_time));
+    }
+
+    assert_eq!(seen, [(2, Some(base))]);
+}
+
+/// A read window stops the stream at the first commit older than the window
+/// before the newest dated commit.
+#[tokio::test]
+async fn log_window_stops_at_the_oldest_commit_in_reach() {
+    let fixture = Fixture::new();
+    let base = 1_700_000_000_000i64;
+    fixture.commit(2, &[json!({"commitInfo": {"timestamp": base}})]);
+    fixture.commit(3, &[json!({"commitInfo": {"timestamp": base + 10_000}})]);
+    fixture.commit(4, &[json!({"commitInfo": {"timestamp": base + 100_000}})]);
+
+    let wide = load_request(fixture.path().to_string_lossy(), None)
+        .without_files()
+        .with_commit_window_millis(200_000);
+    let mut versions = Vec::new();
+    let mut commits = table::stream_commits(common::lake(), &wide).await.unwrap();
+    while let Some(commit) = commits.try_next().await.unwrap() {
+        versions.push(commit.version);
+    }
+    assert_eq!(versions, [4, 3, 2]);
+
+    let narrow = load_request(fixture.path().to_string_lossy(), None)
+        .without_files()
+        .with_commit_window_millis(20_000);
+    let mut versions = Vec::new();
+    let mut commits = table::stream_commits(common::lake(), &narrow)
+        .await
+        .unwrap();
+    while let Some(commit) = commits.try_next().await.unwrap() {
+        versions.push(commit.version);
+    }
+    assert_eq!(versions, [4]);
 }
 
 #[tokio::test]

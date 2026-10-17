@@ -25,6 +25,10 @@ pub(crate) struct LsArgs {
         default_value = "1d"
     )]
     every: i64,
+    /// read only commits within WINDOW of the newest commit: e.g. 1d
+    /// [env: PQB_TABLE_LAST]
+    #[arg(long, value_parser = parse_window, value_name = "WINDOW", env = "PQB_TABLE_LAST")]
+    last: Option<i64>,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
@@ -48,7 +52,8 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
             }
             let env = BTreeMap::new();
             let table = pqbench::v1::name::local_table(uri);
-            partitions += list_partitions(lake, &table, uri, &env, args.every, &mut emit).await?;
+            partitions +=
+                list_partitions(lake, &table, uri, &env, args.every, args.last, &mut emit).await?;
         }
         _ => {
             if !input.piped {
@@ -68,7 +73,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
                         })?
                         .to_string();
                     let env = ref_env(&record);
-                    partition::ls::list(lake, &name, &uri, &env, args.every)
+                    partition::ls::list(lake, &name, &uri, &env, args.every, args.last)
                         .await
                         .map_err(|error| CliError::from(error.to_string()))
                 })
@@ -91,9 +96,10 @@ async fn list_partitions(
     uri: &str,
     env: &BTreeMap<String, String>,
     window: i64,
+    last: Option<i64>,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    let found = partition::ls::list(lake, table, uri, env, window)
+    let found = partition::ls::list(lake, table, uri, env, window, last)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;

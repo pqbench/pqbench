@@ -11,7 +11,7 @@
 //! `bytemass`.
 //!
 //! Enable the `delta` feature to load Delta logs. That feature requires Rust
-//! 1.91.1 or newer because of the Delta snapshot dependencies. Iceberg needs
+//! 1.94.1 or newer because of the Delta snapshot dependencies. Iceberg needs
 //! `iceberg` (`iceberg-s3` for S3).
 
 pub mod get;
@@ -23,6 +23,7 @@ pub use selection::FileSelection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -91,6 +92,11 @@ pub struct LogCommit {
     /// Actions from the commit file, in file order.
     pub actions: Vec<LogAction>,
 }
+
+/// A table's commits, newest first, from [`stream_commits`].
+///
+/// The stream owns the log it reads, so it borrows nothing from the caller.
+pub type CommitStream<'a> = BoxStream<'a, Result<LogCommit, Error>>;
 
 /// One data file the current snapshot treats as active.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,13 +337,13 @@ pub struct LoadRequest {
     /// files.
     // aipnaming: allow(aip-140/verbs)
     pub require_files: bool,
-    /// When true, read the commit log even when [`Self::require_files`] is
-    /// false: `partition::ls` needs the commits' times, not the files.
-    pub require_log: bool,
     /// Read only these commit versions; `None` reads every commit. Naming the
     /// commits says the log's own file actions are what the caller wants, so
     /// the snapshot's active files are not replayed.
     pub commit_versions: Option<BTreeSet<u64>>,
+    /// Read only commits within this many milliseconds of the newest dated
+    /// commit; `None` reads every retained commit.
+    pub commit_window_millis: Option<i64>,
 }
 
 impl LoadRequest {
@@ -354,8 +360,8 @@ impl LoadRequest {
             env,
             file_stats: true,
             require_files: true,
-            require_log: false,
             commit_versions: None,
+            commit_window_millis: None,
         }
     }
 
@@ -377,22 +383,22 @@ impl LoadRequest {
         self
     }
 
-    /// Read only the commit log: the commits and their times, no active files.
-    /// This is `partition::ls`, which needs the commits, not the file replay.
-    // aipnaming: allow(aip-136/method-prepositions)
-    #[must_use]
-    pub fn with_log(mut self) -> Self {
-        self.require_log = true;
-        self.require_files = false;
-        self
-    }
-
     /// Read only these commit versions. The caller wants the files the log
     /// itself names, so the snapshot replay is skipped.
     // aipnaming: allow(aip-136/method-prepositions)
     #[must_use]
     pub fn with_commits(mut self, versions: impl IntoIterator<Item = u64>) -> Self {
         self.commit_versions = Some(versions.into_iter().collect());
+        self
+    }
+
+    /// Read only commits within `millis` of the newest dated commit. The log
+    /// read walks newest-first and stops at the first commit out of reach, so a
+    /// long log is not read down to its oldest retained commit.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn with_commit_window_millis(mut self, millis: i64) -> Self {
+        self.commit_window_millis = Some(millis);
         self
     }
 }
@@ -435,6 +441,27 @@ pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error
     match format {
         TableFormat::DELTA => delta::load(lake, request).await,
         TableFormat::ICEBERG => iceberg::load(lake, request).await,
+        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+    }
+}
+
+/// Stream a table's commits, newest first, without collecting them.
+///
+/// The stream owns the log it reads, so it borrows nothing from the caller and
+/// nothing grows with the log's length; the walk stops at the oldest commit the
+/// optional [`LoadRequest::commit_window_millis`] horizon reaches.
+///
+/// # Errors
+/// As [`detect`], plus format-specific read failures. A failure raised after the
+/// first commit arrives as a stream item.
+pub async fn stream_commits(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<CommitStream<'static>, Error> {
+    let format = detect(lake, &request.uri, &request.env).await?;
+    match format {
+        TableFormat::DELTA => delta::stream_commits(lake, request).await,
+        TableFormat::ICEBERG => iceberg::stream_commits(lake, request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
     }
 }

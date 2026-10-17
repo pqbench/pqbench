@@ -93,16 +93,21 @@ available active file without retaining a second complete history or file list
 in the CLI. Output writes are awaited, so a slow consumer slows the producer.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
-delta-rs skips the active-file replay, and the load reports the snapshot
-version, schema, partition columns, and properties at O(1) in files.
-`pqbench get table` is that caller.
+the read resolves a plain delta-rs snapshot, which reads the log's actions but
+never replays its files, so the load reports the snapshot version, schema,
+partition columns, and properties at O(1) in files. `pqbench get table` is that
+caller.
 
-Delta-rs still loads its active-file snapshot before the first record. Its lazy
+Resolving a snapshot's *active files* still goes through a loaded `DeltaTable`,
+whose active-file replay delta-rs materializes before the first record; its lazy
 file stream in the pinned version rejects malformed optional statistics that
 the existing loader tolerates, so it is not a compatible replacement yet.
 Memory also includes the largest individual commit and per-partition totals;
-human table output buffers rows to align columns. All available JSON history
-is still read. The library API retains the log and files it reads.
+human table output buffers rows to align columns. The commit reads walk the
+retained JSON history newest-first, stopping at the retention hole, and a
+`--last` horizon stops them earlier; each commit is read as a header prefix, not
+whole, so a commit's add-list is neither read nor retained. The library API
+retains the log and files it reads.
 
 ## Limitations
 
@@ -113,5 +118,5 @@ loader ([docs/iceberg.md](iceberg.md)).
 
 ## Dependencies
 
-Delta resolution delegates to delta-rs 0.32.4, which requires Rust 1.91.1 or
+Delta resolution delegates to delta-rs 1.1.1, which requires Rust 1.94.1 or
 newer. Delta dependencies are only built when the `delta` feature is enabled.
