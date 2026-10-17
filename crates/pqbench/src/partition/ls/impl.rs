@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use futures_util::{Stream, StreamExt, TryStreamExt};
+use serde_json::Value;
 
 use crate::table::{self, LoadRequest};
 use crate::v1;
@@ -38,15 +39,23 @@ pub(crate) async fn list(
 }
 
 /// What a windowed read holds while it runs: the commits still to read, and the
-/// window being filled. A window is handed over as soon as a commit falls outside
-/// it, so nothing accumulates but that one window.
+/// window being filled — each commit with the `commitInfo` the log gave it. A
+/// window is handed over as soon as a commit falls outside it, so nothing
+/// accumulates but that one window.
 struct Windows {
     commit_stream: table::CommitStream<'static>,
     window_millis: i64,
     table: String,
     uri: String,
     credentials: Option<v1::Credentials>,
-    open: Option<(i64, Vec<u64>)>,
+    open: Option<Window>,
+}
+
+/// A window being filled: its key, and the commits that fall in it, each with
+/// the `commitInfo` the log gave it.
+struct Window {
+    first_time: i64,
+    commits: Vec<(u64, Option<Value>)>,
 }
 
 /// Stream the commits as partitions, one per window, each yielded as it closes.
@@ -82,32 +91,54 @@ impl Windows {
                 continue;
             };
             let first_time = commit_time.div_euclid(self.window_millis) * self.window_millis;
+            let entry = (commit.version, commit.commit_info);
             match self.open.take() {
-                Some((open, mut commit_versions)) if first_time >= open => {
-                    commit_versions.push(commit.version);
-                    self.open = Some((open, commit_versions));
+                Some(mut window) if first_time >= window.first_time => {
+                    window.commits.push(entry);
+                    self.open = Some(window);
                 }
-                Some((open, commit_versions)) => {
-                    self.open = Some((first_time, vec![commit.version]));
-                    return Ok(Some((self.partition(open, commit_versions), self)));
+                Some(window) => {
+                    self.open = Some(Window {
+                        first_time,
+                        commits: vec![entry],
+                    });
+                    return Ok(Some((self.partition(window), self)));
                 }
-                None => self.open = Some((first_time, vec![commit.version])),
+                None => {
+                    self.open = Some(Window {
+                        first_time,
+                        commits: vec![entry],
+                    })
+                }
             }
         }
         Ok(self
             .open
             .take()
-            .map(|(open, versions)| (self.partition(open, versions), self)))
+            .map(|window| (self.partition(window), self)))
     }
 
-    fn partition(&self, first_time: i64, mut commit_versions: Vec<u64>) -> Partition {
-        // The walk reads newest first, so a window's versions arrive in reverse.
-        commit_versions.sort_unstable();
+    fn partition(&self, window: Window) -> Partition {
+        // The walk reads newest first, so a window's commits arrive in reverse.
+        let mut commits = window.commits;
+        commits.sort_unstable_by_key(|(version, _)| *version);
+        let (commit_versions, commit_infos): (Vec<u64>, Vec<Option<Value>>) =
+            commits.into_iter().unzip();
+        // Index-aligned with the versions, with a null where a format gave none.
+        let commit_infos = if commit_infos.iter().any(Option::is_some) {
+            commit_infos
+                .into_iter()
+                .map(|info| info.unwrap_or(Value::Null))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Partition {
-            name: v1::name::partition_name(&self.table, &first_time.to_string()),
-            start_time: u64::try_from(first_time).ok(),
-            end_time: u64::try_from(first_time + self.window_millis).ok(),
+            name: v1::name::partition_name(&self.table, &window.first_time.to_string()),
+            start_time: u64::try_from(window.first_time).ok(),
+            end_time: u64::try_from(window.first_time + self.window_millis).ok(),
             commit_versions,
+            commit_infos,
             uri: (!self.uri.is_empty()).then(|| self.uri.clone()),
             credentials: self.credentials.clone(),
         }

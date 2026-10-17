@@ -214,6 +214,7 @@ async fn read_log(
             Ok(Some(LogCommit {
                 version,
                 commit_time: parsed.commit_time,
+                commit_info: parsed.commit_info,
                 actions: parsed.actions,
             }))
         }
@@ -251,11 +252,17 @@ pub(super) async fn stream_commits(
         .buffered(commit_read_width())
         .try_filter_map(|(version, head)| async move {
             Ok(match head {
-                CommitHead::Present(Some(commit_time)) => Some(LogCommit {
-                    version,
-                    commit_time: Some(commit_time),
-                    actions: Vec::new(),
-                }),
+                CommitHead::Present(Some(info)) => {
+                    // A commit the log does not date has no window to fall in.
+                    info.get("timestamp")
+                        .and_then(Value::as_i64)
+                        .map(|commit_time| LogCommit {
+                            version,
+                            commit_time: Some(commit_time),
+                            commit_info: Some(info),
+                            actions: Vec::new(),
+                        })
+                }
                 CommitHead::Missing | CommitHead::Present(None) => None,
             })
         }))
@@ -334,13 +341,13 @@ fn commit_read_width() -> usize {
 const COMMIT_HEADER_STAGES: [u64; 2] = [1024, 4096];
 
 /// What one log version's commit file says about itself.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum CommitHead {
     /// No JSON file at this version: log retention, or a commit that only a
     /// checkpoint still summarizes.
     Missing,
-    /// The file is there; the time when the log records one.
-    Present(Option<i64>),
+    /// The file is there; its `commitInfo`, when the log records one.
+    Present(Option<Value>),
 }
 
 /// The head of one log version, read as a prefix of its commit file.
@@ -353,8 +360,8 @@ async fn commit_head(store: &LogStoreRef, version: u64) -> Result<CommitHead, Er
     for end in COMMIT_HEADER_STAGES {
         match object.get_range(&path, 0..end).await {
             Ok(prefix) => {
-                if let Some(time) = parse_commit_time(&prefix) {
-                    return Ok(CommitHead::Present(Some(time)));
+                if let Some(info) = parse_commit_info(&prefix) {
+                    return Ok(CommitHead::Present(Some(info)));
                 }
                 if (prefix.len() as u64) < end {
                     return Ok(CommitHead::Present(None));
@@ -370,15 +377,15 @@ async fn commit_head(store: &LogStoreRef, version: u64) -> Result<CommitHead, Er
         .await
         .map_err(delta_error)?
     {
-        Some(bytes) => Ok(CommitHead::Present(parse_commit_time(&bytes))),
+        Some(bytes) => Ok(CommitHead::Present(parse_commit_info(&bytes))),
         None => Ok(CommitHead::Missing),
     }
 }
 
-/// `commitInfo.timestamp` of a commit, decoded from its own line: the actions
-/// of a long commit are not parsed. A read that stops mid-line — a prefix, or a
-/// log that does not end in a newline — simply holds no `commitInfo` yet.
-fn parse_commit_time(bytes: &[u8]) -> Option<i64> {
+/// A commit's `commitInfo` action, decoded from its own line: the actions of a
+/// long commit are not parsed. A read that stops mid-line — a prefix, or a log
+/// that does not end in a newline — simply holds no `commitInfo` yet.
+fn parse_commit_info(bytes: &[u8]) -> Option<Value> {
     for line in bytes.split(|byte| *byte == b'\n') {
         let line = String::from_utf8_lossy(line);
         if !line.contains("\"commitInfo\"") {
@@ -387,10 +394,7 @@ fn parse_commit_time(bytes: &[u8]) -> Option<i64> {
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        return value
-            .get("commitInfo")
-            .and_then(|info| info.get("timestamp"))
-            .and_then(Value::as_i64);
+        return value.get("commitInfo").cloned();
     }
     None
 }
@@ -399,6 +403,7 @@ fn parse_commit_time(bytes: &[u8]) -> Option<i64> {
 struct ParsedCommit {
     actions: Vec<LogAction>,
     commit_time: Option<i64>,
+    commit_info: Option<serde_json::Value>,
 }
 
 fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
@@ -406,6 +411,7 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
         .map_err(|e| Error(format!("commit {version} is not UTF-8: {e}")))?;
     let mut actions = Vec::new();
     let mut commit_time = None;
+    let mut commit_info = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
         let value: serde_json::Value = serde_json::from_str(line)
             .map_err(|e| Error(format!("cannot parse commit {version}: {e}")))?;
@@ -416,7 +422,8 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
             .iter()
             .next()
             .ok_or_else(|| Error(format!("commit {version} action is empty")))?;
-        if kind == "commitInfo" && commit_time.is_none() {
+        if kind == "commitInfo" && commit_info.is_none() {
+            commit_info = Some(body.clone());
             commit_time = body.get("timestamp").and_then(serde_json::Value::as_i64);
         }
         actions.push(LogAction {
@@ -430,6 +437,7 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
     Ok(ParsedCommit {
         actions,
         commit_time,
+        commit_info,
     })
 }
 

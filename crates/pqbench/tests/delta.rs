@@ -48,8 +48,9 @@ async fn load_emits_every_json_commit_and_only_active_files() {
 }
 
 /// `list partitions` streams the log for commit times: each commit arrives with
-/// its version and time and no action, so nothing grows with a commit's file
-/// list. A commit the log does not date is not visited.
+/// its version, its time and the `commitInfo` the log stored, and no action, so
+/// nothing grows with a commit's file list. A commit the log does not date is
+/// not visited.
 #[tokio::test]
 async fn log_only_read_streams_times_without_actions() {
     let fixture = Fixture::new();
@@ -61,24 +62,37 @@ async fn log_only_read_streams_times_without_actions() {
     fixture.commit(3, &[json!({"commitInfo": {"timestamp": base + 1_000}})]);
 
     let request = load_request(fixture.path().to_string_lossy(), None).without_files();
-    let mut seen: Vec<(u64, Option<i64>, usize)> = Vec::new();
+    let mut seen: Vec<(u64, Option<i64>, Option<String>, usize)> = Vec::new();
     let mut commits = table::stream_commits(common::lake(), &request)
         .await
         .unwrap();
     while let Some(commit) = commits.try_next().await.unwrap() {
-        seen.push((commit.version, commit.commit_time, commit.actions.len()));
+        let operation = commit
+            .commit_info
+            .as_ref()
+            .and_then(|info| info.get("operation"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        seen.push((
+            commit.version,
+            commit.commit_time,
+            operation,
+            commit.actions.len(),
+        ));
     }
 
     // The walk is newest first, and the newest commit is the snapshot version.
     assert_eq!(
         seen.iter()
-            .map(|(version, _, _)| *version)
+            .map(|(version, _, _, _)| *version)
             .collect::<Vec<_>>(),
         [3, 2]
     );
     assert_eq!(seen[0].1, Some(base + 1_000));
+    assert_eq!(seen[0].2, None, "a commitInfo that records no operation");
     assert_eq!(seen[1].1, Some(base));
-    assert!(seen.iter().all(|(_, _, actions)| *actions == 0));
+    assert_eq!(seen[1].2.as_deref(), Some("WRITE"));
+    assert!(seen.iter().all(|(_, _, _, actions)| *actions == 0));
 }
 
 /// A commit whose `commitInfo` is not the first action is still dated: the walk

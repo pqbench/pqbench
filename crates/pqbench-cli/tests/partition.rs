@@ -166,6 +166,8 @@ fn partition_ls_groups_commits_into_natural_windows() {
     assert_eq!(partition["start_time"], first);
     assert_eq!(partition["end_time"], first + day);
     assert_eq!(partition["commit_versions"][0], 0);
+    assert_eq!(partition["commit_infos"][0]["operation"], "WRITE");
+    assert_eq!(partition["commit_infos"][0]["timestamp"], timestamp);
     assert!(partition.get("kind").is_none(), "{partition}");
 }
 

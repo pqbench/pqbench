@@ -43,7 +43,10 @@ pub type PartitionStream<'a> = BoxStream<'a, Result<Partition, Error>>;
 ///
 /// `table` is the table's resource name; the partition names it as its parent.
 /// `uri` and `env` are the table's storage root and lease, carried on each
-/// partition so the files stage reads the log without a catalog call.
+/// partition so the files stage reads the log without a catalog call. Each
+/// partition carries its commits' versions and, index-aligned with them, the
+/// `commitInfo` the log stored for each — its operation, parameters, metrics and
+/// writer — so a reader can select by operation without re-reading the log.
 ///
 /// # Errors
 /// Fails when the table cannot be loaded or a window is not positive; an error

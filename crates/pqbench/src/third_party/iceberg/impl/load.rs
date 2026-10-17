@@ -70,6 +70,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
                 Ok(LogCommit {
                     version: create_u64(snapshot.snapshot_id)?,
                     commit_time: snapshot.snapshot_time,
+                    commit_info: None,
                     actions: vec![LogAction {
                         kind: "snapshot".into(),
                         path: Some(snapshot.manifest_list.clone()),
@@ -292,6 +293,7 @@ pub(super) async fn stream_commits(
         commits.push(LogCommit {
             version: create_u64(snapshot.snapshot_id)?,
             commit_time: snapshot.snapshot_time,
+            commit_info: None,
             actions: Vec::new(),
         });
     }
