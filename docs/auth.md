@@ -55,6 +55,4 @@ Catalog and metadata reads need `external_access_enabled = true` on the
 metastore (metastore admin), the `workspace-access` entitlement on the SP
 (workspace admin), and `USE CATALOG` / `USE SCHEMA` / `SELECT` grants (catalog
 owner). Credential vending additionally needs external storage and
-`EXTERNAL USE LOCATION`; default-storage tables are excluded. The full table
-and the experiment that verified it are in
-[exp-33](../experiments/exp33_databricks_credential_vending.md).
+`EXTERNAL USE LOCATION`; default-storage tables are excluded.
