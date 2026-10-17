@@ -64,6 +64,15 @@ pqbench.skill("parquet-advisor", "recipes")      # the writer's recipes
 
 `pqbench.commands` lists every bound name.
 
+[`samples/walk.py`](samples/walk.py) is a runnable walk: one generator composes
+`list tables → credentials check → credentials get → get table → list
+partitions → list files`, on the calling thread.
+
+```sh
+PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=<bearer> \
+  AWS_REGION=us-east-2 python samples/walk.py pqbench_ext.tpch_sf1
+```
+
 ## Configuration
 
 The endpoint and token keyword arguments mirror the CLI's global flags and
