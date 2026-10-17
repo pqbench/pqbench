@@ -25,7 +25,7 @@ theme:
   name: material
   custom_dir: overrides
   language: en
-  logo: assets/logo.svg
+  logo: assets/logo.png
   # A multi-size ICO at the site root, so it also answers the `/favicon.ico`
   # request a browser makes when it cannot use a vector icon. `overrides/`
   # lists the SVG after it for browsers that can.

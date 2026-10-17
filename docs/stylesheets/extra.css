@@ -311,3 +311,20 @@ body:has(.pqb-hero) .md-content__inner > h1:first-child {
 .md-typeset hr {
   border-bottom-color: var(--pqb-line);
 }
+
+/* -- The brand ----------------------------------------------------------- */
+
+/* The mark is the study itself: Boccioni's cyclist, cropped and reduced to its
+   strokes. A drawn stand-in reads as an icon, which is not what the drawing is,
+   but the drawing needs room — at the stock 1.2rem it is a smudge, at 1.7rem it
+   reads. The button's margin and padding are trimmed so the larger mark still
+   fits the 2.4rem header bar. The drawer keeps Material's 2.4rem slot. */
+.md-header__button.md-logo {
+  margin: 0;
+  padding: 0.35rem;
+}
+
+.md-header__button.md-logo img {
+  height: 1.7rem;
+  width: auto;
+}
