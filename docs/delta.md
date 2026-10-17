@@ -104,10 +104,9 @@ file stream in the pinned version rejects malformed optional statistics that
 the existing loader tolerates, so it is not a compatible replacement yet.
 Memory also includes the largest individual commit and per-partition totals;
 human table output buffers rows to align columns. The commit reads walk the
-retained JSON history newest-first, stopping at the retention hole, and a
-`--last` horizon stops them earlier; each commit is read as a header prefix, not
-whole, so a commit's add-list is neither read nor retained. The library API
-retains the log and files it reads.
+retained JSON history newest-first, stopping at the retention hole; each commit
+is read as a header prefix, not whole, so a commit's add-list is neither read
+nor retained. The library API retains the log and files it reads.
 
 ## Limitations
 

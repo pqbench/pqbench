@@ -287,15 +287,8 @@ pub(super) async fn stream_commits(
     let selected = select_snapshot(&metadata, requested)?;
     // `ancestry` walks from the selected snapshot back through its parents, so
     // the newest snapshot comes first.
-    let mut floor: Option<i64> = None;
     let mut commits = Vec::new();
     for snapshot in ancestry(&metadata, selected) {
-        if let (Some(window), Some(time)) = (request.commit_window_millis, snapshot.snapshot_time) {
-            let floor = *floor.get_or_insert(time.saturating_sub(window));
-            if time < floor {
-                break;
-            }
-        }
         commits.push(LogCommit {
             version: create_u64(snapshot.snapshot_id)?,
             commit_time: snapshot.snapshot_time,

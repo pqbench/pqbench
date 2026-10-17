@@ -246,60 +246,49 @@ pub(super) async fn stream_commits(
         .await
         .map_err(delta_error)?
         .version();
-    Ok(commits_from_head(store, head, request.commit_window_millis))
+    Ok(commits_newest_first(store, head))
 }
 
-/// Stream the log's commits newest first, ending at the retention hole and at
-/// the oldest commit the optional horizon reaches.
+/// Stream the log's commits newest first, ending at the retention hole.
 ///
 /// A version with no JSON file above the retained boundary is only a checkpoint
 /// that outran the commits it summarizes, so the walk steps over it; the first
 /// hole below a file that did read ends the stream. A commit the log does not
 /// date has no time to contribute, so it is not yielded.
-fn commits_from_head(
+fn commits_newest_first(
     store: LogStoreRef,
     head: u64,
-    window_millis: Option<i64>,
 ) -> impl Stream<Item = Result<LogCommit, Error>> {
-    futures::stream::try_unfold(
-        (Some(head), false, None),
-        move |(mut version, mut started, mut floor)| {
-            let store = store.clone();
-            async move {
-                loop {
-                    let Some(current) = version else {
-                        return Ok(None);
-                    };
-                    version = current.checked_sub(1);
-                    let time = match commit_head(&store, current).await? {
-                        CommitHead::Missing if started => return Ok(None),
-                        CommitHead::Missing => continue,
-                        CommitHead::Present(time) => {
-                            started = true;
-                            time
-                        }
-                    };
-                    let Some(time) = time else {
-                        continue;
-                    };
-                    if let Some(window) = window_millis {
-                        let horizon = *floor.get_or_insert(time.saturating_sub(window));
-                        if time < horizon {
-                            return Ok(None);
-                        }
+    futures::stream::try_unfold((Some(head), false), move |(mut version, mut started)| {
+        let store = store.clone();
+        async move {
+            loop {
+                let Some(current) = version else {
+                    return Ok(None);
+                };
+                version = current.checked_sub(1);
+                let time = match commit_head(&store, current).await? {
+                    CommitHead::Missing if started => return Ok(None),
+                    CommitHead::Missing => continue,
+                    CommitHead::Present(time) => {
+                        started = true;
+                        time
                     }
-                    return Ok(Some((
-                        LogCommit {
-                            version: current,
-                            commit_time: Some(time),
-                            actions: Vec::new(),
-                        },
-                        (version, started, floor),
-                    )));
-                }
+                };
+                let Some(time) = time else {
+                    continue;
+                };
+                return Ok(Some((
+                    LogCommit {
+                        version: current,
+                        commit_time: Some(time),
+                        actions: Vec::new(),
+                    },
+                    (version, started),
+                )));
             }
-        },
-    )
+        }
+    })
 }
 
 /// Bytes of a commit file to read for its head: `commitInfo` is a few hundred

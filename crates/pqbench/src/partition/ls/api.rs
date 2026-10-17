@@ -34,10 +34,6 @@ impl From<String> for Error {
 /// daily window is a UTC day. A commit the log does not date is omitted, so a
 /// window never claims a commit it cannot place.
 ///
-/// `last_millis` bounds the read to commits within that many milliseconds of
-/// the newest dated commit; `None` reads every retained commit. Only windows
-/// the horizon covers whole are returned, so a window never under-counts.
-///
 /// `table` is the table's resource name; the partition names it as its parent.
 /// `uri` and `env` are the table's storage root and lease, carried on each
 /// partition so the files stage reads the log without a catalog call.
@@ -50,7 +46,6 @@ pub async fn list(
     uri: &str,
     env: &BTreeMap<String, String>,
     window_millis: i64,
-    last_millis: Option<i64>,
 ) -> Result<Vec<Partition>, Error> {
-    super::r#impl::list(lake, table, uri, env, window_millis, last_millis).await
+    super::r#impl::list(lake, table, uri, env, window_millis).await
 }

@@ -17,24 +17,14 @@ pub(crate) async fn list(
     uri: &str,
     env: &BTreeMap<String, String>,
     window_millis: i64,
-    last_millis: Option<i64>,
 ) -> Result<Vec<Partition>, Error> {
     if window_millis <= 0 {
         return Err(Error::from("partition window must be positive".to_string()));
     }
-    if last_millis.is_some_and(|last| last <= 0) {
-        return Err(Error::from(
-            "partition read window must be positive".to_string(),
-        ));
-    }
-    let mut request = LoadRequest::new(uri.to_string(), None, env.clone()).without_files();
-    if let Some(last) = last_millis {
-        request = request.with_commit_window_millis(last);
-    }
+    let request = LoadRequest::new(uri.to_string(), None, env.clone()).without_files();
     let credentials = v1::Credentials::from_env(env);
     let mut windows = Windows::new(
         window_millis,
-        last_millis,
         table,
         uri,
         (!credentials.is_empty()).then_some(credentials),
@@ -55,40 +45,30 @@ pub(crate) async fn list(
 /// Folds commits into epoch-aligned half-open windows as they stream in.
 ///
 /// Commits arrive newest first, so a window closes as soon as a commit crosses
-/// into an older one: its [`Partition`] is pushed and its commits dropped. A
-/// window is dropped instead when the optional horizon does not cover it whole,
-/// so a window never under-counts.
+/// into an older one: its [`Partition`] is pushed and its commits dropped.
 struct Windows<'a> {
     window_millis: i64,
-    horizon_millis: Option<i64>,
-    /// The aligned horizon, known once the newest dated commit is seen.
-    min_first_time: Option<i64>,
-    head_time: Option<i64>,
     table: &'a str,
     uri: &'a str,
     credentials: Option<v1::Credentials>,
     current: Option<(i64, Vec<u64>)>,
-    done: Vec<Partition>,
+    partitions: Vec<Partition>,
 }
 
 impl<'a> Windows<'a> {
     fn new(
         window_millis: i64,
-        horizon_millis: Option<i64>,
         table: &'a str,
         uri: &'a str,
         credentials: Option<v1::Credentials>,
     ) -> Self {
         Self {
             window_millis,
-            horizon_millis,
-            min_first_time: None,
-            head_time: None,
             table,
             uri,
             credentials,
             current: None,
-            done: Vec::new(),
+            partitions: Vec::new(),
         }
     }
 
@@ -96,10 +76,6 @@ impl<'a> Windows<'a> {
         let Some(time) = commit.commit_time else {
             return;
         };
-        if self.head_time.is_none() {
-            self.head_time = Some(time);
-            self.min_first_time = self.horizon_millis.map(|last| self.align_up(time - last));
-        }
         let first_time = time.div_euclid(self.window_millis) * self.window_millis;
         match self.current.take() {
             Some((open, mut versions)) if first_time >= open => {
@@ -115,10 +91,7 @@ impl<'a> Windows<'a> {
     }
 
     fn emit(&mut self, first_time: i64, commit_versions: Vec<u64>) {
-        if self.min_first_time.is_some_and(|min| first_time < min) {
-            return;
-        }
-        self.done.push(Partition {
+        self.partitions.push(Partition {
             name: v1::name::partition_name(self.table, &first_time.to_string()),
             start_time: u64::try_from(first_time).ok(),
             end_time: u64::try_from(first_time + self.window_millis).ok(),
@@ -128,22 +101,12 @@ impl<'a> Windows<'a> {
         });
     }
 
-    /// The horizon rounded up to a window edge.
-    fn align_up(&self, horizon: i64) -> i64 {
-        let remainder = horizon.rem_euclid(self.window_millis);
-        if remainder == 0 {
-            horizon
-        } else {
-            horizon + (self.window_millis - remainder)
-        }
-    }
-
     fn finish(mut self) -> Vec<Partition> {
         if let Some((open, versions)) = self.current.take() {
             self.emit(open, versions);
         }
         // Windows closed newest first; the walk reads oldest first.
-        self.done.reverse();
-        self.done
+        self.partitions.reverse();
+        self.partitions
     }
 }

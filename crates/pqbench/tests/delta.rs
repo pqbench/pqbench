@@ -115,39 +115,6 @@ async fn log_only_read_dates_a_header_that_is_not_first() {
     assert_eq!(seen, [(2, Some(base))]);
 }
 
-/// A read window stops the stream at the first commit older than the window
-/// before the newest dated commit.
-#[tokio::test]
-async fn log_window_stops_at_the_oldest_commit_in_reach() {
-    let fixture = Fixture::new();
-    let base = 1_700_000_000_000i64;
-    fixture.commit(2, &[json!({"commitInfo": {"timestamp": base}})]);
-    fixture.commit(3, &[json!({"commitInfo": {"timestamp": base + 10_000}})]);
-    fixture.commit(4, &[json!({"commitInfo": {"timestamp": base + 100_000}})]);
-
-    let wide = load_request(fixture.path().to_string_lossy(), None)
-        .without_files()
-        .with_commit_window_millis(200_000);
-    let mut versions = Vec::new();
-    let mut commits = table::stream_commits(common::lake(), &wide).await.unwrap();
-    while let Some(commit) = commits.try_next().await.unwrap() {
-        versions.push(commit.version);
-    }
-    assert_eq!(versions, [4, 3, 2]);
-
-    let narrow = load_request(fixture.path().to_string_lossy(), None)
-        .without_files()
-        .with_commit_window_millis(20_000);
-    let mut versions = Vec::new();
-    let mut commits = table::stream_commits(common::lake(), &narrow)
-        .await
-        .unwrap();
-    while let Some(commit) = commits.try_next().await.unwrap() {
-        versions.push(commit.version);
-    }
-    assert_eq!(versions, [4]);
-}
-
 #[tokio::test]
 async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     let fixture = Fixture::new();

@@ -341,9 +341,6 @@ pub struct LoadRequest {
     /// commits says the log's own file actions are what the caller wants, so
     /// the snapshot's active files are not replayed.
     pub commit_versions: Option<BTreeSet<u64>>,
-    /// Read only commits within this many milliseconds of the newest dated
-    /// commit; `None` reads every retained commit.
-    pub commit_window_millis: Option<i64>,
 }
 
 impl LoadRequest {
@@ -361,7 +358,6 @@ impl LoadRequest {
             file_stats: true,
             require_files: true,
             commit_versions: None,
-            commit_window_millis: None,
         }
     }
 
@@ -389,16 +385,6 @@ impl LoadRequest {
     #[must_use]
     pub fn with_commits(mut self, versions: impl IntoIterator<Item = u64>) -> Self {
         self.commit_versions = Some(versions.into_iter().collect());
-        self
-    }
-
-    /// Read only commits within `millis` of the newest dated commit. The log
-    /// read walks newest-first and stops at the first commit out of reach, so a
-    /// long log is not read down to its oldest retained commit.
-    // aipnaming: allow(aip-136/method-prepositions)
-    #[must_use]
-    pub fn with_commit_window_millis(mut self, millis: i64) -> Self {
-        self.commit_window_millis = Some(millis);
         self
     }
 }
@@ -448,8 +434,8 @@ pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error
 /// Stream a table's commits, newest first, without collecting them.
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller and
-/// nothing grows with the log's length; the walk stops at the oldest commit the
-/// optional [`LoadRequest::commit_window_millis`] horizon reaches.
+/// nothing grows with the log's length; it reaches as far back as the log's
+/// retention allows.
 ///
 /// # Errors
 /// As [`detect`], plus format-specific read failures. A failure raised after the
