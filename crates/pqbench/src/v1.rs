@@ -466,7 +466,7 @@ pub struct Partition {
     /// them. Empty when no commit in the window has one — Iceberg carries none,
     /// and a Delta writer may leave it out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commit_infos: Vec<serde_json::Value>,
+    pub commit_info: Vec<serde_json::Value>,
     /// The table's storage root URI. Denormalized onto the partition so the
     /// files stage reads the log without a catalog call.
     #[serde(default, skip_serializing_if = "Option::is_none")]

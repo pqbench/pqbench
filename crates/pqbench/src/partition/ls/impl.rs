@@ -122,11 +122,10 @@ impl Windows {
         // The walk reads newest first, so a window's commits arrive in reverse.
         let mut commits = window.commits;
         commits.sort_unstable_by_key(|(version, _)| *version);
-        let (commit_versions, commit_infos): (Vec<u64>, Vec<Option<Value>>) =
-            commits.into_iter().unzip();
+        let (commit_versions, infos): (Vec<u64>, Vec<Option<Value>>) = commits.into_iter().unzip();
         // Index-aligned with the versions, with a null where a format gave none.
-        let commit_infos = if commit_infos.iter().any(Option::is_some) {
-            commit_infos
+        let commit_info = if infos.iter().any(Option::is_some) {
+            infos
                 .into_iter()
                 .map(|info| info.unwrap_or(Value::Null))
                 .collect()
@@ -138,7 +137,7 @@ impl Windows {
             start_time: u64::try_from(window.first_time).ok(),
             end_time: u64::try_from(window.first_time + self.window_millis).ok(),
             commit_versions,
-            commit_infos,
+            commit_info,
             uri: (!self.uri.is_empty()).then(|| self.uri.clone()),
             credentials: self.credentials.clone(),
         }
