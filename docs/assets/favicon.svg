@@ -1,12 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="pqbench">
-  <!-- The same echoing curves, inked on a paper tile so they read at 16px.
-       Paths only — nothing here depends on a font being present. -->
+  <!-- The same cyclist, inked on a paper tile so it holds up at 16px against
+       either browser chrome. Paths only — nothing here depends on a font. -->
   <rect width="32" height="32" rx="7" fill="#f4efe1"/>
   <g transform="translate(2.4 2.4) scale(1.1333)">
-    <g fill="none" stroke="#2f2b24" stroke-width="2.6" stroke-linecap="round" transform="translate(1.5 0)">
-      <path d="M17.4 3.6C2.6 4.6 2.6 19.4 17.4 20.4"/>
-      <path d="M17.8 8.0C8.6 8.8 8.6 15.2 17.8 16.0"/>
-      <path d="M18.2 11.4C13.9 11.8 13.9 12.2 18.2 12.6"/>
+    <g fill="none" stroke="#2f2b24" stroke-width="1.0" stroke-linecap="round" opacity="0.55">
+      <path d="M1.6 20.8 22.4 5.2"/>
     </g>
+    <g fill="none" stroke="#2f2b24" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="6.8" cy="16.6" r="3.4"/>
+      <circle cx="16.6" cy="16.6" r="3.4"/>
+      <path d="M6.8 16.6 11.6 9.6 16.6 16.6M11.6 9.6 15.4 9.2M9.4 16.6 14.0 16.6"/>
+    </g>
+    <path d="M10.0 4.6C12.4 3.0 15.8 3.8 16.6 6.2 17.2 8.2 16.2 10.2 14.2 10.6L11.2 9.4C10.0 7.9 9.4 6.1 10.0 4.6Z" fill="#2f2b24"/>
   </g>
 </svg>
