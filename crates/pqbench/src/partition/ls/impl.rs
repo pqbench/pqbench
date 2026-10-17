@@ -41,7 +41,7 @@ pub(crate) async fn list(
 /// window being filled. A window is handed over as soon as a commit falls outside
 /// it, so nothing accumulates but that one window.
 struct Windows {
-    commits: table::CommitStream<'static>,
+    commit_stream: table::CommitStream<'static>,
     window_millis: i64,
     table: String,
     uri: String,
@@ -51,14 +51,14 @@ struct Windows {
 
 /// Stream the commits as partitions, one per window, each yielded as it closes.
 fn windows(
-    commits: table::CommitStream<'static>,
+    commit_stream: table::CommitStream<'static>,
     window_millis: i64,
     table: String,
     uri: String,
     credentials: Option<v1::Credentials>,
 ) -> impl Stream<Item = Result<Partition, Error>> {
     let state = Windows {
-        commits,
+        commit_stream,
         window_millis,
         table,
         uri,
@@ -73,7 +73,7 @@ impl Windows {
     /// last window when the commits end.
     async fn next(mut self) -> Result<Option<(Partition, Self)>, Error> {
         while let Some(commit) = self
-            .commits
+            .commit_stream
             .try_next()
             .await
             .map_err(|error| Error::from(error.to_string()))?

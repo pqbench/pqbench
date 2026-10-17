@@ -248,7 +248,7 @@ pub(super) async fn stream_commits(
                     .map(|head| (version, head))
             }
         })
-        .buffered(commit_reads_in_flight())
+        .buffered(commit_read_width())
         .try_filter_map(|(version, head)| async move {
             Ok(match head {
                 CommitHead::Present(Some(commit_time)) => Some(LogCommit {
@@ -320,7 +320,7 @@ fn commit_file_version(name: &str) -> Option<u64> {
 /// as delta-rs takes it for its own commit stream. Unbounded, every read's body
 /// is resident at once — a million-commit log would be gigabytes — and windowed
 /// it is flat in the log.
-fn commit_reads_in_flight() -> usize {
+fn commit_read_width() -> usize {
     std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(1)
