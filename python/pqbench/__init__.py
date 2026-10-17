@@ -1,4 +1,4 @@
-"""The ``pqbench`` API: the client handles, and the walk.
+"""The ``pqbench`` API: the client handles, the records, and the walk.
 
 The library's commands are the crate's modules, one function per path, under
 ``pqbench.native``::
@@ -19,17 +19,39 @@ collections the library streams — ``partition.ls.list`` and ``file.ls.list`` �
 are async iterators.
 
 This package is the ergonomic surface over them: the client handles every
-command takes, re-exported so they sit with ``walk``, the whole-metastore walk
-composed once::
+command takes, re-exported so they sit with ``walk``, and the records every
+command returns, re-exported so a return type has a name at this level too
+(``pqbench.TableFile`` is ``pqbench.native.TableFile``). The whole-metastore
+walk is composed once::
 
     workspace = pqbench.Workspace(pqbench.Config(endpoint, token))
 
     async for file in pqbench.walk(workspace):
         print(file["uri"])
+
+Where the commands themselves are typed is ``pqbench/native.pyi`` — the stub
+next to the extension module, which is what a caller's editor reads.
 """
 
 from pqbench import native
-from pqbench.native import Config, Dialect, Lake, Layer, Workspace
+from pqbench.native import (
+    Catalog,
+    Config,
+    Dialect,
+    Eligibility,
+    Lake,
+    Layer,
+    MassRow,
+    Partition,
+    Record,
+    Sample,
+    Schema,
+    Table,
+    TableFile,
+    TableRef,
+    TypedSample,
+    Workspace,
+)
 from pqbench.walk import walk
 
 __version__ = native.__version__
@@ -38,9 +60,22 @@ __all__ = [
     "__version__",
     "native",
     "walk",
+    # The client handles every command takes.
     "Config",
     "Dialect",
     "Lake",
     "Layer",
     "Workspace",
+    # The records every command returns.
+    "Record",
+    "Catalog",
+    "Eligibility",
+    "MassRow",
+    "Partition",
+    "Sample",
+    "Schema",
+    "Table",
+    "TableFile",
+    "TableRef",
+    "TypedSample",
 ]

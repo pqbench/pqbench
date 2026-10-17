@@ -25,7 +25,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
+from typing import Any, TypeVar
 
 from pqbench import native
 
@@ -40,26 +41,26 @@ REQUESTS_PER_SECOND = 15.0
 WINDOW_MILLIS = 86_400_000
 """The natural-window width the CLI's ``--every 1d`` names: one UTC day."""
 
+_LevelRecord = TypeVar("_LevelRecord", bound=native.Record)
+"""A record a level listing returns: `Catalog`, `Schema` or `TableRef`."""
+
 _DONE = object()
 
 
-def _leaf(record: dict) -> str:
+def _leaf(record: native.Record) -> str:
     """The id segment of a resource name (its last path component)."""
     return record["name"].rsplit("/", 1)[-1]
 
 
-def _lease(credentials: dict | None) -> dict:
+def _lease(credentials: dict[str, Any] | None) -> dict[str, str]:
     """A vended lease as the ``AWS_*`` options a storage read needs."""
-    credentials = credentials or {}
-    return {
-        key: value
-        for key, value in {
-            "AWS_ACCESS_KEY_ID": credentials.get("access_key_id"),
-            "AWS_SECRET_ACCESS_KEY": credentials.get("secret_access_key"),
-            "AWS_SESSION_TOKEN": credentials.get("session_token"),
-        }.items()
-        if value
+    lease = credentials or {}
+    options = {
+        "AWS_ACCESS_KEY_ID": lease.get("access_key_id"),
+        "AWS_SECRET_ACCESS_KEY": lease.get("secret_access_key"),
+        "AWS_SESSION_TOKEN": lease.get("session_token"),
     }
+    return {name: value for name, value in options.items() if value}
 
 
 async def walk(
@@ -69,8 +70,11 @@ async def walk(
     concurrency: int = CONCURRENCY,
     requests_per_second: float = REQUESTS_PER_SECOND,
     window_millis: int = WINDOW_MILLIS,
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[native.TableFile]:
     """Yield a table-file record for every file the metastore reaches.
+
+    Each record is a :class:`TableFile` — the library's model, so
+    ``file.uri``, ``file["uri"]`` and ``file.asdict()`` agree.
 
     The catalog levels span the whole Unity Catalog; the table levels descend
     every catalog whose tables this principal may read outside compute —
@@ -106,10 +110,10 @@ async def walk(
     if lake is None:
         lake = native.Lake(workspace)
 
-    queue: asyncio.Queue = asyncio.Queue(maxsize=concurrency)
+    queue: asyncio.Queue[native.TableFile] = asyncio.Queue(maxsize=concurrency)
     inflight = asyncio.Semaphore(concurrency)
     limit = native.ratelimit.RateLimit(requests_per_second)
-    tasks: list[asyncio.Task] = []
+    tasks: list[asyncio.Task[None]] = []
     skipped = 0
 
     async def pace(endpoint: str) -> None:
@@ -118,7 +122,9 @@ async def walk(
         if delay > 0.0:
             await asyncio.sleep(delay)
 
-    async def skip_level(awaitable, default: list) -> list:
+    async def skip_level(
+        awaitable: Awaitable[list[_LevelRecord]], default: list[_LevelRecord]
+    ) -> list[_LevelRecord]:
         """Await a listing, counting a level this principal cannot read."""
         nonlocal skipped
         try:
