@@ -2,9 +2,11 @@
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use clap::Args;
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream::{self, BoxStream, StreamExt, TryStreamExt};
 use pqbench::v1;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -38,45 +40,63 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
     }
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut partitions = 0usize;
     let mut files = 0usize;
-    let mut reads = partition_stream(lines)
-        .map(|partition| async {
-            let partition = partition?;
-            let (catalog, schema, table, _) = v1::name::parse_partition(&partition.name)
-                .ok_or_else(|| not_a_partition(&partition.name))?;
-            let uri = partition
-                .uri
-                .clone()
-                .ok_or("a partition record needs a table storage root")?;
-            let env = partition
-                .credentials
-                .as_ref()
-                .map(v1::Credentials::to_env)
-                .unwrap_or_default();
-            let found = pqbench::file::ls::list(lake, &uri, &env, &partition.commit_versions)
-                .await
-                .map_err(|error| CliError::from(error.to_string()))?;
-            Ok::<_, CliError>((catalog, schema, table, partition.credentials, found))
+    // Partition streams in flight at once, each streaming its files as its
+    // commits are read; `started` counts them so the summary separates
+    // partitions from files.
+    let started = Arc::new(AtomicUsize::new(0));
+    let streams = partition_stream(lines)
+        .map(|partition| async move { file_rows(lake, partition?).await })
+        .buffer_unordered(args.fan_out.max(1))
+        .inspect_ok({
+            let started = Arc::clone(&started);
+            move |_| {
+                started.fetch_add(1, Ordering::Relaxed);
+            }
         })
-        .buffer_unordered(args.fan_out.max(1));
-    while let Some(result) = reads.next().await {
-        let (catalog, schema, table, credentials, found) = result?;
-        for file in &found {
-            let table_file = v1::TableFile {
-                name: v1::name::table_file(&catalog, &schema, &table, &file.path),
-                blob: Some(v1::name::blob_name(&file.uri)),
-                size_bytes: Some(file.size_bytes),
-                credentials: credentials.clone(),
-                ..v1::TableFile::default()
-            };
-            emit.write_row(&table_file).await?;
-            files += 1;
-        }
-        partitions += 1;
+        .boxed();
+    let mut found = streams.try_flatten_unordered(Some(args.fan_out.max(1)));
+    while let Some(file) = found.try_next().await? {
+        emit.write_row(&file).await?;
+        files += 1;
     }
+    let partitions = started.load(Ordering::Relaxed);
     emit.finish(&format!("partitions: {partitions}\nfiles: {files}\n"))
         .await
+}
+
+/// One partition's rows: the files its commits added, each becoming a table
+/// file as it arrives — so the first file is written while the window's later
+/// commits are still being read.
+async fn file_rows(
+    lake: &pqbench::Lake,
+    partition: v1::Partition,
+) -> Result<BoxStream<'static, Result<v1::TableFile, CliError>>, CliError> {
+    let (catalog, schema, table, _) = v1::name::parse_partition(&partition.name)
+        .ok_or_else(|| not_a_partition(&partition.name))?;
+    let uri = partition
+        .uri
+        .clone()
+        .ok_or("a partition record needs a table storage root")?;
+    let env = partition
+        .credentials
+        .as_ref()
+        .map(v1::Credentials::to_env)
+        .unwrap_or_default();
+    let credentials = partition.credentials;
+    let found = pqbench::file::ls::list(lake, &uri, &env, &partition.commit_versions)
+        .await
+        .map_err(|error| CliError::from(error.to_string()))?;
+    Ok(found
+        .map_ok(move |file| v1::TableFile {
+            name: v1::name::table_file(&catalog, &schema, &table, &file.path),
+            blob: Some(v1::name::blob_name(&file.uri)),
+            size_bytes: Some(file.size_bytes),
+            credentials: credentials.clone(),
+            ..v1::TableFile::default()
+        })
+        .map_err(|error| CliError::from(error.to_string()))
+        .boxed())
 }
 
 /// The error for a partition record whose name is not a partition resource.

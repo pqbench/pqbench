@@ -131,3 +131,33 @@ fn file_ls_lists_the_files_a_window_added() {
     assert!(blob.starts_with("blobs/file/"), "{blob}");
     assert!(blob.ends_with("data.parquet"), "{blob}");
 }
+
+/// The summary counts partitions and files apart: one partition's stream yields
+/// many files, and a table run shows both counts.
+#[test]
+fn file_ls_counts_partitions_and_files_apart() {
+    let fixture = dated_delta_fixture(1_700_000_000_000);
+    let listed = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(listed.status.success());
+    let files = pipe(
+        &["list", "files", "--format", "table"],
+        &String::from_utf8_lossy(&listed.stdout),
+    );
+    assert!(
+        files.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&files.stderr)
+    );
+    let out = String::from_utf8_lossy(&files.stdout);
+    assert!(out.contains("partitions: 1"), "{out}");
+    assert!(out.contains("files: 1"), "{out}");
+}

@@ -51,3 +51,27 @@ pub(crate) async fn stream_commits(
         ))
     }
 }
+
+pub(crate) async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    #[cfg(feature = "delta")]
+    {
+        use futures_util::{StreamExt as _, TryStreamExt as _};
+
+        let files = load::stream_files(lake, request)
+            .await
+            .map_err(|error| crate::table::Error(error.to_string()))?;
+        Ok(files
+            .map_err(|error| crate::table::Error(error.to_string()))
+            .boxed())
+    }
+    #[cfg(not(feature = "delta"))]
+    {
+        let _ = (lake, request);
+        Err(crate::table::Error(
+            "delta tables require the `delta` feature (`delta-s3` for S3)".into(),
+        ))
+    }
+}

@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use apache_avro::{Schema, Writer};
+use futures_util::TryStreamExt;
 use pqbench::table::{self, LoadRequest, TableFormat};
 use pqbench::third_party::parquet::{default_metadata_parser, MetadataParser};
 use serde::Serialize;
@@ -333,7 +334,13 @@ async fn file_ls_names_the_files_a_snapshot_added() {
     )
     .await
     .unwrap();
-    let mut uris: Vec<_> = files.iter().map(|file| file.uri.clone()).collect();
+    let mut uris: Vec<_> = files
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap()
+        .iter()
+        .map(|file| file.uri.clone())
+        .collect();
     uris.sort();
     let mut expected = vec![
         file_uri(&fixture.root.join("data").join("first.parquet")),

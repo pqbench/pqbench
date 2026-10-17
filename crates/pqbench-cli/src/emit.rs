@@ -8,14 +8,18 @@
 //! the older `--json`) override that choice. `-o` always receives the NDJSON
 //! stream, independent of what stdout shows.
 //!
-//! A pipe write awaits the event loop. The `-o` sink compresses with lz4
-//! inline: lz4 is fast enough to treat as work, not as I/O.
+//! A pipe write awaits the event loop, so the NDJSON stream is buffered: a row
+//! costs a copy into the buffer, and the buffer reaches the pipe when it fills
+//! and when the command finishes — which is where a slow consumer slows the
+//! producer. The `-o` sink compresses with lz4 inline: lz4 is fast enough to
+//! treat as work, not as I/O.
 
 use std::fs::File;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use serde::Serialize;
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::CliError;
 
@@ -72,7 +76,7 @@ pub(crate) trait Row: Serialize {
 
 /// Destination for one command's stream.
 pub(crate) struct Emitter {
-    pipe: bool,
+    pipe: Option<BufWriter<tokio::io::Stdout>>,
     closed: bool,
     file: Option<lz4::Encoder<File>>,
     table: Option<Table>,
@@ -90,7 +94,7 @@ impl Emitter {
             Resolved::Json => None,
         };
         Ok(Self {
-            pipe: format == Resolved::Json,
+            pipe: (format == Resolved::Json).then(|| BufWriter::new(tokio::io::stdout())),
             closed: false,
             file,
             table,
@@ -114,25 +118,51 @@ impl Emitter {
         let mut line = serde_json::to_string(value)
             .map_err(|error| format!("cannot serialize output: {error}"))?;
         line.push('\n');
-        if self.pipe && !self.closed {
-            match write_stdout(&line).await {
-                Ok(()) => {}
-                Err(error) if closed_pipe(&error) => self.closed = true,
-                Err(error) => return Err(error),
-            }
-        }
+        self.write_pipe(&line).await?;
         if let Some(file) = &mut self.file {
             file.write_all(line.as_bytes())?;
-            file.flush()?;
         }
         Ok(())
     }
 
-    /// Finish the lz4 frame. On a table, render it followed by `summary`.
+    /// Buffer a line for the pipe. A closed reader ends the stream, not the
+    /// command.
+    async fn write_pipe(&mut self, line: &str) -> Result<(), CliError> {
+        if self.closed {
+            return Ok(());
+        }
+        let Some(pipe) = &mut self.pipe else {
+            return Ok(());
+        };
+        match pipe.write_all(line.as_bytes()).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let error: CliError = error.into();
+                if closed_pipe(&error) {
+                    self.closed = true;
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    /// Flush what is buffered, finish the lz4 frame, and on a table render it
+    /// followed by `summary`.
     pub(crate) async fn finish(mut self, summary: &str) -> Result<(), CliError> {
         if let Some(encoder) = self.file.take() {
             let (_, result) = encoder.finish();
             result.map_err(|error| format!("cannot finish output: {error}"))?;
+        }
+        // A reader that has gone away has nothing left to flush.
+        if let Some(mut pipe) = self.pipe.take() {
+            if let Err(error) = pipe.flush().await {
+                let error: CliError = error.into();
+                if !closed_pipe(&error) {
+                    return Err(error);
+                }
+            }
         }
         if let Some(table) = self.table.take() {
             write_stdout(&table.render(summary)).await?;
@@ -143,7 +173,6 @@ impl Emitter {
 
 /// Write plain text to stdout. A closed reader is not an error.
 pub(crate) async fn write_stdout(text: &str) -> Result<(), CliError> {
-    use tokio::io::AsyncWriteExt;
     let mut stdout = tokio::io::stdout();
     match stdout
         .write_all(text.as_bytes())
