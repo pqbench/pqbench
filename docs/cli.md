@@ -287,7 +287,7 @@ per epoch-aligned, half-open UTC window, carrying the commits it holds.
 `--every` sets the width (`1h`, `1d`, `1w`); a commit the log does not date is
 omitted, so a window never claims a commit it cannot place. A partition is a
 lens on the files, not a thing the table stores — see `docs/partition.md`.
-`list files` then re-reads the window's commits and lists the files they
+`list files` then re-reads only the window's commits and streams the files they
 added — the lease rides on every file, and that stream is what `bytemass`
 measures.
 

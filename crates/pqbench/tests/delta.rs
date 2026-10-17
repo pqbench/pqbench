@@ -129,6 +129,80 @@ async fn log_only_read_dates_a_header_that_is_not_first() {
     assert_eq!(seen, [(2, Some(base))]);
 }
 
+/// `list files` streams the named commits' `add` actions — the files those
+/// commits wrote, in version order, without a snapshot resolved. A version the
+/// log does not hold has nothing to contribute.
+#[tokio::test]
+async fn file_stream_names_the_adds_of_the_named_commits() {
+    let fixture = Fixture::new();
+    // The fixture's version 0 adds two files and version 1 removes one and adds
+    // another; only what a commit added is named, never what it removed.
+    let first = file_uris(&fixture, &[0]).await;
+    assert_eq!(first.len(), 2);
+    assert!(first[0].ends_with("part=a/old%20file.parquet"), "{first:?}");
+    assert!(first[1].ends_with("part=b/kept.parquet"), "{first:?}");
+    let second = file_uris(&fixture, &[1]).await;
+    assert_eq!(second.len(), 1);
+    assert!(second[0].ends_with("part=a/added.parquet"), "{second:?}");
+
+    // Log order is version order, and 7 is not in the log.
+    let both = file_uris(&fixture, &[0, 1, 7]).await;
+    assert_eq!(both, [first, second].concat());
+    assert!(file_uris(&fixture, &[]).await.is_empty());
+}
+
+/// A log that holds `add` actions and nothing else still names its files: the
+/// read is the commits' own actions, so it resolves no snapshot and needs no
+/// protocol or metadata to do it.
+#[tokio::test]
+async fn file_stream_reads_a_log_without_a_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("_delta_log")).unwrap();
+    std::fs::write(
+        directory
+            .path()
+            .join("_delta_log/00000000000000000000.json"),
+        concat!(
+            "{\"add\":{\"path\":\"one.parquet\",\"size\":1,",
+            "\"partitionValues\":{},\"modificationTime\":0,\"dataChange\":true}}\n"
+        ),
+    )
+    .unwrap();
+    let uris = file_uris_path(&directory.path().to_string_lossy(), &[0]).await;
+    assert_eq!(uris.len(), 1);
+    assert!(uris[0].ends_with("one.parquet"), "{uris:?}");
+}
+
+/// A request that names no commits reads the log's own listing, as
+/// `list partitions` names them.
+#[tokio::test]
+async fn file_stream_reads_every_commit_when_none_are_named() {
+    let fixture = Fixture::new();
+    let request = load_request(fixture.path().to_string_lossy(), None);
+    let files = table::stream_files(common::lake(), &request)
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    // Version 0 added two files and version 1 one more.
+    assert_eq!(files.len(), 3);
+}
+
+async fn file_uris(fixture: &Fixture, versions: &[u64]) -> Vec<String> {
+    file_uris_path(&fixture.path().to_string_lossy(), versions).await
+}
+
+async fn file_uris_path(uri: &str, versions: &[u64]) -> Vec<String> {
+    let request = load_request(uri, None).with_commits(versions.iter().copied());
+    let mut files = table::stream_files(common::lake(), &request).await.unwrap();
+    let mut uris = Vec::new();
+    while let Some(file) = files.try_next().await.unwrap() {
+        uris.push(file.uri);
+    }
+    uris
+}
+
 #[tokio::test]
 async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     let fixture = Fixture::new();

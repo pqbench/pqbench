@@ -1,45 +1,29 @@
-//! The `file::ls` internals: read the log, keep the named commits' adds.
+//! The `file::ls` internals: stream the files a partition's commits added.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use crate::table::{self, LoadRequest, TableFile};
+use futures_util::{StreamExt, TryStreamExt};
+
+use crate::table::{self, LoadRequest};
 use crate::Lake;
 
-use super::api::Error;
+use super::api::{Error, FileStream};
 
 pub(crate) async fn list(
     lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
     versions: &[u64],
-) -> Result<Vec<TableFile>, Error> {
-    let wanted: BTreeSet<u64> = versions.iter().copied().collect();
-    // The files a commit added ride on the log. Delta's log names them itself,
-    // but Iceberg attaches a snapshot's files only when they are resolved, so
-    // the read must still request them: a commit read for times alone leaves an
-    // Iceberg commit with no `add` actions and the walk measures nothing.
-    // Naming the window's commits keeps the read to them: Delta reads only those
-    // commits and skips the snapshot replay its log already carries.
+) -> Result<FileStream<'static>, Error> {
+    // The files a commit added ride on the log itself, so the read names the
+    // commits and takes their own `add` actions: no snapshot, no checkpoint, no
+    // active-file replay. Naming them also keeps the read to the window.
     let request =
-        LoadRequest::new(uri.to_string(), None, env.clone()).with_commits(wanted.iter().copied());
-    let info = table::load(lake, &request)
+        LoadRequest::new(uri.to_string(), None, env.clone()).with_commits(versions.iter().copied());
+    let files = table::stream_files(lake, &request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;
-    let mut files = Vec::new();
-    for commit in &info.log {
-        if !wanted.contains(&commit.version) {
-            continue;
-        }
-        for action in &commit.actions {
-            if action.kind != "add" {
-                continue;
-            }
-            if let Some(path) = &action.path {
-                let file_uri =
-                    table::join_uri(uri, path).map_err(|error| Error::from(error.to_string()))?;
-                files.push(TableFile::new(path.clone(), file_uri, 0));
-            }
-        }
-    }
-    Ok(files)
+    Ok(files
+        .map_err(|error| Error::from(error.to_string()))
+        .boxed())
 }

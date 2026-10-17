@@ -135,6 +135,11 @@ impl TableFile {
     }
 }
 
+/// A table's data files, in log order, from [`stream_files`].
+///
+/// The stream owns the log it reads, so it borrows nothing from the caller.
+pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
+
 /// Statistics copied from a Delta add action. Values are the log's claim.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
@@ -453,6 +458,30 @@ pub async fn stream_commits(
     match format {
         TableFormat::DELTA => delta::stream_commits(lake, request).await,
         TableFormat::ICEBERG => iceberg::stream_commits(lake, request).await,
+        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+    }
+}
+
+/// Stream the files the requested commits added, in log order, without
+/// collecting them.
+///
+/// The files are the commits' own `add` actions — the **added** set, not the
+/// table's active files — so Delta reads them from the commits themselves and no
+/// snapshot, checkpoint or active-file replay is involved. Iceberg attaches a
+/// snapshot's files only when that snapshot is resolved, so its files come from
+/// the selected snapshot's manifests.
+///
+/// # Errors
+/// As [`detect`], plus format-specific read failures. A failure raised after the
+/// first file arrives as a stream item.
+pub async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<FileStream<'static>, Error> {
+    let format = detect(lake, &request.uri, &request.env).await?;
+    match format {
+        TableFormat::DELTA => delta::stream_files(lake, request).await,
+        TableFormat::ICEBERG => iceberg::stream_files(lake, request).await,
         TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
     }
 }

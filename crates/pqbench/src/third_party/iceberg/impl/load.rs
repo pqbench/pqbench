@@ -300,6 +300,36 @@ pub(super) async fn stream_commits(
     Ok(futures_util::stream::iter(commits.into_iter().map(Ok)))
 }
 
+/// Stream the files the selected snapshot's manifests name.
+///
+/// An Iceberg snapshot attaches its files only when it is resolved, and this read
+/// resolves one snapshot — the requested one, or the latest — so the files are
+/// that snapshot's. A request that names commits and does not name that snapshot
+/// yields none: what an older snapshot added is a separate manifest read.
+///
+/// The size is left zero, as [`TableFile`] documents: the manifest's size is a
+/// cross-check, and `bytemass` reads the true one from the footer.
+pub(super) async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<TableFile, Error>>, Error> {
+    let mut request = request.clone();
+    request.require_files = true;
+    let info = load(lake, &request).await?;
+    let root = request.uri.clone();
+    let files = match request.commit_versions.as_ref() {
+        Some(named) if !named.contains(&info.snapshot_version) => Vec::new(),
+        _ => info.files,
+    };
+    Ok(futures_util::stream::iter(files.into_iter().map(
+        move |file| {
+            let uri = crate::table::join_uri(&root, &file.path)
+                .map_err(|error| Error(error.to_string()))?;
+            Ok(TableFile::new(file.path, uri, 0))
+        },
+    )))
+}
+
 fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> Vec<&'a Snapshot> {
     let Some(selected) = selected else {
         return Vec::new();

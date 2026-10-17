@@ -39,5 +39,4 @@ __pycache__/
 /python/dist/
 /python/.venv/
 /python/target/
-/python/Cargo.lock
 /python/pqbench/*.so
