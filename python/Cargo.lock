@@ -1344,9 +1344,9 @@ dependencies = [
 
 [[package]]
 name = "deltalake-core"
-version = "1.1.2"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbbe04f5de2041c60621db9c6ea1d12dcfe836f61d4c23c19c8dffc9e1d34d5c"
+checksum = "7fe1836c3b09ced560081eddf154ccbec1e6cb8f4dde4738b01790f35fd1d3f8"
 dependencies = [
  "alloc-stdlib 0.2.2",
  "arrow",
