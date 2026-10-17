@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="pqbench">
+  <!-- Echoing curves: the wheel's arcs from the study, abstracted to nested
+       arcs. Stroked in paper, not `currentColor` — an `<img>`-loaded SVG is
+       its own document, so `currentColor` resolves to black there and would
+       disappear against the ink header bar. -->
+  <g fill="none" stroke="#f4efe1" stroke-width="2.4" stroke-linecap="round" transform="translate(1.5 0)">
+    <path d="M17.4 3.6C2.6 4.6 2.6 19.4 17.4 20.4"/>
+    <path d="M17.8 8.0C8.6 8.8 8.6 15.2 17.8 16.0"/>
+    <path d="M18.2 11.4C13.9 11.8 13.9 12.2 18.2 12.6"/>
+  </g>
+</svg>

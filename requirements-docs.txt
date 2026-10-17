@@ -1,0 +1,11 @@
+# The docs site's build dependencies. Installed by `.github/workflows/pages.yml`
+# and, locally, into a throwaway virtualenv:
+#
+#     python3 -m venv .venv-docs
+#     .venv-docs/bin/pip install -r requirements-docs.txt
+#     .venv-docs/bin/mkdocs serve
+#
+# Pinned so a rebuild is the one CI verified.
+mkdocs-material==9.7.7
+mkdocs==1.6.1
+pymdown-extensions==12.3

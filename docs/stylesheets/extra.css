@@ -1,0 +1,313 @@
+/* pqbench site — a graphite sketch on warm paper.
+ *
+ * The reference is Boccioni's 1913 study for *Dynamism of a Cyclist* (Estorick
+ * Collection): charcoal and graphite on cream paper, with "force lines" and
+ * echoing curves and a divisionist hatch. The palette below is sampled from
+ * that sheet. Ink is the header bar and body text; paper is the page; the deep
+ * sepia is the only accent.
+ *
+ * Everything is expressed through Material for MkDocs' own custom properties,
+ * so light and dark stay coherent. Only the landing hero and its "plate" (the
+ * terminal card) are bespoke.
+ */
+
+:root {
+  /* Paper and graphite, sampled from the sketch. */
+  --pqb-paper: #f4efe1;
+  --pqb-paper-2: #faf6ec;
+  --pqb-ink: #2f2b24;
+  --pqb-ink-soft: #5d564c;
+  --pqb-graphite: #9c9585;
+  --pqb-line: #d3cab4;
+  --pqb-sepia: #6a563a;
+  --pqb-shadow: rgba(47, 43, 36, 0.10);
+  --pqb-radius: 3px;
+
+  /* Ink header bar over a paper page. */
+  --md-primary-fg-color: #2f2b24;
+  --md-primary-fg-color--light: #4a453c;
+  --md-primary-fg-color--dark: #23201a;
+  --md-primary-bg-color: #f4efe1;
+  --md-primary-bg-color--light: #cfc6b0;
+  --md-accent-fg-color: #c9ab74;
+  --md-typeset-a-color: #6a563a;
+
+  --md-default-bg-color: #f4efe1;
+  --md-default-fg-color: #2f2b24;
+  --md-default-fg-color--light: #6b6456;
+  --md-default-fg-color--lighter: #9c9585;
+  --md-default-fg-color--lightest: #d3cab4;
+  --md-code-bg-color: #ece4d1;
+  --md-code-fg-color: #322e26;
+}
+
+/* Charcoal board: chalk on near-black paper. */
+[data-md-color-scheme="slate"] {
+  --pqb-paper: #14120e;
+  --pqb-paper-2: #1e1a14;
+  --pqb-ink: #e8e1d1;
+  --pqb-ink-soft: #b3a992;
+  --pqb-graphite: #857c68;
+  --pqb-line: #332f26;
+  --pqb-sepia: #cbb083;
+  --pqb-shadow: rgba(0, 0, 0, 0.45);
+
+  --md-primary-fg-color: #1c1913;
+  --md-primary-fg-color--light: #2a251c;
+  --md-primary-fg-color--dark: #121009;
+  --md-primary-bg-color: #ece4d1;
+  --md-primary-bg-color--light: #b3a992;
+  --md-accent-fg-color: #cbb083;
+  --md-typeset-a-color: #cbb083;
+
+  --md-default-bg-color: #14120e;
+  --md-default-fg-color: #e8e1d1;
+  --md-default-fg-color--light: #b3a992;
+  --md-default-fg-color--lighter: #7d7460;
+  --md-default-fg-color--lightest: #332f26;
+  --md-code-bg-color: #1f1b15;
+  --md-code-fg-color: #e8e1d1;
+}
+
+/* -- Landing hero -------------------------------------------------------- */
+
+.pqb-hero {
+  position: relative;
+  overflow: hidden;
+  color: var(--pqb-ink);
+  background-color: var(--pqb-paper);
+  border-bottom: 1px solid var(--pqb-line);
+  padding: 3.5rem 0 4rem;
+}
+
+/* The ground: force lines, echoing curves, speed strokes and a divisionist
+   hatch, drawn inline in the template so the strokes take `currentColor` and
+   the palette rather than being baked into a bitmap. */
+.pqb-hero__art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  color: var(--pqb-graphite);
+  pointer-events: none;
+}
+
+/* A paper wash *above* the drawing — opaque under the copy, lighter past the
+   middle — holds the headline at AA while letting the strokes read on the
+   right. As the hero's `::after` it paints over the art and under the grid. */
+.pqb-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: linear-gradient(90deg,
+    color-mix(in srgb, var(--pqb-paper) 97%, transparent) 0%,
+    color-mix(in srgb, var(--pqb-paper) 92%, transparent) 44%,
+    color-mix(in srgb, var(--pqb-paper) 58%, transparent) 72%,
+    color-mix(in srgb, var(--pqb-paper) 34%, transparent) 100%);
+  pointer-events: none;
+}
+
+.pqb-hero__grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2.5rem;
+  align-items: center;
+}
+
+@media screen and (min-width: 60em) {
+  .pqb-hero__grid {
+    grid-template-columns: 1.05fr 1fr;
+    gap: 3rem;
+  }
+}
+
+.pqb-hero__eyebrow {
+  margin: 0 0 1rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--pqb-sepia);
+}
+
+.pqb-hero h1 {
+  margin: 0 0 1.5rem;
+  font-size: 2.1rem;
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--pqb-ink);
+}
+
+@media screen and (min-width: 60em) {
+  .pqb-hero h1 {
+    font-size: 2.6rem;
+  }
+}
+
+/* A skewed "force line" under the headline. */
+.pqb-hero h1::after {
+  content: "";
+  display: block;
+  width: 4.5rem;
+  height: 3px;
+  margin-top: 1.1rem;
+  background-color: var(--pqb-sepia);
+  transform: skewX(-32deg);
+}
+
+.pqb-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0 0 1.5rem;
+}
+
+.pqb-hero__actions .md-button {
+  border-radius: var(--pqb-radius);
+  padding: 0.6em 1.4em;
+  font-weight: 700;
+  color: var(--pqb-ink);
+  border: 1.5px solid var(--pqb-ink);
+  background-color: transparent;
+}
+
+.pqb-hero__actions .md-button:hover {
+  color: var(--pqb-sepia);
+  border-color: var(--pqb-sepia);
+  background-color: transparent;
+}
+
+.pqb-hero__actions .md-button--primary {
+  color: var(--pqb-paper);
+  background-color: var(--pqb-ink);
+}
+
+.pqb-hero__actions .md-button--primary:hover {
+  color: var(--pqb-paper);
+  background-color: var(--pqb-sepia);
+  border-color: var(--pqb-sepia);
+}
+
+.pqb-hero__badges {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--pqb-ink-soft);
+}
+
+.pqb-hero__badges a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.2em;
+}
+
+/* Credit for the drawing used as the hero's ground. */
+.pqb-hero__credit {
+  margin: 1rem 0 0;
+  font-size: 0.62rem;
+  line-height: 1.5;
+  color: var(--pqb-ink-soft);
+}
+
+.pqb-hero__credit a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 0.2em;
+}
+
+/* -- The plate: the terminal card, pinned to the sheet ------------------- */
+
+.pqb-term {
+  color: var(--pqb-ink);
+  background-color: var(--pqb-paper-2);
+  border: 1.5px solid var(--pqb-ink);
+  border-radius: var(--pqb-radius);
+  /* An offset plate shadow — a pasted-on sketch, not a floating window. */
+  box-shadow: 7px 7px 0 var(--pqb-shadow);
+  transform: rotate(-0.5deg);
+  overflow: hidden;
+}
+
+.pqb-term__bar {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--pqb-line);
+}
+
+/* Outlined dots: circles drawn, not filled. */
+.pqb-term__dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  border: 1.2px solid var(--pqb-ink);
+  border-radius: 50%;
+}
+
+.pqb-term__title {
+  margin-left: 0.5rem;
+  font-size: 0.68rem;
+  font-style: italic;
+  color: var(--pqb-ink-soft);
+}
+
+.pqb-term pre {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  background-color: transparent;
+  font-size: 0.7rem;
+  line-height: 1.55;
+  color: var(--pqb-ink);
+}
+
+.pqb-term pre code {
+  background: transparent;
+}
+
+.pqb-term .pqb-term__prompt {
+  color: var(--pqb-sepia);
+  user-select: none;
+}
+
+.pqb-term .pqb-term__dim {
+  color: var(--pqb-ink-soft);
+}
+
+/* -- The docs, kept quiet ------------------------------------------------ */
+
+/* The hero carries the page's `h1`. Material injects the nav title as an `h1`
+   when the Markdown has none; on the home page that would stack a stray
+   heading above the first section, so drop it (`display: none` also keeps it
+   out of the accessibility tree, leaving the hero's headline as the only h1). */
+body:has(.pqb-hero) .md-content__inner > h1:first-child {
+  display: none;
+}
+
+/* Cards read as pencil boxes. */
+.md-typeset .grid.cards > ul > li {
+  border: 1px solid var(--pqb-line);
+  border-radius: var(--pqb-radius);
+  background-color: var(--pqb-paper-2);
+  box-shadow: 3px 3px 0 var(--pqb-shadow);
+}
+
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--pqb-sepia);
+}
+
+/* A drawn rule under section headings, echoing the sketch's ruled annotations. */
+.md-typeset h2 {
+  border-bottom: 1px solid var(--pqb-line);
+  padding-bottom: 0.25em;
+}
+
+.md-typeset hr {
+  border-bottom-color: var(--pqb-line);
+}

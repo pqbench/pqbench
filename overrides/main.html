@@ -1,0 +1,21 @@
+{#-
+  Adds a raster/vector second icon next to Material's one.
+
+  Material emits a single icon from `theme.favicon`, which here is a multi-size
+  `favicon.ico` at the site root — every browser understands it, and it is also
+  the exact path a browser requests by itself when it has no usable icon link
+  (`/pqbench/favicon.ico`; it 404s without this file, and the tab then shows the
+  browser's own placeholder instead of the mark).
+
+  The SVG is listed after it, so browsers that support vector favicons get the
+  crisp version and the rest keep the ICO.
+
+  The theme's `main.html` is only `{% extends "base.html" %}`, so this override
+  adds to it without dropping anything.
+-#}
+{% extends "base.html" %}
+
+{% block site_meta %}
+  {{ super() }}
+  <link rel="icon" type="image/svg+xml" href="{{ 'assets/favicon.svg' | url }}">
+{% endblock %}

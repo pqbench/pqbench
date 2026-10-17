@@ -1,6 +1,10 @@
 # Rust build artifacts
 /target
 
+# Documentation site (MkDocs) build output and its local virtualenv
+/site
+/.venv-docs
+
 # Editor/IDE
 .idea/
 .vscode/

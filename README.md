@@ -1,11 +1,13 @@
 # pqbench
 
 [![CI](https://github.com/pqbench/pqbench/actions/workflows/ci.yml/badge.svg)](https://github.com/pqbench/pqbench/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE-MIT)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
+[![Docs](https://img.shields.io/badge/docs-pqbench.github.io-blue.svg)](https://pqbench.github.io/pqbench/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://github.com/pqbench/pqbench/blob/main/LICENSE-MIT)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/pqbench/pqbench/blob/main/LICENSE-APACHE)
 
 *lzbench for parquet.*
 
+<!-- --8<-- [start:landing] -->
 Measure how well each codec compresses a Parquet file and how many on-disk
 bytes each column costs. One binary for Parquet optimization: it reads footers
 and table metadata, never the data pages, so it is fast on files of any size.
@@ -24,7 +26,7 @@ curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-c
 
 The installer verifies the download against the release checksums and puts
 `pqbench` in `~/.cargo/bin`. To pin a version, build from source, or read about
-the release process, see [Distribution](docs/distribution.md).
+the release process, see [Distribution](https://pqbench.github.io/pqbench/distribution/).
 
 ## The walk, end to end
 
@@ -44,7 +46,7 @@ Read it left to right:
 
 - `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
   rate-limited endpoint wants `pqbench ratelimit --rate 15` between two levels;
-  the retry-at-half-the-rate recipe is in the [CLI reference](docs/cli.md).
+  the retry-at-half-the-rate recipe is in the [CLI reference](https://pqbench.github.io/pqbench/cli/).
 - `credentials check` drops the tables you can't read outside compute — a view,
   a system catalog, Databricks default storage — and prints the reason;
   `credentials get` vends a short-lived lease onto each remaining ref.
@@ -58,13 +60,13 @@ Read it left to right:
   treemap.
 
 The same walk runs offline against the local Delta and Iceberg stand,
-`make lakehouse`. [Getting started](docs/getting-started.md) takes one Parquet
-file to a treemap, and the [CLI reference](docs/cli.md) documents every command.
+`make lakehouse`. [Getting started](https://pqbench.github.io/pqbench/getting-started/) takes one Parquet
+file to a treemap, and the [CLI reference](https://pqbench.github.io/pqbench/cli/) documents every command.
 
 ## Commands
 
 The core measurements. The walk's [`get` and `list`](#the-walk-end-to-end) come
-first; the [CLI reference](docs/cli.md) covers `profile`, `experiment`, `diff`,
+first; the [CLI reference](https://pqbench.github.io/pqbench/cli/) covers `profile`, `experiment`, `diff`,
 `skill`, `credentials`, `ratelimit`, and `setup`.
 
 ### lz
@@ -125,7 +127,7 @@ columns: 2
   (`--format json`, or `-o FILE`).
 
 Filtering which files to measure is a shell job on the `list files` stream —
-see [docs/demo.md](docs/demo.md).
+see [Visual demos](https://pqbench.github.io/pqbench/demo/).
 
 ### list partitions
 
@@ -190,25 +192,25 @@ The page lands at `/tmp/report.html`. Open it in a browser.
 
 ## Documentation
 
-Start with [Getting started](docs/getting-started.md). The
-[documentation index](docs/README.md) maps every page by kind.
+Start with [Getting started](https://pqbench.github.io/pqbench/getting-started/). The
+[documentation index](https://pqbench.github.io/pqbench/) maps every page by kind.
 `pqbench --help` is the command guide; `pqbench <command> --help` is local to
 that command.
 
-- [Getting started](docs/getting-started.md) — install, first measurement, the metadata walk
-- [Distribution](docs/distribution.md) — install the binary, targets, and how releases are cut
-- [CLI reference](docs/cli.md) — the command table, documents, flags, and auth
-- [Visual demos](docs/demo.md) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
-- [Delta tables](docs/delta.md) — log load, `list partitions | list files | bytemass`, limitations
-- [Iceberg tables](docs/iceberg.md) — metadata load, `list partitions | list files | bytemass`, limitations
-- [Visualization](docs/viz.md) — `pqbench viz`, a static HTML treemap
-- [Python bindings](python/README.md) — install the wheel and call every command
-- [Unity Catalog and Iceberg REST E2E](docker/e2e-lakehouse/README.md) — catalogs
+- [Getting started](https://pqbench.github.io/pqbench/getting-started/) — install, first measurement, the metadata walk
+- [Distribution](https://pqbench.github.io/pqbench/distribution/) — install the binary, targets, and how releases are cut
+- [CLI reference](https://pqbench.github.io/pqbench/cli/) — the command table, documents, flags, and auth
+- [Visual demos](https://pqbench.github.io/pqbench/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
+- [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list partitions | list files | bytemass`, limitations
+- [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list partitions | list files | bytemass`, limitations
+- [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqbench viz`, a static HTML treemap
+- [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel and call every command
+- [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
   naming tables for `pqbench list partitions`, over rustfs S3
 
 ## Python
 
-[`python/`](python/README.md) is a PyO3 wheel. Each CLI command is a function
+[`python/`](https://pqbench.github.io/pqbench/python/) is a PyO3 wheel. Each CLI command is a function
 that calls the library in-process:
 
 ```python
@@ -223,8 +225,10 @@ pqbench.viz(rows, output="report")
 PRs welcome. The gate is `make check` (`fmt-check` + `clippy -D warnings` +
 `test`). The PyO3 wheel is `make check-python`. The runnable commands on this
 page are generated into tests by `docscheck` (`make sync-docs`); see
-[CONTRIBUTING.md](CONTRIBUTING.md) for the loop, style, and naming rules.
+[CONTRIBUTING.md](https://pqbench.github.io/pqbench/contributing/) for the loop, style, and naming rules.
 
 ## License
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+Dual-licensed under [MIT](https://github.com/pqbench/pqbench/blob/main/LICENSE-MIT) or [Apache-2.0](https://github.com/pqbench/pqbench/blob/main/LICENSE-APACHE).
+
+<!-- --8<-- [end:landing] -->
