@@ -217,6 +217,15 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
             )
         ]
         self.assertEqual(len(files), 1)
+        # A record is its model's class: one field, three ways to read it.
+        self.assertIsInstance(files[0], pqbench.native.TableFile)
+        self.assertEqual(type(files[0]).__name__, "TableFile")
+        self.assertEqual(files[0].uri, files[0]["uri"])
+        self.assertEqual(files[0].asdict()["uri"], files[0]["uri"])
+        self.assertEqual(list(files[0]), list(files[0].asdict()))
+        self.assertIsNone(files[0].get("no_such_field"))
+        with self.assertRaises(KeyError):
+            files[0]["no_such_field"]
         self.assertTrue(files[0]["path"].endswith(".parquet"), files[0])
         self.assertTrue(files[0]["uri"], files[0])
 
@@ -225,8 +234,11 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
             pqbench.Lake(_workspace()),
             pqbench.native.BytemassRequest(inputs=[str(_PARQUET)]),
         )
+        self.assertIsInstance(rows[0], pqbench.native.MassRow)
+        self.assertEqual(rows[0].column, rows[0]["column"])
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory) / "report"
+            # A list of records goes back into a command unchanged.
             pqbench.native.viz.write_report(prefix, rows)
             page = prefix.with_suffix(".html").read_text()
             self.assertTrue(page.startswith("<!DOCTYPE html>"))

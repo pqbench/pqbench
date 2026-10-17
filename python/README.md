@@ -31,8 +31,8 @@ maturin develop --manifest-path python/Cargo.toml
 
 Each command is the library function of the same path, under `pqbench.native`,
 and takes the handles and the resource like the Rust signature: `credentials.get`
-returns the `AWS_*` lease map, and the values are the library's serde types as
-dicts.
+returns the `AWS_*` lease map, and a record is its model's class: `record["uri"]`,
+`record.uri` and `record.asdict()` agree.
 
 ```python
 import asyncio

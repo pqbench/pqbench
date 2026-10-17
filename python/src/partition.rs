@@ -3,6 +3,7 @@
 use crate::handles::Lake;
 use crate::marshal::stream_listing;
 use crate::prelude::*;
+use crate::records::Partition;
 
 #[pyfunction]
 #[pyo3(name = "list")]
@@ -15,9 +16,11 @@ fn partition_list(
     window_millis: i64,
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
-    stream_listing(py, async move {
-        pqbench::partition::ls::list(&lake, &table, &uri, &env, window_millis).await
-    })
+    stream_listing(
+        py,
+        async move { pqbench::partition::ls::list(&lake, &table, &uri, &env, window_millis).await },
+        Partition::attach,
+    )
 }
 
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -3,6 +3,7 @@
 use crate::handles::Lake;
 use crate::marshal::stream_listing;
 use crate::prelude::*;
+use crate::records::TableFile;
 
 #[pyfunction]
 #[pyo3(name = "list")]
@@ -14,9 +15,11 @@ fn file_list(
     versions: Vec<u64>,
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
-    stream_listing(py, async move {
-        pqbench::file::ls::list(&lake, &uri, &env, &versions).await
-    })
+    stream_listing(
+        py,
+        async move { pqbench::file::ls::list(&lake, &uri, &env, &versions).await },
+        TableFile::attach,
+    )
 }
 
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {

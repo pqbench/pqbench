@@ -1,8 +1,8 @@
 //! `table`: read one table, or list a schema's refs.
 
 use crate::handles::{Lake, Workspace};
-use crate::marshal::records;
 use crate::prelude::*;
+use crate::records::{many, one, Table, TableRef};
 use crate::requests::Storage;
 
 #[pyfunction]
@@ -19,11 +19,15 @@ fn table_read(
     let workspace = workspace.0.clone();
     let lake = lake.0.clone();
     let storage = LibStorage::from(storage);
-    records(py, async move {
-        pqbench::table::get::read(&workspace, &lake, &catalog, &schema, &table, &storage)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    one(
+        py,
+        async move {
+            pqbench::table::get::read(&workspace, &lake, &catalog, &schema, &table, &storage)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        Table::attach,
+    )
 }
 #[pyfunction]
 #[pyo3(name = "list")]
@@ -34,11 +38,15 @@ fn table_list(
     schema: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
-    records(py, async move {
-        pqbench::table::ls::list(&workspace, &catalog, &schema)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    many(
+        py,
+        async move {
+            pqbench::table::ls::list(&workspace, &catalog, &schema)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        TableRef::attach,
+    )
 }
 
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {

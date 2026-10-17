@@ -12,7 +12,8 @@ The library's commands are the crate's modules, one function per path, under
 
 Every name there is the library function of the same path, with the same
 arguments — a separate ``pqbench`` binary is not required. The records are the
-library's serde types, marshalled as dicts; the commands whose library entry
+library's records, as classes — a field reads the same three ways:
+``record["uri"]``, ``record.uri``, ``record.asdict()``; the commands whose entry
 point is async — the walk verbs, ``bytemass`` — return awaitables, and the
 collections the library streams — ``partition.ls.list`` and ``file.ls.list`` —
 are async iterators.

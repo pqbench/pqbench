@@ -2,10 +2,13 @@
 
 use crate::prelude::*;
 
-/// A lazily-consumed stream of JSON values, driven on the shared runtime.
+/// The stream's channel: a built value, or the error that ended the stream.
+pub(crate) type Channel = mpsc::Receiver<Result<Py<PyAny>, String>>;
+
+/// A lazily-consumed stream of built values, driven on the shared runtime.
 #[pyclass]
 pub(crate) struct ValueIterator {
-    rx: Arc<Mutex<mpsc::Receiver<Result<Value, String>>>>,
+    rx: Arc<Mutex<Channel>>,
 }
 #[pymethods]
 impl ValueIterator {
@@ -19,14 +22,18 @@ impl ValueIterator {
             let mut receiver = rx.lock().await;
             match receiver.recv().await {
                 None => Err(PyStopAsyncIteration::new_err(())),
-                Some(Ok(value)) => Python::attach(|py| value_to_py(py, &value)),
+                Some(Ok(value)) => Ok(value),
                 Some(Err(error)) => Err(PyRuntimeError::new_err(error)),
             }
         })
     }
 }
 /// Drive a library stream on the shared runtime, as the Python async iterator.
-pub(crate) fn stream_listing<F, S, T, E>(py: Python<'_>, source: F) -> PyResult<Py<PyAny>>
+pub(crate) fn stream_listing<F, S, T, E>(
+    py: Python<'_>,
+    source: F,
+    attach: fn(Python<'_>, &T) -> PyResult<Py<PyAny>>,
+) -> PyResult<Py<PyAny>>
 where
     F: Future<Output = Result<S, E>> + Send + 'static,
     S: Stream<Item = Result<T, E>> + Send + 'static,
@@ -45,7 +52,9 @@ where
         let mut stream = Box::pin(stream);
         while let Some(item) = stream.next().await {
             let value = match item {
-                Ok(record) => serde_json::to_value(&record).map_err(|error| error.to_string()),
+                Ok(record) => {
+                    Python::attach(|py| attach(py, &record)).map_err(|error| error.to_string())
+                }
                 Err(error) => Err(error.to_string()),
             };
             if tx.send(value).await.is_err() {
@@ -56,10 +65,7 @@ where
     iterator(py, rx)
 }
 /// Wrap a value channel as the Python async iterator the streams return.
-pub(crate) fn iterator(
-    py: Python<'_>,
-    rx: mpsc::Receiver<Result<Value, String>>,
-) -> PyResult<Py<PyAny>> {
+pub(crate) fn iterator(py: Python<'_>, rx: Channel) -> PyResult<Py<PyAny>> {
     Ok(Py::new(
         py,
         ValueIterator {
@@ -101,14 +107,26 @@ pub(crate) fn rows(records: &[Value]) -> PyResult<Vec<pqbench::bytemass::MassRow
         .map(|value| serde_json::from_value(value.clone()).map_err(value_error))
         .collect()
 }
-/// A Python value as JSON, via `json.dumps`.
+/// A Python value as JSON, via `json.dumps` — or a record, field for field.
 pub(crate) fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if let Ok(record) = object.extract::<PyRef<'_, crate::records::Record>>() {
+        return Ok(Value::Object(record.fields().clone()));
+    }
     let json = object.py().import("json")?;
     let text: String = json.call_method1("dumps", (object,))?.extract()?;
     serde_json::from_str(&text).map_err(value_error)
 }
 /// The items of a Python list (or one object) as JSON values.
 pub(crate) fn py_records(object: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
+    if let Ok(record) = object.extract::<PyRef<'_, crate::records::Record>>() {
+        return Ok(vec![Value::Object(record.fields().clone())]);
+    }
+    if let Ok(records) = object.extract::<Vec<PyRef<'_, crate::records::Record>>>() {
+        return Ok(records
+            .iter()
+            .map(|record| Value::Object(record.fields().clone()))
+            .collect());
+    }
     Ok(match py_to_value(object)? {
         Value::Array(items) => items,
         other => vec![other],

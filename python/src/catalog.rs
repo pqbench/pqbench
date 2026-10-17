@@ -1,8 +1,8 @@
 //! `catalog`: read one catalog, or list them all.
 
 use crate::handles::Workspace;
-use crate::marshal::records;
 use crate::prelude::*;
+use crate::records::{many, one, Catalog};
 
 #[pyfunction]
 #[pyo3(name = "read")]
@@ -12,21 +12,29 @@ fn catalog_read(
     catalog: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
-    records(py, async move {
-        pqbench::catalog::get::read(&workspace, &catalog)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    one(
+        py,
+        async move {
+            pqbench::catalog::get::read(&workspace, &catalog)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        Catalog::attach,
+    )
 }
 #[pyfunction]
 #[pyo3(name = "list")]
 fn catalog_list(py: Python<'_>, workspace: PyRef<'_, Workspace>) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
-    records(py, async move {
-        pqbench::catalog::ls::list(&workspace)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    many(
+        py,
+        async move {
+            pqbench::catalog::ls::list(&workspace)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        Catalog::attach,
+    )
 }
 
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {

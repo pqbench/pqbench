@@ -9,9 +9,10 @@
 //! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the
 //! request structs (`Storage`, `LzRequest`, `CompressionRequest`,
 //! `BytemassRequest`, `ProfileRequest`, `ExperimentRequest`) are Python
-//! classes. The records the library returns are its `Serialize` types,
-//! marshalled as dicts: a collection the library streams is an async iterator,
-//! a single value an awaitable.
+//! classes, and so are the records: a model's record is its class, so
+//! `record["uri"]`, `record.uri` and `record.asdict()` agree, and the deep
+//! trees it embeds stay dicts. A collection the library streams is an async
+//! iterator, a single value an awaitable.
 //!
 //! The binding is split the way the library is: one module per domain, each
 //! owning its command and the function that registers it, so a domain can be
@@ -33,6 +34,7 @@ mod partition;
 mod prelude;
 mod profile;
 mod ratelimit;
+mod records;
 mod requests;
 mod sample;
 mod schema;
@@ -78,6 +80,7 @@ fn native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     requests::register(module)?;
     ratelimit::register(py, module)?;
     marshal::register(module)?;
+    records::register(module)?;
     sample::register(py, module)?;
     credentials::register(py, module)?;
     metastore::register(py, module)?;
