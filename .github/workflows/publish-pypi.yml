@@ -9,8 +9,17 @@
 #
 # https://docs.pypi.org/trusted-publishers/
 #
-# Linux wheels set CXXFLAGS to the portable codec baseline (no -march=native);
-# a wheel built with native flags SIGILLs on other CPUs.
+# The wheel is built with every storage backend (`[tool.maturin] features` in
+# pyproject.toml), so `pip install pqbench` reads `s3://` and Delta/Iceberg
+# tables; a wheel cannot be rebuilt by its user.
+#
+# Linux wheels keep the portable codec baseline (no -march=native) and pin
+# aarch64 to the `neoverse-n1` generation, so a wheel built on a newer CPU
+# still runs on an older one.
+#
+# The workspace Cargo.lock is copied into python/ before the build: python/ is
+# its own crate, and seeding its lock from the workspace's pins the shared
+# dependencies (delta-rs, arrow, parquet) to the versions the binaries ship.
 #
 # Deliberately NOT triggered by `release: published`: release.yml cuts a binary
 # release on a manual dispatch, and PyPI versions are immutable, so riding that
@@ -38,7 +47,8 @@ jobs:
             cxxflags: "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            cxxflags: "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
+            cxxflags: "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1 -mcpu=neoverse-n1"
+            rustflags: "-C target-cpu=neoverse-n1"
           - os: macos-14
             target: aarch64-apple-darwin
           - os: macos-13
@@ -47,9 +57,12 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v6
+      - name: Seed python/Cargo.lock from the workspace pins
+        run: cp Cargo.lock python/Cargo.lock
       - uses: PyO3/maturin-action@v1
         env:
           CXXFLAGS: ${{ matrix.cxxflags }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
         with:
           target: ${{ matrix.target }}
           working-directory: python
@@ -65,6 +78,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+      - name: Seed python/Cargo.lock from the workspace pins
+        run: cp Cargo.lock python/Cargo.lock
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist

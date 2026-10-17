@@ -28,4 +28,8 @@ Documentation = "https://github.com/pqbench/pqbench/tree/main/python"
 bindings = "pyo3"
 module-name = "pqbench._native"
 python-packages = ["pqbench"]
-features = ["delta"]
+# A published wheel cannot be rebuilt by its user, so it carries every storage
+# backend: `s3://` reads and Delta/Iceberg tables work out of the box. The
+# individual features (`delta`, `aws`, `iceberg`) stay defined for a direct
+# `cargo build --features delta`.
+features = ["delta-s3", "iceberg-s3"]
