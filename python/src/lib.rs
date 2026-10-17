@@ -3,21 +3,36 @@
 //! Each function calls the same library entry point as the matching CLI
 //! subcommand and returns the same document, bytes, or paths the CLI would
 //! produce.
+//!
+//! The **walk** is the verb-first surface: `get_*` reads one resource and
+//! `list_*` enumerates a collection, mirroring `pqbench get …` and `pqbench
+//! list …`. The resources are the `pqbench.v1` wire types, so a value returned
+//! here round-trips as JSON into `bytemass`, `list_files`, or any CLI stage.
+//! The analysis commands (`lz`, `compression`, `bytemass`, `diff`, `profile`,
+//! `experiment`, `viz`, `skill`) read storage or a sample directly, and
+//! `ratelimit` and `setup` mirror their CLI helpers.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
+use futures::StreamExt;
 use pqbench::experiment::{Aim, ExperimentRequest};
 use pqbench::profile::ProfileRequest;
 use pqbench::stats;
 use pqbench::third_party::parquet::api::{read_sample, read_typed_sample};
+use pqbench::v1::{Credentials, Partition, TableFile};
 use pqbench::viz::MassRecord;
+use pqbench::{catalog, file, metastore, partition, schema, v1, Config, Dialect, Lake, Workspace};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use pyo3::{Py, PyAny};
 use serde::Serialize;
 use serde_json::Value;
+
+/// The default `ratelimit` rate, matching `pqbench::ratelimit::DEFAULT_REQUESTS_PER_SECOND`.
+const DEFAULT_RATE: f64 = 15.0;
 
 /// Run `pqbench lz` over the raw bytes of `file`.
 ///
@@ -116,7 +131,7 @@ fn bytemass(
         env: aws_env(env)?,
         indexes,
     };
-    let lake = lake()?;
+    let (_workspace, lake) = capabilities(None, None, None, false)?;
     let rows = py
         .detach(|| block_on(pqbench::bytemass::bytemass(&lake, &request)))
         .map_err(runtime)?;
@@ -199,25 +214,119 @@ fn experiment(
     dumps(py, &records)
 }
 
-/// Run `pqbench table`: detect the format and load one snapshot.
+/// Run `pqbench diff`: compare two bytemass measurements.
 ///
-/// Returns the table's record.
+/// `left` and `right` are each a parquet path or glob mask (measured here) or a
+/// list of `pqbench.bytemass-row` dicts. `depth` rolls dotted physical column
+/// paths up to that many components. Returns the stream of `pqbench.diff-column`
+/// objects.
 #[pyfunction]
-#[pyo3(signature = (uri, *, version=None, env=None, no_stats=false))]
-fn table(
+#[pyo3(signature = (left, right, *, depth=None, endpoint=None, token=None, table_format=None))]
+fn diff(
     py: Python<'_>,
-    uri: String,
-    version: Option<u64>,
-    env: Option<BTreeMap<String, String>>,
-    no_stats: bool,
+    left: Bound<'_, PyAny>,
+    right: Bound<'_, PyAny>,
+    depth: Option<usize>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
-    let request =
-        pqbench::table::LoadRequest::new(uri, version, aws_env(env)?).with_file_stats(!no_stats);
-    let lake = lake()?;
-    let info = py
-        .detach(|| block_on(pqbench::table::load(&lake, &request)))
-        .map_err(runtime)?;
-    dumps(py, &info)
+    let (_workspace, lake) = capabilities(endpoint, token, table_format, false)?;
+    let left = side_rows(py, &left, &lake)?;
+    let right = side_rows(py, &right, &lake)?;
+    let deltas = pqbench::diff::compare(&left, &right, depth).map_err(runtime)?;
+    let records: Vec<Value> = deltas
+        .into_iter()
+        .map(|delta| with_kind("pqbench.diff-column", &delta))
+        .collect::<PyResult<_>>()?;
+    dumps(py, &records)
+}
+
+/// Run `pqbench ratelimit`: pace a list of records to `rate` per second.
+///
+/// Records pass through unchanged, delayed so each resource type observes at
+/// most `rate` records per second; `0` turns pacing off. The bucket is a
+/// record's `kind`, or the collection segment of its `name`.
+#[pyfunction]
+#[pyo3(signature = (records, *, rate=DEFAULT_RATE))]
+fn ratelimit(py: Python<'_>, records: Bound<'_, PyAny>, rate: f64) -> PyResult<Py<PyAny>> {
+    if !rate.is_finite() || rate < 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "rate expects a non-negative rate, got {rate}"
+        )));
+    }
+    let items = value_items(&py_to_value(&records)?);
+    let mut limit = pqbench::ratelimit::RateLimit::new(rate);
+    for record in &items {
+        let delay = limit.delay(record_type(record), Instant::now());
+        if !delay.is_zero() {
+            py.detach(|| std::thread::sleep(delay));
+        }
+    }
+    dumps(py, &items)
+}
+
+/// Run `pqbench setup`: the environment the resolved configuration exports.
+///
+/// Returns a dict of `PQB_*` names (plus `AWS_REGION` when `region` is set and
+/// `AWS_EC2_METADATA_DISABLED`), the Python spelling of the shell `export`
+/// lines. Needs an endpoint and a token, like the CLI.
+#[pyfunction]
+#[pyo3(signature = (*, region=None, endpoint=None, token=None, table_format=None))]
+fn setup(
+    py: Python<'_>,
+    region: Option<&str>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let config = resolve_config(endpoint, token, table_format, true)?;
+    let token = config.token.as_deref().ok_or_else(|| {
+        PyValueError::new_err(
+            "setup needs a token: pass token= or set PQB_TOKEN / DATABRICKS_TOKEN",
+        )
+    })?;
+    let mut out = serde_json::Map::new();
+    out.insert("PQB_ENDPOINT".into(), Value::String(config.endpoint));
+    out.insert("PQB_TOKEN".into(), Value::String(token.to_string()));
+    out.insert(
+        "PQB_TABLE_FORMAT".into(),
+        Value::String(dialect_name(config.dialect).to_string()),
+    );
+    if let Some(region) = region.map(str::trim).filter(|value| !value.is_empty()) {
+        out.insert("AWS_REGION".into(), Value::String(region.to_string()));
+    }
+    out.insert(
+        "AWS_EC2_METADATA_DISABLED".into(),
+        Value::String("true".into()),
+    );
+    value_to_py(py, &Value::Object(out))
+}
+
+/// Run `pqbench skill`.
+///
+/// No `name` lists skills. `document` is `recipes` for the extra markdown.
+#[pyfunction]
+#[pyo3(signature = (name=None, document=""))]
+fn skill(py: Python<'_>, name: Option<&str>, document: &str) -> PyResult<Py<PyAny>> {
+    match name {
+        None => {
+            let items: Vec<Value> = pqbench::skill::skills()
+                .iter()
+                .map(|item| {
+                    let mut object = serde_json::Map::new();
+                    object.insert("name".into(), Value::String(item.name.into()));
+                    object.insert("description".into(), Value::String(item.description.into()));
+                    Value::Object(object)
+                })
+                .collect();
+            dumps(py, &items)
+        }
+        Some(name) => {
+            let markdown = pqbench::skill::document(name, document).map_err(runtime)?;
+            as_text(py, markdown.to_string())
+        }
+    }
 }
 
 /// Run `pqbench viz` on a bytemass row stream.
@@ -241,61 +350,358 @@ fn viz(py: Python<'_>, rows: Bound<'_, PyAny>, output: PathBuf) -> PyResult<Py<P
     value_to_py(py, &Value::Object(result))
 }
 
-/// Return a bundled skill (`pqbench skill`).
-///
-/// No name lists skills. `document` is `recipes` for the extra markdown.
+/// `pqbench get metastore`: the endpoint's metastore record.
 #[pyfunction]
-#[pyo3(signature = (name=None, document=""))]
-fn skill(py: Python<'_>, name: Option<&str>, document: &str) -> PyResult<Py<PyAny>> {
-    match name {
-        None => {
-            let items: Vec<Value> = pqbench::skill::skills()
-                .iter()
-                .map(|item| {
-                    let mut object = serde_json::Map::new();
-                    object.insert("name".into(), Value::String(item.name.into()));
-                    object.insert("description".into(), Value::String(item.description.into()));
-                    Value::Object(object)
-                })
-                .collect();
-            dumps(py, &items)
-        }
-        Some(name) => {
-            let markdown = pqbench::skill::document(name, document).map_err(runtime)?;
-            Ok(pyo3::types::PyString::new(py, markdown).into_any().unbind())
+#[pyo3(signature = (*, endpoint=None, token=None, table_format=None))]
+fn get_metastore(
+    py: Python<'_>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let value = py
+        .detach(|| block_on(metastore::get::read(&workspace)))
+        .map_err(runtime)?;
+    dumps(py, &value)
+}
+
+/// `pqbench get catalog CATALOG`: one catalog's record.
+#[pyfunction]
+#[pyo3(signature = (catalog, *, endpoint=None, token=None, table_format=None))]
+fn get_catalog(
+    py: Python<'_>,
+    catalog: String,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let value = py
+        .detach(|| block_on(catalog::get::read(&workspace, &catalog)))
+        .map_err(runtime)?;
+    dumps(py, &value)
+}
+
+/// `pqbench get schema CATALOG.SCHEMA`: one schema's record.
+#[pyfunction]
+#[pyo3(signature = (catalog, schema, *, endpoint=None, token=None, table_format=None))]
+fn get_schema(
+    py: Python<'_>,
+    catalog: String,
+    schema: String,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let value = py
+        .detach(|| block_on(schema::get::read(&workspace, &catalog, &schema)))
+        .map_err(runtime)?;
+    dumps(py, &value)
+}
+
+/// `pqbench get table CATALOG.SCHEMA.TABLE`: one table's record.
+///
+/// `location` is a storage path a parent ref already carries, when it does.
+/// `env` carries the object-store options (`AWS_*` names) the metadata read
+/// needs.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (catalog, schema, table, *, location=None, env=None, endpoint=None, token=None, table_format=None))]
+fn get_table(
+    py: Python<'_>,
+    catalog: String,
+    schema: String,
+    table: String,
+    location: Option<String>,
+    env: Option<BTreeMap<String, String>>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, lake) = capabilities(endpoint, token, table_format, true)?;
+    let storage = pqbench::table::get::Storage {
+        location,
+        env: aws_env(env)?,
+    };
+    let value = py
+        .detach(|| {
+            block_on(pqbench::table::get::read(
+                &workspace, &lake, &catalog, &schema, &table, &storage,
+            ))
+        })
+        .map_err(runtime)?;
+    dumps(py, &value)
+}
+
+/// `pqbench list catalogs`: the catalogs at the endpoint.
+#[pyfunction]
+#[pyo3(signature = (*, endpoint=None, token=None, table_format=None))]
+fn list_catalogs(
+    py: Python<'_>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let value = py
+        .detach(|| block_on(catalog::ls::list(&workspace)))
+        .map_err(runtime)?;
+    dumps(py, &value)
+}
+
+/// `pqbench list schemas CATALOG`: the schemas in a catalog.
+#[pyfunction]
+#[pyo3(signature = (catalog, *, endpoint=None, token=None, table_format=None))]
+fn list_schemas(
+    py: Python<'_>,
+    catalog: String,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let value = py
+        .detach(|| block_on(schema::ls::list(&workspace, &catalog)))
+        .map_err(runtime)?;
+    dumps(py, &value)
+}
+
+/// `pqbench list tables CATALOG.SCHEMA`: the tables in a schema.
+#[pyfunction]
+#[pyo3(signature = (catalog, schema, *, endpoint=None, token=None, table_format=None))]
+fn list_tables(
+    py: Python<'_>,
+    catalog: String,
+    schema: String,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let value = py
+        .detach(|| block_on(pqbench::table::ls::list(&workspace, &catalog, &schema)))
+        .map_err(runtime)?;
+    dumps(py, &value)
+}
+
+/// `pqbench list partitions URI`: a table's natural partitions.
+///
+/// `table` overrides the resource name (default: the `local` name a storage
+/// root takes). `every` is the window width, epoch-aligned: `1h`, `1d`, `1w`.
+/// `env` carries the object-store options the log read needs. Returns the
+/// stream of `Partition` objects as a list.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (uri, *, table=None, every="1d", env=None, endpoint=None, token=None, table_format=None))]
+fn list_partitions(
+    py: Python<'_>,
+    uri: String,
+    table: Option<String>,
+    every: &str,
+    env: Option<BTreeMap<String, String>>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let window = parse_window(every)?;
+    let table = table.unwrap_or_else(|| v1::name::local_table(&uri));
+    let env = aws_env(env)?;
+    let (_workspace, lake) = capabilities(endpoint, token, table_format, false)?;
+    let partitions = py
+        .detach(|| {
+            block_on(async {
+                let mut stream = partition::ls::list(&lake, &table, &uri, &env, window)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let mut items = Vec::new();
+                while let Some(item) = stream.next().await {
+                    items.push(item.map_err(|error| error.to_string())?);
+                }
+                Ok::<Vec<Partition>, String>(items)
+            })
+        })
+        .map_err(runtime)?;
+    dumps(py, &partitions)
+}
+
+/// `pqbench list files`: the files a partition's commits added.
+///
+/// `partition` is a `Partition` (as returned by [`list_partitions`]); its
+/// `uri`, `commit_versions`, and `credentials` name the log to read. `env`
+/// carries extra object-store options; the partition's own lease wins.
+#[pyfunction]
+#[pyo3(signature = (partition, *, env=None, endpoint=None, token=None, table_format=None))]
+fn list_files(
+    py: Python<'_>,
+    partition: Bound<'_, PyAny>,
+    env: Option<BTreeMap<String, String>>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let partition: Partition = serde_json::from_value(py_to_value(&partition)?)
+        .map_err(|error| PyValueError::new_err(format!("not a partition record: {error}")))?;
+    let (catalog, schema, table, _partition) = v1::name::parse_partition(&partition.name)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "a partition name must be `…/tables/{{table}}/partitions/{{partition}}`: {}",
+                partition.name
+            ))
+        })?;
+    let uri = partition.uri.clone().ok_or_else(|| {
+        PyValueError::new_err("a partition record needs a table storage root (uri)")
+    })?;
+    let mut env = aws_env(env)?;
+    if let Some(credentials) = &partition.credentials {
+        env.extend(credentials.to_env());
+    }
+    let versions = partition.commit_versions.clone();
+    let (_workspace, lake) = capabilities(endpoint, token, table_format, false)?;
+    let found = py
+        .detach(|| {
+            block_on(async {
+                file::ls::list(&lake, &uri, &env, &versions)
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+        })
+        .map_err(runtime)?;
+    let records: Vec<TableFile> = found
+        .into_iter()
+        .map(|file| TableFile {
+            name: v1::name::table_file(&catalog, &schema, &table, &file.path),
+            blob: Some(v1::name::blob_name(&file.uri)),
+            size_bytes: Some(file.size_bytes),
+            credentials: partition.credentials.clone(),
+            ..TableFile::default()
+        })
+        .collect();
+    dumps(py, &records)
+}
+
+/// `pqbench credentials get`: put vended read credentials on each table-ref.
+///
+/// `refs` is one table-ref dict or a list of them (a `Table` from
+/// [`list_tables`]). Each ref the catalog vends for gains its `credentials`;
+/// a table the catalog vends nothing for passes through unchanged.
+#[pyfunction]
+#[pyo3(signature = (refs, *, endpoint=None, token=None, table_format=None))]
+fn credentials_get(
+    py: Python<'_>,
+    refs: Bound<'_, PyAny>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let records = refs_value(&refs)?;
+    let mut out = Vec::with_capacity(records.len());
+    for record in records {
+        let (catalog, schema, table) = table_name(&record)?;
+        let vended = py
+            .detach(|| block_on(vend(&workspace, &catalog, &schema, &table)))
+            .map_err(runtime)?;
+        out.push(attach_credentials(record, vended));
+    }
+    dumps(py, &out)
+}
+
+/// `pqbench credentials check`: the table-refs readable outside Databricks.
+///
+/// `refs` is one table-ref dict or a list of them. Returns the refs the
+/// catalog reports readable (a `system` table, a view, and managed default
+/// storage are dropped), so the result composes ahead of [`credentials_get`].
+#[pyfunction]
+#[pyo3(signature = (refs, *, endpoint=None, token=None, table_format=None))]
+fn credentials_check(
+    py: Python<'_>,
+    refs: Bound<'_, PyAny>,
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    use pqbench::credentials::check::Eligibility;
+    let (workspace, _lake) = capabilities(endpoint, token, table_format, true)?;
+    let records = refs_value(&refs)?;
+    let mut out = Vec::with_capacity(records.len());
+    for record in records {
+        let (catalog, schema, table) = table_name(&record)?;
+        let eligibility = py
+            .detach(|| {
+                block_on(pqbench::credentials::check::check(
+                    &workspace, &catalog, &schema, &table,
+                ))
+            })
+            .map_err(runtime)?;
+        if matches!(eligibility, Eligibility::Eligible) {
+            out.push(record);
         }
     }
+    dumps(py, &out)
 }
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    // pqbench reads tables from outside Databricks with explicit credentials
+    // (vended, or on the source); it never relies on EC2 instance metadata.
+    // The AWS SDK probes IMDS for the region otherwise and hangs where that
+    // endpoint is blackholed; the CLI defaults the probe off at startup, and
+    // the module matches it. A caller that sets it wins.
+    if std::env::var_os("AWS_EC2_METADATA_DISABLED").is_none() {
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+    }
     module.add_function(wrap_pyfunction!(lz, module)?)?;
     module.add_function(wrap_pyfunction!(compression, module)?)?;
     module.add_function(wrap_pyfunction!(bytemass, module)?)?;
-    module.add_function(wrap_pyfunction!(table, module)?)?;
     module.add_function(wrap_pyfunction!(profile, module)?)?;
     module.add_function(wrap_pyfunction!(experiment, module)?)?;
+    module.add_function(wrap_pyfunction!(diff, module)?)?;
+    module.add_function(wrap_pyfunction!(ratelimit, module)?)?;
+    module.add_function(wrap_pyfunction!(setup, module)?)?;
     module.add_function(wrap_pyfunction!(skill, module)?)?;
     module.add_function(wrap_pyfunction!(viz, module)?)?;
-    module.add(
-        "commands",
-        PyTuple::new(
-            module.py(),
-            [
-                "lz",
-                "compression",
-                "bytemass",
-                "table",
-                "profile",
-                "experiment",
-                "skill",
-                "viz",
-            ],
-        )?,
-    )?;
+    module.add_function(wrap_pyfunction!(get_metastore, module)?)?;
+    module.add_function(wrap_pyfunction!(get_catalog, module)?)?;
+    module.add_function(wrap_pyfunction!(get_schema, module)?)?;
+    module.add_function(wrap_pyfunction!(get_table, module)?)?;
+    module.add_function(wrap_pyfunction!(list_catalogs, module)?)?;
+    module.add_function(wrap_pyfunction!(list_schemas, module)?)?;
+    module.add_function(wrap_pyfunction!(list_tables, module)?)?;
+    module.add_function(wrap_pyfunction!(list_partitions, module)?)?;
+    module.add_function(wrap_pyfunction!(list_files, module)?)?;
+    module.add_function(wrap_pyfunction!(credentials_get, module)?)?;
+    module.add_function(wrap_pyfunction!(credentials_check, module)?)?;
+    module.add("commands", PyTuple::new(module.py(), COMMANDS)?)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
+
+/// Every bound command, in the order the CLI's help groups them.
+const COMMANDS: [&str; 21] = [
+    "lz",
+    "compression",
+    "bytemass",
+    "profile",
+    "experiment",
+    "diff",
+    "ratelimit",
+    "setup",
+    "skill",
+    "viz",
+    "get_metastore",
+    "get_catalog",
+    "get_schema",
+    "get_table",
+    "list_catalogs",
+    "list_schemas",
+    "list_tables",
+    "list_partitions",
+    "list_files",
+    "credentials_get",
+    "credentials_check",
+];
 
 fn parse_mode(mode: &str) -> PyResult<stats::Mode> {
     match mode {
@@ -304,6 +710,23 @@ fn parse_mode(mode: &str) -> PyResult<stats::Mode> {
         other => Err(PyValueError::new_err(format!(
             "invalid mode {other:?}; expected fastest or mean"
         ))),
+    }
+}
+
+fn parse_dialect(value: &str) -> PyResult<Dialect> {
+    match value {
+        "unity" => Ok(Dialect::Unity),
+        "iceberg" => Ok(Dialect::Iceberg),
+        other => Err(PyValueError::new_err(format!(
+            "invalid table_format {other:?}; expected unity or iceberg"
+        ))),
+    }
+}
+
+fn dialect_name(dialect: Dialect) -> &'static str {
+    match dialect {
+        Dialect::Unity => "unity",
+        Dialect::Iceberg => "iceberg",
     }
 }
 
@@ -326,6 +749,228 @@ fn parse_profile_rows(method: &str) -> PyResult<Option<usize>> {
     Err(PyValueError::new_err(format!(
         "bad rows {method:?}; expected `all` or `first:N`"
     )))
+}
+
+/// Parse a window width: a positive integer and a unit (`m`, `h`, `d`, `w`).
+fn parse_window(value: &str) -> PyResult<i64> {
+    let (number, unit) = value.split_at(
+        value
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| PyValueError::new_err("every is empty"))?,
+    );
+    let count: i64 = number
+        .parse()
+        .map_err(|_| PyValueError::new_err(format!("every `{value}` needs a number and a unit")))?;
+    if count <= 0 {
+        return Err(PyValueError::new_err(format!(
+            "every must be positive: {value}"
+        )));
+    }
+    let millis = match unit {
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        "w" => 604_800_000,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "every unit must be m, h, d, or w: {value}"
+            )))
+        }
+    };
+    Ok(count * millis)
+}
+
+/// The resolved configuration: explicit keyword arguments win over `PQB_*`,
+/// which wins over `DATABRICKS_*`, as the CLI's global flags do.
+fn resolve_config(
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+    require_endpoint: bool,
+) -> PyResult<Config> {
+    let endpoint = endpoint
+        .map(str::to_owned)
+        .or_else(|| env_non_empty("PQB_ENDPOINT"))
+        .or_else(|| env_non_empty("DATABRICKS_HOST"))
+        .unwrap_or_default();
+    let token = token
+        .map(str::to_owned)
+        .or_else(|| env_non_empty("PQB_TOKEN"))
+        .or_else(|| env_non_empty("DATABRICKS_TOKEN"));
+    let dialect = match table_format
+        .map(str::to_owned)
+        .or_else(|| env_non_empty("PQB_TABLE_FORMAT"))
+    {
+        Some(value) => parse_dialect(&value)?,
+        None => Dialect::Unity,
+    };
+    if require_endpoint && endpoint.is_empty() {
+        return Err(PyValueError::new_err(
+            "an endpoint is required: pass endpoint= or set PQB_ENDPOINT / DATABRICKS_HOST",
+        ));
+    }
+    Ok(Config {
+        endpoint,
+        token,
+        dialect,
+    })
+}
+
+fn env_non_empty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+/// The workspace and lake a command runs under: the resolved configuration
+/// and the storage registry built over the same client.
+fn capabilities(
+    endpoint: Option<&str>,
+    token: Option<&str>,
+    table_format: Option<&str>,
+    require_endpoint: bool,
+) -> PyResult<(Workspace, Lake)> {
+    let config = resolve_config(endpoint, token, table_format, require_endpoint)?;
+    let workspace = Workspace::new(config).map_err(runtime)?;
+    let lake = Lake::new(&workspace);
+    Ok((workspace, lake))
+}
+
+/// Vendor read credentials for one table, by the workspace's dialect.
+async fn vend(
+    workspace: &Workspace,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+) -> Result<Option<BTreeMap<String, String>>, String> {
+    let vended = match workspace.config().dialect {
+        Dialect::Unity => {
+            pqbench::credentials::get::vend_unity(workspace, catalog, schema, table).await
+        }
+        Dialect::Iceberg => pqbench::credentials::get::vend_iceberg(workspace, schema, table).await,
+    };
+    vended.map_err(|error| error.to_string())
+}
+
+/// The ref with the vended lease written onto it as `credentials`; an older
+/// `env` bag is dropped, so a table's lease lives in one place. A ref the
+/// catalog vends nothing for passes through unchanged.
+fn attach_credentials(mut record: Value, env: Option<BTreeMap<String, String>>) -> Value {
+    let Some(env) = env else {
+        return record;
+    };
+    let credentials = Credentials::from_env(&env);
+    if credentials.is_empty() {
+        return record;
+    }
+    let Some(object) = record.as_object_mut() else {
+        return record;
+    };
+    object.remove("env");
+    object.insert(
+        "credentials".into(),
+        serde_json::to_value(credentials).unwrap_or(Value::Null),
+    );
+    record
+}
+
+/// The catalog, schema, and table a ref's `name` parses to.
+fn table_name(record: &Value) -> PyResult<(String, String, String)> {
+    let name = record
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| PyValueError::new_err("a table-ref needs a name"))?;
+    v1::name::parse_table(name).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "a table-ref name must be `…/tables/{{table}}`: {name}"
+        ))
+    })
+}
+
+/// One or more records as a list: a single object is one record.
+fn refs_value(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
+    match py_to_value(obj)? {
+        Value::Array(items) => Ok(items),
+        object @ Value::Object(_) => Ok(vec![object]),
+        other => Err(PyValueError::new_err(format!(
+            "expected a record or a list of records, not `{}`",
+            json_kind(&other)
+        ))),
+    }
+}
+
+/// One diff side as bytemass rows: a path or glob mask is measured, a list of
+/// rows is taken as-is.
+fn side_rows(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    lake: &Lake,
+) -> PyResult<Vec<pqbench::bytemass::MassRow>> {
+    if let Ok(input) = obj.extract::<String>() {
+        let request = pqbench::bytemass::BytemassRequest {
+            inputs: vec![input],
+            ..Default::default()
+        };
+        return py
+            .detach(|| block_on(pqbench::bytemass::bytemass(lake, &request)))
+            .map_err(runtime);
+    }
+    value_items(&py_to_value(obj)?)
+        .into_iter()
+        .map(|item| {
+            serde_json::from_value(item).map_err(|error| {
+                PyValueError::new_err(format!("diff reads bytemass rows: {error}"))
+            })
+        })
+        .collect()
+}
+
+/// The items of a JSON value: an array stays, anything else is one item.
+fn value_items(value: &Value) -> Vec<Value> {
+    match value {
+        Value::Array(items) => items.clone(),
+        other => vec![other.clone()],
+    }
+}
+
+/// A value tagged with a `kind`, as the CLI's row records are.
+fn with_kind<T: Serialize>(kind: &'static str, value: &T) -> PyResult<Value> {
+    let mut object = serde_json::Map::new();
+    object.insert("kind".into(), Value::from(kind));
+    if let Value::Object(fields) =
+        serde_json::to_value(value).map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+    {
+        object.extend(fields);
+    }
+    Ok(Value::Object(object))
+}
+
+/// The resource type a record names — the pacing bucket: its `kind`, or the
+/// collection segment of its `name` (the segment before the id).
+fn record_type(record: &Value) -> &str {
+    if let Some(kind) = record.get("kind").and_then(Value::as_str) {
+        return kind;
+    }
+    let Some(name) = record.get("name").and_then(Value::as_str) else {
+        return "";
+    };
+    let segments: Vec<&str> = name.split('/').collect();
+    segments
+        .len()
+        .checked_sub(2)
+        .and_then(|index| segments.get(index))
+        .copied()
+        .unwrap_or("")
+}
+
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 fn aws_env(env: Option<BTreeMap<String, String>>) -> PyResult<BTreeMap<String, String>> {
@@ -429,22 +1074,6 @@ fn u64_field(value: &Value, name: &str) -> PyResult<u64> {
         .get(name)
         .and_then(Value::as_u64)
         .ok_or_else(|| PyValueError::new_err(format!("bytemass row needs `{name}`")))
-}
-
-/// The shared lake, resolved from the environment as the CLI does: the same
-/// `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT` names.
-fn lake() -> PyResult<pqbench::Lake> {
-    let dialect = match std::env::var("PQB_TABLE_FORMAT").as_deref() {
-        Ok("iceberg") => pqbench::Dialect::Iceberg,
-        _ => pqbench::Dialect::Unity,
-    };
-    let config = pqbench::Config {
-        endpoint: std::env::var("PQB_ENDPOINT").unwrap_or_default(),
-        token: std::env::var("PQB_TOKEN").ok(),
-        dialect,
-    };
-    let workspace = pqbench::Workspace::new(config).map_err(runtime)?;
-    Ok(pqbench::Lake::new(&workspace))
 }
 
 fn block_on<T, E>(future: impl std::future::Future<Output = Result<T, E>>) -> Result<T, String>
