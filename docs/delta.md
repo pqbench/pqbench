@@ -90,7 +90,9 @@ columns: 2
 
 With NDJSON output, `list partitions` emits each partition and `list files` each
 available active file without retaining a second complete history or file list
-in the CLI. Output writes are awaited, so a slow consumer slows the producer.
+in the CLI. Output writes are awaited at buffer boundaries, so a slow consumer
+still slows the producer — per buffer rather than per row, since a row's own
+write is a copy.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 the read resolves a plain delta-rs snapshot, which reads the log's actions but
