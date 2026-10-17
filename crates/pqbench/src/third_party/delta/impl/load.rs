@@ -268,6 +268,70 @@ pub(super) async fn stream_commits(
         }))
 }
 
+/// Stream the files the requested commits added, in version order.
+///
+/// A commit's `add` actions name the files it wrote, so the read is the actions
+/// themselves: no snapshot, no `_last_checkpoint`, no checkpoint, no active-file
+/// replay. The versions come from the caller when it names them — `list files`
+/// does, one window at a time — and from the log's own listing when it does not.
+///
+/// A version the listing names that a read no longer finds has nothing left to
+/// read — retention kept no actions — and contributes no files.
+pub(super) async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<TableFile, Error>>, Error> {
+    let store = open_store(lake, request)?;
+    let versions: Vec<u64> = match request.commit_versions.as_ref() {
+        Some(named) => named.iter().copied().collect(),
+        None => commit_versions(&store, &request.uri, request.snapshot_version).await?,
+    };
+    let uri = request.uri.clone();
+    // Version order is the log's order, and `buffered` keeps it while bounding
+    // how many commits are in flight at once; a commit's files are yielded as a
+    // group once its own read lands.
+    Ok(futures::stream::iter(versions)
+        .map(move |version| {
+            let store = store.clone();
+            let uri = uri.clone();
+            async move { commit_files(&store, &uri, version).await }
+        })
+        .buffered(commit_read_width())
+        .map_ok(|files| futures::stream::iter(files.into_iter().map(Ok)))
+        .try_flatten())
+}
+
+/// The files one commit's `add` actions name, in file order.
+async fn commit_files(
+    store: &LogStoreRef,
+    uri: &str,
+    version: u64,
+) -> Result<Vec<TableFile>, Error> {
+    let Some(bytes) = store
+        .read_commit_entry(version)
+        .await
+        .map_err(delta_error)?
+    else {
+        // Named but gone: the log kept no actions to read.
+        return Ok(Vec::new());
+    };
+    let parsed = parse_commit(&bytes, version)?;
+    drop(bytes);
+    parsed
+        .actions
+        .into_iter()
+        .filter(|action| action.kind == "add")
+        .filter_map(|action| action.path)
+        .map(|path| added_file(uri, path))
+        .collect()
+}
+
+/// The table file one `add` action's path describes.
+fn added_file(uri: &str, path: String) -> Result<TableFile, Error> {
+    let file_uri = crate::table::join_uri(uri, &path).map_err(|error| Error(error.to_string()))?;
+    Ok(TableFile::new(path, file_uri, 0))
+}
+
 /// The table's commit versions, oldest first, from the log's own listing.
 ///
 /// A JSON commit is named `00000000000000000042.json` and nothing else is: a

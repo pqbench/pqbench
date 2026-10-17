@@ -1,13 +1,14 @@
 //! Delta snapshot resolution: the transaction log and the active files.
 //!
 //! [`load`] reads a table's header and files; [`stream_commits`] streams its
-//! commit times. Neither reads Parquet footers; pipe the record to `bytemass`
-//! to measure. All delta-rs interaction lives in the private `impl` module.
-//! Drive the load from a current-thread runtime: delta-rs then selects its own
-//! executor instead of borrowing the caller's.
+//! commit times and [`stream_files`] the files its commits added. None of them
+//! reads Parquet footers; pipe the record to `bytemass` to measure. All delta-rs
+//! interaction lives in the private `impl` module. Drive the load from a
+//! current-thread runtime: delta-rs then selects its own executor instead of
+//! borrowing the caller's.
 //!
-//! The `delta` feature compiles the loader; without it both entry points fail
-//! at runtime and name the feature.
+//! The `delta` feature compiles the loader; without it every entry point fails
+//! at runtime and names the feature.
 
 use crate::table::{LoadRequest, TableInfo};
 use crate::Lake;
@@ -30,4 +31,19 @@ pub async fn stream_commits(
     request: &LoadRequest,
 ) -> Result<crate::table::CommitStream<'static>, crate::table::Error> {
     super::r#impl::stream_commits(lake, request).await
+}
+
+/// Stream the files the requested commits added, in log order.
+///
+/// The read is the commits' own `add` actions, so no snapshot and no
+/// active-file replay is resolved. A version the log no longer holds
+/// contributes no files.
+///
+/// # Errors
+/// As [`load`]; an error raised after the first file is a stream item.
+pub async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    super::r#impl::stream_files(lake, request).await
 }

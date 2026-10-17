@@ -1,12 +1,13 @@
 //! Iceberg snapshot resolution: the metadata JSON and Avro manifests.
 //!
 //! [`load`] reads a table's header and files; [`stream_commits`] streams its
-//! commit times. Neither reads Parquet footers; pipe the record to `bytemass`
-//! to measure. All Iceberg and Avro interaction lives in the private `impl`
-//! module. Run inside a Tokio runtime.
+//! commit times and [`stream_files`] the files its snapshots name. None of them
+//! reads Parquet footers; pipe the record to `bytemass` to measure. All Iceberg
+//! and Avro interaction lives in the private `impl` module. Run inside a Tokio
+//! runtime.
 //!
-//! The `iceberg` feature compiles the loader; without it both entry points fail
-//! at runtime and name the feature.
+//! The `iceberg` feature compiles the loader; without it every entry point fails
+//! at runtime and names the feature.
 
 use crate::table::{LoadRequest, TableInfo};
 use crate::Lake;
@@ -32,4 +33,19 @@ pub async fn stream_commits(
     request: &LoadRequest,
 ) -> Result<crate::table::CommitStream<'static>, crate::table::Error> {
     super::r#impl::stream_commits(lake, request).await
+}
+
+/// Stream the files the selected snapshot's manifests name.
+///
+/// An Iceberg snapshot's files ride on its manifest list, not on the log, so the
+/// files are the resolved snapshot's, and a request naming other snapshots than
+/// the selected one yields none.
+///
+/// # Errors
+/// As [`load`]; an error raised after the first file is a stream item.
+pub async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    super::r#impl::stream_files(lake, request).await
 }

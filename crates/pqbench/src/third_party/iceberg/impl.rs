@@ -51,3 +51,27 @@ pub(crate) async fn stream_commits(
         ))
     }
 }
+
+pub(crate) async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    #[cfg(feature = "iceberg")]
+    {
+        use futures_util::{StreamExt as _, TryStreamExt as _};
+
+        let files = load::stream_files(lake, request)
+            .await
+            .map_err(|error| crate::table::Error(error.to_string()))?;
+        Ok(files
+            .map_err(|error| crate::table::Error(error.to_string()))
+            .boxed())
+    }
+    #[cfg(not(feature = "iceberg"))]
+    {
+        let _ = (lake, request);
+        Err(crate::table::Error(
+            "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
+        ))
+    }
+}

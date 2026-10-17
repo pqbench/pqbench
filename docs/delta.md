@@ -109,8 +109,15 @@ retention is asked for, and read each commit as a header prefix, not whole
 (1 KB, then 4 KB, whole only as a last resort), so a commit's add-list is neither
 read nor retained. Reads run a window wide (`available_parallelism * 4`), so
 memory is flat in the log's length rather than growing with every commit's
-header. The library API retains the log
-and files it reads.
+header. The library API retains the log and files it reads.
+
+`list files` reads the same window's commits for a different reason: their `add`
+actions name the files the window wrote. That read is whole commits — the adds
+are the bulk of a commit — but it resolves nothing else: no listing, no
+`_last_checkpoint`, no checkpoint, and no active-file replay, so it needs no
+protocol or metadata to name a commit's files. Each file is streamed as its
+commit is read, and the files a version the log no longer holds contributed are
+simply absent.
 
 ## Limitations
 
