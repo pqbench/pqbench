@@ -22,6 +22,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.94.1"
 
+# rust-cache policy: only the default branch saves (the `save-if` on each cache
+# step). A PR restores main's cache — GitHub serves the default branch's caches
+# to every branch — but if it also saved, its copy would live under
+# refs/pull/N/merge, readable by no other branch, and the duplicates push the
+# repo past its 10 GB cache limit, evicting the entries PRs restore. So PRs
+# read and never write; only main's set is kept, and it stays under the limit.
 jobs:
   # Clippy once over the union of features. Isolated feature sets don't need
   # their own lint pass: `--all-features` sees every gated `cfg(feature = ...)`
@@ -39,6 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: make lint CARGO_FEATURES=--all-features
 
   # Drafts run only the lightweight workflow; this one runs on non-draft PRs.
@@ -106,6 +113,7 @@ jobs:
           # rebuild every crate whose features differ. Key on both so each leg
           # reuses its own artifacts.
           key: ${{ matrix.arch }}-${{ matrix.features || 'default' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: make test CARGO_FEATURES="${{ matrix.cargo_flags }}" TEST_FLAGS="${{ matrix.test_flags }}"
 
   python:
@@ -126,6 +134,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: python
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: make check-python
 
   # The lakehouse stand: compose up the object store and catalogs, seed the
@@ -146,6 +155,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: arm64-delta-s3-unity-iceberg-stand
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Bring the lakehouse stand up and check it
         run: make lakehouse
 
@@ -166,6 +176,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: amd64-metastore
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Secrets are scoped to this step, so the third-party actions above never
       # receive them in their environment.
       - name: Run the live Databricks metastore e2e
@@ -199,6 +210,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: amd64-walk
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Secrets are scoped to this step, so the third-party actions above never
       # receive them in their environment.
       - name: Run the walk
