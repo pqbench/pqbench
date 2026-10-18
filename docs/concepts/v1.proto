@@ -1,0 +1,393 @@
+// Status: the wire contract. The implemented model is
+// `crates/pqbench/src/v1/`, and the modelling rules are
+// `docs/concepts/data-modelling.md`; where this contract differs from them, they
+// win.
+//
+// pqbench IPC messages, in protobuf (AIP style).
+//
+// The data the commands pass are these resource messages: one resource per
+// NDJSON line, using the proto3 JSON mapping, except that field names are the
+// names as spelled here (snake_case), not the mapping's lowerCamelCase — a
+// generator sets `json_name` to match — that a count or a size is a JSON
+// number, not the mapping's string, and that an instant is integer milliseconds
+// since the Unix epoch, the unit the logs already store. An enum is its value
+// name. One `Schema` line, for example:
+//
+//   {"name":"catalogs/dbx_samples/schemas/nyctaxi","comment":"NYC taxi data"}
+//
+// There is no envelope: no `kind`, no per-document `version`. A stage reads
+// exactly one resource type, and the `name`'s collection segment identifies it
+// (`…/tables/{t}` is a `Table`, `…/blobs/{service}/{locator}` is a `Blob`,
+// `…/bytemass` is a `Bytemass`). A stream is one type; a genuinely mixed input
+// is a `oneof`, never a tag on a resource.
+//
+// The API version is the package's (`pqbench.v1`), not a segment of the `name`;
+// a name is self-describing by its collection segment, and no document carries
+// a version of its own.
+//
+// An id segment is any string that is one URI path segment and decodes back to
+// what it names — a plain name, a URL-encoded path (`/` as `%2F`), a dotted
+// column path, or a number. None of these ids is user-specified, so AIP-122
+// asks only that the format be documented (below); its character-set advice
+// comes from RFC-1034, the DNS spec, and does not apply here.
+//
+// Resource names are relative (AIP-122) and are pqbench's own identifiers, not
+// the backend's URL: the endpoint is Unity's or Iceberg's, and the dialect maps
+// `name` to that backend's REST URL — `/api/2.1/unity-catalog/tables/{c}.{s}.{t}`
+// for Unity, `/namespaces/{s}/tables/{t}` for Iceberg. A dotted FQN is an
+// input-only lookup alias; it never appears as a field.
+//
+// AIP's field annotations are deliberately absent: the documents are
+// reimplemented as native Rust, so the type system carries what the annotations
+// would describe — an absent value is an `Option`, an output-only field is not
+// an input parameter — and there is no generator to read them. The AIP shape
+// (names, patterns, field names) still applies.
+//
+// Credentials are a value a document carries beside the resource's own data
+// (AIP-147 concerns storage; the messages below model the value). The vended
+// lease `credentials get` mints rides as the resource's own `credentials`
+// field, set by the stage that read it — a `Table` (the read that follows), a
+// `Partition` (the read that follows), a `TableFile` (the blob read) — so a
+// pipeline stays in-band. It is treated as non-sensitive for now; a later pass
+// moves it off the wire.
+//
+// A table a catalog did not name — one read by storage path — is still a
+// resource: it takes the `local` catalog and schema (`catalogs/local/schemas/
+// local/tables/{id}`), so every partition and file has a canonical name.
+//
+// A blob is storage-rooted: `blobs/{service}/{locator}` (the service is
+// `s3`, `file`, …; the locator URL-encoded), so a bare object or a local path
+// names a resource like any other. A table references it through a `TableFile`
+// association, not as its parent (AIP-124).
+
+syntax = "proto3";
+
+package pqbench.v1;
+
+// A per-column value the log stores as JSON — a number, a string, an object, or
+// null — and a partition value that may be null.
+import "google/protobuf/struct.proto";
+
+// ---------------------------------------------------------------------------
+// Enums (AIP-126): UPPER_SNAKE_CASE, an `_UNSPECIFIED` zero value.
+// ---------------------------------------------------------------------------
+
+enum CatalogType {
+  CATALOG_TYPE_UNSPECIFIED = 0;
+  CATALOG_TYPE_MANAGED = 1;
+  CATALOG_TYPE_FOREIGN = 2;
+  CATALOG_TYPE_SYSTEM = 3;
+}
+
+enum TableFormat {
+  TABLE_FORMAT_UNSPECIFIED = 0;
+  TABLE_FORMAT_DELTA = 1;
+  TABLE_FORMAT_ICEBERG = 2;
+}
+
+enum EligibilityReason {
+  ELIGIBILITY_REASON_UNSPECIFIED = 0;
+  ELIGIBILITY_REASON_SYSTEM_TABLE = 1;
+  ELIGIBILITY_REASON_NOT_A_TABLE = 2;
+  ELIGIBILITY_REASON_NO_EXTERNAL_READ = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Resources (AIP-121/122/123). First field is `name`; `uid`, when present, is
+// an output-only UUID4.
+// ---------------------------------------------------------------------------
+
+// The metastore: the entity above catalogs. There can be several — the Unity
+// metastore, the Iceberg metastore — so it is a collection, e.g.
+// `metastores/unity`.
+message Metastore {
+  // Format: metastores/{metastore}
+  string name = 1;
+
+  string uid = 2;
+
+  // The user-set metastore name.
+  string display_name = 3;
+
+  string cloud_provider = 4;
+
+  string region = 5;
+}
+
+message Catalog {
+  // Format: catalogs/{catalog}
+  string name = 1;
+
+  string uid = 2;
+
+  string display_name = 3;
+
+  CatalogType catalog_type = 4;
+
+  string comment = 5;
+
+  string owner = 6;
+}
+
+message Schema {
+  // Format: catalogs/{catalog}/schemas/{schema}
+  string name = 1;
+
+  string uid = 2;
+
+  string comment = 3;
+
+  // The schema's storage URI, when it has one.
+  string uri = 4;
+
+  map<string, string> properties = 5;
+}
+
+message Table {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}
+  string name = 1;
+
+  string uid = 2;
+
+  // The storage root URI.
+  string uri = 3;
+
+  TableFormat format = 4;
+
+  int64 snapshot_version = 5;
+
+  repeated string partition_columns = 6;
+
+  // The schema, in order. A repeated field follows its element type (AIP-140).
+  repeated DeclaredColumn declared_columns = 7;
+
+  map<string, string> properties = 8;
+
+  int64 file_count = 9;
+
+  int64 partition_count = 10;
+
+  // The vended storage credentials for the table's files, when the caller
+  // holds them. Set by the stage that read the table.
+  Credentials credentials = 11;
+}
+
+// A column of a table's schema. Not a resource: the declared column is a
+// bounded value on its `Table`, while a file's copy of it is the `Column`
+// resource the analyses hang off.
+message DeclaredColumn {
+  // The column's name within the schema (AIP-122 reserves `name` for resources).
+  string column = 1;
+
+  string data_type = 2;
+
+  bool nullable = 3;
+
+  int64 position = 4;
+}
+
+// A natural partition: a half-open commit-time window (AIP-145).
+message Partition {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}
+  string name = 1;
+
+  // Inclusive start of the window, milliseconds since the Unix epoch.
+  int64 start_time = 2;
+
+  // Exclusive end of the window, milliseconds since the Unix epoch.
+  int64 end_time = 3;
+
+  repeated int64 commit_versions = 4;
+
+  // The table's storage root, denormalized so the files stage reads the log
+  // without a catalog call.
+  string uri = 5;
+
+  // The table's vended credentials, when the caller holds them.
+  Credentials credentials = 6;
+
+  // The commits' `commitInfo` actions, index-aligned with `commit_versions`:
+  // the operation, its parameters and metrics, and the writer's identity, as
+  // the log stores them. Empty when no commit in the window has one.
+  repeated google.protobuf.Value commit_info = 7;
+}
+
+// A storage blob: the bytes a data file lives in — a local file or an S3
+// object, named by its service. It is storage-rooted and top-level; a table
+// references it through a `TableFile` association (AIP-124), not as a parent.
+message Blob {
+  // Format: blobs/{service}/{locator}
+  // `{service}` is the storage service (`s3`, `file`, …); `{locator}` is what
+  // it names — `bucket/key` for `s3` (`s3://bucket/key` → `bucket%2Fkey`),
+  // `tmp/x.parquet` for `file` — URL-encoded to one segment so it decodes back.
+  string name = 1;
+
+  int64 size_bytes = 2;
+
+  // The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
+  string storage_class = 3;
+
+  int64 row_group_count = 4;
+
+  int64 column_count = 5;
+}
+
+// A table's reference to one `Blob`: a row of the table's log (the Delta
+// `add`). The table owns it, so its canonical parent is the table; the blob is
+// storage-owned. This is the AIP-124 association resource between them.
+message TableFile {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/files/{file}
+  // `{file}` is the table-relative path, URL-encoded to one segment.
+  string name = 1;
+
+  // The blob holding the bytes, a `pqbench.v1.Blob` name.
+  string blob = 2;
+
+  int64 size_bytes = 3;
+
+  // The log's partition values; a null value is JSON null.
+  map<string, google.protobuf.Value> partition_values = 4;
+
+  // The Delta add action's statistics, when the log carries them.
+  FileStats stats = 5;
+
+  // The vended credentials to read `blob` with, when the caller holds them.
+  Credentials credentials = 6;
+
+  // The path as the log records it, relative to the table's storage root.
+  string path = 7;
+}
+
+// One commit of a table's log. The `{commit}` id segment is the log version, a
+// number (a valid URI path segment).
+message Commit {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/commits/{commit}
+  string name = 1;
+
+  int64 version = 2;
+
+  // Commit time, milliseconds since the Unix epoch, when the log records one.
+  int64 commit_time = 3;
+
+  repeated LogAction actions = 4;
+
+  // The commit's `commitInfo` action as the log stores it, when it has one.
+  google.protobuf.Value commit_info = 5;
+}
+
+// A file's copy of a declared column: the physical unit the analyses read. The
+// collection is `columns` and the path says `column`, so the resource takes the
+// bare name `Column`. The `{column}` id segment is the column path (e.g.
+// `a.b`); a dot is valid in a URI path segment.
+message Column {
+  // Format:
+  // blobs/{service}/{locator}/columns/{column}
+  string name = 1;
+
+  // The declared column this file column is a copy of.
+  string declared_column = 2;
+
+  int64 position = 3;
+
+  string physical_data_type = 4;
+
+  int64 row_group_count = 5;
+}
+
+// A column's byte mass (the footer's `ColumnMetaData`), aggregated by column:
+// one per column, over its column chunks. The per-chunk breakdown is not this
+// resource; a `ChunkBytemass` would carry it.
+message Bytemass {
+  // Format: blobs/{service}/{locator}/columns/{column}/bytemass
+  string name = 1;
+
+  int64 compressed_bytes = 2;
+  int64 uncompressed_bytes = 3;
+  string codec = 4;
+  repeated string encodings = 5;
+  bool dictionary = 6;
+  int64 value_count = 7;
+  int64 null_count = 8;
+  int64 distinct_count = 9;
+  string first_value = 10;
+  string last_value = 11;
+
+  // Derived.
+  double bytes_per_value = 12;
+  double compression_ratio = 13;
+  double null_fraction = 14;
+}
+
+// A codec sweep of a column.
+message CompressionReport {
+  // Format: …/columns/{column}/compression/{codec}
+  string name = 1;
+
+  string codec = 2;
+
+  int64 compressed_bytes = 3;
+  double ratio = 4;
+  double compress_megabytes_per_second = 5;
+  double decompress_megabytes_per_second = 6;
+}
+
+// A decoded-sample profile of a column.
+message ColumnProfile {
+  // Format: …/columns/{column}/profile
+  string name = 1;
+
+  int64 null_count = 2;
+  int64 distinct_count = 3;
+  double entropy_bits = 4;
+  repeated string top_values = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Value types (not resources).
+// ---------------------------------------------------------------------------
+
+message FileStats {
+  int64 record_count = 1;
+  double bytes_per_row = 2;
+
+  // Inclusive per-column bounds (AIP-145), as the log stores them: a number, a
+  // string, or an object.
+  map<string, google.protobuf.Value> first_values = 3;
+  map<string, google.protobuf.Value> last_values = 4;
+
+  map<string, int64> null_count = 5;
+  bool tight_bounds = 6;
+}
+
+message LogAction {
+  // add, remove, metaData, …
+  string kind = 1;
+  string path = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Documents that are not resources.
+// ---------------------------------------------------------------------------
+
+// The vended credentials `credentials get` emits. Sensitive (AIP-147): carried
+// on the resource that needs it for now, and stored no further than that; a
+// later pass moves it off the wire.
+message Credentials {
+  string access_key_id = 1;
+  string secret_access_key = 2;
+  string session_token = 3;
+  string expire_time = 4;
+}
+
+// The result `credentials check` emits.
+message ReadEligibility {
+  bool eligible = 1;
+  EligibilityReason reason = 2;
+}
+
+// One rewrite `experiment` measured: the codec settings and the resulting size.
+message ExperimentTrial {
+  repeated string rewrites = 1;
+  int64 size_bytes = 2;
+  double ratio = 3;
+}

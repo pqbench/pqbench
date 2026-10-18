@@ -7,7 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::table::list;
 
 use crate::emit::{Emitter, Format};
-use crate::source::{self, read_input, schema_ref, split_schema};
+use crate::source::{self, read_input, schema_ref, split_schema, Input};
 use crate::CliError;
 
 /// Arguments for `list tables`.
@@ -31,17 +31,39 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list tables").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    if let Some(schema) = &args.schema {
-        if input.first.is_some() {
-            return Err("list tables takes CATALOG.SCHEMA or a schema stream, not both".into());
+    let tables = match &args.schema {
+        Some(schema) => {
+            if input.first.is_some() {
+                return Err("list tables takes CATALOG.SCHEMA or a schema stream, not both".into());
+            }
+            list_schema(workspace, schema, &mut emit).await?
         }
-        let (catalog, name) = split_schema("list tables", schema)?;
-        let tables = list::list(workspace, &pqbench::v1::name::schema(&catalog, &name)).await?;
-        for table in &tables {
-            emit.write_row(table).await?;
-        }
-        return emit.finish(&format!("tables: {}\n", tables.len())).await;
+        None => list_stream(workspace, input, args.fan_out, &mut emit).await?,
+    };
+    emit.finish(&format!("tables: {tables}\n")).await
+}
+
+/// List one named schema's tables.
+async fn list_schema(
+    workspace: &pqbench::Workspace,
+    schema: &str,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
+    let (catalog, name) = split_schema("list tables", schema)?;
+    let tables = list::list(workspace, &pqbench::v1::name::schema(&catalog, &name)).await?;
+    for table in &tables {
+        emit.write_row(table).await?;
     }
+    Ok(tables.len())
+}
+
+/// List every schema's tables from a schema stream.
+async fn list_stream(
+    workspace: &pqbench::Workspace,
+    input: Input,
+    fan_out: usize,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
     if !input.piped {
         return Err("list tables needs CATALOG.SCHEMA or a schema stream".into());
     }
@@ -52,12 +74,12 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Resu
             let name = schema_ref("list tables", &record?)?;
             Ok::<_, CliError>(list::list(workspace, &name).await?)
         })
-        .buffer_unordered(args.fan_out.max(1));
+        .buffer_unordered(fan_out.max(1));
     while let Some(listed) = lists.next().await {
         for table in listed? {
             emit.write_row(&table).await?;
             tables += 1;
         }
     }
-    emit.finish(&format!("tables: {tables}\n")).await
+    Ok(tables)
 }

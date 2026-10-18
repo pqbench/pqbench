@@ -23,9 +23,8 @@ pub use selection::FileSelection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use futures_util::stream::BoxStream;
+use futures_util::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use url::Url;
 
 use crate::third_party::delta;
@@ -54,119 +53,18 @@ impl Error {
     }
 }
 
-/// On-disk table formats `pqbench table` can name. Detection runs before load.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum TableFormat {
-    /// Zero value; not a detected format.
-    #[serde(rename = "unspecified")]
-    UNSPECIFIED,
-    #[serde(rename = "delta")]
-    DELTA,
-    #[serde(rename = "iceberg")]
-    ICEBERG,
-}
-
-/// One action from a commit file, in file order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct LogAction {
-    /// Action kind as stored (`add`, `remove`, `metaData`, ...).
-    pub kind: String,
-    /// Data path when the action names one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-/// One commit from the table log, as stored on disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct LogCommit {
-    /// Commit version.
-    pub version: u64,
-    /// Commit time in milliseconds since the Unix epoch, when the log records
-    /// one. Delta reads `commitInfo.timestamp`; Iceberg the snapshot time.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commit_time: Option<i64>,
-    /// The commit's `commitInfo` action as the log stores it, when it has one:
-    /// the operation, its parameters and metrics, and the writer's identity.
-    /// Delta reads it from the first line of the commit file; Iceberg has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commit_info: Option<serde_json::Value>,
-    /// Actions from the commit file, in file order.
-    pub actions: Vec<LogAction>,
-}
-
 /// A table's commits, newest first, from [`stream_commits`].
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
-pub type CommitStream<'a> = BoxStream<'a, Result<LogCommit, Error>>;
-
-/// One data file the current snapshot treats as active.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TableFile {
-    /// Path as recorded in the log, relative to the table root.
-    pub path: String,
-    /// URI or filesystem path `bytemass` should read.
-    pub uri: String,
-    /// Size the log claims, in bytes.
-    pub size_bytes: u64,
-    /// Partition values from the Delta add action. Empty when unpartitioned.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub partition_values: BTreeMap<String, Option<String>>,
-    /// Statistics from the Delta `add.stats` JSON. Absent when the log has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stats: Option<FileStats>,
-}
-
-impl TableFile {
-    /// Assemble a table file from its parts.
-    #[must_use]
-    pub fn new(path: impl Into<String>, uri: impl Into<String>, size_bytes: u64) -> Self {
-        Self {
-            path: path.into(),
-            uri: uri.into(),
-            size_bytes,
-            partition_values: BTreeMap::new(),
-            stats: None,
-        }
-    }
-}
+pub type CommitStream<'a> = BoxStream<'a, Result<v1::Commit, Error>>;
 
 /// A table's data files, in log order, from [`stream_files`].
 ///
+/// Each file carries the path the log records; naming it under a table is the
+/// caller's, which knows the table's resource name.
+///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
-pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
-
-/// Statistics copied from a Delta add action. Values are the log's claim.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[non_exhaustive]
-pub struct FileStats {
-    /// `numRecords` from `add.stats`.
-    // aipnaming: allow(aip-141/count-suffix)
-    pub num_records: u64,
-    /// On-disk file size divided by [`Self::num_records`]. Absent at zero rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bytes_per_row: Option<f64>,
-    /// Per-column minimum from `minValues`, JSON as stored (nested structs stay
-    /// objects).
-    // aipnaming: allow(aip-145/ranges)
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub min_values: BTreeMap<String, Value>,
-    /// Per-column maximum from `maxValues`, JSON as stored.
-    // aipnaming: allow(aip-145/ranges)
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub max_values: BTreeMap<String, Value>,
-    /// Per-column `nullCount`. Nested struct columns are flattened to dotted
-    /// keys (`struct.inner.x`).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub null_count: BTreeMap<String, u64>,
-    /// `tightBounds` when the log sets it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tight_bounds: Option<bool>,
-}
+pub type FileStream<'a> = BoxStream<'a, Result<v1::TableFile, Error>>;
 
 /// Byte mass of one partition, summed from the active files' log statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,19 +85,6 @@ pub struct PartitionMass {
     pub bytes_per_row: Option<f64>,
 }
 
-/// One column in a table's schema.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Column {
-    /// Column name.
-    pub name: String,
-    /// Data type as the format reports it (e.g. `long`, `string`). A nested
-    /// type is the format's JSON form.
-    pub data_type: String,
-    /// Whether the column accepts nulls.
-    pub nullable: bool,
-}
-
 /// A table's record: format, log, and the files the snapshot names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -207,7 +92,7 @@ pub struct TableInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_selection: Option<FileSelection>,
     /// Detected table format.
-    pub format: TableFormat,
+    pub format: v1::TableFormat,
     /// Table root as given (path or URI).
     pub uri: String,
     /// Table's full name (`catalog.schema.table`), when a catalog named it.
@@ -219,7 +104,7 @@ pub struct TableInfo {
     pub partition_columns: Vec<String>,
     /// Table schema columns, when the metadata carries them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub columns: Vec<Column>,
+    pub columns: Vec<v1::DeclaredColumn>,
     /// Delta table properties: the log's `metaData.configuration` plus the
     /// catalog record's values.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -231,10 +116,10 @@ pub struct TableInfo {
     /// Every available JSON commit, in version order. Checkpoint-only versions
     /// that have no remaining JSON file are omitted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub log: Vec<LogCommit>,
+    pub log: Vec<v1::Commit>,
     /// Active data files after replaying the log to `snapshot_version`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<TableFile>,
+    pub files: Vec<v1::TableFile>,
     /// Per-partition totals from Delta add statistics. Empty for Iceberg and
     /// for a Delta snapshot with no active files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -248,12 +133,12 @@ impl TableInfo {
     /// Assemble a table record from its parts.
     #[must_use]
     pub fn new(
-        format: TableFormat,
+        format: v1::TableFormat,
         uri: impl Into<String>,
         snapshot_version: u64,
         partition_columns: Vec<String>,
-        log: Vec<LogCommit>,
-        files: Vec<TableFile>,
+        log: Vec<v1::Commit>,
+        files: Vec<v1::TableFile>,
         env: BTreeMap<String, String>,
     ) -> Self {
         Self {
@@ -276,28 +161,15 @@ impl TableInfo {
 
 impl TableInfo {
     /// The wire [`v1::Table`] this record describes: what `table::get` emits.
-    ///
-    /// `env` is the storage lease the read ran under, when it carried one; the
-    /// record keeps it as [`v1::Table::credentials`].
+    /// The caller, which holds the lease, sets [`v1::Table::credentials`].
     #[must_use]
-    pub fn resource(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        env: &BTreeMap<String, String>,
-    ) -> v1::Table {
+    pub fn resource(&self, catalog: &str, schema: &str, table: &str) -> v1::Table {
         let mut properties = self.delta_properties.clone();
         properties.extend(self.iceberg_properties.clone());
-        let credentials = v1::Credentials::from_env(env);
         v1::Table {
             name: v1::name::table(catalog, schema, table),
             uri: non_empty(&self.uri),
-            format: match self.format {
-                TableFormat::DELTA => Some(v1::TableFormat::Delta),
-                TableFormat::ICEBERG => Some(v1::TableFormat::Iceberg),
-                TableFormat::UNSPECIFIED => None,
-            },
+            format: Some(self.format),
             snapshot_version: Some(self.snapshot_version),
             partition_columns: self.partition_columns.clone(),
             declared_columns: self
@@ -305,23 +177,20 @@ impl TableInfo {
                 .iter()
                 .enumerate()
                 .map(|(position, column)| v1::DeclaredColumn {
-                    column: column.name.clone(),
-                    data_type: non_empty(&column.data_type),
-                    nullable: column.nullable,
                     position: Some(position as u64),
+                    ..column.clone()
                 })
                 .collect(),
             properties,
             file_count: non_empty_len(&self.files),
             partition_count: non_empty_len(&self.partitions),
-            credentials: (!credentials.is_empty()).then_some(credentials),
             ..v1::Table::default()
         }
     }
 }
 
 /// `Some` unless the text is empty.
-fn non_empty(value: &str) -> Option<String> {
+pub(crate) fn non_empty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
@@ -341,7 +210,7 @@ pub struct LoadRequest {
     pub snapshot_version: Option<u64>,
     /// Storage options (`AWS_*` names), copied onto the record.
     pub env: BTreeMap<String, String>,
-    /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
+    /// When false, omit first/last/null maps (keep `record_count` / `bytes_per_row`).
     pub file_stats: bool,
     /// When false, read only the snapshot metadata: no commit log, no active
     /// files.
@@ -413,7 +282,7 @@ pub async fn detect(
     lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
-) -> Result<TableFormat, Error> {
+) -> Result<v1::TableFormat, Error> {
     if is_local(uri) {
         local_format(&local_path(uri)?)?.ok_or_else(|| unrecognized(uri))
     } else {
@@ -435,9 +304,8 @@ pub async fn detect(
 pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::load(lake, request).await,
-        TableFormat::ICEBERG => iceberg::load(lake, request).await,
-        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+        v1::TableFormat::Delta => delta::load(lake, request).await,
+        v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
     }
 }
 
@@ -456,9 +324,8 @@ pub async fn stream_commits(
 ) -> Result<CommitStream<'static>, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::stream_commits(lake, request).await,
-        TableFormat::ICEBERG => iceberg::stream_commits(lake, request).await,
-        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+        v1::TableFormat::Delta => delta::stream_commits(lake, request).await,
+        v1::TableFormat::Iceberg => iceberg::stream_commits(lake, request).await,
     }
 }
 
@@ -479,11 +346,10 @@ pub async fn stream_files(
     request: &LoadRequest,
 ) -> Result<FileStream<'static>, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
-    match format {
-        TableFormat::DELTA => delta::stream_files(lake, request).await,
-        TableFormat::ICEBERG => iceberg::stream_files(lake, request).await,
-        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
-    }
+    Ok(match format {
+        v1::TableFormat::Delta => delta::stream_files(lake, request).await?.boxed(),
+        v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await?.boxed(),
+    })
 }
 
 /// Sum log sizes and `numRecords` by partition value.
@@ -494,7 +360,7 @@ pub async fn stream_files(
 ///
 /// # Errors
 /// Fails when a partition's record count overflows `u64`.
-pub fn partition_masses(files: &[TableFile]) -> Result<Vec<PartitionMass>, Error> {
+pub fn partition_masses(files: &[v1::TableFile]) -> Result<Vec<PartitionMass>, Error> {
     let mut groups = BTreeMap::new();
     for file in files {
         add_partition_total(&mut groups, file)?;
@@ -504,7 +370,7 @@ pub fn partition_masses(files: &[TableFile]) -> Result<Vec<PartitionMass>, Error
 
 pub(crate) fn add_partition_total(
     groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
-    file: &TableFile,
+    file: &v1::TableFile,
 ) -> Result<(), Error> {
     let entry = groups
         .entry(file.partition_values.clone())
@@ -516,13 +382,13 @@ pub(crate) fn add_partition_total(
     entry.file_count += 1;
     entry.size = entry
         .size
-        .checked_add(file.size_bytes)
-        .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.path)))?;
+        .checked_add(file.size_bytes.unwrap_or(0))
+        .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.name)))?;
     entry.num_records = match (entry.num_records, file.stats.as_ref()) {
-        (Some(sum), Some(stats)) => Some(sum.checked_add(stats.num_records).ok_or_else(|| {
+        (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(|| {
             Error(format!(
                 "partition record total overflowed for {}",
-                file.path
+                file.name
             ))
         })?),
         _ => None,
@@ -563,22 +429,22 @@ pub(crate) fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
 }
 
 /// Local markers `lake` and `table` share. `None` is unrecognized, not an error.
-pub(crate) fn local_format(path: &Path) -> Result<Option<TableFormat>, Error> {
+pub(crate) fn local_format(path: &Path) -> Result<Option<v1::TableFormat>, Error> {
     if !path.exists() {
         return Err(Error(format!("cannot open table {}", path.display())));
     }
     if path.is_file() {
-        return Ok(is_metadata_json_path(path).then_some(TableFormat::ICEBERG));
+        return Ok(is_metadata_json_path(path).then_some(v1::TableFormat::Iceberg));
     }
     if path.join("_delta_log").is_dir() {
-        return Ok(Some(TableFormat::DELTA));
+        return Ok(Some(v1::TableFormat::Delta));
     }
     let metadata = path.join("metadata");
     if metadata.join("version-hint.text").is_file() {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     if has_metadata_json(&metadata)? {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     Ok(None)
 }
@@ -590,13 +456,13 @@ pub(crate) async fn remote_format(
     lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
-) -> Result<Option<TableFormat>, Error> {
+) -> Result<Option<v1::TableFormat>, Error> {
     if uri
         .rsplit(['/', '\\'])
         .next()
         .is_some_and(|name| name.ends_with(".metadata.json"))
     {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     let options: Vec<(String, String)> = env
         .iter()
@@ -605,10 +471,10 @@ pub(crate) async fn remote_format(
     if probe(lake, uri, "_delta_log/_last_checkpoint", &options).await?
         || probe(lake, uri, "_delta_log/00000000000000000000.json", &options).await?
     {
-        return Ok(Some(TableFormat::DELTA));
+        return Ok(Some(v1::TableFormat::Delta));
     }
     if probe(lake, uri, "metadata/version-hint.text", &options).await? {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     Ok(None)
 }

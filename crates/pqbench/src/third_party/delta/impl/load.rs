@@ -19,9 +19,10 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadRequest,
-    LogAction, LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
+    add_partition_total, bytes_per_row, finish_partition_masses, LoadRequest, PartitionMass,
+    TableInfo,
 };
+use crate::v1;
 use crate::Lake;
 
 /// Errors resolving a snapshot through delta-rs.
@@ -47,7 +48,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         .map_err(delta_error)?;
     let meta = snapshot_meta(&snapshot);
     let mut info = TableInfo::new(
-        TableFormat::DELTA,
+        v1::TableFormat::Delta,
         request.uri.clone(),
         meta.version,
         meta.partition_columns,
@@ -154,7 +155,7 @@ fn shared_store(
 struct SnapshotMeta {
     version: u64,
     partition_columns: Vec<String>,
-    columns: Vec<Column>,
+    columns: Vec<v1::DeclaredColumn>,
     properties: BTreeMap<String, String>,
 }
 
@@ -165,10 +166,11 @@ fn snapshot_meta(snapshot: &Snapshot) -> SnapshotMeta {
         columns: snapshot
             .schema()
             .fields()
-            .map(|field| Column {
-                name: field.name().clone(),
-                data_type: field.data_type().to_string(),
+            .map(|field| v1::DeclaredColumn {
+                column: field.name().clone(),
+                data_type: crate::table::non_empty(&field.data_type().to_string()),
                 nullable: field.is_nullable(),
+                position: None,
             })
             .collect(),
         properties: snapshot
@@ -190,16 +192,18 @@ async fn read_log(
     uri: &str,
     head: Option<u64>,
     versions: Option<&BTreeSet<u64>>,
-) -> Result<Vec<LogCommit>, Error> {
+) -> Result<Vec<v1::Commit>, Error> {
     let versions: Vec<u64> = match versions {
         Some(named) => named.iter().copied().collect(),
         None => commit_versions(store, uri, head).await?,
     };
     let store = store.clone();
+    let table = v1::name::local_table(uri);
     // As in `stream_commits`: the versions are known, so every read goes at once
     // and the commits come back in version order.
     let commits = futures::future::try_join_all(versions.into_iter().map(|version| {
         let store = store.clone();
+        let table = table.clone();
         async move {
             let Some(bytes) = store
                 .read_commit_entry(version)
@@ -211,7 +215,8 @@ async fn read_log(
             };
             let parsed = parse_commit(&bytes, version)?;
             drop(bytes);
-            Ok(Some(LogCommit {
+            Ok(Some(v1::Commit {
+                name: v1::name::commit_name(&table, &version.to_string()),
                 version,
                 commit_time: parsed.commit_time,
                 commit_info: parsed.commit_info,
@@ -233,9 +238,10 @@ async fn read_log(
 pub(super) async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<LogCommit, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
     let store = open_store(lake, request)?;
     let versions = commit_versions(&store, &request.uri, request.snapshot_version).await?;
+    let table = v1::name::local_table(&request.uri);
     // The log names every commit, so no read waits on another: they all go at
     // once and are yielded in version order, newest first, as they land. A commit
     // the log does not date has no time to contribute, and one the listing named
@@ -250,21 +256,25 @@ pub(super) async fn stream_commits(
             }
         })
         .buffered(commit_read_width())
-        .try_filter_map(|(version, head)| async move {
-            Ok(match head {
-                CommitHead::Present(Some(info)) => {
-                    // A commit the log does not date has no window to fall in.
-                    info.get("timestamp")
-                        .and_then(Value::as_i64)
-                        .map(|commit_time| LogCommit {
-                            version,
-                            commit_time: Some(commit_time),
-                            commit_info: Some(info),
-                            actions: Vec::new(),
-                        })
-                }
-                CommitHead::Missing | CommitHead::Present(None) => None,
-            })
+        .try_filter_map(move |(version, head)| {
+            let table = table.clone();
+            async move {
+                Ok(match head {
+                    CommitHead::Present(Some(info)) => {
+                        // A commit the log does not date has no window to fall in.
+                        info.get("timestamp")
+                            .and_then(Value::as_i64)
+                            .map(|commit_time| v1::Commit {
+                                name: v1::name::commit_name(&table, &version.to_string()),
+                                version,
+                                commit_time: Some(commit_time),
+                                commit_info: Some(info),
+                                actions: Vec::new(),
+                            })
+                    }
+                    CommitHead::Missing | CommitHead::Present(None) => None,
+                })
+            }
         }))
 }
 
@@ -280,7 +290,7 @@ pub(super) async fn stream_commits(
 pub(super) async fn stream_files(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<TableFile, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::TableFile, Error>>, Error> {
     let store = open_store(lake, request)?;
     let versions: Vec<u64> = match request.commit_versions.as_ref() {
         Some(named) => named.iter().copied().collect(),
@@ -306,7 +316,7 @@ async fn commit_files(
     store: &LogStoreRef,
     uri: &str,
     version: u64,
-) -> Result<Vec<TableFile>, Error> {
+) -> Result<Vec<v1::TableFile>, Error> {
     let Some(bytes) = store
         .read_commit_entry(version)
         .await
@@ -320,16 +330,21 @@ async fn commit_files(
     parsed
         .actions
         .into_iter()
-        .filter(|action| action.kind == "add")
+        .filter(|action| action.kind.as_deref() == Some("add"))
         .filter_map(|action| action.path)
         .map(|path| added_file(uri, path))
         .collect()
 }
 
 /// The table file one `add` action's path describes.
-fn added_file(uri: &str, path: String) -> Result<TableFile, Error> {
+fn added_file(uri: &str, path: String) -> Result<v1::TableFile, Error> {
     let file_uri = crate::table::join_uri(uri, &path).map_err(|error| Error(error.to_string()))?;
-    Ok(TableFile::new(path, file_uri, 0))
+    Ok(v1::TableFile {
+        blob: Some(v1::name::blob_name(&file_uri)),
+        path,
+        size_bytes: Some(0),
+        ..v1::TableFile::default()
+    })
 }
 
 /// The table's commit versions, oldest first, from the log's own listing.
@@ -465,7 +480,7 @@ fn parse_commit_info(bytes: &[u8]) -> Option<Value> {
 
 /// The parts of a commit file a read keeps.
 struct ParsedCommit {
-    actions: Vec<LogAction>,
+    actions: Vec<v1::LogAction>,
     commit_time: Option<i64>,
     commit_info: Option<serde_json::Value>,
 }
@@ -490,8 +505,8 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
             commit_info = Some(body.clone());
             commit_time = body.get("timestamp").and_then(serde_json::Value::as_i64);
         }
-        actions.push(LogAction {
-            kind: kind.clone(),
+        actions.push(v1::LogAction {
+            kind: Some(kind.clone()),
             path: body
                 .get("path")
                 .and_then(|path| path.as_str())
@@ -511,7 +526,7 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
 async fn active_files(
     table: &DeltaTable,
     request: &LoadRequest,
-) -> Result<(Vec<TableFile>, Vec<PartitionMass>), Error> {
+) -> Result<(Vec<v1::TableFile>, Vec<PartitionMass>), Error> {
     let root = if table.table_url().scheme() == "file" {
         Some(
             table
@@ -526,34 +541,46 @@ async fn active_files(
     let mut active = vec![];
     let mut totals = std::collections::BTreeMap::new();
     while let Some(file) = files.try_next().await.map_err(delta_error)? {
-        let relative = file.path().to_string();
-        let size = u64::try_from(file.size())
-            .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
-        let uri = match &root {
-            Some(root) => local_uri(root, &relative)?,
-            None => object_uri(table.table_url(), &relative)?,
-        };
-        let mut stats = file_stats(file.stats());
-        if let Some(stats) = stats.as_mut() {
-            stats.bytes_per_row = bytes_per_row(size, stats.num_records);
-            if !request.file_stats {
-                stats.min_values.clear();
-                stats.max_values.clear();
-                stats.null_count.clear();
-                stats.tight_bounds = None;
-            }
-        }
-        let table_file = TableFile {
-            path: relative,
-            uri,
-            size_bytes: size,
-            partition_values: partition_values(&file),
-            stats,
-        };
+        let table_file = data_file(&root, table.table_url(), &file, request.file_stats)?;
         add_partition_total(&mut totals, &table_file).map_err(|error| Error(error.to_string()))?;
         active.push(table_file);
     }
     Ok((active, finish_partition_masses(totals)))
+}
+
+/// One add action as a [`v1::TableFile`], resolving its storage path and, unless
+/// `keep_stats` is set, trimming the stats to the byte facts.
+fn data_file(
+    root: &Option<PathBuf>,
+    table_url: &Url,
+    file: &deltalake::kernel::LogicalFileView,
+    keep_stats: bool,
+) -> Result<v1::TableFile, Error> {
+    let relative = file.path().to_string();
+    let size = u64::try_from(file.size())
+        .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
+    let uri = match root {
+        Some(root) => local_uri(root, &relative)?,
+        None => object_uri(table_url, &relative)?,
+    };
+    let mut stats = file_stats(file.stats());
+    if let Some(stats) = stats.as_mut() {
+        stats.bytes_per_row = bytes_per_row(size, stats.record_count);
+        if !keep_stats {
+            stats.first_values.clear();
+            stats.last_values.clear();
+            stats.null_count.clear();
+            stats.tight_bounds = None;
+        }
+    }
+    Ok(v1::TableFile {
+        blob: Some(v1::name::blob_name(&uri)),
+        path: relative,
+        size_bytes: Some(size),
+        partition_values: partition_values(file),
+        stats,
+        ..v1::TableFile::default()
+    })
 }
 
 fn partition_values(file: &deltalake::kernel::LogicalFileView) -> BTreeMap<String, Option<String>> {
@@ -577,16 +604,16 @@ fn partition_values(file: &deltalake::kernel::LogicalFileView) -> BTreeMap<Strin
 
 /// Parse `add.stats`. Nested `nullCount` objects are flattened to dotted
 /// keys. A malformed stats blob is omitted rather than failing the table.
-fn file_stats(raw: Option<String>) -> Option<FileStats> {
+fn file_stats(raw: Option<String>) -> Option<v1::FileStats> {
     let raw = raw?;
     let value: Value = serde_json::from_str(&raw).ok()?;
     let object = value.as_object()?;
     let num_records = object.get("numRecords").and_then(Value::as_u64)?;
-    Some(FileStats {
-        num_records,
+    Some(v1::FileStats {
+        record_count: num_records,
         bytes_per_row: None,
-        min_values: stat_object(object, "minValues"),
-        max_values: stat_object(object, "maxValues"),
+        first_values: stat_object(object, "minValues"),
+        last_values: stat_object(object, "maxValues"),
         null_count: flatten_null_counts(object.get("nullCount")),
         tight_bounds: object.get("tightBounds").and_then(Value::as_bool),
     })

@@ -3,7 +3,7 @@
 //! Every name is the library function of the same path, with the same
 //! arguments: `pqbench.native.metastore.get.get(workspace)`,
 //! `pqbench.native.catalog.list.list(workspace)`,
-//! `pqbench.native.file.list.list(lake, uri, credentials, versions)`,
+//! `pqbench.native.file.list.list(lake, table, uri, credentials, versions)`,
 //! `pqbench.native.credentials.check.check(workspace, name)`.
 //!
 //! The surface is the walk's own pipeline and the measurement that consumes it
@@ -14,7 +14,7 @@
 //!
 //! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the
 //! request structs (`BytemassRequest`) are Python classes, and so are the
-//! records: a model's record is its class, so `record["uri"]`, `record.uri` and
+//! records: a model's record is its class, so `record["path"]`, `record.path` and
 //! `record.asdict()` agree, and the deep trees it embeds stay dicts. A
 //! collection the library streams is an async iterator, a single value an
 //! awaitable.

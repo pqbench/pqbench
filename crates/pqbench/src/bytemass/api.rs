@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::table::FileStats;
 use crate::third_party::parquet::api::Error;
+use crate::v1::FileStats;
 use crate::Lake;
 
 use super::collection;

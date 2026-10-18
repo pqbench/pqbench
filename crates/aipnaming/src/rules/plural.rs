@@ -21,7 +21,7 @@ pub(super) fn agreement(ctx: &Context<'_>, findings: &mut Vec<Finding>) {
         else {
             continue;
         };
-        // `log: Vec<LogCommit>` and other collective nouns read the same in
+        // `log: Vec<Commit>` and other collective nouns read the same in
         // both numbers, and `options: Options` follows its type name; both are
         // legitimate, not agreement errors.
         if is_uncountable(&head) || matches_type_name(field, &head) {

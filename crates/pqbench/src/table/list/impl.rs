@@ -78,43 +78,13 @@ async fn unity_tables(
     let mut tables = Vec::new();
     let mut page_token: Option<String> = None;
     loop {
-        let url = match &page_token {
-            Some(page_token) => format!(
-                "{root}/tables?catalog_name={}&schema_name={}&max_results={PAGE_SIZE}&omit_columns=true&omit_properties=true&page_token={}",
-                dialect::encode(catalog),
-                dialect::encode(schema),
-                dialect::encode(page_token)
-            ),
-            None => format!(
-                "{root}/tables?catalog_name={}&schema_name={}&max_results={PAGE_SIZE}&omit_columns=true&omit_properties=true",
-                dialect::encode(catalog),
-                dialect::encode(schema)
-            ),
-        };
+        let url = unity_tables_url(&root, catalog, schema, page_token.as_deref());
         let page: UnityPage =
             dialect::get_json(workspace, &url, workspace.config().token.as_deref())
                 .await
                 .map_err(Error::from)?;
-        for table in page.tables {
-            let storage_path = table.storage_location.filter(|path| !path.is_empty());
-            let name = table
-                .full_name
-                .filter(|name| !name.is_empty())
-                .or_else(|| {
-                    table
-                        .name
-                        .filter(|name| !name.is_empty())
-                        .map(|name| format!("{catalog}.{schema}.{name}"))
-                })
-                .ok_or_else(|| {
-                    Error::from(format!("the table in {catalog}.{schema} has no name"))
-                })?;
-            let table = name.rsplit('.').next().unwrap_or(name.as_str());
-            tables.push(Table {
-                name: crate::v1::name::table(catalog, schema, table),
-                uri: storage_path,
-                ..Table::default()
-            });
+        for entry in page.tables {
+            tables.push(unity_table(catalog, schema, entry)?);
         }
         match page.next_page_token {
             Some(next) if !next.is_empty() => page_token = Some(next),
@@ -122,6 +92,40 @@ async fn unity_tables(
         }
     }
     Ok(tables)
+}
+
+/// The `/tables` page URL, with the page token appended when there is one.
+fn unity_tables_url(root: &str, catalog: &str, schema: &str, page_token: Option<&str>) -> String {
+    let base = format!(
+        "{root}/tables?catalog_name={}&schema_name={}&max_results={PAGE_SIZE}&omit_columns=true&omit_properties=true",
+        dialect::encode(catalog),
+        dialect::encode(schema)
+    );
+    match page_token {
+        Some(token) => format!("{base}&page_token={}", dialect::encode(token)),
+        None => base,
+    }
+}
+
+/// One listed Unity table as a `Table`, resolving its name and storage path.
+fn unity_table(catalog: &str, schema: &str, entry: UnityTable) -> Result<Table, Error> {
+    let storage_path = entry.storage_location.filter(|path| !path.is_empty());
+    let name = entry
+        .full_name
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            entry
+                .name
+                .filter(|name| !name.is_empty())
+                .map(|name| format!("{catalog}.{schema}.{name}"))
+        })
+        .ok_or_else(|| Error::from(format!("the table in {catalog}.{schema} has no name")))?;
+    let table = name.rsplit('.').next().unwrap_or(name.as_str());
+    Ok(Table {
+        name: crate::v1::name::table(catalog, schema, table),
+        uri: storage_path,
+        ..Table::default()
+    })
 }
 
 async fn iceberg_tables(

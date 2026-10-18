@@ -15,9 +15,10 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::api::{Credentials, Error, Table, TableFormat as Dialect};
+use super::api::{Error, Table, TableFormat as Dialect};
 use crate::dialect;
-use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
+use crate::table::{self, LoadRequest, TableInfo};
+use crate::v1;
 use crate::{Lake, Workspace};
 
 pub(crate) async fn get(
@@ -25,16 +26,15 @@ pub(crate) async fn get(
     lake: &Lake,
     name: &str,
     uri: Option<&str>,
-    credentials: Option<&Credentials>,
+    env: &BTreeMap<String, String>,
 ) -> Result<Table, Error> {
     let (catalog, schema, table) = crate::v1::name::parse_table(name)
         .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
-    let env = credentials.map(Credentials::to_env).unwrap_or_default();
     let info = match workspace.config().dialect {
-        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, &env).await,
-        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table, &env).await,
+        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, env).await,
+        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table, env).await,
     }?;
-    Ok(info.resource(&catalog, &schema, &table, &env))
+    Ok(info.resource(&catalog, &schema, &table))
 }
 
 /// The subset of Unity `GET /tables/{full_name}` this command reports.
@@ -74,62 +74,81 @@ async fn unity_record(
         dialect::api_root(workspace.config().endpoint.as_str()),
         dialect::encode(&name)
     );
-    // The ref already names the storage, so start the catalog call, read the
-    // metadata while it is in flight, then reconcile: the catalog's own
-    // location stays authoritative, and a ref that disagrees is read again.
-    let (record, info) = match hint.filter(|location| !location.is_empty()) {
+    let (record, mut info) = load_record(workspace, lake, &name, &url, hint, env).await?;
+    info.name = name;
+    Ok(merge_catalog(info, record))
+}
+
+/// Fetch the catalog record and the table's metadata, overlapping them when
+/// the ref already names the storage.
+///
+/// The catalog's own location stays authoritative: a ref whose hint disagrees
+/// is read again from the catalog's location.
+async fn load_record(
+    workspace: &Workspace,
+    lake: &Lake,
+    name: &str,
+    url: &str,
+    hint: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> Result<(UnityRecord, TableInfo), Error> {
+    match hint.filter(|location| !location.is_empty()) {
         Some(location) => {
             let catalog = dialect::get_json::<UnityRecord>(
                 workspace,
-                &url,
+                url,
                 workspace.config().token.as_deref(),
             );
             let (record, info) = futures_util::future::try_join(
                 async { catalog.await.map_err(Error::from) },
-                load_metadata(lake, &name, location, env),
+                load_metadata(lake, name, location, env),
             )
             .await?;
-            let catalog_location = catalog_location(&record, &name)?;
+            let catalog_location = catalog_location(&record, name)?;
             let info = match catalog_location == location {
                 true => info,
-                false => load_metadata(lake, &name, &catalog_location, env).await?,
+                false => load_metadata(lake, name, &catalog_location, env).await?,
             };
-            (record, info)
+            Ok((record, info))
         }
         None => {
             let record: UnityRecord =
-                dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+                dialect::get_json(workspace, url, workspace.config().token.as_deref())
                     .await
                     .map_err(Error::from)?;
-            let location = catalog_location(&record, &name)?;
-            let info = load_metadata(lake, &name, &location, env).await?;
-            (record, info)
+            let location = catalog_location(&record, name)?;
+            let info = load_metadata(lake, name, &location, env).await?;
+            Ok((record, info))
         }
-    };
-    let mut info = info;
-    info.name = name;
+    }
+}
+
+/// Merge the catalog's declared columns and properties over the log's.
+fn merge_catalog(mut info: TableInfo, record: UnityRecord) -> TableInfo {
     if !record.columns.is_empty() {
         info.columns = record
             .columns
             .into_iter()
-            .map(|column| Column {
-                name: column.name,
-                data_type: column.type_text.or(column.type_name).unwrap_or_default(),
+            .map(|column| v1::DeclaredColumn {
+                column: column.name,
+                data_type: table::non_empty(
+                    &column.type_text.or(column.type_name).unwrap_or_default(),
+                ),
                 nullable: column.nullable.unwrap_or(true),
+                position: None,
             })
             .collect();
     }
     match info.format {
-        TableFormat::DELTA => info
+        v1::TableFormat::Delta => info
             .delta_properties
             .extend(record.properties.unwrap_or_default()),
-        TableFormat::ICEBERG => {
+        v1::TableFormat::Iceberg => {
             info.iceberg_properties
                 .extend(record.properties.unwrap_or_default());
         }
-        _ => {}
     }
-    Ok(info)
+    info
 }
 
 /// The storage location the catalog names; an error when it names none.
@@ -256,7 +275,7 @@ async fn iceberg_record(
         .and_then(|snapshot_id| u64::try_from(snapshot_id).ok())
         .unwrap_or(0);
     let mut info = TableInfo::new(
-        TableFormat::ICEBERG,
+        v1::TableFormat::Iceberg,
         uri,
         snapshot_version,
         partition_columns,
@@ -271,7 +290,7 @@ async fn iceberg_record(
 }
 
 /// The columns of the current schema; the first schema when none is marked.
-fn columns(metadata: &IcebergMetadata) -> Vec<Column> {
+fn columns(metadata: &IcebergMetadata) -> Vec<v1::DeclaredColumn> {
     metadata
         .schemas
         .iter()
@@ -281,10 +300,11 @@ fn columns(metadata: &IcebergMetadata) -> Vec<Column> {
             schema
                 .fields
                 .iter()
-                .map(|field| Column {
-                    name: field.name.clone(),
-                    data_type: type_name(&field.data_type),
+                .map(|field| v1::DeclaredColumn {
+                    column: field.name.clone(),
+                    data_type: table::non_empty(&type_name(&field.data_type)),
                     nullable: !field.required,
+                    position: None,
                 })
                 .collect()
         })

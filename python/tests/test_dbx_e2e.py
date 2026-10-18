@@ -102,11 +102,11 @@ class WalkE2ETest(unittest.IsolatedAsyncioTestCase):
         before = threading.active_count()
         files = [file async for file in pqbench.walk(workspace, catalog=self.catalog)]
         # The walk descended more than one table of the readable catalog.
-        tables = {file["uri"].rsplit("/", 1)[0] for file in files}
+        tables = {file.uri.rsplit("/", 1)[0] for file in files}
         self.assertGreaterEqual(len(tables), 2, f"{self.catalog}: {len(tables)} tables")
         for file in files:
             self.assertTrue(file["path"].endswith(".parquet"), file)
-            self.assertTrue(file["uri"], file)
+            self.assertTrue(file.uri, file)
         # The generator added no threads: the walk is single-threaded.
         self.assertEqual(threading.active_count(), before)
 

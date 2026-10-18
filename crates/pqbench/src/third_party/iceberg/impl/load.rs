@@ -12,9 +12,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{Column, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::table::{LoadRequest, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
+use crate::v1;
 use crate::Lake;
 
 /// Errors resolving an Iceberg snapshot.
@@ -40,16 +41,7 @@ impl std::error::Error for Error {}
 /// data paths outside the table location.
 pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
     let options = env_options(&request.env);
-    let metadata_location = resolve_metadata_location(lake, &request.uri, &options).await?;
-    let metadata_bytes = read_location(lake, &metadata_location, &options).await?;
-    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes)
-        .map_err(|e| Error(format!("cannot parse metadata JSON: {e}")))?;
-    if metadata.format_version != 1 && metadata.format_version != 2 {
-        return Err(Error(format!(
-            "unsupported Iceberg format version: {}",
-            metadata.format_version
-        )));
-    }
+    let metadata = read_metadata(lake, &request.uri, &options).await?;
     let requested = request.snapshot_version.map(create_i64).transpose()?;
     let selected = select_snapshot(&metadata, requested)?;
     let snapshot_version = selected
@@ -64,42 +56,13 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         _ => (Vec::new(), Vec::new()),
     };
     let mut log = if request.require_files {
-        ancestry(&metadata, selected)
-            .into_iter()
-            .map(|snapshot| {
-                Ok(LogCommit {
-                    version: create_u64(snapshot.snapshot_id)?,
-                    commit_time: snapshot.snapshot_time,
-                    commit_info: None,
-                    actions: vec![LogAction {
-                        kind: "snapshot".into(),
-                        path: Some(snapshot.manifest_list.clone()),
-                    }],
-                })
-            })
-            .collect::<Result<Vec<_>, Error>>()?
+        ancestry_log(&metadata, selected, &v1::name::local_table(&request.uri))?
     } else {
         Vec::new()
     };
-    if let Some(commit) = log
-        .iter_mut()
-        .find(|commit| commit.version == snapshot_version)
-    {
-        for file in &files {
-            commit.actions.push(LogAction {
-                kind: "add".into(),
-                path: Some(file.path.clone()),
-            });
-        }
-        for path in deletes {
-            commit.actions.push(LogAction {
-                kind: "delete".into(),
-                path: Some(path),
-            });
-        }
-    }
+    attach_actions(&mut log, snapshot_version, &files, &deletes);
     let mut info = TableInfo::new(
-        TableFormat::ICEBERG,
+        v1::TableFormat::Iceberg,
         request.uri.clone(),
         snapshot_version,
         partition_columns(&metadata),
@@ -110,6 +73,73 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     info.columns = columns(&metadata);
     info.iceberg_properties = metadata.properties.clone();
     Ok(info)
+}
+
+/// Resolve, read, parse, and validate the table's metadata JSON.
+async fn read_metadata(
+    lake: &Lake,
+    uri: &str,
+    options: &[(String, String)],
+) -> Result<TableMetadata, Error> {
+    let metadata_location = resolve_metadata_location(lake, uri, options).await?;
+    let metadata_bytes = read_location(lake, &metadata_location, options).await?;
+    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| Error(format!("cannot parse metadata JSON: {e}")))?;
+    if metadata.format_version != 1 && metadata.format_version != 2 {
+        return Err(Error(format!(
+            "unsupported Iceberg format version: {}",
+            metadata.format_version
+        )));
+    }
+    Ok(metadata)
+}
+
+/// The selected snapshot's ancestry as log commits, one action per snapshot.
+fn ancestry_log(
+    metadata: &TableMetadata,
+    selected: Option<&Snapshot>,
+    table: &str,
+) -> Result<Vec<v1::Commit>, Error> {
+    ancestry(metadata, selected)
+        .into_iter()
+        .map(|snapshot| {
+            let version = create_u64(snapshot.snapshot_id)?;
+            Ok(v1::Commit {
+                name: v1::name::commit_name(table, &version.to_string()),
+                version,
+                commit_time: snapshot.snapshot_time,
+                commit_info: None,
+                actions: vec![v1::LogAction {
+                    kind: Some("snapshot".into()),
+                    path: Some(snapshot.manifest_list.clone()),
+                }],
+            })
+        })
+        .collect()
+}
+
+/// Attach the snapshot's added and deleted files to its log commit.
+fn attach_actions(
+    log: &mut [v1::Commit],
+    version: u64,
+    files: &[v1::TableFile],
+    deletes: &[String],
+) {
+    let Some(commit) = log.iter_mut().find(|commit| commit.version == version) else {
+        return;
+    };
+    for file in files {
+        commit.actions.push(v1::LogAction {
+            kind: Some("add".into()),
+            path: Some(file.path.clone()),
+        });
+    }
+    for path in deletes {
+        commit.actions.push(v1::LogAction {
+            kind: Some("delete".into()),
+            path: Some(path.clone()),
+        });
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,7 +245,7 @@ fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
 }
 
 /// The columns of the current schema; the first schema when none is marked.
-fn columns(metadata: &TableMetadata) -> Vec<Column> {
+fn columns(metadata: &TableMetadata) -> Vec<v1::DeclaredColumn> {
     metadata
         .schemas
         .iter()
@@ -225,10 +255,11 @@ fn columns(metadata: &TableMetadata) -> Vec<Column> {
             schema
                 .fields
                 .iter()
-                .map(|field| Column {
-                    name: field.name.clone(),
-                    data_type: type_name(&field.data_type),
+                .map(|field| v1::DeclaredColumn {
+                    column: field.name.clone(),
+                    data_type: crate::table::non_empty(&type_name(&field.data_type)),
                     nullable: !field.required,
+                    position: None,
                 })
                 .collect()
         })
@@ -272,7 +303,7 @@ fn select_snapshot(
 pub(super) async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<LogCommit, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
     let options = env_options(&request.env);
     let metadata_location = resolve_metadata_location(lake, &request.uri, &options).await?;
     let metadata_bytes = read_location(lake, &metadata_location, &options).await?;
@@ -289,9 +320,12 @@ pub(super) async fn stream_commits(
     // `ancestry` walks from the selected snapshot back through its parents, so
     // the newest snapshot comes first.
     let mut commits = Vec::new();
+    let table = v1::name::local_table(&request.uri);
     for snapshot in ancestry(&metadata, selected) {
-        commits.push(LogCommit {
-            version: create_u64(snapshot.snapshot_id)?,
+        let version = create_u64(snapshot.snapshot_id)?;
+        commits.push(v1::Commit {
+            name: v1::name::commit_name(&table, &version.to_string()),
+            version,
             commit_time: snapshot.snapshot_time,
             commit_info: None,
             actions: Vec::new(),
@@ -307,12 +341,12 @@ pub(super) async fn stream_commits(
 /// that snapshot's. A request that names commits and does not name that snapshot
 /// yields none: what an older snapshot added is a separate manifest read.
 ///
-/// The size is left zero, as [`TableFile`] documents: the manifest's size is a
+/// The size is left zero, as `v1::TableFile` documents: the manifest's size is a
 /// cross-check, and `bytemass` reads the true one from the footer.
 pub(super) async fn stream_files(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<TableFile, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::TableFile, Error>>, Error> {
     let mut request = request.clone();
     request.require_files = true;
     let info = load(lake, &request).await?;
@@ -325,7 +359,12 @@ pub(super) async fn stream_files(
         move |file| {
             let uri = crate::table::join_uri(&root, &file.path)
                 .map_err(|error| Error(error.to_string()))?;
-            Ok(TableFile::new(file.path, uri, 0))
+            Ok(v1::TableFile {
+                blob: Some(v1::name::blob_name(&uri)),
+                path: file.path,
+                size_bytes: Some(0),
+                ..v1::TableFile::default()
+            })
         },
     )))
 }
@@ -385,23 +424,37 @@ fn local_metadata(root: &Path) -> Result<String, Error> {
         return Ok(root.to_string_lossy().into_owned());
     }
     let metadata = root.join("metadata");
-    let hint_path = metadata.join("version-hint.text");
-    if hint_path.is_file() {
-        let hint = std::fs::read_to_string(&hint_path)
-            .map_err(|e| Error(format!("cannot read {}: {e}", hint_path.display())))?;
-        let version = parse_hint_version(&hint)?;
-        for name in hint_names(version) {
-            let candidate = metadata.join(name);
-            if candidate.is_file() {
-                return Ok(candidate.to_string_lossy().into_owned());
-            }
-        }
-        return Err(Error(format!(
-            "version-hint.text is {version} but no matching metadata JSON is in {}",
-            metadata.display()
-        )));
+    match hint_metadata(&metadata)? {
+        Some(found) => Ok(found),
+        None => newest_metadata(&metadata),
     }
-    let entries = std::fs::read_dir(&metadata)
+}
+
+/// Resolve the metadata JSON named by `version-hint.text`, when the directory
+/// has one.
+fn hint_metadata(metadata: &Path) -> Result<Option<String>, Error> {
+    let hint_path = metadata.join("version-hint.text");
+    if !hint_path.is_file() {
+        return Ok(None);
+    }
+    let hint = std::fs::read_to_string(&hint_path)
+        .map_err(|e| Error(format!("cannot read {}: {e}", hint_path.display())))?;
+    let version = parse_hint_version(&hint)?;
+    for name in hint_names(version) {
+        let candidate = metadata.join(name);
+        if candidate.is_file() {
+            return Ok(Some(candidate.to_string_lossy().into_owned()));
+        }
+    }
+    Err(Error(format!(
+        "version-hint.text is {version} but no matching metadata JSON is in {}",
+        metadata.display()
+    )))
+}
+
+/// The newest metadata JSON in the directory, by leading version.
+fn newest_metadata(metadata: &Path) -> Result<String, Error> {
+    let entries = std::fs::read_dir(metadata)
         .map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
     let mut found = Vec::new();
     for entry in entries {
@@ -459,7 +512,7 @@ async fn active_files(
     table_location: &str,
     manifest_list: &str,
     options: &[(String, String)],
-) -> Result<(Vec<TableFile>, Vec<String>), Error> {
+) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
     let root = table_root(table_location)?;
     let bytes = read_location(lake, manifest_list, options).await?;
     let manifests: Vec<ManifestFile> =
@@ -483,23 +536,33 @@ async fn active_files(
                 deletes.push(entry.data_file.file_path);
                 continue;
             }
-            if !entry.data_file.file_format.eq_ignore_ascii_case("parquet") {
-                return Err(Error(format!(
-                    "active data file is not Parquet: {}",
-                    entry.data_file.file_path
-                )));
-            }
-            let size = u64::try_from(entry.data_file.file_size_bytes).map_err(|_| {
-                Error(format!(
-                    "invalid file size in manifest: {}",
-                    entry.data_file.file_path
-                ))
-            })?;
-            let uri = resolve_data_file(&root, &entry.data_file.file_path)?;
-            files.push(TableFile::new(entry.data_file.file_path, uri, size));
+            files.push(data_file(&root, entry)?);
         }
     }
     Ok((files, deletes))
+}
+
+/// One active manifest entry as a `v1::TableFile`, checking it is Parquet.
+fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<v1::TableFile, Error> {
+    if !entry.data_file.file_format.eq_ignore_ascii_case("parquet") {
+        return Err(Error(format!(
+            "active data file is not Parquet: {}",
+            entry.data_file.file_path
+        )));
+    }
+    let size = u64::try_from(entry.data_file.file_size_bytes).map_err(|_| {
+        Error(format!(
+            "invalid file size in manifest: {}",
+            entry.data_file.file_path
+        ))
+    })?;
+    let uri = resolve_data_file(root, &entry.data_file.file_path)?;
+    Ok(v1::TableFile {
+        blob: Some(v1::name::blob_name(&uri)),
+        path: entry.data_file.file_path,
+        size_bytes: Some(size),
+        ..v1::TableFile::default()
+    })
 }
 
 enum TableRoot {
