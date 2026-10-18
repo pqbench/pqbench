@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, FileStats, LoadRequest, LogCommit,
+    add_partition_total, bytes_per_row, finish_partition_masses, FileStats, LoadRequest,
     PartitionMass, TableFile, TableInfo,
 };
 use crate::v1;
@@ -192,16 +192,18 @@ async fn read_log(
     uri: &str,
     head: Option<u64>,
     versions: Option<&BTreeSet<u64>>,
-) -> Result<Vec<LogCommit>, Error> {
+) -> Result<Vec<v1::Commit>, Error> {
     let versions: Vec<u64> = match versions {
         Some(named) => named.iter().copied().collect(),
         None => commit_versions(store, uri, head).await?,
     };
     let store = store.clone();
+    let table = v1::name::local_table(uri);
     // As in `stream_commits`: the versions are known, so every read goes at once
     // and the commits come back in version order.
     let commits = futures::future::try_join_all(versions.into_iter().map(|version| {
         let store = store.clone();
+        let table = table.clone();
         async move {
             let Some(bytes) = store
                 .read_commit_entry(version)
@@ -213,7 +215,8 @@ async fn read_log(
             };
             let parsed = parse_commit(&bytes, version)?;
             drop(bytes);
-            Ok(Some(LogCommit {
+            Ok(Some(v1::Commit {
+                name: v1::name::commit_name(&table, &version.to_string()),
                 version,
                 commit_time: parsed.commit_time,
                 commit_info: parsed.commit_info,
@@ -235,9 +238,10 @@ async fn read_log(
 pub(super) async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<LogCommit, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
     let store = open_store(lake, request)?;
     let versions = commit_versions(&store, &request.uri, request.snapshot_version).await?;
+    let table = v1::name::local_table(&request.uri);
     // The log names every commit, so no read waits on another: they all go at
     // once and are yielded in version order, newest first, as they land. A commit
     // the log does not date has no time to contribute, and one the listing named
@@ -252,21 +256,25 @@ pub(super) async fn stream_commits(
             }
         })
         .buffered(commit_read_width())
-        .try_filter_map(|(version, head)| async move {
-            Ok(match head {
-                CommitHead::Present(Some(info)) => {
-                    // A commit the log does not date has no window to fall in.
-                    info.get("timestamp")
-                        .and_then(Value::as_i64)
-                        .map(|commit_time| LogCommit {
-                            version,
-                            commit_time: Some(commit_time),
-                            commit_info: Some(info),
-                            actions: Vec::new(),
-                        })
-                }
-                CommitHead::Missing | CommitHead::Present(None) => None,
-            })
+        .try_filter_map(move |(version, head)| {
+            let table = table.clone();
+            async move {
+                Ok(match head {
+                    CommitHead::Present(Some(info)) => {
+                        // A commit the log does not date has no window to fall in.
+                        info.get("timestamp")
+                            .and_then(Value::as_i64)
+                            .map(|commit_time| v1::Commit {
+                                name: v1::name::commit_name(&table, &version.to_string()),
+                                version,
+                                commit_time: Some(commit_time),
+                                commit_info: Some(info),
+                                actions: Vec::new(),
+                            })
+                    }
+                    CommitHead::Missing | CommitHead::Present(None) => None,
+                })
+            }
         }))
 }
 

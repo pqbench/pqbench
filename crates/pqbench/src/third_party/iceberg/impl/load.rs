@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{LoadRequest, LogCommit, TableFile, TableInfo};
+use crate::table::{LoadRequest, TableFile, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 use crate::v1;
@@ -56,7 +56,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         _ => (Vec::new(), Vec::new()),
     };
     let mut log = if request.require_files {
-        ancestry_log(&metadata, selected)?
+        ancestry_log(&metadata, selected, &v1::name::local_table(&request.uri))?
     } else {
         Vec::new()
     };
@@ -98,12 +98,15 @@ async fn read_metadata(
 fn ancestry_log(
     metadata: &TableMetadata,
     selected: Option<&Snapshot>,
-) -> Result<Vec<LogCommit>, Error> {
+    table: &str,
+) -> Result<Vec<v1::Commit>, Error> {
     ancestry(metadata, selected)
         .into_iter()
         .map(|snapshot| {
-            Ok(LogCommit {
-                version: create_u64(snapshot.snapshot_id)?,
+            let version = create_u64(snapshot.snapshot_id)?;
+            Ok(v1::Commit {
+                name: v1::name::commit_name(table, &version.to_string()),
+                version,
                 commit_time: snapshot.snapshot_time,
                 commit_info: None,
                 actions: vec![v1::LogAction {
@@ -116,7 +119,7 @@ fn ancestry_log(
 }
 
 /// Attach the snapshot's added and deleted files to its log commit.
-fn attach_actions(log: &mut [LogCommit], version: u64, files: &[TableFile], deletes: &[String]) {
+fn attach_actions(log: &mut [v1::Commit], version: u64, files: &[TableFile], deletes: &[String]) {
     let Some(commit) = log.iter_mut().find(|commit| commit.version == version) else {
         return;
     };
@@ -295,7 +298,7 @@ fn select_snapshot(
 pub(super) async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<LogCommit, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
     let options = env_options(&request.env);
     let metadata_location = resolve_metadata_location(lake, &request.uri, &options).await?;
     let metadata_bytes = read_location(lake, &metadata_location, &options).await?;
@@ -312,9 +315,12 @@ pub(super) async fn stream_commits(
     // `ancestry` walks from the selected snapshot back through its parents, so
     // the newest snapshot comes first.
     let mut commits = Vec::new();
+    let table = v1::name::local_table(&request.uri);
     for snapshot in ancestry(&metadata, selected) {
-        commits.push(LogCommit {
-            version: create_u64(snapshot.snapshot_id)?,
+        let version = create_u64(snapshot.snapshot_id)?;
+        commits.push(v1::Commit {
+            name: v1::name::commit_name(&table, &version.to_string()),
+            version,
             commit_time: snapshot.snapshot_time,
             commit_info: None,
             actions: Vec::new(),

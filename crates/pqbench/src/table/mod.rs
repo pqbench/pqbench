@@ -54,29 +54,10 @@ impl Error {
     }
 }
 
-/// One commit from the table log, as stored on disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct LogCommit {
-    /// Commit version.
-    pub version: u64,
-    /// Commit time in milliseconds since the Unix epoch, when the log records
-    /// one. Delta reads `commitInfo.timestamp`; Iceberg the snapshot time.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commit_time: Option<i64>,
-    /// The commit's `commitInfo` action as the log stores it, when it has one:
-    /// the operation, its parameters and metrics, and the writer's identity.
-    /// Delta reads it from the first line of the commit file; Iceberg has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commit_info: Option<serde_json::Value>,
-    /// Actions from the commit file, in file order.
-    pub actions: Vec<v1::LogAction>,
-}
-
 /// A table's commits, newest first, from [`stream_commits`].
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
-pub type CommitStream<'a> = BoxStream<'a, Result<LogCommit, Error>>;
+pub type CommitStream<'a> = BoxStream<'a, Result<v1::Commit, Error>>;
 
 /// One data file the current snapshot treats as active.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,7 +174,7 @@ pub struct TableInfo {
     /// Every available JSON commit, in version order. Checkpoint-only versions
     /// that have no remaining JSON file are omitted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub log: Vec<LogCommit>,
+    pub log: Vec<v1::Commit>,
     /// Active data files after replaying the log to `snapshot_version`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<TableFile>,
@@ -214,7 +195,7 @@ impl TableInfo {
         uri: impl Into<String>,
         snapshot_version: u64,
         partition_columns: Vec<String>,
-        log: Vec<LogCommit>,
+        log: Vec<v1::Commit>,
         files: Vec<TableFile>,
         env: BTreeMap<String, String>,
     ) -> Self {
