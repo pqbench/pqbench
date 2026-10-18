@@ -19,7 +19,7 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	dbx-perf-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check isolation lfs-check check-python sync-docs \
-	check-docs code-analysis clean
+	check-docs check-version sync-version code-analysis clean
 
 all: fmt build test lint
 
@@ -87,7 +87,7 @@ lakehouse-seed-unity: lakehouse-up
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
-check: fmt-check check-docs lint isolation lfs-check test
+check: fmt-check check-docs check-version lint isolation lfs-check test
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
@@ -101,6 +101,17 @@ isolation:
 # contributor prerequisite; see CONTRIBUTING.md.
 lfs-check:
 	git lfs fsck
+
+# The wheel's version, and the one definition of it: python/ is its own
+# workspace root, so python/Cargo.toml cannot inherit [workspace.package].
+# `check-version` is part of `check`, so drift fails on the pull request.
+VERSION = $(shell ./scripts/version.sh)
+
+sync-version:
+	./scripts/version.sh sync
+
+check-version:
+	./scripts/version.sh check
 
 # python/ is its own crate (not a workspace member); share the repo target
 # dir so it does not grow python/target. Local to python/.venv for PEP 668.

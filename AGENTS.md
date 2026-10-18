@@ -140,9 +140,12 @@ analogy, convention, or precedent:
 
 - Format: `make fmt`
 - Gate (pre-commit): `make check` = `fmt-check` + `check-docs` +
-  `clippy -D warnings` + `test`.
+  `check-version` + `clippy -D warnings` + `test`.
   `make check-python` builds the PyO3 wheel and runs its tests; CI runs it,
   the local gate does not (it compiles libpython and every storage backend).
+  `check-version` holds `python/Cargo.toml` to `[workspace.package] version`
+  (`make sync-version` writes it): python/ is its own workspace root and cannot
+  inherit it.
 - Docs: the `console` transcripts in the Markdown are generated into
   `crates/pqbench-cli/tests/gen_*.rs` and run by `make test`. Edit a doc block,
   run `make sync-docs`; `check-docs` (part of `make check`, hence the pre-commit
