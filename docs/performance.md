@@ -11,8 +11,8 @@ request (see the Perf box in the template).
 Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
-$ pqbench list catalogs | pqbench list schemas <catalog> \
-    | pqbench list tables <catalog.schema> \
+$ pqbench list catalogs | pqbench list schemas \
+    | pqbench list tables \
     | pqbench credentials check | pqbench credentials get \
     | pqbench get table | pqbench list partitions \
     | pqbench list files | pqbench bytemass

@@ -9,8 +9,8 @@
 
 <!-- --8<-- [start:landing] -->
 Measure how well each codec compresses a Parquet file and how many on-disk
-bytes each column costs. It reads footers and table metadata, never the data
-pages, so it is fast on files of any size.
+bytes each column costs. Byte masses come from the footer and the table
+metadata, not the data pages, so they are fast on files of any size.
 
 Commands compose on pipes — each writes a versioned JSON document the next
 reads — so the whole job is one pipeline. The [walk](#the-walk-end-to-end) goes
@@ -204,14 +204,14 @@ that command.
 - [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list partitions | list files | bytemass`, limitations
 - [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list partitions | list files | bytemass`, limitations
 - [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqbench viz`, a static HTML treemap
-- [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel and call every command
+- [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel and call the measurement commands
 - [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
   naming tables for `pqbench list partitions`, over rustfs S3
 
 ## Python
 
-[`python/`](https://pqbench.github.io/pqbench/python/) is a PyO3 wheel. Each CLI command is a function
-that calls the library in-process:
+[`python/`](https://pqbench.github.io/pqbench/python/) is a PyO3 wheel. Each measurement command is a
+function that calls the library in-process:
 
 ```python
 import pqbench
@@ -222,8 +222,9 @@ pqbench.viz(rows, output="report")
 
 ## Contributing
 
-PRs welcome. The gate is `make check` (`fmt-check` + `clippy -D warnings` +
-`test`). The PyO3 wheel is `make check-python`. The runnable commands on this
+PRs welcome. The gate is `make check` (`fmt-check` + `check-docs` +
+`clippy -D warnings` + `isolation` + `lfs-check` + `test`). The PyO3 wheel is
+`make check-python`. The runnable commands on this
 page are generated into tests by `docscheck` (`make sync-docs`); see
 [CONTRIBUTING.md](https://pqbench.github.io/pqbench/contributing/) for the loop, style, and naming rules.
 

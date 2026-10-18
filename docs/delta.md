@@ -75,8 +75,8 @@ bytes); a pipe streams NDJSON. `--format json` forces the stream, and `-o`
 also writes it without delaying stdout:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.zst
-$ pqbench bytemass /tmp/partition.ndjson.zst --format table
+$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4
+$ pqbench bytemass /tmp/partition.ndjson.lz4 --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
 id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3

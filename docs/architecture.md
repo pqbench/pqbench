@@ -13,15 +13,22 @@ tidyings; this page covers structure.
 
 ## Commands
 
-A command is a top-level folder in the library crate. Its subcommands are
-folders inside it, and every leaf holds exactly two files:
+The walk's resource commands (`metastore`, `catalog`, `schema`, `table`,
+`partition`, `file`, `credentials`) are folders — one per resource, with a
+subcommand folder per verb. The measurement commands (`bytemass`,
+`compression`, `lz`) keep an `api.rs` and split the implementation across named
+modules (`raw.rs`, `analytics.rs`, `text.rs`, `json.rs`, …); the rest
+(`profile`, `experiment`, `diff`, `skill`, `ratelimit`, `viz`) are single
+modules or small folders.
 
 ```text
 crates/pqbench/src/
-  <command>/
-    <subcommand>/{api.rs, impl.rs}
+  <resource>/
+    <verb>/{api.rs, impl.rs, mod.rs}
+  bytemass/{api.rs, raw.rs, analytics.rs, text.rs, json.rs, …}
   third_party/
-    <crate>/{api.rs, impl.rs}
+    <crate>/{api.rs, impl.rs, mod.rs}
+    <crate>/impl/<module>.rs
 ```
 
 - `api.rs` — exactly one public function: the command's entry point. It is the
@@ -60,9 +67,9 @@ resources (the parent rides the argument, or parent refs on standard input);
 
 ## third_party
 
-- One folder per third-party crate: `api.rs` is the isolated surface, `impl.rs`
-  is the only file that names the crate. Feature flags live only in `impl.rs`,
-  enforced by `scripts/check_isolation.sh`.
+- One folder per third-party crate: `api.rs` is the isolated surface; `impl.rs`
+  and its `impl/` submodules are the only code that names the crate. Feature
+  flags live only under `impl`, enforced by `scripts/check_isolation.sh`.
 - An adapter wraps a third-party crate and nothing else: no domain types, no
   other modules of the crate.
 - Protocol code we speak ourselves is not third-party code, even when it runs

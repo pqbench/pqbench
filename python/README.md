@@ -1,8 +1,8 @@
 # pqbench
 
-PyO3 bindings for every [pqbench](https://github.com/pqbench/pqbench) command.
-`pip install` builds a native wheel. Each function calls the same library
-entry point as the matching CLI subcommand.
+PyO3 bindings for the [pqbench](https://github.com/pqbench/pqbench)
+measurement commands. `pip install` builds a native wheel. Each function calls
+the same library entry point as the matching CLI subcommand.
 
 ## Install
 
@@ -32,7 +32,9 @@ pqbench.table("./delta-table")                   # the table's record
 pqbench.viz(rows, output="report")               # report.html
 ```
 
-`pqbench.commands` is `("lz", "compression", "bytemass", "table", "viz")`.
+`pqbench.commands` is `("lz", "compression", "bytemass", "table", "profile",
+"experiment", "skill", "viz")`. The walk commands (`list`, `get`,
+`credentials`) have no binding.
 
 `codecs` repeats `codec@level`. Defaults match the CLI: `samples` 10,
 `warmup_iterations` 3, `mode` `fastest`. `mode` is `fastest` or `mean`.

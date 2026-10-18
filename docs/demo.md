@@ -67,7 +67,7 @@ file its `blob` names.
 The whole walk is three commands:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table -o /tmp/partition.ndjson.zst
+$ pqbench list partitions docker/e2e-lakehouse/table -o /tmp/partition.ndjson.lz4
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
@@ -86,9 +86,9 @@ columns: 2
 
 ## Catalogs
 
-The catalog comes from the environment (`PQB_ENDPOINT`, `PQB_TOKEN`).
-`GET /v1/config` with a `defaults` object is Iceberg REST; a 200 without
-`defaults`, or HTTP 404, is Unity. The walk descends `list catalogs` → `list schemas`
+The catalog comes from the environment (`PQB_ENDPOINT`, `PQB_TOKEN`). The
+dialect is declared, not probed: `PQB_TABLE_FORMAT` is `unity` (the default) or
+`iceberg`. The walk descends `list catalogs` → `list schemas`
 → `list tables`, checks and vends credentials, then enriches each table and lists
 its files:
 
@@ -111,7 +111,7 @@ table (`--format table`). The local stand (`make lakehouse`) exports
 ## One Parquet file
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.zst
+$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.lz4
 $ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
 column            type        codec         encodings                  bytes  values
 ----------------  ----------  ------------  ------------------------  ------  ------
@@ -137,7 +137,7 @@ columns: 7
 partitions as a table; a pipe streams NDJSON for `list files` and `bytemass`:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.zst
+$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
 column  type        codec   encodings                 bytes  values
 ------  ----------  ------  ------------------------  -----  ------
@@ -160,7 +160,7 @@ fixture stores data as `s3://lakehouse/...`, so measure it through the stand
 (`make lakehouse`), not just the feature:
 
 ```console no-run
-$ pqbench list partitions docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.zst
+$ pqbench list partitions docker/e2e-lakehouse/iceberg -o /tmp/iceberg.ndjson.lz4
 ```
 
 With the stand up, walk the Iceberg REST catalog (`PQB_ENDPOINT=…
