@@ -131,7 +131,7 @@ URL always serves the newest.
 **3. Dispatch the wheel** once that tag exists:
 
 ```sh
-gh workflow run publish-pypi.yml
+gh workflow run release-pypi.yml
 ```
 
 or run the **Publish to PyPI** workflow from the Actions tab. Publishing is
