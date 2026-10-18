@@ -13,7 +13,7 @@ pub(crate) fn credentials(
     let value = crate::marshal::py_to_value(&value)?;
     serde_json::from_value(value)
         .map(Some)
-        .map_err(crate::marshal::value_error)
+        .map_err(crate::marshal::argument_error)
 }
 /// Arguments for `pqbench.bytemass.bytemass`.
 #[pyclass(skip_from_py_object)]

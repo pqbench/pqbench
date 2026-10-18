@@ -1,14 +1,14 @@
 //! `metastore`: the whole metastore, as the crate record.
 
 use crate::handles::Workspace;
-use crate::marshal::records;
+use crate::marshal::document;
 use crate::prelude::*;
 
 #[pyfunction]
 #[pyo3(name = "get")]
 fn metastore_get(py: Python<'_>, workspace: PyRef<'_, Workspace>) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
-    records(py, async move {
+    document(py, async move {
         pqbench::metastore::get::get(&workspace)
             .await
             .map_err(|error| error.to_string())

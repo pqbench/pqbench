@@ -12,7 +12,9 @@ pub(crate) use pqbench::{
     Config as LibConfig, Dialect as LibDialect, Lake as LibLake, Layer as LibLayer,
     Workspace as LibWorkspace,
 };
-pub(crate) use pyo3::exceptions::{PyRuntimeError, PyStopAsyncIteration, PyValueError};
+pub(crate) use pyo3::exceptions::{
+    PyRuntimeError, PyStopAsyncIteration, PyTypeError, PyValueError,
+};
 pub(crate) use pyo3::prelude::*;
 pub(crate) use pyo3::types::{PyDict, PyList, PyModule};
 pub(crate) use pyo3::{Py, PyAny};
