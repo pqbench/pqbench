@@ -41,23 +41,26 @@ fn read_struct(source: &str, node: Node, index: &mut ModelIndex) {
     if body.kind() != "field_declaration_list" {
         return;
     }
-    let mut fields = Vec::new();
     let mut cursor = body.walk();
-    for field in body.named_children(&mut cursor) {
-        if field.kind() != "field_declaration" {
-            continue;
-        }
-        if !is_public(source, field) || is_skipped(source, field) {
-            continue;
-        }
-        if let Some(field_name) = field.child_by_field_name("name") {
-            fields.push(ModelField {
-                name: text(source, field_name).to_owned(),
-                optional: is_absent_when_empty(source, field),
-            });
-        }
-    }
+    let fields = body
+        .named_children(&mut cursor)
+        .filter_map(|field| read_field(source, field))
+        .collect();
     index.add(text(source, name), fields);
+}
+
+/// Read one field: the name and absence of a field that reaches the wire, or
+/// `None` for a line that is not a public, serialized field.
+fn read_field(source: &str, field: Node) -> Option<ModelField> {
+    if field.kind() != "field_declaration" || !is_public(source, field) || is_skipped(source, field)
+    {
+        return None;
+    }
+    let name = field.child_by_field_name("name")?;
+    Some(ModelField {
+        name: text(source, name).to_owned(),
+        optional: is_absent_when_empty(source, field),
+    })
 }
 
 /// Whether a field carries a `pub` visibility modifier.
