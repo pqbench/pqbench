@@ -33,5 +33,4 @@ It does not measure files and does not replace `experiment`. The
 workflow is: L0 byte mass → profile → bounded rewrites → recipe with
 evidence.
 
-Project copy for Cursor: `.cursor/skills/parquet-advisor/`. Source
-markdown: `skills/parquet-advisor/`.
+Source markdown: `skills/parquet-advisor/`.
