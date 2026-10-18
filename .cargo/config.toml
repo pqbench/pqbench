@@ -20,6 +20,8 @@
 [build]
 # Use sccache when installed and invoke rustc directly otherwise. This keeps
 # fresh clones and CI working without mandatory machine-level configuration.
+# The shim is POSIX, so a Windows build must unset it — cargo cannot execute the
+# script there ("os error 193"): `RUSTC_WRAPPER= cargo build`.
 rustc-wrapper = ".cargo/scripts/rustc-wrapper.sh"
 
 [env]
