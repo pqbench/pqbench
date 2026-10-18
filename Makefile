@@ -17,7 +17,7 @@ CODE_ANALYSIS_PATHS ?= crates
 LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
-	dbx-perf-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
+	dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check isolation lfs-check check-python sync-docs \
 	check-docs check-version sync-version code-analysis clean
 
@@ -42,14 +42,15 @@ dbx-e2e:
 	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/auth.md)"; exit 1; }
 	$(CARGO) test -p pqbench-cli --features delta-s3,iceberg-s3 --test dbx_e2e -- --ignored --nocapture
 
-# The live perf walk (scripts/dbx-perf-walk.sh): `perf stat`/`perf record` over
-# the metadata walk. Needs DBX_HOST plus a bearer source — the service
-# principal's client secret, or a ready PQB_ENDPOINT/PQB_TOKEN — and `perf`.
-# Report-only; the `dbx-perf-walk` CI job runs it.
-dbx-perf-walk:
+# The live walk (scripts/dbx-walk.sh): one pass over the whole-Unity-Catalog
+# metadata walk, through `bytemass`. Needs DBX_HOST plus a bearer source — the
+# service principal's client secret, or a ready PQB_ENDPOINT/PQB_TOKEN. The
+# `dbx-walk` CI job runs it as a live smoke test; profile it with `perf` by hand
+# (docs/performance.md).
+dbx-walk:
 	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/auth.md)"; exit 1; }
 	$(CARGO) build --release -p pqbench-cli --features delta-s3,iceberg-s3
-	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/release/pqbench" ./scripts/dbx-perf-walk.sh
+	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/release/pqbench" ./scripts/dbx-walk.sh
 
 lint:
 	$(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings

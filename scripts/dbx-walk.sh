@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Measure the metadata walk with `perf`.
+# Walk the metadata walk once against the live endpoint.
 #
 # The walk is the issue-#58 pipeline, one process per level:
 #
@@ -29,39 +29,30 @@
 # `docs/cli.md` gives: "pace the walk and retry it at a lower rate in the
 # shell") before it fails.
 #
-# The walk runs three ways:
-#
-#   shape   one pass with `tee` after each level, so every level's record count
-#           is visible (the "jobs are limited by the number of tables" claim);
-#   stat    `perf stat` over the whole pipeline, repeated for the spread;
-#   record  `perf record -g` then `perf report` for the hot symbols.
+# One pass, with `tee` after each level, so every level's record count is
+# visible (the "jobs are limited by the number of tables" claim). Profile it
+# with `perf` by hand — `docs/performance.md` has the recipe.
 #
 # Auth: either PQB_ENDPOINT / PQB_TOKEN, or DBX_HOST plus a bearer source — the
 # GitHub Actions OIDC token (`id-token: write`; set DATABRICKS_CLIENT_ID and
 # DATABRICKS_ACCOUNT_ID, and the service principal needs a GitHub federation
 # policy), or the e2e service principal's client secret
 # (DBX_SAMPLES_SP_CLIENT_ID / DBX_SAMPLES_SP_CLIENT_SECRET). Run by the
-# `dbx-perf-walk` CI job; the same script runs locally.
+# `dbx-walk` CI job; the same script runs locally.
 #
 # Usage:
 #
-#   scripts/dbx-perf-walk.sh                    # shape + stat + record
-#   PQB_PERF_MODE=stat scripts/dbx-perf-walk.sh
-#   PQB_RATE=5 PQB_PERF_REPEAT=5 scripts/dbx-perf-walk.sh
+#   scripts/dbx-walk.sh
+#   PQB_RATE=5 scripts/dbx-walk.sh
 #
-# Tunables (environment): PQB, PQB_RATE, PQB_PERF_MODE, PQB_PERF_EVENTS,
-# PQB_PERF_REPEAT, PQB_PERF_TOP, PQB_PERF_RETRIES, PQB_WALK_CATALOG,
+# Tunables (environment): PQB, PQB_RATE, PQB_WALK_RETRIES, PQB_WALK_CATALOG,
 # PQB_ENDPOINT, PQB_TOKEN, AWS_REGION.
 
 set -euo pipefail
 
 PQB="${PQB:-target/release/pqbench}"
 RATE="${PQB_RATE:-15}"
-MODE="${PQB_PERF_MODE:-all}"
-EVENTS="${PQB_PERF_EVENTS:-cycles,instructions,duration_time}"
-REPEAT="${PQB_PERF_REPEAT:-3}"
-TOP="${PQB_PERF_TOP:-30}"
-RETRIES="${PQB_PERF_RETRIES:-3}"
+RETRIES="${PQB_WALK_RETRIES:-3}"
 CATALOG="${PQB_WALK_CATALOG:-pqbench_ext}"
 REGION="${AWS_REGION:-us-east-2}"
 
@@ -77,28 +68,31 @@ keep_readable_catalog() {
 }
 
 # The walk, as `docs/performance.md` writes it: one pipeline, every level
-# streaming refs to the next. `--run` is the internal entry `perf` re-execs.
+# streaming refs to the next, `tee`d so each level's records can be counted.
 walk() {
-    set -o pipefail
-    "$PQB" list catalogs --format json |
+    local dir="$WORK/walk" name status
+    mkdir -p "$dir"
+    "$PQB" list catalogs --format json | tee "$dir/catalogs" |
         "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" list schemas --format json |
+        "$PQB" list schemas --format json | tee "$dir/schemas" |
         "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" list tables --format json |
+        "$PQB" list tables --format json | tee "$dir/refs" |
         "$PQB" ratelimit --rate "$RATE" |
-        keep_readable_catalog |
-        "$PQB" credentials check --format json |
-        "$PQB" credentials get --format json |
-        "$PQB" get table --format json |
-        "$PQB" list partitions --format json |
-        "$PQB" list files --format json |
-        "$PQB" bytemass --format json
+        keep_readable_catalog | tee "$dir/readable" |
+        "$PQB" credentials check --format json | tee "$dir/checked" |
+        "$PQB" credentials get --format json | tee "$dir/vended" |
+        "$PQB" get table --format json | tee "$dir/tables" |
+        "$PQB" list partitions --format json | tee "$dir/partitions" |
+        "$PQB" list files --format json | tee "$dir/files" |
+        "$PQB" bytemass --format json >"$dir/bytemass"
+    # `walk` runs in a condition, where the shell ignores `set -e`; return the
+    # walk's status so the retry in `main` sees a failed walk.
+    status=$?
+    [ "$status" -eq 0 ] || return "$status"
+    for name in catalogs schemas refs readable checked vended tables partitions files bytemass; do
+        printf '  %-12s %8s records\n' "$name" "$(wc -l <"$dir/$name")"
+    done
 }
-
-if [ "${1:-}" = "--run" ]; then
-    walk
-    exit 0
-fi
 
 require() {
     [ -n "${!1:-}" ] || {
@@ -147,71 +141,6 @@ mint_token() {
         jq -r .access_token
 }
 
-run_shape() {
-    local dir="$WORK/shape" name status
-    mkdir -p "$dir"
-    echo "== shape =="
-    set -o pipefail
-    "$PQB" list catalogs --format json | tee "$dir/catalogs" |
-        "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" list schemas --format json | tee "$dir/schemas" |
-        "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" list tables --format json | tee "$dir/refs" |
-        "$PQB" ratelimit --rate "$RATE" |
-        keep_readable_catalog | tee "$dir/readable" |
-        "$PQB" credentials check --format json | tee "$dir/checked" |
-        "$PQB" credentials get --format json | tee "$dir/vended" |
-        "$PQB" get table --format json | tee "$dir/tables" |
-        "$PQB" list partitions --format json | tee "$dir/partitions" |
-        "$PQB" list files --format json | tee "$dir/files" |
-        "$PQB" bytemass --format json >"$dir/bytemass"
-    # `run_mode` runs in a condition, where the shell ignores `set -e`; return
-    # the walk's status so the retry in `main` sees a failed walk.
-    status=$?
-    [ "$status" -eq 0 ] || return "$status"
-    for name in catalogs schemas refs readable checked vended tables partitions files bytemass; do
-        printf '  %-12s %8s records\n' "$name" "$(wc -l <"$dir/$name")"
-    done
-}
-
-run_stat() {
-    if ! command -v perf >/dev/null 2>&1; then
-        echo "== perf stat (perf not found; timing one run) ==" >&2
-        time "$0" --run >/dev/null
-        return
-    fi
-    echo "== perf stat ($EVENTS, -r $REPEAT) =="
-    perf stat -e "$EVENTS" -r "$REPEAT" -- "$0" --run >/dev/null
-}
-
-run_record() {
-    if ! command -v perf >/dev/null 2>&1; then
-        echo "== perf record (perf not found; skipping) ==" >&2
-        return
-    fi
-    echo "== perf record =="
-    perf record -g -o "$WORK/perf.data" -- "$0" --run >/dev/null || return $?
-    perf report --stdio -i "$WORK/perf.data" --no-children >"$WORK/report.txt" 2>/dev/null || true
-    head -n "$TOP" "$WORK/report.txt"
-}
-
-run_mode() {
-    case "$MODE" in
-    shape) run_shape ;;
-    stat) run_stat ;;
-    record) run_record ;;
-    all)
-        run_shape || return $?
-        run_stat || return $?
-        run_record || return $?
-        ;;
-    *)
-        echo "PQB_PERF_MODE must be shape|stat|record|all, got $MODE" >&2
-        return 2
-        ;;
-    esac
-}
-
 main() {
     if [ -n "${PQB_ENDPOINT:-}" ] && [ -n "${PQB_TOKEN:-}" ]; then
         :
@@ -225,7 +154,7 @@ main() {
     # A live walk shares the endpoint; retry at half the rate before giving up
     # (docs/cli.md: "pace the walk and retry it at a lower rate in the shell").
     local attempt=1
-    until PQB_RATE="$RATE" run_mode; do
+    until walk; do
         if [ "$attempt" -ge "$RETRIES" ] || [ "$RATE" -le 1 ]; then
             echo "the walk failed at rate $RATE after $attempt attempt(s)" >&2
             return 1

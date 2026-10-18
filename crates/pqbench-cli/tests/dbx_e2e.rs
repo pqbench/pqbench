@@ -7,8 +7,8 @@
 //!
 //! The external fixture (`pqbench_ext`, external Delta on customer S3 — see
 //! `scripts/dbx-ext/`) covers the rest of the walk:
-//! `external_fixture_walks_to_bytemass` runs the full pipeline. The perf walk
-//! lives in `scripts/dbx-perf-walk.sh` (`make dbx-perf-walk`).
+//! `external_fixture_walks_to_bytemass` runs the full pipeline. The
+//! whole-catalog walk lives in `scripts/dbx-walk.sh` (`make dbx-walk`).
 //!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
 //! service principal's credentials come from `DBX_SAMPLES_SP_CLIENT_ID` /
