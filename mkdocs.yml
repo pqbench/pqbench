@@ -114,6 +114,7 @@ nav:
   - Getting started: getting-started.md
   - Guides:
       - guides/index.md
+      - Showcases: showcases.md
       - Visual demos: demo.md
       - Delta tables: delta.md
       - Iceberg tables: iceberg.md

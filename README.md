@@ -198,6 +198,7 @@ Start with [Getting started](https://pqbench.github.io/pqbench/getting-started/)
 that command.
 
 - [Getting started](https://pqbench.github.io/pqbench/getting-started/) — install, first measurement, the metadata walk
+- [Showcases](https://pqbench.github.io/pqbench/showcases/) — real jobs on real data: triage the bytes, pick a codec, verify a layout change
 - [Distribution](https://pqbench.github.io/pqbench/distribution/) — install the binary, targets, and how releases are cut
 - [CLI reference](https://pqbench.github.io/pqbench/cli/) — the command table, documents, flags, and auth
 - [Visual demos](https://pqbench.github.io/pqbench/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
