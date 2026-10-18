@@ -20,7 +20,7 @@ use url::Url;
 
 use crate::table::{
     add_partition_total, bytes_per_row, finish_partition_masses, LoadRequest, PartitionMass,
-    TableFile, TableInfo,
+    TableInfo,
 };
 use crate::v1;
 use crate::Lake;
@@ -290,7 +290,7 @@ pub(super) async fn stream_commits(
 pub(super) async fn stream_files(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<TableFile, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::TableFile, Error>>, Error> {
     let store = open_store(lake, request)?;
     let versions: Vec<u64> = match request.commit_versions.as_ref() {
         Some(named) => named.iter().copied().collect(),
@@ -316,7 +316,7 @@ async fn commit_files(
     store: &LogStoreRef,
     uri: &str,
     version: u64,
-) -> Result<Vec<TableFile>, Error> {
+) -> Result<Vec<v1::TableFile>, Error> {
     let Some(bytes) = store
         .read_commit_entry(version)
         .await
@@ -337,9 +337,14 @@ async fn commit_files(
 }
 
 /// The table file one `add` action's path describes.
-fn added_file(uri: &str, path: String) -> Result<TableFile, Error> {
+fn added_file(uri: &str, path: String) -> Result<v1::TableFile, Error> {
     let file_uri = crate::table::join_uri(uri, &path).map_err(|error| Error(error.to_string()))?;
-    Ok(TableFile::new(path, file_uri, 0))
+    Ok(v1::TableFile {
+        blob: Some(v1::name::blob_name(&file_uri)),
+        path,
+        size_bytes: Some(0),
+        ..v1::TableFile::default()
+    })
 }
 
 /// The table's commit versions, oldest first, from the log's own listing.
@@ -521,7 +526,7 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
 async fn active_files(
     table: &DeltaTable,
     request: &LoadRequest,
-) -> Result<(Vec<TableFile>, Vec<PartitionMass>), Error> {
+) -> Result<(Vec<v1::TableFile>, Vec<PartitionMass>), Error> {
     let root = if table.table_url().scheme() == "file" {
         Some(
             table
@@ -543,14 +548,14 @@ async fn active_files(
     Ok((active, finish_partition_masses(totals)))
 }
 
-/// One add action as a `TableFile`, resolving its storage path and, unless
+/// One add action as a [`v1::TableFile`], resolving its storage path and, unless
 /// `keep_stats` is set, trimming the stats to the byte facts.
 fn data_file(
     root: &Option<PathBuf>,
     table_url: &Url,
     file: &deltalake::kernel::LogicalFileView,
     keep_stats: bool,
-) -> Result<TableFile, Error> {
+) -> Result<v1::TableFile, Error> {
     let relative = file.path().to_string();
     let size = u64::try_from(file.size())
         .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
@@ -568,12 +573,13 @@ fn data_file(
             stats.tight_bounds = None;
         }
     }
-    Ok(TableFile {
+    Ok(v1::TableFile {
+        blob: Some(v1::name::blob_name(&uri)),
         path: relative,
-        uri,
-        size_bytes: size,
+        size_bytes: Some(size),
         partition_values: partition_values(file),
         stats,
+        ..v1::TableFile::default()
     })
 }
 

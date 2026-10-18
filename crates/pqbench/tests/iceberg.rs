@@ -298,7 +298,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     assert_eq!(previous.format, TableFormat::Iceberg);
     assert_eq!(previous.snapshot_version, 0);
     assert_eq!(previous.files.len(), 1);
-    assert_eq!(previous.files[0].size_bytes, fixture.first_size);
+    assert_eq!(previous.files[0].size_bytes, Some(fixture.first_size));
     assert_eq!(previous.log.len(), 1);
 
     let latest = table::load(
@@ -309,7 +309,11 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     .unwrap();
     assert_eq!(latest.snapshot_version, 1);
     assert_eq!(latest.files.len(), 2);
-    let mut sizes: Vec<_> = latest.files.iter().map(|file| file.size_bytes).collect();
+    let mut sizes: Vec<_> = latest
+        .files
+        .iter()
+        .map(|file| file.size_bytes.unwrap_or(0))
+        .collect();
     sizes.sort_unstable();
     assert_eq!(sizes, [fixture.first_size, fixture.second_size]);
     let selected = latest
@@ -329,6 +333,7 @@ async fn file_ls_names_the_files_a_snapshot_added() {
     let fixture = Fixture::new();
     let files = pqbench::file::list::list(
         common::lake(),
+        "catalogs/local/schemas/local/tables/events",
         &fixture.metadata.to_string_lossy(),
         Default::default(),
         &[1],
@@ -340,12 +345,22 @@ async fn file_ls_names_the_files_a_snapshot_added() {
         .await
         .unwrap()
         .iter()
-        .map(|file| file.uri.clone())
+        .map(|file| file.uri().unwrap())
         .collect();
     uris.sort();
     let mut expected = vec![
-        file_uri(&fixture.root.join("data").join("first.parquet")),
-        file_uri(&fixture.root.join("data").join("second.parquet")),
+        fixture
+            .root
+            .join("data")
+            .join("first.parquet")
+            .to_string_lossy()
+            .into_owned(),
+        fixture
+            .root
+            .join("data")
+            .join("second.parquet")
+            .to_string_lossy()
+            .into_owned(),
     ];
     expected.sort();
     assert_eq!(uris, expected);
@@ -363,7 +378,7 @@ async fn load_then_bytemass_matches_footer_totals() {
     let rows = pqbench::bytemass::bytemass(
         common::lake(),
         &pqbench::bytemass::BytemassRequest {
-            inputs: info.files.iter().map(|file| file.uri.clone()).collect(),
+            inputs: info.files.iter().map(|file| file.uri().unwrap()).collect(),
             ..Default::default()
         },
     )
@@ -400,7 +415,7 @@ async fn rejects_missing_snapshots_changed_files_and_path_escapes() {
     )
     .await
     .unwrap();
-    assert_eq!(info.files[0].size_bytes, fixture.first_size);
+    assert_eq!(info.files[0].size_bytes, Some(fixture.first_size));
     assert_ne!(fs::metadata(&first).unwrap().len(), fixture.first_size);
 
     write_parquet(&first, 3);

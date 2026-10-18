@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{LoadRequest, TableFile, TableInfo};
+use crate::table::{LoadRequest, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 use crate::v1;
@@ -119,7 +119,12 @@ fn ancestry_log(
 }
 
 /// Attach the snapshot's added and deleted files to its log commit.
-fn attach_actions(log: &mut [v1::Commit], version: u64, files: &[TableFile], deletes: &[String]) {
+fn attach_actions(
+    log: &mut [v1::Commit],
+    version: u64,
+    files: &[v1::TableFile],
+    deletes: &[String],
+) {
     let Some(commit) = log.iter_mut().find(|commit| commit.version == version) else {
         return;
     };
@@ -336,12 +341,12 @@ pub(super) async fn stream_commits(
 /// that snapshot's. A request that names commits and does not name that snapshot
 /// yields none: what an older snapshot added is a separate manifest read.
 ///
-/// The size is left zero, as [`TableFile`] documents: the manifest's size is a
+/// The size is left zero, as `v1::TableFile` documents: the manifest's size is a
 /// cross-check, and `bytemass` reads the true one from the footer.
 pub(super) async fn stream_files(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<TableFile, Error>>, Error> {
+) -> Result<impl Stream<Item = Result<v1::TableFile, Error>>, Error> {
     let mut request = request.clone();
     request.require_files = true;
     let info = load(lake, &request).await?;
@@ -354,7 +359,12 @@ pub(super) async fn stream_files(
         move |file| {
             let uri = crate::table::join_uri(&root, &file.path)
                 .map_err(|error| Error(error.to_string()))?;
-            Ok(TableFile::new(file.path, uri, 0))
+            Ok(v1::TableFile {
+                blob: Some(v1::name::blob_name(&uri)),
+                path: file.path,
+                size_bytes: Some(0),
+                ..v1::TableFile::default()
+            })
         },
     )))
 }
@@ -502,7 +512,7 @@ async fn active_files(
     table_location: &str,
     manifest_list: &str,
     options: &[(String, String)],
-) -> Result<(Vec<TableFile>, Vec<String>), Error> {
+) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
     let root = table_root(table_location)?;
     let bytes = read_location(lake, manifest_list, options).await?;
     let manifests: Vec<ManifestFile> =
@@ -532,8 +542,8 @@ async fn active_files(
     Ok((files, deletes))
 }
 
-/// One active manifest entry as a `TableFile`, checking it is Parquet.
-fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<TableFile, Error> {
+/// One active manifest entry as a `v1::TableFile`, checking it is Parquet.
+fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<v1::TableFile, Error> {
     if !entry.data_file.file_format.eq_ignore_ascii_case("parquet") {
         return Err(Error(format!(
             "active data file is not Parquet: {}",
@@ -547,7 +557,12 @@ fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<TableFile, Error>
         ))
     })?;
     let uri = resolve_data_file(root, &entry.data_file.file_path)?;
-    Ok(TableFile::new(entry.data_file.file_path, uri, size))
+    Ok(v1::TableFile {
+        blob: Some(v1::name::blob_name(&uri)),
+        path: entry.data_file.file_path,
+        size_bytes: Some(size),
+        ..v1::TableFile::default()
+    })
 }
 
 enum TableRoot {

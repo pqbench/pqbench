@@ -511,6 +511,13 @@ pub struct TableFile {
     /// The blob holding the bytes, a [`Blob`] name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob: Option<String>,
+    /// The table's storage root, denormalized onto the file so a reader reads
+    /// [`Self::blob`] without the table record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_root: Option<String>,
+    /// The path as the log records it, relative to [`Self::storage_root`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
     /// The size the log claims, in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
@@ -525,6 +532,15 @@ pub struct TableFile {
     /// lease on a [`Table`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
+}
+
+impl TableFile {
+    /// The storage URI the bytes are at, from [`Self::blob`]. `None` when the
+    /// record carries no blob.
+    #[must_use]
+    pub fn uri(&self) -> Option<String> {
+        self.blob.as_deref().and_then(name::blob_uri)
+    }
 }
 
 /// One commit of a table's log.

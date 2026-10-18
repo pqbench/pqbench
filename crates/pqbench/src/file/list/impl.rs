@@ -10,6 +10,7 @@ use super::api::{Error, FileStream};
 
 pub(crate) async fn list(
     lake: &Lake,
+    table: &str,
     uri: &str,
     credentials: Option<&v1::Credentials>,
     versions: &[u64],
@@ -23,7 +24,16 @@ pub(crate) async fn list(
     let files = table::stream_files(lake, &request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;
+    // `stream_files` names each file after the table it read by path; re-name it
+    // under the caller's table, which a catalog named, and hand it the lease.
+    let table = table.to_string();
+    let credentials = credentials.cloned();
     Ok(files
+        .map_ok(move |mut file| {
+            file.name = v1::name::table_file_name(&table, &file.path);
+            file.credentials = credentials.clone();
+            file
+        })
         .map_err(|error| Error::from(error.to_string()))
         .boxed())
 }

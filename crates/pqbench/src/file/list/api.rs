@@ -7,7 +7,7 @@ use std::fmt;
 
 use futures_util::stream::BoxStream;
 
-use crate::table::TableFile;
+use crate::v1::TableFile;
 use crate::Lake;
 
 /// Errors listing a partition's files.
@@ -33,6 +33,10 @@ pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
 
 /// The files the given commits added, in log order.
 ///
+/// `table` is the table's resource name: each file is named
+/// `{table}/files/{path}`, so the record is complete without the caller
+/// re-naming it.
+///
 /// A commit's `add` actions name the files it wrote; a file a later commit
 /// removes is still named, so the result is the **added in the window** set,
 /// not the table's active files. The size is left zero: the log's `add` size
@@ -46,9 +50,10 @@ pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
 /// arrives as a stream item.
 pub async fn list(
     lake: &Lake,
+    table: &str,
     uri: &str,
     credentials: Option<&crate::v1::Credentials>,
     versions: &[u64],
 ) -> Result<FileStream<'static>, Error> {
-    super::r#impl::list(lake, uri, credentials, versions).await
+    super::r#impl::list(lake, table, uri, credentials, versions).await
 }

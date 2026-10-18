@@ -23,7 +23,7 @@ pub use selection::FileSelection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use futures_util::stream::BoxStream;
+use futures_util::stream::{BoxStream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -58,42 +58,18 @@ impl Error {
 /// The stream owns the log it reads, so it borrows nothing from the caller.
 pub type CommitStream<'a> = BoxStream<'a, Result<v1::Commit, Error>>;
 
-/// One data file the current snapshot treats as active.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct TableFile {
-    /// Path as recorded in the log, relative to the table root.
-    pub path: String,
-    /// URI or filesystem path `bytemass` should read.
-    pub uri: String,
-    /// Size the log claims, in bytes.
-    pub size_bytes: u64,
-    /// Partition values from the Delta add action. Empty when unpartitioned.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub partition_values: BTreeMap<String, Option<String>>,
-    /// Statistics from the Delta `add.stats` JSON. Absent when the log has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stats: Option<v1::FileStats>,
-}
-
-impl TableFile {
-    /// Assemble a table file from its parts.
-    #[must_use]
-    pub fn new(path: impl Into<String>, uri: impl Into<String>, size_bytes: u64) -> Self {
-        Self {
-            path: path.into(),
-            uri: uri.into(),
-            size_bytes,
-            partition_values: BTreeMap::new(),
-            stats: None,
-        }
-    }
-}
-
 /// A table's data files, in log order, from [`stream_files`].
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
-pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
+pub type FileStream<'a> = BoxStream<'a, Result<v1::TableFile, Error>>;
+
+/// Name each file under `table` and stamp the table's storage root on it.
+pub(crate) fn name_files(table: &str, storage_root: &str, files: &mut [v1::TableFile]) {
+    for file in files {
+        file.name = v1::name::table_file_name(table, &file.path);
+        file.storage_root = Some(storage_root.to_string());
+    }
+}
 
 /// Byte mass of one partition, summed from the active files' log statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -148,7 +124,7 @@ pub struct TableInfo {
     pub log: Vec<v1::Commit>,
     /// Active data files after replaying the log to `snapshot_version`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<TableFile>,
+    pub files: Vec<v1::TableFile>,
     /// Per-partition totals from Delta add statistics. Empty for Iceberg and
     /// for a Delta snapshot with no active files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -167,7 +143,7 @@ impl TableInfo {
         snapshot_version: u64,
         partition_columns: Vec<String>,
         log: Vec<v1::Commit>,
-        files: Vec<TableFile>,
+        files: Vec<v1::TableFile>,
         env: BTreeMap<String, String>,
     ) -> Self {
         Self {
@@ -342,10 +318,16 @@ pub async fn detect(
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
-    match format {
+    let mut info = match format {
         v1::TableFormat::Delta => delta::load(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
-    }
+    }?;
+    name_files(
+        &v1::name::local_table(&request.uri),
+        &request.uri,
+        &mut info.files,
+    );
+    Ok(info)
 }
 
 /// Stream a table's commits, newest first, without collecting them.
@@ -385,10 +367,19 @@ pub async fn stream_files(
     request: &LoadRequest,
 ) -> Result<FileStream<'static>, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
-    match format {
+    let files = match format {
         v1::TableFormat::Delta => delta::stream_files(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await,
-    }
+    }?;
+    let table = v1::name::local_table(&request.uri);
+    let root = request.uri.clone();
+    Ok(files
+        .map_ok(move |mut file| {
+            file.name = v1::name::table_file_name(&table, &file.path);
+            file.storage_root = Some(root.clone());
+            file
+        })
+        .boxed())
 }
 
 /// Sum log sizes and `numRecords` by partition value.
@@ -399,7 +390,7 @@ pub async fn stream_files(
 ///
 /// # Errors
 /// Fails when a partition's record count overflows `u64`.
-pub fn partition_masses(files: &[TableFile]) -> Result<Vec<PartitionMass>, Error> {
+pub fn partition_masses(files: &[v1::TableFile]) -> Result<Vec<PartitionMass>, Error> {
     let mut groups = BTreeMap::new();
     for file in files {
         add_partition_total(&mut groups, file)?;
@@ -409,7 +400,7 @@ pub fn partition_masses(files: &[TableFile]) -> Result<Vec<PartitionMass>, Error
 
 pub(crate) fn add_partition_total(
     groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
-    file: &TableFile,
+    file: &v1::TableFile,
 ) -> Result<(), Error> {
     let entry = groups
         .entry(file.partition_values.clone())
@@ -421,13 +412,13 @@ pub(crate) fn add_partition_total(
     entry.file_count += 1;
     entry.size = entry
         .size
-        .checked_add(file.size_bytes)
-        .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.path)))?;
+        .checked_add(file.size_bytes.unwrap_or(0))
+        .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.name)))?;
     entry.num_records = match (entry.num_records, file.stats.as_ref()) {
         (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(|| {
             Error(format!(
                 "partition record total overflowed for {}",
-                file.path
+                file.name
             ))
         })?),
         _ => None,
