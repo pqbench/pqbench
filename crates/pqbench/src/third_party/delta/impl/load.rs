@@ -526,34 +526,45 @@ async fn active_files(
     let mut active = vec![];
     let mut totals = std::collections::BTreeMap::new();
     while let Some(file) = files.try_next().await.map_err(delta_error)? {
-        let relative = file.path().to_string();
-        let size = u64::try_from(file.size())
-            .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
-        let uri = match &root {
-            Some(root) => local_uri(root, &relative)?,
-            None => object_uri(table.table_url(), &relative)?,
-        };
-        let mut stats = file_stats(file.stats());
-        if let Some(stats) = stats.as_mut() {
-            stats.bytes_per_row = bytes_per_row(size, stats.num_records);
-            if !request.file_stats {
-                stats.min_values.clear();
-                stats.max_values.clear();
-                stats.null_count.clear();
-                stats.tight_bounds = None;
-            }
-        }
-        let table_file = TableFile {
-            path: relative,
-            uri,
-            size_bytes: size,
-            partition_values: partition_values(&file),
-            stats,
-        };
+        let table_file = data_file(&root, table.table_url(), &file, request.file_stats)?;
         add_partition_total(&mut totals, &table_file).map_err(|error| Error(error.to_string()))?;
         active.push(table_file);
     }
     Ok((active, finish_partition_masses(totals)))
+}
+
+/// One add action as a `TableFile`, resolving its storage path and, unless
+/// `keep_stats` is set, trimming the stats to the byte facts.
+fn data_file(
+    root: &Option<PathBuf>,
+    table_url: &Url,
+    file: &deltalake::kernel::LogicalFileView,
+    keep_stats: bool,
+) -> Result<TableFile, Error> {
+    let relative = file.path().to_string();
+    let size = u64::try_from(file.size())
+        .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
+    let uri = match root {
+        Some(root) => local_uri(root, &relative)?,
+        None => object_uri(table_url, &relative)?,
+    };
+    let mut stats = file_stats(file.stats());
+    if let Some(stats) = stats.as_mut() {
+        stats.bytes_per_row = bytes_per_row(size, stats.num_records);
+        if !keep_stats {
+            stats.min_values.clear();
+            stats.max_values.clear();
+            stats.null_count.clear();
+            stats.tight_bounds = None;
+        }
+    }
+    Ok(TableFile {
+        path: relative,
+        uri,
+        size_bytes: size,
+        partition_values: partition_values(file),
+        stats,
+    })
 }
 
 fn partition_values(file: &deltalake::kernel::LogicalFileView) -> BTreeMap<String, Option<String>> {
