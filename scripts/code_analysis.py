@@ -134,15 +134,20 @@ def count_cell(head, base, worse_up=False):
     return f"**{cell}**" if worse_up and delta > 0 else cell
 
 
-def index_cell(head, base):
-    """The maintainability index with its delta; a drop is bold."""
+def index_cell(head, base, always=False):
+    """The maintainability index with its delta; a drop is bold.
+
+    A delta that rounds to zero is dropped — a file that did not move says
+    nothing — unless ``always`` is set, for the aggregate that states a flat
+    result as ``0.0`` rather than blank.
+    """
     if head is None:
         return "—"
     if base is None:
         return f"{head:.1f} (new)"
     delta = head - base
     if round(delta, 1) == 0:
-        return f"{head:.1f}"
+        return f"{head:.1f} (0.0)" if always else f"{head:.1f}"
     cell = f"{head:.1f} ({delta:+.1f})"
     return f"**{cell}**" if delta < 0 else cell
 
@@ -169,7 +174,7 @@ def aggregate_line(head, base):
     noun = "file" if len(shared) == 1 else "files"
     return (
         f"Aggregate MI over the {len(shared)} {noun} in both revisions: "
-        f"{index_cell(head_mean, base_mean)}"
+        f"{index_cell(head_mean, base_mean, always=True)}"
     )
 
 
