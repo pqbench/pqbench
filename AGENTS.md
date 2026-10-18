@@ -2,6 +2,17 @@
 
 Working rules for agents in the pqbench repository.
 
+## Communication (no slop)
+
+The reply is the shortest text that carries the answer.
+
+- No preamble, no restating the request, no closing summary, no offer to
+  continue. Answer, then stop.
+- A few plain lines beat a structured document: no headers, tables, or bullet
+  lists for an answer that is a paragraph or two.
+- Facts, paths, commands; `file:line` when the location matters.
+- One question at most, and only when the answer changes what happens next.
+
 ## Principles
 
 - **No ad-hoc workarounds.** If the environment is unsuitable, fix the
