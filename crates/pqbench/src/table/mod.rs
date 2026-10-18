@@ -23,7 +23,7 @@ pub use selection::FileSelection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use futures_util::stream::{BoxStream, StreamExt, TryStreamExt};
+use futures_util::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -60,15 +60,11 @@ pub type CommitStream<'a> = BoxStream<'a, Result<v1::Commit, Error>>;
 
 /// A table's data files, in log order, from [`stream_files`].
 ///
+/// Each file carries the path the log records; naming it under a table is the
+/// caller's, which knows the table's resource name.
+///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
 pub type FileStream<'a> = BoxStream<'a, Result<v1::TableFile, Error>>;
-
-/// Name each file under `table`.
-pub(crate) fn name_files(table: &str, files: &mut [v1::TableFile]) {
-    for file in files {
-        file.name = v1::name::table_file_name(table, &file.path);
-    }
-}
 
 /// Byte mass of one partition, summed from the active files' log statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -317,12 +313,10 @@ pub async fn detect(
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
-    let mut info = match format {
+    match format {
         v1::TableFormat::Delta => delta::load(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
-    }?;
-    name_files(&v1::name::local_table(&request.uri), &mut info.files);
-    Ok(info)
+    }
 }
 
 /// Stream a table's commits, newest first, without collecting them.
@@ -362,17 +356,10 @@ pub async fn stream_files(
     request: &LoadRequest,
 ) -> Result<FileStream<'static>, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
-    let files = match format {
-        v1::TableFormat::Delta => delta::stream_files(lake, request).await,
-        v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await,
-    }?;
-    let table = v1::name::local_table(&request.uri);
-    Ok(files
-        .map_ok(move |mut file| {
-            file.name = v1::name::table_file_name(&table, &file.path);
-            file
-        })
-        .boxed())
+    Ok(match format {
+        v1::TableFormat::Delta => delta::stream_files(lake, request).await?.boxed(),
+        v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await?.boxed(),
+    })
 }
 
 /// Sum log sizes and `numRecords` by partition value.

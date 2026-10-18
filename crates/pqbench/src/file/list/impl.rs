@@ -24,8 +24,8 @@ pub(crate) async fn list(
     let files = table::stream_files(lake, &request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;
-    // `stream_files` names each file after the table it read by path; re-name it
-    // under the caller's table, which a catalog named, and hand it the lease.
+    // The log names each file by its path; name it under the caller's table,
+    // which a catalog named, and hand it the lease.
     let table = table.to_string();
     let credentials = credentials.cloned();
     Ok(files
