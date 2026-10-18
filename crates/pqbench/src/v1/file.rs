@@ -45,8 +45,8 @@ pub struct TableFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<FileStats>,
     /// The vended storage credentials to read [`Self::blob`] with, when the
-    /// caller holds them. A sibling to the resource on the wire, like the
-    /// lease on a [`Table`].
+    /// caller holds them. Held on the record so the blob read uses the lease
+    /// the log read used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
 }

@@ -1,20 +1,17 @@
-// Status: the wire contract (2026-10-11). The implemented model is
-// `crates/pqbench/src/v1.rs`, and the modelling rules are
+// Status: the wire contract. The implemented model is
+// `crates/pqbench/src/v1/`, and the modelling rules are
 // `docs/concepts/data-modelling.md`; where this contract differs from them, they
-// win. Field drift since it was written: `ColumnProfile.entropy` became
-// `entropy_bits`; `Commit` and `Partition` gained `commit_info`; `Schema` and
-// `Table` gained `properties`; `FileStats` gained `first_values`,
-// `last_values`, `null_count`; `TableFile` gained `path` and
-// `partition_values`.
+// win.
 //
 // pqbench IPC messages, in protobuf (AIP style).
 //
 // The data the commands pass are these resource messages: one resource per
 // NDJSON line, using the proto3 JSON mapping, except that field names are the
 // names as spelled here (snake_case), not the mapping's lowerCamelCase — a
-// generator sets `json_name` to match. Enums are their value names, `int64` is
-// a JSON string, and instants are RFC-3339 strings. One `Schema` line, for
-// example:
+// generator sets `json_name` to match — that a count or a size is a JSON
+// number, not the mapping's string, and that an instant is integer milliseconds
+// since the Unix epoch, the unit the logs already store. An enum is its value
+// name. One `Schema` line, for example:
 //
 //   {"name":"catalogs/dbx_samples/schemas/nyctaxi","comment":"NYC taxi data"}
 //
@@ -46,10 +43,10 @@
 // an input parameter — and there is no generator to read them. The AIP shape
 // (names, patterns, field names) still applies.
 //
-// Credentials are a value a document carries beside the resource, not a field
-// of it (AIP-147 concerns storage; the messages below model the value). The
-// vended lease `credentials get` mints rides as a sibling `credentials` object
-// on the resource that needs it — a `Table` (the read that follows), a
+// Credentials are a value a document carries beside the resource's own data
+// (AIP-147 concerns storage; the messages below model the value). The vended
+// lease `credentials get` mints rides as the resource's own `credentials`
+// field, set by the stage that read it — a `Table` (the read that follows), a
 // `Partition` (the read that follows), a `TableFile` (the blob read) — so a
 // pipeline stays in-band. It is treated as non-sensitive for now; a later pass
 // moves it off the wire.
@@ -66,6 +63,10 @@
 syntax = "proto3";
 
 package pqbench.v1;
+
+// A per-column value the log stores as JSON — a number, a string, an object, or
+// null — and a partition value that may be null.
+import "google/protobuf/struct.proto";
 
 // ---------------------------------------------------------------------------
 // Enums (AIP-126): UPPER_SNAKE_CASE, an `_UNSPECIFIED` zero value.
@@ -167,7 +168,7 @@ message Table {
   int64 partition_count = 10;
 
   // The vended storage credentials for the table's files, when the caller
-  // holds them. A sibling value on the document, not a resource field.
+  // holds them. Set by the stage that read the table.
   Credentials credentials = 11;
 }
 
@@ -190,11 +191,11 @@ message Partition {
   // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}
   string name = 1;
 
-  // Inclusive start of the window.
-  string start_time = 2;
+  // Inclusive start of the window, milliseconds since the Unix epoch.
+  int64 start_time = 2;
 
-  // Exclusive end of the window.
-  string end_time = 3;
+  // Exclusive end of the window, milliseconds since the Unix epoch.
+  int64 end_time = 3;
 
   repeated int64 commit_versions = 4;
 
@@ -204,6 +205,11 @@ message Partition {
 
   // The table's vended credentials, when the caller holds them.
   Credentials credentials = 6;
+
+  // The commits' `commitInfo` actions, index-aligned with `commit_versions`:
+  // the operation, its parameters and metrics, and the writer's identity, as
+  // the log stores them. Empty when no commit in the window has one.
+  repeated google.protobuf.Value commit_info = 7;
 }
 
 // A storage blob: the bytes a data file lives in — a local file or an S3
@@ -234,12 +240,13 @@ message TableFile {
   // `{file}` is the table-relative path, URL-encoded to one segment.
   string name = 1;
 
-  // The blob holding the bytes, a `pqbench.io/Blob` name.
+  // The blob holding the bytes, a `pqbench.v1.Blob` name.
   string blob = 2;
 
   int64 size_bytes = 3;
 
-  map<string, string> partition_values = 4;
+  // The log's partition values; a null value is JSON null.
+  map<string, google.protobuf.Value> partition_values = 4;
 
   // The Delta add action's statistics, when the log carries them.
   FileStats stats = 5;
@@ -259,9 +266,13 @@ message Commit {
 
   int64 version = 2;
 
-  string commit_time = 3;
+  // Commit time, milliseconds since the Unix epoch, when the log records one.
+  int64 commit_time = 3;
 
   repeated LogAction actions = 4;
+
+  // The commit's `commitInfo` action as the log stores it, when it has one.
+  google.protobuf.Value commit_info = 5;
 }
 
 // A file's copy of a declared column: the physical unit the analyses read. The
@@ -327,7 +338,7 @@ message ColumnProfile {
 
   int64 null_count = 2;
   int64 distinct_count = 3;
-  double entropy = 4;
+  double entropy_bits = 4;
   repeated string top_values = 5;
 }
 
@@ -339,9 +350,10 @@ message FileStats {
   int64 record_count = 1;
   double bytes_per_row = 2;
 
-  // Inclusive per-column bounds (AIP-145).
-  map<string, string> first_values = 3;
-  map<string, string> last_values = 4;
+  // Inclusive per-column bounds (AIP-145), as the log stores them: a number, a
+  // string, or an object.
+  map<string, google.protobuf.Value> first_values = 3;
+  map<string, google.protobuf.Value> last_values = 4;
 
   map<string, int64> null_count = 5;
   bool tight_bounds = 6;
@@ -357,8 +369,9 @@ message LogAction {
 // Documents that are not resources.
 // ---------------------------------------------------------------------------
 
-// The vended credentials `credentials get` emits. Sensitive (AIP-147): never a
-// field of a resource and never stored on one; it travels by its own means.
+// The vended credentials `credentials get` emits. Sensitive (AIP-147): carried
+// on the resource that needs it for now, and stored no further than that; a
+// later pass moves it off the wire.
 message Credentials {
   string access_key_id = 1;
   string secret_access_key = 2;

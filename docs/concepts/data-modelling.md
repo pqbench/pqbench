@@ -86,19 +86,23 @@ Two consequences:
   unsigned quantity, and `serde` spells the wire form back.
 - A quantity that cannot be negative is unsigned. A count is `_count`, never
   `num_` (AIP-141). Units are spelled out — `size_bytes`, not `size`.
-- An instant is `_time`, an RFC-3339 string (AIP-142); a span is `_duration`. A
-  half-open window is `[start_time, end_time)` (AIP-145).
+- An instant is `_time`, integer milliseconds since the Unix epoch on the wire —
+  the unit the logs already store, so a record passes it through, rather than
+  AIP-142's RFC-3339 string. A span is `_duration`. A half-open window is
+  `[start_time, end_time)` (AIP-145).
 - A range is `first_values`/`last_values`, inclusive, never `min`/`max`
-  (AIP-145).
+  (AIP-145). A footer that spells them `min`/`max` keeps that spelling, with an
+  `aipnaming: allow(aip-145/ranges)` and the reason (`MassRow`).
 - A field is a noun, not a verb (AIP-140), and a `bool` carries no verb prefix.
 - A nested message is a value type or a document, never a resource.
 
 ## The wire
 
 - One resource per NDJSON line, in the proto3 JSON mapping — except that field
-  names are spelled as here (`snake_case`), not the mapping's `lowerCamelCase`.
-  An enum is its value name, an `int64` is a JSON string, an instant is an
-  RFC-3339 string.
+  names are spelled as here (`snake_case`), not the mapping's `lowerCamelCase`,
+  that a count or a size is a JSON number, not the mapping's string, and that an
+  instant is integer milliseconds since the Unix epoch. An enum is its value
+  name.
 
   ```json
   {"name":"catalogs/dbx_samples/schemas/nyctaxi","comment":"NYC taxi data"}
@@ -116,9 +120,10 @@ Two consequences:
   and there is no generator to read them. The AIP *shape* (names, patterns,
   field names) still applies.
 - Credentials ride beside the resource that needs them — a `Table`, a
-  `Partition`, a `TableFile` — never as a field of it (AIP-147), so a pipeline
-  stays in band. They are treated as non-sensitive for now; a later pass moves
-  them off the wire.
+  `Partition`, a `TableFile` — as the resource's own `credentials` field, which
+  the stage that read it sets, never inside the backend's document, so a
+  pipeline stays in band. They are treated as non-sensitive for now; a later
+  pass moves them off the wire.
 - A table references a blob through the `TableFile` association, not as its
   parent (AIP-124).
 
