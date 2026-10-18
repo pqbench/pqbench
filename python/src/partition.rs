@@ -12,13 +12,17 @@ fn partition_list(
     lake: PyRef<'_, Lake>,
     table: String,
     uri: String,
-    env: BTreeMap<String, String>,
+    credentials: Option<Bound<'_, PyAny>>,
     window_millis: i64,
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
+    let credentials = crate::requests::credentials(credentials)?;
     stream_listing(
         py,
-        async move { pqbench::partition::list::list(&lake, &table, &uri, &env, window_millis).await },
+        async move {
+            pqbench::partition::list::list(&lake, &table, &uri, credentials.as_ref(), window_millis)
+                .await
+        },
         Partition::attach,
     )
 }

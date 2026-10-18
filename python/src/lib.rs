@@ -3,11 +3,11 @@
 //! Every name is the library function of the same path, with the same
 //! arguments: `pqbench.native.metastore.get.get(workspace)`,
 //! `pqbench.native.catalog.list.list(workspace)`,
-//! `pqbench.native.file.list.list(lake, uri, env, versions)`,
+//! `pqbench.native.file.list.list(lake, uri, credentials, versions)`,
 //! `pqbench.native.credentials.check.check(workspace, catalog, schema, table)`.
 //!
 //! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the
-//! request structs (`Storage`, `LzRequest`, `CompressionRequest`,
+//! request structs (`LzRequest`, `CompressionRequest`,
 //! `BytemassRequest`, `ProfileRequest`, `ExperimentRequest`) are Python
 //! classes, and so are the records: a model's record is its class, so
 //! `record["uri"]`, `record.uri` and `record.asdict()` agree, and the deep

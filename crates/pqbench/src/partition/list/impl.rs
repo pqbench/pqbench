@@ -1,8 +1,6 @@
 //! The `partition::list` internals: stream a table's commits as commit-time
 //! windows.
 
-use std::collections::BTreeMap;
-
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use serde_json::Value;
 
@@ -16,15 +14,15 @@ pub(crate) async fn list(
     lake: &Lake,
     table: &str,
     uri: &str,
-    env: &BTreeMap<String, String>,
+    credentials: Option<&v1::Credentials>,
     window_millis: i64,
 ) -> Result<PartitionStream<'static>, Error> {
     if window_millis <= 0 {
         return Err(Error::from("partition window must be positive".to_string()));
     }
-    let request = LoadRequest::new(uri.to_string(), None, env.clone()).without_files();
-    let credentials = v1::Credentials::from_env(env);
-    let credentials = (!credentials.is_empty()).then_some(credentials);
+    let env = credentials.map(v1::Credentials::to_env).unwrap_or_default();
+    let request = LoadRequest::new(uri.to_string(), None, env).without_files();
+    let credentials = credentials.filter(|lease| !lease.is_empty()).cloned();
     let commits = table::stream_commits(lake, &request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;

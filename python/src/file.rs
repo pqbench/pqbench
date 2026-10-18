@@ -11,13 +11,14 @@ fn file_list(
     py: Python<'_>,
     lake: PyRef<'_, Lake>,
     uri: String,
-    env: BTreeMap<String, String>,
+    credentials: Option<Bound<'_, PyAny>>,
     versions: Vec<u64>,
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
+    let credentials = crate::requests::credentials(credentials)?;
     stream_listing(
         py,
-        async move { pqbench::file::list::list(&lake, &uri, &env, &versions).await },
+        async move { pqbench::file::list::list(&lake, &uri, credentials.as_ref(), &versions).await },
         TableFile::attach,
     )
 }

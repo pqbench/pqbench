@@ -3,54 +3,18 @@
 use crate::handles::{Aim, Mode};
 use crate::prelude::*;
 
-/// Where a table's metadata lives, for `table.get.get`.
-///
-/// `env` is the `AWS_*` options to read with. `credentials` is a vended lease
-/// as a ref carries it (`access_key_id`, `secret_access_key`,
-/// `session_token`), converted to those options, so
-/// `Storage(credentials=ref["credentials"])` needs no mapping by hand.
-#[pyclass(skip_from_py_object)]
-#[derive(Clone, Default)]
-pub(crate) struct Storage {
-    location: Option<String>,
-    env: BTreeMap<String, String>,
-}
-#[pymethods]
-impl Storage {
-    #[new]
-    #[pyo3(signature = (location=None, env=None, credentials=None))]
-    fn new(
-        location: Option<String>,
-        env: Option<BTreeMap<String, String>>,
-        credentials: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<Self> {
-        let mut env = env.unwrap_or_default();
-        if let Some(credentials) = credentials {
-            let value = crate::marshal::py_to_value(&credentials)?;
-            let lease: pqbench::v1::Credentials =
-                serde_json::from_value(value).map_err(crate::marshal::value_error)?;
-            env.extend(lease.to_env());
-        }
-        Ok(Self { location, env })
-    }
-
-    #[getter]
-    fn location(&self) -> Option<&str> {
-        self.location.as_deref()
-    }
-
-    #[getter]
-    fn env(&self) -> BTreeMap<String, String> {
-        self.env.clone()
-    }
-}
-impl From<&Storage> for LibStorage {
-    fn from(value: &Storage) -> Self {
-        Self {
-            location: value.location.clone(),
-            env: value.env.clone(),
-        }
-    }
+/// The vended lease a Python mapping names, as the model's credentials — what
+/// `table.get.get` reads with, and what `Storage` builds `AWS_*` options from.
+pub(crate) fn credentials(
+    value: Option<Bound<'_, PyAny>>,
+) -> PyResult<Option<pqbench::v1::Credentials>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = crate::marshal::py_to_value(&value)?;
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(crate::marshal::value_error)
 }
 /// Arguments for `pqbench.lz.lz`.
 #[pyclass(skip_from_py_object)]
@@ -226,7 +190,6 @@ impl From<&ExperimentRequest> for LibExperimentRequest {
 }
 
 pub(crate) fn register(root: &Bound<'_, PyModule>) -> PyResult<()> {
-    root.add_class::<Storage>()?;
     root.add_class::<LzRequest>()?;
     root.add_class::<CompressionRequest>()?;
     root.add_class::<BytemassRequest>()?;

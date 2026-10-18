@@ -18,7 +18,6 @@
 //! never buffers its parent: a slow consumer stops reading, and the pipe
 //! backpressures the producer.
 
-use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use futures_util::stream::{self, Stream, StreamExt};
@@ -176,22 +175,7 @@ pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, S
     Ok((catalog.to_string(), schema.to_string(), table.to_string()))
 }
 
-/// The storage lease a ref carries: the proto `Table.credentials` value, or the
-/// older `env` bag. The credentials win, so a table-scoped lease replaces any
-/// static key for that table.
-pub(crate) fn ref_env(record: &Value) -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    if let Some(values) = record["env"].as_object() {
-        for (key, value) in values {
-            if let Some(value) = value.as_str() {
-                env.insert(key.clone(), value.to_string());
-            }
-        }
-    }
-    if let Ok(credentials) =
-        serde_json::from_value::<pqbench::v1::Credentials>(record["credentials"].clone())
-    {
-        env.extend(credentials.to_env());
-    }
-    env
+/// The vended lease a ref carries, when it carries one.
+pub(crate) fn ref_credentials(record: &Value) -> Option<pqbench::v1::Credentials> {
+    serde_json::from_value(record["credentials"].clone()).ok()
 }

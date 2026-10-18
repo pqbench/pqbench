@@ -3,7 +3,6 @@
 //! [`list`] is the only public function. It returns plain data; the CLI owns
 //! the document it becomes.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use futures_util::stream::BoxStream;
@@ -48,8 +47,8 @@ pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
 pub async fn list(
     lake: &Lake,
     uri: &str,
-    env: &BTreeMap<String, String>,
+    credentials: Option<&crate::v1::Credentials>,
     versions: &[u64],
 ) -> Result<FileStream<'static>, Error> {
-    super::r#impl::list(lake, uri, env, versions).await
+    super::r#impl::list(lake, uri, credentials, versions).await
 }

@@ -134,20 +134,18 @@ async def walk(
                     return
                 await pace("credentials.get")
                 ref = await native.credentials.get.get(workspace, ref)
-                storage = native.Storage(credentials=ref.get("credentials"))
-                info = await native.table.get.get(workspace, lake, ref["name"], storage)
+
+                info = await native.table.get.get(
+                    workspace, lake, ref["name"], ref.get("uri"), ref.get("credentials")
+                )
                 uri = info.get("uri")
                 if not uri:
                     return
                 async for partition in native.partition.list.list(
-                    lake, info["name"], uri, storage.env, window_millis
+                    lake, info["name"], uri, info.get("credentials"), window_millis
                 ):
-                    # The partition's own lease reads its files, over the table's.
-                    files = native.Storage(
-                        env=storage.env, credentials=partition.get("credentials")
-                    )
                     async for file in native.file.list.list(
-                        lake, partition["uri"], files.env, partition["commit_versions"]
+                        lake, partition["uri"], partition.get("credentials"), partition["commit_versions"]
                     ):
                         await queue.put(file)
             except Exception as error:  # noqa: BLE001 - a table we may not read

@@ -4,11 +4,10 @@
 //! the wire form of the loaded [`TableInfo`](crate::table::TableInfo) — and the
 //! CLI forwards it as-is.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 pub use crate::config::Dialect as TableFormat;
-pub use crate::v1::Table;
+pub use crate::v1::{Credentials, Table};
 
 use crate::{Lake, Workspace};
 
@@ -30,26 +29,19 @@ impl From<String> for Error {
     }
 }
 
-/// Where and how a table's metadata is read: the storage path a parent ref
-/// already carries (when it does), and the object-store options the read needs.
-pub struct Storage {
-    /// The storage path a parent ref already carries, when it does. The catalog
-    /// stays authoritative; this only lets the storage read start earlier.
-    pub location: Option<String>,
-    /// The object-store options (`AWS_*` names) the read needs.
-    pub env: BTreeMap<String, String>,
-}
-
 /// Read the record of the table `name` — a
 /// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name — at the
 /// workspace's endpoint.
 ///
 /// The catalog names the table and the location to load; the table's own
 /// metadata is read without files (`without_files()` for Delta, the metadata
-/// JSON only for Iceberg), so the cost is O(1) in files. `storage` carries the
-/// object-store options that read needs and, when the parent ref already named
-/// it, the location, so the storage read starts alongside the catalog call; the
-/// catalog's own location stays authoritative.
+/// JSON only for Iceberg), so the cost is O(1) in files.
+///
+/// `uri` is where the ref already says the metadata is, when it does: the
+/// storage read then starts alongside the catalog call, and the catalog's own
+/// location stays authoritative. `credentials` is the ref's vended lease, read
+/// as the `AWS_*` options that read needs; without one the read uses whatever
+/// the process environment holds.
 ///
 /// # Errors
 /// Fails when `name` is not a table name, the endpoint cannot be reached,
@@ -58,7 +50,8 @@ pub async fn get(
     workspace: &Workspace,
     lake: &Lake,
     name: &str,
-    storage: &Storage,
+    uri: Option<&str>,
+    credentials: Option<&Credentials>,
 ) -> Result<Table, Error> {
-    super::r#impl::get(workspace, lake, name, storage).await
+    super::r#impl::get(workspace, lake, name, uri, credentials).await
 }
