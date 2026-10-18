@@ -111,33 +111,7 @@ pub(crate) const RULES: &[Rule] = &[
 fn parity(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
     for surface in inputs.bindings {
         for binding in &surface.entries {
-            match inputs.stub.get(&binding.path) {
-                Some(stub) if compatible(binding.kind, stub.kind) => {}
-                Some(stub) => report(
-                    findings,
-                    "surface/parity",
-                    Severity::ERROR,
-                    &inputs.stub.file,
-                    stub,
-                    format!(
-                        "the bindings expose {} as a {}, the stub as a {}",
-                        binding.path,
-                        binding.kind.as_str(),
-                        stub.kind.as_str()
-                    ),
-                    None,
-                ),
-                None if member(inputs.stub, &binding.path) => {}
-                None => report(
-                    findings,
-                    "surface/parity",
-                    Severity::ERROR,
-                    &surface.file,
-                    binding,
-                    format!("the stub declares no `{}`", binding.path),
-                    None,
-                ),
-            }
+            check_binding(inputs, surface, binding, findings);
         }
     }
     for stub in &inputs.stub.entries {
@@ -152,6 +126,44 @@ fn parity(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
                 None,
             );
         }
+    }
+}
+
+/// One binding name: the stub mirrors it, or the finding goes to the side that
+/// has it — the stub when the kinds disagree, the binding when the stub omits
+/// the name outright.
+fn check_binding(
+    inputs: &Inputs<'_>,
+    surface: &Surface,
+    binding: &Entry,
+    findings: &mut Vec<Finding>,
+) {
+    match inputs.stub.get(&binding.path) {
+        Some(stub) if compatible(binding.kind, stub.kind) => {}
+        Some(stub) => report(
+            findings,
+            "surface/parity",
+            Severity::ERROR,
+            &inputs.stub.file,
+            stub,
+            format!(
+                "the bindings expose {} as a {}, the stub as a {}",
+                binding.path,
+                binding.kind.as_str(),
+                stub.kind.as_str()
+            ),
+            None,
+        ),
+        None if member(inputs.stub, &binding.path) => {}
+        None => report(
+            findings,
+            "surface/parity",
+            Severity::ERROR,
+            &surface.file,
+            binding,
+            format!("the stub declares no `{}`", binding.path),
+            None,
+        ),
     }
 }
 
@@ -264,42 +276,64 @@ fn methods(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
         let Some(stub) = inputs.stub_class(&binding.path) else {
             continue;
         };
-        for method in binding.methods.iter().filter(|method| method.is_public()) {
-            if has_method(stub, &method.name) {
-                continue;
-            }
-            report_position(
-                findings,
-                "surface/method",
-                Severity::WARNING,
-                &surface.file,
-                format!("{}.{}", binding.path, method.name),
-                method.line,
-                method.column,
-                format!("the stub declares no `{}`", method.name),
-                None,
-            );
+        methods_missing_from_stub(surface, binding, stub, findings);
+        methods_missing_from_bindings(inputs, binding, stub, findings);
+    }
+}
+
+/// The binding's public methods the stub does not declare, at their position in
+/// the binding.
+fn methods_missing_from_stub(
+    surface: &Surface,
+    binding: &Entry,
+    stub: &Entry,
+    findings: &mut Vec<Finding>,
+) {
+    for method in binding.methods.iter().filter(|method| method.is_public()) {
+        if has_method(stub, &method.name) {
+            continue;
         }
-        for method in stub.methods.iter().filter(|method| method.is_public()) {
-            if binding
-                .methods
-                .iter()
-                .any(|found| found.name == method.name)
-            {
-                continue;
-            }
-            report_position(
-                findings,
-                "surface/method",
-                Severity::WARNING,
-                &inputs.stub.file,
-                format!("{}.{}", stub.path, method.name),
-                method.line,
-                method.column,
-                format!("the bindings expose no `{}`", method.name),
-                None,
-            );
+        report_position(
+            findings,
+            "surface/method",
+            Severity::WARNING,
+            &surface.file,
+            format!("{}.{}", binding.path, method.name),
+            method.line,
+            method.column,
+            format!("the stub declares no `{}`", method.name),
+            None,
+        );
+    }
+}
+
+/// The stub's public methods the bindings do not expose, at their position in
+/// the stub.
+fn methods_missing_from_bindings(
+    inputs: &Inputs<'_>,
+    binding: &Entry,
+    stub: &Entry,
+    findings: &mut Vec<Finding>,
+) {
+    for method in stub.methods.iter().filter(|method| method.is_public()) {
+        if binding
+            .methods
+            .iter()
+            .any(|found| found.name == method.name)
+        {
+            continue;
         }
+        report_position(
+            findings,
+            "surface/method",
+            Severity::WARNING,
+            &inputs.stub.file,
+            format!("{}.{}", stub.path, method.name),
+            method.line,
+            method.column,
+            format!("the bindings expose no `{}`", method.name),
+            None,
+        );
     }
 }
 
@@ -344,8 +378,17 @@ fn bases(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
         .binding_entries(Kind::Function)
         .filter_map(|(_, binding)| binding.returned_class())
         .collect();
+    returned_are_records(inputs, &returned, findings);
+    records_are_returned(inputs, &returned, findings);
+}
 
-    for name in &returned {
+/// Every class the bindings return is declared `(Record)` in the stub.
+fn returned_are_records(
+    inputs: &Inputs<'_>,
+    returned: &BTreeSet<String>,
+    findings: &mut Vec<Finding>,
+) {
+    for name in returned {
         let Some(stub) = inputs.stub_class_named(name) else {
             continue;
         };
@@ -362,12 +405,16 @@ fn bases(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
             None,
         );
     }
+}
 
+/// Every stub class declared `(Record)` is one the bindings return.
+fn records_are_returned(
+    inputs: &Inputs<'_>,
+    returned: &BTreeSet<String>,
+    findings: &mut Vec<Finding>,
+) {
     for stub in &inputs.stub.entries {
-        if stub.kind != Kind::Class || !stub.bases.iter().any(|base| base == "Record") {
-            continue;
-        }
-        if returned.contains(stub.name()) {
+        if !is_record(stub) || returned.contains(stub.name()) {
             continue;
         }
         report(
@@ -385,18 +432,16 @@ fn bases(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
     }
 }
 
+/// Whether a stub class is declared a `Record`.
+fn is_record(entry: &Entry) -> bool {
+    entry.kind == Kind::Class && entry.bases.iter().any(|base| base == "Record")
+}
+
 /// A record class's fields match a model of the same name in the library.
 fn fields(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
     for stub in record_classes(inputs) {
         let name = stub.name().to_owned();
-        let declared = field_names(
-            &stub
-                .fields
-                .iter()
-                .map(|field| field.name.clone())
-                .collect::<Vec<_>>(),
-        );
-        if matched_candidate(inputs, &name, &declared).is_some() {
+        if matched_candidate(inputs, &name, &declared_names(stub)).is_some() {
             continue;
         }
         let expected = inputs
@@ -414,16 +459,7 @@ fn fields(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
             stub,
             format!(
                 "`{name}` declares ({}) but the model declares {expected}",
-                render_fields(
-                    &stub
-                        .fields
-                        .iter()
-                        .map(|field| ModelField {
-                            name: field.name.clone(),
-                            optional: field.optional
-                        })
-                        .collect::<Vec<_>>()
-                )
+                render_fields(&declared_fields(stub))
             ),
             None,
         );
@@ -436,14 +472,7 @@ fn fields(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
 fn optionality(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
     for stub in record_classes(inputs) {
         let name = stub.name().to_owned();
-        let declared = field_names(
-            &stub
-                .fields
-                .iter()
-                .map(|field| field.name.clone())
-                .collect::<Vec<_>>(),
-        );
-        let Some(candidate) = matched_candidate(inputs, &name, &declared) else {
+        let Some(candidate) = matched_candidate(inputs, &name, &declared_names(stub)) else {
             continue;
         };
         for field in &stub.fields {
@@ -479,16 +508,35 @@ fn optionality(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
     }
 }
 
-/// The stub classes that mirror a library model: the classes declared `(Record)`.
+/// The stub classes that mirror a library model: the classes declared `(Record)`
+/// that the library declares.
 fn record_classes<'a>(inputs: &'a Inputs<'_>) -> impl Iterator<Item = &'a Entry> {
     inputs
         .stub
         .entries
         .iter()
-        .filter(|entry| {
-            entry.kind == Kind::Class && entry.bases.iter().any(|base| base == "Record")
+        .filter(|entry| is_record(entry) && inputs.models.contains(entry.name()))
+}
+
+/// A class's declared field names, for the model comparison.
+fn declared_names(entry: &Entry) -> BTreeSet<String> {
+    entry
+        .fields
+        .iter()
+        .map(|field| field.name.clone())
+        .collect()
+}
+
+/// A class's declared fields in the model's shape, for a message.
+fn declared_fields(entry: &Entry) -> Vec<ModelField> {
+    entry
+        .fields
+        .iter()
+        .map(|field| ModelField {
+            name: field.name.clone(),
+            optional: field.optional,
         })
-        .filter(|entry| inputs.models.contains(entry.name()))
+        .collect()
 }
 
 /// The model candidate whose field names are exactly `declared`, if any.
@@ -504,10 +552,6 @@ fn matched_candidate<'a>(
             .collect::<BTreeSet<_>>()
             == declared.iter().map(String::as_str).collect()
     })
-}
-
-fn field_names(names: &[String]) -> BTreeSet<String> {
-    names.iter().cloned().collect()
 }
 
 /// Whether a binding kind is a stub kind: a module is a nested-class proxy.
