@@ -51,7 +51,9 @@ pub use crate::config::Dialect as TableFormat;
 
 use crate::Workspace;
 
-/// Whether `table` is readable outside Databricks compute, by dialect.
+/// Whether the table `name` — a
+/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name — is
+/// readable outside Databricks compute, by dialect.
 ///
 /// The check owns the format: Unity reads the `GET /tables/{full_name}` record
 /// without asking for credentials; Iceberg REST reads its metadata inline
@@ -65,20 +67,17 @@ use crate::Workspace;
 /// running a storage read that cannot succeed.
 ///
 /// # Errors
-/// Fails when the endpoint cannot be reached or answers with an unexpected
-/// status.
-pub async fn check(
-    workspace: &Workspace,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-) -> Result<Eligibility, Error> {
+/// Fails when `name` is not a table name, the endpoint cannot be reached, or it
+/// answers with an unexpected status.
+pub async fn check(workspace: &Workspace, name: &str) -> Result<Eligibility, Error> {
+    let (catalog, schema, table) = crate::v1::name::parse_table(name)
+        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
     match workspace.config().dialect {
         TableFormat::Unity => {
             if catalog == "system" {
                 return Ok(Eligibility::Ineligible(Reason::SystemTable));
             }
-            super::r#impl::check_unity(workspace, catalog, schema, table).await
+            super::r#impl::check_unity(workspace, &catalog, &schema, &table).await
         }
         TableFormat::Iceberg => Ok(Eligibility::Eligible),
     }
@@ -98,7 +97,7 @@ mod tests {
             dialect: crate::Dialect::Iceberg,
         })
         .expect("the workspace builds");
-        let eligibility = check(&workspace, "catalog", "schema", "table")
+        let eligibility = check(&workspace, "catalogs/catalog/schemas/schema/tables/table")
             .await
             .expect("the Iceberg check does not call the catalog");
         assert_eq!(eligibility, Eligibility::Eligible);

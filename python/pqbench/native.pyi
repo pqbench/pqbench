@@ -396,9 +396,7 @@ class table:
         async def read(
             workspace: Workspace,
             lake: Lake,
-            catalog: str,
-            schema: str,
-            table: str,
+            name: str,
             storage: Storage,
         ) -> Table: ...
 
@@ -448,12 +446,7 @@ class credentials:
         """``pqbench.native.credentials.check``: may this principal read the table?"""
 
         @staticmethod
-        async def check(
-            workspace: Workspace,
-            catalog: str,
-            schema: str,
-            table: str,
-        ) -> Eligibility: ...
+        async def check(workspace: Workspace, name: str) -> Eligibility: ...
 
     class get:
         """``pqbench.native.credentials.get``: the lease, written on the ref."""

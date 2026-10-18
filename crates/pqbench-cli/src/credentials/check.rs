@@ -32,8 +32,8 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     let mut checks = records
         .map(|record| async {
             let record = record?;
-            let (catalog, schema, name) = table_ref("credentials check", &record)?;
-            let reason = check(workspace, &catalog, &schema, &name).await?;
+            let name = table_ref("credentials check", &record)?;
+            let reason = check(workspace, &name).await?;
             Ok::<_, CliError>((record, reason))
         })
         .buffer_unordered(args.fan_out.max(1));
@@ -62,19 +62,11 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
 /// it is. The core check owns the dialect — Unity reads the capability
 /// manifest; Iceberg REST reads its metadata inline through the catalog, so it
 /// passes — and the CLI only renders the reason.
-async fn check(
-    workspace: &pqbench::Workspace,
-    catalog: &str,
-    schema: &str,
-    name: &str,
-) -> Result<Option<String>, CliError> {
-    let eligibility = pqbench::credentials::check::check(workspace, catalog, schema, name).await?;
+async fn check(workspace: &pqbench::Workspace, name: &str) -> Result<Option<String>, CliError> {
+    let eligibility = pqbench::credentials::check::check(workspace, name).await?;
     match eligibility {
         Eligibility::Eligible => Ok(None),
-        Eligibility::Ineligible(reason) => Ok(Some(ineligible(
-            &format!("{catalog}.{schema}.{name}"),
-            reason,
-        ))),
+        Eligibility::Ineligible(reason) => Ok(Some(ineligible(name, reason))),
     }
 }
 

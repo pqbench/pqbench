@@ -56,13 +56,11 @@ impl From<pqbench::credentials::check::Eligibility> for Eligibility {
 fn credentials_check(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
-    catalog: String,
-    schema: String,
-    table: String,
+    name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
     drive(py, async move {
-        let eligibility = pqbench::credentials::check::check(&workspace, &catalog, &schema, &table)
+        let eligibility = pqbench::credentials::check::check(&workspace, &name)
             .await
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         Python::attach(|py| Ok(Py::new(py, Eligibility::from(eligibility))?.into_any()))

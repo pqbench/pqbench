@@ -48,12 +48,13 @@ pub(crate) async fn run(
         if input.first.is_some() {
             return Err("get table takes CATALOG.SCHEMA.TABLE or a table stream, not both".into());
         }
-        let (catalog, schema, name) = split_table("get table", table)?;
+        let (catalog, schema, table) = split_table("get table", table)?;
         let storage = get::Storage {
             location: None,
             env: BTreeMap::new(),
         };
-        let record = get::read(workspace, lake, &catalog, &schema, &name, &storage).await?;
+        let name = pqbench::v1::name::table(&catalog, &schema, &table);
+        let record = get::read(workspace, lake, &name, &storage).await?;
         emit.write_row(&record).await?;
         return emit.finish("tables: 1\n").await;
     }
@@ -65,12 +66,12 @@ pub(crate) async fn run(
     let mut reads = records
         .map(|record| async {
             let record = record?;
-            let (catalog, schema, name) = table_ref("get table", &record)?;
+            let name = table_ref("get table", &record)?;
             let storage = get::Storage {
                 location: ref_storage(&record).map(str::to_owned),
                 env: ref_env(&record),
             };
-            Ok::<_, CliError>(get::read(workspace, lake, &catalog, &schema, &name, &storage).await?)
+            Ok::<_, CliError>(get::read(workspace, lake, &name, &storage).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {

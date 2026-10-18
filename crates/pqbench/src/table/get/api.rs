@@ -40,8 +40,9 @@ pub struct Storage {
     pub env: BTreeMap<String, String>,
 }
 
-/// Read the record of `table` in `schema` of `catalog` at the workspace's
-/// endpoint.
+/// Read the record of the table `name` — a
+/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name — at the
+/// workspace's endpoint.
 ///
 /// The catalog names the table and the location to load; the table's own
 /// metadata is read without files (`without_files()` for Delta, the metadata
@@ -51,15 +52,13 @@ pub struct Storage {
 /// catalog's own location stays authoritative.
 ///
 /// # Errors
-/// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or the table's metadata cannot be read.
+/// Fails when `name` is not a table name, the endpoint cannot be reached,
+/// answers with an unexpected status, or the table's metadata cannot be read.
 pub async fn read(
     workspace: &Workspace,
     lake: &Lake,
-    catalog: &str,
-    schema: &str,
-    table: &str,
+    name: &str,
     storage: &Storage,
 ) -> Result<Table, Error> {
-    super::r#impl::read(workspace, lake, catalog, schema, table, storage).await
+    super::r#impl::read(workspace, lake, name, storage).await
 }

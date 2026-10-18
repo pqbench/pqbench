@@ -58,8 +58,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
             let reads = records
                 .map(|record| async {
                     let record = record?;
-                    let (catalog, schema, table) = table_ref("list partitions", &record)?;
-                    let name = pqbench::v1::name::table(&catalog, &schema, &table);
+                    let name = table_ref("list partitions", &record)?;
                     let uri = ref_storage(&record)
                         .ok_or_else(|| {
                             CliError::from(

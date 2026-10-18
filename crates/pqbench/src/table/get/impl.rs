@@ -23,16 +23,18 @@ use crate::{Lake, Workspace};
 pub(crate) async fn read(
     workspace: &Workspace,
     lake: &Lake,
-    catalog: &str,
-    schema: &str,
-    table: &str,
+    name: &str,
     storage: &Storage,
 ) -> Result<Table, Error> {
+    let (catalog, schema, table) = crate::v1::name::parse_table(name)
+        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
     let info = match workspace.config().dialect {
-        Dialect::Unity => unity_record(workspace, lake, catalog, schema, table, storage).await,
-        Dialect::Iceberg => iceberg_record(workspace, catalog, schema, table, &storage.env).await,
+        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, storage).await,
+        Dialect::Iceberg => {
+            iceberg_record(workspace, &catalog, &schema, &table, &storage.env).await
+        }
     }?;
-    Ok(info.resource(catalog, schema, table, &storage.env))
+    Ok(info.resource(&catalog, &schema, &table, &storage.env))
 }
 
 /// The subset of Unity `GET /tables/{full_name}` this command reports.

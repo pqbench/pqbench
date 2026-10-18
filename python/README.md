@@ -30,9 +30,10 @@ maturin develop --manifest-path python/Cargo.toml
 ## The commands
 
 Each command is the library function of the same path, under `pqbench.native`,
-and takes the handles and the resource like the Rust signature: `credentials.get`
-returns the `AWS_*` lease map, and a record is its model's class: `record["uri"]`,
-`record.uri` and `record.asdict()` agree.
+and takes the handles and the resource's name like the Rust signature: the name
+is the AIP resource name a parent record carries, so a record feeds the next
+command as it is. `credentials.get` returns the `AWS_*` lease map, and a record
+is its model's class: `record["uri"]`, `record.uri` and `record.asdict()` agree.
 
 ```python
 import asyncio
@@ -51,12 +52,17 @@ async def main():
     refs = await pqbench.native.table.ls.list(
         workspace, "catalogs/dbx_samples/schemas/nyctaxi"
     )
-    await pqbench.native.credentials.check.check(workspace, "dbx_samples", "nyctaxi", "trips")
+    await pqbench.native.credentials.check.check(
+        workspace, "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
+    )
     # `get.vend` is ref -> ref: the lease lands on the ref as its `credentials`.
     ref = await pqbench.native.credentials.get.vend(workspace, refs[0])
     storage = pqbench.native.Storage(credentials=ref["credentials"])
     table = await pqbench.native.table.get.read(
-        workspace, lake, "dbx_samples", "nyctaxi", "trips", storage,
+        workspace,
+        lake,
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips",
+        storage,
     )
 
     # `partition.ls.list` and `file.ls.list` stream (async iterators); the

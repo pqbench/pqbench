@@ -11,9 +11,7 @@ fn table_read(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
     lake: PyRef<'_, Lake>,
-    catalog: String,
-    schema: String,
-    table: String,
+    name: String,
     storage: &Storage,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
@@ -22,7 +20,7 @@ fn table_read(
     one(
         py,
         async move {
-            pqbench::table::get::read(&workspace, &lake, &catalog, &schema, &table, &storage)
+            pqbench::table::get::read(&workspace, &lake, &name, &storage)
                 .await
                 .map_err(|error| error.to_string())
         },

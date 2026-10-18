@@ -134,23 +134,20 @@ async def walk(
             _log.debug("skipped an unreadable level: %s", error)
             return default
 
-    async def descend(ref: native.TableRef, catalog: str, schema: str) -> None:
+    async def descend(ref: native.TableRef) -> None:
         """One table's chain, holding one of the `concurrency` slots."""
         nonlocal skipped
-        table = _leaf(ref)
         async with inflight:
             try:
                 await pace("credentials.check")
-                eligibility = await native.credentials.check.check(
-                    workspace, catalog, schema, table
-                )
+                eligibility = await native.credentials.check.check(workspace, ref["name"])
                 if not eligibility.eligible:
                     return
                 await pace("credentials.get")
                 ref = await native.credentials.get.vend(workspace, ref)
                 env = _lease(ref.get("credentials"))
                 info = await native.table.get.read(
-                    workspace, lake, catalog, schema, table, native.Storage(env=env)
+                    workspace, lake, ref["name"], native.Storage(env=env)
                 )
                 uri = info.get("uri")
                 if not uri:
@@ -165,30 +162,26 @@ async def walk(
                         await queue.put(file)
             except Exception as error:  # noqa: BLE001 - a table we may not read
                 skipped += 1
-                _log.debug("skipped %s.%s.%s: %s", catalog, schema, table, error)
+                _log.debug("skipped %s: %s", ref["name"], error)
 
     async def descend_all() -> None:
         """The catalog levels, then one task per table; one queue for all."""
         try:
             await pace("catalog.ls")
             for listed in await native.catalog.ls.list(workspace):
-                catalog_name = _leaf(listed)
-                if catalog is not None and catalog_name != catalog:
+                if catalog is not None and _leaf(listed) != catalog:
                     continue
                 await pace("schema.ls")
                 schemas = await skip_level(
                     native.schema.ls.list(workspace, listed["name"]), []
                 )
                 for schema in schemas:
-                    schema_name = _leaf(schema)
                     await pace("table.ls")
                     refs = await skip_level(
                         native.table.ls.list(workspace, schema["name"]), []
                     )
                     for ref in refs:
-                        tasks.append(
-                            asyncio.create_task(descend(ref, catalog_name, schema_name))
-                        )
+                        tasks.append(asyncio.create_task(descend(ref)))
             await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             await queue.put(_DONE)

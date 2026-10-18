@@ -137,15 +137,13 @@ pub(crate) fn split_schema(command: &str, fqn: &str) -> Result<(String, String),
     Ok((catalog.to_string(), schema.to_string()))
 }
 
-/// The catalog, schema, and table a table ref names: a
-/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name.
-pub(crate) fn table_ref(
-    command: &str,
-    record: &Value,
-) -> Result<(String, String, String), CliError> {
+/// The `catalogs/{catalog}/schemas/{schema}/tables/{table}` name a table ref
+/// carries.
+pub(crate) fn table_ref(command: &str, record: &Value) -> Result<String, CliError> {
     record["name"]
         .as_str()
-        .and_then(pqbench::v1::name::parse_table)
+        .filter(|name| pqbench::v1::name::parse_table(name).is_some())
+        .map(ToOwned::to_owned)
         .ok_or_else(|| {
             format!(
                 "{command} reads pqbench table resources; a record needs a `catalogs/…/tables/…` name"
