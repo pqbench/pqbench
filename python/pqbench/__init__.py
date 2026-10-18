@@ -49,7 +49,6 @@ from pqbench.native import (
     Schema,
     Table,
     TableFile,
-    TableRef,
     TypedSample,
     Workspace,
 )
@@ -78,6 +77,5 @@ __all__ = [
     "Schema",
     "Table",
     "TableFile",
-    "TableRef",
     "TypedSample",
 ]

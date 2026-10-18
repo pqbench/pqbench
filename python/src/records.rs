@@ -144,7 +144,6 @@ macro_rules! record_class {
 record_class!(
     Catalog,
     Schema,
-    TableRef,
     Table,
     Partition,
     TableFile,
@@ -190,7 +189,6 @@ pub(crate) fn register(root: &Bound<'_, PyModule>) -> PyResult<()> {
     root.add_class::<Record>()?;
     root.add_class::<Catalog>()?;
     root.add_class::<Schema>()?;
-    root.add_class::<TableRef>()?;
     root.add_class::<Table>()?;
     root.add_class::<Partition>()?;
     root.add_class::<TableFile>()?;

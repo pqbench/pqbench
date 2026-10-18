@@ -2,7 +2,7 @@
 
 use crate::handles::{Lake, Workspace};
 use crate::prelude::*;
-use crate::records::{many, one, Table, TableRef};
+use crate::records::{many, one, Table};
 
 #[pyfunction]
 #[pyo3(name = "get")]
@@ -48,7 +48,7 @@ fn table_list(
                 .await
                 .map_err(|error| error.to_string())
         },
-        TableRef::attach,
+        Table::attach,
     )
 }
 

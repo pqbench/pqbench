@@ -224,26 +224,11 @@ class Schema(Record):
     properties: dict[str, str]
 
 class Table(Record):
-    """One table's record, as ``table.get.get`` resolves it."""
+    """One table: ``table.get.get``'s record, ``table.list.list``'s element.
 
-    name: str
-    uid: str | None
-    uri: str | None
-    format: str | None  # "TABLE_FORMAT_DELTA" | "TABLE_FORMAT_ICEBERG"
-    snapshot_version: int | None
-    partition_columns: list[str]
-    declared_columns: list[dict[str, Any]]
-    properties: dict[str, str]
-    file_count: int | None
-    partition_count: int | None
-    credentials: dict[str, Any] | None
-
-class TableRef(Record):
-    """One table's reference, as ``table.list.list`` lists it.
-
-    The same model as :class:`Table`, carrying what a listing costs: Unity
-    pages carry a storage location, Iceberg REST lists identifiers only, so
-    ``uri`` is unset there until ``table.get.get`` resolves it.
+    A listing costs what the catalog's page carries — Unity's pages name a
+    storage location, Iceberg REST lists identifiers only — so ``uri`` is unset
+    there until ``table.get.get`` resolves it.
     """
 
     name: str
@@ -256,7 +241,7 @@ class TableRef(Record):
     properties: dict[str, str]
     file_count: int | None
     partition_count: int | None
-    credentials: dict[str, Any] | None
+    credentials: Credentials | None
 
 class Partition(Record):
     """A natural partition: a half-open commit-time window."""
@@ -401,7 +386,7 @@ class table:
         """``pqbench.native.table.list``: list a schema's table refs."""
 
         @staticmethod
-        async def list(workspace: Workspace, name: str) -> list[TableRef]: ...
+        async def list(workspace: Workspace, name: str) -> list[Table]: ...
 
 class partition:
     """``pqbench.native.partition``: a table's natural partitions."""

@@ -42,7 +42,7 @@ WINDOW_MILLIS = 86_400_000
 """The natural-window width the CLI's ``--every 1d`` names: one UTC day."""
 
 _LevelRecord = TypeVar("_LevelRecord", bound=native.Record)
-"""A record a level listing returns: `Catalog`, `Schema` or `TableRef`."""
+"""A record a level listing returns: `Catalog`, `Schema` or `Table`."""
 
 _DONE = object()
 
@@ -123,7 +123,7 @@ async def walk(
             _log.debug("skipped an unreadable level: %s", error)
             return default
 
-    async def descend(ref: native.TableRef) -> None:
+    async def descend(ref: native.Table) -> None:
         """One table's chain, holding one of the `concurrency` slots."""
         nonlocal skipped
         async with inflight:
