@@ -306,6 +306,18 @@ class MassRow(Record):
     page_count: int | None
     page_compressed_bytes: int | None
 
+class Credentials(Record):
+    """A vended storage lease: the ``AWS_*`` options a read takes.
+
+    ``table.get.get``, ``partition.list.list`` and ``file.list.list`` take one
+    back as their ``credentials`` — the record ``credentials.get.get`` returns.
+    """
+
+    access_key_id: str | None
+    secret_access_key: str | None
+    session_token: str | None
+    expire_time: str | None
+
 class Eligibility:
     """Whether a principal may be vended credentials for one table."""
 
@@ -382,7 +394,7 @@ class table:
             lake: Lake,
             name: str,
             uri: str | None,
-            credentials: dict[str, Any] | None,
+            credentials: Credentials | dict[str, Any] | None,
         ) -> Table: ...
 
     class list:
@@ -402,7 +414,7 @@ class partition:
             lake: Lake,
             table: str,
             uri: str,
-            credentials: dict[str, Any] | None,
+            credentials: Credentials | dict[str, Any] | None,
             window_millis: int,
         ) -> AsyncIterator[Partition]:
             """Stream the table's partitions, widest window first."""
@@ -418,7 +430,7 @@ class file:
         def list(
             lake: Lake,
             uri: str,
-            credentials: dict[str, Any] | None,
+            credentials: Credentials | dict[str, Any] | None,
             versions: Sequence[int],
         ) -> AsyncIterator[TableFile]:
             """Stream the files the given log versions added."""
@@ -434,15 +446,14 @@ class credentials:
         async def check(workspace: Workspace, name: str) -> Eligibility: ...
 
     class get:
-        """``pqbench.native.credentials.get``: the lease, written on the ref."""
+        """``pqbench.native.credentials.get``: the lease of one table."""
 
         @staticmethod
-        async def get(workspace: Workspace, table: TableRef) -> TableRef:
-            """The ref with its vended read credentials on it, as ``credentials``.
+        async def get(workspace: Workspace, name: str) -> Credentials | None:
+            """The table's vended read credentials, by its resource name.
 
-            ``access_key_id``/``secret_access_key``/``session_token`` are the
-            lease; the ref comes back unchanged when the catalog vends nothing
-            for the table.
+            ``None`` when the catalog vends nothing for the table, so the read
+            falls back to the process environment.
             """
             ...
 

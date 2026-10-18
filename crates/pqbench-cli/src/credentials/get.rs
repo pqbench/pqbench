@@ -1,5 +1,8 @@
 //! `credentials get`: put vended read credentials on each table-ref:
 //! `list tables | credentials get`.
+//!
+//! The verb is `name -> lease`; the stage is what writes the lease onto the ref
+//! it read, so the pipe carries on with the same record, enriched.
 
 use futures_util::stream::StreamExt;
 use serde::Serialize;
@@ -23,11 +26,15 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         .map(|record| async {
             let table: pqbench::v1::Table =
                 serde_json::from_value(record?).map_err(invalid_json)?;
-            Ok::<_, CliError>(pqbench::credentials::get::get(workspace, &table).await?)
+            let credentials = pqbench::credentials::get::get(workspace, &table.name).await?;
+            Ok::<_, CliError>((table, credentials))
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(result) = vends.next().await {
-        let table = result?;
+        let (mut table, credentials) = result?;
+        if let Some(credentials) = credentials {
+            table.credentials = Some(credentials);
+        }
         emit.write_row(&VendedRef {
             vended: table.credentials.is_some(),
             record: serde_json::to_value(&table).unwrap_or(Value::Null),

@@ -2,7 +2,7 @@
 
 ``pqbench.walk`` composes the library's per-resource functions —
 ``catalog.list.list | schema.list.list | table.list.list | credentials.check.check |
-credentials.get.get_unity | table.get.get | partition.list.list |
+credentials.get.get | table.get.get | partition.list.list |
 file.list.list`` — as one async generator that multiplexes the tables and yields
 their files. The catalog levels span the whole Unity Catalog; the table levels
 descend the one catalog the principal may read outside compute
@@ -113,14 +113,28 @@ class WalkE2ETest(unittest.IsolatedAsyncioTestCase):
     async def test_check_drops_managed_storage(self) -> None:
         workspace = _workspace()
         external = await pqbench.native.credentials.check.check(
-            workspace, "pqbench_ext", "nyctaxi", "trips"
+            workspace, "catalogs/pqbench_ext/schemas/nyctaxi/tables/trips"
         )
         managed = await pqbench.native.credentials.check.check(
-            workspace, "dbx_samples", "nyctaxi", "pqbench_delta_test"
+            workspace, "catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"
         )
         self.assertTrue(external.eligible)
         self.assertFalse(managed.eligible)
         self.assertIsNotNone(managed.reason)
+
+    async def test_get_vends_the_lease_by_name(self) -> None:
+        # The verb is name -> lease: a resource name in, the lease a storage
+        # read takes out, ready to hand to the next verb.
+        workspace = _workspace()
+        name = "catalogs/pqbench_ext/schemas/nyctaxi/tables/trips"
+        credentials = await pqbench.native.credentials.get.get(workspace, name)
+        self.assertIsInstance(credentials, pqbench.Credentials)
+        self.assertTrue(credentials.access_key_id)
+        self.assertEqual(credentials.access_key_id, credentials["access_key_id"])
+        table = await pqbench.native.table.get.get(
+            workspace, pqbench.Lake(workspace), name, None, credentials
+        )
+        self.assertTrue(table["uri"], table)
 
 
 if __name__ == "__main__":

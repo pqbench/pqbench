@@ -17,8 +17,9 @@ pip install pqbench
 ```
 
 The wheel carries every storage backend (`delta-s3`, `iceberg-s3`), so `s3://`
-reads and Delta/Iceberg tables work out of the box. Storage reads authenticate
-with the `env=` argument (`AWS_*` names) or the process environment.
+reads and Delta/Iceberg tables work out of the box. A storage read
+authenticates with the `credentials=` argument (a `Credentials` record) or the
+process environment.
 
 From a checkout:
 
@@ -32,8 +33,9 @@ maturin develop --manifest-path python/Cargo.toml
 Each command is the library function of the same path, under `pqbench.native`,
 and takes the handles and the resource's name like the Rust signature: the name
 is the AIP resource name a parent record carries, so a record feeds the next
-command as it is. `credentials.get` returns the `AWS_*` lease map, and a record
-is its model's class: `record["uri"]`, `record.uri` and `record.asdict()` agree.
+command as it is. `credentials.get` takes a table's name and returns its lease,
+the `Credentials` record a storage read takes, and a record is its model's
+class: `record["uri"]`, `record.uri` and `record.asdict()` agree.
 
 ```python
 import asyncio
@@ -55,12 +57,13 @@ async def main():
     await pqbench.native.credentials.check.check(
         workspace, "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     )
-    # `credentials.get.get` is ref -> ref: the lease lands on the ref as `credentials`.
-    ref = await pqbench.native.credentials.get.get(workspace, refs[0])
+    # `credentials.get.get` is name -> lease: the lease is what a storage read
+    # takes, from the table's name alone.
+    credentials = await pqbench.native.credentials.get.get(workspace, refs[0]["name"])
     table = await pqbench.native.table.get.get(
         workspace,
         lake,
-        ref["name"], ref.get("uri"), ref.get("credentials"),
+        refs[0]["name"], refs[0].get("uri"), credentials,
     )
 
     # `partition.list.list` and `file.list.list` stream (async iterators); the
@@ -131,10 +134,11 @@ bearer, and the dialect (`UNITY` or `ICEBERG`); `Layer(endpoint=None,
 token=None, dialect=None).resolve()` combines configuration layers into a
 `Config`.
 
-`env` is the library's `BTreeMap<String, String>` and is passed straight
-through, so a vended lease (`credentials.get`) or the process environment rides
-as given. `codec_specs` repeats `codec@level`; `samples` defaults to 10,
-`warmup_iterations` to 3, `mode` to `Mode.FASTEST`.
+`credentials` is a `Credentials` record — what `credentials.get` returns — or
+the mapping of the same fields; a read given none falls back to the process
+environment. A request's `env` is the library's `BTreeMap<String, String>`,
+passed straight through. `codec_specs` repeats `codec@level`; `samples`
+defaults to 10, `warmup_iterations` to 3, `mode` to `Mode.FASTEST`.
 
 ## Publish to PyPI
 

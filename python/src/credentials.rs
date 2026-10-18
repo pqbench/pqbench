@@ -3,7 +3,7 @@
 use crate::handles::Workspace;
 use crate::marshal::drive;
 use crate::prelude::*;
-use crate::records::{one, Record, TableRef};
+use crate::records::{one, Credentials};
 
 #[pyclass]
 pub(crate) struct Eligibility {
@@ -66,26 +66,23 @@ fn credentials_check(
         Python::attach(|py| Ok(Py::new(py, Eligibility::from(eligibility))?.into_any()))
     })
 }
-/// Vend the ref's read credentials and write them onto it: `Table` -> `Table`.
+/// Vend the table `name`'s read credentials: `name` -> lease.
 #[pyfunction]
 #[pyo3(name = "get")]
 fn credentials_get(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
-    table: PyRef<'_, Record>,
+    name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
-    let fields = table.fields().clone();
     one(
         py,
         async move {
-            let table: pqbench::v1::Table =
-                serde_json::from_value(Value::Object(fields)).map_err(|error| error.to_string())?;
-            pqbench::credentials::get::get(&workspace, &table)
+            pqbench::credentials::get::get(&workspace, &name)
                 .await
                 .map_err(|error| error.to_string())
         },
-        TableRef::attach,
+        Credentials::attach,
     )
 }
 

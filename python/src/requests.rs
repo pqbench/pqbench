@@ -3,8 +3,8 @@
 use crate::handles::{Aim, Mode};
 use crate::prelude::*;
 
-/// The vended lease a Python mapping names, as the model's credentials — what
-/// `table.get.get` reads with, and what `Storage` builds `AWS_*` options from.
+/// The vended lease a command reads with: a `Credentials` record, or the
+/// mapping of the same fields, as the model's credentials.
 pub(crate) fn credentials(
     value: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Option<pqbench::v1::Credentials>> {

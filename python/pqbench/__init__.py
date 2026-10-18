@@ -7,8 +7,8 @@ The library's commands are the crate's modules, one function per path, under
 
     pqbench.native.metastore.get.get(workspace)
     pqbench.native.catalog.list.list(workspace)
-    pqbench.native.file.list.list(lake, uri, env, versions)
-    pqbench.native.credentials.check.check(workspace, catalog, schema, table)
+    pqbench.native.file.list.list(lake, uri, credentials, versions)
+    pqbench.native.credentials.check.check(workspace, name)
 
 Every name there is the library function of the same path, with the same
 arguments — a separate ``pqbench`` binary is not required. The records are the
@@ -37,6 +37,7 @@ from pqbench import native
 from pqbench.native import (
     Catalog,
     Config,
+    Credentials,
     Dialect,
     Eligibility,
     Lake,
@@ -69,6 +70,7 @@ __all__ = [
     # The records every command returns.
     "Record",
     "Catalog",
+    "Credentials",
     "Eligibility",
     "MassRow",
     "Partition",
