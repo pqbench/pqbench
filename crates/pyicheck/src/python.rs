@@ -228,22 +228,26 @@ fn params(source: &str, node: Node) -> Vec<Param> {
     let Some(parameters) = node.child_by_field_name("parameters") else {
         return Vec::new();
     };
-    let mut out = Vec::new();
     let mut cursor = parameters.walk();
-    for child in parameters.named_children(&mut cursor) {
-        let (name, has_default) = match child.kind() {
-            "identifier" => (text(source, child).to_owned(), false),
-            "typed_parameter" => (parameter_name(source, child), false),
-            "default_parameter" => (parameter_name(source, child), true),
-            "typed_default_parameter" => (parameter_name(source, child), true),
-            _ => continue,
-        };
-        if name.is_empty() || name == "self" || name == "cls" {
-            continue;
-        }
-        out.push(Param::new(name, has_default));
+    parameters
+        .named_children(&mut cursor)
+        .filter_map(|child| param(source, child))
+        .collect()
+}
+
+/// One parameter, or `None` for a separator, `self`, or `cls`.
+fn param(source: &str, child: Node) -> Option<Param> {
+    let (name, has_default) = match child.kind() {
+        "identifier" => (text(source, child).to_owned(), false),
+        "typed_parameter" => (parameter_name(source, child), false),
+        "default_parameter" => (parameter_name(source, child), true),
+        "typed_default_parameter" => (parameter_name(source, child), true),
+        _ => return None,
+    };
+    if name.is_empty() || name == "self" || name == "cls" {
+        return None;
     }
-    out
+    Some(Param::new(name, has_default))
 }
 
 /// A parameter's name: the `name` field, or the first identifier in the node.
