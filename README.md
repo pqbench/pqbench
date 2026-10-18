@@ -63,6 +63,33 @@ The same walk runs offline against the local Delta and Iceberg stand,
 `make lakehouse`. [Getting started](https://pqbench.github.io/pqbench/getting-started/) takes one Parquet
 file to a treemap, and the [CLI reference](https://pqbench.github.io/pqbench/cli/) documents every command.
 
+## Showcases
+
+[Showcases](https://pqbench.github.io/pqbench/showcases/) runs the commands as
+jobs on real public data — triage which columns own the file, choose a codec,
+verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
+2.1 MB Reddit comments sample, three of seven columns are 99.7% of the bytes:
+
+```console run
+$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
+column            type        codec         encodings                  bytes  values
+----------------  ----------  ------------  ------------------------  ------  ------
+text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
+label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
+dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
+communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
+datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
+username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
+url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
+files: 1
+rows: 3000
+columns: 7
+```
+
+`profile` explains it, `compression` picks the codec, and `experiment` proves a
+layout change before you apply it. The [Showcases](https://pqbench.github.io/pqbench/showcases/)
+page walks all four end to end.
+
 ## Commands
 
 The core measurements. The walk's [`get` and `list`](#the-walk-end-to-end) come
@@ -71,19 +98,23 @@ first; the [CLI reference](https://pqbench.github.io/pqbench/cli/) covers `profi
 
 ### lz
 
-lzbench-style compression benchmark over raw file bytes:
+lzbench-style compression benchmark over raw file bytes. The default sweeps
+every wired codec (zstd, lz4, gzip, snappy); `-c codec@level` (repeatable)
+picks one config:
 
 ```console run
-$ pqbench lz examples/quickstart.parquet -c zstd@3 --samples 1 --warmup-iterations 0 --format table
-codec  level  compress MB/s  decompress MB/s  ratio
------  -----  -------------  ---------------  -----
-zstd       3          ±12.5            ±31.8   0.63
-file: examples/quickstart.parquet
-rows: 1
+$ pqbench lz data/samples/delta_byte_array.parquet --samples 1 --warmup-iterations 0 --format table
+codec   level  compress MB/s  decompress MB/s  ratio
+------  -----  -------------  ---------------  -----
+gzip        1            ±38             ±128   0.54
+zstd        1            ±27             ±144   0.57
+snappy      1           ±310             ±635   0.69
+lz4         1           ±465            ±2071   0.74
+file: data/samples/delta_byte_array.parquet
+rows: 4
 ```
 
-Omit `-c` to sweep every codec. Speeds vary run to run; `--format json` (or
-`--json`) emits NDJSON.
+Speeds vary run to run; `--format json` (or `--json`) emits NDJSON.
 
 ### compression
 
@@ -91,14 +122,14 @@ The same sweep over a parquet file's encoded pages. The input must be
 NONE-compressed; `--per-column` adds a report per column.
 
 ```console run
-$ pqbench compression examples/quickstart.parquet --samples 1 --warmup-iterations 0 --format table
+$ pqbench compression data/samples/delta_byte_array.parquet --samples 1 --warmup-iterations 0 --format table
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
-lz4         1          ±71.0            ±89.0   0.78
-snappy      1          ±20.0            ±40.0   0.85
-zstd        1          ±12.0            ±28.0   1.01
-gzip        1           ±0.6             ±4.0   1.26
-file: examples/quickstart.parquet
+zstd        1            ±41             ±174   0.53
+gzip        1            ±75             ±202   0.53
+lz4         1           ±641            ±2692   0.72
+snappy      1          ±1091            ±1636   0.77
+file: data/samples/delta_byte_array.parquet
 rows: 4
 columns: 0
 ```
@@ -110,14 +141,21 @@ columns: 0
 Per-column byte masses — how many on-disk bytes each column takes per row.
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet --format table
-column  type   codec         encodings                 bytes  values
-------  -----  ------------  ------------------------  -----  ------
-id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
-year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+$ pqbench bytemass data/samples/delta_byte_array.parquet --format table
+column                 type        codec         encodings         bytes  values
+---------------------  ----------  ------------  ----------------  -----  ------
+c_customer_id          BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
+c_salutation           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000
+c_first_name           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000
+c_last_name            BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000
+c_preferred_cust_flag  BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000
+c_birth_country        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
+c_login                BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
+c_email_address        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
+c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
 files: 1
-rows: 8
-columns: 2
+rows: 1000
+columns: 9
 ```
 
 - Reads only the footer, so it works on any file, compressed or not.
@@ -184,7 +222,7 @@ Collect a bytemass stream into a static HTML treemap — no server, no build
 step.
 
 ```console run delta
-$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench bytemass data/samples/delta_byte_array.parquet | pqbench viz -o /tmp/report
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
@@ -198,6 +236,7 @@ Start with [Getting started](https://pqbench.github.io/pqbench/getting-started/)
 that command.
 
 - [Getting started](https://pqbench.github.io/pqbench/getting-started/) — install, first measurement, the metadata walk
+- [Showcases](https://pqbench.github.io/pqbench/showcases/) — real jobs on real data: triage the bytes, pick a codec, verify a layout change
 - [Distribution](https://pqbench.github.io/pqbench/distribution/) — install the binary, targets, and how releases are cut
 - [CLI reference](https://pqbench.github.io/pqbench/cli/) — the command table, documents, flags, and auth
 - [Visual demos](https://pqbench.github.io/pqbench/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection

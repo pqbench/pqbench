@@ -61,9 +61,9 @@ cache-stats:
 		echo "sccache is not installed; run: cargo install sccache"; \
 	fi
 
-# Fetch open-dataset sample parquet files into local/samples/ for local testing.
+# Verify the committed open-dataset parquet samples in data/samples/ (Git LFS).
 samples:
-	./scripts/fetch_samples.sh
+	./scripts/check_samples.sh
 
 # Local Unity Catalog and Iceberg REST, ready to query: see
 # docker/e2e-lakehouse/README.md.

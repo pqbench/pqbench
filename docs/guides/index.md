@@ -5,6 +5,9 @@ Parquet file, a Delta or Iceberg table, a Databricks workspace — and follows t
 commands through to a result. They are the how, not the why; for the detail of
 each command see the [Reference](../cli.md).
 
+- [Showcases](../showcases.md) — real jobs on real data: triage which columns
+  own the bytes, choose a codec, verify a layout change, and read SQuAD and a
+  TPC-DS table from the wild.
 - [Visual demos](../demo.md) — the same measure-everything pipe over a Parquet
   file, a Delta table, an Iceberg table, and a catalog, with real output; ends
   with selecting files using `jq`, `sort`, `head`, and `awk`.

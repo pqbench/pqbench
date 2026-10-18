@@ -97,6 +97,8 @@ The page lands at `/tmp/report.html`; open it in a browser. See [viz.md](viz.md)
 
 - **Commands** — [cli.md](cli.md) has the task-oriented table, documents, and
   auth for `s3://` and catalogs.
+- **Real jobs on real data** — [showcases.md](showcases.md) triages a file's
+  bytes, picks a codec, and verifies a layout change, on public datasets.
 - **More walkthroughs** — [demo.md](demo.md) has Parquet, Delta, Iceberg, and
   catalog pipes with real output.
 - **Tune a layout** — [experiment.md](experiment.md) rewrites a sample and

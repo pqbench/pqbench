@@ -8,13 +8,14 @@ fixtures). Clone, build, and try the bundled sample:
 ```sh
 git clone https://github.com/pqbench/pqbench.git
 cd pqbench
-make check   # fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
+make check   # fmt-check + check-docs + check-version + clippy -D warnings + isolation + lfs-check + test
 cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
 ```
 
 `examples/quickstart.parquet` is a small smoke sample — its numbers aren't
-benchmark-grade. `make samples` fetches real test data. For using the CLI, see
-the README quick start.
+benchmark-grade. The real datasets live in `data/samples/` (Git LFS); `make
+samples` verifies they are fetched. For using the CLI, see the README quick
+start.
 
 ## The loop
 
@@ -37,7 +38,7 @@ Keep behavior changes separate from tidyings.
 
 ```
 make fmt
-make check        # = fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
+make check        # = fmt-check + check-docs + check-version + clippy -D warnings + isolation + lfs-check + test
 ```
 
 - `make check` is the gate and runs automatically in the pre-commit hook.
@@ -78,8 +79,8 @@ make check        # = fmt-check + check-docs + clippy -D warnings + isolation + 
 - The network e2e (`redset`) is `#[ignore]`d so local `make test` stays offline
   and sub-second. CI runs it on every PR via
   `make test CARGO_FEATURES="--features aws" TEST_FLAGS=--include-ignored`.
-- `make samples` fetches a few open parquet datasets into `local/samples/` for
-  manual testing.
+- `make samples` verifies the committed open parquet datasets in `data/samples/`
+  (Git LFS; run `git lfs pull` after a clone that skipped LFS).
 - `make code-analysis` prints rust-code-analysis metrics for `crates/` (the
   CLI's own metrics tree). It needs `rust-code-analysis-cli` on `PATH`; `RCA`
   and `CODE_ANALYSIS_PATHS` override the binary and inputs. It is
