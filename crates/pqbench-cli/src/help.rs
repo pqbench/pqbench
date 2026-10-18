@@ -90,7 +90,7 @@ Auth (how to reach data):
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
   Producer pipe
-    echo '{\"kind\":\"pqbench.remote-source\",\"version\":1,\"inputs\":[\"s3://b/t\"],
+    echo '{\"version\":1,\"inputs\":[\"s3://b/t\"],
       \"env\":{\"AWS_ACCESS_KEY_ID\":\"…\",\"AWS_SECRET_ACCESS_KEY\":\"…\",
              \"AWS_SESSION_TOKEN\":\"…\",\"AWS_REGION\":\"us-east-1\"}}' \\
       | pqbench bytemass
@@ -124,7 +124,7 @@ forces the stream, and `-o` also writes it. Pipe the stream to `viz`.";
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet
-  pqbench bytemass 'data/*.parquet' -o masses.ndjson.zst
+  pqbench bytemass 'data/*.parquet' -o masses.ndjson.lz4
   pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass
   pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass | pqbench viz -o report
 
@@ -272,8 +272,8 @@ forces the stream, and `-o` also writes it.";
 
 pub const CREDENTIALS_AFTER: &str = "\
 Examples:
-  PQB_ENDPOINT=… pqbench list tables | pqbench credentials check | pqbench credentials get
-  PQB_ENDPOINT=… pqbench list tables | pqbench credentials check | pqbench credentials get | pqbench get table
+  PQB_ENDPOINT=… pqbench list tables CAT.SCHEMA | pqbench credentials check | pqbench credentials get
+  PQB_ENDPOINT=… pqbench list tables CAT.SCHEMA | pqbench credentials check | pqbench credentials get | pqbench get table
 
 See also:
   pqbench list --help  the tables in a schema
@@ -297,7 +297,7 @@ rate. A 429 fails the level; retry it at a lower --rate.";
 pub const RATELIMIT_AFTER: &str = "\
 Examples:
   pqbench list catalogs | pqbench ratelimit | pqbench list schemas
-  pqbench list schemas | pqbench ratelimit --rate 5 | pqbench list tables
+  pqbench list schemas CATALOG | pqbench ratelimit --rate 5 | pqbench list tables
 
 See also:
   pqbench list --help     the walk's collections
@@ -314,7 +314,7 @@ treemap per table id. Does not measure files. `-o PREFIX` is required.";
 pub const VIZ_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet | pqbench viz -o report
-  pqbench list tables ./delta-table | pqbench list partitions | pqbench bytemass | pqbench viz -o report
+  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass | pqbench viz -o report
   xdg-open report.html
 
 See also:
@@ -386,7 +386,7 @@ pub const PROFILE_AFTER: &str = "\
 Examples:
   pqbench profile data.parquet
   pqbench profile data.parquet --columns 'text' --top 5
-  pqbench profile data.parquet --rows first:1024 -o profile.ndjson.zst
+  pqbench profile data.parquet --rows first:1024 -o profile.ndjson.lz4
   pqbench profile data.parquet --rows all --json
 
 See also:
@@ -430,7 +430,7 @@ Examples:
   pqbench experiment data.parquet
   pqbench experiment data.parquet --rewrite sort:text --aim all
   pqbench experiment data.parquet --rewrite 'sort:country,city' --rewrite codec:snappy
-  pqbench experiment data.parquet --rewrite 'sort:id;dictionary:off' -o trials.ndjson.zst
+  pqbench experiment data.parquet --rewrite 'sort:id;dictionary:off' -o trials.ndjson.lz4
 
 See also:
   pqbench profile --help  facts to choose a rewrite from

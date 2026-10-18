@@ -10,8 +10,8 @@ prompt() {
     sleep 1
 }
 
-prompt "pqbench list partitions docker/e2e-lakehouse/table -o /tmp/pqbench-demo-partition.ndjson.zst"
-pqbench list partitions docker/e2e-lakehouse/table -o /tmp/pqbench-demo-partition.ndjson.zst
+prompt "pqbench list partitions docker/e2e-lakehouse/table -o /tmp/pqbench-demo-partition.ndjson.lz4"
+pqbench list partitions docker/e2e-lakehouse/table -o /tmp/pqbench-demo-partition.ndjson.lz4
 sleep 2
 
 prompt "pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass"

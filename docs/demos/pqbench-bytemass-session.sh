@@ -12,8 +12,8 @@ prompt() {
 
 parquet=crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet
 
-prompt "pqbench bytemass $parquet -o /tmp/pqbench-demo-bytemass.ndjson.zst"
-pqbench bytemass "$parquet" -o /tmp/pqbench-demo-bytemass.ndjson.zst
+prompt "pqbench bytemass $parquet -o /tmp/pqbench-demo-bytemass.ndjson.lz4"
+pqbench bytemass "$parquet" -o /tmp/pqbench-demo-bytemass.ndjson.lz4
 sleep 2
 
 prompt "pqbench bytemass $parquet --json"

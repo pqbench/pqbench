@@ -394,7 +394,7 @@ fn schema_ls_follows_iceberg_page_tokens() {
 fn schema_ls_exports_the_ndjson_stream() {
     let address = server(200, SCHEMAS);
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("schemas.ndjson.zst");
+    let file = dir.path().join("schemas.ndjson.lz4");
     let output = pipe(
         &[
             "list",
