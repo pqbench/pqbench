@@ -7,7 +7,7 @@ use futures_util::stream::{StreamExt, TryStreamExt};
 use pqbench::partition;
 
 use crate::emit::{Emitter, Format};
-use crate::source::{self, read_input, ref_credentials, ref_storage, table_ref};
+use crate::source::{self, read_input, ref_credentials, ref_storage, table_ref, Input};
 use crate::CliError;
 
 /// Arguments for `list partitions`.
@@ -39,56 +39,60 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list partitions").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let mut partitions = 0usize;
-    match &args.input {
+    let partitions = match &args.input {
         Some(uri) if uri != "-" => {
             if input.first.is_some() {
                 return Err("list partitions takes a table URI or a table stream, not both".into());
             }
-            let credentials = None;
             let table = pqbench::v1::name::local_table(uri);
-            partitions +=
-                list_partitions(lake, &table, uri, credentials, args.every, &mut emit).await?;
+            list_partitions(lake, &table, uri, None, args.every, &mut emit).await?
         }
-        _ => {
-            if !input.piped {
-                return Err("list partitions needs a table URI or a table stream".into());
-            }
-            let records = source::records("list partitions", input.first, input.lines);
-            let reads = records
-                .map(|record| async {
-                    let record = record?;
-                    let name = table_ref("list partitions", &record)?;
-                    let uri = ref_storage(&record)
-                        .ok_or_else(|| {
-                            CliError::from(
-                                "a table-ref has no storage path; run `pqbench get table` first",
-                            )
-                        })?
-                        .to_string();
-                    let credentials = ref_credentials(&record);
-                    let found =
-                        partition::list::list(lake, &name, &uri, credentials.as_ref(), args.every)
-                            .await
-                            .map_err(|error| CliError::from(error.to_string()))?;
-                    Ok::<_, CliError>(
-                        found
-                            .map_err(|error| CliError::from(error.to_string()))
-                            .boxed(),
-                    )
-                })
-                .buffer_unordered(args.fan_out.max(1))
-                .boxed();
-            // Tables in flight at once, each streaming its partitions as its
-            // windows close.
-            let mut found = reads.try_flatten_unordered(Some(args.fan_out.max(1)));
-            while let Some(partition) = found.try_next().await? {
-                emit.write_row(&partition).await?;
-                partitions += 1;
-            }
-        }
-    }
+        _ => list_stream(lake, input, args.every, args.fan_out, &mut emit).await?,
+    };
     emit.finish(&format!("partitions: {partitions}\n")).await
+}
+
+/// Emit every table's partitions from a table stream: tables in flight at
+/// once, each streaming its partitions as its windows close.
+async fn list_stream(
+    lake: &pqbench::Lake,
+    input: Input,
+    window: i64,
+    fan_out: usize,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
+    if !input.piped {
+        return Err("list partitions needs a table URI or a table stream".into());
+    }
+    let records = source::records("list partitions", input.first, input.lines);
+    let reads = records
+        .map(|record| async {
+            let record = record?;
+            let name = table_ref("list partitions", &record)?;
+            let uri = ref_storage(&record)
+                .ok_or_else(|| {
+                    CliError::from("a table-ref has no storage path; run `pqbench get table` first")
+                })?
+                .to_string();
+            let credentials = ref_credentials(&record);
+            let found = partition::list::list(lake, &name, &uri, credentials.as_ref(), window)
+                .await
+                .map_err(|error| CliError::from(error.to_string()))?;
+            Ok::<_, CliError>(
+                found
+                    .map_err(|error| CliError::from(error.to_string()))
+                    .boxed(),
+            )
+        })
+        .buffer_unordered(fan_out.max(1))
+        .boxed();
+    let mut found = reads.try_flatten_unordered(Some(fan_out.max(1)));
+    let mut partitions = 0;
+    while let Some(partition) = found.try_next().await? {
+        emit.write_row(&partition).await?;
+        partitions += 1;
+    }
+    Ok(partitions)
 }
 
 /// Emit one table's partitions as they arrive; returns how many were written.
