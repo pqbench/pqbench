@@ -424,15 +424,6 @@ class file:
             """Stream the files the given log versions added."""
             ...
 
-class Credentials:
-    """A vended storage lease: the ``AWS_*`` options a read takes."""
-
-    access_key_id: str | None
-    secret_access_key: str | None
-    session_token: str | None
-    expire_time: str | None
-
-
 class credentials:
     """``pqbench.native.credentials``: check eligibility, then vend a lease."""
 
@@ -443,10 +434,10 @@ class credentials:
         async def check(workspace: Workspace, name: str) -> Eligibility: ...
 
     class get:
-        """``pqbench.native.credentials.get``: the lease."""
+        """``pqbench.native.credentials.get``: the lease, written on the ref."""
 
         @staticmethod
-        async def get(workspace: Workspace, name: str) -> Credentials: ...
+        async def get(workspace: Workspace, table: TableRef) -> TableRef:
             """The ref with its vended read credentials on it, as ``credentials``.
 
             ``access_key_id``/``secret_access_key``/``session_token`` are the

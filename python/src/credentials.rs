@@ -3,7 +3,7 @@
 use crate::handles::Workspace;
 use crate::marshal::drive;
 use crate::prelude::*;
-use crate::records::{one, Credentials};
+use crate::records::{one, Record, TableRef};
 
 #[pyclass]
 pub(crate) struct Eligibility {
@@ -72,17 +72,20 @@ fn credentials_check(
 fn credentials_get(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
-    name: String,
+    table: PyRef<'_, Record>,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
+    let fields = table.fields().clone();
     one(
         py,
         async move {
-            pqbench::credentials::get::get(&workspace, &name)
+            let table: pqbench::v1::Table =
+                serde_json::from_value(Value::Object(fields)).map_err(|error| error.to_string())?;
+            pqbench::credentials::get::get(&workspace, &table)
                 .await
                 .map_err(|error| error.to_string())
         },
-        Credentials::attach,
+        TableRef::attach,
     )
 }
 

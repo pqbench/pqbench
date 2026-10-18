@@ -55,13 +55,12 @@ async def main():
     await pqbench.native.credentials.check.check(
         workspace, "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     )
-    # `credentials.get.get` is name -> lease: the ref names the table, the lease
-    # is what a storage read takes.
-    credentials = await pqbench.native.credentials.get.get(workspace, refs[0]["name"])
+    # `credentials.get.get` is ref -> ref: the lease lands on the ref as `credentials`.
+    ref = await pqbench.native.credentials.get.get(workspace, refs[0])
     table = await pqbench.native.table.get.get(
         workspace,
         lake,
-        refs[0]["name"], refs[0].get("uri"), credentials,
+        ref["name"], ref.get("uri"), ref.get("credentials"),
     )
 
     # `partition.list.list` and `file.list.list` stream (async iterators); the
