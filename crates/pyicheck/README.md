@@ -31,13 +31,10 @@ interpreter and fills that gap.
 | --- | --- |
 | `surface/parity` | Every name on one side exists on the other (a missing verb, a stray class) |
 | `surface/params` | A function's parameters agree, name for name and default for default |
-| `surface/returns` | The return shape agrees (`Table`, `list[Table]`, `AsyncIterator[TableFile]`, `dict[str, Any]`) |
-| `surface/async` | The stub's `async def` agrees with the binding's awaitability |
-| `surface/method` | A class's public methods (and `__init__`) exist on both sides |
-| `surface/method-params` | A shared method's parameters agree — `__init__`, built from `#[new]` and `#[pyo3(signature)]`, most of all |
+| `surface/returns` | The return shape (`Table`, `list[Table]`, `AsyncIterator[TableFile]`, `dict[str, Any]`) and the awaitability agree |
+| `surface/method` | A class's public methods (and `__init__`) exist on both sides with the same parameters |
 | `model/base` | A class a command returns is declared `(Record)` in the stub, and a `(Record)` class is one a command returns |
-| `model/field` | A record's fields match a `pub struct` of the same name in the library |
-| `model/optionality` | A field the model skips when empty (`skip_serializing_if = "Option::is_none"`) is `| None` in the stub, and only that field |
+| `model/field` | A record's fields match a `pub struct` of the same name, and a field the model skips when empty (`skip_serializing_if = "Option::is_none"`) is `\| None` |
 
 The field rule matches a record against *any* model of its name, because a name
 can be declared twice (the wire `v1::TableFile` and the streaming
@@ -48,7 +45,6 @@ can be declared twice (the wire `v1::TableFile` and the streaming
 ```sh
 cargo run -p pyicheck-cli                       # the repo's own wheel
 cargo run -p pyicheck-cli -- --rule surface/returns
-cargo run -p pyicheck-cli -- --output-format github   # PR annotations
 cargo run -p pyicheck-cli -- --list-rules
 ```
 
