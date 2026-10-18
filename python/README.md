@@ -146,12 +146,12 @@ parquet page indexes too, one extra range per file).
 
 ## Publish to PyPI
 
-[`.github/workflows/publish-pypi.yml`](../.github/workflows/publish-pypi.yml)
-builds manylinux, macOS, and Windows wheels with
+[`.github/workflows/release-pypi.yml`](../.github/workflows/release-pypi.yml)
+builds manylinux and macOS wheels with
 [maturin](https://www.maturin.rs/) and uploads them with
 [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/) — no token
 is stored. It has its own dispatch, after the matching tag is released:
-`gh workflow run publish-pypi.yml`, or **Publish Python package** from the
+`gh workflow run release-pypi.yml`, or **Publish to PyPI** from the
 Actions tab. Publishing is separate because PyPI names the workflow file that
 may upload, and its trusted publisher does not accept a job defined in a
 workflow that another workflow calls.
@@ -164,6 +164,6 @@ maturin reads it, and `make check-version` fails when the two disagree —
 Before the first upload:
 
 1. On PyPI, add a pending publisher for this repository: owner `pqbench`,
-   project `pqbench`, workflow `publish-pypi.yml`, environment `pypi`.
+   project `pqbench`, workflow `release-pypi.yml`, environment `pypi`.
 2. In the GitHub repository settings, create an environment named `pypi`.
-3. Run the **Publish Python package** workflow.
+3. Run the **Publish to PyPI** workflow.
