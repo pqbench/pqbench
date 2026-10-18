@@ -32,11 +32,7 @@ pub struct TableFile {
     /// The blob holding the bytes, a [`Blob`] name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob: Option<String>,
-    /// The table's storage root, denormalized onto the file so a reader reads
-    /// [`Self::blob`] without the table record.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub storage_root: Option<String>,
-    /// The path as the log records it, relative to [`Self::storage_root`].
+    /// The path as the log records it, relative to the table's storage root.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
     /// The size the log claims, in bytes.

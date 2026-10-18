@@ -4,7 +4,7 @@
 // win. Field drift since it was written: `ColumnProfile.entropy` became
 // `entropy_bits`; `Commit` and `Partition` gained `commit_info`; `Schema` and
 // `Table` gained `properties`; `FileStats` gained `first_values`,
-// `last_values`, `null_count`; `TableFile` gained `path`, `storage_root`,
+// `last_values`, `null_count`; `TableFile` gained `path` and
 // `partition_values`.
 //
 // pqbench IPC messages, in protobuf (AIP style).
@@ -246,6 +246,9 @@ message TableFile {
 
   // The vended credentials to read `blob` with, when the caller holds them.
   Credentials credentials = 6;
+
+  // The path as the log records it, relative to the table's storage root.
+  string path = 7;
 }
 
 // One commit of a table's log. The `{commit}` id segment is the log version, a

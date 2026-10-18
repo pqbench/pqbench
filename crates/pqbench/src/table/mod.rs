@@ -63,11 +63,10 @@ pub type CommitStream<'a> = BoxStream<'a, Result<v1::Commit, Error>>;
 /// The stream owns the log it reads, so it borrows nothing from the caller.
 pub type FileStream<'a> = BoxStream<'a, Result<v1::TableFile, Error>>;
 
-/// Name each file under `table` and stamp the table's storage root on it.
-pub(crate) fn name_files(table: &str, storage_root: &str, files: &mut [v1::TableFile]) {
+/// Name each file under `table`.
+pub(crate) fn name_files(table: &str, files: &mut [v1::TableFile]) {
     for file in files {
         file.name = v1::name::table_file_name(table, &file.path);
-        file.storage_root = Some(storage_root.to_string());
     }
 }
 
@@ -322,11 +321,7 @@ pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error
         v1::TableFormat::Delta => delta::load(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
     }?;
-    name_files(
-        &v1::name::local_table(&request.uri),
-        &request.uri,
-        &mut info.files,
-    );
+    name_files(&v1::name::local_table(&request.uri), &mut info.files);
     Ok(info)
 }
 
@@ -372,11 +367,9 @@ pub async fn stream_files(
         v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await,
     }?;
     let table = v1::name::local_table(&request.uri);
-    let root = request.uri.clone();
     Ok(files
         .map_ok(move |mut file| {
             file.name = v1::name::table_file_name(&table, &file.path);
-            file.storage_root = Some(root.clone());
             file
         })
         .boxed())
