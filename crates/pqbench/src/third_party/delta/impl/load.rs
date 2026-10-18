@@ -19,8 +19,8 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, FileStats, LoadRequest,
-    PartitionMass, TableFile, TableInfo,
+    add_partition_total, bytes_per_row, finish_partition_masses, LoadRequest, PartitionMass,
+    TableFile, TableInfo,
 };
 use crate::v1;
 use crate::Lake;
@@ -560,10 +560,10 @@ fn data_file(
     };
     let mut stats = file_stats(file.stats());
     if let Some(stats) = stats.as_mut() {
-        stats.bytes_per_row = bytes_per_row(size, stats.num_records);
+        stats.bytes_per_row = bytes_per_row(size, stats.record_count);
         if !keep_stats {
-            stats.min_values.clear();
-            stats.max_values.clear();
+            stats.first_values.clear();
+            stats.last_values.clear();
             stats.null_count.clear();
             stats.tight_bounds = None;
         }
@@ -598,16 +598,16 @@ fn partition_values(file: &deltalake::kernel::LogicalFileView) -> BTreeMap<Strin
 
 /// Parse `add.stats`. Nested `nullCount` objects are flattened to dotted
 /// keys. A malformed stats blob is omitted rather than failing the table.
-fn file_stats(raw: Option<String>) -> Option<FileStats> {
+fn file_stats(raw: Option<String>) -> Option<v1::FileStats> {
     let raw = raw?;
     let value: Value = serde_json::from_str(&raw).ok()?;
     let object = value.as_object()?;
     let num_records = object.get("numRecords").and_then(Value::as_u64)?;
-    Some(FileStats {
-        num_records,
+    Some(v1::FileStats {
+        record_count: num_records,
         bytes_per_row: None,
-        min_values: stat_object(object, "minValues"),
-        max_values: stat_object(object, "maxValues"),
+        first_values: stat_object(object, "minValues"),
+        last_values: stat_object(object, "maxValues"),
         null_count: flatten_null_counts(object.get("nullCount")),
         tight_bounds: object.get("tightBounds").and_then(Value::as_bool),
     })

@@ -659,18 +659,18 @@ pub struct ColumnProfile {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FileStats {
     /// `numRecords` from the log.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub record_count: Option<u64>,
-    /// On-disk file size divided by [`Self::record_count`].
+    pub record_count: u64,
+    /// On-disk file size divided by [`Self::record_count`]. Absent at zero rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_per_row: Option<f64>,
-    /// Per-column first value.
+    /// Per-column first value, JSON as stored (nested structs stay objects).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub first_values: BTreeMap<String, String>,
-    /// Per-column last value.
+    pub first_values: BTreeMap<String, serde_json::Value>,
+    /// Per-column last value, JSON as stored.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub last_values: BTreeMap<String, String>,
-    /// Per-column `nullCount`.
+    pub last_values: BTreeMap<String, serde_json::Value>,
+    /// Per-column `nullCount`. Nested struct columns are flattened to dotted
+    /// keys (`struct.inner.x`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub null_count: BTreeMap<String, u64>,
     /// The log's `tightBounds`, when it sets it.

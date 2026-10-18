@@ -133,8 +133,8 @@ mod tests {
                 size: 40,
                 storage_class: Some("STANDARD".into()),
                 partition_values: [("year".to_string(), Some("2024".to_string()))].into(),
-                stats: Some(crate::table::FileStats {
-                    num_records: 10,
+                stats: Some(crate::v1::FileStats {
+                    record_count: 10,
                     bytes_per_row: Some(4.0),
                     ..Default::default()
                 }),

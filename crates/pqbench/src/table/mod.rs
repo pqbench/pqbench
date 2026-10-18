@@ -25,7 +25,6 @@ use std::path::{Path, PathBuf};
 
 use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use url::Url;
 
 use crate::third_party::delta;
@@ -74,7 +73,7 @@ pub struct TableFile {
     pub partition_values: BTreeMap<String, Option<String>>,
     /// Statistics from the Delta `add.stats` JSON. Absent when the log has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stats: Option<FileStats>,
+    pub stats: Option<v1::FileStats>,
 }
 
 impl TableFile {
@@ -95,34 +94,6 @@ impl TableFile {
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
 pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
-
-/// Statistics copied from a Delta add action. Values are the log's claim.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[non_exhaustive]
-pub struct FileStats {
-    /// `numRecords` from `add.stats`.
-    // aipnaming: allow(aip-141/count-suffix)
-    pub num_records: u64,
-    /// On-disk file size divided by [`Self::num_records`]. Absent at zero rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bytes_per_row: Option<f64>,
-    /// Per-column minimum from `minValues`, JSON as stored (nested structs stay
-    /// objects).
-    // aipnaming: allow(aip-145/ranges)
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub min_values: BTreeMap<String, Value>,
-    /// Per-column maximum from `maxValues`, JSON as stored.
-    // aipnaming: allow(aip-145/ranges)
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub max_values: BTreeMap<String, Value>,
-    /// Per-column `nullCount`. Nested struct columns are flattened to dotted
-    /// keys (`struct.inner.x`).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub null_count: BTreeMap<String, u64>,
-    /// `tightBounds` when the log sets it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tight_bounds: Option<bool>,
-}
 
 /// Byte mass of one partition, summed from the active files' log statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -278,7 +249,7 @@ pub struct LoadRequest {
     pub snapshot_version: Option<u64>,
     /// Storage options (`AWS_*` names), copied onto the record.
     pub env: BTreeMap<String, String>,
-    /// When false, omit min/max/null maps (keep `num_records` / `bytes_per_row`).
+    /// When false, omit first/last/null maps (keep `record_count` / `bytes_per_row`).
     pub file_stats: bool,
     /// When false, read only the snapshot metadata: no commit log, no active
     /// files.
@@ -453,7 +424,7 @@ pub(crate) fn add_partition_total(
         .checked_add(file.size_bytes)
         .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.path)))?;
     entry.num_records = match (entry.num_records, file.stats.as_ref()) {
-        (Some(sum), Some(stats)) => Some(sum.checked_add(stats.num_records).ok_or_else(|| {
+        (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(|| {
             Error(format!(
                 "partition record total overflowed for {}",
                 file.path

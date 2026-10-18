@@ -231,14 +231,14 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
         .find(|file| file.path == "part=a/added.parquet")
         .unwrap();
     let stats = added.stats.as_ref().unwrap();
-    assert_eq!(stats.num_records, 9);
-    assert_eq!(stats.min_values["id"], 0);
-    assert_eq!(stats.max_values["id"], 8);
+    assert_eq!(stats.record_count, 9);
+    assert_eq!(stats.first_values["id"], 0);
+    assert_eq!(stats.last_values["id"], 8);
     assert_eq!(stats.null_count["id"], 0);
     assert_eq!(stats.tight_bounds, Some(true));
     assert_eq!(
         stats.bytes_per_row,
-        Some(added.size_bytes as f64 / stats.num_records as f64)
+        Some(added.size_bytes as f64 / stats.record_count as f64)
     );
     assert_eq!(added.partition_values["part"].as_deref(), Some("a"));
     let part_a = latest
@@ -353,7 +353,7 @@ async fn load_resolves_checkpoint_after_old_json_is_removed() {
         .iter()
         .find(|file| file.path == "part=b/kept.parquet")
         .unwrap();
-    assert_eq!(kept.stats.as_ref().unwrap().num_records, 5);
+    assert_eq!(kept.stats.as_ref().unwrap().record_count, 5);
 }
 
 #[tokio::test]
@@ -639,10 +639,10 @@ async fn load_omits_stat_maps_when_disabled() {
         .stats
         .as_ref()
         .unwrap();
-    assert_eq!(stats.num_records, 9);
+    assert_eq!(stats.record_count, 9);
     assert!(stats.bytes_per_row.is_some());
-    assert!(stats.min_values.is_empty());
-    assert!(stats.max_values.is_empty());
+    assert!(stats.first_values.is_empty());
+    assert!(stats.last_values.is_empty());
     assert!(stats.null_count.is_empty());
     assert!(stats.tight_bounds.is_none());
 }
