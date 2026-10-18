@@ -2,7 +2,8 @@
 
 use crate::handles::{Lake, Workspace};
 use crate::prelude::*;
-use crate::records::{many, one, Record, Table, TableRef};
+use crate::records::{many, one, Table, TableRef};
+use crate::requests::Storage;
 
 #[pyfunction]
 #[pyo3(name = "get")]
@@ -10,17 +11,16 @@ fn table_get(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
     lake: PyRef<'_, Lake>,
-    table: PyRef<'_, Record>,
+    name: String,
+    storage: &Storage,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
     let lake = lake.0.clone();
-    let fields = table.fields().clone();
+    let storage = LibStorage::from(storage);
     one(
         py,
         async move {
-            let table: pqbench::v1::Table =
-                serde_json::from_value(Value::Object(fields)).map_err(|error| error.to_string())?;
-            pqbench::table::get::get(&workspace, &lake, &table)
+            pqbench::table::get::get(&workspace, &lake, &name, &storage)
                 .await
                 .map_err(|error| error.to_string())
         },

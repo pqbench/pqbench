@@ -14,6 +14,7 @@ pub(crate) use pqbench::experiment::{Aim as LibAim, ExperimentRequest as LibExpe
 pub(crate) use pqbench::lz::LzRequest as LibLzRequest;
 pub(crate) use pqbench::profile::ProfileRequest as LibProfileRequest;
 pub(crate) use pqbench::stats;
+pub(crate) use pqbench::table::get::Storage as LibStorage;
 pub(crate) use pqbench::third_party::parquet::api::{read_sample, read_typed_sample};
 pub(crate) use pqbench::third_party::parquet::api::{
     Sample as LibSample, TypedSample as LibTypedSample,

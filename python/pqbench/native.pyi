@@ -97,6 +97,23 @@ class Lake:
     def __init__(self, workspace: Workspace) -> None: ...
     def __repr__(self) -> str: ...
 
+class Storage:
+    """Where a table's metadata lives, for :func:`table.get.get`."""
+
+    def __init__(
+        self,
+        location: str | None = None,
+        env: dict[str, str] | None = None,
+        credentials: dict[str, Any] | None = None,
+    ) -> None:
+        """``credentials`` is a vended lease as a ref carries it, converted to
+        the ``AWS_*`` options ``env`` holds."""
+        ...
+    @property
+    def env(self) -> dict[str, str]: ...
+    @property
+    def location(self) -> str | None: ...
+
 class LzRequest:
     """Arguments for ``pqbench.native.lz.lz``."""
 
@@ -379,7 +396,8 @@ class table:
         async def get(
             workspace: Workspace,
             lake: Lake,
-            table: TableRef,
+            name: str,
+            storage: Storage,
         ) -> Table: ...
 
     class list:

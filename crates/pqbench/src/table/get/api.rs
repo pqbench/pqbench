@@ -4,6 +4,7 @@
 //! the wire form of the loaded [`TableInfo`](crate::table::TableInfo) — and the
 //! CLI forwards it as-is.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 pub use crate::config::Dialect as TableFormat;
@@ -29,20 +30,35 @@ impl From<String> for Error {
     }
 }
 
-/// Read the record of the table `table` names — the ref
-/// [`credentials::get`](crate::credentials::get::get) returns, or a bare
-/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` name.
+/// Where and how a table's metadata is read: the storage path a parent ref
+/// already carries (when it does), and the object-store options the read needs.
+pub struct Storage {
+    /// The storage path a parent ref already carries, when it does. The catalog
+    /// stays authoritative; this only lets the storage read start earlier.
+    pub location: Option<String>,
+    /// The object-store options (`AWS_*` names) the read needs.
+    pub env: BTreeMap<String, String>,
+}
+
+/// Read the record of the table `name` — a
+/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name — at the
+/// workspace's endpoint.
 ///
 /// The catalog names the table and the location to load; the table's own
 /// metadata is read without files (`without_files()` for Delta, the metadata
-/// JSON only for Iceberg), so the cost is O(1) in files. The ref's `uri`, when
-/// it has one, starts the storage read alongside the catalog call — the
-/// catalog's own location stays authoritative — and its `credentials` are the
-/// object-store options that read uses.
+/// JSON only for Iceberg), so the cost is O(1) in files. `storage` carries the
+/// object-store options that read needs and, when the parent ref already named
+/// it, the location, so the storage read starts alongside the catalog call; the
+/// catalog's own location stays authoritative.
 ///
 /// # Errors
-/// Fails when the ref is not a table name, the endpoint cannot be reached,
+/// Fails when `name` is not a table name, the endpoint cannot be reached,
 /// answers with an unexpected status, or the table's metadata cannot be read.
-pub async fn get(workspace: &Workspace, lake: &Lake, table: &Table) -> Result<Table, Error> {
-    super::r#impl::get(workspace, lake, table).await
+pub async fn get(
+    workspace: &Workspace,
+    lake: &Lake,
+    name: &str,
+    storage: &Storage,
+) -> Result<Table, Error> {
+    super::r#impl::get(workspace, lake, name, storage).await
 }

@@ -3,16 +3,16 @@
 //! Every name is the library function of the same path, with the same
 //! arguments: `pqbench.native.metastore.get.get(workspace)`,
 //! `pqbench.native.catalog.list.list(workspace)`,
-//! `pqbench.native.table.get.get(workspace, lake, table)`,
-//! `pqbench.native.credentials.check.check(workspace, table)`.
+//! `pqbench.native.file.list.list(lake, uri, env, versions)`,
+//! `pqbench.native.credentials.check.check(workspace, catalog, schema, table)`.
 //!
 //! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the
-//! request structs (`LzRequest`, `CompressionRequest`, `BytemassRequest`,
-//! `ProfileRequest`, `ExperimentRequest`) are Python classes, and so are the
-//! records: a model's record is its class, so `record["uri"]`, `record.uri` and
-//! `record.asdict()` agree, and the deep trees it embeds stay dicts. A
-//! collection the library streams is an async iterator, a single value an
-//! awaitable.
+//! request structs (`Storage`, `LzRequest`, `CompressionRequest`,
+//! `BytemassRequest`, `ProfileRequest`, `ExperimentRequest`) are Python
+//! classes, and so are the records: a model's record is its class, so
+//! `record["uri"]`, `record.uri` and `record.asdict()` agree, and the deep
+//! trees it embeds stay dicts. A collection the library streams is an async
+//! iterator, a single value an awaitable.
 //!
 //! The binding is split the way the library is: one module per domain, each
 //! owning its command and the function that registers it, so a domain can be

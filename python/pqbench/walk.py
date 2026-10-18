@@ -146,7 +146,9 @@ async def walk(
                 await pace("credentials.get")
                 ref = await native.credentials.get.get(workspace, ref)
                 env = _lease(ref.get("credentials"))
-                info = await native.table.get.get(workspace, lake, ref)
+                info = await native.table.get.get(
+                    workspace, lake, ref["name"], native.Storage(env=env)
+                )
                 uri = info.get("uri")
                 if not uri:
                     return

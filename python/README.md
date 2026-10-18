@@ -57,7 +57,13 @@ async def main():
     )
     # `credentials.get.get` is ref -> ref: the lease lands on the ref as `credentials`.
     ref = await pqbench.native.credentials.get.get(workspace, refs[0])
-    table = await pqbench.native.table.get.get(workspace, lake, ref)
+    storage = pqbench.native.Storage(credentials=ref["credentials"])
+    table = await pqbench.native.table.get.get(
+        workspace,
+        lake,
+        "catalogs/dbx_samples/schemas/nyctaxi/tables/trips",
+        storage,
+    )
 
     # `partition.list.list` and `file.list.list` stream (async iterators); the
     # single-value verbs are awaitable.
