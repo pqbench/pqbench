@@ -26,7 +26,7 @@ import asyncio
 import logging
 import math
 from collections.abc import AsyncIterator, Awaitable
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from pqbench import native
 
@@ -50,17 +50,6 @@ _DONE = object()
 def _leaf(record: native.Record) -> str:
     """The id segment of a resource name (its last path component)."""
     return record["name"].rsplit("/", 1)[-1]
-
-
-def _lease(credentials: dict[str, Any] | None) -> dict[str, str]:
-    """A vended lease as the ``AWS_*`` options a storage read needs."""
-    lease = credentials or {}
-    options = {
-        "AWS_ACCESS_KEY_ID": lease.get("access_key_id"),
-        "AWS_SECRET_ACCESS_KEY": lease.get("secret_access_key"),
-        "AWS_SESSION_TOKEN": lease.get("session_token"),
-    }
-    return {name: value for name, value in options.items() if value}
 
 
 async def walk(
@@ -145,19 +134,20 @@ async def walk(
                     return
                 await pace("credentials.get")
                 ref = await native.credentials.get.get(workspace, ref)
-                env = _lease(ref.get("credentials"))
-                info = await native.table.get.get(
-                    workspace, lake, ref["name"], native.Storage(env=env)
-                )
+                storage = native.Storage(credentials=ref.get("credentials"))
+                info = await native.table.get.get(workspace, lake, ref["name"], storage)
                 uri = info.get("uri")
                 if not uri:
                     return
                 async for partition in native.partition.list.list(
-                    lake, info["name"], uri, env, window_millis
+                    lake, info["name"], uri, storage.env, window_millis
                 ):
-                    files_env = {**env, **_lease(partition.get("credentials"))}
+                    # The partition's own lease reads its files, over the table's.
+                    files = native.Storage(
+                        env=storage.env, credentials=partition.get("credentials")
+                    )
                     async for file in native.file.list.list(
-                        lake, partition["uri"], files_env, partition["commit_versions"]
+                        lake, partition["uri"], files.env, partition["commit_versions"]
                     ):
                         await queue.put(file)
             except Exception as error:  # noqa: BLE001 - a table we may not read
