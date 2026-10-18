@@ -190,7 +190,6 @@ analogy, convention, or precedent:
   workspace member (maturin builds the wheel from `python/`). `make check-python` builds
   and tests it
 - `skills/` — agent skills compiled into `pqbench skill`
-- `.cursor/skills/` — Cursor pointers to those skills
 - `scripts/` — build / sample / smoke-test helpers
 - `docs/` — user documentation (`cli.md`, `profile.md`, `experiment.md`,
   `skill.md`, `viz.md`)
