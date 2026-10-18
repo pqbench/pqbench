@@ -141,7 +141,16 @@ macro_rules! record_class {
     )*};
 }
 
-record_class!(Catalog, Schema, TableRef, Table, Partition, TableFile, MassRow);
+record_class!(
+    Catalog,
+    Schema,
+    TableRef,
+    Table,
+    Partition,
+    TableFile,
+    MassRow,
+    Credentials
+);
 
 /// The function that wraps one value of a model as its record.
 pub(crate) type Attach<T> = fn(Python<'_>, &T) -> PyResult<Py<PyAny>>;
