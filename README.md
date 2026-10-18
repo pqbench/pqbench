@@ -63,6 +63,33 @@ The same walk runs offline against the local Delta and Iceberg stand,
 `make lakehouse`. [Getting started](https://pqbench.github.io/pqbench/getting-started/) takes one Parquet
 file to a treemap, and the [CLI reference](https://pqbench.github.io/pqbench/cli/) documents every command.
 
+## Showcases
+
+[Showcases](https://pqbench.github.io/pqbench/showcases/) runs the commands as
+jobs on real public data — triage which columns own the file, choose a codec,
+verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
+2.1 MB Reddit comments sample, three of seven columns are 99.7% of the bytes:
+
+```console run
+$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
+column            type        codec         encodings                  bytes  values
+----------------  ----------  ------------  ------------------------  ------  ------
+text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
+label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
+dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
+communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
+datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
+username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
+url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
+files: 1
+rows: 3000
+columns: 7
+```
+
+`profile` explains it, `compression` picks the codec, and `experiment` proves a
+layout change before you apply it. The [Showcases](https://pqbench.github.io/pqbench/showcases/)
+page walks all four end to end.
+
 ## Commands
 
 The core measurements. The walk's [`get` and `list`](#the-walk-end-to-end) come
