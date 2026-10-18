@@ -13,6 +13,15 @@ publish = false
 
 [workspace]
 
+# `maturin develop` reinstalls the debug cdylib on every run, so its size is a
+# per-run cost: at the default `debug = 2` it was 722 MiB — 555 MiB of it DWARF
+# and 75 MiB symbol tables — and maturin's install copy alone took ~15 s. This
+# crate is its own workspace root, so it does not inherit the root workspace's
+# `debug = 1`; the extension is not debugged, so it asks for no debug info. The
+# wheel is built in the release profile and is unaffected.
+[profile.dev]
+debug = 0
+
 [lib]
 name = "native"
 crate-type = ["cdylib"]
