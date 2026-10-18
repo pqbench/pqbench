@@ -1,15 +1,14 @@
 //! `credentials get`: put vended read credentials on each table-ref:
 //! `list tables | credentials get`.
 
-use std::collections::BTreeMap;
-
 use futures_util::stream::StreamExt;
 use serde::Serialize;
 use serde_json::Value;
 
 use super::StageArgs;
+use crate::document::invalid_json;
 use crate::emit::{Align, Emitter, Row};
-use crate::source::{self, read_input, table_ref, vend};
+use crate::source::{self, read_input};
 use crate::CliError;
 
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
@@ -22,18 +21,16 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     let mut tables = 0;
     let mut vends = records
         .map(|record| async {
-            let record = record?;
-            let (catalog, schema, name) = table_ref("credentials get", &record)?;
-            let credentials = vend(workspace, &catalog, &schema, &name).await?;
-            Ok::<_, CliError>((record, credentials))
+            let table: pqbench::v1::Table =
+                serde_json::from_value(record?).map_err(invalid_json)?;
+            Ok::<_, CliError>(pqbench::credentials::get::vend(workspace, &table).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(result) = vends.next().await {
-        let (record, credentials) = result?;
-        let vended = credentials.is_some();
+        let table = result?;
         emit.write_row(&VendedRef {
-            record: attach_credentials(record, credentials),
-            vended,
+            vended: table.credentials.is_some(),
+            record: serde_json::to_value(&table).unwrap_or(Value::Null),
         })
         .await?;
         tables += 1;
@@ -41,30 +38,8 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     emit.finish(&format!("tables: {tables}\n")).await
 }
 
-/// The ref with the vended lease written onto it as its `credentials` value;
-/// the older `env` bag, if any, is dropped, so a table's lease lives in one
-/// place. A table the catalog vends nothing for is passed through unchanged.
-fn attach_credentials(mut record: Value, env: Option<BTreeMap<String, String>>) -> Value {
-    let Some(env) = env else {
-        return record;
-    };
-    let credentials = pqbench::v1::Credentials::from_env(&env);
-    if credentials.is_empty() {
-        return record;
-    }
-    let Some(object) = record.as_object_mut() else {
-        return record;
-    };
-    object.remove("env");
-    object.insert(
-        "credentials".to_string(),
-        serde_json::to_value(credentials).unwrap_or(Value::Null),
-    );
-    record
-}
-
 /// The row `credentials get` writes: the ref, plus whether creds were vended.
-/// The serialized form is the ref itself.
+/// The serialized form is the ref itself, with its lease on it.
 struct VendedRef {
     record: Value,
     vended: bool,

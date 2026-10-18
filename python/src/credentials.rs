@@ -1,8 +1,9 @@
 //! `credentials`: whether a table is readable here, and its lease.
 
 use crate::handles::Workspace;
-use crate::marshal::{drive, records};
+use crate::marshal::drive;
 use crate::prelude::*;
+use crate::records::{one, Record, TableRef};
 
 #[pyclass]
 pub(crate) struct Eligibility {
@@ -67,36 +68,27 @@ fn credentials_check(
         Python::attach(|py| Ok(Py::new(py, Eligibility::from(eligibility))?.into_any()))
     })
 }
+/// Vend the ref's read credentials and write them onto it: `Table` -> `Table`.
 #[pyfunction]
-#[pyo3(name = "vend_unity")]
-fn credentials_vend_unity(
+#[pyo3(name = "vend")]
+fn credentials_vend(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
-    catalog: String,
-    schema: String,
-    table: String,
+    table: PyRef<'_, Record>,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
-    records(py, async move {
-        pqbench::credentials::get::vend_unity(&workspace, &catalog, &schema, &table)
-            .await
-            .map_err(|error| error.to_string())
-    })
-}
-#[pyfunction]
-#[pyo3(name = "vend_iceberg")]
-fn credentials_vend_iceberg(
-    py: Python<'_>,
-    workspace: PyRef<'_, Workspace>,
-    schema: String,
-    table: String,
-) -> PyResult<Py<PyAny>> {
-    let workspace = workspace.0.clone();
-    records(py, async move {
-        pqbench::credentials::get::vend_iceberg(&workspace, &schema, &table)
-            .await
-            .map_err(|error| error.to_string())
-    })
+    let fields = table.fields().clone();
+    one(
+        py,
+        async move {
+            let table: pqbench::v1::Table =
+                serde_json::from_value(Value::Object(fields)).map_err(|error| error.to_string())?;
+            pqbench::credentials::get::vend(&workspace, &table)
+                .await
+                .map_err(|error| error.to_string())
+        },
+        TableRef::attach,
+    )
 }
 
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -105,8 +97,7 @@ pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<(
     let check = crate::submodule(py, &credentials, "check")?;
     check.add_function(wrap_pyfunction!(credentials_check, &check)?)?;
     let get = crate::submodule(py, &credentials, "get")?;
-    get.add_function(wrap_pyfunction!(credentials_vend_unity, &get)?)?;
-    get.add_function(wrap_pyfunction!(credentials_vend_iceberg, &get)?)?;
+    get.add_function(wrap_pyfunction!(credentials_vend, &get)?)?;
     crate::expose(py, "pqbench.native.credentials", &credentials)?;
     crate::expose(py, "pqbench.native.credentials.check", &check)?;
     crate::expose(py, "pqbench.native.credentials.get", &get)?;

@@ -104,7 +104,11 @@ class Storage:
         self,
         location: str | None = None,
         env: dict[str, str] | None = None,
-    ) -> None: ...
+        credentials: dict[str, Any] | None = None,
+    ) -> None:
+        """``credentials`` is a vended lease as a ref carries it, converted to
+        the ``AWS_*`` options ``env`` holds."""
+        ...
     @property
     def env(self) -> dict[str, str]: ...
     @property
@@ -456,26 +460,17 @@ class credentials:
         ) -> Eligibility: ...
 
     class get:
-        """``pqbench.native.credentials.get``: the ``AWS_*`` lease for one table."""
+        """``pqbench.native.credentials.get``: the lease, written on the ref."""
 
         @staticmethod
-        async def vend_unity(
-            workspace: Workspace,
-            catalog: str,
-            schema: str,
-            table: str,
-        ) -> dict[str, Any] | None:
-            """The vended lease — ``access_key_id``, ``secret_access_key``,
-            ``session_token``, ``expire_time`` — or ``None`` when the endpoint
-            vends none."""
+        async def vend(workspace: Workspace, table: TableRef) -> TableRef:
+            """The ref with its vended read credentials on it, as ``credentials``.
+
+            ``access_key_id``/``secret_access_key``/``session_token`` are the
+            lease; the ref comes back unchanged when the catalog vends nothing
+            for the table.
+            """
             ...
-
-        @staticmethod
-        async def vend_iceberg(
-            workspace: Workspace,
-            schema: str,
-            table: str,
-        ) -> dict[str, Any] | None: ...
 
 class bytemass:
     """``pqbench.native.bytemass``: the per-column byte masses of Parquet files."""

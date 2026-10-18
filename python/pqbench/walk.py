@@ -2,7 +2,7 @@
 
 The verbs compose by hand — the pipeline the CLI pipes together,
 ``catalog.ls.list | schema.ls.list | table.ls.list | credentials.check.check |
-credentials.get.vend_unity | table.get.read | partition.ls.list |
+credentials.get.vend | table.get.read | partition.ls.list |
 file.ls.list`` — but a hand-written ``for`` loop awaits one table at a time,
 and on a real endpoint that is the difference between minutes and seconds.
 This helper is that composition with the independence handed to ``asyncio``:
@@ -82,7 +82,7 @@ async def walk(
 
     ``concurrency`` bounds the tables in flight, and with them the requests in
     flight; each table's chain (``credentials.check.check`` →
-    ``credentials.get.vend_unity`` → ``table.get.read`` → ``partition.ls.list``
+    ``credentials.get.vend`` → ``table.get.read`` → ``partition.ls.list``
     → ``file.ls.list``) is sequential, so this is the only parallelism there
     is. ``lake`` defaults to one over ``workspace``.
 
@@ -134,26 +134,23 @@ async def walk(
             _log.debug("skipped an unreadable level: %s", error)
             return default
 
-    async def descend(name: str, schema: str, table: str) -> None:
+    async def descend(ref: native.TableRef, catalog: str, schema: str) -> None:
         """One table's chain, holding one of the `concurrency` slots."""
         nonlocal skipped
+        table = _leaf(ref)
         async with inflight:
             try:
                 await pace("credentials.check")
                 eligibility = await native.credentials.check.check(
-                    workspace, name, schema, table
+                    workspace, catalog, schema, table
                 )
                 if not eligibility.eligible:
                     return
                 await pace("credentials.get")
-                env = (
-                    await native.credentials.get.vend_unity(
-                        workspace, name, schema, table
-                    )
-                    or {}
-                )
+                ref = await native.credentials.get.vend(workspace, ref)
+                env = _lease(ref.get("credentials"))
                 info = await native.table.get.read(
-                    workspace, lake, name, schema, table, native.Storage(env=env)
+                    workspace, lake, catalog, schema, table, native.Storage(env=env)
                 )
                 uri = info.get("uri")
                 if not uri:
@@ -190,7 +187,7 @@ async def walk(
                     )
                     for ref in refs:
                         tasks.append(
-                            asyncio.create_task(descend(name, schema_name, _leaf(ref)))
+                            asyncio.create_task(descend(ref, name, schema_name))
                         )
             await asyncio.gather(*tasks, return_exceptions=True)
         finally:

@@ -48,23 +48,22 @@ async def main():
     await pqbench.native.catalog.get.read(workspace, "dbx_samples")
     await pqbench.native.catalog.ls.list(workspace)
     await pqbench.native.schema.ls.list(workspace, "dbx_samples")
-    await pqbench.native.table.ls.list(workspace, "dbx_samples", "nyctaxi")
+    refs = await pqbench.native.table.ls.list(workspace, "dbx_samples", "nyctaxi")
     await pqbench.native.credentials.check.check(workspace, "dbx_samples", "nyctaxi", "trips")
-    lease = await pqbench.native.credentials.get.vend_unity(
-        workspace, "dbx_samples", "nyctaxi", "trips"
-    )
+    # `get.vend` is ref -> ref: the lease lands on the ref as its `credentials`.
+    ref = await pqbench.native.credentials.get.vend(workspace, refs[0])
+    storage = pqbench.native.Storage(credentials=ref["credentials"])
     table = await pqbench.native.table.get.read(
-        workspace, lake, "dbx_samples", "nyctaxi", "trips",
-        pqbench.native.Storage(env=lease or {}),
+        workspace, lake, "dbx_samples", "nyctaxi", "trips", storage,
     )
 
     # `partition.ls.list` and `file.ls.list` stream (async iterators); the
     # single-value verbs are awaitable.
     async for partition in pqbench.native.partition.ls.list(
-        lake, table["name"], table["uri"], lease or {}, 86_400_000
+        lake, table["name"], table["uri"], storage.env, 86_400_000
     ):
         async for file in pqbench.native.file.ls.list(
-            lake, partition["uri"], lease or {}, partition["commit_versions"]
+            lake, partition["uri"], storage.env, partition["commit_versions"]
         ):
             print(file["uri"])
 

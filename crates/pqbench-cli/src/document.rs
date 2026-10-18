@@ -223,7 +223,7 @@ pub(crate) async fn is_document(path: &str) -> bool {
         == Some(b'{')
 }
 
-fn invalid_json(error: serde_json::Error) -> CliError {
+pub(crate) fn invalid_json(error: serde_json::Error) -> CliError {
     format!(
         "invalid pqbench document at line {}, column {}",
         error.line(),

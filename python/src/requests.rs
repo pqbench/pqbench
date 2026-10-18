@@ -4,6 +4,11 @@ use crate::handles::{Aim, Mode};
 use crate::prelude::*;
 
 /// Where a table's metadata lives, for `table.get.read`.
+///
+/// `env` is the `AWS_*` options to read with. `credentials` is a vended lease
+/// as a ref carries it (`access_key_id`, `secret_access_key`,
+/// `session_token`), converted to those options, so
+/// `Storage(credentials=ref["credentials"])` needs no mapping by hand.
 #[pyclass(skip_from_py_object)]
 #[derive(Clone, Default)]
 pub(crate) struct Storage {
@@ -13,12 +18,20 @@ pub(crate) struct Storage {
 #[pymethods]
 impl Storage {
     #[new]
-    #[pyo3(signature = (location=None, env=None))]
-    fn new(location: Option<String>, env: Option<BTreeMap<String, String>>) -> Self {
-        Self {
-            location,
-            env: env.unwrap_or_default(),
+    #[pyo3(signature = (location=None, env=None, credentials=None))]
+    fn new(
+        location: Option<String>,
+        env: Option<BTreeMap<String, String>>,
+        credentials: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let mut env = env.unwrap_or_default();
+        if let Some(credentials) = credentials {
+            let value = crate::marshal::py_to_value(&credentials)?;
+            let lease: pqbench::v1::Credentials =
+                serde_json::from_value(value).map_err(crate::marshal::value_error)?;
+            env.extend(lease.to_env());
         }
+        Ok(Self { location, env })
     }
 
     #[getter]
