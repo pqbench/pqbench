@@ -33,7 +33,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
         if input.first.is_some() {
             return Err("list schemas takes CATALOG or a catalog stream, not both".into());
         }
-        let schemas = ls::list(workspace, catalog).await?;
+        let schemas = ls::list(workspace, &pqbench::v1::name::catalog(catalog)).await?;
         for schema in &schemas {
             emit.write_row(schema).await?;
         }
@@ -46,8 +46,8 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
     let mut schemas = 0;
     let mut lists = records
         .map(|record| async {
-            let catalog = catalog_ref("list schemas", &record?)?;
-            Ok::<_, CliError>(ls::list(workspace, &catalog).await?)
+            let name = catalog_ref("list schemas", &record?)?;
+            Ok::<_, CliError>(ls::list(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {

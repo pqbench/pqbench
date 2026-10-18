@@ -28,11 +28,12 @@ impl From<String> for Error {
     }
 }
 
-/// List the schemas in `catalog` at the workspace's endpoint.
+/// List the schemas in the catalog `name` — a `catalogs/{catalog}` resource
+/// name — at the workspace's endpoint.
 ///
 /// # Errors
-/// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or returns a malformed schema page.
-pub async fn list(workspace: &Workspace, catalog: &str) -> Result<Vec<Schema>, Error> {
-    super::r#impl::list(workspace, catalog).await
+/// Fails when `name` is not a catalog name, the endpoint cannot be reached,
+/// answers with an unexpected status, or returns a malformed schema page.
+pub async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Schema>, Error> {
+    super::r#impl::list(workspace, name).await
 }

@@ -99,11 +99,12 @@ pub(crate) fn metastore_ref(command: &str, record: &Value) -> Result<String, Cli
         })
 }
 
-/// The catalog id a catalog ref names: a `catalogs/{catalog}` resource name.
+/// The `catalogs/{catalog}` name a catalog ref carries.
 pub(crate) fn catalog_ref(command: &str, record: &Value) -> Result<String, CliError> {
     record["name"]
         .as_str()
-        .and_then(pqbench::v1::name::parse_catalog)
+        .filter(|name| pqbench::v1::name::parse_catalog(name).is_some())
+        .map(ToOwned::to_owned)
         .ok_or_else(|| {
             format!("{command} reads pqbench catalog resources; a record needs a `catalogs/…` name")
                 .into()

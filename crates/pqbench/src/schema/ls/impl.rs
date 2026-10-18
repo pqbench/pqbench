@@ -42,15 +42,17 @@ struct NamespacesPage {
     next_page_token: Option<String>,
 }
 
-pub(crate) async fn list(workspace: &Workspace, catalog: &str) -> Result<Vec<Schema>, Error> {
+pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Schema>, Error> {
+    let catalog = crate::v1::name::parse_catalog(name)
+        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/… name")))?;
     let names = match workspace.config().dialect {
-        TableFormat::Unity => unity_schemas(workspace, catalog).await?,
+        TableFormat::Unity => unity_schemas(workspace, &catalog).await?,
         TableFormat::Iceberg => iceberg_namespaces(workspace).await?,
     };
     let mut schemas: Vec<Schema> = names
         .into_iter()
         .map(|schema| Schema {
-            name: crate::v1::name::schema(catalog, &schema),
+            name: crate::v1::name::schema(&catalog, &schema),
             ..Schema::default()
         })
         .collect();

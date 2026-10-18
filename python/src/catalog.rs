@@ -9,13 +9,13 @@ use crate::records::{many, one, Catalog};
 fn catalog_read(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
-    catalog: String,
+    name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
     one(
         py,
         async move {
-            pqbench::catalog::get::read(&workspace, &catalog)
+            pqbench::catalog::get::read(&workspace, &name)
                 .await
                 .map_err(|error| error.to_string())
         },

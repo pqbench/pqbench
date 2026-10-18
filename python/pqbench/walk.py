@@ -172,22 +172,22 @@ async def walk(
         try:
             await pace("catalog.ls")
             for listed in await native.catalog.ls.list(workspace):
-                name = _leaf(listed)
-                if catalog is not None and name != catalog:
+                catalog_name = _leaf(listed)
+                if catalog is not None and catalog_name != catalog:
                     continue
                 await pace("schema.ls")
                 schemas = await skip_level(
-                    native.schema.ls.list(workspace, name), []
+                    native.schema.ls.list(workspace, listed["name"]), []
                 )
                 for schema in schemas:
                     schema_name = _leaf(schema)
                     await pace("table.ls")
                     refs = await skip_level(
-                        native.table.ls.list(workspace, name, schema_name), []
+                        native.table.ls.list(workspace, catalog_name, schema_name), []
                     )
                     for ref in refs:
                         tasks.append(
-                            asyncio.create_task(descend(ref, name, schema_name))
+                            asyncio.create_task(descend(ref, catalog_name, schema_name))
                         )
             await asyncio.gather(*tasks, return_exceptions=True)
         finally:

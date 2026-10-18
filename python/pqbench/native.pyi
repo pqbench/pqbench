@@ -363,7 +363,7 @@ class catalog:
         """``pqbench.native.catalog.get``: read one catalog."""
 
         @staticmethod
-        async def read(workspace: Workspace, catalog: str) -> Catalog: ...
+        async def read(workspace: Workspace, name: str) -> Catalog: ...
 
     class ls:
         """``pqbench.native.catalog.ls``: list the catalogs."""
@@ -384,7 +384,7 @@ class schema:
         """``pqbench.native.schema.ls``: list a catalog's schemas."""
 
         @staticmethod
-        async def list(workspace: Workspace, catalog: str) -> list[Schema]: ...
+        async def list(workspace: Workspace, name: str) -> list[Schema]: ...
 
 class table:
     """``pqbench.native.table``: one table, or a schema's refs."""

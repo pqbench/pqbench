@@ -45,9 +45,9 @@ async def main():
 
     # The walk, one function per resource. The I/O verbs are awaitable.
     await pqbench.native.metastore.get.read(workspace)
-    await pqbench.native.catalog.get.read(workspace, "dbx_samples")
+    await pqbench.native.catalog.get.read(workspace, "catalogs/dbx_samples")
     await pqbench.native.catalog.ls.list(workspace)
-    await pqbench.native.schema.ls.list(workspace, "dbx_samples")
+    await pqbench.native.schema.ls.list(workspace, "catalogs/dbx_samples")
     refs = await pqbench.native.table.ls.list(workspace, "dbx_samples", "nyctaxi")
     await pqbench.native.credentials.check.check(workspace, "dbx_samples", "nyctaxi", "trips")
     # `get.vend` is ref -> ref: the lease lands on the ref as its `credentials`.

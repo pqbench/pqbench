@@ -15,7 +15,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Resu
         if input.first.is_some() {
             return Err("get catalog takes CATALOG or a catalog stream, not both".into());
         }
-        let catalog = get::read(workspace, name).await?;
+        let catalog = get::read(workspace, &pqbench::v1::name::catalog(name)).await?;
         emit.write_row(&catalog).await?;
         return emit.finish("catalogs: 1\n").await;
     }
