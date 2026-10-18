@@ -39,7 +39,7 @@ fn walk(source: &str, node: Node, prefix: &str, out: &mut Vec<Entry>) {
         match definition.node.kind() {
             "class_definition" => read_class(source, definition.node, prefix, out),
             "function_definition"
-                if prefix == ROOT || is_staticmethod(source, definition.decorators) =>
+                if prefix == ROOT || is_staticmethod(source, definition.decorated) =>
             {
                 push_function(source, definition.node, prefix, out);
             }
@@ -49,11 +49,11 @@ fn walk(source: &str, node: Node, prefix: &str, out: &mut Vec<Entry>) {
 }
 
 /// A block child that is a definition: the `function_definition` or
-/// `class_definition` itself, and the node carrying its decorators (the
-/// definition itself when it is undecorated).
+/// `class_definition` itself, and the `decorated_definition` carrying its
+/// decorators (the definition itself when it is undecorated).
 struct Definition<'a> {
     node: Node<'a>,
-    decorators: Node<'a>,
+    decorated: Node<'a>,
 }
 
 impl<'a> Definition<'a> {
@@ -62,11 +62,11 @@ impl<'a> Definition<'a> {
         match child.kind() {
             "class_definition" | "function_definition" => Some(Self {
                 node: child,
-                decorators: child,
+                decorated: child,
             }),
             "decorated_definition" => Some(Self {
                 node: child.child_by_field_name("definition")?,
-                decorators: child,
+                decorated: child,
             }),
             _ => None,
         }
@@ -183,7 +183,7 @@ fn methods(source: &str, node: Node) -> Vec<Method> {
             continue;
         };
         if definition.node.kind() != "function_definition"
-            || is_staticmethod(source, definition.decorators)
+            || is_staticmethod(source, definition.decorated)
         {
             continue;
         }
