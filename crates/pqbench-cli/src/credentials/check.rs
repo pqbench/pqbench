@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use super::StageArgs;
 use crate::emit::{Align, Emitter, Row};
-use crate::source::{self, read_input, table_ref};
+use crate::source::{self, dotted_name, read_input, table_ref};
 use crate::CliError;
 
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
@@ -67,7 +67,7 @@ async fn check(workspace: &pqbench::Workspace, name: &str) -> Result<Option<Stri
     if eligibility.eligible {
         return Ok(None);
     }
-    Ok(Some(ineligible(name, eligibility.reason)))
+    Ok(Some(ineligible(&dotted_name(name), eligibility.reason)))
 }
 
 /// The message an ineligible table reports.

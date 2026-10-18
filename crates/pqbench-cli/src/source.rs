@@ -151,6 +151,15 @@ pub(crate) fn table_ref(command: &str, record: &Value) -> Result<String, CliErro
         })
 }
 
+/// The dotted `catalog.schema.table` a table ref names, for a message; the ref
+/// itself when the name is not a table ref (a path read names a local table).
+pub(crate) fn dotted_name(name: &str) -> String {
+    match pqbench::v1::name::parse_table(name) {
+        Some((catalog, schema, table)) => format!("{catalog}.{schema}.{table}"),
+        None => name.to_string(),
+    }
+}
+
 /// The storage location a table ref names: the [`Table`]'s `uri`. `None` when
 /// the ref names no location (a view, or an Iceberg identifier until
 /// `get table` resolves it).
