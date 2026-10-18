@@ -68,8 +68,8 @@ fn credentials_check(
 }
 /// Vend the ref's read credentials and write them onto it: `Table` -> `Table`.
 #[pyfunction]
-#[pyo3(name = "vend")]
-fn credentials_vend(
+#[pyo3(name = "get")]
+fn credentials_get(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
     table: PyRef<'_, Record>,
@@ -81,7 +81,7 @@ fn credentials_vend(
         async move {
             let table: pqbench::v1::Table =
                 serde_json::from_value(Value::Object(fields)).map_err(|error| error.to_string())?;
-            pqbench::credentials::get::vend(&workspace, &table)
+            pqbench::credentials::get::get(&workspace, &table)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -95,7 +95,7 @@ pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<(
     let check = crate::submodule(py, &credentials, "check")?;
     check.add_function(wrap_pyfunction!(credentials_check, &check)?)?;
     let get = crate::submodule(py, &credentials, "get")?;
-    get.add_function(wrap_pyfunction!(credentials_vend, &get)?)?;
+    get.add_function(wrap_pyfunction!(credentials_get, &get)?)?;
     crate::expose(py, "pqbench.native.credentials", &credentials)?;
     crate::expose(py, "pqbench.native.credentials.check", &check)?;
     crate::expose(py, "pqbench.native.credentials.get", &get)?;

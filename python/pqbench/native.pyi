@@ -11,7 +11,7 @@ coroutine object, whose Python type is erased — ``future_into_py`` hands back
 The stub is where the erased type is written down, the way the sibling bindings
 do it (lancedb declares ``async def`` for its native module in
 ``_lancedb.pyi``; delta-rs ships ``_internal.pyi``). So an awaitable command is
-an ``async def`` returning its model, and ``await native.table.get.read(…)`` is
+an ``async def`` returning its model, and ``await native.table.get.get(…)`` is
 a :class:`Table`.
 
 **The records.** A record's fields are its model's, built from the same serde
@@ -98,7 +98,7 @@ class Lake:
     def __repr__(self) -> str: ...
 
 class Storage:
-    """Where a table's metadata lives, for :func:`table.get.read`."""
+    """Where a table's metadata lives, for :func:`table.get.get`."""
 
     def __init__(
         self,
@@ -240,7 +240,7 @@ class Schema(Record):
     properties: dict[str, str]
 
 class Table(Record):
-    """One table's record, as ``table.get.read`` resolves it."""
+    """One table's record, as ``table.get.get`` resolves it."""
 
     name: str
     uid: str | None
@@ -259,7 +259,7 @@ class TableRef(Record):
 
     The same model as :class:`Table`, carrying what a listing costs: Unity
     pages carry a storage location, Iceberg REST lists identifiers only, so
-    ``uri`` is unset there until ``table.get.read`` resolves it.
+    ``uri`` is unset there until ``table.get.get`` resolves it.
     """
 
     name: str
@@ -348,7 +348,7 @@ class metastore:
         """``pqbench.native.metastore.get``: read verbs."""
 
         @staticmethod
-        async def read(workspace: Workspace) -> dict[str, Any]:
+        async def get(workspace: Workspace) -> dict[str, Any]:
             """The metastore tree, as the crate's record.
 
             The tree is a document rather than a resource, so it stays a dict;
@@ -363,7 +363,7 @@ class catalog:
         """``pqbench.native.catalog.get``: read one catalog."""
 
         @staticmethod
-        async def read(workspace: Workspace, name: str) -> Catalog: ...
+        async def get(workspace: Workspace, name: str) -> Catalog: ...
 
     class list:
         """``pqbench.native.catalog.list``: list the catalogs."""
@@ -378,7 +378,7 @@ class schema:
         """``pqbench.native.schema.get``: read one schema."""
 
         @staticmethod
-        async def read(workspace: Workspace, name: str) -> Schema: ...
+        async def get(workspace: Workspace, name: str) -> Schema: ...
 
     class list:
         """``pqbench.native.schema.list``: list a catalog's schemas."""
@@ -393,7 +393,7 @@ class table:
         """``pqbench.native.table.get``: read one table."""
 
         @staticmethod
-        async def read(
+        async def get(
             workspace: Workspace,
             lake: Lake,
             name: str,
@@ -452,7 +452,7 @@ class credentials:
         """``pqbench.native.credentials.get``: the lease, written on the ref."""
 
         @staticmethod
-        async def vend(workspace: Workspace, table: TableRef) -> TableRef:
+        async def get(workspace: Workspace, table: TableRef) -> TableRef:
             """The ref with its vended read credentials on it, as ``credentials``.
 
             ``access_key_id``/``secret_access_key``/``session_token`` are the

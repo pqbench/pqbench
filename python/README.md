@@ -45,8 +45,8 @@ async def main():
     lake = pqbench.Lake(workspace)
 
     # The walk, one function per resource. The I/O verbs are awaitable.
-    await pqbench.native.metastore.get.read(workspace)
-    await pqbench.native.catalog.get.read(workspace, "catalogs/dbx_samples")
+    await pqbench.native.metastore.get.get(workspace)
+    await pqbench.native.catalog.get.get(workspace, "catalogs/dbx_samples")
     await pqbench.native.catalog.list.list(workspace)
     await pqbench.native.schema.list.list(workspace, "catalogs/dbx_samples")
     refs = await pqbench.native.table.list.list(
@@ -55,10 +55,10 @@ async def main():
     await pqbench.native.credentials.check.check(
         workspace, "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     )
-    # `get.vend` is ref -> ref: the lease lands on the ref as its `credentials`.
-    ref = await pqbench.native.credentials.get.vend(workspace, refs[0])
+    # `credentials.get.get` is ref -> ref: the lease lands on the ref as `credentials`.
+    ref = await pqbench.native.credentials.get.get(workspace, refs[0])
     storage = pqbench.native.Storage(credentials=ref["credentials"])
-    table = await pqbench.native.table.get.read(
+    table = await pqbench.native.table.get.get(
         workspace,
         lake,
         "catalogs/dbx_samples/schemas/nyctaxi/tables/trips",

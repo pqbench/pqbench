@@ -5,7 +5,7 @@ The library's commands are the crate's modules, one function per path, under
 
     import pqbench.native
 
-    pqbench.native.metastore.get.read(workspace)
+    pqbench.native.metastore.get.get(workspace)
     pqbench.native.catalog.list.list(workspace)
     pqbench.native.file.list.list(lake, uri, env, versions)
     pqbench.native.credentials.check.check(workspace, catalog, schema, table)

@@ -20,7 +20,7 @@ use crate::dialect;
 use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
 use crate::{Lake, Workspace};
 
-pub(crate) async fn read(
+pub(crate) async fn get(
     workspace: &Workspace,
     lake: &Lake,
     name: &str,

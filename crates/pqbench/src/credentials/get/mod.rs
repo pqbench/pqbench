@@ -3,4 +3,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{vend, Error};
+pub use api::{get, Error};

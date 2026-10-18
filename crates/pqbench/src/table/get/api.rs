@@ -1,6 +1,6 @@
 //! `table::get`: one table's record.
 //!
-//! [`read`] is the only public function. It returns the [`Table`] resource —
+//! [`get`] is the only public function. It returns the [`Table`] resource —
 //! the wire form of the loaded [`TableInfo`](crate::table::TableInfo) — and the
 //! CLI forwards it as-is.
 
@@ -54,11 +54,11 @@ pub struct Storage {
 /// # Errors
 /// Fails when `name` is not a table name, the endpoint cannot be reached,
 /// answers with an unexpected status, or the table's metadata cannot be read.
-pub async fn read(
+pub async fn get(
     workspace: &Workspace,
     lake: &Lake,
     name: &str,
     storage: &Storage,
 ) -> Result<Table, Error> {
-    super::r#impl::read(workspace, lake, name, storage).await
+    super::r#impl::get(workspace, lake, name, storage).await
 }

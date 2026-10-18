@@ -2,7 +2,7 @@
 
 ``pqbench.walk`` composes the library's per-resource functions —
 ``catalog.list.list | schema.list.list | table.list.list | credentials.check.check |
-credentials.get.vend_unity | table.get.read | partition.list.list |
+credentials.get.get_unity | table.get.get | partition.list.list |
 file.list.list`` — as one async generator that multiplexes the tables and yields
 their files. The catalog levels span the whole Unity Catalog; the table levels
 descend the one catalog the principal may read outside compute

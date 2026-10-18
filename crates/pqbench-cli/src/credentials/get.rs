@@ -23,7 +23,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         .map(|record| async {
             let table: pqbench::v1::Table =
                 serde_json::from_value(record?).map_err(invalid_json)?;
-            Ok::<_, CliError>(pqbench::credentials::get::vend(workspace, &table).await?)
+            Ok::<_, CliError>(pqbench::credentials::get::get(workspace, &table).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(result) = vends.next().await {

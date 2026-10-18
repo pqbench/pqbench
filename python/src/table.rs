@@ -6,8 +6,8 @@ use crate::records::{many, one, Table, TableRef};
 use crate::requests::Storage;
 
 #[pyfunction]
-#[pyo3(name = "read")]
-fn table_read(
+#[pyo3(name = "get")]
+fn table_get(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
     lake: PyRef<'_, Lake>,
@@ -20,7 +20,7 @@ fn table_read(
     one(
         py,
         async move {
-            pqbench::table::get::read(&workspace, &lake, &name, &storage)
+            pqbench::table::get::get(&workspace, &lake, &name, &storage)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -49,7 +49,7 @@ fn table_list(
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
     let module = crate::submodule(py, root, "table")?;
     let get = crate::submodule(py, &module, "get")?;
-    get.add_function(wrap_pyfunction!(table_read, &get)?)?;
+    get.add_function(wrap_pyfunction!(table_get, &get)?)?;
     let list = crate::submodule(py, &module, "list")?;
     list.add_function(wrap_pyfunction!(table_list, &list)?)?;
     crate::expose(py, "pqbench.native.table", &module)?;

@@ -38,17 +38,17 @@ def _workspace() -> pqbench.Workspace:
 class BindingsTest(unittest.IsolatedAsyncioTestCase):
     def test_surface_mirrors_the_crate(self) -> None:
         paths = [
-            "metastore.get.read",
-            "catalog.get.read",
+            "metastore.get.get",
+            "catalog.get.get",
             "catalog.list.list",
-            "schema.get.read",
+            "schema.get.get",
             "schema.list.list",
-            "table.get.read",
+            "table.get.get",
             "table.list.list",
             "partition.list.list",
             "file.list.list",
             "credentials.check.check",
-            "credentials.get.vend",
+            "credentials.get.get",
             "lz.lz",
             "compression.compression",
             "bytemass.bytemass",

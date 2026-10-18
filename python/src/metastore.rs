@@ -5,11 +5,11 @@ use crate::marshal::records;
 use crate::prelude::*;
 
 #[pyfunction]
-#[pyo3(name = "read")]
-fn metastore_read(py: Python<'_>, workspace: PyRef<'_, Workspace>) -> PyResult<Py<PyAny>> {
+#[pyo3(name = "get")]
+fn metastore_get(py: Python<'_>, workspace: PyRef<'_, Workspace>) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
     records(py, async move {
-        pqbench::metastore::get::read(&workspace)
+        pqbench::metastore::get::get(&workspace)
             .await
             .map_err(|error| error.to_string())
     })
@@ -18,7 +18,7 @@ fn metastore_read(py: Python<'_>, workspace: PyRef<'_, Workspace>) -> PyResult<P
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
     let metastore = crate::submodule(py, root, "metastore")?;
     let get = crate::submodule(py, &metastore, "get")?;
-    get.add_function(wrap_pyfunction!(metastore_read, &get)?)?;
+    get.add_function(wrap_pyfunction!(metastore_get, &get)?)?;
     crate::expose(py, "pqbench.native.metastore", &metastore)?;
     crate::expose(py, "pqbench.native.metastore.get", &get)?;
     Ok(())

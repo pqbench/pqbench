@@ -2,7 +2,7 @@
 
 The verbs compose by hand — the pipeline the CLI pipes together,
 ``catalog.list.list | schema.list.list | table.list.list | credentials.check.check |
-credentials.get.vend | table.get.read | partition.list.list |
+credentials.get.get | table.get.get | partition.list.list |
 file.list.list`` — but a hand-written ``for`` loop awaits one table at a time,
 and on a real endpoint that is the difference between minutes and seconds.
 This helper is that composition with the independence handed to ``asyncio``:
@@ -82,7 +82,7 @@ async def walk(
 
     ``concurrency`` bounds the tables in flight, and with them the requests in
     flight; each table's chain (``credentials.check.check`` →
-    ``credentials.get.vend`` → ``table.get.read`` → ``partition.list.list``
+    ``credentials.get.get`` → ``table.get.get`` → ``partition.list.list``
     → ``file.list.list``) is sequential, so this is the only parallelism there
     is. ``lake`` defaults to one over ``workspace``.
 
@@ -144,9 +144,9 @@ async def walk(
                 if not eligibility.eligible:
                     return
                 await pace("credentials.get")
-                ref = await native.credentials.get.vend(workspace, ref)
+                ref = await native.credentials.get.get(workspace, ref)
                 env = _lease(ref.get("credentials"))
-                info = await native.table.get.read(
+                info = await native.table.get.get(
                     workspace, lake, ref["name"], native.Storage(env=env)
                 )
                 uri = info.get("uri")

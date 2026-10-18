@@ -54,7 +54,7 @@ pub(crate) async fn run(
             env: BTreeMap::new(),
         };
         let name = pqbench::v1::name::table(&catalog, &schema, &table);
-        let record = get::read(workspace, lake, &name, &storage).await?;
+        let record = get::get(workspace, lake, &name, &storage).await?;
         emit.write_row(&record).await?;
         return emit.finish("tables: 1\n").await;
     }
@@ -71,7 +71,7 @@ pub(crate) async fn run(
                 location: ref_storage(&record).map(str::to_owned),
                 env: ref_env(&record),
             };
-            Ok::<_, CliError>(get::read(workspace, lake, &name, &storage).await?)
+            Ok::<_, CliError>(get::get(workspace, lake, &name, &storage).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {

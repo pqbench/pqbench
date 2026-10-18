@@ -3,7 +3,7 @@
 use crate::handles::{Aim, Mode};
 use crate::prelude::*;
 
-/// Where a table's metadata lives, for `table.get.read`.
+/// Where a table's metadata lives, for `table.get.get`.
 ///
 /// `env` is the `AWS_*` options to read with. `credentials` is a vended lease
 /// as a ref carries it (`access_key_id`, `secret_access_key`,

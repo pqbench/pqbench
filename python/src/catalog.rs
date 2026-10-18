@@ -5,8 +5,8 @@ use crate::prelude::*;
 use crate::records::{many, one, Catalog};
 
 #[pyfunction]
-#[pyo3(name = "read")]
-fn catalog_read(
+#[pyo3(name = "get")]
+fn catalog_get(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
     name: String,
@@ -15,7 +15,7 @@ fn catalog_read(
     one(
         py,
         async move {
-            pqbench::catalog::get::read(&workspace, &name)
+            pqbench::catalog::get::get(&workspace, &name)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -40,7 +40,7 @@ fn catalog_list(py: Python<'_>, workspace: PyRef<'_, Workspace>) -> PyResult<Py<
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
     let module = crate::submodule(py, root, "catalog")?;
     let get = crate::submodule(py, &module, "get")?;
-    get.add_function(wrap_pyfunction!(catalog_read, &get)?)?;
+    get.add_function(wrap_pyfunction!(catalog_get, &get)?)?;
     let list = crate::submodule(py, &module, "list")?;
     list.add_function(wrap_pyfunction!(catalog_list, &list)?)?;
     crate::expose(py, "pqbench.native.catalog", &module)?;

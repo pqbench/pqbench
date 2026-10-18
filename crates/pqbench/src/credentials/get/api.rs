@@ -35,7 +35,7 @@ impl From<String> for Error {
 /// # Errors
 /// Fails for a name that is not a table, when the endpoint cannot be reached,
 /// or when it answers an unexpected status.
-pub async fn vend(workspace: &Workspace, table: &Table) -> Result<Table, Error> {
+pub async fn get(workspace: &Workspace, table: &Table) -> Result<Table, Error> {
     let (catalog, schema, table_name) = name::parse_table(&table.name)
         .ok_or_else(|| Error(format!("not a table name: {}", table.name)))?;
     let env = match workspace.config().dialect {
