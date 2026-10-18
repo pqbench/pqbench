@@ -161,20 +161,11 @@ impl TableInfo {
 
 impl TableInfo {
     /// The wire [`v1::Table`] this record describes: what `table::get` emits.
-    ///
-    /// `env` is the storage lease the read ran under, when it carried one; the
-    /// record keeps it as [`v1::Table::credentials`].
+    /// The caller, which holds the lease, sets [`v1::Table::credentials`].
     #[must_use]
-    pub fn resource(
-        &self,
-        catalog: &str,
-        schema: &str,
-        table: &str,
-        env: &BTreeMap<String, String>,
-    ) -> v1::Table {
+    pub fn resource(&self, catalog: &str, schema: &str, table: &str) -> v1::Table {
         let mut properties = self.delta_properties.clone();
         properties.extend(self.iceberg_properties.clone());
-        let credentials = v1::Credentials::from_env(env);
         v1::Table {
             name: v1::name::table(catalog, schema, table),
             uri: non_empty(&self.uri),
@@ -193,7 +184,6 @@ impl TableInfo {
             properties,
             file_count: non_empty_len(&self.files),
             partition_count: non_empty_len(&self.partitions),
-            credentials: (!credentials.is_empty()).then_some(credentials),
             ..v1::Table::default()
         }
     }

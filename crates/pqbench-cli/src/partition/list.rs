@@ -1,5 +1,6 @@
 //! `list partitions`: a table's natural partitions, grouped by commit time.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::Args;
@@ -45,7 +46,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
                 return Err("list partitions takes a table URI or a table stream, not both".into());
             }
             let table = pqbench::v1::name::local_table(uri);
-            list_partitions(lake, &table, uri, None, args.every, &mut emit).await?
+            list_partitions(lake, &table, uri, args.every, &mut emit).await?
         }
         _ => list_stream(lake, input, args.every, args.fan_out, &mut emit).await?,
     };
@@ -74,12 +75,20 @@ async fn list_stream(
                     CliError::from("a table-ref has no storage path; run `pqbench get table` first")
                 })?
                 .to_string();
-            let credentials = ref_credentials(&record);
-            let found = partition::list::list(lake, &name, &uri, credentials.as_ref(), window)
+            let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
+            let env = lease
+                .as_ref()
+                .map(pqbench::v1::Credentials::to_env)
+                .unwrap_or_default();
+            let found = partition::list::list(lake, &name, &uri, &env, window)
                 .await
                 .map_err(|error| CliError::from(error.to_string()))?;
             Ok::<_, CliError>(
                 found
+                    .map_ok(move |mut partition| {
+                        partition.credentials = lease.clone();
+                        partition
+                    })
                     .map_err(|error| CliError::from(error.to_string()))
                     .boxed(),
             )
@@ -100,11 +109,10 @@ async fn list_partitions(
     lake: &pqbench::Lake,
     table: &str,
     uri: &str,
-    credentials: Option<&pqbench::v1::Credentials>,
     window: i64,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    let mut found = partition::list::list(lake, table, uri, credentials, window)
+    let mut found = partition::list::list(lake, table, uri, &BTreeMap::new(), window)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;

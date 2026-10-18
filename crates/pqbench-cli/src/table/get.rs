@@ -1,5 +1,6 @@
 //! `get table`: one table's record, read from its catalog and storage.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::Args;
@@ -69,7 +70,7 @@ async fn get_one(
 ) -> Result<usize, CliError> {
     let (catalog, schema, table) = split_table("get table", table)?;
     let name = pqbench::v1::name::table(&catalog, &schema, &table);
-    let record = get::get(workspace, lake, &name, None, None).await?;
+    let record = get::get(workspace, lake, &name, None, &BTreeMap::new()).await?;
     emit.write_row(&record).await?;
     Ok(1)
 }
@@ -92,8 +93,14 @@ async fn get_stream(
             let record = record?;
             let name = table_ref("get table", &record)?;
             let uri = ref_storage(&record);
-            let credentials = ref_credentials(&record);
-            Ok::<_, CliError>(get::get(workspace, lake, &name, uri, credentials.as_ref()).await?)
+            let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
+            let env = lease
+                .as_ref()
+                .map(pqbench::v1::Credentials::to_env)
+                .unwrap_or_default();
+            let mut table = get::get(workspace, lake, &name, uri, &env).await?;
+            table.credentials = lease;
+            Ok::<_, CliError>(table)
         })
         .buffer_unordered(fan_out.max(1));
     while let Some(record) = reads.next().await {

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::api::{Credentials, Error, Table, TableFormat as Dialect};
+use super::api::{Error, Table, TableFormat as Dialect};
 use crate::dialect;
 use crate::table::{self, LoadRequest, TableInfo};
 use crate::v1;
@@ -26,16 +26,15 @@ pub(crate) async fn get(
     lake: &Lake,
     name: &str,
     uri: Option<&str>,
-    credentials: Option<&Credentials>,
+    env: &BTreeMap<String, String>,
 ) -> Result<Table, Error> {
     let (catalog, schema, table) = crate::v1::name::parse_table(name)
         .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
-    let env = credentials.map(Credentials::to_env).unwrap_or_default();
     let info = match workspace.config().dialect {
-        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, &env).await,
-        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table, &env).await,
+        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, env).await,
+        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table, env).await,
     }?;
-    Ok(info.resource(&catalog, &schema, &table, &env))
+    Ok(info.resource(&catalog, &schema, &table))
 }
 
 /// The subset of Unity `GET /tables/{full_name}` this command reports.

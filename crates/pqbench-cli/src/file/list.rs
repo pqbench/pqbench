@@ -78,18 +78,20 @@ async fn file_rows(
         .uri
         .clone()
         .ok_or("a partition record needs a table storage root")?;
-    let credentials = partition.credentials;
+    let lease = partition.credentials;
+    let env = lease
+        .as_ref()
+        .map(v1::Credentials::to_env)
+        .unwrap_or_default();
     let table = v1::name::table(&catalog, &schema, &table);
-    let found = pqbench::file::list::list(
-        lake,
-        &table,
-        &uri,
-        credentials.as_ref(),
-        &partition.commit_versions,
-    )
-    .await
-    .map_err(|error| CliError::from(error.to_string()))?;
+    let found = pqbench::file::list::list(lake, &table, &uri, &env, &partition.commit_versions)
+        .await
+        .map_err(|error| CliError::from(error.to_string()))?;
     Ok(found
+        .map_ok(move |mut file| {
+            file.credentials = lease.clone();
+            file
+        })
         .map_err(|error| CliError::from(error.to_string()))
         .boxed())
 }

@@ -335,7 +335,7 @@ async fn file_ls_names_the_files_a_snapshot_added() {
         common::lake(),
         "catalogs/local/schemas/local/tables/events",
         &fixture.metadata.to_string_lossy(),
-        Default::default(),
+        &Default::default(),
         &[1],
     )
     .await

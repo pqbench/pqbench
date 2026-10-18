@@ -4,10 +4,11 @@
 //! the wire form of the loaded [`TableInfo`](crate::table::TableInfo) — and the
 //! CLI forwards it as-is.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 pub use crate::config::Dialect as TableFormat;
-pub use crate::v1::{Credentials, Table};
+pub use crate::v1::Table;
 
 use crate::{Lake, Workspace};
 
@@ -39,9 +40,9 @@ impl From<String> for Error {
 ///
 /// `uri` is where the ref already says the metadata is, when it does: the
 /// storage read then starts alongside the catalog call, and the catalog's own
-/// location stays authoritative. `credentials` is the ref's vended lease, read
-/// as the `AWS_*` options that read needs; without one the read uses whatever
-/// the process environment holds.
+/// location stays authoritative. `env` is the `AWS_*` options that read needs;
+/// empty reads under whatever the process environment holds. The caller, which
+/// holds the lease, sets the returned record's `credentials`.
 ///
 /// # Errors
 /// Fails when `name` is not a table name, the endpoint cannot be reached,
@@ -51,7 +52,7 @@ pub async fn get(
     lake: &Lake,
     name: &str,
     uri: Option<&str>,
-    credentials: Option<&Credentials>,
+    env: &BTreeMap<String, String>,
 ) -> Result<Table, Error> {
-    super::r#impl::get(workspace, lake, name, uri, credentials).await
+    super::r#impl::get(workspace, lake, name, uri, env).await
 }

@@ -3,6 +3,7 @@
 //! [`list`] is the only public function. It returns plain data; the CLI owns
 //! the document it becomes.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use futures_util::stream::BoxStream;
@@ -35,7 +36,8 @@ pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
 ///
 /// `table` is the table's resource name: each file is named
 /// `{table}/files/{path}`, so the record is complete without the caller
-/// re-naming it.
+/// re-naming it. The caller, which holds the lease, sets each file's
+/// `credentials`.
 ///
 /// A commit's `add` actions name the files it wrote; a file a later commit
 /// removes is still named, so the result is the **added in the window** set,
@@ -52,8 +54,8 @@ pub async fn list(
     lake: &Lake,
     table: &str,
     uri: &str,
-    credentials: Option<&crate::v1::Credentials>,
+    env: &BTreeMap<String, String>,
     versions: &[u64],
 ) -> Result<FileStream<'static>, Error> {
-    super::r#impl::list(lake, table, uri, credentials, versions).await
+    super::r#impl::list(lake, table, uri, env, versions).await
 }
