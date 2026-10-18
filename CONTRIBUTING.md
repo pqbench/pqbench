@@ -8,7 +8,7 @@ fixtures). Clone, build, and try the bundled sample:
 ```sh
 git clone https://github.com/pqbench/pqbench.git
 cd pqbench
-make check   # fmt-check + check-docs + clippy -D warnings + test
+make check   # fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
 cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
 ```
 
@@ -37,7 +37,7 @@ Keep behavior changes separate from tidyings.
 
 ```
 make fmt
-make check        # = fmt-check + check-docs + clippy -D warnings + test
+make check        # = fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
 ```
 
 - `make check` is the gate and runs automatically in the pre-commit hook.
@@ -129,9 +129,9 @@ directional and conflicts with idiomatic Rust, **Rust casing wins**.
 
 - Types `UpperCamelCase`; functions `VerbNoun` (no `get_` prefix); modules,
   fields, and functions `snake_case`.
-- Fields are **nouns, not verbs**; booleans use `is_`/`has_`/`can_`; keep a
-  **single root** for a family (`compress`/`decompress`, not a mix of verb and
-  noun forms).
+- Fields are **nouns, not verbs**; booleans omit the verb prefix (`dictionary`,
+  not `is_dictionary`; AIP-140); keep a **single root** for a family
+  (`compress`/`decompress`, not a mix of verb and noun forms).
 - Units spelled out, never ambiguous abbreviations: `megabytes_per_second`, not
   `mbps`; `_estimate` for a measurement; `_duration`/`_durations` for spans.
 - Ranges use `first`/`last`; no bare `time`.

@@ -129,7 +129,7 @@ analogy, convention, or precedent:
 
 - Format: `make fmt`
 - Gate (pre-commit): `make check` = `fmt-check` + `check-docs` +
-  `clippy -D warnings` + `test`.
+  `clippy -D warnings` + `isolation` + `lfs-check` + `test`.
   `make check-python` builds the PyO3 wheel and runs its tests; CI runs it,
   the local gate does not (it compiles libpython and the delta feature).
 - Docs: the `console` transcripts in the Markdown are generated into
@@ -151,10 +151,12 @@ analogy, convention, or precedent:
 - Features: pass `CARGO_FEATURES` to any target (quote values with a space),
   e.g. `make check CARGO_FEATURES=--all-features`,
   `make test CARGO_FEATURES="--features aws"`.
-- CI (`.github/workflows/ci.yml`) runs fmt, one clippy over `--all-features`,
-  and a test matrix over default/aws/delta/iceberg/all-features (default and
-  all-features also on arm64), plus a `docs` job that runs `make check-docs`.
-  Ignored e2e run via `TEST_FLAGS=--include-ignored`.
+- CI is two workflows. `.github/workflows/ci.yml` is the lightweight gate: fmt,
+  aipnaming, `make check-docs`, isolation, and lfs. The heavy workflow,
+  `.github/workflows/ci-heavy.yml`, runs one clippy over `--all-features` and a
+  test matrix over default/aws/delta/iceberg/all-features (default and
+  all-features also on arm64), plus the Python wheel and the
+  lakehouse/Databricks jobs. Ignored e2e run via `TEST_FLAGS=--include-ignored`.
 - `.cargo/config.toml` sets a portable codec baseline (no `-march=native`) so
   cached codec objects are valid on any machine. Do not make it native:
   objects tuned on one machine and restored from another's cache caused SIGILL.
