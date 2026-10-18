@@ -183,7 +183,7 @@ async def walk(
                     schema_name = _leaf(schema)
                     await pace("table.ls")
                     refs = await skip_level(
-                        native.table.ls.list(workspace, catalog_name, schema_name), []
+                        native.table.ls.list(workspace, schema["name"]), []
                     )
                     for ref in refs:
                         tasks.append(

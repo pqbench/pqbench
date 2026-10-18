@@ -34,14 +34,13 @@ fn table_read(
 fn table_list(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
-    catalog: String,
-    schema: String,
+    name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
     many(
         py,
         async move {
-            pqbench::table::ls::list(&workspace, &catalog, &schema)
+            pqbench::table::ls::list(&workspace, &name)
                 .await
                 .map_err(|error| error.to_string())
         },

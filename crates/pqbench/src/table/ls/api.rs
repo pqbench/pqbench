@@ -27,14 +27,16 @@ impl From<String> for Error {
     }
 }
 
-/// List the tables in `schema` of `catalog` at the workspace's endpoint.
+/// List the tables in the schema `name` — a
+/// `catalogs/{catalog}/schemas/{schema}` resource name — at the workspace's
+/// endpoint.
 ///
 /// Unity pages carry a storage location; Iceberg REST lists identifiers only,
 /// so `uri` is unset there until `pqbench get table` resolves it.
 ///
 /// # Errors
-/// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or returns a malformed table page.
-pub async fn list(workspace: &Workspace, catalog: &str, schema: &str) -> Result<Vec<Table>, Error> {
-    super::r#impl::list(workspace, catalog, schema).await
+/// Fails when `name` is not a schema name, the endpoint cannot be reached,
+/// answers with an unexpected status, or returns a malformed table page.
+pub async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Table>, Error> {
+    super::r#impl::list(workspace, name).await
 }

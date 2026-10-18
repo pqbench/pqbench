@@ -9,14 +9,13 @@ use crate::records::{many, one, Schema};
 fn schema_read(
     py: Python<'_>,
     workspace: PyRef<'_, Workspace>,
-    catalog: String,
-    schema: String,
+    name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
     one(
         py,
         async move {
-            pqbench::schema::get::read(&workspace, &catalog, &schema)
+            pqbench::schema::get::read(&workspace, &name)
                 .await
                 .map_err(|error| error.to_string())
         },

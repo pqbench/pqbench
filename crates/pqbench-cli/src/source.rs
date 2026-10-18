@@ -111,12 +111,12 @@ pub(crate) fn catalog_ref(command: &str, record: &Value) -> Result<String, CliEr
         })
 }
 
-/// The catalog and schema a schema ref names: a
-/// `catalogs/{catalog}/schemas/{schema}` resource name.
-pub(crate) fn schema_ref(command: &str, record: &Value) -> Result<(String, String), CliError> {
+/// The `catalogs/{catalog}/schemas/{schema}` name a schema ref carries.
+pub(crate) fn schema_ref(command: &str, record: &Value) -> Result<String, CliError> {
     record["name"]
         .as_str()
-        .and_then(pqbench::v1::name::parse_schema)
+        .filter(|name| pqbench::v1::name::parse_schema(name).is_some())
+        .map(ToOwned::to_owned)
         .ok_or_else(|| {
             format!(
                 "{command} reads pqbench schema resources; a record needs a `catalogs/…/schemas/…` name"

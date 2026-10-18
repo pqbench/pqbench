@@ -378,7 +378,7 @@ class schema:
         """``pqbench.native.schema.get``: read one schema."""
 
         @staticmethod
-        async def read(workspace: Workspace, catalog: str, schema: str) -> Schema: ...
+        async def read(workspace: Workspace, name: str) -> Schema: ...
 
     class ls:
         """``pqbench.native.schema.ls``: list a catalog's schemas."""
@@ -406,11 +406,7 @@ class table:
         """``pqbench.native.table.ls``: list a schema's table refs."""
 
         @staticmethod
-        async def list(
-            workspace: Workspace,
-            catalog: str,
-            schema: str,
-        ) -> list[TableRef]: ...
+        async def list(workspace: Workspace, name: str) -> list[TableRef]: ...
 
 class partition:
     """``pqbench.native.partition``: a table's natural partitions."""

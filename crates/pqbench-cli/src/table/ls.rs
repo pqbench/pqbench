@@ -36,7 +36,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
             return Err("list tables takes CATALOG.SCHEMA or a schema stream, not both".into());
         }
         let (catalog, name) = split_schema("list tables", schema)?;
-        let tables = ls::list(workspace, &catalog, &name).await?;
+        let tables = ls::list(workspace, &pqbench::v1::name::schema(&catalog, &name)).await?;
         for table in &tables {
             emit.write_row(table).await?;
         }
@@ -49,8 +49,8 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
     let mut tables = 0;
     let mut lists = records
         .map(|record| async {
-            let (catalog, name) = schema_ref("list tables", &record?)?;
-            Ok::<_, CliError>(ls::list(workspace, &catalog, &name).await?)
+            let name = schema_ref("list tables", &record?)?;
+            Ok::<_, CliError>(ls::list(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {

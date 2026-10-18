@@ -57,14 +57,12 @@ struct Identifier {
     name: String,
 }
 
-pub(crate) async fn list(
-    workspace: &Workspace,
-    catalog: &str,
-    schema: &str,
-) -> Result<Vec<Table>, Error> {
+pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Table>, Error> {
+    let (catalog, schema) = crate::v1::name::parse_schema(name)
+        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/schemas/… name")))?;
     let mut tables = match workspace.config().dialect {
-        TableFormat::Unity => unity_tables(workspace, catalog, schema).await?,
-        TableFormat::Iceberg => iceberg_tables(workspace, catalog, schema).await?,
+        TableFormat::Unity => unity_tables(workspace, &catalog, &schema).await?,
+        TableFormat::Iceberg => iceberg_tables(workspace, &catalog, &schema).await?,
     };
     tables.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(tables)

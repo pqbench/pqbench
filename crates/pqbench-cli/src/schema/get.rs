@@ -16,7 +16,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Resu
             return Err("get schema takes CATALOG.SCHEMA or a schema stream, not both".into());
         }
         let (catalog, name) = split_schema("get schema", schema)?;
-        let record = get::read(workspace, &catalog, &name).await?;
+        let record = get::read(workspace, &pqbench::v1::name::schema(&catalog, &name)).await?;
         emit.write_row(&record).await?;
         return emit.finish("schemas: 1\n").await;
     }
@@ -27,8 +27,8 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Resu
     let mut schemas = 0;
     let mut reads = records
         .map(|record| async {
-            let (catalog, name) = schema_ref("get schema", &record?)?;
-            Ok::<_, CliError>(get::read(workspace, &catalog, &name).await?)
+            let name = schema_ref("get schema", &record?)?;
+            Ok::<_, CliError>(get::read(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {

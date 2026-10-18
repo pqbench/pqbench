@@ -48,7 +48,9 @@ async def main():
     await pqbench.native.catalog.get.read(workspace, "catalogs/dbx_samples")
     await pqbench.native.catalog.ls.list(workspace)
     await pqbench.native.schema.ls.list(workspace, "catalogs/dbx_samples")
-    refs = await pqbench.native.table.ls.list(workspace, "dbx_samples", "nyctaxi")
+    refs = await pqbench.native.table.ls.list(
+        workspace, "catalogs/dbx_samples/schemas/nyctaxi"
+    )
     await pqbench.native.credentials.check.check(workspace, "dbx_samples", "nyctaxi", "trips")
     # `get.vend` is ref -> ref: the lease lands on the ref as its `credentials`.
     ref = await pqbench.native.credentials.get.vend(workspace, refs[0])

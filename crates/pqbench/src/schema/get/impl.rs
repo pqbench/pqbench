@@ -37,14 +37,12 @@ struct Namespace {
     properties: Option<BTreeMap<String, String>>,
 }
 
-pub(crate) async fn read(
-    workspace: &Workspace,
-    catalog: &str,
-    schema: &str,
-) -> Result<Schema, Error> {
+pub(crate) async fn read(workspace: &Workspace, name: &str) -> Result<Schema, Error> {
+    let (catalog, schema) = crate::v1::name::parse_schema(name)
+        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/schemas/… name")))?;
     match workspace.config().dialect {
-        TableFormat::Unity => unity_schema(workspace, catalog, schema).await,
-        TableFormat::Iceberg => iceberg_schema(workspace, catalog, schema).await,
+        TableFormat::Unity => unity_schema(workspace, &catalog, &schema).await,
+        TableFormat::Iceberg => iceberg_schema(workspace, &catalog, &schema).await,
     }
 }
 
