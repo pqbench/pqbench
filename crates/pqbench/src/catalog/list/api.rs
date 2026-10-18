@@ -1,4 +1,4 @@
-//! `catalog::ls`: the catalogs at the endpoint.
+//! `catalog::list`: the catalogs at the endpoint.
 //!
 //! [`list`] is the only public function. It returns [`Catalog`] resources; the
 //! CLI forwards them as-is.

@@ -18,16 +18,16 @@ fn partition_list(
     let lake = lake.0.clone();
     stream_listing(
         py,
-        async move { pqbench::partition::ls::list(&lake, &table, &uri, &env, window_millis).await },
+        async move { pqbench::partition::list::list(&lake, &table, &uri, &env, window_millis).await },
         Partition::attach,
     )
 }
 
 pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
     let module = crate::submodule(py, root, "partition")?;
-    let ls = crate::submodule(py, &module, "ls")?;
-    ls.add_function(wrap_pyfunction!(partition_list, &ls)?)?;
+    let list = crate::submodule(py, &module, "list")?;
+    list.add_function(wrap_pyfunction!(partition_list, &list)?)?;
     crate::expose(py, "pqbench.native.partition", &module)?;
-    crate::expose(py, "pqbench.native.partition.ls", &ls)?;
+    crate::expose(py, "pqbench.native.partition.list", &list)?;
     Ok(())
 }

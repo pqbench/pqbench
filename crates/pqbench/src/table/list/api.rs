@@ -1,4 +1,4 @@
-//! `table::ls`: the tables in one schema.
+//! `table::list`: the tables in one schema.
 //!
 //! [`list`] is the only public function. It returns [`Table`] resources; the
 //! CLI forwards them as-is.

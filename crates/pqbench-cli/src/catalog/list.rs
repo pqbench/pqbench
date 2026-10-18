@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream::StreamExt;
-use pqbench::catalog::ls;
+use pqbench::catalog::list;
 
 use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input};
@@ -12,7 +12,7 @@ use crate::CliError;
 
 /// Arguments for `list catalogs`.
 #[derive(Args)]
-pub(crate) struct LsArgs {
+pub(crate) struct ListArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
@@ -26,7 +26,7 @@ pub(crate) struct LsArgs {
 /// The metastore is a singleton, so a `Metastore` stream on standard input only
 /// affords the walk its shape: the refs are validated, and the endpoint's
 /// catalogs are the answer either way.
-pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list catalogs").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if input.piped {
@@ -35,7 +35,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
             source::metastore_ref("list catalogs", &record?)?;
         }
     }
-    let catalogs = ls::list(workspace).await?;
+    let catalogs = list::list(workspace).await?;
     for catalog in &catalogs {
         emit.write_row(catalog).await?;
     }

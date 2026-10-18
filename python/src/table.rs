@@ -38,7 +38,7 @@ fn table_list(
     many(
         py,
         async move {
-            pqbench::table::ls::list(&workspace, &name)
+            pqbench::table::list::list(&workspace, &name)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -50,10 +50,10 @@ pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<(
     let module = crate::submodule(py, root, "table")?;
     let get = crate::submodule(py, &module, "get")?;
     get.add_function(wrap_pyfunction!(table_read, &get)?)?;
-    let ls = crate::submodule(py, &module, "ls")?;
-    ls.add_function(wrap_pyfunction!(table_list, &ls)?)?;
+    let list = crate::submodule(py, &module, "list")?;
+    list.add_function(wrap_pyfunction!(table_list, &list)?)?;
     crate::expose(py, "pqbench.native.table", &module)?;
     crate::expose(py, "pqbench.native.table.get", &get)?;
-    crate::expose(py, "pqbench.native.table.ls", &ls)?;
+    crate::expose(py, "pqbench.native.table.list", &list)?;
     Ok(())
 }

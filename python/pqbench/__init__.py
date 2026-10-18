@@ -6,8 +6,8 @@ The library's commands are the crate's modules, one function per path, under
     import pqbench.native
 
     pqbench.native.metastore.get.read(workspace)
-    pqbench.native.catalog.ls.list(workspace)
-    pqbench.native.file.ls.list(lake, uri, env, versions)
+    pqbench.native.catalog.list.list(workspace)
+    pqbench.native.file.list.list(lake, uri, env, versions)
     pqbench.native.credentials.check.check(workspace, catalog, schema, table)
 
 Every name there is the library function of the same path, with the same
@@ -15,7 +15,7 @@ arguments — a separate ``pqbench`` binary is not required. The records are the
 library's records, as classes — a field reads the same three ways:
 ``record["uri"]``, ``record.uri``, ``record.asdict()``; the commands whose entry
 point is async — the walk verbs, ``bytemass`` — return awaitables, and the
-collections the library streams — ``partition.ls.list`` and ``file.ls.list`` —
+collections the library streams — ``partition.list.list`` and ``file.list.list`` —
 are async iterators.
 
 This package is the ergonomic surface over them: the client handles every

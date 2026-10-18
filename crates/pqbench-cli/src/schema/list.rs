@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream::StreamExt;
-use pqbench::schema::ls;
+use pqbench::schema::list;
 
 use crate::emit::{Emitter, Format};
 use crate::source::{self, catalog_ref, read_input};
@@ -12,7 +12,7 @@ use crate::CliError;
 
 /// Arguments for `list schemas`.
 #[derive(Args)]
-pub(crate) struct LsArgs {
+pub(crate) struct ListArgs {
     /// catalog name; without it, read `Catalog` refs on stdin
     catalog: Option<String>,
     /// stdout format: auto (table on a terminal) | table | json
@@ -26,14 +26,14 @@ pub(crate) struct LsArgs {
     fan_out: usize,
 }
 
-pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list schemas").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(catalog) = &args.catalog {
         if input.first.is_some() {
             return Err("list schemas takes CATALOG or a catalog stream, not both".into());
         }
-        let schemas = ls::list(workspace, &pqbench::v1::name::catalog(catalog)).await?;
+        let schemas = list::list(workspace, &pqbench::v1::name::catalog(catalog)).await?;
         for schema in &schemas {
             emit.write_row(schema).await?;
         }
@@ -47,7 +47,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
     let mut lists = records
         .map(|record| async {
             let name = catalog_ref("list schemas", &record?)?;
-            Ok::<_, CliError>(ls::list(workspace, &name).await?)
+            Ok::<_, CliError>(list::list(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {

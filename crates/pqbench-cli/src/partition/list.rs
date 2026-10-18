@@ -13,7 +13,7 @@ use crate::CliError;
 
 /// Arguments for `list partitions`.
 #[derive(Args)]
-pub(crate) struct LsArgs {
+pub(crate) struct ListArgs {
     /// table URI or a document file; without it, read table refs on stdin
     input: Option<String>,
     /// window width, epoch-aligned: e.g. 1h, 1d, 1w [env: PQB_TABLE_EVERY]
@@ -37,7 +37,7 @@ pub(crate) struct LsArgs {
 }
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
-pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list partitions").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let mut partitions = 0usize;
@@ -67,7 +67,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliEr
                         })?
                         .to_string();
                     let env = ref_env(&record);
-                    let found = partition::ls::list(lake, &name, &uri, &env, args.every)
+                    let found = partition::list::list(lake, &name, &uri, &env, args.every)
                         .await
                         .map_err(|error| CliError::from(error.to_string()))?;
                     Ok::<_, CliError>(
@@ -99,7 +99,7 @@ async fn list_partitions(
     window: i64,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    let mut found = partition::ls::list(lake, table, uri, env, window)
+    let mut found = partition::list::list(lake, table, uri, env, window)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;

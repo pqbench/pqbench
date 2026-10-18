@@ -233,14 +233,14 @@ class StubFieldTest(unittest.IsolatedAsyncioTestCase):
         lake = pqbench.Lake(workspace)
         partitions = [
             partition
-            async for partition in native.partition.ls.list(
+            async for partition in native.partition.list.list(
                 lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
             )
         ]
         self.assertTrue(partitions)
         files = [
             file
-            async for file in native.file.ls.list(
+            async for file in native.file.list.list(
                 lake, partitions[0]["uri"], {}, partitions[0]["commit_versions"]
             )
         ]

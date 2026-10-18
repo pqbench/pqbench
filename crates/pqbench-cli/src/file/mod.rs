@@ -1,3 +1,3 @@
 //! `file`: a partition's files.
 
-pub(crate) mod ls;
+pub(crate) mod list;

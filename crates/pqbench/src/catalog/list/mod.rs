@@ -1,4 +1,4 @@
-//! `catalog::ls`: the catalogs at the endpoint.
+//! `catalog::list`: the catalogs at the endpoint.
 //!
 //! [`api`] is the public surface: one function, [`api::list`]. The private
 //! `impl` module holds the URL, the page shape, and the pagination; the HTTP

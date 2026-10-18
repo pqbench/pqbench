@@ -1,4 +1,4 @@
-//! `file::ls`: the files a partition's commits added.
+//! `file::list`: the files a partition's commits added.
 //!
 //! [`list`] is the only public function. It returns plain data; the CLI owns
 //! the document it becomes.

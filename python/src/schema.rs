@@ -33,7 +33,7 @@ fn schema_list(
     many(
         py,
         async move {
-            pqbench::schema::ls::list(&workspace, &name)
+            pqbench::schema::list::list(&workspace, &name)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -45,10 +45,10 @@ pub(crate) fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<(
     let module = crate::submodule(py, root, "schema")?;
     let get = crate::submodule(py, &module, "get")?;
     get.add_function(wrap_pyfunction!(schema_read, &get)?)?;
-    let ls = crate::submodule(py, &module, "ls")?;
-    ls.add_function(wrap_pyfunction!(schema_list, &ls)?)?;
+    let list = crate::submodule(py, &module, "list")?;
+    list.add_function(wrap_pyfunction!(schema_list, &list)?)?;
     crate::expose(py, "pqbench.native.schema", &module)?;
     crate::expose(py, "pqbench.native.schema.get", &get)?;
-    crate::expose(py, "pqbench.native.schema.ls", &ls)?;
+    crate::expose(py, "pqbench.native.schema.list", &list)?;
     Ok(())
 }

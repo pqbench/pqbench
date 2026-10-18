@@ -1,4 +1,4 @@
-//! The `file::ls` internals: stream the files a partition's commits added.
+//! The `file::list` internals: stream the files a partition's commits added.
 
 use std::collections::BTreeMap;
 

@@ -47,9 +47,9 @@ async def main():
     # The walk, one function per resource. The I/O verbs are awaitable.
     await pqbench.native.metastore.get.read(workspace)
     await pqbench.native.catalog.get.read(workspace, "catalogs/dbx_samples")
-    await pqbench.native.catalog.ls.list(workspace)
-    await pqbench.native.schema.ls.list(workspace, "catalogs/dbx_samples")
-    refs = await pqbench.native.table.ls.list(
+    await pqbench.native.catalog.list.list(workspace)
+    await pqbench.native.schema.list.list(workspace, "catalogs/dbx_samples")
+    refs = await pqbench.native.table.list.list(
         workspace, "catalogs/dbx_samples/schemas/nyctaxi"
     )
     await pqbench.native.credentials.check.check(
@@ -65,12 +65,12 @@ async def main():
         storage,
     )
 
-    # `partition.ls.list` and `file.ls.list` stream (async iterators); the
+    # `partition.list.list` and `file.list.list` stream (async iterators); the
     # single-value verbs are awaitable.
-    async for partition in pqbench.native.partition.ls.list(
+    async for partition in pqbench.native.partition.list.list(
         lake, table["name"], table["uri"], storage.env, 86_400_000
     ):
-        async for file in pqbench.native.file.ls.list(
+        async for file in pqbench.native.file.list.list(
             lake, partition["uri"], storage.env, partition["commit_versions"]
         ):
             print(file["uri"])

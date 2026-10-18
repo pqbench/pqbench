@@ -2,8 +2,8 @@
 //!
 //! Every name is the library function of the same path, with the same
 //! arguments: `pqbench.native.metastore.get.read(workspace)`,
-//! `pqbench.native.catalog.ls.list(workspace)`,
-//! `pqbench.native.file.ls.list(lake, uri, env, versions)`,
+//! `pqbench.native.catalog.list.list(workspace)`,
+//! `pqbench.native.file.list.list(lake, uri, env, versions)`,
 //! `pqbench.native.credentials.check.check(workspace, catalog, schema, table)`.
 //!
 //! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the

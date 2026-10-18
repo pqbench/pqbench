@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream::StreamExt;
-use pqbench::table::ls;
+use pqbench::table::list;
 
 use crate::emit::{Emitter, Format};
 use crate::source::{self, read_input, schema_ref, split_schema};
@@ -12,7 +12,7 @@ use crate::CliError;
 
 /// Arguments for `list tables`.
 #[derive(Args)]
-pub(crate) struct LsArgs {
+pub(crate) struct ListArgs {
     /// schema name (`catalog.schema`); without it, read schema refs on stdin
     schema: Option<String>,
     /// stdout format: auto (table on a terminal) | table | json
@@ -28,7 +28,7 @@ pub(crate) struct LsArgs {
 
 /// List a schema's tables: one `Table` line each, the record `get table`
 /// enriches.
-pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list tables").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     if let Some(schema) = &args.schema {
@@ -36,7 +36,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
             return Err("list tables takes CATALOG.SCHEMA or a schema stream, not both".into());
         }
         let (catalog, name) = split_schema("list tables", schema)?;
-        let tables = ls::list(workspace, &pqbench::v1::name::schema(&catalog, &name)).await?;
+        let tables = list::list(workspace, &pqbench::v1::name::schema(&catalog, &name)).await?;
         for table in &tables {
             emit.write_row(table).await?;
         }
@@ -50,7 +50,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &LsArgs) -> Result
     let mut lists = records
         .map(|record| async {
             let name = schema_ref("list tables", &record?)?;
-            Ok::<_, CliError>(ls::list(workspace, &name).await?)
+            Ok::<_, CliError>(list::list(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(listed) = lists.next().await {

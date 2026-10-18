@@ -1,9 +1,9 @@
 """``walk``: the metastore walk, one helper over the verbs.
 
 The verbs compose by hand — the pipeline the CLI pipes together,
-``catalog.ls.list | schema.ls.list | table.ls.list | credentials.check.check |
-credentials.get.vend | table.get.read | partition.ls.list |
-file.ls.list`` — but a hand-written ``for`` loop awaits one table at a time,
+``catalog.list.list | schema.list.list | table.list.list | credentials.check.check |
+credentials.get.vend | table.get.read | partition.list.list |
+file.list.list`` — but a hand-written ``for`` loop awaits one table at a time,
 and on a real endpoint that is the difference between minutes and seconds.
 This helper is that composition with the independence handed to ``asyncio``:
 the catalog levels fan out, one task descends each table under a bounded
@@ -82,8 +82,8 @@ async def walk(
 
     ``concurrency`` bounds the tables in flight, and with them the requests in
     flight; each table's chain (``credentials.check.check`` →
-    ``credentials.get.vend`` → ``table.get.read`` → ``partition.ls.list``
-    → ``file.ls.list``) is sequential, so this is the only parallelism there
+    ``credentials.get.vend`` → ``table.get.read`` → ``partition.list.list``
+    → ``file.list.list``) is sequential, so this is the only parallelism there
     is. ``lake`` defaults to one over ``workspace``.
 
     ``requests_per_second`` paces the Unity Catalog calls — the level listings
@@ -152,11 +152,11 @@ async def walk(
                 uri = info.get("uri")
                 if not uri:
                     return
-                async for partition in native.partition.ls.list(
+                async for partition in native.partition.list.list(
                     lake, info["name"], uri, env, window_millis
                 ):
                     files_env = {**env, **_lease(partition.get("credentials"))}
-                    async for file in native.file.ls.list(
+                    async for file in native.file.list.list(
                         lake, partition["uri"], files_env, partition["commit_versions"]
                     ):
                         await queue.put(file)
@@ -167,18 +167,18 @@ async def walk(
     async def descend_all() -> None:
         """The catalog levels, then one task per table; one queue for all."""
         try:
-            await pace("catalog.ls")
-            for listed in await native.catalog.ls.list(workspace):
+            await pace("catalog.list")
+            for listed in await native.catalog.list.list(workspace):
                 if catalog is not None and _leaf(listed) != catalog:
                     continue
-                await pace("schema.ls")
+                await pace("schema.list")
                 schemas = await skip_level(
-                    native.schema.ls.list(workspace, listed["name"]), []
+                    native.schema.list.list(workspace, listed["name"]), []
                 )
                 for schema in schemas:
-                    await pace("table.ls")
+                    await pace("table.list")
                     refs = await skip_level(
-                        native.table.ls.list(workspace, schema["name"]), []
+                        native.table.list.list(workspace, schema["name"]), []
                     )
                     for ref in refs:
                         tasks.append(asyncio.create_task(descend(ref)))

@@ -3,7 +3,7 @@
 ``pqbench.native`` mirrors the ``pqbench`` library — every command is the
 function of the same path — while ``pqbench`` is the ergonomic surface over it
 (the client handles, and ``walk``). The walk verbs are awaitable and
-``partition.ls.list`` is an async iterator, so the tests are async
+``partition.list.list`` is an async iterator, so the tests are async
 (``IsolatedAsyncioTestCase`` gives each one a running loop).
 """
 
@@ -40,13 +40,13 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         paths = [
             "metastore.get.read",
             "catalog.get.read",
-            "catalog.ls.list",
+            "catalog.list.list",
             "schema.get.read",
-            "schema.ls.list",
+            "schema.list.list",
             "table.get.read",
-            "table.ls.list",
-            "partition.ls.list",
-            "file.ls.list",
+            "table.list.list",
+            "partition.list.list",
+            "file.list.list",
             "credentials.check.check",
             "credentials.get.vend",
             "lz.lz",
@@ -71,7 +71,7 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
     def test_surface_keeps_the_handles_and_the_walk(self) -> None:
         # Every command lives under `pqbench.native`, once; `pqbench` carries
         # the handles the commands and `walk` take, and `walk` itself.
-        self.assertTrue(callable(pqbench.native.catalog.ls.list))
+        self.assertTrue(callable(pqbench.native.catalog.list.list))
         for name in ("metastore", "catalog", "table", "credentials", "lz", "file"):
             self.assertFalse(hasattr(pqbench, name), name)
         for name in ("Config", "Dialect", "Lake", "Layer", "Workspace"):
@@ -189,7 +189,7 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         lake = pqbench.Lake(_workspace())
         partitions = [
             partition
-            async for partition in pqbench.native.partition.ls.list(
+            async for partition in pqbench.native.partition.list.list(
                 lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
             )
         ]
@@ -205,13 +205,13 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         lake = pqbench.Lake(_workspace())
         partition = [
             partition
-            async for partition in pqbench.native.partition.ls.list(
+            async for partition in pqbench.native.partition.list.list(
                 lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
             )
         ][0]
         files = [
             file
-            async for file in pqbench.native.file.ls.list(
+            async for file in pqbench.native.file.list.list(
                 lake, partition["uri"], {}, partition["commit_versions"]
             )
         ]
@@ -256,7 +256,7 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
             pqbench.native.lz.lz(pqbench.native.LzRequest(file=Path("/nonexistent/pqbench-input")))
         lake = pqbench.Lake(_workspace())
         with self.assertRaises(RuntimeError):
-            async for _ in pqbench.native.partition.ls.list(
+            async for _ in pqbench.native.partition.list.list(
                 lake, "local", "/nonexistent/pqbench-table", {}, _DAY_MILLIS
             ):
                 pass

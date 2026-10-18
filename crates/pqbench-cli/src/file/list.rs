@@ -15,7 +15,7 @@ use crate::CliError;
 
 /// Arguments for `list files`.
 #[derive(Args)]
-pub(crate) struct LsArgs {
+pub(crate) struct ListArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
@@ -34,7 +34,7 @@ pub(crate) struct LsArgs {
 /// commit removes is still named. Each file is a [`v1::TableFile`] naming its
 /// blob and carrying the partition's lease, so the storage stage reads it
 /// without a catalog call.
-pub(crate) async fn run(lake: &pqbench::Lake, args: &LsArgs) -> Result<(), CliError> {
+pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     if std::io::stdin().is_terminal() {
         return Err("list files reads partition records on standard input".into());
     }
@@ -84,7 +84,7 @@ async fn file_rows(
         .map(v1::Credentials::to_env)
         .unwrap_or_default();
     let credentials = partition.credentials;
-    let found = pqbench::file::ls::list(lake, &uri, &env, &partition.commit_versions)
+    let found = pqbench::file::list::list(lake, &uri, &env, &partition.commit_versions)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     Ok(found

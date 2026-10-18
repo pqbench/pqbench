@@ -2,7 +2,7 @@
 
 Every name here is the Rust function of the same path, with the same
 arguments, so the stub is a mirror of the module rather than a second API:
-``native.catalog.ls.list(workspace)`` is ``pqbench::catalog::ls::list``.
+``native.catalog.list.list(workspace)`` is ``pqbench::catalog::list::list``.
 Three things the module cannot say about itself live here.
 
 **The awaitables.** The commands whose entry point is async return pyo3's
@@ -255,7 +255,7 @@ class Table(Record):
     credentials: dict[str, Any] | None
 
 class TableRef(Record):
-    """One table's reference, as ``table.ls.list`` lists it.
+    """One table's reference, as ``table.list.list`` lists it.
 
     The same model as :class:`Table`, carrying what a listing costs: Unity
     pages carry a storage location, Iceberg REST lists identifiers only, so
@@ -365,8 +365,8 @@ class catalog:
         @staticmethod
         async def read(workspace: Workspace, name: str) -> Catalog: ...
 
-    class ls:
-        """``pqbench.native.catalog.ls``: list the catalogs."""
+    class list:
+        """``pqbench.native.catalog.list``: list the catalogs."""
 
         @staticmethod
         async def list(workspace: Workspace) -> list[Catalog]: ...
@@ -380,8 +380,8 @@ class schema:
         @staticmethod
         async def read(workspace: Workspace, name: str) -> Schema: ...
 
-    class ls:
-        """``pqbench.native.schema.ls``: list a catalog's schemas."""
+    class list:
+        """``pqbench.native.schema.list``: list a catalog's schemas."""
 
         @staticmethod
         async def list(workspace: Workspace, name: str) -> list[Schema]: ...
@@ -400,8 +400,8 @@ class table:
             storage: Storage,
         ) -> Table: ...
 
-    class ls:
-        """``pqbench.native.table.ls``: list a schema's table refs."""
+    class list:
+        """``pqbench.native.table.list``: list a schema's table refs."""
 
         @staticmethod
         async def list(workspace: Workspace, name: str) -> list[TableRef]: ...
@@ -409,8 +409,8 @@ class table:
 class partition:
     """``pqbench.native.partition``: a table's natural partitions."""
 
-    class ls:
-        """``pqbench.native.partition.ls``: list a table's partitions."""
+    class list:
+        """``pqbench.native.partition.list``: list a table's partitions."""
 
         @staticmethod
         def list(
@@ -426,8 +426,8 @@ class partition:
 class file:
     """``pqbench.native.file``: the files of one partition."""
 
-    class ls:
-        """``pqbench.native.file.ls``: list a partition's files."""
+    class list:
+        """``pqbench.native.file.list``: list a partition's files."""
 
         @staticmethod
         def list(

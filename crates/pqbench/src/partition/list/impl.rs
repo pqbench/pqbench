@@ -1,4 +1,4 @@
-//! The `partition::ls` internals: stream a table's commits as commit-time
+//! The `partition::list` internals: stream a table's commits as commit-time
 //! windows.
 
 use std::collections::BTreeMap;
