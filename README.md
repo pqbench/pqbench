@@ -103,14 +103,14 @@ every wired codec (zstd, lz4, gzip, snappy); `-c codec@level` (repeatable)
 picks one config:
 
 ```console run
-$ pqbench lz data/samples/delta_byte_array.parquet --samples 1 --warmup-iterations 0 --format table
+$ pqbench lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 --format table
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
-gzip        1            ±38             ±128   0.54
-zstd        1            ±27             ±144   0.57
-snappy      1           ±310             ±635   0.69
-lz4         1           ±465            ±2071   0.74
-file: data/samples/delta_byte_array.parquet
+gzip        1            ±44             ±226   0.85
+zstd        1           ±915            ±1391   0.85
+lz4         1          ±2176            ±5180   0.98
+snappy      1          ±1608            ±1981   0.99
+file: data/samples/squad.parquet
 rows: 4
 ```
 
@@ -122,14 +122,14 @@ The same sweep over a parquet file's encoded pages. The input must be
 NONE-compressed; `--per-column` adds a report per column.
 
 ```console run
-$ pqbench compression data/samples/delta_byte_array.parquet --samples 1 --warmup-iterations 0 --format table
+$ pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 --format table
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
-zstd        1            ±41             ±174   0.53
-gzip        1            ±75             ±202   0.53
-lz4         1           ±641            ±2692   0.72
-snappy      1          ±1091            ±1636   0.77
-file: data/samples/delta_byte_array.parquet
+zstd        1           ±458            ±1722   0.56
+gzip        1            ±68             ±270   0.58
+lz4         1           ±897            ±8476   0.81
+snappy      1           ±912            ±2101   0.81
+file: crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet
 rows: 4
 columns: 0
 ```

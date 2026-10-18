@@ -17,6 +17,19 @@
 # define them explicitly because doing so measurably changed snappy's decompress
 # codegen vs lzbench (which defines none). `-DHAVE_BUILTIN_CTZ` is the one
 # intrinsic snappy does not auto-detect, which lzbench passes via its own probe.
+#
+# The C codecs need the same flags via CFLAGS: the `cc` crate otherwise compiles
+# C at the cargo profile's opt level. zstd was hit hardest — the dev/test profile
+# (opt-level 0) built libzstd unoptimized, so the `make test` transcripts (and so
+# the README's speed tables) ran zstd ~7x slow, while lz4 (which pins its own
+# `-O3`), snappy (CXXFLAGS) and zlib (the system library) did not.
+#
+# CFLAGS stays narrow on purpose: unlike CXXFLAGS it reaches *every* C crate, not
+# just snappy. `-fPIE` in particular breaks a cdylib link — aws-lc-sys is linked
+# into the Python wheel, which needs `-fPIC` ("relocation R_X86_64_PC32 cannot be
+# used against symbol 'stderr'") — and `-ffast-math`/`-fstrict-aliasing` are a
+# gamble on dependencies the project does not own. `-O3 -DNDEBUG` is all zstd
+# needs.
 [build]
 # Use sccache when installed and invoke rustc directly otherwise. This keeps
 # fresh clones and CI working without mandatory machine-level configuration.
@@ -25,4 +38,5 @@
 rustc-wrapper = ".cargo/scripts/rustc-wrapper.sh"
 
 [env]
+CFLAGS = "-O3 -DNDEBUG"
 CXXFLAGS = "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
