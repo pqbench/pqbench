@@ -18,7 +18,7 @@ Commands compose on pipes: each writes a resource the next command reads.
   list          → Catalog / Schema / Table / Partition / TableFile
                   a collection of the walk
   credentials   → Table          check + vend read credentials
-  bytemass      → pqbench.bytemass-row footer byte masses (one line per column)
+  bytemass      → pqbench.bytemass-row footer byte masses (one line per chunk)
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
 
@@ -106,11 +106,10 @@ Format skills (read these when the input is Parquet or a table):
   pqbench command guide    docs/cli.md
   pqbench table docs       docs/delta.md  docs/iceberg.md  docs/viz.md";
 
-pub const BYTEMASS_ABOUT: &str =
-    "Per-column on-disk bytes/row from Parquet footers (no page decode)";
+pub const BYTEMASS_ABOUT: &str = "Per-column on-disk bytes from Parquet footers (no page decode)";
 
 pub const BYTEMASS_LONG_ABOUT: &str = "\
-Read Parquet footers only and report on-disk bytes per column per row.
+Read Parquet footers only and report the on-disk bytes of each column chunk.
 Works on compressed files (HEAD + ranged GETs on a URI).
 
 Inputs: parquet paths, quoted globs, s3://, a TableFile or

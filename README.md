@@ -138,7 +138,8 @@ columns: 0
 
 ### bytemass
 
-Per-column byte masses — how many on-disk bytes each column takes per row.
+Per-column byte masses — the on-disk bytes each column chunk takes, with its
+value count.
 
 ```console run
 $ pqbench bytemass data/samples/delta_byte_array.parquet --format table
@@ -162,7 +163,7 @@ columns: 9
 - Accepts paths, quoted globs, `s3://` URIs, and a `TableFile` /
   `remote-source` document; `--indexes` adds page counts.
 - `s3://` needs the `aws` feature; a pipe streams one NDJSON row per column
-  (`--format json`, or `-o FILE`).
+  chunk (`--format json`, or `-o FILE`).
 
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/demo/).
