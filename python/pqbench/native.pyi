@@ -24,10 +24,12 @@ package), so ``native.catalog`` and its verbs are declared as nested classes
 with static methods. The access path and the signature are exact; only the
 runtime type differs (a module object, not a class).
 
-The analysis commands are synchronous: they block the calling thread with the
-GIL released (``py.detach``) and return plain dicts, their report being a
-document rather than a resource. Only :func:`walk` composes; every other name
-is a binding.
+The surface is the walk's own pipeline and the measurement that consumes it —
+metastore, catalog, schema, table, credentials, partition, file, bytemass — and
+stops at :class:`bytemass`: the commands downstream of a byte-mass stream
+(``viz``, ``diff``, ``profile``, ``experiment``), the standalone codec
+benchmarks (``lz``, ``compression``) and ``skill`` are separate tools, and are
+not bound. Only :func:`walk` composes; every other name is a binding.
 """
 
 from collections.abc import AsyncIterator, Iterator, Sequence
@@ -40,19 +42,6 @@ class Dialect:
 
     UNITY: ClassVar[Dialect]
     ICEBERG: ClassVar[Dialect]
-
-class Mode:
-    """How a sweep's samples reduce: the fastest pass, or their mean."""
-
-    FASTEST: ClassVar[Mode]
-    MEAN: ClassVar[Mode]
-
-class Aim:
-    """What an experiment measures after a rewrite."""
-
-    STORAGE: ClassVar[Aim]
-    SKIPPING: ClassVar[Aim]
-    ALL: ClassVar[Aim]
 
 class Config:
     """The endpoint, token, and dialect a :class:`Workspace` runs under."""
@@ -98,31 +87,6 @@ class Lake:
     def __repr__(self) -> str: ...
 
 
-class LzRequest:
-    """Arguments for ``pqbench.native.lz.lz``."""
-
-    def __init__(
-        self,
-        file: str,
-        codec_specs: Sequence[str] | None = None,
-        samples: int = 10,
-        warmup_iterations: int = 3,
-        mode: Mode = ...,
-    ) -> None: ...
-
-class CompressionRequest:
-    """Arguments for ``pqbench.native.compression.compression``."""
-
-    def __init__(
-        self,
-        file: str,
-        codec_specs: Sequence[str] | None = None,
-        samples: int = 10,
-        warmup_iterations: int = 3,
-        mode: Mode = ...,
-        per_column: bool = False,
-    ) -> None: ...
-
 class BytemassRequest:
     """Arguments for ``pqbench.native.bytemass.bytemass``."""
 
@@ -131,24 +95,6 @@ class BytemassRequest:
         inputs: Sequence[str],
         env: dict[str, str] | None = None,
         indexes: bool = False,
-    ) -> None: ...
-
-class ProfileRequest:
-    """Arguments for ``pqbench.native.profile.profile``."""
-
-    def __init__(
-        self,
-        columns: Sequence[str] | None = None,
-        top: int = 5,
-    ) -> None: ...
-
-class ExperimentRequest:
-    """Arguments for ``pqbench.native.experiment.experiment``."""
-
-    def __init__(
-        self,
-        trials: Sequence[str] | None = None,
-        aim: Aim = ...,
     ) -> None: ...
 
 class RateLimit:
@@ -310,18 +256,6 @@ class Eligibility:
     reason: str | None
     def __repr__(self) -> str: ...
 
-class Sample:
-    """A read sample: the columns, and how many rows were read."""
-
-    columns: list[str]
-    row_count: int
-
-class TypedSample:
-    """A typed sample: the columns with their types, and the row count."""
-
-    columns: list[str]
-    row_count: int
-
 class metastore:
     """``pqbench.native.metastore``: the whole metastore as one tree."""
 
@@ -449,70 +383,3 @@ class bytemass:
     async def bytemass(lake: Lake, request: BytemassRequest) -> list[MassRow]:
         """Measure the files the request names, one row per column chunk."""
         ...
-
-class lz:
-    """``pqbench.native.lz``: the compression codecs, over a local file."""
-
-    @staticmethod
-    def lz(request: LzRequest) -> dict[str, Any]:
-        """Benchmark the codecs on the file, as the crate's report document."""
-        ...
-
-class compression:
-    """``pqbench.native.compression``: the codecs, over a Parquet file's column chunks."""
-
-    @staticmethod
-    def compression(request: CompressionRequest) -> dict[str, Any]: ...
-
-class profile:
-    """``pqbench.native.profile``: a sample's columns, summarized."""
-
-    @staticmethod
-    def profile(sample: Sample, request: ProfileRequest) -> dict[str, Any]: ...
-
-class experiment:
-    """``pqbench.native.experiment``: what a rewrite would change."""
-
-    @staticmethod
-    def experiment(sample: TypedSample, request: ExperimentRequest) -> dict[str, Any]: ...
-
-class diff:
-    """``pqbench.native.diff``: two bytemass records, compared."""
-
-    @staticmethod
-    def compare(
-        left: Sequence[MassRow],
-        right: Sequence[MassRow],
-        depth: int | None,
-    ) -> dict[str, Any]: ...
-
-class skill:
-    """``pqbench.native.skill``: the compiled agent skills."""
-
-    @staticmethod
-    def skills() -> list[dict[str, Any]]: ...
-    @staticmethod
-    def skill(name: str) -> dict[str, Any]: ...
-    @staticmethod
-    def document(name: str, document: str) -> str: ...
-
-class viz:
-    """``pqbench.native.viz``: a bytemass stream as a treemap page."""
-
-    @staticmethod
-    def write_report(
-        prefix: str,
-        rows: Sequence[MassRow],
-        files: Sequence[TableFile] | None = None,
-    ) -> None: ...
-
-class third_party:
-    """``pqbench.native.third_party``: the third-party facades the crate exposes."""
-
-    class parquet:
-        """``pqbench.native.third_party.parquet``: a Parquet file's rows, sampled."""
-
-        @staticmethod
-        def read_sample(path: str, max_rows: int | None) -> Sample: ...
-        @staticmethod
-        def read_typed_sample(path: str, max_rows: int | None) -> TypedSample: ...

@@ -4,43 +4,39 @@
 //! arguments: `pqbench.native.metastore.get.get(workspace)`,
 //! `pqbench.native.catalog.list.list(workspace)`,
 //! `pqbench.native.file.list.list(lake, uri, credentials, versions)`,
-//! `pqbench.native.credentials.check.check(workspace, catalog, schema, table)`.
+//! `pqbench.native.credentials.check.check(workspace, name)`.
+//!
+//! The surface is the walk's own pipeline and the measurement that consumes it
+//! — metastore, catalog, schema, table, credentials, partition, file, bytemass
+//! — and stops at `bytemass`: the commands downstream of a byte-mass stream
+//! (`viz`, `diff`, `profile`, `experiment`), the standalone codec benchmarks
+//! (`lz`, `compression`) and `skill` are separate tools, and are not bound.
 //!
 //! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the
-//! request structs (`LzRequest`, `CompressionRequest`,
-//! `BytemassRequest`, `ProfileRequest`, `ExperimentRequest`) are Python
-//! classes, and so are the records: a model's record is its class, so
-//! `record["uri"]`, `record.uri` and `record.asdict()` agree, and the deep
-//! trees it embeds stay dicts. A collection the library streams is an async
-//! iterator, a single value an awaitable.
+//! request structs (`BytemassRequest`) are Python classes, and so are the
+//! records: a model's record is its class, so `record["uri"]`, `record.uri` and
+//! `record.asdict()` agree, and the deep trees it embeds stay dicts. A
+//! collection the library streams is an async iterator, a single value an
+//! awaitable.
 //!
 //! The binding is split the way the library is: one module per domain, each
 //! owning its command and the function that registers it, so a domain can be
 //! read and changed on its own. [`prelude`] holds the names they share, and
 //! this file is only the module tree.
-
 mod bytemass;
 mod catalog;
-mod compression;
 mod credentials;
-mod diff;
-mod experiment;
 mod file;
 mod handles;
-mod lz;
 mod marshal;
 mod metastore;
 mod partition;
 mod prelude;
-mod profile;
 mod ratelimit;
 mod records;
 mod requests;
-mod sample;
 mod schema;
-mod skill;
 mod table;
-mod viz;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -81,7 +77,6 @@ fn native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     ratelimit::register(py, module)?;
     marshal::register(module)?;
     records::register(module)?;
-    sample::register(py, module)?;
     credentials::register(py, module)?;
     metastore::register(py, module)?;
     catalog::register(py, module)?;
@@ -89,13 +84,6 @@ fn native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     table::register(py, module)?;
     partition::register(py, module)?;
     file::register(py, module)?;
-    lz::register(py, module)?;
-    compression::register(py, module)?;
     bytemass::register(py, module)?;
-    profile::register(py, module)?;
-    experiment::register(py, module)?;
-    diff::register(py, module)?;
-    skill::register(py, module)?;
-    viz::register(py, module)?;
     Ok(())
 }

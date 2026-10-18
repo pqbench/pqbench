@@ -9,7 +9,6 @@ function of the same path — while ``pqbench`` is the ergonomic surface over it
 
 from __future__ import annotations
 
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -49,18 +48,7 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
             "file.list.list",
             "credentials.check.check",
             "credentials.get.get",
-            "lz.lz",
-            "compression.compression",
             "bytemass.bytemass",
-            "profile.profile",
-            "experiment.experiment",
-            "diff.compare",
-            "skill.skills",
-            "skill.skill",
-            "skill.document",
-            "viz.write_report",
-            "third_party.parquet.read_sample",
-            "third_party.parquet.read_typed_sample",
         ]
         for path in paths:
             target = pqbench.native
@@ -72,12 +60,20 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         # Every command lives under `pqbench.native`, once; `pqbench` carries
         # the handles the commands and `walk` take, and `walk` itself.
         self.assertTrue(callable(pqbench.native.catalog.list.list))
-        for name in ("metastore", "catalog", "table", "credentials", "lz", "file"):
+        for name in ("metastore", "catalog", "table", "credentials", "bytemass", "file"):
             self.assertFalse(hasattr(pqbench, name), name)
         for name in ("Config", "Dialect", "Lake", "Layer", "Workspace"):
             self.assertTrue(hasattr(pqbench, name), name)
         self.assertTrue(callable(pqbench.walk))
         self.assertIn("walk", pqbench.__all__)
+
+    def test_surface_stops_at_bytemass(self) -> None:
+        # The commands downstream of a byte-mass stream, the standalone codec
+        # benchmarks and `skill` are separate tools: they are not bound.
+        for name in ("lz", "compression", "profile", "experiment", "diff", "skill", "viz"):
+            self.assertFalse(hasattr(pqbench.native, name), name)
+            self.assertFalse(hasattr(pqbench, name), name)
+        self.assertTrue(callable(pqbench.native.bytemass.bytemass))
 
     def test_config_and_workspace(self) -> None:
         config = pqbench.Config("https://example.test", token="secret")
@@ -103,42 +99,6 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
                 async for _ in pqbench.walk(workspace, requests_per_second=rate):
                     pass
 
-    def test_lz_report(self) -> None:
-        report = pqbench.native.lz.lz(
-            pqbench.native.LzRequest(
-                file=_PARQUET,
-                codec_specs=["snappy"],
-                samples=1,
-                warmup_iterations=0,
-            )
-        )
-        self.assertEqual(len(report["rows"]), 1)
-        self.assertEqual(report["rows"][0]["codec"], "snappy")
-
-    def test_lz_rejects_an_unknown_codec(self) -> None:
-        with self.assertRaises(RuntimeError):
-            pqbench.native.lz.lz(
-                pqbench.native.LzRequest(
-                    file=_PARQUET,
-                    codec_specs=["nonesuch"],
-                    samples=1,
-                    warmup_iterations=0,
-                )
-            )
-
-    def test_compression_per_column(self) -> None:
-        report = pqbench.native.compression.compression(
-            pqbench.native.CompressionRequest(
-                file=_PARQUET,
-                codec_specs=["snappy"],
-                samples=1,
-                warmup_iterations=0,
-                per_column=True,
-            )
-        )
-        self.assertIn("rows", report)
-        self.assertIn("columns", report)
-
     async def test_bytemass_streams_column_rows(self) -> None:
         rows = await pqbench.native.bytemass.bytemass(
             pqbench.Lake(_workspace()),
@@ -150,34 +110,6 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("physical_type", rows[0])
         self.assertTrue(rows[0]["encodings"])
         self.assertTrue(any(row["column"] == "text" for row in rows))
-
-    def test_profile_streams_column_facts(self) -> None:
-        sample = pqbench.native.third_party.parquet.read_sample(_PARQUET, 32)
-        profile = pqbench.native.profile.profile(
-            sample, pqbench.native.ProfileRequest(columns=[], top=5)
-        )
-        self.assertGreaterEqual(len(profile["columns"]), 1)
-        self.assertIn("column", profile["columns"][0])
-        self.assertIn("null_fraction", profile["columns"][0])
-        self.assertIn("ndv", profile["columns"][0])
-
-    def test_experiment_streams_trials(self) -> None:
-        sample = pqbench.native.third_party.parquet.read_typed_sample(_PARQUET, 512)
-        experiment = pqbench.native.experiment.experiment(
-            sample, pqbench.native.ExperimentRequest(trials=["sort:text"], aim=pqbench.native.Aim.ALL)
-        )
-        names = [trial["name"] for trial in experiment["trials"]]
-        self.assertEqual(names[0], "control")
-        self.assertIn("sort:text", names)
-
-    async def test_diff_compares_row_lists(self) -> None:
-        rows = await pqbench.native.bytemass.bytemass(
-            pqbench.Lake(_workspace()),
-            pqbench.native.BytemassRequest(inputs=[str(_PARQUET)]),
-        )
-        deltas = pqbench.native.diff.compare(rows, rows, 1)
-        self.assertGreaterEqual(len(deltas), 1)
-        self.assertEqual(deltas[0]["delta_bytes"], 0)
 
     def test_ratelimit_paces_by_kind(self) -> None:
         limit = pqbench.native.ratelimit.RateLimit(10.0)
@@ -228,32 +160,7 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(files[0]["path"].endswith(".parquet"), files[0])
         self.assertTrue(files[0]["uri"], files[0])
 
-    async def test_viz_writes_the_report(self) -> None:
-        rows = await pqbench.native.bytemass.bytemass(
-            pqbench.Lake(_workspace()),
-            pqbench.native.BytemassRequest(inputs=[str(_PARQUET)]),
-        )
-        self.assertIsInstance(rows[0], pqbench.native.MassRow)
-        self.assertEqual(rows[0].column, rows[0]["column"])
-        with tempfile.TemporaryDirectory() as directory:
-            prefix = Path(directory) / "report"
-            # A list of records goes back into a command unchanged.
-            pqbench.native.viz.write_report(prefix, rows)
-            page = prefix.with_suffix(".html").read_text()
-            self.assertTrue(page.startswith("<!DOCTYPE html>"))
-            self.assertIn("d3-hierarchy@3", page)
-
-    def test_skill_returns_the_advisor(self) -> None:
-        listed = pqbench.native.skill.skills()
-        self.assertTrue(any(item["name"] == "parquet-advisor" for item in listed))
-        body = pqbench.native.skill.skill("parquet-advisor")
-        self.assertEqual(body["name"], "parquet-advisor")
-        recipes = pqbench.native.skill.document("parquet-advisor", "recipes")
-        self.assertIn("zstd@3", recipes)
-
     async def test_missing_input_fails(self) -> None:
-        with self.assertRaises(RuntimeError):
-            pqbench.native.lz.lz(pqbench.native.LzRequest(file=Path("/nonexistent/pqbench-input")))
         lake = pqbench.Lake(_workspace())
         with self.assertRaises(RuntimeError):
             async for _ in pqbench.native.partition.list.list(

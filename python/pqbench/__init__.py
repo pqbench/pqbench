@@ -11,7 +11,9 @@ The library's commands are the crate's modules, one function per path, under
     pqbench.native.credentials.check.check(workspace, name)
 
 Every name there is the library function of the same path, with the same
-arguments — a separate ``pqbench`` binary is not required. The records are the
+arguments — a separate ``pqbench`` binary is not required. They are the walk's
+own pipeline and the measurement that consumes it, and they stop at
+``bytemass``. The records are the
 library's records, as classes — a field reads the same three ways:
 ``record["uri"]``, ``record.uri``, ``record.asdict()``; the commands whose entry
 point is async — the walk verbs, ``bytemass`` — return awaitables, and the
@@ -45,11 +47,9 @@ from pqbench.native import (
     MassRow,
     Partition,
     Record,
-    Sample,
     Schema,
     Table,
     TableFile,
-    TypedSample,
     Workspace,
 )
 from pqbench.walk import walk
@@ -73,9 +73,7 @@ __all__ = [
     "Eligibility",
     "MassRow",
     "Partition",
-    "Sample",
     "Schema",
     "Table",
     "TableFile",
-    "TypedSample",
 ]

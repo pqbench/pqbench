@@ -100,13 +100,6 @@ pub(crate) fn runtime(error: impl ToString) -> PyErr {
 pub(crate) fn value_error(error: serde_json::Error) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
-/// Mass rows from their JSON records.
-pub(crate) fn rows(records: &[Value]) -> PyResult<Vec<pqbench::bytemass::MassRow>> {
-    records
-        .iter()
-        .map(|value| serde_json::from_value(value.clone()).map_err(value_error))
-        .collect()
-}
 /// A Python value as JSON, via `json.dumps` — or a record, field for field.
 pub(crate) fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(record) = object.extract::<PyRef<'_, crate::records::Record>>() {
@@ -115,22 +108,6 @@ pub(crate) fn py_to_value(object: &Bound<'_, PyAny>) -> PyResult<Value> {
     let json = object.py().import("json")?;
     let text: String = json.call_method1("dumps", (object,))?.extract()?;
     serde_json::from_str(&text).map_err(value_error)
-}
-/// The items of a Python list (or one object) as JSON values.
-pub(crate) fn py_records(object: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
-    if let Ok(record) = object.extract::<PyRef<'_, crate::records::Record>>() {
-        return Ok(vec![Value::Object(record.fields().clone())]);
-    }
-    if let Ok(records) = object.extract::<Vec<PyRef<'_, crate::records::Record>>>() {
-        return Ok(records
-            .iter()
-            .map(|record| Value::Object(record.fields().clone()))
-            .collect());
-    }
-    Ok(match py_to_value(object)? {
-        Value::Array(items) => items,
-        other => vec![other],
-    })
 }
 pub(crate) fn dumps(py: Python<'_>, value: &impl Serialize) -> PyResult<Py<PyAny>> {
     let value = serde_json::to_value(value).map_err(value_error)?;

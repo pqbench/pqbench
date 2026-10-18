@@ -27,40 +27,6 @@ impl From<LibDialect> for Dialect {
         }
     }
 }
-/// How a sweep's samples reduce: the fastest pass, or their mean.
-#[allow(clippy::upper_case_acronyms)]
-#[pyclass(eq, eq_int, from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Mode {
-    FASTEST,
-    MEAN,
-}
-impl From<Mode> for stats::Mode {
-    fn from(value: Mode) -> Self {
-        match value {
-            Mode::FASTEST => Self::Fastest,
-            Mode::MEAN => Self::Mean,
-        }
-    }
-}
-/// What an experiment measures after a rewrite.
-#[allow(clippy::upper_case_acronyms)]
-#[pyclass(eq, eq_int, from_py_object)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Aim {
-    STORAGE,
-    SKIPPING,
-    ALL,
-}
-impl From<Aim> for LibAim {
-    fn from(value: Aim) -> Self {
-        match value {
-            Aim::STORAGE => Self::Storage,
-            Aim::SKIPPING => Self::Skipping,
-            Aim::ALL => Self::All,
-        }
-    }
-}
 /// The endpoint, token, and dialect a `Workspace` runs under.
 #[pyclass(skip_from_py_object)]
 #[derive(Debug, Clone)]
@@ -196,8 +162,6 @@ impl Lake {
 
 pub(crate) fn register(root: &Bound<'_, PyModule>) -> PyResult<()> {
     root.add_class::<Dialect>()?;
-    root.add_class::<Mode>()?;
-    root.add_class::<Aim>()?;
     root.add_class::<Config>()?;
     root.add_class::<Layer>()?;
     root.add_class::<Workspace>()?;

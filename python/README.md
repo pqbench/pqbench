@@ -18,8 +18,8 @@ pip install pqbench
 
 The wheel carries every storage backend (`delta-s3`, `iceberg-s3`), so `s3://`
 reads and Delta/Iceberg tables work out of the box. A storage read
-authenticates with the `credentials=` argument (a `Credentials` record) or the
-process environment.
+authenticates with the `credentials=` argument (a `Credentials` record) or,
+for `bytemass`, with `env` on its request — or with the process environment.
 
 From a checkout:
 
@@ -36,6 +36,12 @@ is the AIP resource name a parent record carries, so a record feeds the next
 command as it is. `credentials.get` takes a table's name and returns its lease,
 the `Credentials` record a storage read takes, and a record is its model's
 class: `record["uri"]`, `record.uri` and `record.asdict()` agree.
+
+They are the walk's own pipeline — metastore, catalog, schema, table,
+credentials, partition, file, bytemass — and they stop at `bytemass`: the
+commands downstream of a byte-mass stream (`viz`, `diff`, `profile`,
+`experiment`), the standalone codec benchmarks (`lz`, `compression`) and
+`skill` are separate tools, and are not bound.
 
 ```python
 import asyncio
@@ -74,7 +80,11 @@ async def main():
         async for file in pqbench.native.file.list.list(
             lake, partition["uri"], partition.get("credentials"), partition["commit_versions"]
         ):
-            print(file["uri"])
+            # The pipeline stops here: `bytemass` measures the file's bytes.
+            rows = await pqbench.native.bytemass.bytemass(
+                lake, pqbench.native.BytemassRequest(inputs=[file["uri"]])
+            )
+            print(len(rows), file["uri"])
 
 asyncio.run(main())
 ```
@@ -102,20 +112,13 @@ limit and retries its own. Anything skipped is counted in a `warning` when the
 walk ends, so a rate limit shows up as a count rather than as silently missing
 files.
 
-The analysis commands are synchronous and take their Rust request structs:
+`bytemass` is the last command: it reads what `file.list.list` yields — a
+path or URI per file — and returns one `MassRow` per column chunk.
 
 ```python
-report = pqbench.native.lz.lz(pqbench.native.LzRequest(file="file.bin", codec_specs=["zstd@3"]))
-report = pqbench.native.compression.compression(
-    pqbench.native.CompressionRequest(file="data.parquet", per_column=True)
+rows = await pqbench.native.bytemass.bytemass(
+    lake, pqbench.native.BytemassRequest(inputs=["s3://…/part-00000.parquet"])
 )
-sample = pqbench.native.third_party.parquet.read_sample("data.parquet", None)
-pqbench.native.profile.profile(sample, pqbench.native.ProfileRequest(top=5))
-typed = pqbench.native.third_party.parquet.read_typed_sample("data.parquet", 512)
-pqbench.native.experiment.experiment(typed, pqbench.native.ExperimentRequest(trials=["sort:text"]))
-pqbench.native.diff.compare(rows, rows, 2)
-pqbench.native.skill.document("parquet-advisor", "recipes")
-pqbench.native.viz.write_report("report", rows)
 ```
 
 [`samples/walk.py`](samples/walk.py) is a runnable walk over the **whole
@@ -137,8 +140,9 @@ token=None, dialect=None).resolve()` combines configuration layers into a
 `credentials` is a `Credentials` record — what `credentials.get` returns — or
 the mapping of the same fields; a read given none falls back to the process
 environment. A request's `env` is the library's `BTreeMap<String, String>`,
-passed straight through. `codec_specs` repeats `codec@level`; `samples`
-defaults to 10, `warmup_iterations` to 3, `mode` to `Mode.FASTEST`.
+passed straight through. A `BytemassRequest` names `inputs` (paths or glob
+masks), `env` (the `AWS_*` options a remote read uses) and `indexes` (load the
+parquet page indexes too, one extra range per file).
 
 ## Publish to PyPI
 
