@@ -15,15 +15,15 @@ pub(crate) struct ListArgs {
 #[derive(Subcommand)]
 enum ListCollection {
     /// List the catalogs at the endpoint
-    Catalogs(crate::catalog::ls::LsArgs),
+    Catalogs(crate::catalog::list::ListArgs),
     /// List the schemas in a catalog (`CATALOG`)
-    Schemas(crate::schema::ls::LsArgs),
+    Schemas(crate::schema::list::ListArgs),
     /// List the tables in a schema (`CATALOG.SCHEMA`)
-    Tables(crate::table::ls::LsArgs),
+    Tables(crate::table::list::ListArgs),
     /// List a table's natural partitions (`DIR`, or a `Table` stream on stdin)
-    Partitions(crate::partition::ls::LsArgs),
+    Partitions(crate::partition::list::ListArgs),
     /// List a partition's files (a `Partition` stream on stdin)
-    Files(crate::file::ls::LsArgs),
+    Files(crate::file::list::ListArgs),
 }
 
 /// List a collection: the walk's list verb.
@@ -33,11 +33,11 @@ pub(crate) async fn run(
     args: &ListArgs,
 ) -> Result<(), CliError> {
     match &args.collection {
-        ListCollection::Catalogs(args) => crate::catalog::ls::run(workspace, args).await,
-        ListCollection::Schemas(args) => crate::schema::ls::run(workspace, args).await,
-        ListCollection::Tables(args) => crate::table::ls::run(workspace, args).await,
-        ListCollection::Partitions(args) => crate::partition::ls::run(lake, args).await,
-        ListCollection::Files(args) => crate::file::ls::run(lake, args).await,
+        ListCollection::Catalogs(args) => crate::catalog::list::run(workspace, args).await,
+        ListCollection::Schemas(args) => crate::schema::list::run(workspace, args).await,
+        ListCollection::Tables(args) => crate::table::list::run(workspace, args).await,
+        ListCollection::Partitions(args) => crate::partition::list::run(lake, args).await,
+        ListCollection::Files(args) => crate::file::list::run(lake, args).await,
     }
 }
 

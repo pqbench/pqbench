@@ -1,6 +1,5 @@
 //! `get table`: one table's record, read from its catalog and storage.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::Args;
@@ -8,7 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::table::get;
 
 use crate::emit::{Emitter, Format};
-use crate::source::{self, read_input, ref_env, ref_storage, split_table, table_ref};
+use crate::source::{self, read_input, ref_credentials, ref_storage, split_table, table_ref};
 use crate::CliError;
 
 /// The default tables in flight for `get table`: one per core.
@@ -33,10 +32,11 @@ pub(crate) struct GetArgs {
     fan_out: usize,
 }
 
-/// Read one table's record with the lease the stream carries: the lake
-/// source's options and the ref's own. The record keeps the lease as its
-/// `credentials`, so a later stage reads the table's files under the same
-/// lease.
+/// Read one table's record with the lease the stream carries: the ref names the
+/// lease the storage read uses and, when it has one, the path that read can
+/// start on; the catalog names the table and its location. The record keeps the
+/// lease as its `credentials`, so a later stage reads the table's files under
+/// the same lease.
 pub(crate) async fn run(
     workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
@@ -48,12 +48,9 @@ pub(crate) async fn run(
         if input.first.is_some() {
             return Err("get table takes CATALOG.SCHEMA.TABLE or a table stream, not both".into());
         }
-        let (catalog, schema, name) = split_table("get table", table)?;
-        let storage = get::Storage {
-            location: None,
-            env: BTreeMap::new(),
-        };
-        let record = get::read(workspace, lake, &catalog, &schema, &name, &storage).await?;
+        let (catalog, schema, table) = split_table("get table", table)?;
+        let name = pqbench::v1::name::table(&catalog, &schema, &table);
+        let record = get::get(workspace, lake, &name, None, None).await?;
         emit.write_row(&record).await?;
         return emit.finish("tables: 1\n").await;
     }
@@ -65,12 +62,10 @@ pub(crate) async fn run(
     let mut reads = records
         .map(|record| async {
             let record = record?;
-            let (catalog, schema, name) = table_ref("get table", &record)?;
-            let storage = get::Storage {
-                location: ref_storage(&record).map(str::to_owned),
-                env: ref_env(&record),
-            };
-            Ok::<_, CliError>(get::read(workspace, lake, &catalog, &schema, &name, &storage).await?)
+            let name = table_ref("get table", &record)?;
+            let uri = ref_storage(&record);
+            let credentials = ref_credentials(&record);
+            Ok::<_, CliError>(get::get(workspace, lake, &name, uri, credentials.as_ref()).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(record) = reads.next().await {

@@ -18,11 +18,9 @@
 //! never buffers its parent: a slow consumer stops reading, and the pipe
 //! backpressures the producer.
 
-use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
 use futures_util::stream::{self, Stream, StreamExt};
-use pqbench::credentials;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
@@ -100,23 +98,24 @@ pub(crate) fn metastore_ref(command: &str, record: &Value) -> Result<String, Cli
         })
 }
 
-/// The catalog id a catalog ref names: a `catalogs/{catalog}` resource name.
+/// The `catalogs/{catalog}` name a catalog ref carries.
 pub(crate) fn catalog_ref(command: &str, record: &Value) -> Result<String, CliError> {
     record["name"]
         .as_str()
-        .and_then(pqbench::v1::name::parse_catalog)
+        .filter(|name| pqbench::v1::name::parse_catalog(name).is_some())
+        .map(ToOwned::to_owned)
         .ok_or_else(|| {
             format!("{command} reads pqbench catalog resources; a record needs a `catalogs/…` name")
                 .into()
         })
 }
 
-/// The catalog and schema a schema ref names: a
-/// `catalogs/{catalog}/schemas/{schema}` resource name.
-pub(crate) fn schema_ref(command: &str, record: &Value) -> Result<(String, String), CliError> {
+/// The `catalogs/{catalog}/schemas/{schema}` name a schema ref carries.
+pub(crate) fn schema_ref(command: &str, record: &Value) -> Result<String, CliError> {
     record["name"]
         .as_str()
-        .and_then(pqbench::v1::name::parse_schema)
+        .filter(|name| pqbench::v1::name::parse_schema(name).is_some())
+        .map(ToOwned::to_owned)
         .ok_or_else(|| {
             format!(
                 "{command} reads pqbench schema resources; a record needs a `catalogs/…/schemas/…` name"
@@ -137,21 +136,28 @@ pub(crate) fn split_schema(command: &str, fqn: &str) -> Result<(String, String),
     Ok((catalog.to_string(), schema.to_string()))
 }
 
-/// The catalog, schema, and table a table ref names: a
-/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name.
-pub(crate) fn table_ref(
-    command: &str,
-    record: &Value,
-) -> Result<(String, String, String), CliError> {
+/// The `catalogs/{catalog}/schemas/{schema}/tables/{table}` name a table ref
+/// carries.
+pub(crate) fn table_ref(command: &str, record: &Value) -> Result<String, CliError> {
     record["name"]
         .as_str()
-        .and_then(pqbench::v1::name::parse_table)
+        .filter(|name| pqbench::v1::name::parse_table(name).is_some())
+        .map(ToOwned::to_owned)
         .ok_or_else(|| {
             format!(
                 "{command} reads pqbench table resources; a record needs a `catalogs/…/tables/…` name"
             )
             .into()
         })
+}
+
+/// The dotted `catalog.schema.table` a table ref names, for a message; the ref
+/// itself when the name is not a table ref (a path read names a local table).
+pub(crate) fn dotted_name(name: &str) -> String {
+    match pqbench::v1::name::parse_table(name) {
+        Some((catalog, schema, table)) => format!("{catalog}.{schema}.{table}"),
+        None => name.to_string(),
+    }
 }
 
 /// The storage location a table ref names: the [`Table`]'s `uri`. `None` when
@@ -178,41 +184,7 @@ pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, S
     Ok((catalog.to_string(), schema.to_string(), table.to_string()))
 }
 
-/// The storage lease a ref carries: the proto `Table.credentials` value, or the
-/// older `env` bag. The credentials win, so a table-scoped lease replaces any
-/// static key for that table.
-pub(crate) fn ref_env(record: &Value) -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    if let Some(values) = record["env"].as_object() {
-        for (key, value) in values {
-            if let Some(value) = value.as_str() {
-                env.insert(key.clone(), value.to_string());
-            }
-        }
-    }
-    if let Ok(credentials) =
-        serde_json::from_value::<pqbench::v1::Credentials>(record["credentials"].clone())
-    {
-        env.extend(credentials.to_env());
-    }
-    env
-}
-
-/// The table's vended read credentials, by dialect: Unity's
-/// `temporary-table-credentials`, or the Iceberg REST catalog's
-/// `storage-credentials` for the table's data read.
-pub(crate) async fn vend(
-    workspace: &pqbench::Workspace,
-    catalog: &str,
-    schema: &str,
-    name: &str,
-) -> Result<Option<BTreeMap<String, String>>, CliError> {
-    match workspace.config().dialect {
-        pqbench::Dialect::Unity => {
-            Ok(credentials::get::vend_unity(workspace, catalog, schema, name).await?)
-        }
-        pqbench::Dialect::Iceberg => {
-            Ok(credentials::get::vend_iceberg(workspace, schema, name).await?)
-        }
-    }
+/// The vended lease a ref carries, when it carries one.
+pub(crate) fn ref_credentials(record: &Value) -> Option<pqbench::v1::Credentials> {
+    serde_json::from_value(record["credentials"].clone()).ok()
 }

@@ -15,7 +15,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Resu
         if input.first.is_some() {
             return Err("get catalog takes CATALOG or a catalog stream, not both".into());
         }
-        let catalog = get::read(workspace, name).await?;
+        let catalog = get::get(workspace, &pqbench::v1::name::catalog(name)).await?;
         emit.write_row(&catalog).await?;
         return emit.finish("catalogs: 1\n").await;
     }
@@ -27,7 +27,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Resu
     let mut reads = records
         .map(|record| async {
             let name = catalog_ref("get catalog", &record?)?;
-            Ok::<_, CliError>(get::read(workspace, &name).await?)
+            Ok::<_, CliError>(get::get(workspace, &name).await?)
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(catalog) = reads.next().await {

@@ -1,6 +1,6 @@
 //! `schema::get`: one schema's record.
 //!
-//! [`read`] is the only public function. It returns the [`Schema`] resource;
+//! [`get`] is the only public function. It returns the [`Schema`] resource;
 //! the CLI forwards it as-is.
 
 use std::fmt;
@@ -27,11 +27,13 @@ impl From<String> for Error {
     }
 }
 
-/// Read the record of `schema` in `catalog` at the workspace's endpoint.
+/// Read the record of the schema `name` — a
+/// `catalogs/{catalog}/schemas/{schema}` resource name — at the workspace's
+/// endpoint.
 ///
 /// # Errors
-/// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or returns a malformed schema record.
-pub async fn read(workspace: &Workspace, catalog: &str, schema: &str) -> Result<Schema, Error> {
-    super::r#impl::read(workspace, catalog, schema).await
+/// Fails when `name` is not a schema name, the endpoint cannot be reached,
+/// answers with an unexpected status, or returns a malformed schema record.
+pub async fn get(workspace: &Workspace, name: &str) -> Result<Schema, Error> {
+    super::r#impl::get(workspace, name).await
 }

@@ -1,9 +1,9 @@
-//! `credentials get`: one table's vended storage options.
+//! `credentials get`: one table's vended read credentials.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::Workspace;
+use crate::v1::{name, Credentials};
+use crate::{Dialect, Workspace};
 
 /// Errors vending a table's credentials.
 #[derive(Debug)]
@@ -23,45 +23,30 @@ impl From<String> for Error {
     }
 }
 
-/// Vend Unity read credentials for `table` in `schema` of `catalog` at the
-/// workspace's endpoint.
+/// Vend the read credentials of the table `name` — a
+/// `catalogs/{catalog}/schemas/{schema}/tables/{table}` resource name; `None`
+/// when the catalog vends nothing for it.
 ///
-/// The returned options are `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
-/// `AWS_SESSION_TOKEN`. `None` means the table cannot be read outside
-/// Databricks compute (managed default storage, a view) or the catalog does
-/// not implement `temporary-table-credentials`; the caller keeps its own
-/// `env`. A catalog that reports no kind is attempted: the route itself
-/// decides.
-///
-/// # Errors
-/// Fails when the endpoint cannot be reached or answers with an unexpected
-/// status.
-pub async fn vend_unity(
-    workspace: &Workspace,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-) -> Result<Option<BTreeMap<String, String>>, Error> {
-    super::r#impl::vend_unity(workspace, catalog, schema, table).await
-}
-
-/// Vend Iceberg REST read credentials for `table` in `schema` at the workspace's
-/// endpoint.
-///
-/// The endpoint names the catalog base. The command reads the catalog's
-/// `loadCredentials` route and takes the `storage-credentials` it returns, as
-/// `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`; a
-/// catalog that does not serve the route falls back to the delegated
-/// `loadTable`. `None` means the catalog vends nothing for the table (managed
-/// default storage, or no vending support); the caller keeps its own `env`.
+/// The dialect decides the route: Unity's `temporary-table-credentials`, or the
+/// Iceberg REST catalog's `storage-credentials`. A table the catalog vends
+/// nothing for — managed default storage, a view, a serverless notebook whose
+/// compute reaches storage itself — has none, so a caller keeps its own.
 ///
 /// # Errors
-/// Fails when the endpoint cannot be reached or answers with an unexpected
-/// status.
-pub async fn vend_iceberg(
-    workspace: &Workspace,
-    schema: &str,
-    table: &str,
-) -> Result<Option<BTreeMap<String, String>>, Error> {
-    super::r#impl::vend_iceberg(workspace, schema, table).await
+/// Fails for a name that is not a table, when the endpoint cannot be reached,
+/// or when it answers an unexpected status.
+pub async fn get(workspace: &Workspace, name: &str) -> Result<Option<Credentials>, Error> {
+    let (catalog, schema, table_name) =
+        name::parse_table(name).ok_or_else(|| Error(format!("not a table name: {name}")))?;
+    let env = match workspace.config().dialect {
+        Dialect::Unity => {
+            super::r#impl::vend_unity(workspace, &catalog, &schema, &table_name).await?
+        }
+        Dialect::Iceberg => super::r#impl::vend_iceberg(workspace, &schema, &table_name).await?,
+    };
+    let Some(env) = env else {
+        return Ok(None);
+    };
+    let credentials = Credentials::from_env(&env);
+    Ok((!credentials.is_empty()).then_some(credentials))
 }

@@ -17,6 +17,12 @@ It detects the platform, downloads the matching archive, verifies the checksums,
 and installs `pqbench` into `$CARGO_HOME/bin` (default `~/.cargo/bin`). Run it
 with `--help` for the flags (pinning a version, choosing the install path, …).
 
+The same release publishes the Python bindings to PyPI, at the same version:
+
+```sh
+pip install pqbench
+```
+
 To build from source instead — no registry, always current:
 
 ```sh
@@ -92,17 +98,19 @@ Configuration lives in [`dist-workspace.toml`](../dist-workspace.toml), and the
 workflow (`.github/workflows/release.yml`) is generated from it — change the
 config and run `cargo dist generate`, never the workflow by hand.
 
-Releases are cut by hand, not on every merge. Two steps.
+Releases are cut by hand, not on every merge. Three steps.
 
-**1. Bump the version** in `[workspace.package]` in `Cargo.toml`, commit, and
-merge it — the release tag must equal this version:
+**1. Bump the version** in `[workspace.package]` in `Cargo.toml`, carry it into
+the wheel's manifest, commit, and merge it — the release tag must equal this
+version:
 
 ```sh
 # Cargo.toml: version = "0.0.2"
+make sync-version
 git commit -am "release: 0.0.2"
 ```
 
-**2. Dispatch the release** with the matching tag:
+**2. Dispatch the binary release** with the matching tag:
 
 ```sh
 gh workflow run release.yml -f tag=v0.0.2
@@ -115,10 +123,30 @@ what a release would produce. If the tag does not match the crate version,
 
 `dist` derives the release from the tag, creates the GitHub Release (and the git
 tag) itself, then runs `plan → build-local-artifacts → build-global-artifacts →
-host → announce`: it builds each target, generates the installer, checksums, and
+host → announce`: it builds each target, generates the installer, checksums and
 source tarball, and uploads them. Every version is kept — cargo-dist does not
 prune — and each is published as "latest", so consumers' `releases/latest/...`
 URL always serves the newest.
+
+**3. Dispatch the wheel** once that tag exists:
+
+```sh
+gh workflow run publish-pypi.yml
+```
+
+or run the **Publish Python package** workflow from the Actions tab. Publishing
+is separate because PyPI names the workflow file that may upload, and its
+trusted publisher does not accept a job defined in a workflow that another
+workflow calls (`publish-pypi.yml` is called, not triggered, from `dist`'s
+release run). It builds the wheels and the sdist and uploads them under trusted
+publishing: no token is stored.
+
+The version is the workspace's, so the two dispatches cannot ship different
+versions. `python/` is its own workspace root and cannot inherit
+`[workspace.package]`; `scripts/version.sh` is the one definition of the value —
+`make sync-version` writes it, `make check-version` (part of `make check`) fails
+when the two disagree, and the wheel jobs run the same script before maturin
+reads the manifest.
 
 ## Source consumers
 

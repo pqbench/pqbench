@@ -11,13 +11,13 @@
 //! error (a missing table, an endpoint fault) fails it.
 
 use futures_util::stream::StreamExt;
-use pqbench::credentials::check::{Eligibility, Reason};
+use pqbench::v1::EligibilityReason;
 use serde::Serialize;
 use serde_json::Value;
 
 use super::StageArgs;
 use crate::emit::{Align, Emitter, Row};
-use crate::source::{self, read_input, table_ref};
+use crate::source::{self, dotted_name, read_input, table_ref};
 use crate::CliError;
 
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
@@ -32,8 +32,8 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     let mut checks = records
         .map(|record| async {
             let record = record?;
-            let (catalog, schema, name) = table_ref("credentials check", &record)?;
-            let reason = check(workspace, &catalog, &schema, &name).await?;
+            let name = table_ref("credentials check", &record)?;
+            let reason = check(workspace, &name).await?;
             Ok::<_, CliError>((record, reason))
         })
         .buffer_unordered(args.fan_out.max(1));
@@ -62,28 +62,23 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
 /// it is. The core check owns the dialect — Unity reads the capability
 /// manifest; Iceberg REST reads its metadata inline through the catalog, so it
 /// passes — and the CLI only renders the reason.
-async fn check(
-    workspace: &pqbench::Workspace,
-    catalog: &str,
-    schema: &str,
-    name: &str,
-) -> Result<Option<String>, CliError> {
-    let eligibility = pqbench::credentials::check::check(workspace, catalog, schema, name).await?;
-    match eligibility {
-        Eligibility::Eligible => Ok(None),
-        Eligibility::Ineligible(reason) => Ok(Some(ineligible(
-            &format!("{catalog}.{schema}.{name}"),
-            reason,
-        ))),
+async fn check(workspace: &pqbench::Workspace, name: &str) -> Result<Option<String>, CliError> {
+    let eligibility = pqbench::credentials::check::check(workspace, name).await?;
+    if eligibility.eligible {
+        return Ok(None);
     }
+    Ok(Some(ineligible(&dotted_name(name), eligibility.reason)))
 }
 
 /// The message an ineligible table reports.
-fn ineligible(name: &str, reason: Reason) -> String {
+fn ineligible(name: &str, reason: Option<EligibilityReason>) -> String {
     let because = match reason {
-        Reason::SystemTable => "a system table",
-        Reason::NotATable => "a view, not a table",
-        Reason::NoExternalRead => "a table only Databricks compute reads (managed default storage)",
+        Some(EligibilityReason::SystemTable) => "a system table",
+        Some(EligibilityReason::NotATable) => "a view, not a table",
+        Some(EligibilityReason::NoExternalRead) => {
+            "a table only Databricks compute reads (managed default storage)"
+        }
+        Some(_) | None => "not readable outside Databricks compute",
     };
     format!(
         "{name} is {because}: read it with Databricks compute, or copy it to an external location"

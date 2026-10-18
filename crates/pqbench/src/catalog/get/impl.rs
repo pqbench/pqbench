@@ -23,11 +23,13 @@ struct Record {
     owner: Option<String>,
 }
 
-pub(crate) async fn read(workspace: &Workspace, catalog: &str) -> Result<Catalog, Error> {
+pub(crate) async fn get(workspace: &Workspace, name: &str) -> Result<Catalog, Error> {
+    let catalog = name::parse_catalog(name)
+        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/… name")))?;
     let url = format!(
         "{}/catalogs/{}",
         dialect::api_root(workspace.config().endpoint.as_str()),
-        catalog.trim_matches('/')
+        catalog
     );
     let response = workspace
         .http()
