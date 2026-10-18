@@ -25,9 +25,20 @@
 # pyproject.toml), so `pip install pqbench` reads `s3://` and Delta/Iceberg
 # tables; a wheel cannot be rebuilt by its user.
 #
-# Linux wheels keep the portable codec baseline (no -march=native) and pin
-# aarch64 to the `neoverse-n1` generation, so a wheel built on a newer CPU
-# still runs on an older one.
+# Linux wheels keep the portable codec baseline (no -march=native), build
+# in manylinux2014 — glibc 2.17, the floor the archives use — and pin aarch64 to
+# the `neoverse-n1` generation, so a wheel built on a newer CPU still runs on an
+# older one. Without the manylinux container a wheel inherits the runner's glibc
+# and is tagged `manylinux_2_39`, which excludes every older distribution.
+#
+# macOS wheels declare the floor their target starts at: 11 for arm64, 13 for
+# Intel — what the retired `macos-13` runner produced, its replacement being
+# `macos-15-intel`.
+#
+# No Windows wheel: nothing in the project builds for MSVC — no CI leg, no
+# `dist` target — and the first attempt died on `.cargo/config.toml`'s
+# `rustc-wrapper`, a POSIX shim Windows cannot execute (`os error 193`). A
+# Windows user with a Rust toolchain can build the sdist instead.
 
 name: Publish Python package
 
@@ -48,19 +59,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The four targets the binary release builds (dist-workspace.toml), so
+          # an archive and a wheel always cover the same platforms.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            manylinux: "2014"
             cxxflags: "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1"
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            manylinux: "2014"
             cxxflags: "-O3 -DNDEBUG -fPIE -fomit-frame-pointer -fstrict-aliasing -ffast-math -DHAVE_BUILTIN_CTZ=1 -mcpu=neoverse-n1"
             rustflags: "-C target-cpu=neoverse-n1"
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            macosx_deployment_target: "13.0"
           - os: macos-14
             target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
+            macosx_deployment_target: "11.0"
     steps:
       - uses: actions/checkout@v6
       - name: Take the wheel version from the workspace manifest
@@ -70,8 +85,10 @@ jobs:
         env:
           CXXFLAGS: ${{ matrix.cxxflags }}
           RUSTFLAGS: ${{ matrix.rustflags }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macosx_deployment_target }}
         with:
           target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
           working-directory: python
           args: --release --out dist
       - uses: actions/upload-artifact@v4
