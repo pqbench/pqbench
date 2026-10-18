@@ -176,19 +176,6 @@ pub struct PartitionMass {
     pub bytes_per_row: Option<f64>,
 }
 
-/// One column in a table's schema.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Column {
-    /// Column name.
-    pub name: String,
-    /// Data type as the format reports it (e.g. `long`, `string`). A nested
-    /// type is the format's JSON form.
-    pub data_type: String,
-    /// Whether the column accepts nulls.
-    pub nullable: bool,
-}
-
 /// A table's record: format, log, and the files the snapshot names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -208,7 +195,7 @@ pub struct TableInfo {
     pub partition_columns: Vec<String>,
     /// Table schema columns, when the metadata carries them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub columns: Vec<Column>,
+    pub columns: Vec<v1::DeclaredColumn>,
     /// Delta table properties: the log's `metaData.configuration` plus the
     /// catalog record's values.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -294,10 +281,8 @@ impl TableInfo {
                 .iter()
                 .enumerate()
                 .map(|(position, column)| v1::DeclaredColumn {
-                    column: column.name.clone(),
-                    data_type: non_empty(&column.data_type),
-                    nullable: column.nullable,
                     position: Some(position as u64),
+                    ..column.clone()
                 })
                 .collect(),
             properties,
@@ -310,7 +295,7 @@ impl TableInfo {
 }
 
 /// `Some` unless the text is empty.
-fn non_empty(value: &str) -> Option<String> {
+pub(crate) fn non_empty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 

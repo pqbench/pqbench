@@ -19,8 +19,8 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadRequest,
-    LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
+    add_partition_total, bytes_per_row, finish_partition_masses, FileStats, LoadRequest, LogCommit,
+    PartitionMass, TableFile, TableFormat, TableInfo,
 };
 use crate::v1;
 use crate::Lake;
@@ -155,7 +155,7 @@ fn shared_store(
 struct SnapshotMeta {
     version: u64,
     partition_columns: Vec<String>,
-    columns: Vec<Column>,
+    columns: Vec<v1::DeclaredColumn>,
     properties: BTreeMap<String, String>,
 }
 
@@ -166,10 +166,11 @@ fn snapshot_meta(snapshot: &Snapshot) -> SnapshotMeta {
         columns: snapshot
             .schema()
             .fields()
-            .map(|field| Column {
-                name: field.name().clone(),
-                data_type: field.data_type().to_string(),
+            .map(|field| v1::DeclaredColumn {
+                column: field.name().clone(),
+                data_type: crate::table::non_empty(&field.data_type().to_string()),
                 nullable: field.is_nullable(),
+                position: None,
             })
             .collect(),
         properties: snapshot

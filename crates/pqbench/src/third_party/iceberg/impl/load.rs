@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{Column, LoadRequest, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::table::{LoadRequest, LogCommit, TableFile, TableFormat, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 use crate::v1;
@@ -237,7 +237,7 @@ fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
 }
 
 /// The columns of the current schema; the first schema when none is marked.
-fn columns(metadata: &TableMetadata) -> Vec<Column> {
+fn columns(metadata: &TableMetadata) -> Vec<v1::DeclaredColumn> {
     metadata
         .schemas
         .iter()
@@ -247,10 +247,11 @@ fn columns(metadata: &TableMetadata) -> Vec<Column> {
             schema
                 .fields
                 .iter()
-                .map(|field| Column {
-                    name: field.name.clone(),
-                    data_type: type_name(&field.data_type),
+                .map(|field| v1::DeclaredColumn {
+                    column: field.name.clone(),
+                    data_type: crate::table::non_empty(&type_name(&field.data_type)),
                     nullable: !field.required,
+                    position: None,
                 })
                 .collect()
         })

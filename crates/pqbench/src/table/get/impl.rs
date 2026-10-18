@@ -17,7 +17,8 @@ use serde_json::Value;
 
 use super::api::{Credentials, Error, Table, TableFormat as Dialect};
 use crate::dialect;
-use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
+use crate::table::{self, LoadRequest, TableFormat, TableInfo};
+use crate::v1;
 use crate::{Lake, Workspace};
 
 pub(crate) async fn get(
@@ -129,10 +130,13 @@ fn merge_catalog(mut info: TableInfo, record: UnityRecord) -> TableInfo {
         info.columns = record
             .columns
             .into_iter()
-            .map(|column| Column {
-                name: column.name,
-                data_type: column.type_text.or(column.type_name).unwrap_or_default(),
+            .map(|column| v1::DeclaredColumn {
+                column: column.name,
+                data_type: table::non_empty(
+                    &column.type_text.or(column.type_name).unwrap_or_default(),
+                ),
                 nullable: column.nullable.unwrap_or(true),
+                position: None,
             })
             .collect();
     }
@@ -288,7 +292,7 @@ async fn iceberg_record(
 }
 
 /// The columns of the current schema; the first schema when none is marked.
-fn columns(metadata: &IcebergMetadata) -> Vec<Column> {
+fn columns(metadata: &IcebergMetadata) -> Vec<v1::DeclaredColumn> {
     metadata
         .schemas
         .iter()
@@ -298,10 +302,11 @@ fn columns(metadata: &IcebergMetadata) -> Vec<Column> {
             schema
                 .fields
                 .iter()
-                .map(|field| Column {
-                    name: field.name.clone(),
-                    data_type: type_name(&field.data_type),
+                .map(|field| v1::DeclaredColumn {
+                    column: field.name.clone(),
+                    data_type: table::non_empty(&type_name(&field.data_type)),
                     nullable: !field.required,
+                    position: None,
                 })
                 .collect()
         })
