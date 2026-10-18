@@ -319,7 +319,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     assert!(selected
         .actions
         .iter()
-        .any(|action| action.kind == "delete"));
+        .any(|action| action.kind.as_deref() == Some("delete")));
     assert_eq!(latest.log.len(), 2);
 }
 

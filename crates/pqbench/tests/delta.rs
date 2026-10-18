@@ -28,7 +28,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     assert!(info.log[1]
         .actions
         .iter()
-        .any(|action| action.kind == "remove"));
+        .any(|action| action.kind.as_deref() == Some("remove")));
     let mut paths: Vec<_> = info.files.iter().map(|file| file.path.as_str()).collect();
     paths.sort_unstable();
     assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);

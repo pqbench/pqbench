@@ -68,17 +68,6 @@ pub enum TableFormat {
     ICEBERG,
 }
 
-/// One action from a commit file, in file order.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct LogAction {
-    /// Action kind as stored (`add`, `remove`, `metaData`, ...).
-    pub kind: String,
-    /// Data path when the action names one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
 /// One commit from the table log, as stored on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -95,7 +84,7 @@ pub struct LogCommit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit_info: Option<serde_json::Value>,
     /// Actions from the commit file, in file order.
-    pub actions: Vec<LogAction>,
+    pub actions: Vec<v1::LogAction>,
 }
 
 /// A table's commits, newest first, from [`stream_commits`].

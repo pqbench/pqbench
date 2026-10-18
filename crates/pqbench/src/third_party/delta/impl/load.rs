@@ -20,8 +20,9 @@ use url::Url;
 
 use crate::table::{
     add_partition_total, bytes_per_row, finish_partition_masses, Column, FileStats, LoadRequest,
-    LogAction, LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
+    LogCommit, PartitionMass, TableFile, TableFormat, TableInfo,
 };
+use crate::v1;
 use crate::Lake;
 
 /// Errors resolving a snapshot through delta-rs.
@@ -320,7 +321,7 @@ async fn commit_files(
     parsed
         .actions
         .into_iter()
-        .filter(|action| action.kind == "add")
+        .filter(|action| action.kind.as_deref() == Some("add"))
         .filter_map(|action| action.path)
         .map(|path| added_file(uri, path))
         .collect()
@@ -465,7 +466,7 @@ fn parse_commit_info(bytes: &[u8]) -> Option<Value> {
 
 /// The parts of a commit file a read keeps.
 struct ParsedCommit {
-    actions: Vec<LogAction>,
+    actions: Vec<v1::LogAction>,
     commit_time: Option<i64>,
     commit_info: Option<serde_json::Value>,
 }
@@ -490,8 +491,8 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
             commit_info = Some(body.clone());
             commit_time = body.get("timestamp").and_then(serde_json::Value::as_i64);
         }
-        actions.push(LogAction {
-            kind: kind.clone(),
+        actions.push(v1::LogAction {
+            kind: Some(kind.clone()),
             path: body
                 .get("path")
                 .and_then(|path| path.as_str())

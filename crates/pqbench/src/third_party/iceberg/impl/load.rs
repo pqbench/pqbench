@@ -12,9 +12,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{Column, LoadRequest, LogAction, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::table::{Column, LoadRequest, LogCommit, TableFile, TableFormat, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
+use crate::v1;
 use crate::Lake;
 
 /// Errors resolving an Iceberg snapshot.
@@ -105,8 +106,8 @@ fn ancestry_log(
                 version: create_u64(snapshot.snapshot_id)?,
                 commit_time: snapshot.snapshot_time,
                 commit_info: None,
-                actions: vec![LogAction {
-                    kind: "snapshot".into(),
+                actions: vec![v1::LogAction {
+                    kind: Some("snapshot".into()),
                     path: Some(snapshot.manifest_list.clone()),
                 }],
             })
@@ -120,14 +121,14 @@ fn attach_actions(log: &mut [LogCommit], version: u64, files: &[TableFile], dele
         return;
     };
     for file in files {
-        commit.actions.push(LogAction {
-            kind: "add".into(),
+        commit.actions.push(v1::LogAction {
+            kind: Some("add".into()),
             path: Some(file.path.clone()),
         });
     }
     for path in deletes {
-        commit.actions.push(LogAction {
-            kind: "delete".into(),
+        commit.actions.push(v1::LogAction {
+            kind: Some("delete".into()),
             path: Some(path.clone()),
         });
     }
