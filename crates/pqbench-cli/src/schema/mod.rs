@@ -7,7 +7,7 @@ use clap::Args;
 use crate::emit::Format;
 
 pub(crate) mod get;
-pub(crate) mod ls;
+pub(crate) mod list;
 
 /// Arguments for `get schema`: the `catalog.schema` name and the output flags.
 #[derive(Args)]

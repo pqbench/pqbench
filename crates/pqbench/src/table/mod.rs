@@ -1,7 +1,7 @@
 //! The table command: one table's record and the tables in a schema.
 //!
 //! [`get`] reads one table's record from a catalog (Unity or Iceberg REST),
-//! without files, so the cost is O(1) in files. [`ls`] lists the tables in a
+//! without files, so the cost is O(1) in files. [`list`] lists the tables in a
 //! schema, one `Table` each — the record [`get`] enriches.
 //!
 //! [`detect`] names the format from on-disk markers before any format-specific
@@ -15,7 +15,7 @@
 //! `iceberg` (`iceberg-s3` for S3).
 
 pub mod get;
-pub mod ls;
+pub mod list;
 
 mod selection;
 pub use selection::FileSelection;

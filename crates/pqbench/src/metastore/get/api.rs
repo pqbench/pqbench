@@ -1,6 +1,6 @@
 //! `metastore::get`: the endpoint's metastore record.
 //!
-//! [`read`] is the only public function. It returns the [`Metastore`] resource;
+//! [`get`] is the only public function. It returns the [`Metastore`] resource;
 //! the CLI forwards it as-is.
 
 use std::fmt;
@@ -32,6 +32,6 @@ impl From<String> for Error {
 /// # Errors
 /// Fails when the endpoint cannot be reached, answers with an unexpected
 /// status, or returns a malformed summary.
-pub async fn read(workspace: &Workspace) -> Result<Metastore, Error> {
-    super::r#impl::read(workspace).await
+pub async fn get(workspace: &Workspace) -> Result<Metastore, Error> {
+    super::r#impl::get(workspace).await
 }

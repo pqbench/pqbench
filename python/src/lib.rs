@@ -1,554 +1,89 @@
-//! In-process bindings for the pqbench commands.
+//! The `pqbench` library, exposed to Python as `pqbench.native`.
 //!
-//! Each function calls the same library entry point as the matching CLI
-//! subcommand and returns the same document, bytes, or paths the CLI would
-//! produce.
+//! Every name is the library function of the same path, with the same
+//! arguments: `pqbench.native.metastore.get.get(workspace)`,
+//! `pqbench.native.catalog.list.list(workspace)`,
+//! `pqbench.native.file.list.list(lake, uri, credentials, versions)`,
+//! `pqbench.native.credentials.check.check(workspace, name)`.
+//!
+//! The surface is the walk's own pipeline and the measurement that consumes it
+//! — metastore, catalog, schema, table, credentials, partition, file, bytemass
+//! — and stops at `bytemass`: the commands downstream of a byte-mass stream
+//! (`viz`, `diff`, `profile`, `experiment`), the standalone codec benchmarks
+//! (`lz`, `compression`) and `skill` are separate tools, and are not bound.
+//!
+//! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the
+//! request structs (`BytemassRequest`) are Python classes, and so are the
+//! records: a model's record is its class, so `record["uri"]`, `record.uri` and
+//! `record.asdict()` agree, and the deep trees it embeds stay dicts. A
+//! collection the library streams is an async iterator, a single value an
+//! awaitable.
+//!
+//! The binding is split the way the library is: one module per domain, each
+//! owning its command and the function that registers it, so a domain can be
+//! read and changed on its own. [`prelude`] holds the names they share, and
+//! this file is only the module tree.
+mod bytemass;
+mod catalog;
+mod credentials;
+mod file;
+mod handles;
+mod marshal;
+mod metastore;
+mod partition;
+mod prelude;
+mod ratelimit;
+mod records;
+mod requests;
+mod schema;
+mod table;
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-use pqbench::experiment::{Aim, ExperimentRequest};
-use pqbench::profile::ProfileRequest;
-use pqbench::stats;
-use pqbench::third_party::parquet::api::{read_sample, read_typed_sample};
-use pqbench::viz::MassRecord;
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
-use pyo3::{Py, PyAny};
-use serde::Serialize;
-use serde_json::Value;
+use pyo3::types::PyModule;
 
-/// Run `pqbench lz` over the raw bytes of `file`.
-///
-/// `codecs` is repeatable `codec@level`. `mode` is `fastest` or `mean`.
-/// `json=True` returns the report object; otherwise the text table.
-#[pyfunction]
-#[pyo3(signature = (file, *, codecs=None, samples=10, warmup_iterations=3, mode="fastest", json=false))]
-fn lz(
-    py: Python<'_>,
-    file: PathBuf,
-    codecs: Option<Vec<String>>,
-    samples: u32,
-    warmup_iterations: u32,
-    mode: &str,
-    json: bool,
-) -> PyResult<Py<PyAny>> {
-    let request = pqbench::lz::LzRequest {
-        file,
-        codec_specs: codecs.unwrap_or_default(),
-        samples,
-        warmup_iterations,
-        mode: parse_mode(mode)?,
-    };
-    let report = py.detach(|| pqbench::lz::lz(&request)).map_err(runtime)?;
-    if json {
-        to_object(py, &pqbench::lz::render_json(&report).map_err(runtime)?)
-    } else {
-        as_text(py, pqbench::lz::render_text(&report).map_err(runtime)?)
-    }
+/// Make a child module and hang it under `parent`.
+pub(crate) fn submodule<'py>(
+    py: Python<'py>,
+    parent: &Bound<'py, PyModule>,
+    name: &str,
+) -> PyResult<Bound<'py, PyModule>> {
+    let module = PyModule::new(py, name)?;
+    parent.add_submodule(&module)?;
+    Ok(module)
 }
 
-/// Run `pqbench compression` over a NONE-compressed parquet file.
-///
-/// Same sweep arguments as `lz`, plus `per_column`. `json=True` returns the
-/// report object.
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (
-    file,
-    *,
-    codecs=None,
-    samples=10,
-    warmup_iterations=3,
-    mode="fastest",
-    per_column=false,
-    json=false
-))]
-fn compression(
-    py: Python<'_>,
-    file: PathBuf,
-    codecs: Option<Vec<String>>,
-    samples: u32,
-    warmup_iterations: u32,
-    mode: &str,
-    per_column: bool,
-    json: bool,
-) -> PyResult<Py<PyAny>> {
-    let request = pqbench::compression::CompressionRequest {
-        file,
-        codec_specs: codecs.unwrap_or_default(),
-        samples,
-        warmup_iterations,
-        mode: parse_mode(mode)?,
-        per_column,
-    };
-    let report = py
-        .detach(|| pqbench::compression::compression(&request))
-        .map_err(runtime)?;
-    if json {
-        to_object(
-            py,
-            &pqbench::compression::render_json(&report).map_err(runtime)?,
-        )
-    } else {
-        as_text(
-            py,
-            pqbench::compression::render_text(&report, per_column).map_err(runtime)?,
-        )
-    }
-}
-
-/// Run `pqbench bytemass` on parquet paths or glob masks.
-///
-/// Returns the stream of `pqbench.bytemass-row` objects (one dict per column
-/// chunk).
-#[pyfunction]
-#[pyo3(signature = (*inputs, env=None, indexes=false))]
-fn bytemass(
-    py: Python<'_>,
-    inputs: Vec<String>,
-    env: Option<BTreeMap<String, String>>,
-    indexes: bool,
-) -> PyResult<Py<PyAny>> {
-    let request = pqbench::bytemass::BytemassRequest {
-        inputs,
-        env: aws_env(env)?,
-        indexes,
-    };
-    let lake = lake()?;
-    let rows = py
-        .detach(|| block_on(pqbench::bytemass::bytemass(&lake, &request)))
-        .map_err(runtime)?;
-    dumps(py, &rows)
-}
-
-/// Run `pqbench profile`: decode a bounded row sample into per-column facts.
-///
-/// `columns` is a list of column-name globs (default: all). `rows` is `all` or
-/// `first:N`. Returns the stream of `pqbench.profile-column` objects (one dict
-/// per column, carrying the input path as `id`).
-#[pyfunction]
-#[pyo3(signature = (*inputs, columns=None, rows="first:8192", top=8))]
-fn profile(
-    py: Python<'_>,
-    inputs: Vec<String>,
-    columns: Option<Vec<String>>,
-    rows: &str,
-    top: u32,
-) -> PyResult<Py<PyAny>> {
-    let max_rows = parse_profile_rows(rows)?;
-    let request = ProfileRequest {
-        columns: columns.unwrap_or_default(),
-        top,
-    };
-    let mut records: Vec<Value> = Vec::new();
-    for input in &inputs {
-        let sample = py
-            .detach(|| read_sample(Path::new(input), max_rows))
-            .map_err(runtime)?;
-        let report = pqbench::profile::profile(&sample, &request).map_err(runtime)?;
-        for column in report.columns {
-            let mut object = serde_json::Map::new();
-            object.insert("kind".into(), Value::from("pqbench.profile-column"));
-            object.insert("id".into(), Value::from(input.clone()));
-            if let Value::Object(fields) = serde_json::to_value(&column).map_err(runtime)? {
-                object.extend(fields);
-            }
-            records.push(Value::Object(object));
-        }
-    }
-    dumps(py, &records)
-}
-
-/// Run `pqbench experiment`: rewrite a decoded sample and measure it.
-///
-/// `rewrite` and `trial` are repeatable specs; `aim` is `storage`, `skipping`,
-/// or `all`. `rows` is `all` or `first:N`. Returns the stream of
-/// `pqbench.experiment-trial` objects (the control first).
-#[pyfunction]
-#[pyo3(signature = (path, *, rewrite=None, trial=None, aim="storage", rows="first:8192"))]
-fn experiment(
-    py: Python<'_>,
-    path: PathBuf,
-    rewrite: Option<Vec<String>>,
-    trial: Option<Vec<String>>,
-    aim: &str,
-    rows: &str,
-) -> PyResult<Py<PyAny>> {
-    let max_rows = parse_profile_rows(rows)?;
-    let mut trials = rewrite.unwrap_or_default();
-    trials.extend(trial.unwrap_or_default());
-    let request = ExperimentRequest {
-        trials,
-        aim: Aim::parse(aim).map_err(runtime)?,
-    };
-    let sample = py
-        .detach(|| read_typed_sample(&path, max_rows))
-        .map_err(runtime)?;
-    let report = pqbench::experiment::experiment(&sample, &request).map_err(runtime)?;
-    let mut records: Vec<Value> = Vec::new();
-    for trial in report.trials {
-        let mut object = serde_json::Map::new();
-        object.insert("kind".into(), Value::from("pqbench.experiment-trial"));
-        if let Value::Object(fields) = serde_json::to_value(&trial).map_err(runtime)? {
-            object.extend(fields);
-        }
-        records.push(Value::Object(object));
-    }
-    dumps(py, &records)
-}
-
-/// Run `pqbench table`: detect the format and load one snapshot.
-///
-/// Returns the table's record.
-#[pyfunction]
-#[pyo3(signature = (uri, *, version=None, env=None, no_stats=false))]
-fn table(
-    py: Python<'_>,
-    uri: String,
-    version: Option<u64>,
-    env: Option<BTreeMap<String, String>>,
-    no_stats: bool,
-) -> PyResult<Py<PyAny>> {
-    let request =
-        pqbench::table::LoadRequest::new(uri, version, aws_env(env)?).with_file_stats(!no_stats);
-    let lake = lake()?;
-    let info = py
-        .detach(|| block_on(pqbench::table::load(&lake, &request)))
-        .map_err(runtime)?;
-    dumps(py, &info)
-}
-
-/// Run `pqbench viz` on a bytemass row stream.
-///
-/// Writes `output.html`. Returns that path.
-#[pyfunction]
-#[pyo3(signature = (rows, *, output))]
-fn viz(py: Python<'_>, rows: Bound<'_, PyAny>, output: PathBuf) -> PyResult<Py<PyAny>> {
-    let records = viz_rows(&rows)?;
-    let prefix = match output.extension().and_then(|ext| ext.to_str()) {
-        Some("html" | "htm") => output.with_extension(""),
-        _ => output,
-    };
-    py.detach(|| pqbench::viz::write_report(&prefix, &records, &[]))
-        .map_err(runtime)?;
-    let mut result = serde_json::Map::new();
-    result.insert(
-        "html".into(),
-        Value::String(prefix.with_extension("html").display().to_string()),
-    );
-    value_to_py(py, &Value::Object(result))
-}
-
-/// Return a bundled skill (`pqbench skill`).
-///
-/// No name lists skills. `document` is `recipes` for the extra markdown.
-#[pyfunction]
-#[pyo3(signature = (name=None, document=""))]
-fn skill(py: Python<'_>, name: Option<&str>, document: &str) -> PyResult<Py<PyAny>> {
-    match name {
-        None => {
-            let items: Vec<Value> = pqbench::skill::skills()
-                .iter()
-                .map(|item| {
-                    let mut object = serde_json::Map::new();
-                    object.insert("name".into(), Value::String(item.name.into()));
-                    object.insert("description".into(), Value::String(item.description.into()));
-                    Value::Object(object)
-                })
-                .collect();
-            dumps(py, &items)
-        }
-        Some(name) => {
-            let markdown = pqbench::skill::document(name, document).map_err(runtime)?;
-            Ok(pyo3::types::PyString::new(py, markdown).into_any().unbind())
-        }
-    }
+/// Make a child importable by its dotted path.
+pub(crate) fn expose(py: Python<'_>, name: &str, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    py.import("sys")?.getattr("modules")?.set_item(name, module)
 }
 
 #[pymodule]
-fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(lz, module)?)?;
-    module.add_function(wrap_pyfunction!(compression, module)?)?;
-    module.add_function(wrap_pyfunction!(bytemass, module)?)?;
-    module.add_function(wrap_pyfunction!(table, module)?)?;
-    module.add_function(wrap_pyfunction!(profile, module)?)?;
-    module.add_function(wrap_pyfunction!(experiment, module)?)?;
-    module.add_function(wrap_pyfunction!(skill, module)?)?;
-    module.add_function(wrap_pyfunction!(viz, module)?)?;
-    module.add(
-        "commands",
-        PyTuple::new(
-            module.py(),
-            [
-                "lz",
-                "compression",
-                "bytemass",
-                "table",
-                "profile",
-                "experiment",
-                "skill",
-                "viz",
-            ],
-        )?,
-    )?;
+fn native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    // pqbench reads tables from outside Databricks with explicit credentials
+    // (vended, or on the source); it never relies on EC2 instance metadata.
+    if std::env::var_os("AWS_EC2_METADATA_DISABLED").is_none() {
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+    }
+    let py = module.py();
+    // One shared tokio runtime backs every awaitable; started at import so the
+    // first call does not pay to build it.
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    pyo3_async_runtimes::tokio::init(builder);
+
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    handles::register(module)?;
+    requests::register(module)?;
+    ratelimit::register(py, module)?;
+    marshal::register(module)?;
+    records::register(module)?;
+    credentials::register(py, module)?;
+    metastore::register(py, module)?;
+    catalog::register(py, module)?;
+    schema::register(py, module)?;
+    table::register(py, module)?;
+    partition::register(py, module)?;
+    file::register(py, module)?;
+    bytemass::register(py, module)?;
     Ok(())
-}
-
-fn parse_mode(mode: &str) -> PyResult<stats::Mode> {
-    match mode {
-        "fastest" => Ok(stats::Mode::Fastest),
-        "mean" => Ok(stats::Mode::Mean),
-        other => Err(PyValueError::new_err(format!(
-            "invalid mode {other:?}; expected fastest or mean"
-        ))),
-    }
-}
-
-/// Parse `rows`: `all` reads every row, `first:N` reads N (N >= 1).
-fn parse_profile_rows(method: &str) -> PyResult<Option<usize>> {
-    if method == "all" {
-        return Ok(None);
-    }
-    if let Some(rest) = method.strip_prefix("first:") {
-        let rows: usize = rest.parse().map_err(|_| {
-            PyValueError::new_err(format!("bad rows {method:?}; expected `all` or `first:N`"))
-        })?;
-        if rows == 0 {
-            return Err(PyValueError::new_err(
-                "bad rows `first:0`; N must be at least 1",
-            ));
-        }
-        return Ok(Some(rows));
-    }
-    Err(PyValueError::new_err(format!(
-        "bad rows {method:?}; expected `all` or `first:N`"
-    )))
-}
-
-fn aws_env(env: Option<BTreeMap<String, String>>) -> PyResult<BTreeMap<String, String>> {
-    let env = env.unwrap_or_default();
-    if let Some(key) = env.keys().find(|key| !key.starts_with("AWS_")) {
-        return Err(PyValueError::new_err(format!(
-            "env may only contain AWS_* names, not `{key}`"
-        )));
-    }
-    Ok(env)
-}
-
-fn viz_rows(obj: &Bound<'_, PyAny>) -> PyResult<Vec<MassRecord>> {
-    let value = py_to_value(obj)?;
-    let items = match value {
-        Value::Array(items) => items,
-        Value::Object(fields)
-            if fields.get("kind").and_then(Value::as_str) == Some("pqbench.bytemass-row") =>
-        {
-            vec![Value::Object(fields)]
-        }
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "viz reads a bytemass row stream, not `{}`",
-                other
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("document")
-            )));
-        }
-    };
-    items
-        .into_iter()
-        .map(|item| {
-            let id = item
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            Ok(MassRecord {
-                id,
-                file: string_field(&item, "uri")?,
-                size: u64_field(&item, "size_bytes")?,
-                row_count: u64_field(&item, "row_count")?,
-                column: string_field(&item, "column")?,
-                compressed_bytes: u64_field(&item, "compressed_bytes")?,
-                uncompressed_bytes: u64_field(&item, "uncompressed_bytes")?,
-                codec: string_field(&item, "codec")?,
-                encodings: item
-                    .get("encodings")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                    .or_else(|| {
-                        item.get("encodings")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_default(),
-                num_values: item.get("num_values").and_then(Value::as_u64).unwrap_or(0),
-                dictionary: item
-                    .get("dictionary")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                null_count: item.get("null_count").and_then(Value::as_u64),
-                distinct_count: item.get("distinct_count").and_then(Value::as_u64),
-                physical_type: item
-                    .get("physical_type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                row_group: item.get("row_group").and_then(Value::as_u64).unwrap_or(0) as u32,
-                row_group_rows: item
-                    .get("row_group_rows")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0),
-                compressed_bytes_per_row: item
-                    .get("compressed_bytes_per_row")
-                    .and_then(Value::as_f64),
-                page_count: item.get("page_count").and_then(Value::as_u64),
-            })
-        })
-        .collect()
-}
-
-fn string_field(value: &Value, name: &str) -> PyResult<String> {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| PyValueError::new_err(format!("bytemass row needs `{name}`")))
-}
-
-fn u64_field(value: &Value, name: &str) -> PyResult<u64> {
-    value
-        .get(name)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| PyValueError::new_err(format!("bytemass row needs `{name}`")))
-}
-
-/// The shared lake, resolved from the environment as the CLI does: the same
-/// `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT` names.
-fn lake() -> PyResult<pqbench::Lake> {
-    let dialect = match std::env::var("PQB_TABLE_FORMAT").as_deref() {
-        Ok("iceberg") => pqbench::Dialect::Iceberg,
-        _ => pqbench::Dialect::Unity,
-    };
-    let config = pqbench::Config {
-        endpoint: std::env::var("PQB_ENDPOINT").unwrap_or_default(),
-        token: std::env::var("PQB_TOKEN").ok(),
-        dialect,
-    };
-    let workspace = pqbench::Workspace::new(config).map_err(runtime)?;
-    Ok(pqbench::Lake::new(&workspace))
-}
-
-fn block_on<T, E>(future: impl std::future::Future<Output = Result<T, E>>) -> Result<T, String>
-where
-    E: ToString,
-{
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|err| err.to_string())?;
-    runtime.block_on(future).map_err(|err| err.to_string())
-}
-
-fn runtime(err: impl ToString) -> PyErr {
-    PyRuntimeError::new_err(err.to_string())
-}
-
-fn dumps(py: Python<'_>, value: impl Serialize) -> PyResult<Py<PyAny>> {
-    let value = serde_json::to_value(value).map_err(runtime)?;
-    value_to_py(py, &value)
-}
-
-fn to_object(py: Python<'_>, body: &str) -> PyResult<Py<PyAny>> {
-    let value: Value = serde_json::from_str(body).map_err(runtime)?;
-    value_to_py(py, &value)
-}
-
-fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<Py<PyAny>> {
-    match value {
-        Value::Null => Ok(py.None()),
-        Value::Bool(flag) => {
-            let bound = (*flag).into_pyobject(py)?.to_owned();
-            Ok(bound.into_any().unbind())
-        }
-        Value::Number(number) => {
-            if let Some(value) = number.as_u64() {
-                Ok(value.into_pyobject(py)?.into_any().unbind())
-            } else if let Some(value) = number.as_i64() {
-                Ok(value.into_pyobject(py)?.into_any().unbind())
-            } else if let Some(value) = number.as_f64() {
-                Ok(value.into_pyobject(py)?.into_any().unbind())
-            } else {
-                Err(PyValueError::new_err("unsupported JSON number"))
-            }
-        }
-        Value::String(text) => Ok(text.into_pyobject(py)?.into_any().unbind()),
-        Value::Array(items) => {
-            let list = PyList::empty(py);
-            for item in items {
-                list.append(value_to_py(py, item)?)?;
-            }
-            Ok(list.into_any().unbind())
-        }
-        Value::Object(fields) => {
-            let dict = PyDict::new(py);
-            for (key, item) in fields {
-                dict.set_item(key, value_to_py(py, item)?)?;
-            }
-            Ok(dict.into_any().unbind())
-        }
-    }
-}
-
-fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
-    if obj.is_none() {
-        return Ok(Value::Null);
-    }
-    if let Ok(flag) = obj.extract::<bool>() {
-        return Ok(Value::Bool(flag));
-    }
-    if let Ok(value) = obj.extract::<u64>() {
-        return Ok(Value::from(value));
-    }
-    if let Ok(value) = obj.extract::<i64>() {
-        return Ok(Value::from(value));
-    }
-    if let Ok(value) = obj.extract::<f64>() {
-        return Ok(serde_json::Number::from_f64(value)
-            .map(Value::Number)
-            .unwrap_or(Value::Null));
-    }
-    if let Ok(text) = obj.extract::<String>() {
-        return Ok(Value::String(text));
-    }
-    if let Ok(list) = obj.cast::<PyList>() {
-        let mut items = Vec::with_capacity(list.len());
-        for item in list.iter() {
-            items.push(py_to_value(&item)?);
-        }
-        return Ok(Value::Array(items));
-    }
-    if let Ok(dict) = obj.cast::<PyDict>() {
-        let mut fields = serde_json::Map::new();
-        for (key, item) in dict.iter() {
-            fields.insert(key.extract::<String>()?, py_to_value(&item)?);
-        }
-        return Ok(Value::Object(fields));
-    }
-    Err(PyTypeError::new_err(format!(
-        "cannot convert {} to a document",
-        obj.get_type().name()?
-    )))
-}
-
-fn as_text(py: Python<'_>, body: String) -> PyResult<Py<PyAny>> {
-    Ok(body.into_pyobject(py)?.into_any().unbind())
 }

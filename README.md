@@ -204,20 +204,24 @@ that command.
 - [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list partitions | list files | bytemass`, limitations
 - [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list partitions | list files | bytemass`, limitations
 - [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqbench viz`, a static HTML treemap
-- [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel and call every command
+- [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel: the commands, and the walk
 - [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
   naming tables for `pqbench list partitions`, over rustfs S3
 
 ## Python
 
-[`python/`](https://pqbench.github.io/pqbench/python/) is a PyO3 wheel. Each CLI command is a function
-that calls the library in-process:
+[`python/`](https://pqbench.github.io/pqbench/python/) is a PyO3 wheel. The
+commands are functions under `pqbench.native`, one per library path; `pqbench`
+carries the client handles they take and `walk`, the whole-metastore walk:
 
 ```python
 import pqbench
+import pqbench.native
 
-rows = pqbench.bytemass("data.parquet")
-pqbench.viz(rows, output="report")
+workspace = pqbench.Workspace(pqbench.Config(endpoint, token))
+
+async for file in pqbench.walk(workspace):
+    print(file["uri"])
 ```
 
 ## Contributing

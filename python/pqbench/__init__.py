@@ -1,32 +1,79 @@
-"""Python bindings for the pqbench command line.
+"""The ``pqbench`` API: the client handles, the records, and the walk.
 
-Each function runs one command inside this process and returns the same text
-or JSON the CLI would print. ``pip install`` builds the native extension; a
-separate ``pqbench`` binary is not required.
+The library's commands are the crate's modules, one function per path, under
+``pqbench.native``::
+
+    import pqbench.native
+
+    pqbench.native.metastore.get.get(workspace)
+    pqbench.native.catalog.list.list(workspace)
+    pqbench.native.file.list.list(lake, uri, credentials, versions)
+    pqbench.native.credentials.check.check(workspace, name)
+
+Every name there is the library function of the same path, with the same
+arguments — a separate ``pqbench`` binary is not required. They are the walk's
+own pipeline and the measurement that consumes it, and they stop at
+``bytemass``. The records are the
+library's records, as classes — a field reads the same three ways:
+``record["uri"]``, ``record.uri``, ``record.asdict()``; the commands whose entry
+point is async — the walk verbs, ``bytemass`` — return awaitables, and the
+collections the library streams — ``partition.list.list`` and ``file.list.list`` —
+are async iterators.
+
+This package is the ergonomic surface over them: the client handles every
+command takes, re-exported so they sit with ``walk``, and the records every
+command returns, re-exported so a return type has a name at this level too
+(``pqbench.TableFile`` is ``pqbench.native.TableFile``). The whole-metastore
+walk is composed once::
+
+    workspace = pqbench.Workspace(pqbench.Config(endpoint, token))
+
+    async for file in pqbench.walk(workspace):
+        print(file["uri"])
+
+Where the commands themselves are typed is ``pqbench/native.pyi`` — the stub
+next to the extension module, which is what a caller's editor reads.
 """
 
-from pqbench._native import (
-    __version__,
-    bytemass,
-    commands,
-    compression,
-    experiment,
-    lz,
-    profile,
-    skill,
-    table,
-    viz,
+from pqbench import native
+from pqbench.native import (
+    Catalog,
+    Config,
+    Credentials,
+    Dialect,
+    ReadEligibility,
+    Lake,
+    Layer,
+    MassRow,
+    Partition,
+    Record,
+    Schema,
+    Table,
+    TableFile,
+    Workspace,
 )
+from pqbench.walk import walk
+
+__version__ = native.__version__
 
 __all__ = [
     "__version__",
-    "bytemass",
-    "commands",
-    "compression",
-    "experiment",
-    "lz",
-    "profile",
-    "skill",
-    "table",
-    "viz",
+    "native",
+    "walk",
+    # The client handles every command takes.
+    "Config",
+    "Dialect",
+    "Lake",
+    "Layer",
+    "Workspace",
+    # The records every command returns.
+    "Record",
+    "Catalog",
+    "Credentials",
+    "ReadEligibility",
+    "MassRow",
+    "Partition",
+    "Schema",
+    "Table",
+    "TableFile",
 ]

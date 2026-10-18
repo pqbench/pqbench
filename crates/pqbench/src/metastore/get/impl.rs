@@ -21,7 +21,7 @@ struct Summary {
     region: String,
 }
 
-pub(crate) async fn read(workspace: &Workspace) -> Result<Metastore, Error> {
+pub(crate) async fn get(workspace: &Workspace) -> Result<Metastore, Error> {
     let url = format!(
         "{}/metastore_summary",
         dialect::api_root(workspace.config().endpoint.as_str())

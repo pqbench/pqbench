@@ -1,6 +1,6 @@
 //! `catalog::get`: one catalog's record.
 //!
-//! [`read`] is the only public function. It returns the [`Catalog`] resource;
+//! [`get`] is the only public function. It returns the [`Catalog`] resource;
 //! the CLI forwards it as-is.
 
 use std::fmt;
@@ -27,11 +27,12 @@ impl From<String> for Error {
     }
 }
 
-/// Read the record of `catalog` from the workspace's endpoint.
+/// Read the record of the catalog `name` — a `catalogs/{catalog}` resource
+/// name — from the workspace's endpoint.
 ///
 /// # Errors
-/// Fails when the endpoint cannot be reached, answers with an unexpected
-/// status, or returns a malformed catalog record.
-pub async fn read(workspace: &Workspace, catalog: &str) -> Result<Catalog, Error> {
-    super::r#impl::read(workspace, catalog).await
+/// Fails when `name` is not a catalog name, the endpoint cannot be reached,
+/// answers with an unexpected status, or returns a malformed catalog record.
+pub async fn get(workspace: &Workspace, name: &str) -> Result<Catalog, Error> {
+    super::r#impl::get(workspace, name).await
 }

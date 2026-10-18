@@ -15,24 +15,26 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::api::{Error, Storage, Table, TableFormat as Dialect};
+use super::api::{Credentials, Error, Table, TableFormat as Dialect};
 use crate::dialect;
 use crate::table::{self, Column, LoadRequest, TableFormat, TableInfo};
 use crate::{Lake, Workspace};
 
-pub(crate) async fn read(
+pub(crate) async fn get(
     workspace: &Workspace,
     lake: &Lake,
-    catalog: &str,
-    schema: &str,
-    table: &str,
-    storage: &Storage,
+    name: &str,
+    uri: Option<&str>,
+    credentials: Option<&Credentials>,
 ) -> Result<Table, Error> {
+    let (catalog, schema, table) = crate::v1::name::parse_table(name)
+        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
+    let env = credentials.map(Credentials::to_env).unwrap_or_default();
     let info = match workspace.config().dialect {
-        Dialect::Unity => unity_record(workspace, lake, catalog, schema, table, storage).await,
-        Dialect::Iceberg => iceberg_record(workspace, catalog, schema, table, &storage.env).await,
+        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, &env).await,
+        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table, &env).await,
     }?;
-    Ok(info.resource(catalog, schema, table, &storage.env))
+    Ok(info.resource(&catalog, &schema, &table, &env))
 }
 
 /// The subset of Unity `GET /tables/{full_name}` this command reports.
@@ -63,7 +65,8 @@ async fn unity_record(
     catalog: &str,
     schema: &str,
     table: &str,
-    storage: &Storage,
+    hint: Option<&str>,
+    env: &BTreeMap<String, String>,
 ) -> Result<TableInfo, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let url = format!(
@@ -71,14 +74,10 @@ async fn unity_record(
         dialect::api_root(workspace.config().endpoint.as_str()),
         dialect::encode(&name)
     );
-    // The parent ref already names the storage, so start the catalog call, read
-    // the metadata while it is in flight, then reconcile: the catalog's own
+    // The ref already names the storage, so start the catalog call, read the
+    // metadata while it is in flight, then reconcile: the catalog's own
     // location stays authoritative, and a ref that disagrees is read again.
-    let (record, info) = match storage
-        .location
-        .as_deref()
-        .filter(|location| !location.is_empty())
-    {
+    let (record, info) = match hint.filter(|location| !location.is_empty()) {
         Some(location) => {
             let catalog = dialect::get_json::<UnityRecord>(
                 workspace,
@@ -87,13 +86,13 @@ async fn unity_record(
             );
             let (record, info) = futures_util::future::try_join(
                 async { catalog.await.map_err(Error::from) },
-                load_metadata(lake, &name, location, &storage.env),
+                load_metadata(lake, &name, location, env),
             )
             .await?;
             let catalog_location = catalog_location(&record, &name)?;
             let info = match catalog_location == location {
                 true => info,
-                false => load_metadata(lake, &name, &catalog_location, &storage.env).await?,
+                false => load_metadata(lake, &name, &catalog_location, env).await?,
             };
             (record, info)
         }
@@ -103,7 +102,7 @@ async fn unity_record(
                     .await
                     .map_err(Error::from)?;
             let location = catalog_location(&record, &name)?;
-            let info = load_metadata(lake, &name, &location, &storage.env).await?;
+            let info = load_metadata(lake, &name, &location, env).await?;
             (record, info)
         }
     };
