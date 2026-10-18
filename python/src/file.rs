@@ -10,15 +10,26 @@ use crate::records::TableFile;
 fn file_list(
     py: Python<'_>,
     lake: PyRef<'_, Lake>,
+    table: String,
     uri: String,
     credentials: Option<Bound<'_, PyAny>>,
     versions: Vec<u64>,
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
     let credentials = crate::requests::credentials(credentials)?;
+    let env = credentials
+        .as_ref()
+        .map(pqbench::v1::Credentials::to_env)
+        .unwrap_or_default();
     stream_listing(
         py,
-        async move { pqbench::file::list::list(&lake, &uri, credentials.as_ref(), &versions).await },
+        async move {
+            let found = pqbench::file::list::list(&lake, &table, &uri, &env, &versions).await?;
+            Ok(found.map_ok(move |mut file| {
+                file.credentials = credentials.clone();
+                file
+            }))
+        },
         TableFile::attach,
     )
 }

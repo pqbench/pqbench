@@ -35,7 +35,7 @@ and takes the handles and the resource's name like the Rust signature: the name
 is the AIP resource name a parent record carries, so a record feeds the next
 command as it is. `credentials.get` takes a table's name and returns its lease,
 the `Credentials` record a storage read takes, and a record is its model's
-class: `record["uri"]`, `record.uri` and `record.asdict()` agree.
+class: `record["path"]`, `record.path` and `record.asdict()` agree.
 
 They are the walk's own pipeline — metastore, catalog, schema, table,
 credentials, partition, file, bytemass — and they stop at `bytemass`: the
@@ -78,13 +78,17 @@ async def main():
         lake, table["name"], table["uri"], table.get("credentials"), 86_400_000
     ):
         async for file in pqbench.native.file.list.list(
-            lake, partition["uri"], partition.get("credentials"), partition["commit_versions"]
+            lake,
+            table["name"],
+            partition["uri"],
+            partition.get("credentials"),
+            partition["commit_versions"],
         ):
             # The pipeline stops here: `bytemass` measures the file's bytes.
             rows = await pqbench.native.bytemass.bytemass(
-                lake, pqbench.native.BytemassRequest(inputs=[file["uri"]])
+                lake, pqbench.native.BytemassRequest(inputs=[file.uri])
             )
-            print(len(rows), file["uri"])
+            print(len(rows), file.uri)
 
 asyncio.run(main())
 ```
@@ -98,7 +102,7 @@ yields each table file.
 
 ```python
 async for file in pqbench.walk(workspace):
-    print(file["uri"])
+    print(file.uri)
 ```
 
 `catalog=` descends one catalog instead of every readable one. A table that

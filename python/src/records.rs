@@ -1,7 +1,7 @@
 //! The records a command returns: the library's `Serialize` models, as classes.
 //!
 //! A record is its model's fields under a class that names it, so
-//! `type(file).__name__ == "TableFile"`, `file["uri"]`, `file.uri` and
+//! `type(file).__name__ == "TableFile"`, `file["path"]`, `file.path` and
 //! `file.asdict()` all agree, and `isinstance(file, TableFile)` says what it is.
 //! The structs are `#[non_exhaustive]`, so a field the library adds is a key
 //! here without a binding change; the deep trees they embed (`FileStats`, the
@@ -151,6 +151,18 @@ record_class!(
     Credentials,
     ReadEligibility
 );
+
+#[pymethods]
+impl TableFile {
+    /// The storage URI the record's bytes are at, from its `blob` name — the
+    /// model's own derivation, so a caller feeds `bytemass` without parsing.
+    #[getter]
+    fn uri(slf: PyRef<'_, Self>) -> Option<String> {
+        let record = slf.into_super();
+        let blob = record.fields().get("blob")?.as_str()?;
+        pqbench::v1::name::blob_uri(blob)
+    }
+}
 
 /// The function that wraps one value of a model as its record.
 pub(crate) type Attach<T> = fn(Python<'_>, &T) -> PyResult<Py<PyAny>>;

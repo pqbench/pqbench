@@ -144,21 +144,22 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         files = [
             file
             async for file in pqbench.native.file.list.list(
-                lake, partition["uri"], {}, partition["commit_versions"]
+                lake, _TABLE_NAME, partition["uri"], {}, partition["commit_versions"]
             )
         ]
         self.assertEqual(len(files), 1)
         # A record is its model's class: one field, three ways to read it.
         self.assertIsInstance(files[0], pqbench.native.TableFile)
         self.assertEqual(type(files[0]).__name__, "TableFile")
-        self.assertEqual(files[0].uri, files[0]["uri"])
-        self.assertEqual(files[0].asdict()["uri"], files[0]["uri"])
+        self.assertEqual(files[0].path, files[0]["path"])
+        self.assertEqual(files[0].asdict()["path"], files[0]["path"])
         self.assertEqual(list(files[0]), list(files[0].asdict()))
         self.assertIsNone(files[0].get("no_such_field"))
         with self.assertRaises(KeyError):
             files[0]["no_such_field"]
         self.assertTrue(files[0]["path"].endswith(".parquet"), files[0])
-        self.assertTrue(files[0]["uri"], files[0])
+        self.assertTrue(files[0]["name"].startswith(f"{_TABLE_NAME}/files/"), files[0])
+        self.assertTrue(files[0].uri, files[0])
 
     async def test_missing_input_fails(self) -> None:
         lake = pqbench.Lake(_workspace())

@@ -241,7 +241,7 @@ class StubFieldTest(unittest.IsolatedAsyncioTestCase):
         files = [
             file
             async for file in native.file.list.list(
-                lake, partitions[0]["uri"], {}, partitions[0]["commit_versions"]
+                lake, _TABLE_NAME, partitions[0]["uri"], {}, partitions[0]["commit_versions"]
             )
         ]
         rows = await native.bytemass.bytemass(

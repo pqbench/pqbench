@@ -129,8 +129,8 @@ class ValueIterator:
 class Record:
     """One record of a library model, its fields, and the mapping interface.
 
-    A field reads the same three ways — ``record["uri"]``, ``record.uri`` and
-    ``record.asdict()["uri"]`` — and a record is mutable in one place: a
+    A field reads the same three ways — ``record["path"]``, ``record.path`` and
+    ``record.asdict()["path"]`` — and a record is mutable in one place: a
     composed stage puts the lease that read it on the record. Records compare
     by value and are unhashable, like the dicts they mirror.
     """
@@ -209,11 +209,18 @@ class Partition(Record):
 class TableFile(Record):
     """One data file the current snapshot treats as active."""
 
+    name: str
+    blob: str | None
     path: str
-    uri: str
-    size_bytes: int
+    size_bytes: int | None
     partition_values: dict[str, str | None]
     stats: dict[str, Any] | None
+    credentials: Credentials | None
+
+    @property
+    def uri(self) -> str | None:
+        """The storage URI the bytes are at, from ``blob``."""
+        ...
 
 class MassRow(Record):
     """One column chunk's measured byte mass: a row of the ``bytemass`` table."""
@@ -353,11 +360,12 @@ class file:
         @staticmethod
         def list(
             lake: Lake,
+            table: str,
             uri: str,
             credentials: Credentials | dict[str, Any] | None,
             versions: Sequence[int],
         ) -> AsyncIterator[TableFile]:
-            """Stream the files the given log versions added."""
+            """Stream the files the given log versions added, named under the table."""
             ...
 
 class credentials:

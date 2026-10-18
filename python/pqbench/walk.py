@@ -10,7 +10,7 @@ the catalog levels fan out, one task descends each table under a bounded
 semaphore, and the files arrive as one async iterator.
 
     async for file in pqbench.walk(workspace):
-        print(file["uri"])
+        print(file.uri)
 
 The Unity Catalog API limits requests per endpoint and per workspace, so its
 calls are paced — one bucket per endpoint, through the library's own
@@ -63,7 +63,8 @@ async def walk(
     """Yield a table-file record for every file the metastore reaches.
 
     Each record is a :class:`TableFile` — the library's model, so
-    ``file.uri``, ``file["uri"]`` and ``file.asdict()`` agree.
+    ``file.path``, ``file["path"]`` and ``file.asdict()`` agree, and
+    ``file.uri`` is the storage URI derived from its ``blob``.
 
     The catalog levels span the whole Unity Catalog; the table levels descend
     every catalog whose tables this principal may read outside compute —
@@ -145,7 +146,11 @@ async def walk(
                     lake, info["name"], uri, info.get("credentials"), window_millis
                 ):
                     async for file in native.file.list.list(
-                        lake, partition["uri"], partition.get("credentials"), partition["commit_versions"]
+                        lake,
+                        info["name"],
+                        partition["uri"],
+                        partition.get("credentials"),
+                        partition["commit_versions"],
                     ):
                         await queue.put(file)
             except Exception as error:  # noqa: BLE001 - a table we may not read
