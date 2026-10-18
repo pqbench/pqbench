@@ -79,10 +79,10 @@ the codecs over the file's encoded pages:
 $ pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 --format table
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
-zstd        1           ±485            ±1819   0.56
-gzip        1            ±70             ±272   0.58
-lz4         1           ±917            ±7914   0.81
-snappy      1           ±944            ±2971   0.81
+zstd        1           ±458            ±1722   0.56
+gzip        1            ±68             ±270   0.58
+lz4         1           ±897            ±8476   0.81
+snappy      1           ±912            ±2101   0.81
 file: crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet
 rows: 4
 columns: 0
