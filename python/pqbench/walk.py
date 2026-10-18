@@ -165,7 +165,7 @@ async def walk(
                         await queue.put(file)
             except Exception as error:  # noqa: BLE001 - a table we may not read
                 skipped += 1
-                _log.debug("skipped %s.%s.%s: %s", name, schema, table, error)
+                _log.debug("skipped %s.%s.%s: %s", catalog, schema, table, error)
 
     async def descend_all() -> None:
         """The catalog levels, then one task per table; one queue for all."""
