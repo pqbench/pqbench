@@ -7,9 +7,10 @@
 //! These are ordinary Rust types first: a value that can be absent is an
 //! `Option`, a quantity is unsigned, an enum has no "unspecified" sentinel
 //! (absence is `None`), and a collection is a `Vec`/`BTreeMap`. The modelling
-//! rules are `docs/concepts/data-modelling.md`; where a wire idiom (a
-//! zero-value variant, an `int64`, a prefixed enum value) is not the Rust
-//! idiom, Rust wins and the wire keeps the spelling via `serde`.
+//! rules are `docs/concepts/data-modelling.md` and the wire contract is
+//! `docs/concepts/v1.proto`; where a wire idiom (a zero-value variant, an
+//! `int64`, a prefixed enum value) is not the Rust idiom, Rust wins and the
+//! wire keeps the spelling via `serde`.
 //!
 //! [`name`] is the one place a name format lives, so changing it (say, to a
 //! URN) is a one-module change.

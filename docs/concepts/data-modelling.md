@@ -122,6 +122,9 @@ Two consequences:
 - A table references a blob through the `TableFile` association, not as its
   parent (AIP-124).
 
+The field-by-field contract is [`v1.proto`](v1.proto); this page is the rules
+that keep it coherent.
+
 ## Where the model stops
 
 This page is the vocabulary, not the API. Two rules keep it from becoming a
