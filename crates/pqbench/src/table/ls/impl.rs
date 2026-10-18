@@ -4,8 +4,9 @@
 //! serves `/tables?catalog_name=&schema_name=` pages, each entry carrying
 //! `full_name` and `storage_location`, so a ref is complete in one page.
 //! Iceberg REST lists `{endpoint}/namespaces/{namespace}/tables` identifiers
-//! only; the ref carries the `loadTable` URL as its `uri`, and
-//! `pqbench get table` dereferences it later. No config probe runs. A view
+//! only; the ref carries its name and no storage URI, so `pqbench get table`
+//! derives the `loadTable` URL and reads the metadata inline. No config probe
+//! runs. A view
 //! carries no location: the ref keeps its `uri` unset, and
 //! `credentials check` is the stage that drops it. The URLs, the page shapes,
 //! and the pagination are this command's; the transport is the third-party
