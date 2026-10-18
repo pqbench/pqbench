@@ -3,15 +3,16 @@
 //! The default inputs are the wheel's own layout: the bindings in `python/src`,
 //! the stub at `python/pqbench/native.pyi`, and the library's models under
 //! `crates/pqbench/src`. Findings print one per line as
-//! `file:line:column: severity[rule]: message`. Exit status is 0 when clean, 1
-//! when findings exist, and 2 for usage or io errors.
+//! `file:line:column: severity[rule]: message`; `--output-format github` renders
+//! them as workflow commands, so they land inline on a pull request. Exit status
+//! is 0 when clean, 1 when findings exist, and 2 for usage or io errors.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use pyicheck::lint::{check, rule_ids, Finding};
 use pyicheck::model::{ModelIndex, Surface};
@@ -28,6 +29,7 @@ Findings print as file:line:column: severity[rule]: message.
 Examples:
   pyicheck
   pyicheck --rule surface/returns
+  pyicheck --output-format github
   pyicheck --list-rules
 "#
 )]
@@ -44,12 +46,32 @@ struct Cli {
     /// Restrict the run to a rule id (repeatable).
     #[arg(long = "rule", value_name = "ID")]
     rules: Vec<String>,
+    /// How to render findings.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    output_format: OutputFormat,
     /// Always exit 0, even when findings exist.
     #[arg(long)]
     exit_zero: bool,
     /// List the rule ids and exit.
     #[arg(long = "list-rules")]
     list_rules: bool,
+}
+
+/// How a finding is rendered: a line, or a GitHub workflow command that lands
+/// inline on a pull request.
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum OutputFormat {
+    Text,
+    Github,
+}
+
+impl OutputFormat {
+    fn render(self, finding: &Finding) -> String {
+        match self {
+            OutputFormat::Text => render_text(finding),
+            OutputFormat::Github => render_github(finding),
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -70,7 +92,7 @@ fn main() -> ExitCode {
     };
     let findings = check(&inputs.bindings, &inputs.stub, &inputs.model, &cli.rules);
     for finding in &findings {
-        println!("{}", render(finding));
+        println!("{}", cli.output_format.render(finding));
     }
 
     if findings.is_empty() || cli.exit_zero {
@@ -178,7 +200,7 @@ fn collect_dir(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
 }
 
 /// One finding, as `file:line:column: severity[rule]: message`.
-fn render(finding: &Finding) -> String {
+fn render_text(finding: &Finding) -> String {
     format!(
         "{}:{}:{}: {}[{}]: {}",
         finding.file.display(),
@@ -188,4 +210,25 @@ fn render(finding: &Finding) -> String {
         finding.rule,
         finding.message,
     )
+}
+
+/// One finding as a GitHub Actions workflow command, rendered inline on the PR
+/// diff. The rule id goes in `title` so the annotation's name stays readable.
+fn render_github(finding: &Finding) -> String {
+    let level = finding.severity.as_str();
+    let message = escape_github(&finding.message);
+    format!(
+        "::{level} file={},line={},col={},title=pyicheck {}::{message}",
+        finding.file.display(),
+        finding.line,
+        finding.column,
+        finding.rule,
+    )
+}
+
+/// Workflow-command data escapes `%`, `\r`, and `\n`.
+fn escape_github(text: &str) -> String {
+    text.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
 }
