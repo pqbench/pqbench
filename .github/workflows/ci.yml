@@ -86,23 +86,8 @@ jobs:
         run: cargo build --release -p pyicheck-cli
       - name: Check the stub
         run: |
-          # Annotations land inline on the PR diff.
-          ./target/release/pyicheck --output-format github
-          # Full list plus a per-rule breakdown, for the log and the summary.
-          ./target/release/pyicheck --statistics 2> stats.txt | tee findings.txt || true
-          {
-            echo '### pyicheck'
-            echo
-            if [ -s findings.txt ]; then
-              echo '```'
-              cat findings.txt
-              echo '```'
-            else
-              echo 'No findings.'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          # The gate: exit non-zero if any finding remains.
-          ./target/release/pyicheck > /dev/null
+          # The gate: exit non-zero when the stub disagrees with the bindings.
+          ./target/release/pyicheck
 
   # The documented `pqbench ...` commands are generated into
   # `crates/pqbench-cli/tests/gen_*.rs` and run by `make test` like any other

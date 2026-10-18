@@ -1,20 +1,19 @@
 //! `pyicheck` — check the PyO3 stub against the bindings it mirrors.
 //!
-//! The default inputs are the wheel's own layout: the bindings in
-//! `python/src`, the stub at `python/pqbench/native.pyi`, and the library's
-//! models under `crates/pqbench/src`. Output is one line per finding by
-//! default; `--output-format json` emits one object per finding and `github`
-//! emits workflow commands annotated inline on a pull request. Exit status is 0
-//! when clean, 1 when findings exist, and 2 for usage or io errors.
+//! The default inputs are the wheel's own layout: the bindings in `python/src`,
+//! the stub at `python/pqbench/native.pyi`, and the library's models under
+//! `crates/pqbench/src`. Findings print one per line as
+//! `file:line:column: severity[rule]: message`. Exit status is 0 when clean, 1
+//! when findings exist, and 2 for usage or io errors.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 
-use pyicheck::lint::{check, rule_ids, Finding, Options, Severity};
+use pyicheck::lint::{check, rule_ids, Finding};
 use pyicheck::model::{ModelIndex, Surface};
 
 #[derive(Parser)]
@@ -26,16 +25,10 @@ The stub (python/pqbench/native.pyi) is hand-written, so it can drift from the
 bindings (python/src) and the library models (crates/pqbench/src) it mirrors.
 Findings print as file:line:column: severity[rule]: message.
 
-Output formats:
-  text    file:line:column: severity[rule]: message (default)
-  json    one JSON object per finding, for jq and friends
-  github  ::error/::warning workflow commands, annotated inline in a PR
-
 Examples:
   pyicheck
   pyicheck --rule surface/returns
-  pyicheck --output-format github
-  pyicheck --output-format json | jq -r 'select(.severity == "error") | .rule'
+  pyicheck --list-rules
 "#
 )]
 struct Cli {
@@ -48,70 +41,15 @@ struct Cli {
     /// The library sources that declare the record models.
     #[arg(long, default_value = "crates/pqbench/src")]
     library: PathBuf,
-    /// How to render findings.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    output_format: OutputFormat,
-    /// Shorthand for `--output-format json`.
-    #[arg(long, hide = true)]
-    json: bool,
     /// Restrict the run to a rule id (repeatable).
     #[arg(long = "rule", value_name = "ID")]
     rules: Vec<String>,
-    /// Silence a rule id (repeatable).
-    #[arg(long = "allow", value_name = "ID")]
-    allowed_rules: Vec<String>,
-    /// Drop findings below this severity.
-    #[arg(long, value_enum)]
-    min_severity: Option<SeverityArg>,
-    /// Print a per-rule count after the findings.
-    #[arg(long = "statistics")]
-    stats: bool,
     /// Always exit 0, even when findings exist.
     #[arg(long)]
     exit_zero: bool,
     /// List the rule ids and exit.
     #[arg(long = "list-rules")]
     list_rules: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum OutputFormat {
-    Text,
-    Json,
-    Github,
-}
-
-impl OutputFormat {
-    fn resolve(self, json: bool) -> Self {
-        if json {
-            OutputFormat::Json
-        } else {
-            self
-        }
-    }
-
-    fn render(self, finding: &Finding) -> String {
-        match self {
-            OutputFormat::Text => render_text(finding),
-            OutputFormat::Json => render_json(finding),
-            OutputFormat::Github => render_github(finding),
-        }
-    }
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum SeverityArg {
-    Error,
-    Warning,
-}
-
-impl SeverityArg {
-    fn severity(self) -> Severity {
-        match self {
-            SeverityArg::Error => Severity::ERROR,
-            SeverityArg::Warning => Severity::WARNING,
-        }
-    }
 }
 
 fn main() -> ExitCode {
@@ -130,20 +68,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-
-    let options = Options {
-        rules: cli.rules,
-        allowed_rules: cli.allowed_rules,
-        min_severity: cli.min_severity.map(SeverityArg::severity),
-    };
-    let findings = check(&inputs.bindings, &inputs.stub, &inputs.models, &options);
-
-    let format = cli.output_format.resolve(cli.json);
+    let findings = check(&inputs.bindings, &inputs.stub, &inputs.model, &cli.rules);
     for finding in &findings {
-        println!("{}", format.render(finding));
-    }
-    if cli.stats {
-        print_stats(&findings);
+        println!("{}", render(finding));
     }
 
     if findings.is_empty() || cli.exit_zero {
@@ -157,7 +84,7 @@ fn main() -> ExitCode {
 struct Inputs {
     bindings: Vec<Surface>,
     stub: Surface,
-    models: ModelIndex,
+    model: ModelIndex,
 }
 
 /// An input that could not be read, with the path to name in the message.
@@ -176,25 +103,22 @@ fn load(cli: &Cli) -> Result<Inputs, LoadError> {
         path: cli.stub.clone(),
         error,
     })?;
-    let mut models = ModelIndex::default();
-    read_models(&cli.library, &mut models).map_err(|error| LoadError {
+    let mut model = ModelIndex::default();
+    read_models(&cli.library, &mut model).map_err(|error| LoadError {
         path: cli.library.clone(),
         error,
     })?;
     Ok(Inputs {
         bindings,
         stub,
-        models,
+        model,
     })
 }
 
 /// Parse every binding source into one surface per file.
 fn read_bindings(root: &Path) -> io::Result<Vec<Surface>> {
-    let mut files = Vec::new();
-    collect_extension(root, "rs", &mut files)?;
-    files.sort();
     let mut surfaces = Vec::new();
-    for path in files {
+    for path in sources(root)? {
         let source = fs::read_to_string(&path)?;
         let entries = pyicheck::rust::parse(&source);
         if !entries.is_empty() {
@@ -212,29 +136,28 @@ fn read_stub(path: &Path) -> io::Result<Surface> {
 
 /// Read every library source into the model index.
 fn read_models(root: &Path, models: &mut ModelIndex) -> io::Result<()> {
-    let mut files = Vec::new();
-    collect_extension(root, "rs", &mut files)?;
-    files.sort();
-    for path in files {
+    for path in sources(root)? {
         let source = fs::read_to_string(&path)?;
         pyicheck::library::collect(&source, models);
     }
     Ok(())
 }
 
-/// Every file of an extension under a directory, `target` and hidden entries
-/// skipped. A single file is taken as itself.
-fn collect_extension(root: &Path, extension: &str, out: &mut Vec<PathBuf>) -> io::Result<()> {
+/// Every `.rs` file under a directory, `target` and hidden entries skipped. A
+/// single file is taken as itself.
+fn sources(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
     if fs::metadata(root)?.is_dir() {
-        collect_dir(root, extension, out)
-    } else {
-        keep(root, extension, out);
-        Ok(())
+        collect_dir(root, &mut out)?;
+    } else if root.extension().is_some_and(|found| found == "rs") {
+        out.push(root.to_path_buf());
     }
+    out.sort();
+    Ok(out)
 }
 
-/// Every file of an extension under a directory, one level down.
-fn collect_dir(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) -> io::Result<()> {
+/// Every `.rs` file under a directory, one level down.
+fn collect_dir(dir: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
@@ -245,30 +168,19 @@ fn collect_dir(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) -> io::Resul
         let path = entry.path();
         if path.is_dir() {
             if name != "target" {
-                collect_dir(&path, extension, out)?;
+                collect_dir(&path, out)?;
             }
-        } else {
-            keep(&path, extension, out);
+        } else if path.extension().is_some_and(|found| found == "rs") {
+            out.push(path);
         }
     }
     Ok(())
 }
 
-/// Record a file when it carries the wanted extension.
-fn keep(path: &Path, extension: &str, out: &mut Vec<PathBuf>) {
-    if path.extension().is_some_and(|found| found == extension) {
-        out.push(path.to_path_buf());
-    }
-}
-
-fn render_text(finding: &Finding) -> String {
-    let help = finding
-        .help
-        .as_deref()
-        .map(|help| format!(" help: {help}"))
-        .unwrap_or_default();
+/// One finding, as `file:line:column: severity[rule]: message`.
+fn render(finding: &Finding) -> String {
     format!(
-        "{}:{}:{}: {}[{}]: {}{help}",
+        "{}:{}:{}: {}[{}]: {}",
         finding.file.display(),
         finding.line,
         finding.column,
@@ -276,59 +188,4 @@ fn render_text(finding: &Finding) -> String {
         finding.rule,
         finding.message,
     )
-}
-
-fn render_json(finding: &Finding) -> String {
-    serde_json::json!({
-        "path": finding.file.display().to_string(),
-        "line": finding.line,
-        "column": finding.column,
-        "severity": finding.severity.as_str(),
-        "rule": finding.rule,
-        "name": finding.name,
-        "message": finding.message,
-        "help": finding.help,
-    })
-    .to_string()
-}
-
-/// A GitHub Actions workflow command, rendered inline on the PR diff.
-fn render_github(finding: &Finding) -> String {
-    let level = match finding.severity {
-        Severity::ERROR => "error",
-        Severity::WARNING => "warning",
-    };
-    let help = finding
-        .help
-        .as_deref()
-        .map(|help| format!(" (help: {help})"))
-        .unwrap_or_default();
-    let message = escape_github(&format!("{}{help}", finding.message));
-    format!(
-        "::{level} file={},line={},col={},title=pyicheck {rule}::{message}",
-        finding.file.display(),
-        finding.line,
-        finding.column,
-        rule = finding.rule,
-    )
-}
-
-fn escape_github(text: &str) -> String {
-    text.replace('%', "%25")
-        .replace('\r', "%0D")
-        .replace('\n', "%0A")
-}
-
-fn print_stats(findings: &[Finding]) {
-    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for finding in findings {
-        *counts.entry(finding.rule).or_default() += 1;
-    }
-    if counts.is_empty() {
-        return;
-    }
-    eprintln!("pyicheck: {} finding(s)", findings.len());
-    for (rule, count) in counts {
-        eprintln!("{count:>4}  {rule}");
-    }
 }
