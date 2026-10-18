@@ -32,7 +32,7 @@ make build          # or: cargo build --release
 
 ## Measure one file
 
-`bytemass` reports the on-disk bytes each column takes, per row. On a terminal
+`bytemass` reports the on-disk bytes each column takes. On a terminal
 an aligned table; on a pipe, NDJSON.
 
 ```console run

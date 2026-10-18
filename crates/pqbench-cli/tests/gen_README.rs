@@ -28,31 +28,31 @@ fn compression() {
 #[rustfmt::skip]
 #[test]
 fn bytemass() {
-    // bytemass, from line 143
-    support::run("pqbench bytemass data/samples/delta_byte_array.parquet --format table", 144, Some(&["column                 type        codec         encodings         bytes  values", "---------------------  ----------  ------------  ----------------  -----  ------", "c_customer_id          BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000", "files: 1", "rows: 1000", "columns: 9"]));
+    // bytemass, from line 144
+    support::run("pqbench bytemass data/samples/delta_byte_array.parquet --format table", 145, Some(&["column                 type        codec         encodings         bytes  values", "---------------------  ----------  ------------  ----------------  -----  ------", "c_customer_id          BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000", "files: 1", "rows: 1000", "columns: 9"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn list_partitions() {
-    // list_partitions, from line 175
-    support::run("pqbench list partitions docker/e2e-lakehouse/table --format table", 176, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
+    // list_partitions, from line 176
+    support::run("pqbench list partitions docker/e2e-lakehouse/table --format table", 177, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn list_files() {
-    // list_files, from line 193
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 194, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    // list_files, from line 194
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 195, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 224
-    support::run("pqbench bytemass data/samples/delta_byte_array.parquet | pqbench viz -o /tmp/report", 225, None);
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 226, None);
+    // viz, from line 225
+    support::run("pqbench bytemass data/samples/delta_byte_array.parquet | pqbench viz -o /tmp/report", 226, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 227, None);
 }
