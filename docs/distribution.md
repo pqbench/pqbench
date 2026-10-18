@@ -17,6 +17,12 @@ It detects the platform, downloads the matching archive, verifies the checksums,
 and installs `pqbench` into `$CARGO_HOME/bin` (default `~/.cargo/bin`). Run it
 with `--help` for the flags (pinning a version, choosing the install path, …).
 
+The same release publishes the Python bindings to PyPI, at the same version:
+
+```sh
+pip install pqbench
+```
+
 To build from source instead — no registry, always current:
 
 ```sh
@@ -94,11 +100,13 @@ config and run `cargo dist generate`, never the workflow by hand.
 
 Releases are cut by hand, not on every merge. Two steps.
 
-**1. Bump the version** in `[workspace.package]` in `Cargo.toml`, commit, and
-merge it — the release tag must equal this version:
+**1. Bump the version** in `[workspace.package]` in `Cargo.toml`, carry it into
+the wheel's manifest, commit, and merge it — the release tag must equal this
+version:
 
 ```sh
 # Cargo.toml: version = "0.0.2"
+make sync-version
 git commit -am "release: 0.0.2"
 ```
 
@@ -113,12 +121,23 @@ default input, `dry-run`, runs only `plan` (no build, no publish), so it preview
 what a release would produce. If the tag does not match the crate version,
 `dist` errors before building.
 
-`dist` derives the release from the tag, creates the GitHub Release (and the git
-tag) itself, then runs `plan → build-local-artifacts → build-global-artifacts →
-host → announce`: it builds each target, generates the installer, checksums, and
-source tarball, and uploads them. Every version is kept — cargo-dist does not
-prune — and each is published as "latest", so consumers' `releases/latest/...`
-URL always serves the newest.
+One dispatch publishes everything. `dist` derives the release from the tag,
+creates the GitHub Release (and the git tag) itself, then runs
+`plan → build-local-artifacts → build-global-artifacts → host → announce`: it
+builds each target, generates the installer, checksums, and source tarball, and
+uploads them. Then its `publish-jobs` entry calls the PyPI workflow, which builds
+the wheels and the sdist for the same version and uploads them under trusted
+publishing, so the binary release and the wheel can never carry different
+versions. Every binary version is kept — cargo-dist does not prune — and each is
+published as "latest", so consumers' `releases/latest/...` URL always serves the
+newest. A prerelease tag skips the wheels, as it skips every other publisher,
+unless `publish-prereleases` is set.
+
+`python/` is its own workspace root, so its manifest cannot inherit
+`[workspace.package]`. `scripts/version.sh` is the one definition of the value:
+`make sync-version` writes it, `make check-version` (part of `make check`) fails
+when the two disagree, and the wheel job runs the same script before maturin
+reads the manifest.
 
 ## Source consumers
 

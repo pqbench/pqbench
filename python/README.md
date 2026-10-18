@@ -149,17 +149,20 @@ parquet page indexes too, one extra range per file).
 [`.github/workflows/publish-pypi.yml`](../.github/workflows/publish-pypi.yml)
 builds manylinux, macOS, and Windows wheels with
 [maturin](https://www.maturin.rs/) and uploads them with
-[PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/). It runs
-only on a manual dispatch (and only in `pqbench/pqbench`): the binary release
-is cut separately, and PyPI versions are immutable.
+[PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/) — no token
+is stored. The release run calls it: dispatching **Release**
+(`gh workflow run release.yml -f tag=v0.0.2`) ships the binaries and then the
+wheels at the same version, one trigger for both. It can also be run on its own
+— **Publish Python package**, from the Actions tab — to re-publish a wheel.
+
+Its version is the workspace's: `scripts/version.sh sync` writes
+`[workspace.package] version` from `Cargo.toml` into `python/Cargo.toml` before
+maturin reads it, and `make check-version` fails when the two disagree —
+`python/` is its own crate and cannot inherit it.
 
 Before the first upload:
 
 1. On PyPI, add a pending publisher for this repository: owner `pqbench`,
    project `pqbench`, workflow `publish-pypi.yml`, environment `pypi`.
 2. In the GitHub repository settings, create an environment named `pypi`.
-3. Run the **Publish Python package** workflow.
-
-The wheel version comes from `python/Cargo.toml` (`version`), which is kept in
-step with the workspace release by hand — `python/` is its own crate and cannot
-inherit `[workspace.package]`.
+3. Run the **Publish Python package** workflow, or the **Release** workflow.
