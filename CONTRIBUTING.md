@@ -87,8 +87,9 @@ make check        # = fmt-check + check-docs + check-version + clippy -D warning
   **report-only** — not part of `make check`. On a PR, CI analyzes only the
   changed Rust files against the base revision: `scripts/code_analysis.py`
   annotates functions over cyclomatic 15 and files under maintainability 20,
-  posts a sticky comment with the base→head deltas, and logs the raw diff. On a
-  push it rolls the whole tree up for the job summary.
+  posts a sticky comment with the base→head deltas and the PR's aggregate
+  maintainability index, and logs the raw diff. On a push it rolls the whole
+  tree up for the job summary.
 - Tests are **blackbox** (observable behavior through the public API), unit
   level, sub-second, no network, no external build steps.
 - During implementation, prefer `cargo check` for fast feedback. The repository
