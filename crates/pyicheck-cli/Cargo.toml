@@ -1,0 +1,25 @@
+[package]
+name = "pyicheck-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Command line frontend for the PyO3 stub consistency checker."
+
+[[bin]]
+name = "pyicheck"
+path = "src/main.rs"
+
+[dependencies]
+pyicheck = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Not distributed: a development tool, not a shipped binary.
+[package.metadata.dist]
+dist = false

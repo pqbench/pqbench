@@ -1,0 +1,14 @@
+[package]
+name = "pyicheck"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Check the PyO3 stub against the bindings: a tree-sitter front end over Rust and Python source."
+
+[dependencies]
+tree-sitter = "0.27"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"

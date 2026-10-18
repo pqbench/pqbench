@@ -187,6 +187,8 @@ analogy, convention, or precedent:
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
 - `crates/aipnaming/`, `crates/aipnaming-cli/` — the AIP naming linter and its
   `aipnaming` binary
+- `crates/pyicheck/`, `crates/pyicheck-cli/` — check the PyO3 stub against the
+  bindings; `make check-pyi` runs it (part of `make check`)
 - `crates/docscheck/`, `crates/docscheck-cli/` — generate Rust tests from the
   runnable Markdown blocks; `docscheck sync` writes `tests/gen_*.rs`
 - `crates/pqbench-cli/tests/gen_*.rs` — generated documentation tests (do not
