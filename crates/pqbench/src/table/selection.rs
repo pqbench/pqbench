@@ -1,5 +1,6 @@
 //! Deterministic selection of active snapshot files before data reads.
-use super::{Error, TableFile};
+use super::Error;
+use crate::v1;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -27,7 +28,7 @@ impl FileSelection {
     ///
     /// # Errors
     /// Invalid globs/sample methods, zero N, or unknown median-sample sizes.
-    pub fn select_files(&self, mut files: Vec<TableFile>) -> Result<Vec<TableFile>, Error> {
+    pub fn select_files(&self, mut files: Vec<v1::TableFile>) -> Result<Vec<v1::TableFile>, Error> {
         let compile = |patterns: &[String]| {
             patterns
                 .iter()
@@ -64,22 +65,22 @@ impl FileSelection {
                     .iter()
                     .all(|(k, v)| f.partition_values.get(k) == Some(v))
         });
-        files.sort_by(|a, b| a.path.cmp(&b.path).then(a.uri.cmp(&b.uri)));
+        files.sort_by(|a, b| a.path.cmp(&b.path).then(a.name.cmp(&b.name)));
         match method {
             Some(("first", n)) => files.truncate(n),
             Some(("every", n)) => files = files.into_iter().step_by(n).collect(),
             Some(("median", n)) if !files.is_empty() => {
-                if files.iter().any(|f| f.size_bytes == 0) {
+                if files.iter().any(|f| f.size_bytes.unwrap_or(0) == 0) {
                     return Err(Error::new(
                         "median sampling requires known positive file sizes",
                     ));
                 }
-                let mut sizes: Vec<_> = files.iter().map(|f| f.size_bytes).collect();
+                let mut sizes: Vec<_> = files.iter().map(|f| f.size_bytes.unwrap_or(0)).collect();
                 sizes.sort_unstable();
                 let median = sizes[(sizes.len() - 1) / 2];
-                files.sort_by_key(|f| f.size_bytes.abs_diff(median));
+                files.sort_by_key(|f| f.size_bytes.unwrap_or(0).abs_diff(median));
                 files.truncate(n);
-                files.sort_by(|a, b| a.path.cmp(&b.path).then(a.uri.cmp(&b.uri)));
+                files.sort_by(|a, b| a.path.cmp(&b.path).then(a.name.cmp(&b.name)));
             }
             _ => {}
         }

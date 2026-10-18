@@ -7,7 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::schema::list;
 
 use crate::emit::{Emitter, Format};
-use crate::source::{self, catalog_ref, read_input};
+use crate::source::{self, catalog_ref, read_input, Input};
 use crate::CliError;
 
 /// Arguments for `list schemas`.
@@ -29,16 +29,38 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list schemas").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    if let Some(catalog) = &args.catalog {
-        if input.first.is_some() {
-            return Err("list schemas takes CATALOG or a catalog stream, not both".into());
+    let schemas = match &args.catalog {
+        Some(catalog) => {
+            if input.first.is_some() {
+                return Err("list schemas takes CATALOG or a catalog stream, not both".into());
+            }
+            list_catalog(workspace, catalog, &mut emit).await?
         }
-        let schemas = list::list(workspace, &pqbench::v1::name::catalog(catalog)).await?;
-        for schema in &schemas {
-            emit.write_row(schema).await?;
-        }
-        return emit.finish(&format!("schemas: {}\n", schemas.len())).await;
+        None => list_stream(workspace, input, args.fan_out, &mut emit).await?,
+    };
+    emit.finish(&format!("schemas: {schemas}\n")).await
+}
+
+/// List one named catalog's schemas.
+async fn list_catalog(
+    workspace: &pqbench::Workspace,
+    catalog: &str,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
+    let schemas = list::list(workspace, &pqbench::v1::name::catalog(catalog)).await?;
+    for schema in &schemas {
+        emit.write_row(schema).await?;
     }
+    Ok(schemas.len())
+}
+
+/// List every catalog's schemas from a catalog stream.
+async fn list_stream(
+    workspace: &pqbench::Workspace,
+    input: Input,
+    fan_out: usize,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
     if !input.piped {
         return Err("list schemas needs CATALOG or a catalog stream".into());
     }
@@ -49,12 +71,12 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Resu
             let name = catalog_ref("list schemas", &record?)?;
             Ok::<_, CliError>(list::list(workspace, &name).await?)
         })
-        .buffer_unordered(args.fan_out.max(1));
+        .buffer_unordered(fan_out.max(1));
     while let Some(listed) = lists.next().await {
         for schema in listed? {
             emit.write_row(&schema).await?;
             schemas += 1;
         }
     }
-    emit.finish(&format!("schemas: {schemas}\n")).await
+    Ok(schemas)
 }

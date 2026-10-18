@@ -20,6 +20,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.94.1"
 
+# rust-cache policy: only the default branch saves (the `save-if` on each cache
+# step). PRs restore main's caches — GitHub serves the default branch's caches
+# to every branch — but must not write their own refs/pull/N/merge copies,
+# which no other branch can read and which push the repo past its 10 GB cache
+# limit, evicting the entries everyone restores.
 jobs:
   fmt:
     name: Format
@@ -46,6 +51,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: aipnaming
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the linter
         run: cargo build --release -p aipnaming-cli
       - name: Lint the workspace
@@ -106,6 +112,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: docs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: make check-docs
 
   # The `third_party` wrappers must keep their feature flags in `impl.rs`; an
@@ -228,6 +235,13 @@ jobs:
                 mi_average: ((map(.metrics.mi.mi_visual_studio) | add) / length | . * 10 | round / 10)
               }'
               echo '```'
+              # The PR's aggregate MI — the mean over the files both revisions
+              # have, with its base→head delta. Absent on a push (no base).
+              if [ -n "$base_metrics" ]; then
+                echo
+                python3 scripts/code_analysis.py aggregate \
+                  "$head_metrics" "$base_metrics"
+              fi
             else
               echo "_No Rust files changed._"
             fi

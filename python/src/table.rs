@@ -17,18 +17,19 @@ fn table_get(
     let workspace = workspace.0.clone();
     let lake = lake.0.clone();
     let credentials = crate::requests::credentials(credentials)?;
+    let env = credentials
+        .as_ref()
+        .map(pqbench::v1::Credentials::to_env)
+        .unwrap_or_default();
     one(
         py,
         async move {
-            pqbench::table::get::get(
-                &workspace,
-                &lake,
-                &name,
-                uri.as_deref(),
-                credentials.as_ref(),
-            )
-            .await
-            .map_err(|error| error.to_string())
+            let mut table =
+                pqbench::table::get::get(&workspace, &lake, &name, uri.as_deref(), &env)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            table.credentials = credentials;
+            Ok(table)
         },
         Table::attach,
     )

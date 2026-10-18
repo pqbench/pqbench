@@ -1,5 +1,6 @@
 //! `get table`: one table's record, read from its catalog and storage.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::Args;
@@ -7,7 +8,9 @@ use futures_util::stream::StreamExt;
 use pqbench::table::get;
 
 use crate::emit::{Emitter, Format};
-use crate::source::{self, read_input, ref_credentials, ref_storage, split_table, table_ref};
+use crate::source::{
+    self, read_input, ref_credentials, ref_storage, split_table, table_ref, Input,
+};
 use crate::CliError;
 
 /// The default tables in flight for `get table`: one per core.
@@ -44,16 +47,42 @@ pub(crate) async fn run(
 ) -> Result<(), CliError> {
     let input = read_input("get table").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    if let Some(table) = &args.table {
-        if input.first.is_some() {
-            return Err("get table takes CATALOG.SCHEMA.TABLE or a table stream, not both".into());
+    let tables = match &args.table {
+        Some(table) => {
+            if input.first.is_some() {
+                return Err(
+                    "get table takes CATALOG.SCHEMA.TABLE or a table stream, not both".into(),
+                );
+            }
+            get_one(workspace, lake, table, &mut emit).await?
         }
-        let (catalog, schema, table) = split_table("get table", table)?;
-        let name = pqbench::v1::name::table(&catalog, &schema, &table);
-        let record = get::get(workspace, lake, &name, None, None).await?;
-        emit.write_row(&record).await?;
-        return emit.finish("tables: 1\n").await;
-    }
+        None => get_stream(workspace, lake, input, args.fan_out, &mut emit).await?,
+    };
+    emit.finish(&format!("tables: {tables}\n")).await
+}
+
+/// Read one named table's record.
+async fn get_one(
+    workspace: &pqbench::Workspace,
+    lake: &pqbench::Lake,
+    table: &str,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
+    let (catalog, schema, table) = split_table("get table", table)?;
+    let name = pqbench::v1::name::table(&catalog, &schema, &table);
+    let record = get::get(workspace, lake, &name, None, &BTreeMap::new()).await?;
+    emit.write_row(&record).await?;
+    Ok(1)
+}
+
+/// Read each table's record from a table stream.
+async fn get_stream(
+    workspace: &pqbench::Workspace,
+    lake: &pqbench::Lake,
+    input: Input,
+    fan_out: usize,
+    emit: &mut Emitter,
+) -> Result<usize, CliError> {
     if !input.piped {
         return Err("get table needs CATALOG.SCHEMA.TABLE or a table stream".into());
     }
@@ -64,13 +93,19 @@ pub(crate) async fn run(
             let record = record?;
             let name = table_ref("get table", &record)?;
             let uri = ref_storage(&record);
-            let credentials = ref_credentials(&record);
-            Ok::<_, CliError>(get::get(workspace, lake, &name, uri, credentials.as_ref()).await?)
+            let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
+            let env = lease
+                .as_ref()
+                .map(pqbench::v1::Credentials::to_env)
+                .unwrap_or_default();
+            let mut table = get::get(workspace, lake, &name, uri, &env).await?;
+            table.credentials = lease;
+            Ok::<_, CliError>(table)
         })
-        .buffer_unordered(args.fan_out.max(1));
+        .buffer_unordered(fan_out.max(1));
     while let Some(record) = reads.next().await {
         emit.write_row(&record?).await?;
         tables += 1;
     }
-    emit.finish(&format!("tables: {tables}\n")).await
+    Ok(tables)
 }

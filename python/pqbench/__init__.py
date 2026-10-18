@@ -7,7 +7,7 @@ The library's commands are the crate's modules, one function per path, under
 
     pqbench.native.metastore.get.get(workspace)
     pqbench.native.catalog.list.list(workspace)
-    pqbench.native.file.list.list(lake, uri, credentials, versions)
+    pqbench.native.file.list.list(lake, table, uri, credentials, versions)
     pqbench.native.credentials.check.check(workspace, name)
 
 Every name there is the library function of the same path, with the same
@@ -15,7 +15,7 @@ arguments — a separate ``pqbench`` binary is not required. They are the walk's
 own pipeline and the measurement that consumes it, and they stop at
 ``bytemass``. The records are the
 library's records, as classes — a field reads the same three ways:
-``record["uri"]``, ``record.uri``, ``record.asdict()``; the commands whose entry
+``record["path"]``, ``record.path``, ``record.asdict()``; the commands whose entry
 point is async — the walk verbs, ``bytemass`` — return awaitables, and the
 collections the library streams — ``partition.list.list`` and ``file.list.list`` —
 are async iterators.
@@ -29,7 +29,7 @@ walk is composed once::
     workspace = pqbench.Workspace(pqbench.Config(endpoint, token))
 
     async for file in pqbench.walk(workspace):
-        print(file["uri"])
+        print(file.uri)
 
 Where the commands themselves are typed is ``pqbench/native.pyi`` — the stub
 next to the extension module, which is what a caller's editor reads.

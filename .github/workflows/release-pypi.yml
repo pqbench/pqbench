@@ -9,7 +9,7 @@
 #
 # Trusted publishing, not a long-lived secret: `permissions: id-token: write`
 # plus a pending publisher for this repository (owner `pqbench`, repository
-# `pqbench`, workflow `publish-pypi.yml`, environment `pypi`), which the `pypi`
+# `pqbench`, workflow `release-pypi.yml`, environment `pypi`), which the `pypi`
 # environment gates.
 #
 # https://docs.pypi.org/trusted-publishers/
@@ -40,11 +40,11 @@
 # `rustc-wrapper`, a POSIX shim Windows cannot execute (`os error 193`). A
 # Windows user with a Rust toolchain can build the sdist instead.
 
-name: Publish Python package
+name: Publish to PyPI
 
 on:
   # A wheel on its own, once the matching tag is released:
-  # `gh workflow run publish-pypi.yml`, or from the Actions tab.
+  # `gh workflow run release-pypi.yml`, or from the Actions tab.
   workflow_dispatch:
 
 permissions:

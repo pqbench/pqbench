@@ -1,6 +1,8 @@
 //! The `partition::list` internals: stream a table's commits as commit-time
 //! windows.
 
+use std::collections::BTreeMap;
+
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use serde_json::Value;
 
@@ -14,26 +16,17 @@ pub(crate) async fn list(
     lake: &Lake,
     table: &str,
     uri: &str,
-    credentials: Option<&v1::Credentials>,
+    env: &BTreeMap<String, String>,
     window_millis: i64,
 ) -> Result<PartitionStream<'static>, Error> {
     if window_millis <= 0 {
         return Err(Error::from("partition window must be positive".to_string()));
     }
-    let env = credentials.map(v1::Credentials::to_env).unwrap_or_default();
-    let request = LoadRequest::new(uri.to_string(), None, env).without_files();
-    let credentials = credentials.filter(|lease| !lease.is_empty()).cloned();
+    let request = LoadRequest::new(uri.to_string(), None, env.clone()).without_files();
     let commits = table::stream_commits(lake, &request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;
-    Ok(windows(
-        commits,
-        window_millis,
-        table.to_string(),
-        uri.to_string(),
-        credentials,
-    )
-    .boxed())
+    Ok(windows(commits, window_millis, table.to_string(), uri.to_string()).boxed())
 }
 
 /// What a windowed read holds while it runs: the commits still to read, and the
@@ -45,7 +38,6 @@ struct Windows {
     window_millis: i64,
     table: String,
     uri: String,
-    credentials: Option<v1::Credentials>,
     open: Option<Window>,
 }
 
@@ -62,14 +54,12 @@ fn windows(
     window_millis: i64,
     table: String,
     uri: String,
-    credentials: Option<v1::Credentials>,
 ) -> impl Stream<Item = Result<Partition, Error>> {
     let state = Windows {
         commit_stream,
         window_millis,
         table,
         uri,
-        credentials,
         open: None,
     };
     futures_util::stream::try_unfold(state, Windows::next)
@@ -137,7 +127,7 @@ impl Windows {
             commit_versions,
             commit_info,
             uri: (!self.uri.is_empty()).then(|| self.uri.clone()),
-            credentials: self.credentials.clone(),
+            credentials: None,
         }
     }
 }

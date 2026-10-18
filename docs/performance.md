@@ -33,13 +33,13 @@ catalog".
 $ eval "$(pqbench setup --endpoint <url> --token <token> --region us-east-2)"
 ```
 
-`make dbx-perf-walk` drives the live Databricks workspace and its external
+`make dbx-walk` drives the live Databricks workspace and its external
 fixture: `pqbench_ext`, whose external Delta tables on customer S3 are the
 synthetic `events`/`sales`/`reference` plus real sample data copied server-side
-from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-perf-walk.sh` runs the
-whole walk under `perf` (the `dbx-perf-walk` CI job); `make dbx-e2e` runs the
-live correctness e2e, and `make lakehouse` drives the compose stand for the
-file-level commands.
+from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-walk.sh` runs the whole
+walk once and prints each level's record count (the `dbx-walk` CI job);
+`make dbx-e2e` runs the live correctness e2e, and `make lakehouse` drives the
+compose stand for the file-level commands.
 
 The walk's catalog levels span the whole Unity Catalog; the table levels
 descend the one catalog this principal may read outside compute
@@ -50,15 +50,18 @@ fan-outs with `ratelimit` and retries the walk at a lower rate on failure.
 
 ## Run perf
 
-`perf stat` measures the cost of a run; `perf record` finds the hot symbols.
-`scripts/dbx-perf-walk.sh` wraps both: `PQB_PERF_MODE=shape|stat|record|all`
-(default `all`), with `PQB_PERF_EVENTS`, `PQB_PERF_REPEAT`, and `PQB_PERF_TOP`
-for the report. Use the events the issue names — `task-clock` and
-`context-switches` are not valid event names in this perf build:
+`scripts/dbx-walk.sh` runs the walk once and prints each level's record count;
+it profiles nothing, and `make dbx-walk` builds it debug. To measure, build an
+optimized binary and put the walk under `perf` by hand — `perf stat` for the
+cost of a run, `perf record` for the hot symbols. Use the events the issue
+names — `task-clock` and `context-switches` are not valid event names in this
+perf build:
 
 ```console no-run
-$ perf stat -e cycles,instructions,duration_time -r 3 <the walk>
-$ perf record -g -o /tmp/perf.data -- <the walk>
+$ cargo build --release -p pqbench-cli --features delta-s3,iceberg-s3
+$ export PQB=target/release/pqbench
+$ perf stat -e cycles,instructions,duration_time -r 3 scripts/dbx-walk.sh
+$ perf record -g -o /tmp/perf.data -- scripts/dbx-walk.sh
 $ perf report --stdio -i /tmp/perf.data --no-children | head
 ```
 

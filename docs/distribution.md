@@ -131,14 +131,14 @@ URL always serves the newest.
 **3. Dispatch the wheel** once that tag exists:
 
 ```sh
-gh workflow run publish-pypi.yml
+gh workflow run release-pypi.yml
 ```
 
-or run the **Publish Python package** workflow from the Actions tab. Publishing
-is separate because PyPI names the workflow file that may upload, and its
-trusted publisher does not accept a job defined in a workflow that another
-workflow calls (`publish-pypi.yml` is called, not triggered, from `dist`'s
-release run). It builds the wheels and the sdist and uploads them under trusted
+or run the **Publish to PyPI** workflow from the Actions tab. Publishing is
+separate because PyPI's trusted publisher names the workflow file that may
+upload, and a job defined in a workflow that another workflow *calls* presents a
+claim PyPI does not document (`pypi/warehouse#11096`) — so the wheel keeps its
+own trigger. It builds the wheels and the sdist and uploads them under trusted
 publishing: no token is stored.
 
 The version is the workspace's, so the two dispatches cannot ship different

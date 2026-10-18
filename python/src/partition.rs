@@ -17,11 +17,19 @@ fn partition_list(
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
     let credentials = crate::requests::credentials(credentials)?;
+    let env = credentials
+        .as_ref()
+        .map(pqbench::v1::Credentials::to_env)
+        .unwrap_or_default();
     stream_listing(
         py,
         async move {
-            pqbench::partition::list::list(&lake, &table, &uri, credentials.as_ref(), window_millis)
-                .await
+            let found =
+                pqbench::partition::list::list(&lake, &table, &uri, &env, window_millis).await?;
+            Ok(found.map_ok(move |mut partition| {
+                partition.credentials = credentials.clone();
+                partition
+            }))
         },
         Partition::attach,
     )

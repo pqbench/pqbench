@@ -1,6 +1,11 @@
-use pqbench::table::{FileSelection, TableFile};
+use pqbench::table::FileSelection;
+use pqbench::v1::TableFile;
 fn file(path: &str, bytes: u64, year: &str) -> TableFile {
-    let mut file = TableFile::new(path, path, bytes);
+    let mut file = TableFile {
+        path: path.into(),
+        size_bytes: Some(bytes),
+        ..TableFile::default()
+    };
     file.partition_values
         .insert("year".into(), Some(year.into()));
     file
