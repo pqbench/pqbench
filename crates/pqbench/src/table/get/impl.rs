@@ -74,40 +74,57 @@ async fn unity_record(
         dialect::api_root(workspace.config().endpoint.as_str()),
         dialect::encode(&name)
     );
-    // The ref already names the storage, so start the catalog call, read the
-    // metadata while it is in flight, then reconcile: the catalog's own
-    // location stays authoritative, and a ref that disagrees is read again.
-    let (record, info) = match hint.filter(|location| !location.is_empty()) {
+    let (record, mut info) = load_record(workspace, lake, &name, &url, hint, env).await?;
+    info.name = name;
+    Ok(merge_catalog(info, record))
+}
+
+/// Fetch the catalog record and the table's metadata, overlapping them when
+/// the ref already names the storage.
+///
+/// The catalog's own location stays authoritative: a ref whose hint disagrees
+/// is read again from the catalog's location.
+async fn load_record(
+    workspace: &Workspace,
+    lake: &Lake,
+    name: &str,
+    url: &str,
+    hint: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> Result<(UnityRecord, TableInfo), Error> {
+    match hint.filter(|location| !location.is_empty()) {
         Some(location) => {
             let catalog = dialect::get_json::<UnityRecord>(
                 workspace,
-                &url,
+                url,
                 workspace.config().token.as_deref(),
             );
             let (record, info) = futures_util::future::try_join(
                 async { catalog.await.map_err(Error::from) },
-                load_metadata(lake, &name, location, env),
+                load_metadata(lake, name, location, env),
             )
             .await?;
-            let catalog_location = catalog_location(&record, &name)?;
+            let catalog_location = catalog_location(&record, name)?;
             let info = match catalog_location == location {
                 true => info,
-                false => load_metadata(lake, &name, &catalog_location, env).await?,
+                false => load_metadata(lake, name, &catalog_location, env).await?,
             };
-            (record, info)
+            Ok((record, info))
         }
         None => {
             let record: UnityRecord =
-                dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+                dialect::get_json(workspace, url, workspace.config().token.as_deref())
                     .await
                     .map_err(Error::from)?;
-            let location = catalog_location(&record, &name)?;
-            let info = load_metadata(lake, &name, &location, env).await?;
-            (record, info)
+            let location = catalog_location(&record, name)?;
+            let info = load_metadata(lake, name, &location, env).await?;
+            Ok((record, info))
         }
-    };
-    let mut info = info;
-    info.name = name;
+    }
+}
+
+/// Merge the catalog's declared columns and properties over the log's.
+fn merge_catalog(mut info: TableInfo, record: UnityRecord) -> TableInfo {
     if !record.columns.is_empty() {
         info.columns = record
             .columns
@@ -129,7 +146,7 @@ async fn unity_record(
         }
         _ => {}
     }
-    Ok(info)
+    info
 }
 
 /// The storage location the catalog names; an error when it names none.
