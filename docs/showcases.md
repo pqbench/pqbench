@@ -159,9 +159,9 @@ groups here — so aggregate across row groups for a per-column total:
 
 ```console run
 $ pqbench bytemass data/samples/squad.parquet --format json \
-    | jq -r 'select(.kind == "pqbench.bytemass-row") | [.column, .compressed_bytes] | @tsv' \
-    | awk '{sum[$1] += $2} END {for (c in sum) printf "%-32s %10d\n", c, sum[c]}' \
-    | sort -k2 -nr
+>     | jq -r 'select(.kind == "pqbench.bytemass-row") | [.column, .compressed_bytes] | @tsv' \
+>     | awk '{sum[$1] += $2} END {for (c in sum) printf "%-32s %10d\n", c, sum[c]}' \
+>     | sort -k2 -nr
 context                             8490172
 question                            3027096
 answers.text.list.item              1515148

@@ -43,7 +43,10 @@ fn does_a_layout_change_pay() {
 #[test]
 fn files_from_the_wild() {
     // files_from_the_wild, from line 160
-    support::run(r#"pqbench bytemass data/samples/squad.parquet --format json \"#, 161, Some(&[r#"    | jq -r 'select(.kind == "pqbench.bytemass-row") | [.column, .compressed_bytes] | @tsv' \"#, r#"    | awk '{sum[$1] += $2} END {for (c in sum) printf "%-32s %10d\n", c, sum[c]}' \"#, "    | sort -k2 -nr", "context                             8490172", "question                            3027096", "answers.text.list.item              1515148", "id                                   709562", "answers.answer_start.list.item       304136", "title                                 18488"]));
+    support::run(r#"pqbench bytemass data/samples/squad.parquet --format json \
+    | jq -r 'select(.kind == "pqbench.bytemass-row") | [.column, .compressed_bytes] | @tsv' \
+    | awk '{sum[$1] += $2} END {for (c in sum) printf "%-32s %10d\n", c, sum[c]}' \
+    | sort -k2 -nr"#, 161, Some(&["context                             8490172", "question                            3027096", "answers.text.list.item              1515148", "id                                   709562", "answers.answer_start.list.item       304136", "title                                 18488"]));
 }
 
 #[rustfmt::skip]
