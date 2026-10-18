@@ -12,12 +12,18 @@ The stub is where the erased type is written down, the way the sibling bindings
 do it (lancedb declares ``async def`` for its native module in
 ``_lancedb.pyi``; delta-rs ships ``_internal.pyi``). So an awaitable command is
 an ``async def`` returning its model, and ``await native.table.get.get(…)`` is
-a :class:`Table`.
+a :class:`Table`. Awaiting needs a running ``asyncio`` loop — ``future_into_py``
+reads the current task's event loop — so the awaitable verbs are called from
+``asyncio.run`` or from an async caller.
 
 **The records.** A record's fields are its model's, built from the same serde
 shape the JSON commands emit, so they are declared here field by field with the
 model's own names and types. A deep tree the model embeds (a file's ``stats``,
-a table's ``declared_columns``) stays a ``dict``, as the library keeps it.
+a table's ``declared_columns``) stays a ``dict``, as the library keeps it. A
+field the model leaves out — an ``Option`` its serde shape skips when it is
+``None`` — is absent from the record, so ``record.reason`` raises where
+``record.get("reason")`` answers ``None``: the declaration here is the field's
+type, not a promise that every record carries it.
 
 **The submodules.** A stub cannot declare a submodule of a module (only of a
 package), so ``native.catalog`` and its verbs are declared as nested classes
@@ -256,17 +262,17 @@ class ReadEligibility(Record):
     reason: str | None  # "ELIGIBILITY_REASON_SYSTEM_TABLE" | "…_NOT_A_TABLE" | "…_NO_EXTERNAL_READ"
 
 class metastore:
-    """``pqbench.native.metastore``: the whole metastore as one tree."""
+    """``pqbench.native.metastore``: the endpoint's metastore record."""
 
     class get:
-        """``pqbench.native.metastore.get``: read verbs."""
+        """``pqbench.native.metastore.get``: read the record."""
 
         @staticmethod
         async def get(workspace: Workspace) -> dict[str, Any]:
-            """The metastore tree, as the crate's record.
+            """The metastore record: ``name``, ``uid``, ``display_name``,
+            ``cloud_provider``, ``region``.
 
-            The tree is a document rather than a resource, so it stays a dict;
-            ``children`` holds the nested levels.
+            It is a document rather than a resource, so it stays a dict.
             """
             ...
 
