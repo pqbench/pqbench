@@ -19,7 +19,7 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	dbx-perf-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check isolation lfs-check check-python sync-docs \
-	check-docs check-version sync-version code-analysis clean
+	check-docs check-version check-pyi sync-version code-analysis clean
 
 all: fmt build test lint
 
@@ -87,7 +87,7 @@ lakehouse-seed-unity: lakehouse-up
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
-check: fmt-check check-docs check-version lint isolation lfs-check test
+check: fmt-check check-docs check-version check-pyi lint isolation lfs-check test
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
@@ -123,6 +123,13 @@ check-python:
 	python/.venv/bin/python -m pip install -q maturin
 	. python/.venv/bin/activate && CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" maturin develop --manifest-path python/Cargo.toml
 	python/.venv/bin/python -m unittest discover -s python/tests
+
+# The wheel's stub is hand-written, so it can drift from the bindings it
+# mirrors; `pyicheck` reads python/src, python/pqbench/native.pyi, and the
+# library models, and fails when they disagree. The wheel is committed, so this
+# never needs to build PyO3 — only the checker's tree-sitter grammars.
+check-pyi:
+	$(CARGO) run -q -p pyicheck-cli
 
 # Turn the documented `pqbench ...` commands into Rust integration tests under
 # crates/pqbench-cli/tests/gen_*.rs. Committed, so `make test` runs them like any
