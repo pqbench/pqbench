@@ -10,6 +10,7 @@
 use tree_sitter::{Node, Parser};
 
 use crate::model::{Entry, Field, Method, Param};
+use crate::source::text;
 
 /// The dotted root every stub path is hung under.
 const ROOT: &str = "pqbench.native";
@@ -274,9 +275,4 @@ fn returns(source: &str, node: Node) -> Option<String> {
 /// Whether the definition is `async`.
 fn is_awaitable(source: &str, node: Node) -> bool {
     text(source, node).trim_start().starts_with("async")
-}
-
-/// The source text of a node.
-fn text<'a>(source: &'a str, node: Node) -> &'a str {
-    node.utf8_text(source.as_bytes()).unwrap_or("")
 }

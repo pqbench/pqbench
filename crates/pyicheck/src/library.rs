@@ -10,6 +10,7 @@
 use tree_sitter::{Node, Parser};
 
 use crate::model::{ModelField, ModelIndex};
+use crate::source::{attributes, text};
 
 /// Scan one library source file and add its `pub struct` declarations.
 pub fn collect(source: &str, index: &mut ModelIndex) {
@@ -85,32 +86,4 @@ fn is_absent_when_empty(source: &str, field: Node) -> bool {
     attributes(source, field).iter().any(|attribute| {
         attribute.contains("skip_serializing_if") && attribute.contains("Option::is_none")
     })
-}
-
-/// A field's attributes, on itself and just before it.
-fn attributes(source: &str, field: Node) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cursor = field.walk();
-    for child in field.children(&mut cursor) {
-        if child.kind() == "attribute_item" {
-            out.push(text(source, child).to_owned());
-        }
-    }
-    let mut sibling = field.prev_sibling();
-    while let Some(node) = sibling {
-        match node.kind() {
-            "attribute_item" => {
-                out.push(text(source, node).to_owned());
-                sibling = node.prev_sibling();
-            }
-            "line_comment" | "block_comment" => sibling = node.prev_sibling(),
-            _ => break,
-        }
-    }
-    out
-}
-
-/// The source text of a node.
-fn text<'a>(source: &'a str, node: Node) -> &'a str {
-    node.utf8_text(source.as_bytes()).unwrap_or("")
 }

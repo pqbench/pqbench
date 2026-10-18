@@ -11,6 +11,7 @@
 use tree_sitter::{Node, Parser};
 
 use crate::model::{Entry, Method, Param};
+use crate::source::{attributes, text};
 
 /// Parse one binding source file into the surface entries it exposes.
 ///
@@ -500,35 +501,6 @@ fn has(attributes: &[String], name: &str) -> bool {
     attributes
         .iter()
         .any(|attribute| attribute.trim_start_matches("#[").starts_with(name))
-}
-
-/// The attributes on an item: its own children and its preceding siblings,
-/// which is how rustfmt and the grammar split a `#[...]` from the item.
-fn attributes(source: &str, item: Node) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut child_cursor = item.walk();
-    for child in item.children(&mut child_cursor) {
-        if child.kind() == "attribute_item" {
-            out.push(text(source, child).to_owned());
-        }
-    }
-    let mut sibling = item.prev_sibling();
-    while let Some(node) = sibling {
-        match node.kind() {
-            "attribute_item" => {
-                out.push(text(source, node).to_owned());
-                sibling = node.prev_sibling();
-            }
-            "line_comment" | "block_comment" => sibling = node.prev_sibling(),
-            _ => break,
-        }
-    }
-    out
-}
-
-/// The source text of a node.
-fn text<'a>(source: &'a str, node: Node) -> &'a str {
-    node.utf8_text(source.as_bytes()).unwrap_or("")
 }
 
 /// An identifier with raw markers and mutability stripped.
