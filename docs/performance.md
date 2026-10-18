@@ -51,12 +51,15 @@ fan-outs with `ratelimit` and retries the walk at a lower rate on failure.
 ## Run perf
 
 `scripts/dbx-walk.sh` runs the walk once and prints each level's record count;
-it profiles nothing. To measure, put it under `perf` by hand — `perf stat` for
-the cost of a run, `perf record` for the hot symbols. Use the events the issue
+it profiles nothing, and `make dbx-walk` builds it debug. To measure, build an
+optimized binary and put the walk under `perf` by hand — `perf stat` for the
+cost of a run, `perf record` for the hot symbols. Use the events the issue
 names — `task-clock` and `context-switches` are not valid event names in this
 perf build:
 
 ```console no-run
+$ cargo build --release -p pqbench-cli --features delta-s3,iceberg-s3
+$ export PQB=target/release/pqbench
 $ perf stat -e cycles,instructions,duration_time -r 3 scripts/dbx-walk.sh
 $ perf record -g -o /tmp/perf.data -- scripts/dbx-walk.sh
 $ perf report --stdio -i /tmp/perf.data --no-children | head

@@ -45,12 +45,13 @@ dbx-e2e:
 # The live walk (scripts/dbx-walk.sh): one pass over the whole-Unity-Catalog
 # metadata walk, through `bytemass`. Needs DBX_HOST plus a bearer source — the
 # service principal's client secret, or a ready PQB_ENDPOINT/PQB_TOKEN. The
-# `dbx-walk` CI job runs it as a live smoke test; profile it with `perf` by hand
-# (docs/performance.md).
+# `dbx-walk` CI job runs it as a live smoke test. A debug binary is enough — the
+# walk is paced, not compute-bound — so no `--release`; build one and point PQB
+# at it to profile with `perf` (docs/performance.md).
 dbx-walk:
 	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/auth.md)"; exit 1; }
-	$(CARGO) build --release -p pqbench-cli --features delta-s3,iceberg-s3
-	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/release/pqbench" ./scripts/dbx-walk.sh
+	$(CARGO) build -p pqbench-cli --features delta-s3,iceberg-s3
+	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" ./scripts/dbx-walk.sh
 
 lint:
 	$(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings

@@ -50,7 +50,7 @@
 
 set -euo pipefail
 
-PQB="${PQB:-target/release/pqbench}"
+PQB="${PQB:-target/debug/pqbench}"
 RATE="${PQB_RATE:-15}"
 RETRIES="${PQB_WALK_RETRIES:-3}"
 CATALOG="${PQB_WALK_CATALOG:-pqbench_ext}"
