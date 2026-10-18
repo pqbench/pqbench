@@ -148,7 +148,8 @@ record_class!(
     Partition,
     TableFile,
     MassRow,
-    Credentials
+    Credentials,
+    ReadEligibility
 );
 
 /// The function that wraps one value of a model as its record.
@@ -194,5 +195,6 @@ pub(crate) fn register(root: &Bound<'_, PyModule>) -> PyResult<()> {
     root.add_class::<TableFile>()?;
     root.add_class::<MassRow>()?;
     root.add_class::<Credentials>()?;
+    root.add_class::<ReadEligibility>()?;
     Ok(())
 }

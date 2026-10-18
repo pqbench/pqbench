@@ -249,12 +249,11 @@ class Credentials(Record):
     session_token: str | None
     expire_time: str | None
 
-class Eligibility:
-    """Whether a principal may be vended credentials for one table."""
+class ReadEligibility(Record):
+    """Whether the catalog reports a table readable outside Databricks compute."""
 
     eligible: bool
-    reason: str | None
-    def __repr__(self) -> str: ...
+    reason: str | None  # "ELIGIBILITY_REASON_SYSTEM_TABLE" | "…_NOT_A_TABLE" | "…_NO_EXTERNAL_READ"
 
 class metastore:
     """``pqbench.native.metastore``: the whole metastore as one tree."""
@@ -362,7 +361,7 @@ class credentials:
         """``pqbench.native.credentials.check``: may this principal read the table?"""
 
         @staticmethod
-        async def check(workspace: Workspace, name: str) -> Eligibility: ...
+        async def check(workspace: Workspace, name: str) -> ReadEligibility: ...
 
     class get:
         """``pqbench.native.credentials.get``: the lease of one table."""

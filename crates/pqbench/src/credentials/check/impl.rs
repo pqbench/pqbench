@@ -13,8 +13,9 @@
 
 use serde::Deserialize;
 
-use super::api::{Eligibility, Error, Reason};
+use super::api::{eligible, ineligible, Error};
 use crate::dialect;
+use crate::v1::{EligibilityReason, ReadEligibility};
 use crate::Workspace;
 
 /// The subset of the Unity table record the eligibility check needs.
@@ -34,14 +35,14 @@ impl TableRecord {
     /// to read; `TABLE_DB_STORAGE` is Databricks default storage, which the
     /// vending route refuses. A missing kind says nothing, so the table is
     /// attempted.
-    fn eligibility(&self) -> Eligibility {
+    fn eligibility(&self) -> ReadEligibility {
         if self.is_view() {
-            return Eligibility::Ineligible(Reason::NotATable);
+            return ineligible(EligibilityReason::NotATable);
         }
         if self.is_default_storage() {
-            return Eligibility::Ineligible(Reason::NoExternalRead);
+            return ineligible(EligibilityReason::NoExternalRead);
         }
-        Eligibility::Eligible
+        eligible()
     }
 
     /// Whether the record is a view rather than a table: the type names a
@@ -67,7 +68,7 @@ pub(super) async fn check_unity(
     catalog: &str,
     schema: &str,
     table: &str,
-) -> Result<Eligibility, Error> {
+) -> Result<ReadEligibility, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let record: TableRecord = dialect::get_json(
         workspace,
@@ -96,7 +97,7 @@ mod tests {
         let record = record(r#"{"table_type":"VIEW","storage_location":"s3://b/t"}"#);
         assert_eq!(
             record.eligibility(),
-            Eligibility::Ineligible(Reason::NotATable)
+            ineligible(EligibilityReason::NotATable)
         );
     }
 
@@ -105,7 +106,7 @@ mod tests {
         let record = record(r#"{"table_type":"MANAGED"}"#);
         assert_eq!(
             record.eligibility(),
-            Eligibility::Ineligible(Reason::NotATable)
+            ineligible(EligibilityReason::NotATable)
         );
     }
 
@@ -115,7 +116,7 @@ mod tests {
             record(r#"{"storage_location":"s3://b/t","securable_kind":"TABLE_DB_STORAGE"}"#);
         assert_eq!(
             record.eligibility(),
-            Eligibility::Ineligible(Reason::NoExternalRead)
+            ineligible(EligibilityReason::NoExternalRead)
         );
     }
 
@@ -127,13 +128,13 @@ mod tests {
             r#"{"storage_location":"s3://b/t","securable_kind":"TABLE_DELTA_ICEBERG_MANAGED",
                 "securable_kind_manifest":{"capabilities":["HAS_STORAGE"]}}"#,
         );
-        assert_eq!(record.eligibility(), Eligibility::Eligible);
+        assert_eq!(record.eligibility(), eligible());
     }
 
     #[test]
     fn a_customer_table_is_eligible() {
         let record =
             record(r#"{"storage_location":"s3://b/t","securable_kind":"TABLE_DELTA_EXTERNAL"}"#);
-        assert_eq!(record.eligibility(), Eligibility::Eligible);
+        assert_eq!(record.eligibility(), eligible());
     }
 }

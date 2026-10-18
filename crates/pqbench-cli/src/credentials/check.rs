@@ -11,7 +11,7 @@
 //! error (a missing table, an endpoint fault) fails it.
 
 use futures_util::stream::StreamExt;
-use pqbench::credentials::check::{Eligibility, Reason};
+use pqbench::v1::EligibilityReason;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -64,18 +64,21 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
 /// passes — and the CLI only renders the reason.
 async fn check(workspace: &pqbench::Workspace, name: &str) -> Result<Option<String>, CliError> {
     let eligibility = pqbench::credentials::check::check(workspace, name).await?;
-    match eligibility {
-        Eligibility::Eligible => Ok(None),
-        Eligibility::Ineligible(reason) => Ok(Some(ineligible(name, reason))),
+    if eligibility.eligible {
+        return Ok(None);
     }
+    Ok(Some(ineligible(name, eligibility.reason)))
 }
 
 /// The message an ineligible table reports.
-fn ineligible(name: &str, reason: Reason) -> String {
+fn ineligible(name: &str, reason: Option<EligibilityReason>) -> String {
     let because = match reason {
-        Reason::SystemTable => "a system table",
-        Reason::NotATable => "a view, not a table",
-        Reason::NoExternalRead => "a table only Databricks compute reads (managed default storage)",
+        Some(EligibilityReason::SystemTable) => "a system table",
+        Some(EligibilityReason::NotATable) => "a view, not a table",
+        Some(EligibilityReason::NoExternalRead) => {
+            "a table only Databricks compute reads (managed default storage)"
+        }
+        Some(_) | None => "not readable outside Databricks compute",
     };
     format!(
         "{name} is {because}: read it with Databricks compute, or copy it to an external location"

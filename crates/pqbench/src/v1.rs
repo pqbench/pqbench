@@ -733,7 +733,7 @@ impl Credentials {
     }
 }
 
-/// The result `credentials check` emits.
+/// The result `credentials check` returns.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReadEligibility {
     /// Whether the table is readable outside Databricks compute.

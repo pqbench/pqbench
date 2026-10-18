@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::v1::{EligibilityReason, ReadEligibility};
+
 /// Errors checking a table's eligibility.
 #[derive(Debug)]
 pub struct Error(String);
@@ -20,33 +22,6 @@ impl From<String> for Error {
     }
 }
 
-/// Whether a catalog reports the table readable outside Databricks compute.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Eligibility {
-    /// The catalog reports direct external engine read or write support, or
-    /// reports no capability manifest at all: the table is attempted. A
-    /// catalog that reports none (Unity OSS) leaves the decision to the
-    /// vending route.
-    Eligible,
-    /// The table is not readable outside Databricks compute, for [`Reason`].
-    Ineligible(Reason),
-}
-
-/// Why a table is not readable outside Databricks compute.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reason {
-    /// The ref names a `system` catalog table; Databricks compute reads it,
-    /// not an external client.
-    SystemTable,
-    /// The catalog reports a view (or another non-table securable), which has
-    /// no data files of its own.
-    NotATable,
-    /// The catalog reports Databricks default storage (`TABLE_DB_STORAGE`),
-    /// the kind the vending route refuses: only Databricks compute reads the
-    /// table.
-    NoExternalRead,
-}
-
 pub use crate::config::Dialect as TableFormat;
 
 use crate::Workspace;
@@ -59,27 +34,43 @@ use crate::Workspace;
 /// without asking for credentials; Iceberg REST reads its metadata inline
 /// through the catalog, so the table is eligible and no catalog call is made.
 /// Unity also drops a `system` catalog ref without a call and reports a view
-/// as [`Reason::NotATable`], so `table::list` can list every securable and the
-/// check is the single filter. The caller passes the dialect it runs under and
-/// gets the same [`Eligibility`] either way. The check separates eligibility
-/// from vending: a caller that needs the table itself (`table::get`) can
-/// report an [`Eligibility::Ineligible`] table with the reason instead of
+/// as [`EligibilityReason::NotATable`], so `table::list` can list every
+/// securable and the check is the single filter. The caller passes the dialect
+/// it runs under and gets the same [`ReadEligibility`] either way. The check
+/// separates eligibility from vending: a caller that needs the table itself
+/// (`table::get`) can report an ineligible table with its reason instead of
 /// running a storage read that cannot succeed.
 ///
 /// # Errors
 /// Fails when `name` is not a table name, the endpoint cannot be reached, or it
 /// answers with an unexpected status.
-pub async fn check(workspace: &Workspace, name: &str) -> Result<Eligibility, Error> {
+pub async fn check(workspace: &Workspace, name: &str) -> Result<ReadEligibility, Error> {
     let (catalog, schema, table) = crate::v1::name::parse_table(name)
         .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
     match workspace.config().dialect {
         TableFormat::Unity => {
             if catalog == "system" {
-                return Ok(Eligibility::Ineligible(Reason::SystemTable));
+                return Ok(ineligible(EligibilityReason::SystemTable));
             }
             super::r#impl::check_unity(workspace, &catalog, &schema, &table).await
         }
-        TableFormat::Iceberg => Ok(Eligibility::Eligible),
+        TableFormat::Iceberg => Ok(eligible()),
+    }
+}
+
+/// A table the catalog reports readable outside Databricks compute.
+pub(super) fn eligible() -> ReadEligibility {
+    ReadEligibility {
+        eligible: true,
+        reason: None,
+    }
+}
+
+/// A table only Databricks compute reads, for `reason`.
+pub(super) fn ineligible(reason: EligibilityReason) -> ReadEligibility {
+    ReadEligibility {
+        eligible: false,
+        reason: Some(reason),
     }
 }
 
@@ -100,6 +91,6 @@ mod tests {
         let eligibility = check(&workspace, "catalogs/catalog/schemas/schema/tables/table")
             .await
             .expect("the Iceberg check does not call the catalog");
-        assert_eq!(eligibility, Eligibility::Eligible);
+        assert_eq!(eligibility, eligible());
     }
 }
