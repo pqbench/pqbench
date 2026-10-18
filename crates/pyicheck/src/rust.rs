@@ -17,26 +17,36 @@ use crate::model::{Entry, Method, Param};
 /// The file is a domain module (`catalog.rs`, `file.rs`); its `register`
 /// function names the paths, and every entry is rooted at `pqbench.native`.
 pub fn parse(source: &str) -> Vec<Entry> {
+    let Some(tree) = parse_tree(source) else {
+        return Vec::new();
+    };
+    let registry = Registry::scan(source, tree.root_node());
+    let mut items = Items::default();
+    walk(source, tree.root_node(), &mut items);
+    surface(&registry, &items)
+}
+
+/// Parse one binding source with the bundled Rust grammar.
+fn parse_tree(source: &str) -> Option<tree_sitter::Tree> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_rust::LANGUAGE.into())
         .expect("the bundled Rust grammar loads");
-    let Some(tree) = parser.parse(source, None) else {
-        return Vec::new();
-    };
+    parser.parse(source, None)
+}
 
-    let registry = Registry::scan(source, tree.root_node());
+/// What the walk finds in one file.
+#[derive(Default)]
+struct Items {
+    functions: Vec<Function>,
+    classes: Vec<Class>,
+    methods: Vec<(String, Vec<Method>)>,
+}
+
+/// The entries the registration calls name: a module's Python path, a
+/// `#[pyfunction]`'s name under it, a `#[pyclass]`'s.
+fn surface(registry: &Registry, items: &Items) -> Vec<Entry> {
     let mut out = Vec::new();
-    let mut functions = Vec::new();
-    let mut classes = Vec::new();
-    let mut methods = Vec::new();
-    walk(
-        source,
-        tree.root_node(),
-        &mut functions,
-        &mut classes,
-        &mut methods,
-    );
 
     // A module's Python path, named by its `expose` call.
     for module in registry.modules.values() {
@@ -44,7 +54,7 @@ pub fn parse(source: &str) -> Vec<Entry> {
     }
 
     // A `#[pyfunction]`'s Python name and path.
-    for function in &functions {
+    for function in &items.functions {
         let Some(variable) = registry.function_module.get(&function.ident) else {
             continue;
         };
@@ -62,14 +72,16 @@ pub fn parse(source: &str) -> Vec<Entry> {
         ));
     }
 
-    // A `#[pyclass]`'s path, from its registration.
-    let positions: std::collections::BTreeMap<&str, (usize, usize)> = classes
+    // A `#[pyclass]`'s path and methods, from its registration.
+    let positions: std::collections::BTreeMap<&str, (usize, usize)> = items
+        .classes
         .iter()
         .map(|class| (class.ident.as_str(), (class.line, class.column)))
         .collect();
-    let pymethods: std::collections::BTreeMap<&str, Vec<Method>> = methods
+    let pymethods: std::collections::BTreeMap<&str, &Vec<Method>> = items
+        .methods
         .iter()
-        .map(|(owner, methods)| (owner.as_str(), methods.clone()))
+        .map(|(owner, methods)| (owner.as_str(), methods))
         .collect();
     for (ident, receiver, line, column) in &registry.class_registrations {
         let path = if receiver == "root" {
@@ -83,9 +95,11 @@ pub fn parse(source: &str) -> Vec<Entry> {
             .get(ident.as_str())
             .copied()
             .unwrap_or((*line, *column));
-        let class_methods = pymethods.get(ident.as_str()).cloned().unwrap_or_default();
         let mut entry = Entry::class(path, line, column, Vec::new(), Vec::new());
-        entry.methods = class_methods;
+        entry.methods = pymethods
+            .get(ident.as_str())
+            .map(|methods| (*methods).clone())
+            .unwrap_or_default();
         out.push(entry);
     }
 
@@ -223,16 +237,10 @@ struct Class {
 }
 
 /// Collect the `#[pyfunction]` functions and `#[pyclass]` types of a file.
-fn walk(
-    source: &str,
-    root: Node,
-    functions: &mut Vec<Function>,
-    classes: &mut Vec<Class>,
-    methods: &mut Vec<(String, Vec<Method>)>,
-) {
+fn walk(source: &str, root: Node, items: &mut Items) {
     let mut cursor = vec![root];
     while let Some(node) = cursor.pop() {
-        collect(source, node, functions, classes, methods);
+        collect(source, node, items);
         let mut child_cursor = node.walk();
         cursor.extend(node.children(&mut child_cursor));
     }
@@ -240,28 +248,24 @@ fn walk(
 
 /// File one item, when it is a binding: a `#[pyfunction]`, a `#[pyclass]`, or a
 /// `#[pymethods]` impl.
-fn collect(
-    source: &str,
-    node: Node,
-    functions: &mut Vec<Function>,
-    classes: &mut Vec<Class>,
-    methods: &mut Vec<(String, Vec<Method>)>,
-) {
+fn collect(source: &str, node: Node, items: &mut Items) {
     let attributes = attributes(source, node);
     match node.kind() {
         "function_item" if has(&attributes, "pyfunction") => {
             if let Some(function) = read_function(source, node, &attributes) {
-                functions.push(function);
+                items.functions.push(function);
             }
         }
         "struct_item" | "enum_item" if has(&attributes, "pyclass") => {
             if let Some(class) = read_class(source, node, &attributes) {
-                classes.push(class);
+                items.classes.push(class);
             }
         }
         "impl_item" if has(&attributes, "pymethods") => {
             if let Some(owner) = node.child_by_field_name("type") {
-                methods.push((identifier_name(source, owner), read_methods(source, node)));
+                items
+                    .methods
+                    .push((identifier_name(source, owner), read_methods(source, node)));
             }
         }
         _ => {}
