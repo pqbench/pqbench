@@ -17,6 +17,6 @@ fn usage() {
 #[test]
 fn document() {
     // document, from line 77
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.zst", 78, None);
-    support::run("pqbench bytemass /tmp/partition.ndjson.zst --format table", 79, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4", 78, None);
+    support::run("pqbench bytemass /tmp/partition.ndjson.lz4 --format table", 79, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
 }

@@ -41,7 +41,7 @@ sort:id  year    ZSTD(ZstdLevel(1))     95      11.88  true
 rows: 8
 aim: all
 trials: 2
-$ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.zst
+$ pqbench experiment examples/quickstart.parquet --rewrite 'sort:id;dictionary:off' -o /tmp/trials.ndjson.lz4
 ```
 
 | Flag | Meaning |
@@ -86,9 +86,7 @@ that trial.
 | `row-group-size:ROWS` | Rows per row group. |
 | `cast:COL:int64` | Also `double`, `string`; changes the column's type before write. |
 
-A missing column, an unknown key, or a bad value is an error. The
-`pqbench.experiment` begin record lists the supported aims and rewrites under
-`capabilities`.
+A missing column, an unknown key, or a bad value is an error.
 
 ## Control and ratios
 

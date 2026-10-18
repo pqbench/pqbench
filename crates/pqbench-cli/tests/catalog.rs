@@ -183,7 +183,7 @@ fn catalog_get_streams_the_record_as_ndjson() {
 fn catalog_get_exports_the_ndjson_stream() {
     let address = server(200, CATALOG);
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("catalog.ndjson.zst");
+    let file = dir.path().join("catalog.ndjson.lz4");
     let output = pipe(
         &[
             "get",

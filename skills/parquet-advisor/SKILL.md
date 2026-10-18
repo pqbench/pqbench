@@ -34,8 +34,8 @@ $ pqbench skill parquet-advisor recipes | head -1
 | L2 columns | `pqbench profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
 | L3 rewrite | `pqbench experiment FILE --rewrite SPEC --aim storage\|skipping\|all` | bytes / BPR and skip-span vs a control rewrite | write + measure |
 
-`experiment` begin records list `capabilities`. Do not memorize flags —
-read that list. (`profile` does not list capabilities.)
+Do not memorize the rewrite flags — `pqbench experiment --help` lists the
+supported specs and aims.
 
 Not in the CLI (do not invent measurements): ALP encoding, a built-in
 recommender, page-min/max overlap derived from L1, JSON-explode rewrites,

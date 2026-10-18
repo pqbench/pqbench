@@ -23,6 +23,9 @@ env:
   RUST_TOOLCHAIN: "1.94.1"
 
 jobs:
+  # Clippy once over the union of features. Isolated feature sets don't need
+  # their own lint pass: `--all-features` sees every gated `cfg(feature = ...)`
+  # rename (or, for a deliberate exception, add `// aipnaming: allow(...)`).
   clippy:
     name: Clippy
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -104,11 +107,6 @@ jobs:
           # reuses its own artifacts.
           key: ${{ matrix.arch }}-${{ matrix.features || 'default' }}
       - run: make test CARGO_FEATURES="${{ matrix.cargo_flags }}" TEST_FLAGS="${{ matrix.test_flags }}"
-
-  # Build the naming linter and run it over the workspace. Findings render as
-  # inline annotations on the PR diff (the `github` output format) and a
-  # per-rule breakdown lands in the job summary; any finding fails the job, so
-  # the check is a real gate. Like `clippy`, the fix for the author is to
 
   python:
     name: Python

@@ -9,7 +9,7 @@ mod support;
 fn usage() {
     // usage, from line 9
     support::run("pqbench profile examples/quickstart.parquet --format table", 10, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8", "files: 1", "rows: 8", "columns: 2"]));
-    support::run("pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/profile.ndjson.zst", 18, None);
+    support::run("pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/profile.ndjson.lz4", 18, None);
 }
 
 #[rustfmt::skip]

@@ -116,7 +116,7 @@ fn metastore_get_streams_the_record_as_ndjson() {
 fn metastore_get_exports_the_ndjson_stream() {
     let address = server(200, SUMMARY);
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("metastore.ndjson.zst");
+    let file = dir.path().join("metastore.ndjson.lz4");
     let output = pipe(
         &[
             "get",

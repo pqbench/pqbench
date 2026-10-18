@@ -173,9 +173,7 @@ fn parse_file(value: serde_json::Value) -> Result<v1::TableFile, CliError> {
 fn parse_remote(value: serde_json::Value) -> Result<RemoteSource, CliError> {
     let source: RemoteSource = serde_json::from_value(value).map_err(invalid_json)?;
     if source.version != 1 {
-        return Err(
-            "unsupported source document; expected kind `pqbench.remote-source` version 1".into(),
-        );
+        return Err("unsupported remote-source document; expected version 1".into());
     }
     if source.inputs.is_empty() {
         return Err("source document contains no inputs".into());

@@ -25,7 +25,7 @@ flowchart LR
 Each measured column is one line:
 
 ```json
-{"kind":"pqbench.bytemass-row","id":"sales/orders","file":"part-0.parquet","size":1200,"row_count":3000,"column":"text","compressed_bytes":80,"uncompressed_bytes":240,"codec":"ZSTD"}
+{"kind":"pqbench.bytemass-row","id":"sales/orders","uri":"part-0.parquet","size_bytes":1200,"row_count":3000,"column":"text","compressed_bytes":80,"uncompressed_bytes":240,"codec":"ZSTD"}
 ```
 
 `id` is the table the file belongs to, or empty for a bare parquet path.

@@ -15,7 +15,7 @@ examples/quickstart.parquet  year    integer       8      0    8
 files: 1
 rows: 8
 columns: 2
-$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/profile.ndjson.zst
+$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/profile.ndjson.lz4
 ```
 
 The stream is the explicit machine output, useful for the next command:

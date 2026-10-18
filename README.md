@@ -9,8 +9,8 @@
 
 <!-- --8<-- [start:landing] -->
 Measure how well each codec compresses a Parquet file and how many on-disk
-bytes each column costs. It reads footers and table metadata, never the data
-pages, so it is fast on files of any size.
+bytes each column costs. Byte masses come from the footer and the table
+metadata, not the data pages, so they are fast on files of any size.
 
 Commands compose on pipes — each writes a versioned JSON document the next
 reads — so the whole job is one pipeline. The [walk](#the-walk-end-to-end) goes
@@ -226,8 +226,9 @@ async for file in pqbench.walk(workspace):
 
 ## Contributing
 
-PRs welcome. The gate is `make check` (`fmt-check` + `clippy -D warnings` +
-`test`). The PyO3 wheel is `make check-python`. The runnable commands on this
+PRs welcome. The gate is `make check` (`fmt-check` + `check-docs` +
+`check-version` + `clippy -D warnings` + `isolation` + `lfs-check` + `test`).
+The PyO3 wheel is `make check-python`. The runnable commands on this
 page are generated into tests by `docscheck` (`make sync-docs`); see
 [CONTRIBUTING.md](https://pqbench.github.io/pqbench/contributing/) for the loop, style, and naming rules.
 

@@ -20,7 +20,7 @@ month measures the same files.
 ## Run it
 
 Needs Docker Compose v2, a Rust toolchain for this branch (the stand builds
-`pqbench` with `--features delta-s3,unity,iceberg-s3`), Bash, `curl`, and `jq`.
+`pqbench` with `--features delta-s3,iceberg-s3`), Bash, `curl`, and `jq`.
 From the repository root:
 
 ```bash
@@ -121,8 +121,8 @@ export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 Iceberg walk. Stop after `pqbench list partitions` and pipe to `jq .` to read the
 partition document itself.
 
-A producer document is `{"kind": "pqbench.remote-source", "version": 1,
-"inputs": [...], "env": {...}}`; `pqbench bytemass` measures the files it
+A producer document is `{"version": 1, "inputs": [...], "env": {...}}`;
+`pqbench bytemass` measures the files it
 names, and a table's files come from the walk, `pqbench list partitions | pqbench
 list files`. The walk's context is the environment: `PQB_ENDPOINT`,
 `PQB_TOKEN`, `PQB_TABLE_FORMAT` for the catalog, and `AWS_*` for storage.

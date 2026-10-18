@@ -336,9 +336,9 @@ Read one catalog's record:
 
 ```console no-run
 $ pqbench get catalog dbx_samples
-name                  catalog_type           comment         owner
---------------------  ---------------------  --------------  -----------------
-catalogs/dbx_samples  CATALOG_TYPE_MANAGED   sample catalog  owner@example.com
+name                  catalog_type
+--------------------  --------------------
+catalogs/dbx_samples  CATALOG_TYPE_MANAGED
 catalogs: 1
 ```
 

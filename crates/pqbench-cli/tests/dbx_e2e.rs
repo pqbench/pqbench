@@ -311,7 +311,7 @@ fn catalog_ls_lists_the_live_catalogs() {
     assert!(stdout.contains("catalogs: 5"), "{stdout}");
 
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("catalogs.ndjson.zst");
+    let file = dir.path().join("catalogs.ndjson.lz4");
     let output = pipe_live(
         &[
             "list",

@@ -44,7 +44,6 @@ its own, large enough to be worth a process.
 - `list partitions` groups a table's commits into **natural partitions** — one
   `Partition` per window, carrying the commits it holds.
 - `list files` lists one partition's files — the input to `bytemass`.
-- `partition info` describes one partition.
 - `bytemass` measures one partition — a lease plus a list of files, nothing
   more.
 
