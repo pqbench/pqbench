@@ -98,7 +98,7 @@ Configuration lives in [`dist-workspace.toml`](../dist-workspace.toml), and the
 workflow (`.github/workflows/release.yml`) is generated from it — change the
 config and run `cargo dist generate`, never the workflow by hand.
 
-Releases are cut by hand, not on every merge. Two steps.
+Releases are cut by hand, not on every merge. Three steps.
 
 **1. Bump the version** in `[workspace.package]` in `Cargo.toml`, carry it into
 the wheel's manifest, commit, and merge it — the release tag must equal this
@@ -110,7 +110,7 @@ make sync-version
 git commit -am "release: 0.0.2"
 ```
 
-**2. Dispatch the release** with the matching tag:
+**2. Dispatch the binary release** with the matching tag:
 
 ```sh
 gh workflow run release.yml -f tag=v0.0.2
@@ -121,22 +121,31 @@ default input, `dry-run`, runs only `plan` (no build, no publish), so it preview
 what a release would produce. If the tag does not match the crate version,
 `dist` errors before building.
 
-One dispatch publishes everything. `dist` derives the release from the tag,
-creates the GitHub Release (and the git tag) itself, then runs
-`plan → build-local-artifacts → build-global-artifacts → host → announce`: it
-builds each target, generates the installer, checksums, and source tarball, and
-uploads them. Then its `publish-jobs` entry calls the PyPI workflow, which builds
-the wheels and the sdist for the same version and uploads them under trusted
-publishing, so the binary release and the wheel can never carry different
-versions. Every binary version is kept — cargo-dist does not prune — and each is
-published as "latest", so consumers' `releases/latest/...` URL always serves the
-newest. A prerelease tag skips the wheels, as it skips every other publisher,
-unless `publish-prereleases` is set.
+`dist` derives the release from the tag, creates the GitHub Release (and the git
+tag) itself, then runs `plan → build-local-artifacts → build-global-artifacts →
+host → announce`: it builds each target, generates the installer, checksums and
+source tarball, and uploads them. Every version is kept — cargo-dist does not
+prune — and each is published as "latest", so consumers' `releases/latest/...`
+URL always serves the newest.
 
-`python/` is its own workspace root, so its manifest cannot inherit
-`[workspace.package]`. `scripts/version.sh` is the one definition of the value:
+**3. Dispatch the wheel** once that tag exists:
+
+```sh
+gh workflow run publish-pypi.yml
+```
+
+or run the **Publish Python package** workflow from the Actions tab. Publishing
+is separate because PyPI names the workflow file that may upload, and its
+trusted publisher does not accept a job defined in a workflow that another
+workflow calls (`publish-pypi.yml` is called, not triggered, from `dist`'s
+release run). It builds the wheels and the sdist and uploads them under trusted
+publishing: no token is stored.
+
+The version is the workspace's, so the two dispatches cannot ship different
+versions. `python/` is its own workspace root and cannot inherit
+`[workspace.package]`; `scripts/version.sh` is the one definition of the value —
 `make sync-version` writes it, `make check-version` (part of `make check`) fails
-when the two disagree, and the wheel job runs the same script before maturin
+when the two disagree, and the wheel jobs run the same script before maturin
 reads the manifest.
 
 ## Source consumers

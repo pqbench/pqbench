@@ -13,11 +13,6 @@ ci = "github"
 # version bump, then run this workflow. `dist` derives the tag from the crate
 # version and creates the GitHub Release (and the tag) itself.
 dispatch-releases = true
-# Publishing is part of the same dispatch: after hosting the GitHub Release,
-# dist calls the PyPI workflow, so one release run ships the binaries and the
-# wheel at one version. A custom publish job already carries `id-token: write`,
-# which is what PyPI's trusted publisher wants — no token is stored.
-publish-jobs = ["./publish-pypi"]
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax). Linux and
