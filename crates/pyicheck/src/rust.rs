@@ -232,34 +232,50 @@ fn walk(
 ) {
     let mut cursor = vec![root];
     while let Some(node) = cursor.pop() {
-        let attributes = attributes(source, node);
-        match node.kind() {
-            "function_item" if has(&attributes, "pyfunction") => {
-                if let Some(function) = read_function(source, node, &attributes) {
-                    functions.push(function);
-                }
-            }
-            "struct_item" | "enum_item" if has(&attributes, "pyclass") => {
-                if let Some(name) = node.child_by_field_name("name") {
-                    classes.push(Class {
-                        ident: named(&attributes, "name")
-                            .unwrap_or_else(|| text(source, name).to_owned()),
-                        line: name.start_position().row + 1,
-                        column: name.start_position().column + 1,
-                    });
-                }
-            }
-            "impl_item" if has(&attributes, "pymethods") => {
-                if let Some(owner) = node.child_by_field_name("type") {
-                    let owner = identifier_name(source, owner);
-                    methods.push((owner, read_methods(source, node)));
-                }
-            }
-            _ => {}
-        }
+        collect(source, node, functions, classes, methods);
         let mut child_cursor = node.walk();
         cursor.extend(node.children(&mut child_cursor));
     }
+}
+
+/// File one item, when it is a binding: a `#[pyfunction]`, a `#[pyclass]`, or a
+/// `#[pymethods]` impl.
+fn collect(
+    source: &str,
+    node: Node,
+    functions: &mut Vec<Function>,
+    classes: &mut Vec<Class>,
+    methods: &mut Vec<(String, Vec<Method>)>,
+) {
+    let attributes = attributes(source, node);
+    match node.kind() {
+        "function_item" if has(&attributes, "pyfunction") => {
+            if let Some(function) = read_function(source, node, &attributes) {
+                functions.push(function);
+            }
+        }
+        "struct_item" | "enum_item" if has(&attributes, "pyclass") => {
+            if let Some(class) = read_class(source, node, &attributes) {
+                classes.push(class);
+            }
+        }
+        "impl_item" if has(&attributes, "pymethods") => {
+            if let Some(owner) = node.child_by_field_name("type") {
+                methods.push((identifier_name(source, owner), read_methods(source, node)));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Read one `#[pyclass]` struct or enum: its Python name and position.
+fn read_class(source: &str, node: Node, attributes: &[String]) -> Option<Class> {
+    let name = node.child_by_field_name("name")?;
+    Some(Class {
+        ident: named(attributes, "name").unwrap_or_else(|| text(source, name).to_owned()),
+        line: name.start_position().row + 1,
+        column: name.start_position().column + 1,
+    })
 }
 
 /// The methods and properties of one `#[pymethods] impl`: `#[new]` is the
