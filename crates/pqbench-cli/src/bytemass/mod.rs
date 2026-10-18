@@ -88,14 +88,7 @@ async fn measure(
     let mut reads = stream::iter(bytemass::expand_inputs(lake, &inputs, &env).await?)
         .map(|input| {
             let env = env.clone();
-            async move {
-                let file = v1::TableFile {
-                    name: v1::name::table_file_name(&v1::name::local_table(&input), &input),
-                    blob: Some(v1::name::blob_name(&input)),
-                    ..v1::TableFile::default()
-                };
-                measure_one(lake, file, env, options).await
-            }
+            async move { read_file(lake, &input, &env, options).await }
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(measured) = reads.next().await {
@@ -104,10 +97,9 @@ async fn measure(
     finish_stream(emit, &stats, args.output.as_deref()).await
 }
 
-/// One file's footer read, ready to emit: the log's facts joined onto the
-/// measured file, plus the page headers when `--pages` asked for them.
+/// One file's footer read, ready to emit: the measured file and its page
+/// headers, plus the log's facts when a table file named them.
 struct Measured {
-    id: String,
     measured: bytemass::MeasuredFile,
     pages: Vec<bytemass::PageRecord>,
 }
@@ -120,25 +112,13 @@ async fn measure_record(
     options: (bool, bool),
 ) -> Result<Vec<Measured>, CliError> {
     match record? {
-        Record::File(file) => {
-            let env = file
-                .credentials
-                .as_ref()
-                .map(v1::Credentials::to_env)
-                .unwrap_or_default();
-            Ok(vec![measure_one(lake, file, env, options).await?])
-        }
+        Record::File(file) => Ok(vec![read_table_file(lake, file, options).await?]),
         Record::RemoteSource(source) => {
             let mut measured = Vec::new();
             for uri in source.inputs {
                 let inputs = std::slice::from_ref(&uri);
                 for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
-                    let file = v1::TableFile {
-                        name: v1::name::table_file_name(&v1::name::local_table(&input), &input),
-                        blob: Some(v1::name::blob_name(&input)),
-                        ..v1::TableFile::default()
-                    };
-                    measured.push(measure_one(lake, file, source.env.clone(), options).await?);
+                    measured.push(read_file(lake, &input, &source.env, options).await?);
                 }
             }
             Ok(measured)
@@ -149,12 +129,41 @@ async fn measure_record(
     }
 }
 
-/// Read one file's footer and join the log's facts onto it. This is the I/O the
-/// fanout overlaps; [`emit_measured`] writes each result as it finishes.
-async fn measure_one(
+/// Read one file's footer, and its page headers when `--pages` asked for them.
+/// This is the I/O the fanout overlaps; [`emit_measured`] writes each result as
+/// it finishes. A bare path names no table, so the file names itself.
+async fn read_file(
+    lake: &pqbench::Lake,
+    uri: &str,
+    env: &BTreeMap<String, String>,
+    options: (bool, bool),
+) -> Result<Measured, CliError> {
+    let mut measured = bytemass::measure_files(
+        lake,
+        &bytemass::BytemassRequest {
+            inputs: vec![uri.to_string()],
+            env: env.clone(),
+            indexes: options.0,
+        },
+    )
+    .await?
+    .pop()
+    .ok_or("bytemass read no file")?;
+    measured.file.id = v1::name::local_table(uri);
+    let pages = if options.1 {
+        bytemass::scan_pages(lake, &measured.file.file, env).await?
+    } else {
+        Vec::new()
+    };
+    Ok(Measured { measured, pages })
+}
+
+/// Read a table file's blob, and join the log's facts onto the result: the
+/// table the record names, the path the log records, its partition values, and
+/// its size as a cross-check on the footer.
+async fn read_table_file(
     lake: &pqbench::Lake,
     file: v1::TableFile,
-    env: BTreeMap<String, String>,
     options: (bool, bool),
 ) -> Result<Measured, CliError> {
     let blob = file
@@ -163,56 +172,39 @@ async fn measure_one(
         .ok_or("a table-file record needs a blob to read")?;
     let uri = v1::name::blob_uri(blob)
         .ok_or_else(|| CliError::from(format!("not a blob name: {blob}")))?;
-    let mut measured = bytemass::measure_files(
-        lake,
-        &bytemass::BytemassRequest {
-            inputs: vec![uri.clone()],
-            env: env.clone(),
-            indexes: options.0,
-        },
-    )
-    .await?
-    .pop()
-    .ok_or("bytemass read no file")?;
+    let env = file
+        .credentials
+        .as_ref()
+        .map(v1::Credentials::to_env)
+        .unwrap_or_default();
+    let mut measured = read_file(lake, &uri, &env, options).await?;
     if let Some(size) = file.size_bytes {
-        if size != 0 && measured.file.size != size {
+        if size != 0 && measured.measured.file.size != size {
             return Err(format!(
                 "active file size differs from log: {uri} (expected {size}, found {})",
-                measured.file.size
+                measured.measured.file.size
             )
             .into());
         }
     }
     let (table, path) = v1::name::parse_table_file(&file.name).unzip();
-    let id = table.unwrap_or_else(|| uri.clone());
-    measured.file.id = id.clone();
+    measured.measured.file.id = table.unwrap_or(uri);
     if let Some(path) = path {
-        measured.file.path = path;
+        measured.measured.file.path = path;
     }
-    measured.file.partition_values = file.partition_values.clone();
-    let pages = if options.1 {
-        bytemass::scan_pages(lake, &measured.file.file, &env).await?
-    } else {
-        Vec::new()
-    };
-    Ok(Measured {
-        id,
-        measured,
-        pages,
-    })
+    measured.measured.file.partition_values = file.partition_values;
+    Ok(measured)
 }
 
 /// Emit one measured file: its file record, then its page headers and rows.
+/// The rows carry the file record's id, so a table file's rows name its table.
 async fn emit_measured(
     emit: &mut Emitter,
     stats: &mut MassStats,
-    measured: Measured,
+    read: Measured,
 ) -> Result<(), CliError> {
-    let Measured {
-        id,
-        measured,
-        pages,
-    } = measured;
+    let Measured { measured, pages } = read;
+    let id = measured.file.id.clone();
     stats
         .file_rows
         .insert(measured.file.file.clone(), measured.row_count);
