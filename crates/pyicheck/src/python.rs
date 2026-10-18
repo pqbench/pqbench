@@ -32,25 +32,42 @@ pub fn parse(source: &str) -> Vec<Entry> {
 fn walk(source: &str, node: Node, prefix: &str, out: &mut Vec<Entry>) {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        match child.kind() {
-            "class_definition" => read_class(source, child, prefix, out),
-            "function_definition" => {
-                if prefix == ROOT || is_staticmethod(source, child) {
-                    push_function(source, child, prefix, out);
-                }
-            }
-            "decorated_definition" => {
-                if let Some(definition) = child.child_by_field_name("definition") {
-                    if definition.kind() == "function_definition" {
-                        if is_staticmethod(source, child) {
-                            push_function(source, definition, prefix, out);
-                        }
-                    } else if definition.kind() == "class_definition" {
-                        read_class(source, definition, prefix, out);
-                    }
-                }
+        let Some(definition) = Definition::resolve(child) else {
+            continue;
+        };
+        match definition.node.kind() {
+            "class_definition" => read_class(source, definition.node, prefix, out),
+            "function_definition"
+                if prefix == ROOT || is_staticmethod(source, definition.decorators) =>
+            {
+                push_function(source, definition.node, prefix, out);
             }
             _ => {}
+        }
+    }
+}
+
+/// A block child that is a definition: the `function_definition` or
+/// `class_definition` itself, and the node carrying its decorators (the
+/// definition itself when it is undecorated).
+struct Definition<'a> {
+    node: Node<'a>,
+    decorators: Node<'a>,
+}
+
+impl<'a> Definition<'a> {
+    /// Resolve a block child to a definition, or `None` for anything else.
+    fn resolve(child: Node<'a>) -> Option<Self> {
+        match child.kind() {
+            "class_definition" | "function_definition" => Some(Self {
+                node: child,
+                decorators: child,
+            }),
+            "decorated_definition" => Some(Self {
+                node: child.child_by_field_name("definition")?,
+                decorators: child,
+            }),
+            _ => None,
         }
     }
 }
@@ -161,23 +178,20 @@ fn methods(source: &str, node: Node) -> Vec<Method> {
     let mut out = Vec::new();
     let mut cursor = body.walk();
     for child in body.named_children(&mut cursor) {
-        let definition = match child.kind() {
-            "function_definition" => child,
-            "decorated_definition" => match child.child_by_field_name("definition") {
-                Some(definition) if definition.kind() == "function_definition" => definition,
-                _ => continue,
-            },
-            _ => continue,
+        let Some(definition) = Definition::resolve(child) else {
+            continue;
         };
-        if is_staticmethod(source, child) {
+        if definition.node.kind() != "function_definition"
+            || is_staticmethod(source, definition.decorators)
+        {
             continue;
         }
-        let Some(name) = definition.child_by_field_name("name") else {
+        let Some(name) = definition.node.child_by_field_name("name") else {
             continue;
         };
         out.push(Method::new(
             text(source, name),
-            params(source, definition),
+            params(source, definition.node),
             name.start_position().row + 1,
             name.start_position().column + 1,
         ));
