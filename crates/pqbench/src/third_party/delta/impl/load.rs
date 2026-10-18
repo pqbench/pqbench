@@ -20,7 +20,7 @@ use url::Url;
 
 use crate::table::{
     add_partition_total, bytes_per_row, finish_partition_masses, FileStats, LoadRequest, LogCommit,
-    PartitionMass, TableFile, TableFormat, TableInfo,
+    PartitionMass, TableFile, TableInfo,
 };
 use crate::v1;
 use crate::Lake;
@@ -48,7 +48,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         .map_err(delta_error)?;
     let meta = snapshot_meta(&snapshot);
     let mut info = TableInfo::new(
-        TableFormat::DELTA,
+        v1::TableFormat::Delta,
         request.uri.clone(),
         meta.version,
         meta.partition_columns,

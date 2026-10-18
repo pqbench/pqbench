@@ -4,8 +4,9 @@ mod common;
 mod support;
 
 use futures_util::TryStreamExt;
-use pqbench::table::{self, LoadRequest, TableFormat};
+use pqbench::table::{self, LoadRequest};
 use pqbench::third_party::parquet::api::{default_metadata_parser, MetadataParser};
+use pqbench::v1::TableFormat;
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
 
@@ -22,7 +23,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     )
     .await
     .unwrap();
-    assert_eq!(info.format, TableFormat::DELTA);
+    assert_eq!(info.format, TableFormat::Delta);
     assert_eq!(info.snapshot_version, 1);
     assert_eq!(info.log.len(), 2);
     assert!(info.log[1]

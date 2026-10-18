@@ -8,8 +8,9 @@ use std::path::Path;
 
 use apache_avro::{Schema, Writer};
 use futures_util::TryStreamExt;
-use pqbench::table::{self, LoadRequest, TableFormat};
+use pqbench::table::{self, LoadRequest};
 use pqbench::third_party::parquet::{default_metadata_parser, MetadataParser};
+use pqbench::v1::TableFormat;
 use serde::Serialize;
 use support::write_parquet;
 use url::Url;
@@ -238,7 +239,7 @@ async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
         )
         .await
         .unwrap(),
-        TableFormat::ICEBERG
+        TableFormat::Iceberg
     );
     assert_eq!(
         table::detect(
@@ -248,7 +249,7 @@ async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
         )
         .await
         .unwrap(),
-        TableFormat::ICEBERG
+        TableFormat::Iceberg
     );
 }
 
@@ -281,7 +282,7 @@ async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
         )
         .await
         .unwrap(),
-        TableFormat::DELTA
+        TableFormat::Delta
     );
 }
 
@@ -294,7 +295,7 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
     )
     .await
     .unwrap();
-    assert_eq!(previous.format, TableFormat::ICEBERG);
+    assert_eq!(previous.format, TableFormat::Iceberg);
     assert_eq!(previous.snapshot_version, 0);
     assert_eq!(previous.files.len(), 1);
     assert_eq!(previous.files[0].size_bytes, fixture.first_size);

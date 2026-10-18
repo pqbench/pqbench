@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use super::api::{Credentials, Error, Table, TableFormat as Dialect};
 use crate::dialect;
-use crate::table::{self, LoadRequest, TableFormat, TableInfo};
+use crate::table::{self, LoadRequest, TableInfo};
 use crate::v1;
 use crate::{Lake, Workspace};
 
@@ -141,14 +141,13 @@ fn merge_catalog(mut info: TableInfo, record: UnityRecord) -> TableInfo {
             .collect();
     }
     match info.format {
-        TableFormat::DELTA => info
+        v1::TableFormat::Delta => info
             .delta_properties
             .extend(record.properties.unwrap_or_default()),
-        TableFormat::ICEBERG => {
+        v1::TableFormat::Iceberg => {
             info.iceberg_properties
                 .extend(record.properties.unwrap_or_default());
         }
-        _ => {}
     }
     info
 }
@@ -277,7 +276,7 @@ async fn iceberg_record(
         .and_then(|snapshot_id| u64::try_from(snapshot_id).ok())
         .unwrap_or(0);
     let mut info = TableInfo::new(
-        TableFormat::ICEBERG,
+        v1::TableFormat::Iceberg,
         uri,
         snapshot_version,
         partition_columns,

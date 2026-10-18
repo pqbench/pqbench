@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{LoadRequest, LogCommit, TableFile, TableFormat, TableInfo};
+use crate::table::{LoadRequest, LogCommit, TableFile, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 use crate::v1;
@@ -62,7 +62,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     };
     attach_actions(&mut log, snapshot_version, &files, &deletes);
     let mut info = TableInfo::new(
-        TableFormat::ICEBERG,
+        v1::TableFormat::Iceberg,
         request.uri.clone(),
         snapshot_version,
         partition_columns(&metadata),

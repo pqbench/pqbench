@@ -54,20 +54,6 @@ impl Error {
     }
 }
 
-/// On-disk table formats `pqbench table` can name. Detection runs before load.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum TableFormat {
-    /// Zero value; not a detected format.
-    #[serde(rename = "unspecified")]
-    UNSPECIFIED,
-    #[serde(rename = "delta")]
-    DELTA,
-    #[serde(rename = "iceberg")]
-    ICEBERG,
-}
-
 /// One commit from the table log, as stored on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -183,7 +169,7 @@ pub struct TableInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_selection: Option<FileSelection>,
     /// Detected table format.
-    pub format: TableFormat,
+    pub format: v1::TableFormat,
     /// Table root as given (path or URI).
     pub uri: String,
     /// Table's full name (`catalog.schema.table`), when a catalog named it.
@@ -224,7 +210,7 @@ impl TableInfo {
     /// Assemble a table record from its parts.
     #[must_use]
     pub fn new(
-        format: TableFormat,
+        format: v1::TableFormat,
         uri: impl Into<String>,
         snapshot_version: u64,
         partition_columns: Vec<String>,
@@ -269,11 +255,7 @@ impl TableInfo {
         v1::Table {
             name: v1::name::table(catalog, schema, table),
             uri: non_empty(&self.uri),
-            format: match self.format {
-                TableFormat::DELTA => Some(v1::TableFormat::Delta),
-                TableFormat::ICEBERG => Some(v1::TableFormat::Iceberg),
-                TableFormat::UNSPECIFIED => None,
-            },
+            format: Some(self.format),
             snapshot_version: Some(self.snapshot_version),
             partition_columns: self.partition_columns.clone(),
             declared_columns: self
@@ -387,7 +369,7 @@ pub async fn detect(
     lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
-) -> Result<TableFormat, Error> {
+) -> Result<v1::TableFormat, Error> {
     if is_local(uri) {
         local_format(&local_path(uri)?)?.ok_or_else(|| unrecognized(uri))
     } else {
@@ -409,9 +391,8 @@ pub async fn detect(
 pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::load(lake, request).await,
-        TableFormat::ICEBERG => iceberg::load(lake, request).await,
-        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+        v1::TableFormat::Delta => delta::load(lake, request).await,
+        v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
     }
 }
 
@@ -430,9 +411,8 @@ pub async fn stream_commits(
 ) -> Result<CommitStream<'static>, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::stream_commits(lake, request).await,
-        TableFormat::ICEBERG => iceberg::stream_commits(lake, request).await,
-        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+        v1::TableFormat::Delta => delta::stream_commits(lake, request).await,
+        v1::TableFormat::Iceberg => iceberg::stream_commits(lake, request).await,
     }
 }
 
@@ -454,9 +434,8 @@ pub async fn stream_files(
 ) -> Result<FileStream<'static>, Error> {
     let format = detect(lake, &request.uri, &request.env).await?;
     match format {
-        TableFormat::DELTA => delta::stream_files(lake, request).await,
-        TableFormat::ICEBERG => iceberg::stream_files(lake, request).await,
-        TableFormat::UNSPECIFIED => Err(Error("unrecognized table format".into())),
+        v1::TableFormat::Delta => delta::stream_files(lake, request).await,
+        v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await,
     }
 }
 
@@ -537,22 +516,22 @@ pub(crate) fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
 }
 
 /// Local markers `lake` and `table` share. `None` is unrecognized, not an error.
-pub(crate) fn local_format(path: &Path) -> Result<Option<TableFormat>, Error> {
+pub(crate) fn local_format(path: &Path) -> Result<Option<v1::TableFormat>, Error> {
     if !path.exists() {
         return Err(Error(format!("cannot open table {}", path.display())));
     }
     if path.is_file() {
-        return Ok(is_metadata_json_path(path).then_some(TableFormat::ICEBERG));
+        return Ok(is_metadata_json_path(path).then_some(v1::TableFormat::Iceberg));
     }
     if path.join("_delta_log").is_dir() {
-        return Ok(Some(TableFormat::DELTA));
+        return Ok(Some(v1::TableFormat::Delta));
     }
     let metadata = path.join("metadata");
     if metadata.join("version-hint.text").is_file() {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     if has_metadata_json(&metadata)? {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     Ok(None)
 }
@@ -564,13 +543,13 @@ pub(crate) async fn remote_format(
     lake: &Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
-) -> Result<Option<TableFormat>, Error> {
+) -> Result<Option<v1::TableFormat>, Error> {
     if uri
         .rsplit(['/', '\\'])
         .next()
         .is_some_and(|name| name.ends_with(".metadata.json"))
     {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     let options: Vec<(String, String)> = env
         .iter()
@@ -579,10 +558,10 @@ pub(crate) async fn remote_format(
     if probe(lake, uri, "_delta_log/_last_checkpoint", &options).await?
         || probe(lake, uri, "_delta_log/00000000000000000000.json", &options).await?
     {
-        return Ok(Some(TableFormat::DELTA));
+        return Ok(Some(v1::TableFormat::Delta));
     }
     if probe(lake, uri, "metadata/version-hint.text", &options).await? {
-        return Ok(Some(TableFormat::ICEBERG));
+        return Ok(Some(v1::TableFormat::Iceberg));
     }
     Ok(None)
 }
