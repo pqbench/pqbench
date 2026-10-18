@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use crate::lint::{report, report_position, Finding, Severity};
-use crate::model::{Entry, Kind, ModelField, Param, Surface};
+use crate::model::{Entry, Field, Kind, ModelField, Param, Surface};
 
 /// What a rule sees: both surfaces and the library models.
 pub(crate) struct Inputs<'a> {
@@ -482,17 +482,6 @@ fn optionality(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
             if field.optional == model.optional {
                 continue;
             }
-            let message = if model.optional {
-                format!(
-                    "the model leaves `{}` out when it is empty; the stub should declare `{} | None`",
-                    field.name, field.name
-                )
-            } else {
-                format!(
-                    "the model always writes `{}`; the stub should not make it `| None`",
-                    field.name
-                )
-            };
             report_position(
                 findings,
                 "model/optionality",
@@ -501,10 +490,26 @@ fn optionality(inputs: &Inputs<'_>, findings: &mut Vec<Finding>) {
                 format!("{name}.{}", field.name),
                 field.line,
                 field.column,
-                message,
+                optionality_message(field, model),
                 None,
             );
         }
+    }
+}
+
+/// Why a field's optionality disagrees: the model skips it when empty and the
+/// stub does not say so, or the other way round.
+fn optionality_message(field: &Field, model: &ModelField) -> String {
+    if model.optional {
+        format!(
+            "the model leaves `{}` out when it is empty; the stub should declare `{} | None`",
+            field.name, field.name
+        )
+    } else {
+        format!(
+            "the model always writes `{}`; the stub should not make it `| None`",
+            field.name
+        )
     }
 }
 
