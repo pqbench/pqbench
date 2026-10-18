@@ -62,14 +62,13 @@ fn surface(registry: &Registry, items: &Items) -> Vec<Entry> {
         let Some(module) = registry.modules.get(variable) else {
             continue;
         };
-        let spec = function.spec();
         out.push(Entry::function(
-            format!("{}.{}", module.path, spec.name),
+            format!("{}.{}", module.path, function.name),
             function.line,
             function.column,
-            spec.params,
-            spec.returns,
-            spec.is_async,
+            function.params(),
+            function.returns.clone(),
+            function.is_async,
         ));
     }
 
@@ -209,25 +208,13 @@ struct Function {
 }
 
 impl Function {
-    fn spec(&self) -> Spec {
-        Spec {
-            name: self.name.clone(),
-            params: self
-                .signature
-                .clone()
-                .unwrap_or_else(|| self.params.clone()),
-            returns: self.returns.clone(),
-            is_async: self.is_async,
-        }
+    /// The parameters Python sees: the `#[pyo3(signature = ...)]` override when
+    /// present, the Rust signature otherwise.
+    fn params(&self) -> Vec<Param> {
+        self.signature
+            .clone()
+            .unwrap_or_else(|| self.params.clone())
     }
-}
-
-/// The Python-visible signature of a binding function.
-struct Spec {
-    name: String,
-    params: Vec<Param>,
-    returns: Option<String>,
-    is_async: Option<bool>,
 }
 
 /// One `#[pyclass]` struct or enum.
@@ -350,7 +337,7 @@ fn read_params(source: &str, node: Node) -> Vec<Param> {
         let Some(pattern) = child.child_by_field_name("pattern") else {
             continue;
         };
-        let name = identifier(text(source, pattern));
+        let name = identifier(text(source, pattern)).to_owned();
         if is_receiver(source, child, &name) {
             continue;
         }
@@ -460,7 +447,7 @@ fn signature(attributes: &[String]) -> Option<Vec<Param>> {
                 Some((name, value)) => (name.trim(), !value.trim().is_empty()),
                 None => (part, false),
             };
-            let name = identifier(name);
+            let name = identifier(name).to_owned();
             (!name.is_empty()).then_some(Param {
                 name,
                 has_default: default,
@@ -504,11 +491,7 @@ fn has(attributes: &[String], name: &str) -> bool {
 }
 
 /// An identifier with raw markers and mutability stripped.
-fn identifier(text: &str) -> String {
-    identifier_borrowed(text).to_owned()
-}
-
-fn identifier_borrowed(text: &str) -> &str {
+fn identifier(text: &str) -> &str {
     let text = text.trim();
     let text = text.strip_prefix("mut ").unwrap_or(text);
     text.strip_prefix("r#").unwrap_or(text)
@@ -516,7 +499,7 @@ fn identifier_borrowed(text: &str) -> &str {
 
 /// The identifier of a name node, normalized.
 fn identifier_name(source: &str, node: Node) -> String {
-    identifier(text(source, node))
+    identifier(text(source, node)).to_owned()
 }
 
 /// The first `"..."` in a call.
@@ -533,15 +516,15 @@ fn last_ref(call: &str) -> Option<String> {
     let tail = tail.trim_end_matches(')').trim();
     let tail = tail.strip_prefix('&')?;
     let name = identifier(tail);
-    (!name.is_empty()).then_some(name)
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// The first identifier inside a `<macro>!(<ident>...)` invocation.
 fn macro_ident(text: &str, macro_name: &str) -> Option<String> {
     let inner = text.split_once(macro_name)?.1.trim_start();
     let inner = inner.strip_prefix('(')?.trim_start();
-    let name = identifier_borrowed(inner.split([',', ')', ' ']).next()?);
-    (!name.is_empty()).then_some(name.to_owned())
+    let name = identifier(inner.split([',', ')', ' ']).next()?);
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// Split on top-level commas, ignoring commas inside brackets, braces, parens,
