@@ -329,7 +329,7 @@ async fn file_ls_names_the_files_a_snapshot_added() {
     let files = pqbench::file::list::list(
         common::lake(),
         &fixture.metadata.to_string_lossy(),
-        &Default::default(),
+        Default::default(),
         &[1],
     )
     .await
