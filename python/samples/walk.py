@@ -10,7 +10,7 @@ read outside compute — multiplexed, so the tables are in flight together — a
 yields each table file::
 
     async for file in pqbench.walk(workspace):
-        print(file["uri"])
+        print(file.uri)
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ async def main() -> None:
     count = 0
     async for file in pqbench.walk(workspace):
         count += 1
-        print(file["uri"])
+        print(file.uri)
     print(f"--- {count} files")
 
 

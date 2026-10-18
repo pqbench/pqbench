@@ -12,7 +12,7 @@ The reply is the shortest text that carries the answer.
   lists for an answer that is a paragraph or two.
 - Facts, paths, commands; `file:line` when the location matters.
 - Write plainly, for a reader who knows the product but not your reasoning.
-  Name the concrete thing (`table::TableFile`), not an invented abstraction: no
+  Name the concrete thing (`v1::TableFile`), not an invented abstraction: no
   "layer", "adapter", "superset", "reversible" unless the code or the docs
   already use the word. Say "the old file record has `path` and `uri`; the v1
   one has `name` and `blob`", not "the two families differ by layer".
