@@ -40,7 +40,7 @@
 # `rustc-wrapper`, a POSIX shim Windows cannot execute (`os error 193`). A
 # Windows user with a Rust toolchain can build the sdist instead.
 
-name: Publish Python package
+name: Publish to PyPI
 
 on:
   # A wheel on its own, once the matching tag is released:
