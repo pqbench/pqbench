@@ -205,6 +205,13 @@ jobs:
                 mi_average: ((map(.metrics.mi.mi_visual_studio) | add) / length | . * 10 | round / 10)
               }'
               echo '```'
+              # The PR's aggregate MI — the mean over the files both revisions
+              # have, with its base→head delta. Absent on a push (no base).
+              if [ -n "$base_metrics" ]; then
+                echo
+                python3 scripts/code_analysis.py aggregate \
+                  "$head_metrics" "$base_metrics"
+              fi
             else
               echo "_No Rust files changed._"
             fi

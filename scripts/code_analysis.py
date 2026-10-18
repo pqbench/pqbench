@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Report rust-code-analysis metrics on a pull request.
 
-Two views over the per-file JSON the CLI writes:
+Three views over the per-file JSON the CLI writes:
 
     rust-code-analysis-cli --metrics -O json --pr -o METRICS_DIR -p PATH…
 
@@ -12,7 +12,11 @@ Two views over the per-file JSON the CLI writes:
 
   comment HEAD_DIR [BASE_DIR]
       Print a Markdown table of per-file metrics — with base→head deltas when a
-      BASE_DIR is given — for a sticky pull-request comment.
+      BASE_DIR is given — and the pull request's aggregate maintainability
+      index, for a sticky pull-request comment.
+
+  aggregate HEAD_DIR [BASE_DIR]
+      Print the aggregate maintainability index line alone, for the job summary.
 
 The ceilings are data, kept in one place: a function is flagged above
 ``CYCLOMATIC_CEILING`` or below ``MAINTAINABILITY_FLOOR``. Report-only: the
@@ -38,6 +42,11 @@ def documents(metrics_dir):
         if doc.get("name") and isinstance(doc.get("metrics"), dict):
             docs.append(doc)
     return docs
+
+
+def documents_by_name(metrics_dir):
+    """The per-file documents under ``metrics_dir``, keyed by source path."""
+    return {doc["name"]: doc for doc in documents(metrics_dir)}
 
 
 def metric(space, group, key):
@@ -138,10 +147,45 @@ def index_cell(head, base):
     return f"**{cell}**" if delta < 0 else cell
 
 
+def mean_mi(docs):
+    """The mean file maintainability index, or None when there are no files."""
+    indices = [metric(doc, "mi", "mi_visual_studio") for doc in docs]
+    return sum(indices) / len(indices) if indices else None
+
+
+def aggregate_line(head, base):
+    """The pull request's aggregate MI, or None when nothing is comparable.
+
+    MI is per file and falls with size, so the mean over the changed files is
+    the one number that answers "did this PR move maintainability?". A file only
+    one revision has — added or deleted — has no counterpart to compare, so the
+    mean is over the files present in both.
+    """
+    shared = sorted(name for name in head if name in base)
+    if not shared:
+        return None
+    head_mean = mean_mi([head[name] for name in shared])
+    base_mean = mean_mi([base[name] for name in shared])
+    noun = "file" if len(shared) == 1 else "files"
+    return (
+        f"Aggregate MI over the {len(shared)} {noun} in both revisions: "
+        f"{index_cell(head_mean, base_mean)}"
+    )
+
+
+def aggregate(head_dir, base_dir):
+    """Print the aggregate MI line alone, for the job summary."""
+    head = documents_by_name(head_dir)
+    base = documents_by_name(base_dir) if base_dir else {}
+    line = aggregate_line(head, base)
+    if line:
+        print(line)
+
+
 def comment(head_dir, base_dir, label):
     """A Markdown delta table for a sticky pull-request comment."""
-    head = {doc["name"]: doc for doc in documents(head_dir)}
-    base = {doc["name"]: doc for doc in documents(base_dir)} if base_dir else {}
+    head = documents_by_name(head_dir)
+    base = documents_by_name(base_dir) if base_dir else {}
     names = sorted(set(head) | set(base))
 
     print("### Code analysis")
@@ -163,6 +207,10 @@ def comment(head_dir, base_dir, label):
             f"| {index_cell(h[2], b[2])} |"
         )
     print()
+    line = aggregate_line(head, base)
+    if line:
+        print(line)
+        print()
     print(
         f"Regressions in **bold**. Functions above cyclomatic "
         f"{CYCLOMATIC_CEILING} and files below maintainability index "
@@ -177,9 +225,14 @@ def main():
     if len(sys.argv) == 5 and sys.argv[1] == "comment":
         comment(sys.argv[2], sys.argv[3] or None, sys.argv[4])
         return
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "aggregate":
+        base_dir = sys.argv[3] if len(sys.argv) == 4 else None
+        aggregate(sys.argv[2], base_dir)
+        return
     sys.exit(
         "usage: code_analysis.py annotate METRICS_DIR\n"
-        "       code_analysis.py comment HEAD_DIR BASE_DIR BASE_LABEL"
+        "       code_analysis.py comment HEAD_DIR BASE_DIR BASE_LABEL\n"
+        "       code_analysis.py aggregate HEAD_DIR [BASE_DIR]"
     )
 
 
