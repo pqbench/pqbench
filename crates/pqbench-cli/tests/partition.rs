@@ -95,41 +95,49 @@ fn delta_fixture() -> DeltaFixture {
 /// A Delta table whose single commit records `commitInfo.timestamp` (ms).
 #[cfg(feature = "delta")]
 fn dated_delta_fixture(timestamp: i64) -> DeltaFixture {
+    dated_delta_fixture_commits(&[timestamp])
+}
+
+/// A Delta table whose commits record `commitInfo.timestamp` (ms), one commit
+/// per version, oldest first.
+#[cfg(feature = "delta")]
+fn dated_delta_fixture_commits(timestamps: &[i64]) -> DeltaFixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().to_path_buf();
     std::fs::create_dir(root.join("_delta_log")).unwrap();
     let data = root.join("data.parquet");
     std::fs::copy(parquet_fixture(), &data).unwrap();
     let size = std::fs::metadata(&data).unwrap().len();
-    let commit = json!([
-        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
-        {"metaData": {
-            "id": "11111111-1111-1111-1111-111111111111",
-            "format": {"provider": "parquet", "options": {}},
-            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
-            "partitionColumns": [],
-            "configuration": {},
-            "createdTime": 0
-        }},
-        {"add": {
-            "path": "data.parquet",
-            "partitionValues": {},
-            "size": size,
-            "modificationTime": 0,
-            "dataChange": true,
-            "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
-        }},
-        {"commitInfo": {"timestamp": timestamp, "operation": "WRITE"}}
-    ]);
-    let text = commit
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(serde_json::Value::to_string)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    std::fs::write(root.join("_delta_log/00000000000000000000.json"), text).unwrap();
+    for (version, timestamp) in timestamps.iter().enumerate() {
+        let mut actions = Vec::new();
+        if version == 0 {
+            actions.push(json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}));
+            actions.push(json!({"metaData": {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "format": {"provider": "parquet", "options": {}},
+                "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
+                "partitionColumns": [],
+                "configuration": {},
+                "createdTime": 0
+            }}));
+            actions.push(json!({"add": {
+                "path": "data.parquet",
+                "partitionValues": {},
+                "size": size,
+                "modificationTime": 0,
+                "dataChange": true,
+                "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
+            }}));
+        }
+        actions.push(json!({"commitInfo": {"timestamp": timestamp, "operation": "WRITE"}}));
+        let text = actions
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(root.join(format!("_delta_log/{version:020}.json")), text).unwrap();
+    }
     DeltaFixture {
         _directory: directory,
         path: root,
