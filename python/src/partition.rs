@@ -7,6 +7,7 @@ use crate::records::Partition;
 
 #[pyfunction]
 #[pyo3(name = "list")]
+#[pyo3(signature = (lake, table, uri, credentials, window_millis, last_millis=None))]
 fn partition_list(
     py: Python<'_>,
     lake: PyRef<'_, Lake>,
@@ -14,6 +15,7 @@ fn partition_list(
     uri: String,
     credentials: Option<Bound<'_, PyAny>>,
     window_millis: i64,
+    last_millis: Option<i64>,
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
     let credentials = crate::requests::credentials(credentials)?;
@@ -24,8 +26,15 @@ fn partition_list(
     stream_listing(
         py,
         async move {
-            let found =
-                pqbench::partition::list::list(&lake, &table, &uri, &env, window_millis).await?;
+            let found = pqbench::partition::list::list(
+                &lake,
+                &table,
+                &uri,
+                &env,
+                window_millis,
+                last_millis,
+            )
+            .await?;
             Ok(found.map_ok(move |mut partition| {
                 partition.credentials = credentials.clone();
                 partition

@@ -95,41 +95,49 @@ fn delta_fixture() -> DeltaFixture {
 /// A Delta table whose single commit records `commitInfo.timestamp` (ms).
 #[cfg(feature = "delta")]
 fn dated_delta_fixture(timestamp: i64) -> DeltaFixture {
+    dated_delta_fixture_commits(&[timestamp])
+}
+
+/// A Delta table whose commits record `commitInfo.timestamp` (ms), one commit
+/// per version, oldest first.
+#[cfg(feature = "delta")]
+fn dated_delta_fixture_commits(timestamps: &[i64]) -> DeltaFixture {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().to_path_buf();
     std::fs::create_dir(root.join("_delta_log")).unwrap();
     let data = root.join("data.parquet");
     std::fs::copy(parquet_fixture(), &data).unwrap();
     let size = std::fs::metadata(&data).unwrap().len();
-    let commit = json!([
-        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
-        {"metaData": {
-            "id": "11111111-1111-1111-1111-111111111111",
-            "format": {"provider": "parquet", "options": {}},
-            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
-            "partitionColumns": [],
-            "configuration": {},
-            "createdTime": 0
-        }},
-        {"add": {
-            "path": "data.parquet",
-            "partitionValues": {},
-            "size": size,
-            "modificationTime": 0,
-            "dataChange": true,
-            "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
-        }},
-        {"commitInfo": {"timestamp": timestamp, "operation": "WRITE"}}
-    ]);
-    let text = commit
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(serde_json::Value::to_string)
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    std::fs::write(root.join("_delta_log/00000000000000000000.json"), text).unwrap();
+    for (version, timestamp) in timestamps.iter().enumerate() {
+        let mut actions = Vec::new();
+        if version == 0 {
+            actions.push(json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}));
+            actions.push(json!({"metaData": {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "format": {"provider": "parquet", "options": {}},
+                "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
+                "partitionColumns": [],
+                "configuration": {},
+                "createdTime": 0
+            }}));
+            actions.push(json!({"add": {
+                "path": "data.parquet",
+                "partitionValues": {},
+                "size": size,
+                "modificationTime": 0,
+                "dataChange": true,
+                "stats": "{\"numRecords\":3000,\"minValues\":{\"id\":0},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0},\"tightBounds\":true}"
+            }}));
+        }
+        actions.push(json!({"commitInfo": {"timestamp": timestamp, "operation": "WRITE"}}));
+        let text = actions
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(root.join(format!("_delta_log/{version:020}.json")), text).unwrap();
+    }
     DeltaFixture {
         _directory: directory,
         path: root,
@@ -200,6 +208,125 @@ fn partition_ls_honors_the_window_width() {
     let first = timestamp.div_euclid(hour) * hour;
     assert_eq!(records[0]["start_time"], first);
     assert_eq!(records[0]["end_time"], first + hour);
+}
+
+/// `--last` bounds the read to the newest commits: only whole windows within
+/// the read window are emitted, newest first.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_last_bounds_the_read_to_recent_windows() {
+    let day = 86_400_000i64;
+    let base = 1_700_000_000_000i64.div_euclid(day) * day;
+    let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--every",
+            "1d",
+            "--last",
+            "2d",
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let starts: Vec<i64> = ndjson_records(&output.stdout)
+        .iter()
+        .map(|record| record["start_time"].as_i64().unwrap())
+        .collect();
+    assert_eq!(starts, [base + 3 * day, base + 2 * day, base + day]);
+}
+
+/// `--last` wider than the commits' span reads every window.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_last_covering_the_span_reads_every_window() {
+    let day = 86_400_000i64;
+    let base = 1_700_000_000_000i64.div_euclid(day) * day;
+    let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--every",
+            "1d",
+            "--last",
+            "1w",
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let starts: Vec<i64> = ndjson_records(&output.stdout)
+        .iter()
+        .map(|record| record["start_time"].as_i64().unwrap())
+        .collect();
+    assert_eq!(starts, [base + 3 * day, base + 2 * day, base + day, base]);
+}
+
+/// A window the horizon only partly covers is dropped, never truncated: with a
+/// daily window and a mid-day commit, a one-hour read window holds no whole
+/// window, so nothing is emitted.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_last_drops_a_window_the_horizon_cuts() {
+    let fixture = dated_delta_fixture(1_700_000_000_000);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--every",
+            "1d",
+            "--last",
+            "1h",
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(ndjson_records(&output.stdout).is_empty());
+}
+
+/// A malformed `--last` fails loudly before any table is read.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_rejects_a_bad_last_window() {
+    let fixture = dated_delta_fixture(0);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--last",
+            "1x",
+        ],
+        "",
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--last unit"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// A commit the log does not date is omitted: a window never claims a commit

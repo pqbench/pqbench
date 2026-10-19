@@ -183,6 +183,8 @@ partitions: 1
 
 - Reads each table's Delta / Iceberg log, never the data files.
 - `--every 1h|1d|1w` sets the window width (default `1d`).
+- `--last 1h|1d|1w` bounds the read to the newest commits; only whole windows
+  are emitted.
 - Delta needs `--features delta`, Iceberg `iceberg`; add `-s3` to either for
   `s3://`.
 - A pipe streams `Partition` NDJSON; feed it to `list files`.
