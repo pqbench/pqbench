@@ -29,6 +29,7 @@ mod schema;
 mod setup;
 mod skill;
 mod source;
+mod stdin;
 mod table;
 mod viz;
 

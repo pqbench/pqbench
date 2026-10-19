@@ -36,6 +36,11 @@ $ pqbench list catalogs | pqbench list schemas | pqbench list tables
 $ pqbench get table dbx_samples.nyctaxi.trips
 ```
 
+A level reads standard input only when it is a stream — a pipeline's pipe, or a
+`<file` redirect. A terminal, and a notebook kernel's socket, are not: the level
+falls back to its argument (or its own error) instead of blocking on a read that
+never returns.
+
 The usual walk:
 
 ```console run delta

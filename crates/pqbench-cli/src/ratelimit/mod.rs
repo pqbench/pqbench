@@ -11,6 +11,7 @@ use pqbench::ratelimit::RateLimit;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use crate::stdin::is_stream;
 use crate::CliError;
 
 /// Arguments for `ratelimit`: the target rate.
@@ -53,6 +54,9 @@ fn parse_rate(value: &str) -> Result<f64, CliError> {
 }
 
 pub(crate) async fn run(args: &RateLimitArgs) -> Result<(), CliError> {
+    if !is_stream() {
+        return Err("ratelimit reads NDJSON records on standard input".into());
+    }
     let mut limit = RateLimit::new(args.rate);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();

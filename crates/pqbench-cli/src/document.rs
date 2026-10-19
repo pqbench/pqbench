@@ -15,6 +15,7 @@ use pqbench::bytemass::MassRow;
 use pqbench::v1;
 use serde::Deserialize;
 
+use crate::stdin::is_stream;
 use crate::CliError;
 
 /// A versioned document naming what an external producer resolved, plus the
@@ -48,6 +49,9 @@ pub(crate) async fn records(
     input: &str,
 ) -> Result<BoxStream<'static, Result<Record, CliError>>, CliError> {
     if input == "-" {
+        if !is_stream() {
+            return Err("standard input is not a stream; pass a file or pipe a document in".into());
+        }
         Ok(stdin_records().boxed())
     } else {
         let bytes = tokio::fs::read(input).await?;

@@ -9,6 +9,7 @@ use pqbench::bytemass::{FileStat, MassRow};
 use pqbench::viz::{self, MassRecord};
 
 use crate::document::{self, Record};
+use crate::stdin::is_stream;
 use crate::CliError;
 
 /// Arguments for `viz`.
@@ -23,7 +24,7 @@ pub(crate) struct VizArgs {
 
 pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
     let input = match &args.input {
-        None if !std::io::stdin().is_terminal() => "-",
+        None if is_stream() => "-",
         None => return Err("viz needs a bytemass stream on standard input".into()),
         Some(value) => value.as_str(),
     };
