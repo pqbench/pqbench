@@ -3,7 +3,7 @@ name = "pqbench-py"
 # Written from the workspace version by `make sync-version`: python/ is its own
 # crate, so it cannot inherit [workspace.package]. `make check-version` fails
 # when this is stale. The wheel version comes from here.
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 rust-version = "1.91.1"
 license = "MIT OR Apache-2.0"
