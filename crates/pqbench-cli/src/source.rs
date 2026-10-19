@@ -18,18 +18,18 @@
 //! never buffers its parent: a slow consumer stops reading, and the pipe
 //! backpressures the producer.
 
-use std::io::IsTerminal;
-
 use futures_util::stream::{self, Stream, StreamExt};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
+use crate::stdin::is_stream;
 use crate::CliError;
 
-/// The parent records on standard input: whether stdin was a pipe (a stream),
+/// The parent records on standard input: whether standard input is a stream,
 /// the peeked first record, and the rest of the lines.
 pub(crate) struct Input {
-    /// Whether stdin was a pipe (a stream), not a terminal.
+    /// Whether standard input is a stream (a pipe or a redirected file), not a
+    /// terminal or other descriptor a read would block on.
     pub piped: bool,
     /// The first record, when stdin carried one.
     pub first: Option<Value>,
@@ -63,7 +63,7 @@ pub(crate) fn records(
 /// Read stdin's first record (a parent ref, kept for the command's stream),
 /// without resolving config.
 pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError> {
-    let piped = !std::io::stdin().is_terminal();
+    let piped = is_stream();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut first = None;
     if piped {

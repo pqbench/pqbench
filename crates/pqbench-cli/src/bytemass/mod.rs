@@ -1,7 +1,6 @@
 //! `bytemass`: read a Parquet footer and emit per-column byte masses.
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::Args;
@@ -12,6 +11,7 @@ use serde::Serialize;
 
 use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
+use crate::stdin::is_stream;
 use crate::CliError;
 
 /// Arguments for `bytemass`.
@@ -43,7 +43,7 @@ pub(crate) struct BytemassArgs {
 /// Build the typed request, measure, and stream each row as it is ready.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(), CliError> {
     if args.inputs.is_empty() {
-        if std::io::stdin().is_terminal() {
+        if !is_stream() {
             return Err(
                 "bytemass needs parquet files or a table-file / remote-source document".into(),
             );

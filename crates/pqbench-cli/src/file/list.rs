@@ -1,6 +1,5 @@
 //! `list files`: the files each partition's commits added.
 
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -11,6 +10,7 @@ use pqbench::v1;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::emit::{Emitter, Format};
+use crate::stdin::is_stream;
 use crate::CliError;
 
 /// Arguments for `list files`.
@@ -35,7 +35,7 @@ pub(crate) struct ListArgs {
 /// blob and carrying the partition's lease, so the storage stage reads it
 /// without a catalog call.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
-    if std::io::stdin().is_terminal() {
+    if !is_stream() {
         return Err("list files reads partition records on standard input".into());
     }
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
