@@ -210,6 +210,125 @@ fn partition_ls_honors_the_window_width() {
     assert_eq!(records[0]["end_time"], first + hour);
 }
 
+/// `--last` bounds the read to the newest commits: only whole windows within
+/// the read window are emitted, newest first.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_last_bounds_the_read_to_recent_windows() {
+    let day = 86_400_000i64;
+    let base = 1_700_000_000_000i64.div_euclid(day) * day;
+    let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--every",
+            "1d",
+            "--last",
+            "2d",
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let starts: Vec<i64> = ndjson_records(&output.stdout)
+        .iter()
+        .map(|record| record["start_time"].as_i64().unwrap())
+        .collect();
+    assert_eq!(starts, [base + 3 * day, base + 2 * day, base + day]);
+}
+
+/// `--last` wider than the commits' span reads every window.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_last_covering_the_span_reads_every_window() {
+    let day = 86_400_000i64;
+    let base = 1_700_000_000_000i64.div_euclid(day) * day;
+    let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--every",
+            "1d",
+            "--last",
+            "1w",
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let starts: Vec<i64> = ndjson_records(&output.stdout)
+        .iter()
+        .map(|record| record["start_time"].as_i64().unwrap())
+        .collect();
+    assert_eq!(starts, [base + 3 * day, base + 2 * day, base + day, base]);
+}
+
+/// A window the horizon only partly covers is dropped, never truncated: with a
+/// daily window and a mid-day commit, a one-hour read window holds no whole
+/// window, so nothing is emitted.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_last_drops_a_window_the_horizon_cuts() {
+    let fixture = dated_delta_fixture(1_700_000_000_000);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--every",
+            "1d",
+            "--last",
+            "1h",
+            "--format",
+            "json",
+        ],
+        "",
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(ndjson_records(&output.stdout).is_empty());
+}
+
+/// A malformed `--last` fails loudly before any table is read.
+#[cfg(feature = "delta")]
+#[test]
+fn partition_ls_rejects_a_bad_last_window() {
+    let fixture = dated_delta_fixture(0);
+    let output = pipe(
+        &[
+            "list",
+            "partitions",
+            fixture.path.to_str().unwrap(),
+            "--last",
+            "1x",
+        ],
+        "",
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--last unit"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// A commit the log does not date is omitted: a window never claims a commit
 /// it cannot place.
 #[cfg(feature = "delta")]

@@ -107,7 +107,8 @@ the existing loader tolerates, so it is not a compatible replacement yet.
 Memory also includes the largest individual commit and per-partition totals;
 human table output buffers rows to align columns. The commit reads take their
 versions from the log's own listing, so no version is probed and nothing below
-retention is asked for, and read each commit as a header prefix, not whole
+retention is asked for — a `--last` horizon stops the reads earlier — and each
+commit is read as a header prefix, not whole
 (1 KB, then 4 KB, whole only as a last resort), so a commit's add-list is neither
 read nor retained. Reads run a window wide (`available_parallelism * 4`), so
 memory is flat in the log's length rather than growing with every commit's

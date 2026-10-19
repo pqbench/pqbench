@@ -202,9 +202,10 @@ Unity fills a table's storage location in the listing; Iceberg leaves it to
 
 `list partitions` reads the Delta / Iceberg log — never the data files — and
 groups the commits by commit time (Delta commitInfo.timestamp; Iceberg the
-snapshot time); --every sets the window width (1h, 1d, 1w; default 1d), and a
-commit the log does not date is omitted, so a window never claims a commit it
-cannot place. A partition is a lens on the files, not a thing the table stores —
+snapshot time); --every sets the window width (1h, 1d, 1w; default 1d), --last
+bounds the read to the newest commits, and a commit the log does not date is
+omitted, so a window never claims a commit it cannot place. A partition is a
+lens on the files, not a thing the table stores —
 see docs/partition.md. `list files` re-reads the window's commits and names the
 files they added; each file carries the partition's credentials, and that
 stream is what `bytemass` measures.

@@ -18,15 +18,28 @@ pub(crate) async fn list(
     uri: &str,
     env: &BTreeMap<String, String>,
     window_millis: i64,
+    last_millis: Option<i64>,
 ) -> Result<PartitionStream<'static>, Error> {
     if window_millis <= 0 {
         return Err(Error::from("partition window must be positive".to_string()));
+    }
+    if last_millis.is_some_and(|last| last <= 0) {
+        return Err(Error::from(
+            "partition read window must be positive".to_string(),
+        ));
     }
     let request = LoadRequest::new(uri.to_string(), None, env.clone()).without_files();
     let commits = table::stream_commits(lake, &request)
         .await
         .map_err(|error| Error::from(error.to_string()))?;
-    Ok(windows(commits, window_millis, table.to_string(), uri.to_string()).boxed())
+    Ok(windows(
+        commits,
+        window_millis,
+        last_millis,
+        table.to_string(),
+        uri.to_string(),
+    )
+    .boxed())
 }
 
 /// What a windowed read holds while it runs: the commits still to read, and the
@@ -36,6 +49,15 @@ pub(crate) async fn list(
 struct Windows {
     commit_stream: table::CommitStream<'static>,
     window_millis: i64,
+    /// The read window, if any: stop reading once a commit is older than this
+    /// reaches from the newest dated commit.
+    last_millis: Option<i64>,
+    /// The newest dated commit's time, once seen; the read window is measured
+    /// back from it.
+    head_time: Option<i64>,
+    /// The first window edge the read window covers whole; a window below it is
+    /// dropped, never truncated, so it never under-counts.
+    horizon_first_time: Option<i64>,
     table: String,
     uri: String,
     open: Option<Window>,
@@ -52,12 +74,16 @@ struct Window {
 fn windows(
     commit_stream: table::CommitStream<'static>,
     window_millis: i64,
+    last_millis: Option<i64>,
     table: String,
     uri: String,
 ) -> impl Stream<Item = Result<Partition, Error>> {
     let state = Windows {
         commit_stream,
         window_millis,
+        last_millis,
+        head_time: None,
+        horizon_first_time: None,
         table,
         uri,
         open: None,
@@ -67,7 +93,7 @@ fn windows(
 
 impl Windows {
     /// The next partition: the open window once a commit falls outside it, or the
-    /// last window when the commits end.
+    /// last window when the commits end or the read window is reached.
     async fn next(mut self) -> Result<Option<(Partition, Self)>, Error> {
         while let Some(commit) = self
             .commit_stream
@@ -78,6 +104,10 @@ impl Windows {
             let Some(commit_time) = commit.commit_time else {
                 continue;
             };
+            self.learn_horizon(commit_time);
+            if self.horizon_crossed(commit_time) {
+                break;
+            }
             let first_time = commit_time.div_euclid(self.window_millis) * self.window_millis;
             let entry = (commit.version, commit.commit_info);
             match self.open.take() {
@@ -90,7 +120,7 @@ impl Windows {
                         first_time,
                         commits: vec![entry],
                     });
-                    return Ok(Some((self.partition(window), self)));
+                    return self.close(window);
                 }
                 None => {
                     self.open = Some(Window {
@@ -100,10 +130,43 @@ impl Windows {
                 }
             }
         }
-        Ok(self
-            .open
-            .take()
-            .map(|window| (self.partition(window), self)))
+        match self.open.take() {
+            Some(window) => self.close(window),
+            None => Ok(None),
+        }
+    }
+
+    /// Note the newest dated commit and, from it, the read window: the oldest
+    /// time it reaches, and the first window edge that time covers whole.
+    fn learn_horizon(&mut self, commit_time: i64) {
+        if self.head_time.is_some() {
+            return;
+        }
+        self.head_time = Some(commit_time);
+        self.horizon_first_time = self
+            .last_millis
+            .map(|last| window_edge(commit_time - last, self.window_millis));
+    }
+
+    /// Whether `commit_time` is older than the read window reaches. The walk is
+    /// newest first, so this is the point to stop reading.
+    fn horizon_crossed(&self, commit_time: i64) -> bool {
+        let (Some(last), Some(head)) = (self.last_millis, self.head_time) else {
+            return false;
+        };
+        commit_time < head - last
+    }
+
+    /// Hand over a closed window, or end the stream when the read window does
+    /// not cover it whole.
+    fn close(self, window: Window) -> Result<Option<(Partition, Self)>, Error> {
+        if self
+            .horizon_first_time
+            .is_some_and(|first| window.first_time < first)
+        {
+            return Ok(None);
+        }
+        Ok(Some((self.partition(window), self)))
     }
 
     fn partition(&self, window: Window) -> Partition {
@@ -129,5 +192,15 @@ impl Windows {
             uri: (!self.uri.is_empty()).then(|| self.uri.clone()),
             credentials: None,
         }
+    }
+}
+
+/// Round `horizon` up to the next window edge.
+fn window_edge(horizon: i64, window_millis: i64) -> i64 {
+    let remainder = horizon.rem_euclid(window_millis);
+    if remainder == 0 {
+        horizon
+    } else {
+        horizon + (window_millis - remainder)
     }
 }

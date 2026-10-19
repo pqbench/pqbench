@@ -69,8 +69,8 @@ subcommand:
 - `--table-format unity|iceberg`
 
 Everything else is a per-invocation switch on its own command — `--format` /
-`-o`, `--every`, `--fan-out`, `--rate`, `--pages` — and is not read from the
-run-control file.
+`-o`, `--every`, `--last`, `--fan-out`, `--rate`, `--pages` — and is not read
+from the run-control file.
 
 ## Example
 

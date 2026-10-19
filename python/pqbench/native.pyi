@@ -347,6 +347,7 @@ class partition:
             uri: str,
             credentials: Credentials | dict[str, Any] | None,
             window_millis: int,
+            last_millis: int | None = None,
         ) -> AsyncIterator[Partition]:
             """Stream the table's partitions, widest window first."""
             ...

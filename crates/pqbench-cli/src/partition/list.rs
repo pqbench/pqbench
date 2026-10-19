@@ -19,12 +19,16 @@ pub(crate) struct ListArgs {
     /// window width, epoch-aligned: e.g. 1h, 1d, 1w [env: PQB_TABLE_EVERY]
     #[arg(
         long,
-        value_parser = parse_window,
+        value_parser = parse_every,
         value_name = "WINDOW",
         env = "PQB_TABLE_EVERY",
         default_value = "1d"
     )]
     every: i64,
+    /// read only commits within WINDOW of the newest commit: e.g. 1d
+    /// [env: PQB_TABLE_LAST]
+    #[arg(long, value_parser = parse_last, value_name = "WINDOW", env = "PQB_TABLE_LAST")]
+    last: Option<i64>,
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
@@ -46,9 +50,9 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
                 return Err("list partitions takes a table URI or a table stream, not both".into());
             }
             let table = pqbench::v1::name::local_table(uri);
-            list_partitions(lake, &table, uri, args.every, &mut emit).await?
+            list_partitions(lake, &table, uri, args.every, args.last, &mut emit).await?
         }
-        _ => list_stream(lake, input, args.every, args.fan_out, &mut emit).await?,
+        _ => list_stream(lake, input, args.every, args.last, args.fan_out, &mut emit).await?,
     };
     emit.finish(&format!("partitions: {partitions}\n")).await
 }
@@ -59,6 +63,7 @@ async fn list_stream(
     lake: &pqbench::Lake,
     input: Input,
     window: i64,
+    last: Option<i64>,
     fan_out: usize,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
@@ -80,7 +85,7 @@ async fn list_stream(
                 .as_ref()
                 .map(pqbench::v1::Credentials::to_env)
                 .unwrap_or_default();
-            let found = partition::list::list(lake, &name, &uri, &env, window)
+            let found = partition::list::list(lake, &name, &uri, &env, window, last)
                 .await
                 .map_err(|error| CliError::from(error.to_string()))?;
             Ok::<_, CliError>(
@@ -110,9 +115,10 @@ async fn list_partitions(
     table: &str,
     uri: &str,
     window: i64,
+    last: Option<i64>,
     emit: &mut Emitter,
 ) -> Result<usize, CliError> {
-    let mut found = partition::list::list(lake, table, uri, &BTreeMap::new(), window)
+    let mut found = partition::list::list(lake, table, uri, &BTreeMap::new(), window, last)
         .await
         .map_err(|error| CliError::from(error.to_string()))?;
     let mut count = 0;
@@ -127,26 +133,36 @@ async fn list_partitions(
     Ok(count)
 }
 
-/// Parse a window width: a positive integer and a unit (`m`, `h`, `d`, `w`).
-fn parse_window(value: &str) -> Result<i64, CliError> {
+/// Parse `--every`: a positive window width.
+fn parse_every(value: &str) -> Result<i64, CliError> {
+    parse_window("--every", value)
+}
+
+/// Parse `--last`: a positive read window.
+fn parse_last(value: &str) -> Result<i64, CliError> {
+    parse_window("--last", value)
+}
+
+/// Parse a window: a positive integer and a unit (`m`, `h`, `d`, `w`).
+fn parse_window(flag: &str, value: &str) -> Result<i64, CliError> {
     let (number, unit) = value.split_at(
         value
             .len()
             .checked_sub(1)
-            .ok_or_else(|| CliError::from("--every is empty"))?,
+            .ok_or_else(|| CliError::from(format!("{flag} is empty")))?,
     );
     let count: i64 = number
         .parse()
-        .map_err(|_| CliError::from(format!("--every `{value}` needs a number and a unit")))?;
+        .map_err(|_| CliError::from(format!("{flag} `{value}` needs a number and a unit")))?;
     if count <= 0 {
-        return Err(format!("--every must be positive: {value}").into());
+        return Err(format!("{flag} must be positive: {value}").into());
     }
     let millis = match unit {
         "m" => 60_000,
         "h" => 3_600_000,
         "d" => 86_400_000,
         "w" => 604_800_000,
-        _ => return Err(format!("--every unit must be m, h, d, or w: {value}").into()),
+        _ => return Err(format!("{flag} unit must be m, h, d, or w: {value}").into()),
     };
     Ok(count * millis)
 }
