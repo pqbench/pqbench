@@ -61,7 +61,7 @@ impl std::error::Error for Error {
             Error::Http(error) => Some(error),
             Error::Table(error) => Some(error),
             Error::Metadata { source, .. } => Some(source),
-            _ => None,
+            Error::Name(_) | Error::Malformed(_) => None,
         }
     }
 }

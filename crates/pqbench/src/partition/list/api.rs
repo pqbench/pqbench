@@ -34,7 +34,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Table(error) => Some(error),
-            _ => None,
+            Error::Invalid(_) => None,
         }
     }
 }
