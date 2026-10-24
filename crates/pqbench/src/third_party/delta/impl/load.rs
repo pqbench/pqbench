@@ -228,13 +228,15 @@ async fn read_log(
     Ok(commits.into_iter().flatten().collect())
 }
 
-/// Stream the table's commits in version order, oldest first.
+/// Stream the table's commits, newest first.
 ///
 /// The log names its commits, so the versions come from one listing of it: every
 /// retained version, none probed, nothing asked for below retention, no hole to
-/// step over. Each version's time then comes from the commit itself, read with
-/// the store's own concurrency rather than one round trip at a time, so the walk
-/// costs the log's latency over the commits in reach and not the sum of it.
+/// step over. Each version's time then comes from the commit itself, read a
+/// batch at a time rather than one round trip at a time, so the walk costs the
+/// log's latency once per batch and not the sum over the commits in reach — and
+/// a batch is only started when the consumer asks for another item, so a stalled
+/// consumer leaves no read in flight.
 pub(super) async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
@@ -242,20 +244,27 @@ pub(super) async fn stream_commits(
     let store = open_store(lake, request)?;
     let versions = commit_versions(&store, &request.uri, request.snapshot_version).await?;
     let table = v1::name::local_table(&request.uri);
-    // The log names every commit, so no read waits on another: they all go at
-    // once and are yielded in version order, newest first, as they land. A commit
-    // the log does not date has no time to contribute, and one the listing named
-    // that a read no longer finds has nothing left to read, so neither is yielded.
-    Ok(futures::stream::iter(versions.into_iter().rev())
-        .map(move |version| {
+    // A commit the log does not date has no time to contribute, and one the
+    // listing named that a read no longer finds has nothing left to read, so
+    // neither is yielded.
+    let batches = commit_batches(versions.into_iter().rev());
+    Ok(futures::stream::iter(batches)
+        .then(move |chunk| {
             let store = store.clone();
             async move {
-                commit_head(&store, version)
-                    .await
-                    .map(|head| (version, head))
+                futures::future::try_join_all(chunk.into_iter().map(|version| {
+                    let store = store.clone();
+                    async move {
+                        commit_head(&store, version)
+                            .await
+                            .map(|head| (version, head))
+                    }
+                }))
+                .await
             }
         })
-        .buffered(commit_read_width())
+        .map_ok(|chunk| futures::stream::iter(chunk.into_iter().map(Ok)))
+        .try_flatten()
         .try_filter_map(move |(version, head)| {
             let table = table.clone();
             async move {
@@ -297,17 +306,24 @@ pub(super) async fn stream_files(
         None => commit_versions(&store, &request.uri, request.snapshot_version).await?,
     };
     let uri = request.uri.clone();
-    // Version order is the log's order, and `buffered` keeps it while bounding
-    // how many commits are in flight at once; a commit's files are yielded as a
+    // Version order is the log's order, and a batch keeps it while bounding how
+    // many commits are in flight at once; a commit's files are yielded as a
     // group once its own read lands.
-    Ok(futures::stream::iter(versions)
-        .map(move |version| {
+    let batches = commit_batches(versions);
+    Ok(futures::stream::iter(batches)
+        .then(move |chunk| {
             let store = store.clone();
             let uri = uri.clone();
-            async move { commit_files(&store, &uri, version).await }
+            async move {
+                futures::future::try_join_all(chunk.into_iter().map(|version| {
+                    let store = store.clone();
+                    let uri = uri.clone();
+                    async move { commit_files(&store, &uri, version).await }
+                }))
+                .await
+            }
         })
-        .buffered(commit_read_width())
-        .map_ok(|files| futures::stream::iter(files.into_iter().map(Ok)))
+        .map_ok(|files| futures::stream::iter(files.into_iter().flatten().map(Ok)))
         .try_flatten())
 }
 
@@ -411,6 +427,18 @@ fn commit_read_width() -> usize {
         .map(|count| count.get())
         .unwrap_or(1)
         * 4
+}
+
+/// The versions to read together, in the order given: `commit_read_width()` of
+/// them per batch, so a walk costs the log's latency once per batch rather than
+/// once per commit. A batch is the unit the consumer drives — the next one is
+/// not started until it asks for it.
+fn commit_batches(versions: impl IntoIterator<Item = u64>) -> Vec<Vec<u64>> {
+    let versions: Vec<u64> = versions.into_iter().collect();
+    versions
+        .chunks(commit_read_width())
+        .map(<[u64]>::to_vec)
+        .collect()
 }
 
 /// How far into a commit file to read for its head, in stages: `commitInfo` is a

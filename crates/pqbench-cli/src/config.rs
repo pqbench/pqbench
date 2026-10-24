@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Args;
 use pqbench::config::{Combine, Dialect, Layer};
@@ -33,6 +34,11 @@ pub(crate) struct ConfigArgs {
     pub table_format: Option<Dialect>,
 }
 
+/// How long one request may take. The library leaves the bound to its caller;
+/// two seconds is already far past a metadata read's own latency, so a read that
+/// has not answered by then is better retried than waited on.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Resolve the run's configuration: the selected profile, then the environment,
 /// then the command line.
 ///
@@ -44,10 +50,11 @@ pub(crate) fn resolve(
     args: &ConfigArgs,
     require_endpoint: bool,
 ) -> Result<pqbench::Config, CliError> {
-    let config = profile(args)?
+    let mut config = profile(args)?
         .combine(env_layer())
         .combine(flag_layer(args))
         .resolve();
+    config.request_timeout = Some(REQUEST_TIMEOUT);
     if require_endpoint && config.endpoint.is_empty() {
         return Err(format!(
             "{command} needs an endpoint: --endpoint, PQB_ENDPOINT, DATABRICKS_HOST, or a ~/.pqbenchrc profile"

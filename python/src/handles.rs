@@ -3,6 +3,12 @@
 use crate::marshal::runtime;
 use crate::prelude::*;
 
+use std::time::Duration;
+
+/// How long one request may take: the same bound the CLI sets, so a Python
+/// caller and a `pqbench` run time out alike.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The catalog dialect: Unity Catalog or Iceberg REST.
 #[allow(clippy::upper_case_acronyms)]
 #[pyclass(eq, eq_int, from_py_object)]
@@ -130,6 +136,7 @@ impl Workspace {
             endpoint: config.endpoint.clone(),
             token: config.token.clone(),
             dialect: config.dialect,
+            request_timeout: Some(REQUEST_TIMEOUT),
         };
         Ok(Self(LibWorkspace::new(config).map_err(runtime)?))
     }

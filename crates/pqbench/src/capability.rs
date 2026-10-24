@@ -25,10 +25,8 @@ impl Workspace {
     /// # Errors
     /// Fails when the operating system's TLS trust store cannot be read.
     pub fn new(config: Config) -> Result<Self, crate::third_party::reqwest::Error> {
-        Ok(Self {
-            config,
-            http: Http::new()?,
-        })
+        let http = Http::new(config.request_timeout)?;
+        Ok(Self { config, http })
     }
 
     /// The resolved configuration.
