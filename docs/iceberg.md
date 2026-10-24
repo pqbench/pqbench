@@ -45,12 +45,11 @@ stand up, `pqbench list partitions <table> | pqbench list files | pqbench bytema
 
 ```console run
 $ pqbench bytemass examples/quickstart.parquet --format table
-column  type   codec         encodings                 bytes  values
-------  -----  ------------  ------------------------  -----  ------
-id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
-year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+column  codec         encodings                 bytes  values
+------  ------------  ------------------------  -----  ------
+id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
 files: 1
-rows: 8
 columns: 2
 ```
 

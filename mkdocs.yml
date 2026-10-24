@@ -126,7 +126,6 @@ nav:
       - Configuration: configuration.md
       - Distribution: distribution.md
       - profile: profile.md
-      - experiment: experiment.md
       - diff: diff.md
       - viz: viz.md
       - Agent skills: skill.md

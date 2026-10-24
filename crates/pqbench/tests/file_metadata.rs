@@ -3,23 +3,17 @@ mod common;
 use std::sync::Arc;
 
 use parquet::data_type::Int32Type;
-use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
 use pqbench::bytemass::{measure_files, BytemassRequest};
 
 #[tokio::test]
-async fn footer_facts_survive_empty_files_and_match_file_uri_reads() {
+async fn a_bare_path_and_a_file_uri_measure_the_same_blob_and_columns() {
     for populated in [false, true] {
         let file = tempfile::NamedTempFile::new().unwrap();
         let properties = WriterProperties::builder()
             .set_created_by("metadata-test".into())
-            .set_key_value_metadata(Some(vec![
-                KeyValue::new("same".into(), Some("é".repeat(200))),
-                KeyValue::new("same".into(), None),
-                KeyValue::new("empty".into(), Some(String::new())),
-            ]))
             .build();
         let schema = Arc::new(parse_message_type("message test { REQUIRED INT32 id; }").unwrap());
         let mut writer =
@@ -38,6 +32,8 @@ async fn footer_facts_survive_empty_files_and_match_file_uri_reads() {
             }
         }
         writer.close().unwrap();
+        let size_bytes = std::fs::metadata(file.path()).unwrap().len();
+
         let mut snapshots = Vec::new();
         for input in [
             file.path().to_str().unwrap().to_owned(),
@@ -53,35 +49,23 @@ async fn footer_facts_survive_empty_files_and_match_file_uri_reads() {
             .await
             .unwrap();
             assert_eq!(result.len(), 1);
-            let result = &result[0];
-            let metadata = result.file.metadata.as_ref().unwrap();
-            assert_eq!(metadata.creator.as_deref(), Some("metadata-test"));
-            assert_eq!(metadata.format_version, 1);
-            assert_eq!(metadata.key_values.len(), 3);
+            let measured = &result[0];
+            assert_eq!(measured.blob.size_bytes, Some(size_bytes));
             assert_eq!(
-                metadata.key_values[0].value.as_deref(),
-                Some("é".repeat(128).as_str())
+                measured.blob.row_group_count,
+                Some(if populated { 2 } else { 0 })
             );
-            assert_eq!(metadata.key_values[0].value_bytes, Some(400));
-            assert!(metadata.key_values[0].truncated);
-            assert!(metadata.key_values[1].value.is_none());
-            assert_eq!(metadata.key_values[2].value.as_deref(), Some(""));
-            assert_eq!(result.row_count, if populated { 3 } else { 0 });
-            assert_eq!(metadata.row_groups.len(), if populated { 2 } else { 0 });
+            assert_eq!(
+                measured.blob.column_count,
+                Some(measured.columns.len() as u64)
+            );
             if populated {
-                assert_eq!(metadata.row_groups[0].row_count, 2);
-                assert_eq!(metadata.row_groups[1].row_count, 1);
-                assert_eq!(
-                    metadata.row_groups[0].compressed_bytes,
-                    result.columns[0].compressed_bytes
-                );
-                assert_eq!(
-                    metadata.row_groups[0].uncompressed_bytes,
-                    result.columns[0].uncompressed_bytes
-                );
-                assert_eq!(metadata.row_groups[0].offset_indexes, vec![true]);
+                assert_eq!(measured.columns.len(), 1);
+                assert_eq!(measured.columns[0].value_count, Some(3));
+            } else {
+                assert!(measured.columns.is_empty());
             }
-            snapshots.push(serde_json::to_value(metadata).unwrap());
+            snapshots.push(serde_json::to_value(&measured.blob).unwrap());
         }
         assert_eq!(snapshots[0], snapshots[1]);
     }

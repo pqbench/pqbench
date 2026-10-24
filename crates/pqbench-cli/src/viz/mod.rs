@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use futures_util::StreamExt;
-use pqbench::bytemass::{FileStat, MassRow};
-use pqbench::viz::{self, MassRecord};
+use pqbench::v1;
+use pqbench::viz;
 
 use crate::document::{self, Record};
 use crate::stdin::is_stream;
@@ -32,23 +32,22 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
         Some(path) => prefix(path),
         None => return Err("viz writes an html page; pass --output".into()),
     };
-    let (rows, files) = collect(input).await?;
-    viz::write_report(&prefix, &rows, &files)?;
+    let (columns, blobs) = collect(input).await?;
+    viz::write_report(&prefix, &columns, &blobs)?;
     if std::io::stdout().is_terminal() {
-        print!("{}", summary(&prefix, &rows, &files));
+        print!("{}", summary(&prefix, &columns, &blobs));
     }
     Ok(())
 }
 
-async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliError> {
-    let mut rows = Vec::new();
-    let mut files = Vec::new();
+async fn collect(input: &str) -> Result<(Vec<v1::Bytemass>, Vec<v1::Blob>), CliError> {
+    let mut columns = Vec::new();
+    let mut blobs = Vec::new();
     let mut records = document::records(input).await?;
     while let Some(record) = records.next().await {
         match record? {
-            Record::BytemassFile(file) => files.push(file),
-            Record::BytemassRow { id, row } => rows.push(mass_record(id, row)),
-            Record::BytemassPage => {}
+            Record::Blob(blob) => blobs.push(blob),
+            Record::Bytemass(column) => columns.push(column),
             Record::File(_) | Record::RemoteSource(_) => {
                 return Err(
                     "viz reads a pqbench.bytemass stream; measure with `pqbench bytemass` first"
@@ -57,33 +56,10 @@ async fn collect(input: &str) -> Result<(Vec<MassRecord>, Vec<FileStat>), CliErr
             }
         }
     }
-    if rows.is_empty() {
-        return Err("bytemass stream has no rows".into());
+    if columns.is_empty() {
+        return Err("bytemass stream has no columns".into());
     }
-    Ok((rows, files))
-}
-
-fn mass_record(id: String, row: MassRow) -> MassRecord {
-    MassRecord {
-        id,
-        file: row.uri,
-        size: row.size_bytes,
-        row_count: row.row_count,
-        column: row.column,
-        compressed_bytes: row.compressed_bytes,
-        uncompressed_bytes: row.uncompressed_bytes,
-        codec: row.codec,
-        encodings: row.encodings.join(","),
-        num_values: row.num_values,
-        dictionary: row.dictionary,
-        null_count: row.null_count,
-        distinct_count: row.distinct_count,
-        physical_type: row.physical_type,
-        row_group: row.row_group,
-        row_group_rows: row.row_group_rows,
-        compressed_bytes_per_row: row.compressed_bytes_per_row,
-        page_count: row.page_count,
-    }
+    Ok((columns, blobs))
 }
 
 fn prefix(path: &Path) -> PathBuf {
@@ -93,20 +69,11 @@ fn prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn summary(prefix: &Path, rows: &[MassRecord], files: &[FileStat]) -> String {
-    let measured = rows
-        .iter()
-        .map(|row| row.file.as_str())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    let files = if files.is_empty() {
-        measured
-    } else {
-        files.len()
-    };
+fn summary(prefix: &Path, columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> String {
     format!(
-        "files: {files}\ncolumns: {}\noutput: {}\n",
-        rows.len(),
+        "files: {}\ncolumns: {}\noutput: {}\n",
+        blobs.len(),
+        columns.len(),
         prefix.with_extension("html").display()
     )
 }

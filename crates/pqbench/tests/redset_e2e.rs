@@ -8,7 +8,8 @@
 //!
 //! Ignored by default because it reads a public S3 object; run with `make e2e`.
 
-use pqbench::bytemass::{aggregate, bytemass, render_text, BytemassRequest};
+use pqbench::bytemass::{measure_files, BytemassRequest};
+use pqbench::v1;
 
 mod common;
 
@@ -22,16 +23,20 @@ async fn measures_the_redset_sample_anonymously() {
         inputs: vec![REDSET_SAMPLE_0_001.to_string()],
         ..Default::default()
     };
-    let rows = bytemass(common::lake(), &request).await.unwrap();
+    let files = measure_files(common::lake(), &request).await.unwrap();
 
-    let summary = aggregate(&rows).unwrap();
-    assert_eq!(summary.file_count, 1);
-    assert!(summary.row_count > 0);
-    assert!(!summary.columns.is_empty());
-
-    assert!(rows.iter().all(|row| row.uri == REDSET_SAMPLE_0_001));
-    assert_eq!(rows[0].row_count, summary.row_count);
-    assert_eq!(rows.len(), summary.columns.len());
-
-    print!("{}", render_text(&rows).unwrap());
+    assert_eq!(files.len(), 1);
+    let file = &files[0];
+    assert_eq!(file.blob.name, v1::name::blob_name(REDSET_SAMPLE_0_001));
+    assert!(!file.columns.is_empty());
+    let row_count: u64 = file
+        .columns
+        .iter()
+        .map(|column| column.value_count.unwrap_or(0))
+        .sum();
+    assert!(row_count > 0);
+    for column in &file.columns {
+        let (blob, _) = v1::name::parse_bytemass(&column.name).expect("a bytemass name");
+        assert_eq!(blob, file.blob.name);
+    }
 }

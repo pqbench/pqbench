@@ -147,7 +147,7 @@ record_class!(
     Table,
     Partition,
     TableFile,
-    MassRow,
+    Bytemass,
     Credentials,
     ReadEligibility
 );
@@ -205,7 +205,7 @@ pub(crate) fn register(root: &Bound<'_, PyModule>) -> PyResult<()> {
     root.add_class::<Table>()?;
     root.add_class::<Partition>()?;
     root.add_class::<TableFile>()?;
-    root.add_class::<MassRow>()?;
+    root.add_class::<Bytemass>()?;
     root.add_class::<Credentials>()?;
     root.add_class::<ReadEligibility>()?;
     Ok(())

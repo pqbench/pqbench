@@ -18,7 +18,21 @@ fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// End-to-end: a pipe streams one NDJSON row per column.
+/// The column a `…/columns/{column}/bytemass` name measures, decoded from the
+/// name's `columns` segment.
+fn column_name(record: &serde_json::Value) -> Option<String> {
+    pqbench::v1::name::parse_bytemass(record["name"].as_str()?).map(|(_, column)| column)
+}
+
+/// Whether the record's `name` is a `Blob`.
+fn is_blob(record: &serde_json::Value) -> bool {
+    record["name"]
+        .as_str()
+        .is_some_and(|name| pqbench::v1::name::parse_blob(name).is_some())
+}
+
+/// End-to-end: a pipe streams one `Blob` per file, then one `Bytemass` per
+/// column.
 #[test]
 fn bytemass_streams_column_rows() {
     let exe = env!("CARGO_BIN_EXE_pqbench");
@@ -32,12 +46,17 @@ fn bytemass_streams_column_rows() {
         String::from_utf8_lossy(&out.stderr)
     );
     let records = ndjson_records(&out.stdout);
-    assert_eq!(records[0]["kind"], "pqbench.bytemass-file");
-    let columns: Vec<_> = records
-        .iter()
-        .filter(|record| record["kind"] == "pqbench.bytemass-row")
-        .map(|record| record["column"].as_str().unwrap().to_string())
-        .collect();
+
+    let first = &records[0];
+    assert!(is_blob(first), "first record is not a Blob: {first}");
+    assert!(
+        first["name"].as_str().unwrap().starts_with("blobs/"),
+        "{first}"
+    );
+    assert_eq!(first["column_count"], 7);
+    assert!(first["row_group_count"].as_u64().unwrap() >= 1);
+
+    let columns: Vec<String> = records.iter().filter_map(column_name).collect();
     for column in [
         "url_encoded",
         "text",
@@ -52,19 +71,21 @@ fn bytemass_streams_column_rows() {
             "missing {column}"
         );
     }
-    let file = records
+
+    // Every column carries positive bytes and values.
+    for record in records
         .iter()
-        .find(|record| record["kind"] == "pqbench.bytemass-file")
-        .unwrap();
-    assert!(file["metadata"]["creator"].is_string());
-    assert!(file["metadata"]["format_version"].is_number());
-    assert!(!file["metadata"]["row_groups"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+        .filter(|record| column_name(record).is_some())
+    {
+        assert!(record["compressed_bytes"].as_u64().unwrap() > 0, "{record}");
+        assert!(record["value_count"].as_u64().unwrap() > 0, "{record}");
+    }
+
     let last = records.last().unwrap();
-    assert_eq!(last["kind"], "pqbench.bytemass-row");
-    assert_eq!(last["row_count"], 3000);
+    assert!(
+        column_name(last).is_some(),
+        "last record is not a Bytemass: {last}"
+    );
 }
 
 /// End-to-end: `--json` is the same NDJSON stream.
@@ -81,10 +102,8 @@ fn bytemass_json_is_the_stream() {
         String::from_utf8_lossy(&out.stderr)
     );
     let records = ndjson_records(&out.stdout);
-    assert_eq!(records[0]["kind"], "pqbench.bytemass-file");
-    assert!(records
-        .iter()
-        .any(|record| record["kind"] == "pqbench.bytemass-row"));
+    assert!(is_blob(&records[0]), "{:?}", records[0]);
+    assert!(records.iter().any(|record| column_name(record).is_some()));
     assert!(!out.stdout.windows(10).any(|w| w == b"\"children\""));
 }
 
@@ -102,35 +121,15 @@ fn bytemass_rows_include_footer_facts() {
     );
     let rows: Vec<_> = ndjson_records(&out.stdout)
         .into_iter()
-        .filter(|record| record["kind"] == "pqbench.bytemass-row")
+        .filter(|record| column_name(record).is_some())
         .collect();
     assert!(!rows.is_empty());
-    assert!(rows
-        .iter()
-        .all(|row| !row["physical_type"].as_str().unwrap().is_empty()));
     assert!(rows
         .iter()
         .all(|row| !row["encodings"].as_array().unwrap().is_empty()));
     assert!(rows
         .iter()
-        .all(|row| row["num_values"].as_u64().unwrap() > 0));
-}
-
-#[test]
-fn bytemass_indexes_does_not_fail() {
-    let exe = env!("CARGO_BIN_EXE_pqbench");
-    let out = Command::new(exe)
-        .args(["bytemass", parquet_fixture(), "--indexes"])
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(ndjson_records(&out.stdout)
-        .iter()
-        .any(|record| record["kind"] == "pqbench.bytemass-row"));
+        .all(|row| row["value_count"].as_u64().unwrap() > 0));
 }
 
 /// End-to-end: a reader that closes early ends the stream, not the command.
@@ -154,37 +153,5 @@ fn bytemass_exits_cleanly_when_stdout_is_closed() {
         out.stderr.is_empty(),
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
-fn page_scan_emits_headers_and_remains_a_viz_input() {
-    let directory = tempfile::tempdir().unwrap();
-    let stream = directory.path().join("pages.lz4");
-    let output = Command::new(env!("CARGO_BIN_EXE_pqbench"))
-        .args(["bytemass", parquet_fixture(), "--pages", "-o"])
-        .arg(&stream)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson_records(&output.stdout);
-    assert!(records
-        .iter()
-        .any(|r| r["kind"] == "pqbench.bytemass-page" && r["header_bytes"].as_u64().unwrap() > 0));
-    let output = Command::new(env!("CARGO_BIN_EXE_pqbench"))
-        .arg("viz")
-        .arg(stream)
-        .arg("-o")
-        .arg(directory.path().join("view"))
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
     );
 }

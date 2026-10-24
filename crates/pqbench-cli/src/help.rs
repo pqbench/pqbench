@@ -9,8 +9,8 @@ pub const ROOT_ABOUT: &str =
 pub const ROOT_LONG_ABOUT: &str = "\
 pqbench measures how Parquet files spend bytes (bytemass), how well codecs
 compress them (lz, compression), what a Delta or Iceberg table's partitions
-and files hold (list partitions, list files), what a decoded row sample holds
-(profile), and how a rewritten sample would store (experiment).
+and files hold (list partitions, list files), and what a decoded row sample
+holds (profile).
 Commands compose on pipes: each writes a resource the next command reads.
 
   get           → Metastore / Catalog / Schema / Table
@@ -18,7 +18,7 @@ Commands compose on pipes: each writes a resource the next command reads.
   list          → Catalog / Schema / Table / Partition / TableFile
                   a collection of the walk
   credentials   → Table          check + vend read credentials
-  bytemass      → pqbench.bytemass-row footer byte masses (one line per chunk)
+  bytemass      → Blob + Bytemass      footer byte masses (one line per column)
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
 
@@ -43,7 +43,6 @@ Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
-  pqbench experiment data.parquet --rewrite sort:text --aim all
   pqbench skill parquet-advisor
 
 Documents:
@@ -54,8 +53,8 @@ Documents:
   Partition              a table's natural partitions (list partitions)
   TableFile              one file of a partition (list files)
   remote-source          one URI + AWS_* from a producer
-  pqbench.bytemass-file  one file's footer facts; -row one column's mass
-  pqbench.experiment-trial  one trial's bytes; -column per column
+  Blob                   one file's footer facts (bytemass)
+  Bytemass               one column's byte mass (bytemass)
   pqbench.profile-column one column's profile
   pqbench.skill          name + description (pqbench skill with no args)
 
@@ -109,16 +108,17 @@ Format skills (read these when the input is Parquet or a table):
 pub const BYTEMASS_ABOUT: &str = "Per-column on-disk bytes from Parquet footers (no page decode)";
 
 pub const BYTEMASS_LONG_ABOUT: &str = "\
-Read Parquet footers only and report the on-disk bytes of each column chunk.
-Works on compressed files (HEAD + ranged GETs on a URI).
+Read Parquet footers only and report the on-disk bytes of each column, its
+chunks folded over the file's row groups. Works on compressed files
+(HEAD + ranged GETs on a URI).
 
 Inputs: parquet paths, quoted globs, s3://, a TableFile or
 remote-source document, or '-' / stdin. List a table's files with
 `pqbench list partitions | pqbench list files` first.
 
-A terminal prints one row per column chunk as a table; a pipe streams the
-same rows as `pqbench.bytemass-row` NDJSON. `--format json` (or `--json`)
-forces the stream, and `-o` also writes it. Pipe the stream to `viz`.";
+A terminal prints one row per column as a table; a pipe streams one `Blob`
+per file and one `Bytemass` per column as NDJSON. `--format json` (or
+`--json`) forces the stream, and `-o` also writes it. Pipe the stream to `viz`.";
 
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
@@ -307,9 +307,9 @@ See also:
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into a static HTML treemap";
 
 pub const VIZ_LONG_ABOUT: &str = "\
-Read `pqbench.bytemass-row` lines and write `PREFIX.html`. The page embeds
-the measured rows and loads the d3 modules it uses from a CDN, drawing one
-treemap per table id. Does not measure files. `-o PREFIX` is required.";
+Read a bytemass stream and write `PREFIX.html`. The page embeds the measured
+columns and blobs and loads the d3 modules it uses from a CDN, drawing one
+treemap of bytes per value. Does not measure files. `-o PREFIX` is required.";
 
 pub const VIZ_AFTER: &str = "\
 Examples:
@@ -395,49 +395,6 @@ See also:
   pqbench --help
   docs/profile.md  docs/cli.md";
 
-pub const EXPERIMENT_ABOUT: &str =
-    "Rewrite a decoded row sample and measure storage and skip locality";
-
-pub const EXPERIMENT_LONG_ABOUT: &str = "\
-Read up to --rows leading rows, then for each --rewrite SPEC write the sample
-back to Parquet and measure it. A control trial (zstd, dictionary on) is
-always measured first; trial ratios are versus that control, not the source
-file's original encodings.
-
---rewrite / --trial is repeatable and each value is one trial; semicolons
-compose rewrites (sort:a;codec:zstd@3;dictionary:off;row-group-size:2048).
-Supported rewrites: sort:A / sort:A,B (numeric or bytewise), zorder:A,B,
-hilbert:A,B (exactly two columns), codec:NAME[@LEVEL] (uncompressed, snappy,
-gzip, lz4, zstd), dictionary:on|off|BYTES, row-group-size:N, page-size:BYTES,
-encoding:plain|delta|rle|delta_length|delta_byte_array|byte_stream_split,
-and cast:COL:int64|double|string. Encodings apply only to compatible columns;
-an encoding that applies to no column is an error.
-
---aim chooses what to measure: storage (bytes, bytes per row), skipping
-(row-group min/max locality), or all. skipping/all splits the sample into row
-groups of 2048 rows unless a trial sets row-group-size.
-
-A terminal prints the trials and their columns as tables; a pipe streams one
-`pqbench.experiment-trial` per trial and one `pqbench.experiment-column` per
-column. `--format json` (or `--json`) forces the stream, and `-o` also writes
-it. This command does not do drop, index editing, or input row-group selection.
-The current sample representation flattens nested columns to strings and
-does not preserve all logical types. Casts are not guaranteed lossless; verify
-values and schema before applying a trial to production data.";
-
-pub const EXPERIMENT_AFTER: &str = "\
-Examples:
-  pqbench experiment data.parquet
-  pqbench experiment data.parquet --rewrite sort:text --aim all
-  pqbench experiment data.parquet --rewrite 'sort:country,city' --rewrite codec:snappy
-  pqbench experiment data.parquet --rewrite 'sort:id;dictionary:off' -o trials.ndjson.lz4
-
-See also:
-  pqbench profile --help  facts to choose a rewrite from
-  pqbench bytemass --help  footer byte masses of an existing file
-  pqbench --help
-  docs/experiment.md  docs/cli.md";
-
 pub const SKILL_ABOUT: &str = "Print a bundled agent skill (write / DDL / compression recipes)";
 
 pub const SKILL_LONG_ABOUT: &str = "\
@@ -449,7 +406,7 @@ requirement: this is a document, like `--help`.
   pqbench skill parquet-advisor recipes
                                       write-path, table DDL, codec levels
 
-The advisor turns bytemass / profile / experiment facts into recipes
+The advisor turns bytemass / profile facts into recipes
 (ingest settings, Iceberg/Delta/Spark/DuckDB DDL, compression level
 with pros and cons). It does not measure files.";
 
@@ -460,11 +417,9 @@ Examples:
   pqbench skill parquet-advisor recipes
   pqbench bytemass data.parquet
   pqbench profile data.parquet --rows first:8192
-  pqbench experiment data.parquet --rewrite sort:text --aim skipping
 
 See also:
   pqbench profile --help     cheap column facts
-  pqbench experiment --help  measure a rewrite
   pqbench --help             documents
   docs/skill.md  docs/cli.md";
 

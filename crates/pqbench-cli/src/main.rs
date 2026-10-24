@@ -13,7 +13,6 @@ mod credentials;
 mod diff;
 mod document;
 mod emit;
-mod experiment;
 mod file;
 mod get;
 mod help;
@@ -128,13 +127,6 @@ enum Command {
     )]
     Profile(profile::ProfileArgs),
     #[command(
-        about = help::EXPERIMENT_ABOUT,
-        long_about = help::EXPERIMENT_LONG_ABOUT,
-        after_help = help::EXPERIMENT_AFTER,
-        after_long_help = help::EXPERIMENT_AFTER
-    )]
-    Experiment(experiment::ExperimentArgs),
-    #[command(
         about = help::SKILL_ABOUT,
         long_about = help::SKILL_LONG_ABOUT,
         after_help = help::SKILL_AFTER,
@@ -197,7 +189,6 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
-        Command::Experiment(args) => experiment::run(&args).await,
         Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args).await,
         Command::Setup(args) => setup::run(&workspace, &args),
@@ -217,7 +208,6 @@ impl Command {
             Command::Credentials(_) => "credentials",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
-            Command::Experiment(_) => "experiment",
             Command::Skill(_) => "skill",
             Command::Viz(_) => "viz",
             Command::Setup(_) => "setup",

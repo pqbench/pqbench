@@ -2,8 +2,8 @@
 
 mod common;
 
-use pqbench::bytemass::{aggregate, bytemass, render_json, render_text, BytemassRequest};
-use pqbench::viz::{self, MassRecord};
+use pqbench::bytemass::{bytemass, measure_files, BytemassRequest};
+use pqbench::v1;
 
 fn fixture(name: &str) -> String {
     format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
@@ -18,118 +18,51 @@ fn request(inputs: Vec<String>) -> BytemassRequest {
 
 #[tokio::test]
 async fn measures_a_local_file_from_its_footer() {
-    let rows = bytemass(
-        common::lake(),
-        &request(vec![fixture("small_snappy.parquet")]),
-    )
-    .await
-    .unwrap();
-
-    assert!(!rows.is_empty());
-    assert!(rows
-        .iter()
-        .all(|row| row.uri == fixture("small_snappy.parquet")));
-
-    let summary = aggregate(&rows).unwrap();
-    assert_eq!(summary.file_count, 1);
-    assert!(summary.row_count > 0);
-    assert!(!summary.columns.is_empty());
-    assert_eq!(rows[0].row_count, summary.row_count);
-    assert!(rows[0].size_bytes > 0);
-
-    let text = render_text(&rows).unwrap();
-    assert!(text.contains("bytemass: small_snappy.parquet"));
-    assert!(text.contains("bytes/row"));
-    assert!(text
-        .lines()
-        .any(|line| line.trim_start().starts_with("total")));
-}
-
-#[tokio::test]
-async fn emits_composable_json_per_column() {
-    let rows = bytemass(
-        common::lake(),
-        &request(vec![fixture("small_snappy.parquet")]),
-    )
-    .await
-    .unwrap();
-    let output = render_json(&rows).unwrap();
-
-    let summary: serde_json::Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(summary["file_count"], 1);
-    assert!(summary["row_count"].as_u64().unwrap() > 0);
-    let columns = summary["columns"].as_array().unwrap();
-    assert!(!columns.is_empty());
-    assert!(columns[0]["column"].is_string());
-    assert!(columns[0]["compressed_bytes"].is_number());
-    // The JSON is a flat table, not a d3 treemap hierarchy.
-    assert!(summary.get("children").is_none());
-}
-
-#[tokio::test]
-async fn viz_collects_measured_rows() {
-    let rows = bytemass(
-        common::lake(),
-        &request(vec![fixture("small_snappy.parquet")]),
-    )
-    .await
-    .unwrap();
-    let records: Vec<MassRecord> = rows
-        .into_iter()
-        .map(|row| MassRecord {
-            id: String::new(),
-            file: row.uri,
-            size: row.size_bytes,
-            row_count: row.row_count,
-            column: row.column,
-            compressed_bytes: row.compressed_bytes,
-            uncompressed_bytes: row.uncompressed_bytes,
-            codec: row.codec,
-            encodings: row.encodings.join(","),
-            num_values: row.num_values,
-            dictionary: row.dictionary,
-            null_count: row.null_count,
-            distinct_count: row.distinct_count,
-            physical_type: row.physical_type,
-            row_group: row.row_group,
-            row_group_rows: row.row_group_rows,
-            compressed_bytes_per_row: row.compressed_bytes_per_row,
-            page_count: row.page_count,
-        })
-        .collect();
-    let directory = tempfile::tempdir().unwrap();
-    let prefix = directory.path().join("report");
-    viz::write_report(&prefix, &records, &[]).unwrap();
-    let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
-    assert!(html.starts_with("<!DOCTYPE html>"));
-    assert!(html.contains("d3-hierarchy@3"));
-    assert!(html.contains("small_snappy.parquet"));
-}
-
-#[tokio::test]
-async fn expands_globs_into_one_collection() {
-    let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
-    let rows = bytemass(common::lake(), &request(vec![mask]))
+    let path = fixture("small_snappy.parquet");
+    let columns = bytemass(common::lake(), &request(vec![path.clone()]))
         .await
         .unwrap();
 
-    let summary = aggregate(&rows).unwrap();
-    assert!(summary.file_count > 1);
-    assert!(render_text(&rows).unwrap().contains("parquet files"));
+    assert!(!columns.is_empty());
+    for column in &columns {
+        assert!(
+            column.compressed_bytes.unwrap_or(0) > 0,
+            "{} has no on-disk bytes",
+            column.name
+        );
+        assert!(
+            column.value_count.unwrap_or(0) > 0,
+            "{} has no values",
+            column.name
+        );
+        let (blob, _) = v1::name::parse_bytemass(&column.name).expect("a bytemass name");
+        assert_eq!(blob, v1::name::blob_name(&path));
+    }
+}
+
+#[tokio::test]
+async fn expands_globs_into_more_than_one_file() {
+    let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
+    let files = measure_files(common::lake(), &request(vec![mask]))
+        .await
+        .unwrap();
+
+    assert!(files.len() > 1, "{}", files.len());
+    assert!(files.iter().all(|file| !file.columns.is_empty()));
 }
 
 #[tokio::test]
 async fn treats_brackets_as_literal_path_characters() {
-    let dir = tempfile::tempdir().unwrap();
-    let literal = dir.path().join("archive[1].parquet");
+    let directory = tempfile::tempdir().unwrap();
+    let literal = directory.path().join("archive[1].parquet");
     std::fs::copy(fixture("small_snappy.parquet"), &literal).unwrap();
-    let rows = bytemass(
+    let columns = bytemass(
         common::lake(),
         &request(vec![literal.to_string_lossy().into_owned()]),
     )
     .await
     .unwrap();
-    assert!(!rows.is_empty());
+    assert!(!columns.is_empty());
 }
 
 #[tokio::test]
@@ -145,29 +78,23 @@ async fn rejects_empty_inputs_and_unmatched_masks() {
 }
 
 #[tokio::test]
-async fn rows_include_footer_facts() {
-    let rows = bytemass(
+async fn viz_draws_measured_columns() {
+    let files = measure_files(
         common::lake(),
         &request(vec![fixture("small_snappy.parquet")]),
     )
     .await
     .unwrap();
-    assert!(rows.iter().all(|row| !row.physical_type.is_empty()));
-    assert!(rows.iter().all(|row| !row.encodings.is_empty()));
-    assert!(rows.iter().all(|row| row.num_values > 0));
-    assert!(rows.iter().all(|row| row.row_group_rows > 0));
-    assert!(rows
-        .iter()
-        .all(|row| row.compressed_bytes_per_row.is_some()));
-}
+    let blobs: Vec<_> = files.iter().map(|file| file.blob.clone()).collect();
+    let columns: Vec<_> = files.into_iter().flat_map(|file| file.columns).collect();
 
-#[tokio::test]
-async fn indexes_are_optional() {
-    let mut request = request(vec![fixture("small_snappy.parquet")]);
-    request.indexes = true;
-    let rows = bytemass(common::lake(), &request).await.unwrap();
-    assert!(!rows.is_empty());
-    assert!(rows.iter().all(|row| !row.physical_type.is_empty()));
+    let directory = tempfile::tempdir().unwrap();
+    let prefix = directory.path().join("report");
+    pqbench::viz::write_report(&prefix, &columns, &blobs).unwrap();
+    let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
+    assert!(html.starts_with("<!DOCTYPE html>"));
+    assert!(html.contains("d3-hierarchy@3"));
+    assert!(html.contains("small_snappy.parquet"));
 }
 
 #[cfg(not(feature = "aws"))]

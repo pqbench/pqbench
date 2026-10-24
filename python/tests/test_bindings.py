@@ -99,17 +99,18 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
                 async for _ in pqbench.walk(workspace, requests_per_second=rate):
                     pass
 
-    async def test_bytemass_streams_column_rows(self) -> None:
-        rows = await pqbench.native.bytemass.bytemass(
+    async def test_bytemass_streams_columns(self) -> None:
+        columns = await pqbench.native.bytemass.bytemass(
             pqbench.Lake(_workspace()),
             pqbench.native.BytemassRequest(inputs=[str(_PARQUET)]),
         )
-        self.assertGreaterEqual(len(rows), 1)
-        self.assertIn("column", rows[0])
-        self.assertIn("compressed_bytes", rows[0])
-        self.assertIn("physical_type", rows[0])
-        self.assertTrue(rows[0]["encodings"])
-        self.assertTrue(any(row["column"] == "text" for row in rows))
+        self.assertGreaterEqual(len(columns), 1)
+        self.assertIn("name", columns[0])
+        self.assertIn("compressed_bytes", columns[0])
+        self.assertTrue(columns[0]["encodings"])
+        self.assertTrue(
+            any("/columns/text/bytemass" in column["name"] for column in columns)
+        )
 
     def test_ratelimit_paces_by_kind(self) -> None:
         limit = pqbench.native.ratelimit.RateLimit(10.0)

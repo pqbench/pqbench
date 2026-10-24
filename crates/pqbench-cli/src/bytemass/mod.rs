@@ -29,18 +29,12 @@ pub(crate) struct BytemassArgs {
     /// stdout format: auto (table on a terminal) | table | json
     #[arg(long, value_enum, default_value_t = Format::Auto)]
     format: Format,
-    /// also load ColumnIndex/OffsetIndex (one extra range per file)
-    #[arg(long)]
-    indexes: bool,
-    /// Scan page headers without requiring page indexes (extra reads).
-    #[arg(long)]
-    pages: bool,
     /// files in flight at once
     #[arg(long, default_value_t = 128)]
     fan_out: usize,
 }
 
-/// Build the typed request, measure, and stream each row as it is ready.
+/// Build the typed request, measure, and stream each record as it is ready.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(), CliError> {
     if args.inputs.is_empty() {
         if !is_stream() {
@@ -63,10 +57,9 @@ async fn measure_document(
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    let options = (args.indexes, args.pages);
     let records = document::records(input).await?;
     let mut reads = records
-        .map(|record| measure_record(lake, record, options))
+        .map(|record| measure_record(lake, record))
         .buffer_unordered(args.fan_out.max(1));
     while let Some(batch) = reads.next().await {
         for measured in batch? {
@@ -84,11 +77,10 @@ async fn measure(
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
-    let options = (args.indexes, args.pages);
     let mut reads = stream::iter(bytemass::expand_inputs(lake, &inputs, &env).await?)
         .map(|input| {
             let env = env.clone();
-            async move { read_file(lake, &input, &env, options).await }
+            async move { read_file(lake, &input, &env).await }
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(measured) = reads.next().await {
@@ -97,75 +89,55 @@ async fn measure(
     finish_stream(emit, &stats, args.output.as_deref()).await
 }
 
-/// One file's footer read, ready to emit: the measured file and its page
-/// headers, plus the log's facts when a table file named them.
-struct Measured {
-    measured: bytemass::MeasuredFile,
-    pages: Vec<bytemass::PageRecord>,
-}
-
 /// Measure every file one document record names: a table-file is one file; a
 /// remote-source expands its inputs first.
 async fn measure_record(
     lake: &pqbench::Lake,
     record: Result<Record, CliError>,
-    options: (bool, bool),
-) -> Result<Vec<Measured>, CliError> {
+) -> Result<Vec<bytemass::MeasuredFile>, CliError> {
     match record? {
-        Record::File(file) => Ok(vec![read_table_file(lake, file, options).await?]),
+        Record::File(file) => Ok(vec![read_table_file(lake, file).await?]),
         Record::RemoteSource(source) => {
             let mut measured = Vec::new();
             for uri in source.inputs {
                 let inputs = std::slice::from_ref(&uri);
                 for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
-                    measured.push(read_file(lake, &input, &source.env, options).await?);
+                    measured.push(read_file(lake, &input, &source.env).await?);
                 }
             }
             Ok(measured)
         }
-        Record::BytemassFile(_) | Record::BytemassRow { .. } | Record::BytemassPage => {
+        Record::Blob(_) | Record::Bytemass(_) => {
             Err("a bytemass stream goes to `pqbench viz`".into())
         }
     }
 }
 
-/// Read one file's footer, and its page headers when `--pages` asked for them.
-/// This is the I/O the fanout overlaps; [`emit_measured`] writes each result as
-/// it finishes. A bare path names no table, so the file names itself.
+/// Read one file's footer. This is the I/O the fanout overlaps; [`emit_measured`]
+/// writes each result as it finishes.
 async fn read_file(
     lake: &pqbench::Lake,
     uri: &str,
     env: &BTreeMap<String, String>,
-    options: (bool, bool),
-) -> Result<Measured, CliError> {
-    let mut measured = bytemass::measure_files(
+) -> Result<bytemass::MeasuredFile, CliError> {
+    bytemass::measure_files(
         lake,
         &bytemass::BytemassRequest {
             inputs: vec![uri.to_string()],
             env: env.clone(),
-            indexes: options.0,
         },
     )
     .await?
     .pop()
-    .ok_or("bytemass read no file")?;
-    measured.file.id = v1::name::local_table(uri);
-    let pages = if options.1 {
-        bytemass::scan_pages(lake, &measured.file.file, env).await?
-    } else {
-        Vec::new()
-    };
-    Ok(Measured { measured, pages })
+    .ok_or_else(|| CliError::from("bytemass read no file"))
 }
 
-/// Read a table file's blob, and join the log's facts onto the result: the
-/// table the record names, the path the log records, its partition values, and
-/// its size as a cross-check on the footer.
+/// Read a table file's blob, and cross-check the log's size against the
+/// footer's.
 async fn read_table_file(
     lake: &pqbench::Lake,
     file: v1::TableFile,
-    options: (bool, bool),
-) -> Result<Measured, CliError> {
+) -> Result<bytemass::MeasuredFile, CliError> {
     let blob = file
         .blob
         .as_deref()
@@ -177,69 +149,32 @@ async fn read_table_file(
         .as_ref()
         .map(v1::Credentials::to_env)
         .unwrap_or_default();
-    let mut measured = read_file(lake, &uri, &env, options).await?;
+    let measured = read_file(lake, &uri, &env).await?;
     if let Some(size) = file.size_bytes {
-        if size != 0 && measured.measured.file.size != size {
+        if size != 0 && measured.blob.size_bytes != Some(size) {
             return Err(format!(
-                "active file size differs from log: {uri} (expected {size}, found {})",
-                measured.measured.file.size
+                "active file size differs from log: {uri} (expected {size}, found {:?})",
+                measured.blob.size_bytes
             )
             .into());
         }
     }
-    let (table, path) = v1::name::parse_table_file(&file.name).unzip();
-    measured.measured.file.id = table.unwrap_or(uri);
-    if let Some(path) = path {
-        measured.measured.file.path = path;
-    }
-    measured.measured.file.partition_values = file.partition_values;
     Ok(measured)
 }
 
-/// Emit one measured file: its file record, then its page headers and rows.
-/// The rows carry the file record's id, so a table file's rows name its table.
+/// Emit one measured file: its blob, then one row per column.
 async fn emit_measured(
     emit: &mut Emitter,
     stats: &mut MassStats,
-    read: Measured,
+    measured: bytemass::MeasuredFile,
 ) -> Result<(), CliError> {
-    let Measured { measured, pages } = read;
-    let id = measured.file.id.clone();
-    stats
-        .file_rows
-        .insert(measured.file.file.clone(), measured.row_count);
-    emit.write_event(&FileRecord {
-        kind: "pqbench.bytemass-file",
-        file: &measured.file,
-    })
-    .await?;
-    for page in &pages {
-        emit.write_row(&PageRow {
-            kind: "pqbench.bytemass-page",
-            id: &id,
-            page,
-        })
-        .await?;
-    }
-    for row in &measured.columns {
-        write_row(emit, &id, row, stats).await?;
+    stats.files += 1;
+    emit.write_event(&measured.blob).await?;
+    for column in &measured.columns {
+        stats.columns += 1;
+        emit.write_row(&ColumnRow { column }).await?;
     }
     Ok(())
-}
-
-async fn write_row(
-    emit: &mut Emitter,
-    id: &str,
-    row: &bytemass::MassRow,
-    stats: &mut MassStats,
-) -> Result<(), CliError> {
-    stats.add(row);
-    emit.write_row(&RowRecord {
-        kind: "pqbench.bytemass-row",
-        id,
-        row,
-    })
-    .await
 }
 
 async fn finish_stream(
@@ -252,27 +187,13 @@ async fn finish_stream(
 
 #[derive(Default)]
 struct MassStats {
-    file_rows: BTreeMap<String, u64>,
-    column_count: usize,
+    files: usize,
+    columns: usize,
 }
 
 impl MassStats {
-    fn add(&mut self, row: &bytemass::MassRow) {
-        self.file_rows.insert(row.uri.clone(), row.row_count);
-        self.column_count += 1;
-    }
-
-    fn row_count(&self) -> u64 {
-        self.file_rows.values().sum()
-    }
-
     fn summary(&self, output: Option<&std::path::Path>) -> String {
-        let mut out = format!(
-            "files: {}\nrows: {}\ncolumns: {}\n",
-            self.file_rows.len(),
-            self.row_count(),
-            self.column_count
-        );
+        let mut out = format!("files: {}\ncolumns: {}\n", self.files, self.columns);
         if let Some(path) = output {
             out.push_str(&format!("output: {}\n", path.display()));
         }
@@ -280,26 +201,16 @@ impl MassStats {
     }
 }
 
+/// A column as a table row: the column path and the facts a human reads.
 #[derive(Serialize)]
-struct FileRecord<'a> {
-    kind: &'static str,
+struct ColumnRow<'a> {
     #[serde(flatten)]
-    file: &'a bytemass::FileStat,
+    column: &'a v1::Bytemass,
 }
 
-#[derive(Serialize)]
-struct RowRecord<'a> {
-    kind: &'static str,
-    id: &'a str,
-    #[serde(flatten)]
-    row: &'a bytemass::MassRow,
-}
-
-impl Row for RowRecord<'_> {
-    const HEADER: &'static [&'static str] =
-        &["column", "type", "codec", "encodings", "bytes", "values"];
+impl Row for ColumnRow<'_> {
+    const HEADER: &'static [&'static str] = &["column", "codec", "encodings", "bytes", "values"];
     const ALIGN: &'static [Align] = &[
-        Align::Left,
         Align::Left,
         Align::Left,
         Align::Left,
@@ -308,54 +219,16 @@ impl Row for RowRecord<'_> {
     ];
 
     fn cells(&self) -> Vec<String> {
-        let row = self.row;
+        let column = self.column;
+        let name = v1::name::parse_bytemass(&column.name)
+            .map(|(_, column)| column)
+            .unwrap_or_else(|| column.name.clone());
         vec![
-            row.column.clone(),
-            row.physical_type.clone(),
-            row.codec.clone(),
-            row.encodings.join(","),
-            row.compressed_bytes.to_string(),
-            row.num_values.to_string(),
-        ]
-    }
-}
-
-#[derive(Serialize)]
-struct PageRow<'a> {
-    kind: &'static str,
-    id: &'a str,
-    #[serde(flatten)]
-    page: &'a bytemass::PageRecord,
-}
-impl Row for PageRow<'_> {
-    const HEADER: &'static [&'static str] = &[
-        "column",
-        "row_group",
-        "page",
-        "type",
-        "encoding",
-        "compressed_bytes",
-        "values",
-    ];
-    const ALIGN: &'static [Align] = &[
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Left,
-        Align::Left,
-        Align::Right,
-        Align::Right,
-    ];
-    fn cells(&self) -> Vec<String> {
-        let p = self.page;
-        vec![
-            p.column.clone(),
-            p.row_group.to_string(),
-            p.page.to_string(),
-            p.header.page_type.clone(),
-            p.header.encoding.clone().unwrap_or_default(),
-            p.header.compressed_bytes.to_string(),
-            p.header.value_count.map_or("-".into(), |n| n.to_string()),
+            name,
+            column.codec.clone().unwrap_or_default(),
+            column.encodings.join(","),
+            column.compressed_bytes.unwrap_or(0).to_string(),
+            column.value_count.unwrap_or(0).to_string(),
         ]
     }
 }

@@ -2,16 +2,16 @@
 //!
 //! A producer resolves a table and pqbench measures bytes. A [`v1::TableFile`]
 //! names the blob to read and carries its lease; a `remote-source` names inputs
-//! and an env; the bytemass kinds are its own output. A pipe writes NDJSON; a
-//! terminal prints an aligned table (override with `--format`). `-o` also writes
-//! the lz4 NDJSON stream.
+//! and an env; the bytemass kinds are its own output. The `name`'s collection
+//! segment identifies each record (AIP-122), so no record carries a `kind`. A
+//! pipe writes NDJSON; a terminal prints an aligned table (override with
+//! `--format`). `-o` also writes the lz4 NDJSON stream.
 
 use std::collections::BTreeMap;
 
 use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines, Stdin};
 
-use pqbench::bytemass::MassRow;
 use pqbench::v1;
 use serde::Deserialize;
 
@@ -33,12 +33,10 @@ pub(crate) enum Record {
     /// One table file: its blob and the lease to read it.
     File(v1::TableFile),
     RemoteSource(RemoteSource),
-    BytemassFile(pqbench::bytemass::FileStat),
-    BytemassRow {
-        id: String,
-        row: MassRow,
-    },
-    BytemassPage,
+    /// One measured file's facts.
+    Blob(v1::Blob),
+    /// One measured column's byte mass.
+    Bytemass(v1::Bytemass),
 }
 
 /// The records of a document, one at a time: `-` streams standard input, a path
@@ -133,41 +131,33 @@ fn file_records(bytes: Vec<u8>) -> Vec<Result<Record, CliError>> {
     records
 }
 
+/// Classify one value by the collection segment of its `name` (AIP-122).
 fn classify(value: serde_json::Value) -> Result<Record, CliError> {
-    let kind = value
-        .get("kind")
-        .and_then(|kind| kind.as_str())
+    let name = value
+        .get("name")
+        .and_then(|name| name.as_str())
         .map(str::to_owned);
-    match kind.as_deref() {
-        Some("pqbench.bytemass-file") => Ok(Record::BytemassFile(
-            serde_json::from_value(value).map_err(invalid_json)?,
-        )),
-        Some("pqbench.bytemass-page") => Ok(Record::BytemassPage),
-        Some("pqbench.bytemass-row") => {
-            let (id, row) = parse_mass_row(value)?;
-            Ok(Record::BytemassRow { id, row })
+    match name.as_deref() {
+        Some(name) if v1::name::parse_bytemass(name).is_some() => {
+            Ok(Record::Bytemass(from_value(value)?))
         }
-        Some(other) => Err(invalid_kind(other)),
+        Some(name) if v1::name::parse_blob(name).is_some() => Ok(Record::Blob(from_value(value)?)),
+        Some(name) if v1::name::parse_table_file(name).is_some() => {
+            Ok(Record::File(parse_file(value)?))
+        }
+        Some(name) => Err(invalid_name(name)),
         None if value.get("inputs").is_some() => Ok(Record::RemoteSource(parse_remote(value)?)),
-        None => Ok(Record::File(parse_file(value)?)),
+        None => Err("a document record needs a name or inputs".into()),
     }
 }
 
-fn parse_mass_row(value: serde_json::Value) -> Result<(String, MassRow), CliError> {
-    #[derive(Deserialize)]
-    struct Wire {
-        #[serde(default)]
-        id: String,
-        #[serde(flatten)]
-        row: MassRow,
-    }
-    let wire = serde_json::from_value::<Wire>(value).map_err(invalid_json)?;
-    Ok((wire.id, wire.row))
+fn from_value<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Result<T, CliError> {
+    serde_json::from_value(value).map_err(invalid_json)
 }
 
 /// A table-file resource: the blob it names is what gets read.
 fn parse_file(value: serde_json::Value) -> Result<v1::TableFile, CliError> {
-    let file: v1::TableFile = serde_json::from_value(value).map_err(invalid_json)?;
+    let file: v1::TableFile = from_value(value)?;
     if file.blob.is_none() {
         return Err("a table-file record needs a blob to read".into());
     }
@@ -175,7 +165,7 @@ fn parse_file(value: serde_json::Value) -> Result<v1::TableFile, CliError> {
 }
 
 fn parse_remote(value: serde_json::Value) -> Result<RemoteSource, CliError> {
-    let source: RemoteSource = serde_json::from_value(value).map_err(invalid_json)?;
+    let source: RemoteSource = from_value(value)?;
     if source.version != 1 {
         return Err("unsupported remote-source document; expected version 1".into());
     }
@@ -234,9 +224,6 @@ pub(crate) fn invalid_json(error: serde_json::Error) -> CliError {
     .into()
 }
 
-fn invalid_kind(kind: &str) -> CliError {
-    format!(
-        "unsupported document kind `{kind}`; expected a table-file, a remote-source, or a bytemass stream"
-    )
-    .into()
+fn invalid_name(name: &str) -> CliError {
+    format!("unsupported document name `{name}`; expected a table-file, a blob, a bytemass, or a remote-source").into()
 }

@@ -59,11 +59,10 @@ fn list_help_points_at_get_and_bytemass() {
 }
 
 #[test]
-fn skill_help_points_at_profile_and_experiment() {
+fn skill_help_points_at_profile() {
     let stdout = help(&["skill", "--help"]);
     assert!(stdout.contains("parquet-advisor"), "{stdout}");
     assert!(stdout.contains("recipes"), "{stdout}");
     assert!(stdout.contains("pqbench profile --help"), "{stdout}");
-    assert!(stdout.contains("pqbench experiment --help"), "{stdout}");
     assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
 }

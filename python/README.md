@@ -117,10 +117,11 @@ walk ends, so a rate limit shows up as a count rather than as silently missing
 files.
 
 `bytemass` is the last command: it reads what `file.list.list` yields — a
-path or URI per file — and returns one `MassRow` per column chunk.
+path or URI per file — and returns one `Bytemass` per column, its chunks
+folded over the file's row groups.
 
 ```python
-rows = await pqbench.native.bytemass.bytemass(
+columns = await pqbench.native.bytemass.bytemass(
     lake, pqbench.native.BytemassRequest(inputs=["s3://…/part-00000.parquet"])
 )
 ```
@@ -145,8 +146,7 @@ token=None, dialect=None).resolve()` combines configuration layers into a
 the mapping of the same fields; a read given none falls back to the process
 environment. A request's `env` is the library's `BTreeMap<String, String>`,
 passed straight through. A `BytemassRequest` names `inputs` (paths or glob
-masks), `env` (the `AWS_*` options a remote read uses) and `indexes` (load the
-parquet page indexes too, one extra range per file).
+masks) and `env` (the `AWS_*` options a remote read uses).
 
 ## Publish to PyPI
 

@@ -87,6 +87,21 @@ pub fn column(service: &str, locator: &str, column: &str) -> String {
     )
 }
 
+/// `{blob}/columns/{column}/bytemass`.
+#[must_use]
+pub fn bytemass(blob: &str, column: &str) -> String {
+    format!("{blob}/columns/{}/bytemass", encode(column))
+}
+
+/// The blob name and column id in a `…/columns/{column}/bytemass` name.
+#[must_use]
+pub fn parse_bytemass(value: &str) -> Option<(String, String)> {
+    let (blob, rest) = value.rsplit_once("/columns/")?;
+    let column = rest.strip_suffix("/bytemass")?;
+    parse_blob(blob)?;
+    Some((blob.to_string(), decode(column)))
+}
+
 /// The metastore id in a `metastores/{metastore}` name.
 #[must_use]
 pub fn parse_metastore(value: &str) -> Option<String> {
@@ -341,5 +356,17 @@ mod tests {
             ))
         );
         assert_eq!(parse_table_file("catalogs/c/schemas/s/tables/t"), None);
+    }
+
+    #[test]
+    fn a_bytemass_name_parses_to_its_blob_and_column() {
+        let blob = blob_name("s3://bucket/part-0.parquet");
+        let value = bytemass(&blob, "a.b");
+        assert_eq!(
+            parse_bytemass(&value),
+            Some((blob.clone(), "a.b".to_string()))
+        );
+        assert_eq!(parse_bytemass(&blob), None);
+        assert_eq!(parse_bytemass("blobs/s3/bucket/columns/x"), None);
     }
 }

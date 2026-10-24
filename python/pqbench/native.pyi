@@ -33,7 +33,7 @@ runtime type differs (a module object, not a class).
 The surface is the walk's own pipeline and the measurement that consumes it —
 metastore, catalog, schema, table, credentials, partition, file, bytemass — and
 stops at :class:`bytemass`: the commands downstream of a byte-mass stream
-(``viz``, ``diff``, ``profile``, ``experiment``), the standalone codec
+(``viz``, ``diff``, ``profile``), the standalone codec
 benchmarks (``lz``, ``compression``) and ``skill`` are separate tools, and are
 not bound. Only :func:`walk` composes; every other name is a binding.
 """
@@ -100,7 +100,6 @@ class BytemassRequest:
         self,
         inputs: Sequence[str],
         env: dict[str, str] | None = None,
-        indexes: bool = False,
     ) -> None: ...
 
 class RateLimit:
@@ -222,33 +221,23 @@ class TableFile(Record):
         """The storage URI the bytes are at, from ``blob``."""
         ...
 
-class MassRow(Record):
-    """One column chunk's measured byte mass: a row of the ``bytemass`` table."""
+class Bytemass(Record):
+    """One column's byte mass, its chunks folded over the file's row groups."""
 
-    uri: str
-    size_bytes: int
-    row_count: int
-    column: str
-    compressed_bytes: int
-    uncompressed_bytes: int
-    codec: str
-    storage_class: str | None
+    name: str
+    compressed_bytes: int | None
+    uncompressed_bytes: int | None
+    codec: str | None
     encodings: list[str]
-    num_values: int
     dictionary: bool
+    value_count: int | None
     null_count: int | None
     distinct_count: int | None
-    min_value: str | None
-    max_value: str | None
-    physical_type: str
-    row_group: int
-    row_group_rows: int
-    compressed_bytes_per_row: float | None
-    uncompressed_bytes_per_row: float | None
+    first_value: str | None
+    last_value: str | None
+    bytes_per_value: float | None
     compression_ratio: float | None
     null_fraction: float | None
-    page_count: int | None
-    page_compressed_bytes: int | None
 
 class Credentials(Record):
     """A vended storage lease: the ``AWS_*`` options a read takes.
@@ -394,6 +383,6 @@ class bytemass:
     """``pqbench.native.bytemass``: the per-column byte masses of Parquet files."""
 
     @staticmethod
-    async def bytemass(lake: Lake, request: BytemassRequest) -> list[MassRow]:
-        """Measure the files the request names, one row per column chunk."""
+    async def bytemass(lake: Lake, request: BytemassRequest) -> list[Bytemass]:
+        """Measure the files the request names, one record per column."""
         ...

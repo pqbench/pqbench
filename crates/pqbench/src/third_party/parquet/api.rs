@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// One encoded page: the payload a codec compresses, plus its metadata.
 #[derive(Debug, Clone)]
@@ -170,11 +170,9 @@ pub fn default_parser() -> impl PageParser {
     super::r#impl::ParquetRsParser
 }
 
-/// A column's byte mass, read from parquet metadata (no page decoding).
-#[derive(Debug, Clone, Default, Serialize)]
+/// One column chunk's byte mass, read from parquet metadata (no page decoding).
+#[derive(Debug, Clone, Default)]
 pub struct ColumnMass {
-    /// Start of the column chunk, including its dictionary page if present.
-    pub chunk_offset: u64,
     /// Column path in schema form, e.g. `content` or `a.b`.
     pub column: String,
     /// On-disk (compressed) bytes for this column chunk.
@@ -200,58 +198,18 @@ pub struct ColumnMass {
     /// Footer max, when statistics exist.
     // aipnaming: allow(aip-145/ranges)
     pub max_value: Option<String>,
-    /// Physical type of the leaf column.
-    pub physical_type: String,
-    /// Row-group index (0-based).
-    pub row_group: u32,
-    /// Rows in this row group.
-    pub row_group_rows: u64,
-    /// Data pages in the OffsetIndex, when `--indexes` loaded one.
-    pub page_count: Option<u64>,
-    /// Sum of OffsetIndex `compressed_page_size`, when loaded.
-    pub page_compressed_bytes: Option<u64>,
 }
 
-/// File-level facts read from the footer, without loading page indexes.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct FileMetadata {
-    pub creator: Option<String>,
-    /// Footer format version, independent of data-page version.
-    pub format_version: i32,
-    pub key_values: Vec<MetadataEntry>,
-    pub row_groups: Vec<RowGroupMetadata>,
-}
-
-/// A metadata value preview, limited to 256 UTF-8 bytes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetadataEntry {
-    pub key: String,
-    pub value: Option<String>,
-    pub value_bytes: Option<usize>,
-    pub truncated: bool,
-}
-
-/// Row-group sizes and index availability, obtained from footer metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RowGroupMetadata {
-    pub row_count: u64,
-    /// Sum of compressed column chunks, including page headers.
-    pub compressed_bytes: u64,
-    pub uncompressed_bytes: u64,
-    pub column_indexes: Vec<bool>,
-    pub offset_indexes: Vec<bool>,
-}
-
-/// A file's byte masses, read purely from metadata.
-#[derive(Debug, Clone, Default, Serialize)]
+/// A file's byte masses, read purely from metadata: one entry per column chunk,
+/// in file order. A consumer that wants one entry per column folds them.
+#[derive(Debug, Clone, Default)]
 pub struct FileMass {
-    pub metadata: FileMetadata,
-    /// Number of rows in the file (shared denominator for per-row mass).
+    /// The file's size in bytes.
+    pub size_bytes: u64,
+    /// Number of rows in the file.
     pub row_count: u64,
     /// Number of row groups.
     pub row_group_count: usize,
-    /// Declared sort columns, as `name` or `name DESC`.
-    pub sorting_columns: Vec<String>,
     /// One entry per column chunk (per row group), in file order.
     pub columns: Vec<ColumnMass>,
 }
@@ -276,39 +234,21 @@ pub fn default_metadata_parser() -> impl MetadataParser {
 /// Read byte masses from a complete Parquet footer.
 ///
 /// `footer` must contain the serialized Thrift metadata followed by the
-/// eight-byte Parquet footer trailer. Storage adapters that fetch only the end
-/// of a Parquet object use this.
+/// eight-byte Parquet footer trailer, and `size_bytes` the object's size.
+/// Storage adapters that fetch only the end of a Parquet object use this.
 ///
 /// # Errors
 /// Returns [`Error`] if `footer` is not a valid Parquet footer.
-pub fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
-    super::r#impl::read_footer_masses(footer)
+pub fn read_footer_masses(footer: &[u8], size_bytes: u64) -> Result<FileMass, Error> {
+    super::r#impl::read_footer_masses(footer, size_bytes)
 }
 
-/// Read byte masses from a local file. `indexes` loads ColumnIndex/OffsetIndex
-/// (one extra read of the page-index region). Default callers pass `false`.
+/// Read byte masses from a local file.
 ///
 /// # Errors
 /// Returns [`Error`] if `path` is not a readable parquet file.
-pub fn read_file_masses(path: &Path, indexes: bool) -> Result<FileMass, Error> {
-    super::r#impl::read_file_masses(path, indexes)
-}
-
-/// Lowest ColumnIndex/OffsetIndex offset recorded in `footer`, when present.
-///
-/// # Errors
-/// Returns [`Error`] if `footer` is not a valid Parquet footer.
-pub fn page_index_start(footer: &[u8]) -> Result<Option<u64>, Error> {
-    super::r#impl::page_index_start(footer)
-}
-
-/// Read byte masses from a file suffix that includes the footer and, when
-/// present, the page-index region. `tail` must end at `file_size`.
-///
-/// # Errors
-/// Returns [`Error`] if `tail` is not a valid Parquet suffix.
-pub fn read_tail_masses(tail: &[u8], file_size: u64) -> Result<FileMass, Error> {
-    super::r#impl::read_tail_masses(tail, file_size)
+pub fn read_file_masses(path: &Path) -> Result<FileMass, Error> {
+    super::r#impl::read_file_masses(path)
 }
 
 /// Read up to `max_rows` leading rows of a local Parquet file, decoding every
@@ -343,34 +283,12 @@ pub fn write_parquet(
     super::r#impl::write_parquet(columns, rows, options)
 }
 
-/// Read byte masses from an in-memory Parquet file. `indexes` loads
-/// ColumnIndex/OffsetIndex. Default callers pass `false`.
+/// Read byte masses from an in-memory Parquet file.
 ///
 /// # Errors
 /// Returns [`Error`] if `bytes` is not a valid Parquet file.
-pub fn read_buffer_masses(bytes: &[u8], indexes: bool) -> Result<FileMass, Error> {
-    super::r#impl::read_buffer_masses(bytes, indexes)
-}
-
-/// Facts from one page header; sizes exclude the serialized header itself.
-#[derive(Debug, Clone, Serialize)]
-pub struct PageHeader {
-    pub header_bytes: u64,
-    pub page_type: String,
-    pub compressed_bytes: u64,
-    pub uncompressed_bytes: u64,
-    pub value_count: Option<u64>,
-    pub row_count: Option<u64>,
-    pub dictionary_entries: Option<u64>,
-    pub encoding: Option<String>,
-}
-
-/// Decode a bounded compact-Thrift page header without touching its payload.
-///
-/// # Errors
-/// Invalid, incomplete, or oversized headers and negative sizes/counts.
-pub fn read_page_header(bytes: &[u8]) -> Result<PageHeader, Error> {
-    super::r#impl::read_page_header(bytes)
+pub fn read_buffer_masses(bytes: &[u8]) -> Result<FileMass, Error> {
+    super::r#impl::read_buffer_masses(bytes)
 }
 
 #[cfg(test)]
@@ -436,10 +354,7 @@ mod tests {
         assert!(mass
             .columns
             .iter()
-            .all(|column| !column.physical_type.is_empty()
-                && !column.encodings.is_empty()
-                && column.num_values > 0
-                && column.row_group_rows > 0));
+            .all(|column| !column.encodings.is_empty() && column.num_values > 0));
     }
 
     #[test]
@@ -476,18 +391,18 @@ mod tests {
     }
 
     #[test]
-    fn read_file_masses_indexes_is_optional() {
+    fn read_file_masses_returns_one_entry_per_column_chunk() {
         let path = Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/small_snappy.parquet"
         ));
-        let without = read_file_masses(path, false).unwrap();
-        let with = read_file_masses(path, true).unwrap();
-        assert_eq!(without.columns.len(), with.columns.len());
-        assert!(without
+        let mass = read_file_masses(path).unwrap();
+        assert_eq!(mass.columns.len(), mass.row_group_count);
+        assert!(mass.row_count > 0);
+        assert!(mass
             .columns
             .iter()
-            .all(|column| column.page_count.is_none()));
+            .all(|column| column.compressed_bytes > 0));
     }
 
     #[test]
@@ -552,7 +467,7 @@ mod tests {
             row_group_size: 8,
         };
         let bytes = write_parquet(&columns, &rows, &options).unwrap();
-        let mass = read_buffer_masses(&bytes, false).unwrap();
+        let mass = read_buffer_masses(&bytes).unwrap();
         assert_eq!(mass.row_count, 16);
         assert_eq!(mass.row_group_count, 2);
         assert_eq!(mass.columns.len(), 8);
