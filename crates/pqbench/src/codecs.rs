@@ -34,7 +34,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Io(e) => write!(f, "io: {e}"),
+            Error::Io(_) => write!(f, "codec i/o failed"),
             Error::Level {
                 codec,
                 level,

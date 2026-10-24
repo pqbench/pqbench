@@ -95,7 +95,14 @@ fn empty_specs_sweep_every_wired_codec() {
 #[test]
 fn rejects_compressed_input_unknown_codecs_and_missing_files() {
     let compressed = compression(&request(fixture("small_snappy.parquet"), false)).unwrap_err();
-    assert!(compressed.to_string().contains("NONE"), "{compressed}");
+    let mut message = compressed.to_string();
+    let mut source = std::error::Error::source(&compressed);
+    while let Some(error) = source {
+        message.push_str(": ");
+        message.push_str(&error.to_string());
+        source = error.source();
+    }
+    assert!(message.contains("NONE"), "{message}");
 
     let unknown = CompressionRequest {
         codec_specs: vec!["nope".into()],

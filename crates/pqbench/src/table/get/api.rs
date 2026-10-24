@@ -22,8 +22,6 @@ pub enum Error {
     Http(crate::http::Error),
     /// The endpoint returned a structurally invalid document.
     Malformed(String),
-    /// The table loader failed.
-    Table(crate::table::Error),
     /// The table's metadata at the catalog-named location could not be read.
     Metadata {
         /// The table's full name.
@@ -39,8 +37,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Name(message) | Error::Malformed(message) => write!(f, "{message}"),
-            Error::Http(error) => write!(f, "{error}"),
-            Error::Table(error) => write!(f, "{error}"),
+            Error::Http(_) => write!(f, "the endpoint request failed"),
             Error::Metadata { name, location, .. } => {
                 write!(f, "cannot read {name}'s metadata at {location}")?;
                 if location.starts_with("s3://") {
@@ -60,7 +57,6 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Http(error) => Some(error),
-            Error::Table(error) => Some(error),
             Error::Metadata { source, .. } => Some(source),
             Error::Name(_) | Error::Malformed(_) => None,
         }

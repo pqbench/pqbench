@@ -20,7 +20,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Http(error) => write!(f, "{error}"),
+            Error::Http(_) => write!(f, "the endpoint request failed"),
         }
     }
 }

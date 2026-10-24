@@ -25,7 +25,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Name(message) | Error::Malformed(message) => write!(f, "{message}"),
-            Error::Http(error) => write!(f, "{error}"),
+            Error::Http(_) => write!(f, "the endpoint request failed"),
         }
     }
 }
