@@ -208,7 +208,9 @@ omitted, so a window never claims a commit it cannot place. A partition is a
 lens on the files, not a thing the table stores —
 see docs/partition.md. `list files` re-reads the window's commits and names the
 files they added; each file carries the partition's credentials, and that
-stream is what `bytemass` measures.
+stream is what `bytemass` measures. --min-file-size drops files whose logged
+size is below SIZE (bytes, or a number with a unit: kB/MB/GB/TB or
+KiB/MiB/GiB/TiB), so a walk can measure only the big files.
 
 Every level reads its parent's refs on standard input, or takes the parent as
 its argument, and writes one resource per line, so the walk is a pipe:
@@ -229,6 +231,7 @@ Examples:
   pqbench list schemas dbx_samples
   pqbench list tables dbx_samples.nyctaxi
   pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass
+  pqbench list partitions ./delta-table | pqbench list files --min-file-size 100MB | pqbench bytemass
 
 See also:
   pqbench get --help       read one resource
