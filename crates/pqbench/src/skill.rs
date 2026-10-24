@@ -5,6 +5,7 @@
 
 /// Errors from the skill layer: an unknown skill or document.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The skill name is unknown.
     UnknownSkill(String),

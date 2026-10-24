@@ -14,6 +14,7 @@ use crate::Workspace;
 
 /// Errors from an endpoint request.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The request could not be sent.
     Transport(TransportError),

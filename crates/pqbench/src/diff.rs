@@ -7,6 +7,7 @@ use std::fmt;
 
 /// Errors comparing two measurements.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The comparison input was invalid (bad depth, a duplicate chunk, or
     /// inconsistent row counts).

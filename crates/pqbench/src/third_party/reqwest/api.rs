@@ -4,6 +4,7 @@ use std::fmt;
 
 /// Errors from the HTTP transport.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The HTTP client could not be built.
     Client(Box<dyn std::error::Error + Send + Sync>),

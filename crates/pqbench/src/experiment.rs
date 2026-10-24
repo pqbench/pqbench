@@ -23,6 +23,7 @@ const DEFAULT_ROW_GROUP_ROWS: usize = 2048;
 /// Errors from the experiment layer: a bad aim, a bad rewrite, or a write
 /// failure.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The sample had no rows.
     Empty,

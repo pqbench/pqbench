@@ -16,6 +16,7 @@ use serde::Serialize;
 
 /// Errors from the codec layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     Io(std::io::Error),
     Level {

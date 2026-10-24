@@ -13,6 +13,7 @@ use crate::Lake;
 
 /// Errors listing a partition's files.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The table loader failed.
     Table(crate::table::Error),

@@ -7,6 +7,7 @@ use std::fmt;
 
 /// Errors from the gzip layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The underlying gzip compression call failed.
     Compress(std::io::Error),

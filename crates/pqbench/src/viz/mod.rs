@@ -15,6 +15,7 @@ pub use html::render_html;
 
 /// Errors writing the treemap page.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// There were no rows to draw.
     Empty,

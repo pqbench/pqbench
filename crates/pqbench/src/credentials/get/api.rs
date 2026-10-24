@@ -7,6 +7,7 @@ use crate::{Dialect, Workspace};
 
 /// Errors vending a table's credentials.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The name argument was not a resource name.
     Name(String),

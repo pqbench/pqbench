@@ -7,6 +7,7 @@ use std::fmt;
 
 /// Errors from the Zstandard layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The underlying zstd compression call failed.
     Compress(std::io::Error),

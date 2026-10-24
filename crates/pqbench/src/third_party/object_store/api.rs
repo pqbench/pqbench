@@ -17,6 +17,7 @@ use crate::Lake;
 
 /// Errors from the object-storage layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A URI could not be parsed.
     Uri {

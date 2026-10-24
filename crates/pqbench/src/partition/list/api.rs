@@ -14,6 +14,7 @@ use crate::Lake;
 
 /// Errors listing a table's partitions.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The window argument was invalid.
     Invalid(String),

@@ -33,6 +33,7 @@ use std::fmt;
 
 /// Errors measuring a file's byte masses.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// No inputs were given.
     NoInputs,

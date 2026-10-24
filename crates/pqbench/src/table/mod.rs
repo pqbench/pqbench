@@ -35,6 +35,7 @@ use crate::Lake;
 
 /// Errors detecting a table format or loading its metadata.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The location could not be opened.
     Missing(String),

@@ -16,6 +16,7 @@ use crate::third_party::parquet::api::Sample;
 
 /// Errors from the profile layer: an empty sample or a bad column glob.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The sample had no rows.
     Empty,

@@ -7,6 +7,7 @@ use std::fmt;
 
 /// Errors from the LZ4 layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The underlying LZ4 compression call failed.
     Compress(std::io::Error),

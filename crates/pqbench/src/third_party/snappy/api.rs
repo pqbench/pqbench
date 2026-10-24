@@ -7,6 +7,7 @@ use std::fmt;
 
 /// Errors from the Snappy layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The C library reported a compression failure.
     Compress,

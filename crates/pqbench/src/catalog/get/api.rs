@@ -11,6 +11,7 @@ use crate::Workspace;
 
 /// Errors reading a catalog.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The name argument was not a resource name.
     Name(String),

@@ -6,6 +6,7 @@ use crate::v1::{EligibilityReason, ReadEligibility};
 
 /// Errors checking a table's eligibility.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The name argument was not a resource name.
     Name(String),

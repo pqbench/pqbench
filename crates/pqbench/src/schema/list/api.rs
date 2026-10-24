@@ -12,6 +12,7 @@ use crate::Workspace;
 
 /// Errors listing a catalog's schemas.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The name argument was not a resource name.
     Name(String),

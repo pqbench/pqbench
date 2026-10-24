@@ -102,6 +102,7 @@ pub struct WriteOptions {
 
 /// Errors from the parquet layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// A file or stream could not be read.
     Io(std::io::Error),

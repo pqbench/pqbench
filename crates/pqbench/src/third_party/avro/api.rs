@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 /// Errors reading Avro records.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The `iceberg` feature is off.
     Unsupported,

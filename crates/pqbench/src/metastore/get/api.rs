@@ -11,6 +11,7 @@ use crate::Workspace;
 
 /// Errors reading a metastore.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The endpoint request failed.
     Http(crate::http::Error),
