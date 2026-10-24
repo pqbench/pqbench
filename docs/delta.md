@@ -77,12 +77,11 @@ also writes it without delaying stdout:
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4
 $ pqbench bytemass /tmp/partition.ndjson.lz4 --format table
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+column  codec   encodings                 bytes  values
+------  ------  ------------------------  -----  ------
+id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 files: 1
-rows: 3
 columns: 2
 ```
 

@@ -42,13 +42,16 @@ fn file_and_saved_stream_comparisons_agree() {
     assert_eq!(columns.len(), 7);
     assert!(columns
         .iter()
-        .all(|row| row["delta_bytes"] == 0 && row["left_rows"] == 3000));
+        .all(|row| row["delta_bytes"] == 0 && row["left_values"] == 3000));
     let wrong = directory.path().join("wrong.ndjson");
-    std::fs::write(
-        &wrong,
-        "{\"kind\":\"pqbench.bytemass-page\",\"id\":\"t\"}\n",
-    )
-    .unwrap();
+    let table_file = serde_json::json!({
+        "name": pqbench::v1::name::table_file_name(
+            "catalogs/local/schemas/local/tables/t",
+            "part-0.parquet",
+        ),
+        "blob": pqbench::v1::name::blob_name("/tmp/part-0.parquet"),
+    });
+    std::fs::write(&wrong, format!("{table_file}\n")).unwrap();
     let rejected = command()
         .args(["diff", fixture()])
         .arg(wrong)

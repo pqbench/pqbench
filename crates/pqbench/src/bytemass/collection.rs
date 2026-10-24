@@ -1,140 +1,99 @@
-//! Aggregate byte-mass metadata across multiple physical Parquet files.
+//! Measure Parquet files into per-column byte masses.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-
 use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{read_file_masses, ColumnMass, FileMass};
+use crate::v1;
 use crate::Lake;
 
-use super::api::MassRow;
+use super::api::MeasuredFile;
 use super::remote;
 use super::Error;
 
-/// One column's byte mass summed across a collection of Parquet files.
-#[derive(Debug, Clone, Serialize)]
-#[non_exhaustive]
-pub struct ColumnMassSummary {
-    /// Column path in schema form, e.g. `content` or `a.b`.
-    pub column: String,
-    /// Total on-disk bytes across all physical files.
-    pub compressed_bytes: u64,
-    /// Total encoded bytes before compression across all physical files.
-    pub uncompressed_bytes: u64,
-    /// Compression codecs present in the column chunks.
-    pub codecs: BTreeSet<String>,
-}
-
-/// Byte masses summed across a collection of Parquet files.
-#[derive(Debug, Clone, Serialize)]
-#[non_exhaustive]
-pub struct MassSummary {
-    /// Number of physical Parquet files included in the summary.
-    pub file_count: usize,
-    /// Total physical rows across all files.
-    pub row_count: u64,
-    /// Per-column byte totals and codecs.
-    pub columns: Vec<ColumnMassSummary>,
-}
-
-impl MassSummary {
-    /// Convert the summary to the existing byte-mass analytics input.
-    #[must_use]
-    pub(super) fn file_mass(&self) -> FileMass {
-        FileMass {
-            row_count: self.row_count,
-            columns: self
-                .columns
-                .iter()
-                .map(|column| ColumnMass {
-                    column: column.column.clone(),
-                    compressed_bytes: column.compressed_bytes,
-                    uncompressed_bytes: column.uncompressed_bytes,
-                    codec: column.codecs.iter().cloned().collect::<Vec<_>>().join(","),
-                    ..ColumnMass::default()
-                })
-                .collect(),
-            ..FileMass::default()
-        }
-    }
-}
-
-/// Expand the inputs, measure each file's footer, and flatten the collection
-/// into one row per column chunk.
-pub(super) async fn measure_inputs(
-    lake: &Lake,
-    inputs: &[String],
-    env: &BTreeMap<String, String>,
-    indexes: bool,
-) -> Result<Vec<MassRow>, Error> {
-    Ok(measure_files(lake, inputs, env, indexes)
-        .await?
-        .into_iter()
-        .flat_map(|file| file.columns)
-        .collect())
-}
-
+/// Expand the inputs, measure each file's footer, and fold its column chunks
+/// into one [`v1::Bytemass`] per column.
 pub(super) async fn measure_files(
     lake: &Lake,
     inputs: &[String],
     env: &BTreeMap<String, String>,
-    indexes: bool,
-) -> Result<Vec<super::api::MeasuredFile>, Error> {
+) -> Result<Vec<MeasuredFile>, Error> {
     let mut files = Vec::new();
     for path in expand_inputs(lake, inputs, env).await? {
-        let input = path.to_string_lossy().into_owned();
-        let (stat, mass) = read_input(lake, &input, env, indexes).await?;
-        let mut file = super::api::FileStat::new("", &input, &input, stat.size_bytes);
-        file.metadata = Some(mass.metadata);
-        file.storage_class = stat.storage_class.clone();
-        files.push(super::api::MeasuredFile {
-            file,
-            row_count: mass.row_count,
-            columns: mass
-                .columns
-                .into_iter()
-                .map(|column| mass_row(&input, &stat, mass.row_count, column))
-                .collect(),
-        });
+        let uri = path.to_string_lossy().into_owned();
+        let (stat, mass) = read_input(lake, &uri, env).await?;
+        files.push(measured_file(&uri, &stat, mass));
     }
     Ok(files)
 }
 
-fn mass_row(input: &str, stat: &ObjectStat, row_count: u64, column: ColumnMass) -> MassRow {
-    MassRow {
-        uri: input.to_string(),
-        size_bytes: stat.size_bytes,
-        row_count,
-        column: column.column,
-        compressed_bytes: column.compressed_bytes,
-        uncompressed_bytes: column.uncompressed_bytes,
-        codec: column.codec,
+/// Name a file's masses: its `Blob`, and each column's `Bytemass` under it.
+fn measured_file(uri: &str, stat: &ObjectStat, mass: FileMass) -> MeasuredFile {
+    let blob_name = v1::name::blob_name(uri);
+    let columns = fold(&blob_name, mass.columns);
+    let blob = v1::Blob {
+        name: blob_name,
+        size_bytes: Some(stat.size_bytes),
         storage_class: stat.storage_class.clone(),
-        encodings: column.encodings,
-        num_values: column.num_values,
-        dictionary: column.dictionary,
-        null_count: column.null_count,
-        distinct_count: column.distinct_count,
-        min_value: column.min_value,
-        max_value: column.max_value,
-        physical_type: column.physical_type,
-        row_group: column.row_group,
-        row_group_rows: column.row_group_rows,
-        compressed_bytes_per_row: per_row(column.compressed_bytes, column.row_group_rows),
-        uncompressed_bytes_per_row: per_row(column.uncompressed_bytes, column.row_group_rows),
-        compression_ratio: per_row(column.uncompressed_bytes, column.compressed_bytes),
-        null_fraction: column
-            .null_count
-            .and_then(|count| per_row(count, column.num_values)),
-        page_count: column.page_count,
-        page_compressed_bytes: column.page_compressed_bytes,
-    }
+        row_group_count: Some(mass.row_group_count as u64),
+        column_count: Some(columns.len() as u64),
+    };
+    MeasuredFile { blob, columns }
 }
 
-fn per_row(bytes: u64, rows: u64) -> Option<f64> {
-    (rows > 0).then(|| bytes as f64 / rows as f64)
+/// Fold one `ColumnMass` per chunk into one `Bytemass` per column.
+fn fold(blob_name: &str, chunks: Vec<ColumnMass>) -> Vec<v1::Bytemass> {
+    let mut at: BTreeMap<String, usize> = BTreeMap::new();
+    let mut columns: Vec<v1::Bytemass> = Vec::new();
+    for chunk in chunks {
+        let index = *at.entry(chunk.column.clone()).or_insert_with(|| {
+            columns.push(v1::Bytemass {
+                name: v1::name::bytemass(blob_name, &chunk.column),
+                ..v1::Bytemass::default()
+            });
+            columns.len() - 1
+        });
+        let column = &mut columns[index];
+        column.compressed_bytes = add(column.compressed_bytes, chunk.compressed_bytes);
+        column.uncompressed_bytes = add(column.uncompressed_bytes, chunk.uncompressed_bytes);
+        column.value_count = add(column.value_count, chunk.num_values);
+        column.codec.get_or_insert(chunk.codec);
+        column.dictionary |= chunk.dictionary;
+        for encoding in chunk.encodings {
+            if !column.encodings.contains(&encoding) {
+                column.encodings.push(encoding);
+            }
+        }
+        if let Some(count) = chunk.null_count {
+            column.null_count = add(column.null_count, count);
+        }
+        if let Some(count) = chunk.distinct_count {
+            column.distinct_count = add(column.distinct_count, count);
+        }
+        if column.first_value.is_none() {
+            column.first_value = chunk.min_value;
+        }
+        if chunk.max_value.is_some() {
+            column.last_value = chunk.max_value;
+        }
+    }
+    for column in &mut columns {
+        column.bytes_per_value = ratio(column.compressed_bytes, column.value_count);
+        column.compression_ratio = ratio(column.uncompressed_bytes, column.compressed_bytes);
+        column.null_fraction = ratio(column.null_count, column.value_count);
+    }
+    columns
+}
+
+fn add(total: Option<u64>, part: u64) -> Option<u64> {
+    Some(total.unwrap_or(0) + part)
+}
+
+/// `numerator / denominator`, when the denominator is non-zero.
+fn ratio(numerator: Option<u64>, denominator: Option<u64>) -> Option<f64> {
+    let denominator = denominator?;
+    (denominator > 0).then(|| numerator.unwrap_or(0) as f64 / denominator as f64)
 }
 
 pub(super) async fn expand_inputs(
@@ -191,28 +150,20 @@ async fn read_input(
     lake: &Lake,
     input: &str,
     env: &BTreeMap<String, String>,
-    indexes: bool,
 ) -> Result<(ObjectStat, FileMass), Error> {
     if input.contains("://") {
         return remote::read_remote(
             lake,
             input,
             env.iter().map(|(key, value)| (key.clone(), value.clone())),
-            indexes,
         )
         .await;
     }
-    let path = Path::new(input);
-    let metadata = std::fs::metadata(path).map_err(|e| Error::Io {
-        context: "cannot stat",
-        input: input.to_string(),
-        source: e,
-    })?;
+    let mass = read_file_masses(Path::new(input))?;
     let stat = ObjectStat {
-        size_bytes: metadata.len(),
+        size_bytes: mass.size_bytes,
         identity: None,
         storage_class: None,
     };
-    let mass = read_file_masses(path, indexes)?;
     Ok((stat, mass))
 }

@@ -8,63 +8,63 @@ mod support;
 #[test]
 fn visual_demos() {
     // visual_demos, from line 6
-    support::run("pqbench bytemass examples/quickstart.parquet --format table", 7, Some(&["column  type   codec         encodings                 bytes  values", "------  -----  ------------  ------------------------  -----  ------", "id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "rows: 8", "columns: 2"]));
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 15, None);
+    support::run("pqbench bytemass examples/quickstart.parquet --format table", 7, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "columns: 2"]));
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 14, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn selecting_files_with_unix_tools() {
-    // selecting_files_with_unix_tools, from line 33
+    // selecting_files_with_unix_tools, from line 32
     support::run(r#"pqbench list partitions docker/e2e-lakehouse/table \
   | pqbench list files \
   | jq -c 'select(.name | contains("/files/part-"))' \
   | pqbench bytemass --json \
-  | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1"#, 35, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
+  | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1"#, 34, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
     support::run(r#"pqbench list partitions docker/e2e-lakehouse/table \
   | pqbench list files \
   | sort | head -10 \
   | pqbench bytemass --json \
-  | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1"#, 43, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
+  | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1"#, 42, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
     support::run(r#"pqbench list partitions docker/e2e-lakehouse/table \
   | pqbench list files \
   | awk 'NR % 2 == 1' \
   | pqbench bytemass --json \
-  | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1"#, 51, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
+  | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1"#, 50, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn a_table_s_partitions() {
-    // a_table_s_partitions, from line 69
-    support::run("pqbench list partitions docker/e2e-lakehouse/table -o /tmp/partition.ndjson.lz4", 70, None);
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 71, None);
+    // a_table_s_partitions, from line 68
+    support::run("pqbench list partitions docker/e2e-lakehouse/table -o /tmp/partition.ndjson.lz4", 69, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 70, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn a_table_s_partitions_2() {
-    // a_table_s_partitions_2, from line 76
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 77, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
+    // a_table_s_partitions_2, from line 75
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 76, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "columns: 2"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn one_parquet_file() {
-    // one_parquet_file, from line 113
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.lz4", 114, None);
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table", 115, Some(&["column            type        codec         encodings                  bytes  values", "----------------  ----------  ------------  ------------------------  ------  ------", "text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000", "files: 1", "rows: 3000", "columns: 7"]));
+    // one_parquet_file, from line 111
+    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.lz4", 112, None);
+    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table", 113, Some(&["column            codec         encodings                  bytes  values", "----------------  ------------  ------------------------  ------  ------", "text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000", "files: 1", "columns: 7"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn one_delta_snapshot() {
-    // one_delta_snapshot, from line 139
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4", 140, None);
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 141, Some(&["column  type        codec   encodings                 bytes  values", "------  ----------  ------  ------------------------  -----  ------", "id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "rows: 3", "columns: 2"]));
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 149, None);
+    // one_delta_snapshot, from line 136
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4", 137, None);
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table", 138, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "columns: 2"]));
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 145, None);
 }

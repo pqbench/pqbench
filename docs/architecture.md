@@ -17,8 +17,7 @@ The walk's resource commands (`metastore`, `catalog`, `schema`, `table`,
 `partition`, `file`, `credentials`) are folders — one per resource, with a
 subcommand folder per verb. The measurement commands (`bytemass`,
 `compression`, `lz`) keep an `api.rs` and split the implementation across named
-modules (`raw.rs`, `analytics.rs`, `text.rs`, `json.rs`, …); the rest
-(`profile`, `experiment`, `diff`, `skill`, `ratelimit`, `viz`) are single
+modules; the rest (`profile`, `diff`, `skill`, `ratelimit`, `viz`) are single
 modules or small folders.
 
 ```text

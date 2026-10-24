@@ -1,13 +1,12 @@
-//! `diff`: compare two bytemass row streams.
+//! `diff`: compare two bytemass streams.
 
 use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
 use crate::CliError;
 use clap::Args;
 use futures_util::StreamExt;
-use pqbench::{bytemass, diff};
+use pqbench::{bytemass, diff, v1};
 use serde::Serialize;
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Compare compressed column bytes from Parquet files or bytemass streams.
@@ -43,7 +42,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &DiffArgs) -> Result<(), Cli
     emit.finish(&format!("columns: {}\n", deltas.len())).await
 }
 
-async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<bytemass::MassRow>, CliError> {
+async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<v1::Bytemass>, CliError> {
     if input != "-" && !document::is_document(input).await {
         return Ok(bytemass::bytemass(
             lake,
@@ -54,25 +53,16 @@ async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<bytemass::MassRow
         )
         .await?);
     }
-    let mut rows = Vec::new();
-    let mut tables = BTreeSet::new();
+    let mut columns = Vec::new();
     let mut records = document::records(input).await?;
     while let Some(record) = records.next().await {
         match record? {
-            Record::BytemassFile(_) => {}
-            Record::BytemassRow { id, row } => {
-                if !id.is_empty() && id != row.uri {
-                    tables.insert(id);
-                }
-                rows.push(row);
-            }
+            Record::Bytemass(column) => columns.push(column),
+            Record::Blob(_) => {}
             _ => return Err("diff requires a bytemass stream or a Parquet file".into()),
         }
     }
-    if tables.len() > 1 {
-        return Err("diff requires one table per input; select a table before comparing".into());
-    }
-    Ok(rows)
+    Ok(columns)
 }
 
 #[derive(Serialize)]

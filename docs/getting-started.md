@@ -37,12 +37,11 @@ an aligned table; on a pipe, NDJSON.
 
 ```console run
 $ pqbench bytemass examples/quickstart.parquet --format table
-column  type   codec         encodings                 bytes  values
-------  -----  ------------  ------------------------  -----  ------
-id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
-year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+column  codec         encodings                 bytes  values
+------  ------------  ------------------------  -----  ------
+id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
 files: 1
-rows: 8
 columns: 2
 ```
 
@@ -69,12 +68,11 @@ measures them:
 
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+column  codec   encodings                 bytes  values
+------  ------  ------------------------  -----  ------
+id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 files: 1
-rows: 3
 columns: 2
 ```
 
@@ -101,5 +99,5 @@ The page lands at `/tmp/report.html`; open it in a browser. See [viz.md](viz.md)
   bytes, picks a codec, and verifies a layout change, on public datasets.
 - **More walkthroughs** — [demo.md](demo.md) has Parquet, Delta, Iceberg, and
   catalog pipes with real output.
-- **Tune a layout** — [experiment.md](experiment.md) rewrites a sample and
-  measures it; [profile.md](profile.md) reports what is in it.
+- **Tune a layout** — [profile.md](profile.md) reports what is in a sample;
+  [viz.md](viz.md) shows where an existing table's bytes go.

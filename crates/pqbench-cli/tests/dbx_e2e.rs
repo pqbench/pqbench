@@ -1198,16 +1198,16 @@ fn external_fixture_walks_to_bytemass() {
         "{schema}: {file_count} files < {partition_count} partitions"
     );
     assert!(
-        records
-            .iter()
-            .any(|record| record["kind"] == "pqbench.bytemass-file"),
-        "{schema}: no bytemass-file record"
+        records.iter().any(|record| record["name"]
+            .as_str()
+            .is_some_and(|name| pqbench::v1::name::parse_blob(name).is_some())),
+        "{schema}: no Blob record"
     );
     assert!(
-        records
-            .iter()
-            .any(|record| record["kind"] == "pqbench.bytemass-row"),
-        "{schema}: no bytemass-row record"
+        records.iter().any(|record| record["name"]
+            .as_str()
+            .is_some_and(|name| pqbench::v1::name::parse_bytemass(name).is_some())),
+        "{schema}: no Bytemass record"
     );
     println!(
         "walk {schema}: {tables} tables, {partition_count} partitions, {file_count} files, {} bytemass records",

@@ -21,17 +21,15 @@ pub(crate) fn credentials(
 pub(crate) struct BytemassRequest {
     inputs: Vec<String>,
     env: BTreeMap<String, String>,
-    indexes: bool,
 }
 #[pymethods]
 impl BytemassRequest {
     #[new]
-    #[pyo3(signature = (inputs, env=None, indexes=false))]
-    fn new(inputs: Vec<String>, env: Option<BTreeMap<String, String>>, indexes: bool) -> Self {
+    #[pyo3(signature = (inputs, env=None))]
+    fn new(inputs: Vec<String>, env: Option<BTreeMap<String, String>>) -> Self {
         Self {
             inputs,
             env: env.unwrap_or_default(),
-            indexes,
         }
     }
 }
@@ -40,7 +38,6 @@ impl From<&BytemassRequest> for LibBytemassRequest {
         Self {
             inputs: value.inputs.clone(),
             env: value.env.clone(),
-            indexes: value.indexes,
         }
     }
 }

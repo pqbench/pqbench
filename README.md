@@ -56,7 +56,7 @@ Read it left to right:
   files those commits added.
 - `bytemass` reads each file's footer and prints the on-disk bytes per column,
   the table in [bytemass](#bytemass). In a pipe it streams
-  `pqbench.bytemass-row` NDJSON instead; `pqbench viz` draws that stream as a
+  `Blob` and `Bytemass` NDJSON instead; `pqbench viz` draws that stream as a
   treemap.
 
 The same walk runs offline against the local Delta and Iceberg stand,
@@ -72,28 +72,27 @@ verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
 
 ```console run
 $ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
-column            type        codec         encodings                  bytes  values
-----------------  ----------  ------------  ------------------------  ------  ------
-text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
-label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
-dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
-communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
-datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
-username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
-url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
+column            codec         encodings                  bytes  values
+----------------  ------------  ------------------------  ------  ------
+text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
+label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
+dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
+communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
+datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
+username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
+url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 files: 1
-rows: 3000
 columns: 7
 ```
 
-`profile` explains it, `compression` picks the codec, and `experiment` proves a
-layout change before you apply it. The [Showcases](https://pqbench.github.io/pqbench/showcases/)
-page walks all four end to end.
+`profile` explains it and `compression` picks the codec. The
+[Showcases](https://pqbench.github.io/pqbench/showcases/) page walks them end to
+end.
 
 ## Commands
 
 The core measurements. The walk's [`get` and `list`](#the-walk-end-to-end) come
-first; the [CLI reference](https://pqbench.github.io/pqbench/cli/) covers `profile`, `experiment`, `diff`,
+first; the [CLI reference](https://pqbench.github.io/pqbench/cli/) covers `profile`, `diff`,
 `skill`, `credentials`, `ratelimit`, and `setup`.
 
 ### lz
@@ -138,32 +137,31 @@ columns: 0
 
 ### bytemass
 
-Per-column byte masses — the on-disk bytes each column chunk takes, with its
-value count.
+Per-column byte masses — the on-disk bytes each column takes, with its
+value count, its chunks summed over the file's row groups.
 
 ```console run
 $ pqbench bytemass data/samples/delta_byte_array.parquet --format table
-column                 type        codec         encodings         bytes  values
----------------------  ----------  ------------  ----------------  -----  ------
-c_customer_id          BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
-c_salutation           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000
-c_first_name           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000
-c_last_name            BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000
-c_preferred_cust_flag  BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000
-c_birth_country        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
-c_login                BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
-c_email_address        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
-c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
+column                 codec         encodings         bytes  values
+---------------------  ------------  ----------------  -----  ------
+c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
+c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000
+c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000
+c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000
+c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000
+c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
+c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
+c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
+c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
 files: 1
-rows: 1000
 columns: 9
 ```
 
 - Reads only the footer, so it works on any file, compressed or not.
 - Accepts paths, quoted globs, `s3://` URIs, and a `TableFile` /
-  `remote-source` document; `--indexes` adds page counts.
-- `s3://` needs the `aws` feature; a pipe streams one NDJSON row per column
-  chunk (`--format json`, or `-o FILE`).
+  `remote-source` document.
+- `s3://` needs the `aws` feature; a pipe streams one `Blob` per file and one
+  `Bytemass` per column (`--format json`, or `-o FILE`).
 
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/demo/).
@@ -195,12 +193,11 @@ List the files a partition's commits added — the input to `bytemass`.
 
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+column  codec   encodings                 bytes  values
+------  ------  ------------------------  -----  ------
+id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 files: 1
-rows: 3
 columns: 2
 ```
 

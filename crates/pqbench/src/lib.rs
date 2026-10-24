@@ -11,7 +11,6 @@ pub mod config;
 pub mod credentials;
 mod dialect;
 pub mod diff;
-pub mod experiment;
 pub mod file;
 pub mod http;
 pub mod lz;

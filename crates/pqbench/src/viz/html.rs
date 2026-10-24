@@ -1,23 +1,19 @@
-//! Static HTML: the embedded bytemass rows are drawn as a d3 treemap.
+//! Static HTML: the embedded bytemass columns are drawn as a d3 treemap.
 
-use crate::bytemass::FileStat;
-use crate::viz::{Error, MassRecord};
+use crate::v1;
+use crate::viz::{ColumnRow, Error};
 
-/// Self-contained page that groups the embedded rows and draws a d3 treemap.
+/// Self-contained page that embeds the columns and blobs and draws a d3 treemap.
 ///
 /// # Errors
-/// Fails when there are no rows or the rows cannot be encoded into the page.
-pub fn render_html(rows: &[MassRecord], files: &[FileStat], title: &str) -> Result<String, Error> {
+/// Fails when there are no columns or the columns cannot be encoded into the page.
+pub fn render_html(rows: &[ColumnRow], blobs: &[v1::Blob], title: &str) -> Result<String, Error> {
     if rows.is_empty() {
         return Err(Error::Empty);
     }
     let title = html_escape(title);
-    let data = serde_json::to_string(rows)
-        .map_err(Error::Render)?
-        .replace('<', "\\u003c");
-    let files = serde_json::to_string(files)
-        .map_err(Error::Render)?
-        .replace('<', "\\u003c");
+    let columns = encode(rows)?;
+    let files = encode(blobs)?;
     let mut out = String::new();
     out.push_str("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>");
     out.push_str(&title);
@@ -26,8 +22,6 @@ pub fn render_html(rows: &[MassRecord], files: &[FileStat], title: &str) -> Resu
     out.push_str(
         "#title { text-align: center; font-size: 26px; padding: 12px; color: #332f2a; }\n",
     );
-    out.push_str("nav { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 8px; }\n");
-    out.push_str("nav a { color: #1f5e2a; }\n");
     out.push_str("section { padding: 0 16px 16px; }\n");
     out.push_str("h2 { font-size: 16px; color: #332f2a; margin: 8px 0; }\n");
     out.push_str("svg { display: block; }\n");
@@ -36,21 +30,30 @@ pub fn render_html(rows: &[MassRecord], files: &[FileStat], title: &str) -> Resu
     out.push_str(".label { fill: #332f2a; font-size: 13px; pointer-events: none; }\n");
     out.push_str("</style>\n</head>\n<body>\n<div id=\"title\">");
     out.push_str(&title);
-    out.push_str("</div>\n<nav id=\"tables\"></nav>\n<main id=\"maps\"></main>\n");
+    out.push_str("</div>\n<main id=\"maps\"></main>\n");
     out.push_str("<script type=\"module\">\n");
     out.push_str(
         "import {hierarchy, treemap} from \"https://cdn.jsdelivr.net/npm/d3-hierarchy@3/+esm\";\n",
     );
     out.push_str("import {scaleLinear} from \"https://cdn.jsdelivr.net/npm/d3-scale@4/+esm\";\n");
     out.push_str("import {select} from \"https://cdn.jsdelivr.net/npm/d3-selection@3/+esm\";\n");
-    out.push_str("const ROWS = ");
-    out.push_str(&data);
+    out.push_str("const TITLE = ");
+    out.push_str(&encode(&title)?);
+    out.push_str(";\nconst COLUMNS = ");
+    out.push_str(&columns);
     out.push_str(";\nconst FILES = ");
     out.push_str(&files);
     out.push_str(";\n");
     out.push_str(PAGE_SCRIPT);
     out.push_str("</script>\n</body>\n</html>\n");
     Ok(out)
+}
+
+/// JSON for the page, with `<` escaped so the value cannot close the script.
+fn encode(value: &(impl serde::Serialize + ?Sized)) -> Result<String, Error> {
+    Ok(serde_json::to_string(value)
+        .map_err(Error::Render)?
+        .replace('<', "\\u003c"))
 }
 
 const PAGE_SCRIPT: &str = r##"
@@ -69,13 +72,23 @@ function recompute(node) {
 function tree(name, columns) {
   const root = branch(name);
   for (const column of columns) {
-    const rows = Math.max(column.row_count, 1);
-    insert(root, column.column.split("."), column.compressed_bytes / rows);
+    const values = Math.max(column.value_count, 1);
+    insert(root, column.column.split("."), column.compressed_bytes / values);
   }
   recompute(root);
   return root;
 }
-function draw(svg, data) {
+function fileTree(name, files) {
+  const root = branch(name);
+  for (const file of files) {
+    let leaf = String(file.name).split("/").pop() || file.name;
+    if (file.storage_class) leaf += ` [${file.storage_class}]`;
+    insert(root, [leaf], file.size_bytes || 0);
+  }
+  recompute(root);
+  return root;
+}
+function draw(svg, data, unit) {
   const width = 1600, height = 420;
   svg.attr("width", width).attr("height", height);
   const root = hierarchy(data).sum(d => d.children && d.children.length ? 0 : d.value);
@@ -86,66 +99,27 @@ function draw(svg, data) {
     .attr("transform", d => `translate(${d.x0},${d.y0})`);
   cell.append("rect").attr("width", d => d.x1 - d.x0).attr("height", d => d.y1 - d.y0)
     .attr("fill", d => color(d.value)).attr("class", "cell");
-  cell.append("title").text(d => `${d.data.name}: ${fmt(d.value)} bytes per row`);
+  cell.append("title").text(d => `${d.data.name}: ${fmt(d.value)} ${unit}`);
   cell.filter(d => (d.x1 - d.x0) > 36 && (d.y1 - d.y0) > 16).append("text")
-    .selectAll("tspan").data(d => [d.data.name, fmt(d.value) + " bpr"]).join("tspan")
+    .selectAll("tspan").data(d => [d.data.name, fmt(d.value) + " " + unit]).join("tspan")
     .attr("x", 4).attr("y", (d, i) => 15 + i * 14).attr("class", "label").text(d => d);
 }
-const groups = new Map();
-for (const row of ROWS) {
-  if (!groups.has(row.id)) groups.set(row.id, new Map());
-  const columns = groups.get(row.id);
-  const current = columns.get(row.column) || { compressed_bytes: 0, row_count: 0 };
-  current.compressed_bytes += row.compressed_bytes;
-  current.row_count = Math.max(current.row_count, row.row_count);
-  columns.set(row.column, current);
-}
-const entries = [...groups.entries()];
-const nav = document.getElementById("tables");
 const maps = document.getElementById("maps");
-entries.forEach(([id, columns], index) => {
-  const name = id || document.getElementById("title").textContent;
-  if (entries.length > 1) {
-    const link = document.createElement("a");
-    link.href = `#table-${index}`;
-    link.textContent = name;
-    nav.appendChild(link);
-  }
-  const section = document.createElement("section");
-  section.id = `table-${index}`;
-  const heading = document.createElement("h2");
-  heading.textContent = name;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.id = `map-${index}`;
-  section.appendChild(heading);
-  section.appendChild(svg);
-  maps.appendChild(section);
-  const rows = [...columns.entries()].map(([column, value]) => ({ column, ...value }));
-  draw(select(svg), tree(name, rows));
-  const fileRows = FILES.filter(file => (file.id || "") === id);
-  if (fileRows.length === 0) return;
+const section = document.createElement("section");
+const heading = document.createElement("h2");
+heading.textContent = TITLE;
+const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+section.appendChild(heading);
+section.appendChild(svg);
+maps.appendChild(section);
+draw(select(svg), tree(TITLE, COLUMNS), "bpr");
+if (FILES.length > 0) {
   const fileHeading = document.createElement("h2");
-  fileHeading.textContent = name + " files";
+  fileHeading.textContent = TITLE + " files";
   const fileSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   section.appendChild(fileHeading);
   section.appendChild(fileSvg);
-  draw(select(fileSvg), fileTree(name, fileRows));
-});
-function fileTree(name, files) {
-  const root = branch(name);
-  for (const file of files) {
-    const parts = [];
-    const values = file.partition_values || {};
-    for (const key of Object.keys(values)) parts.push(`${key}=${values[key] ?? "null"}`);
-    let leaf = String(file.path || file.file).split("/").pop() || file.file;
-    if (file.storage_class) leaf += ` [${file.storage_class}]`;
-    parts.push(leaf);
-    const stats = file.stats || {};
-    const value = stats.bytes_per_row || file.size || 0;
-    insert(root, parts, value);
-  }
-  recompute(root);
-  return root;
+  draw(select(fileSvg), fileTree(TITLE, FILES), "bytes");
 }
 "##;
 

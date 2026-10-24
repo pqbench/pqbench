@@ -92,7 +92,7 @@ Two consequences:
   `[start_time, end_time)` (AIP-145).
 - A range is `first_values`/`last_values`, inclusive, never `min`/`max`
   (AIP-145). A footer that spells them `min`/`max` keeps that spelling, with an
-  `aipnaming: allow(aip-145/ranges)` and the reason (`MassRow`).
+  `aipnaming: allow(aip-145/ranges)` and the reason.
 - A field is a noun, not a verb (AIP-140), and a `bool` carries no verb prefix.
 - A nested message is a value type or a document, never a resource.
 

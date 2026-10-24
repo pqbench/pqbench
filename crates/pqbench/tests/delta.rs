@@ -33,7 +33,7 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     let mut paths: Vec<_> = info.files.iter().map(|file| file.path.as_str()).collect();
     paths.sort_unstable();
     assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
-    let rows = pqbench::bytemass::bytemass(
+    let files = pqbench::bytemass::measure_files(
         common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: info.files.iter().map(|file| file.uri().unwrap()).collect(),
@@ -43,9 +43,13 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     )
     .await
     .unwrap();
-    let summary = pqbench::bytemass::aggregate(&rows).unwrap();
-    assert_eq!(summary.row_count, 14);
-    assert_eq!(summary.file_count, 2);
+    assert_eq!(files.len(), 2);
+    let row_count: u64 = files
+        .iter()
+        .flat_map(|file| &file.columns)
+        .map(|column| column.value_count.unwrap_or(0))
+        .sum();
+    assert_eq!(row_count, 14);
 }
 
 /// `list partitions` streams the log for commit times: each commit arrives with
@@ -251,7 +255,7 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     assert_eq!(part_a.bytes_per_row, stats.bytes_per_row);
     assert_eq!(Some(part_a.size), added.size_bytes);
 
-    let rows = pqbench::bytemass::bytemass(
+    let files = pqbench::bytemass::measure_files(
         common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: latest
@@ -265,7 +269,20 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     )
     .await
     .unwrap();
-    let summary = pqbench::bytemass::aggregate(&rows).unwrap();
+    assert_eq!(files.len(), 2);
+    let mut measured_bytes = 0;
+    let mut measured_uncompressed = 0;
+    let mut measured_values = 0;
+    for file in &files {
+        assert_eq!(file.columns.len(), 1);
+        let (_, column) =
+            pqbench::v1::name::parse_bytemass(&file.columns[0].name).expect("a bytemass name");
+        assert_eq!(column, "id");
+        measured_bytes += file.columns[0].compressed_bytes.unwrap_or(0);
+        measured_uncompressed += file.columns[0].uncompressed_bytes.unwrap_or(0);
+        measured_values += file.columns[0].value_count.unwrap_or(0);
+    }
+    assert_eq!(measured_values, 14);
     let mut bytes = 0;
     let mut uncompressed = 0;
     let mut file_bytes = 0;
@@ -276,10 +293,6 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
         uncompressed += mass.columns[0].uncompressed_bytes;
         file_bytes += std::fs::metadata(path).unwrap().len();
     }
-    assert_eq!(summary.row_count, 14);
-    assert_eq!(summary.file_count, 2);
-    assert_eq!(summary.columns.len(), 1);
-    assert_eq!(summary.columns[0].column, "id");
     assert_eq!(
         latest
             .files
@@ -288,8 +301,8 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
             .sum::<u64>(),
         file_bytes
     );
-    assert_eq!(summary.columns[0].compressed_bytes, bytes);
-    assert_eq!(summary.columns[0].uncompressed_bytes, uncompressed);
+    assert_eq!(measured_bytes, bytes);
+    assert_eq!(measured_uncompressed, uncompressed);
 }
 
 #[tokio::test]
@@ -324,7 +337,7 @@ async fn load_ignores_tombstoned_and_untracked_files() {
         .files
         .iter()
         .all(|file| file.path != "part=a/old file.parquet"));
-    let rows = pqbench::bytemass::bytemass(
+    let files = pqbench::bytemass::measure_files(
         common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: latest
@@ -337,7 +350,12 @@ async fn load_ignores_tombstoned_and_untracked_files() {
     )
     .await
     .unwrap();
-    assert_eq!(pqbench::bytemass::aggregate(&rows).unwrap().row_count, 14);
+    let row_count: u64 = files
+        .iter()
+        .flat_map(|file| &file.columns)
+        .map(|column| column.value_count.unwrap_or(0))
+        .sum();
+    assert_eq!(row_count, 14);
     let previous = table::load(
         common::lake(),
         &load_request(fixture.path().to_string_lossy(), Some(0)),
@@ -436,12 +454,15 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
     )
     .await
     .err()
-    .unwrap()
-    .to_string();
-    assert!(
-        error.contains("cannot stat") || error.contains("cannot open"),
-        "{error}"
-    );
+    .unwrap();
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(error) = source {
+        message.push_str(": ");
+        message.push_str(&error.to_string());
+        source = error.source();
+    }
+    assert!(message.contains("No such file or directory"), "{message}");
 }
 
 #[tokio::test]

@@ -9,7 +9,7 @@
 //! The surface is the walk's own pipeline and the measurement that consumes it
 //! — metastore, catalog, schema, table, credentials, partition, file, bytemass
 //! — and stops at `bytemass`: the commands downstream of a byte-mass stream
-//! (`viz`, `diff`, `profile`, `experiment`), the standalone codec benchmarks
+//! (`viz`, `diff`, `profile`), the standalone codec benchmarks
 //! (`lz`, `compression`) and `skill` are separate tools, and are not bound.
 //!
 //! The client handles — `Config`, `Layer`, `Workspace`, `Lake` — and the

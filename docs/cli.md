@@ -24,7 +24,6 @@ that command and links back. This file is the durable copy.
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
 | Codec speed on Parquet pages | `pqbench compression FILE` (NONE-compressed only) |
 | Column facts from row values | `pqbench profile FILE` |
-| Rewrite a sample and measure it | `pqbench experiment FILE --rewrite sort:text --aim all` |
 | Agent skill (write / DDL / codec recipes) | `pqbench skill parquet-advisor` |
 
 The walk reads with two verbs: `get` reads one resource of the walk, `list`
@@ -64,9 +63,8 @@ pqbench never writes them into the process environment itself.
 | `Partition` | `list partitions` | `list files`, humans / scripts (`--json`) |
 | `TableFile` | `list files` | `bytemass`, humans / scripts (`--json`) |
 | `remote-source` | a producer | `bytemass` |
-| `pqbench.bytemass-file` / `pqbench.bytemass-row` | `bytemass` | `viz` |
+| `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts (`--json`) |
 | `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
-| `pqbench.experiment-trial` / `pqbench.experiment-column` | `experiment` | humans / scripts (`--json`) |
 | `pqbench.skill` | `skill` (list) | an agent |
 
 A resource's `name` is its identity: the collection segment (`catalogs`,
@@ -79,7 +77,7 @@ a `kind` or a version of its own — the API version is the package's.
 | --- | --- |
 | `-o` / `--output` | `FILE` for the lz4 NDJSON stream; `PREFIX` on `viz`. Independent of what stdout shows. |
 | `--format` | Every streaming command: `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
-| `--json` | `bytemass`, `lz`, `compression`, `profile`, `experiment`: stream NDJSON on stdout (same as `--format json`). |
+| `--json` | `bytemass`, `lz`, `compression`, `profile`: stream NDJSON on stdout (same as `--format json`). |
 
 ## Auth — how to reach data
 
@@ -418,22 +416,16 @@ Read these when the input is a Parquet file or a table format:
 - AWS default credentials: <https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html>
 
 Repo docs: [delta.md](delta.md), [iceberg.md](iceberg.md), [viz.md](viz.md),
-[profile.md](profile.md), [experiment.md](experiment.md), [skill.md](skill.md),
-[demo.md](demo.md).
+[profile.md](profile.md), [skill.md](skill.md), [demo.md](demo.md).
 
-## File footer metadata
+## File footer facts
 
-The `bytemass-file` machine record includes a `metadata` object, even for an
-empty file. It contains `creator`, the footer `format_version`, ordered
-`key_values` (including duplicate keys), and `row_groups`. Metadata values
-are UTF-8-safe previews of at most 256 bytes; `value_bytes` and `truncated`
-distinguish previews from complete values. Missing values remain null.
-
-Each row group reports its rows and compressed/uncompressed column-chunk
-bytes, plus `column_indexes` and `offset_indexes` booleans in leaf-column
-order. Presence is available without loading index contents. These facts need
-only the footer; `--indexes` still controls the extra index read. Footer
-format version does not identify the data-page version or compression level.
+`bytemass` reads only the footer. It emits one `Blob` per file — its
+`size_bytes`, `row_group_count`, and `column_count` — and one `Bytemass` per
+column, its chunks summed over the file's row groups: on-disk and uncompressed
+bytes, the codec, the encodings, whether a dictionary page is present, the
+value and null counts, and the first and last values from the statistics. No
+data page is decoded, so it works on any Parquet file, compressed or not.
 
 ## Selecting files
 
@@ -461,26 +453,3 @@ These patterns enumerate physical objects, not a table's active snapshot.
 Use `list partitions | list files` for Delta/Iceberg analysis to avoid counting
 obsolete files.
 
-## Page headers without indexes
-
-`bytemass --pages` emits a `bytemass-page` record for every page, including
-its row group, leaf path, ordinal, absolute offset, header length, page type,
-compressed/uncompressed payload sizes, encoding, and applicable value or
-dictionary-entry counts. A v2 page also reports row count. A v1 value count
-is not a row count for repeated columns.
-
-```console
-$ pqbench bytemass data.parquet --pages --format table
-```
-
-This opt-in scan works without ColumnIndex/OffsetIndex and skips compressed
-payloads without decoding them. Small header reads can include up to 4 KiB
-of payload read-ahead; unusually large headers are capped at 1 MiB. Remote
-reads reuse object identity conditions. Ordinary bytemass remains footer-only;
-`--indexes` independently loads index contents. Header sizes exclude the
-header itself, while chunk sizes include it. Checksums of skipped payloads
-are not verified. Encrypted headers are unsupported.
-
-Observed dictionary fallback and page boundaries do not establish which
-writer thresholds caused them. `viz` ignores page records and continues to
-render the column totals from the same stream.

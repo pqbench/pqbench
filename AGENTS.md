@@ -198,7 +198,7 @@ analogy, convention, or precedent:
   and tests it
 - `skills/` — agent skills compiled into `pqbench skill`
 - `scripts/` — build / sample / smoke-test helpers
-- `docs/` — user documentation (`cli.md`, `profile.md`, `experiment.md`,
+- `docs/` — user documentation (`cli.md`, `profile.md`,
   `skill.md`, `viz.md`)
 - `Makefile` + pre-commit hook — the gate
 

@@ -5,21 +5,21 @@ Companion to `parquet-advisor`. Print with
 
 ## Compression levels (pros and cons)
 
-Verify with
-`pqbench experiment data.parquet --rewrite codec:zstd@1 --rewrite codec:zstd@3 --rewrite codec:zstd@7 --rewrite codec:snappy --aim storage`.
+Verify by sweeping the levels in the writer and comparing each output with
+`pqbench bytemass` (bytes and bytes per value), on production-shaped data.
 
 ### zstd
 
 | Level | Pros | Cons |
 | --- | --- | --- |
 | `1` | Fastest zstd write; still beats snappy on many tables | Weaker ratio than 3 |
-| `3` | Default in the experiment control; good BPR/CPU | Not the best ratio |
-| `5`–`7` | Often a few percent better BPR on text/enums | Noticeably slower writes |
+| `3` | Default lake write; good bytes-per-value/CPU | Not the best ratio |
+| `5`–`7` | Often a few percent better bytes per value on text/enums | Noticeably slower writes |
 | `9` | Cold data, infrequent rewrite | High write CPU and memory |
-| `15`–`22` | Last-resort archive | Diminishing BPR; can stall ingest |
+| `15`–`22` | Last-resort archive | Diminishing returns; can stall ingest |
 
-Use `zstd@3` unless experiment shows `zstd@1` within ~5% BPR **and**
-ingest is the bottleneck, or `zstd@7` wins >5% BPR on the heavy
+Use `zstd@3` unless a sweep shows `zstd@1` within ~5% bytes per value **and**
+ingest is the bottleneck, or `zstd@7` wins >5% on the heavy
 columns and writes are batch.
 
 ### Other codecs
@@ -36,34 +36,33 @@ will not help. Change type, dictionary, or sort first.
 
 ## Write / ingest recipes
 
-Apply the **winning** experiment spec to the writer, not only to the
-sample.
+Apply the chosen spec to the writer, not only to a sample.
 
 ### Sort and clustering
 
-| Experiment winner | Ingest change |
+| Change | Ingest change |
 | --- | --- |
 | `sort:ts` | Sort the batch by `ts` before write. Spark: `repartition`/`sortWithinPartitions`. Iceberg: write sort-order. |
 | `sort:country,city` | Composite sort; keep country first when `country` determines `city`. |
-| `zorder:lat,lon` / `hilbert:lat,lon` | Engine Z-order/Hilbert if it has one; otherwise pre-order ranks in the job. Measure skip **and** BPR — Z-order can help skip and hurt BPR. |
+| `zorder:lat,lon` / `hilbert:lat,lon` | Engine Z-order/Hilbert if it has one; otherwise pre-order ranks in the job. Measure skip **and** bytes per value — Z-order can help skip and hurt size. |
 | no sort win | Do not add a shuffle. |
 
 ### Dictionary, pages, row groups
 
-| Experiment winner | Ingest change |
+| Setting | Ingest change |
 | --- | --- |
 | `dictionary:on` | Enable dict on low-NDV columns; leave off on unique ids / high-entropy blobs. |
 | `dictionary:off` | Unique strings, UUID text, or dict pages that bloated the file. |
 | `dictionary:BYTES` | Cap dict page (better page skip, more fallback PLAIN). |
-| `page-size:8192` | Smaller pages: better predicate skip, more overhead (worse BPR). |
-| `page-size:1048576` | Default-ish; better BPR, coarser skip. |
+| `page-size:8192` | Smaller pages: better predicate skip, more overhead (worse bytes per value). |
+| `page-size:1048576` | Default-ish; better size, coarser skip. |
 | `row-group-size:ROWS` | Smaller RGs: more skip granularity, more footer/RG overhead. |
 | `encoding:delta` | Sorted ints/timestamps (integer columns). |
 | `encoding:delta_byte_array` | Strings with long shared prefixes after sort. |
 | `encoding:byte_stream_split` | Somewhat compressible floats (then zstd). |
 
-Encodings are type-specific: the experiment applies a requested encoding
-only to compatible columns, and errors if none apply.
+Encodings are type-specific: apply a requested encoding only to compatible
+columns.
 
 ### Representation (ingest-time, not a codec)
 
@@ -73,14 +72,14 @@ These are ingest decisions; confirm the current storage with `profile`
 | Observation | Ingest change |
 | --- | --- |
 | UUID text in a `string` column | Write `FIXED_LEN_BYTE_ARRAY(16)` or two INT64s; never 36-char text. |
-| Integer / decimal values stored as `string` | Parse to INT64 / DECIMAL at ingest (`cast` verifies). |
+| Integer / decimal values stored as `string` | Parse to INT64 / DECIMAL at ingest; confirm with `bytemass`. |
 | Timestamp text stored as `string` | Parse to TIMESTAMP (micros). |
 | Very large `length_max` on a queried field | Extract queried fields to columns; leftover blob in its own file/column. |
 | Boolean stored as `string` | Native BOOLEAN. |
 
 ## Table DDL recipes
 
-No engine owns all knobs. Map the winner to the table you actually write.
+No engine owns all knobs. Map the chosen settings to the table you actually write.
 
 ### Iceberg (Spark)
 
@@ -181,23 +180,23 @@ INSERT INTO t SELECT * FROM src ORDER BY country, city;
 
 ```text
 compression          = zstd
-compression_level    = 3          # from experiment
+compression_level    = 3          # from a writer sweep
 dictionary_enabled   = true       # except unique/high-entropy cols
-data_page_size       = 8192..1MiB # skip vs BPR
-max_row_group_rows   = from experiment
-sorting_columns      = winning sort:
+data_page_size       = 8192..1MiB # skip vs bytes per value
+max_row_group_rows   = from a writer sweep
+sorting_columns      = chosen sort
 ```
 
 ## Combining aims
 
-- **Storage only:** pick the trial with lowest `bytes` /
-  `bytes_per_row`. Put that codec/level and sort on the writer.
-- **Skipping only:** pick lowest `skip_span_ratio` on the filter
-  columns; accept a small BPR regression if point-skip improves.
-- **Both:** prefer a trial that improves skip on the filter column
-  without raising `ratio` above ~1.05 versus the best storage trial.
-  If Z-order helps skip but loses >10% BPR, say so and let the owner
-  choose.
+- **Storage only:** pick the candidate with the lowest bytes / bytes per
+  value. Put that codec/level and sort on the writer.
+- **Skipping only:** pick the lowest skip span on the filter columns;
+  accept a small size regression if point-skip improves.
+- **Both:** prefer a candidate that improves skip on the filter column
+  without raising bytes per value above ~1.05 versus the best storage
+  candidate. If Z-order helps skip but loses >10% size, say so and let the
+  owner choose.
 
 ## Recipe examples
 
@@ -206,8 +205,8 @@ sorting_columns      = winning sort:
 ```markdown
 ## Recipe: sort country, city; zstd@3
 - Aim: both
-- Evidence: experiment `sort:country,city` ratio 0.71;
-  city skip_span_ratio 0.12 vs control 0.81 (sample 8192)
+- Evidence: bytemass on the rewritten output 0.71× the source bytes;
+  city skip span 0.12 vs 0.81 before (source: sample 8192 / footer)
 - Write / ingest: sortWithinPartitions(country, city); zstd level 3
 - Table DDL: Iceberg WRITE ORDERED BY country, city;
   write.parquet.compression-codec=zstd, compression-level=3
@@ -229,6 +228,6 @@ sorting_columns      = winning sort:
 - Table DDL: BINARY(16) / UUID native type, not STRING
 - Compression: leave zstd@3 — level will not shrink hex text much
 - Risk: break text consumers
-- Unverified: experiment cast is int64/double/string only today;
-  measure after the writer change
+- Unverified: the writer change was not measured;
+  measure the new output with bytemass
 ```

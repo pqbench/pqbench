@@ -23,14 +23,13 @@ No `-o` on a TTY. A named skill is raw markdown.
 
 ## parquet-advisor
 
-Turns **facts** (bytemass, profile, experiment) into **recipes**:
+Turns **facts** (bytemass, profile) into **recipes**:
 
 - write / ingest settings (sort, dictionary, page size, casts)
 - table DDL (Iceberg sort-order, Delta ZORDER, Spark options, DuckDB COPY)
 - compression codec and **level**, with pros and cons
 
-It does not measure files and does not replace `experiment`. The
-workflow is: L0 byte mass → profile → bounded rewrites → recipe with
-evidence.
+It does not measure files. The
+workflow is: L0 byte mass → profile → recipe with evidence.
 
 Source markdown: `skills/parquet-advisor/`.

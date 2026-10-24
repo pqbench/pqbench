@@ -2,7 +2,7 @@
 
 use crate::handles::Lake;
 use crate::prelude::*;
-use crate::records::{many, MassRow};
+use crate::records::{many, Bytemass};
 use crate::requests::BytemassRequest;
 
 #[pyfunction]
@@ -20,7 +20,7 @@ fn bytemass(
                 .await
                 .map_err(|error| error.to_string())
         },
-        MassRow::attach,
+        Bytemass::attach,
     )
 }
 

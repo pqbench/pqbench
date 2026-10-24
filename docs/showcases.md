@@ -23,17 +23,16 @@ bytes — `bytemass` reads only the footer, so it answers in milliseconds:
 
 ```console run
 $ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
-column            type        codec         encodings                  bytes  values
-----------------  ----------  ------------  ------------------------  ------  ------
-text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
-label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
-dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
-communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
-datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
-username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
-url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
+column            codec         encodings                  bytes  values
+----------------  ------------  ------------------------  ------  ------
+text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
+label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
+dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
+communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
+datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
+username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
+url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 files: 1
-rows: 3000
 columns: 7
 ```
 
@@ -91,76 +90,19 @@ columns: 0
 Speeds vary run to run; the ratios do not. zstd takes the file to 0.56 of its
 bytes (44% smaller); snappy and lz4 reach only 0.81 (19% smaller) but compress
 about twice as fast. gzip buys nothing over zstd and writes several times
-slower. Unless write or decode speed is the binding constraint, zstd
-is the answer here — and this is why the `experiment` control writes zstd.
-
-## Does a layout change pay?
-
-Codecs are not the only lever. `experiment` rewrites a decoded sample and
-measures the result, so a hypothesis is verified rather than guessed. The
-control is always zstd with the dictionary on:
-
-```console run
-$ pqbench experiment crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --rewrite 'sort:communityName' --aim storage --format table
-trial      bytes  bytes/row  row_groups  ratio
--------  -------  ---------  ----------  -----
-control  1143595     381.20           1      -
-
-trial    column            codec                bytes  bytes/row  dictionary
--------  ----------------  ------------------  ------  ---------  ----------
-control  communityName     ZSTD(ZstdLevel(1))    2276       0.76  true
-control  dataType          ZSTD(ZstdLevel(1))     287       0.10  true
-control  datetime          ZSTD(ZstdLevel(1))      74       0.02  true
-control  label             ZSTD(ZstdLevel(1))    2250       0.75  true
-control  text              ZSTD(ZstdLevel(1))  262159      87.39  true
-control  url_encoded       ZSTD(ZstdLevel(1))  602109     200.70  true
-control  username_encoded  ZSTD(ZstdLevel(1))  272490      90.83  true
-
-trial                 bytes  bytes/row  row_groups  ratio
-------------------  -------  ---------  ----------  -----
-sort:communityName  1137116     379.04           1   0.99
-
-trial               column            codec                bytes  bytes/row  dictionary
-------------------  ----------------  ------------------  ------  ---------  ----------
-sort:communityName  communityName     ZSTD(ZstdLevel(1))     485       0.16  true
-sort:communityName  dataType          ZSTD(ZstdLevel(1))     214       0.07  true
-sort:communityName  datetime          ZSTD(ZstdLevel(1))      74       0.02  true
-sort:communityName  label             ZSTD(ZstdLevel(1))     465       0.15  true
-sort:communityName  text              ZSTD(ZstdLevel(1))  258821      86.27  true
-sort:communityName  url_encoded       ZSTD(ZstdLevel(1))  601849     200.62  true
-sort:communityName  username_encoded  ZSTD(ZstdLevel(1))  273251      91.08  true
-rows: 3000
-aim: storage
-trials: 2
-```
-
-Two lessons in one table:
-
-- **The codec was the win.** The control is 1.14 MB against the 2.10 MB source
-  — 46% smaller — from compression alone, before any layout change.
-- **Sorting the small key is not.** `sort:communityName` shrinks
-  `communityName` and `label` about five-fold (2276 → 485 bytes), yet the file
-  moves 1% (`ratio` 0.99), because those columns were never the bytes. Sorting
-  by a low-cardinality key when the weight is in random blobs buys a shuffle
-  and nothing else.
-
-Ratios compare a trial to the control, not to the source file's original
-encodings — the control row carries no `ratio`. Use `--aim skipping` or
-`--aim all` to also measure row-group min/max locality. To turn a winning trial
-into an ingest change, see the `parquet-advisor` skill
-([Agent skills](skill.md)).
+slower. Unless write or decode speed is the binding constraint, zstd is the
+answer here.
 
 ## Files from the wild
 
 The committed samples in `data/samples/` are real Parquet from public datasets:
 SQuAD (nested lists) and the TPC-DS `customer` table (`DELTA_BYTE_ARRAY`
-encoding). SQuAD's `bytemass` emits one row per row group per column — 88 row
-groups here — so aggregate across row groups for a per-column total:
+encoding). `bytemass` folds each column's row groups into one record, so the
+stream is already a per-column total:
 
 ```console run
 $ pqbench bytemass data/samples/squad.parquet --format json \
->     | jq -r 'select(.kind == "pqbench.bytemass-row") | [.column, .compressed_bytes] | @tsv' \
->     | awk '{sum[$1] += $2} END {for (c in sum) printf "%-32s %10d\n", c, sum[c]}' \
+>     | jq -r 'select(.name | endswith("/bytemass")) | [(.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), .compressed_bytes] | @tsv' \
 >     | sort -k2 -nr
 context                             8490172
 question                            3027096
@@ -179,19 +121,18 @@ A real table with a non-default encoding reads the same way:
 
 ```console run
 $ pqbench bytemass data/samples/delta_byte_array.parquet --format table
-column                 type        codec         encodings         bytes  values
----------------------  ----------  ------------  ----------------  -----  ------
-c_customer_id          BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
-c_salutation           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000
-c_first_name           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000
-c_last_name            BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000
-c_preferred_cust_flag  BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000
-c_birth_country        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
-c_login                BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
-c_email_address        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
-c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
+column                 codec         encodings         bytes  values
+---------------------  ------------  ----------------  -----  ------
+c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
+c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000
+c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000
+c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000
+c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000
+c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
+c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
+c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
+c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
 files: 1
-rows: 1000
 columns: 9
 ```
 
@@ -205,5 +146,5 @@ The footer reports the encoding the writer actually used, and
   auth for `s3://` and catalogs.
 - **The same pipe over Delta, Iceberg, and a catalog** — [Visual demos](demo.md).
 - **Recipes from the facts** — `pqbench skill parquet-advisor`
-  ([Agent skills](skill.md)) turns a `bytemass` or `experiment` result into a
+  ([Agent skills](skill.md)) turns a `bytemass` or `profile` result into a
   write-path or DDL change.

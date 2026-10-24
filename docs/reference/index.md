@@ -10,7 +10,6 @@ configuration, the install methods, and the per-command pages.
 - [Distribution](../distribution.md) — install the released binary, the
   supported targets, and how releases are cut.
 - [`profile`](../profile.md) — per-column facts from a decoded row sample.
-- [`experiment`](../experiment.md) — rewrite a sample and measure the result.
 - [`diff`](../diff.md) — compare two Parquet files or saved bytemass streams,
   column by column.
 - [`viz`](../viz.md) — collect a bytemass stream into a static HTML treemap.

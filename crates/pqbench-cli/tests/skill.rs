@@ -34,7 +34,7 @@ fn skill_prints_recipes_with_levels_and_ddl() {
         .unwrap();
     assert!(output.status.success());
     let body = String::from_utf8_lossy(&output.stdout);
-    assert!(body.contains("pqbench experiment"), "{body}");
+    assert!(body.contains("pqbench bytemass"), "{body}");
     assert!(body.contains("zstd@3"), "{body}");
     let recipes = pqbench()
         .args(["skill", "parquet-advisor", "recipes"])

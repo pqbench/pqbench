@@ -12,9 +12,7 @@ use parquet::basic::{
 };
 use parquet::column::page::{Page as ParquetPage, PageReader};
 use parquet::data_type::{AsBytes, BoolType, ByteArray, ByteArrayType, DoubleType, Int64Type};
-use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, SortingColumn,
-};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, SortingColumn};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
@@ -23,9 +21,8 @@ use parquet::record::Field;
 use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, FileMetadata, Kind, MetadataEntry, MetadataParser,
-    Page, PageParser, ParquetFile, RowGroupMetadata, Sample, TypedColumn, TypedSample, Value,
-    WriteOptions,
+    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
+    Sample, TypedColumn, TypedSample, Value, WriteOptions,
 };
 
 /// The parquet-rs-backed page parser.
@@ -64,29 +61,15 @@ impl MetadataParser for ParquetRsParser {
     /// Only the footer is read: no page is decoded, so compressed columns are
     /// fine, and large files aren't loaded into memory.
     fn read_masses(&self, path: &Path) -> Result<FileMass, Error> {
-        read_file_masses(path, false)
+        read_file_masses(path)
     }
 }
 
 /// Decode byte masses from a complete Parquet footer without reading pages.
-pub(crate) fn read_footer_masses(footer: &[u8]) -> Result<FileMass, Error> {
+pub(crate) fn read_footer_masses(footer: &[u8], size_bytes: u64) -> Result<FileMass, Error> {
     let metadata =
         ParquetMetaDataReader::new().parse_and_finish(&bytes::Bytes::copy_from_slice(footer))?;
-    create_masses(&metadata)
-}
-
-/// Lowest ColumnIndex/OffsetIndex offset in a footer, when one exists.
-pub(crate) fn page_index_start(footer: &[u8]) -> Result<Option<u64>, Error> {
-    let metadata =
-        ParquetMetaDataReader::new().parse_and_finish(&bytes::Bytes::copy_from_slice(footer))?;
-    Ok(index_start(&metadata))
-}
-
-/// Decode footer + page indexes from a file suffix (`tail` ends at `file_size`).
-pub(crate) fn read_tail_masses(tail: &[u8], file_size: u64) -> Result<FileMass, Error> {
-    let mut reader = ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Optional);
-    reader.try_parse_sized(&bytes::Bytes::copy_from_slice(tail), file_size)?;
-    create_masses(&reader.finish()?)
+    Ok(create_masses(&metadata, size_bytes))
 }
 
 /// Decode up to `max_rows` leading rows of a local file into stringified cells.
@@ -493,190 +476,50 @@ fn value_text(value: &Value) -> String {
 }
 
 /// Read byte masses from an in-memory Parquet file.
-pub(crate) fn read_buffer_masses(bytes: &[u8], indexes: bool) -> Result<FileMass, Error> {
-    let policy = if indexes {
-        PageIndexPolicy::Optional
-    } else {
-        PageIndexPolicy::Skip
-    };
-    let metadata = ParquetMetaDataReader::new()
-        .with_page_index_policy(policy)
-        .parse_and_finish(&bytes::Bytes::copy_from_slice(bytes))?;
-    create_masses(&metadata)
+pub(crate) fn read_buffer_masses(bytes: &[u8]) -> Result<FileMass, Error> {
+    let metadata =
+        ParquetMetaDataReader::new().parse_and_finish(&bytes::Bytes::copy_from_slice(bytes))?;
+    Ok(create_masses(&metadata, bytes.len() as u64))
 }
 
-fn index_start(metadata: &ParquetMetaData) -> Option<u64> {
-    metadata
-        .row_groups()
-        .iter()
-        .flat_map(|row_group| row_group.columns())
-        .filter_map(|column| {
-            let column_index = column
-                .column_index_offset()
-                .and_then(|offset| u64::try_from(offset).ok())
-                .filter(|offset| *offset > 0);
-            let offset_index = column
-                .offset_index_offset()
-                .and_then(|offset| u64::try_from(offset).ok())
-                .filter(|offset| *offset > 0);
-            match (column_index, offset_index) {
-                (Some(left), Some(right)) => Some(left.min(right)),
-                (Some(offset), None) | (None, Some(offset)) => Some(offset),
-                (None, None) => None,
-            }
-        })
-        .min()
-}
-
-/// Read byte masses from a local file. `indexes` loads ColumnIndex/OffsetIndex.
-pub(crate) fn read_file_masses(path: &Path, indexes: bool) -> Result<FileMass, Error> {
+/// Read byte masses from a local file. One open: the size comes from the same
+/// handle the footer is read from.
+pub(crate) fn read_file_masses(path: &Path) -> Result<FileMass, Error> {
     let file = std::fs::File::open(path).map_err(Error::Io)?;
-    let policy = if indexes {
-        PageIndexPolicy::Optional
-    } else {
-        PageIndexPolicy::Skip
-    };
-    let metadata = ParquetMetaDataReader::new()
-        .with_page_index_policy(policy)
-        .parse_and_finish(&file)?;
-    create_masses(&metadata)
+    let size_bytes = file.metadata().map_err(Error::Io)?.len();
+    let metadata = ParquetMetaDataReader::new().parse_and_finish(&file)?;
+    Ok(create_masses(&metadata, size_bytes))
 }
 
-fn create_masses(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
-    let mut row_count = 0i64;
+/// Read one `ColumnMass` per column chunk from the parsed footer.
+fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
+    let mut row_count = 0u64;
     let mut columns = Vec::new();
-    for (row_group_index, row_group) in metadata.row_groups().iter().enumerate() {
-        let row_group_rows = u64::try_from(row_group.num_rows()).unwrap_or(0);
-        row_count += row_group.num_rows();
-        for (column_index, meta) in row_group.columns().iter().enumerate() {
+    for row_group in metadata.row_groups() {
+        row_count += u64::try_from(row_group.num_rows()).unwrap_or(0);
+        for meta in row_group.columns() {
             let stats = meta.statistics();
-            let pages = metadata
-                .offset_index()
-                .and_then(|indexes| indexes.get(row_group_index))
-                .and_then(|row| row.get(column_index));
             columns.push(ColumnMass {
-                chunk_offset: meta.byte_range().0,
                 column: meta.column_path().string(),
                 compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
                 uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
                 codec: meta.compression().to_string(),
-                encodings: meta
-                    .encodings()
-                    .map(|encoding| encoding.to_string())
-                    .collect(),
+                encodings: meta.encodings().map(|e| e.to_string()).collect(),
                 num_values: u64::try_from(meta.num_values()).unwrap_or(0),
                 dictionary: meta.dictionary_page_offset().is_some(),
                 null_count: stats.and_then(Statistics::null_count_opt),
                 distinct_count: stats.and_then(Statistics::distinct_count_opt),
                 min_value: stats.and_then(|value| stat_text(value, true)),
                 max_value: stats.and_then(|value| stat_text(value, false)),
-                physical_type: meta.column_type().to_string(),
-                row_group: u32::try_from(row_group_index).unwrap_or(0),
-                row_group_rows,
-                page_count: pages.map(|index| index.page_locations().len() as u64),
-                page_compressed_bytes: pages.map(|index| {
-                    index
-                        .page_locations()
-                        .iter()
-                        .map(|page| u64::try_from(page.compressed_page_size).unwrap_or(0))
-                        .sum()
-                }),
             });
         }
     }
-    let file = metadata.file_metadata();
-    let key_values = file
-        .key_value_metadata()
-        .into_iter()
-        .flatten()
-        .map(|entry| {
-            let value_bytes = entry.value.as_ref().map(String::len);
-            let value = entry.value.as_ref().map(|value| {
-                let mut end = value.len().min(256);
-                while !value.is_char_boundary(end) {
-                    end -= 1;
-                }
-                value[..end].to_owned()
-            });
-            MetadataEntry {
-                key: entry.key.clone(),
-                value,
-                value_bytes,
-                truncated: value_bytes.is_some_and(|size| size > 256),
-            }
-        })
-        .collect();
-    let row_groups = metadata
-        .row_groups()
-        .iter()
-        .map(|group| {
-            let sum = |compressed: bool| {
-                group.columns().iter().try_fold(0u64, |total, column| {
-                    let size = if compressed {
-                        column.compressed_size()
-                    } else {
-                        column.uncompressed_size()
-                    };
-                    let size = u64::try_from(size).map_err(|_| Error::Overflow("column size"))?;
-                    total
-                        .checked_add(size)
-                        .ok_or_else(|| Error::Overflow("row-group size"))
-                })
-            };
-            Ok(RowGroupMetadata {
-                row_count: u64::try_from(group.num_rows())
-                    .map_err(|_| Error::Overflow("row count"))?,
-                compressed_bytes: sum(true)?,
-                uncompressed_bytes: sum(false)?,
-                column_indexes: group
-                    .columns()
-                    .iter()
-                    .map(|column| column.column_index_offset().is_some())
-                    .collect(),
-                offset_indexes: group
-                    .columns()
-                    .iter()
-                    .map(|column| column.offset_index_offset().is_some())
-                    .collect(),
-            })
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-    Ok(FileMass {
-        metadata: FileMetadata {
-            creator: file.created_by().map(str::to_owned),
-            format_version: file.version(),
-            key_values,
-            row_groups,
-        },
-        row_count: u64::try_from(row_count).unwrap_or(0),
+    FileMass {
+        size_bytes,
+        row_count,
         row_group_count: metadata.row_groups().len(),
-        sorting_columns: sorting_columns(metadata),
         columns,
-    })
-}
-
-fn sorting_columns(metadata: &ParquetMetaData) -> Vec<String> {
-    let Some(row_group) = metadata.row_groups().first() else {
-        return Vec::new();
-    };
-    let Some(columns) = row_group.sorting_columns() else {
-        return Vec::new();
-    };
-    columns
-        .iter()
-        .filter_map(|column| {
-            let path = row_group
-                .columns()
-                .get(usize::try_from(column.column_idx).ok()?)?
-                .column_path()
-                .string();
-            Some(if column.descending {
-                format!("{path} DESC")
-            } else {
-                path
-            })
-        })
-        .collect()
+    }
 }
 
 fn stat_text(stats: &Statistics, min: bool) -> Option<String> {
@@ -732,75 +575,4 @@ impl From<parquet::errors::ParquetError> for Error {
     fn from(e: parquet::errors::ParquetError) -> Self {
         Error::Parquet(Box::new(e))
     }
-}
-
-pub(crate) fn read_page_header(bytes: &[u8]) -> Result<super::api::PageHeader, Error> {
-    use parquet_format_safe::{PageHeader, PageType};
-    let mut input = std::io::Cursor::new(bytes);
-    let mut protocol =
-        parquet_format_safe::thrift::protocol::TCompactInputProtocol::new(&mut input, 1_048_576);
-    let header = PageHeader::read_from_in_protocol(&mut protocol)
-        .map_err(|e| Error::Parquet(Box::new(e)))?;
-    let positive =
-        |value: i32| u64::try_from(value).map_err(|_| Error::Overflow("page size or count"));
-    let mut result = super::api::PageHeader {
-        header_bytes: input.position(),
-        page_type: match header.type_ {
-            PageType::DATA_PAGE => "DATA_PAGE".into(),
-            PageType::DATA_PAGE_V2 => "DATA_PAGE_V2".into(),
-            PageType::DICTIONARY_PAGE => "DICTIONARY_PAGE".into(),
-            PageType::INDEX_PAGE => "INDEX_PAGE".into(),
-            other => format!("UNKNOWN({})", other.0),
-        },
-        compressed_bytes: positive(header.compressed_page_size)?,
-        uncompressed_bytes: positive(header.uncompressed_page_size)?,
-        value_count: None,
-        row_count: None,
-        dictionary_entries: None,
-        encoding: None,
-    };
-    match header.type_ {
-        PageType::DATA_PAGE => {
-            let data = header
-                .data_page_header
-                .ok_or_else(|| Error::Missing("DATA_PAGE header"))?;
-            result.value_count = Some(positive(data.num_values)?);
-            result.encoding = Some(encoding_name(data.encoding.0));
-        }
-        PageType::DATA_PAGE_V2 => {
-            let data = header
-                .data_page_header_v2
-                .ok_or_else(|| Error::Missing("DATA_PAGE_V2 header"))?;
-            result.value_count = Some(positive(data.num_values)?);
-            result.row_count = Some(positive(data.num_rows)?);
-            positive(data.num_nulls)?;
-            positive(data.definition_levels_byte_length)?;
-            positive(data.repetition_levels_byte_length)?;
-            result.encoding = Some(encoding_name(data.encoding.0));
-        }
-        PageType::DICTIONARY_PAGE => {
-            let data = header
-                .dictionary_page_header
-                .ok_or_else(|| Error::Missing("DICTIONARY_PAGE header"))?;
-            result.dictionary_entries = Some(positive(data.num_values)?);
-            result.encoding = Some(encoding_name(data.encoding.0));
-        }
-        _ => {}
-    }
-    Ok(result)
-}
-fn encoding_name(value: i32) -> String {
-    match value {
-        0 => "PLAIN",
-        2 => "PLAIN_DICTIONARY",
-        3 => "RLE",
-        4 => "BIT_PACKED",
-        5 => "DELTA_BINARY_PACKED",
-        6 => "DELTA_LENGTH_BYTE_ARRAY",
-        7 => "DELTA_BYTE_ARRAY",
-        8 => "RLE_DICTIONARY",
-        9 => "BYTE_STREAM_SPLIT",
-        _ => return format!("UNKNOWN({value})"),
-    }
-    .into()
 }

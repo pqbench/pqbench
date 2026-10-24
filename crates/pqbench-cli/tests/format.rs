@@ -102,22 +102,3 @@ fn profile_table_format_lists_columns() {
         "table must not carry NDJSON: {stdout}"
     );
 }
-
-#[test]
-fn experiment_table_format_lists_trials() {
-    let stdout = table(&[
-        "experiment",
-        parquet_fixture(),
-        "--rows",
-        "first:64",
-        "--format",
-        "table",
-    ]);
-    assert!(stdout.contains("trial"), "{stdout}");
-    assert!(stdout.contains("bytes/row"), "{stdout}");
-    assert!(stdout.contains("control"), "{stdout}");
-    assert!(
-        !stdout.contains("{\"kind\""),
-        "table must not carry NDJSON: {stdout}"
-    );
-}

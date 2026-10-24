@@ -208,8 +208,8 @@ fn bytemass_reads_a_table_file_from_stdin() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("pqbench.bytemass-row"));
-    assert!(stdout.contains("url_encoded"));
+    assert!(stdout.contains("blobs/"), "{stdout}");
+    assert!(stdout.contains("columns/url_encoded/bytemass"), "{stdout}");
 }
 
 #[test]
@@ -250,13 +250,25 @@ fn bytemass_measures_mixed_table_ids() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson_records(&output.stdout);
-    let ids: Vec<_> = records
+    let blobs = records
         .iter()
-        .filter(|record| record["kind"] == "pqbench.bytemass-row")
-        .map(|record| record["id"].as_str().unwrap().to_string())
-        .collect();
-    assert!(ids.contains(&a.to_string()), "{ids:?}");
-    assert!(ids.contains(&b.to_string()), "{ids:?}");
+        .filter(|record| {
+            record["name"]
+                .as_str()
+                .is_some_and(|name| pqbench::v1::name::parse_blob(name).is_some())
+        })
+        .count();
+    let columns = records
+        .iter()
+        .filter(|record| {
+            record["name"]
+                .as_str()
+                .is_some_and(|name| pqbench::v1::name::parse_bytemass(name).is_some())
+        })
+        .count();
+    // One Blob and seven Bytemass records per table file, for both ids.
+    assert_eq!(blobs, 2, "{records:?}");
+    assert_eq!(columns, 14, "{records:?}");
 }
 
 /// A minimal Delta table on disk: one commit with a protocol and metadata and

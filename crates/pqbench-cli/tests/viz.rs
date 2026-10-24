@@ -51,16 +51,29 @@ fn viz_collects_a_bytemass_stream_into_html() {
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains("d3-hierarchy@3"));
-    assert!(html.contains("bytes per row"));
+    assert!(html.contains("bpr"));
 }
 
 #[test]
 fn viz_stores_proxied_file_stats() {
-    let file = r#"{"kind":"pqbench.bytemass-file","id":"sales","path":"year=2024/part-0.parquet","file":"part-0.parquet","size":40,"storage_class":"STANDARD","partition_values":{"year":"2024"},"stats":{"record_count":10,"bytes_per_row":4.0}}"#;
-    let row = format!(
-        r#"{{"kind":"pqbench.bytemass-row","id":"sales","uri":"{}","size_bytes":40,"row_count":10,"column":"id","compressed_bytes":8,"uncompressed_bytes":16,"codec":"ZSTD"}}"#,
-        parquet_fixture()
-    );
+    let blob = pqbench::v1::name::blob_name("/tmp/part-0.parquet");
+    let column = pqbench::v1::name::bytemass(&blob, "id");
+    let file = serde_json::json!({
+        "name": blob,
+        "size_bytes": 40,
+        "storage_class": "STANDARD",
+        "row_group_count": 1,
+        "column_count": 1,
+    });
+    let row = serde_json::json!({
+        "name": column,
+        "compressed_bytes": 8,
+        "uncompressed_bytes": 16,
+        "codec": "ZSTD",
+        "encodings": ["PLAIN"],
+        "value_count": 10,
+        "null_count": 0,
+    });
     let document = format!("{file}\n{row}\n");
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
@@ -75,7 +88,7 @@ fn viz_stores_proxied_file_stats() {
     );
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
     assert!(html.contains("STANDARD"), "{html}");
-    assert!(html.contains("year=2024"), "{html}");
+    assert!(html.contains("part-0.parquet"), "{html}");
 }
 
 #[test]

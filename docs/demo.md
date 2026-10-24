@@ -5,18 +5,17 @@ of files. The pipe is the same in every case:
 
 ```console run
 $ pqbench bytemass examples/quickstart.parquet --format table
-column  type   codec         encodings                 bytes  values
-------  -----  ------------  ------------------------  -----  ------
-id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
-year    INT32  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+column  codec         encodings                 bytes  values
+------  ------------  ------------------------  -----  ------
+id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
 files: 1
-rows: 8
 columns: 2
 $ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
 ```
 
 A terminal prints an aligned table; a pipe streams NDJSON (`Partition`,
-`TableFile`, `pqbench.bytemass-row`). `--format json` forces the
+`TableFile`, `Blob`, `Bytemass`). `--format json` forces the
 stream, and `-o` also writes it. `pqbench viz` collects the bytemass stream into
 a static HTML treemap.
 
@@ -36,7 +35,7 @@ $ pqbench list partitions docker/e2e-lakehouse/table \
 >   | pqbench list files \
 >   | jq -c 'select(.name | contains("/files/part-"))' \
 >   | pqbench bytemass --json \
->   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
+>   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # first N by name: sort the file records, cap them, then measure
@@ -44,7 +43,7 @@ $ pqbench list partitions docker/e2e-lakehouse/table \
 >   | pqbench list files \
 >   | sort | head -10 \
 >   | pqbench bytemass --json \
->   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
+>   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # every Nth file
@@ -52,7 +51,7 @@ $ pqbench list partitions docker/e2e-lakehouse/table \
 >   | pqbench list files \
 >   | awk 'NR % 2 == 1' \
 >   | pqbench bytemass --json \
->   | jq -c 'select(.kind == "pqbench.bytemass-row") | {column, compressed_bytes}' | tail -1
+>   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 ```
 
@@ -75,12 +74,11 @@ $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbe
 
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+column  codec   encodings                 bytes  values
+------  ------  ------------------------  -----  ------
+id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 files: 1
-rows: 3
 columns: 2
 ```
 
@@ -113,17 +111,16 @@ table (`--format table`). The local stand (`make lakehouse`) exports
 ```console run
 $ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet -o /tmp/bytemass.ndjson.lz4
 $ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
-column            type        codec         encodings                  bytes  values
-----------------  ----------  ------------  ------------------------  ------  ------
-text              BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
-label             BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
-dataType          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
-communityName     BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
-datetime          BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
-username_encoded  BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
-url_encoded       BYTE_ARRAY  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
+column            codec         encodings                  bytes  values
+----------------  ------------  ------------------------  ------  ------
+text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
+label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
+dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
+communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
+datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
+username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
+url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 files: 1
-rows: 3000
 columns: 7
 ```
 
@@ -139,12 +136,11 @@ partitions as a table; a pipe streams NDJSON for `list files` and `bytemass`:
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+column  codec   encodings                 bytes  values
+------  ------  ------------------------  -----  ------
+id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 files: 1
-rows: 3
 columns: 2
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```

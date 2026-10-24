@@ -375,7 +375,7 @@ async fn load_then_bytemass_matches_footer_totals() {
     )
     .await
     .unwrap();
-    let rows = pqbench::bytemass::bytemass(
+    let files = pqbench::bytemass::measure_files(
         common::lake(),
         &pqbench::bytemass::BytemassRequest {
             inputs: info.files.iter().map(|file| file.uri().unwrap()).collect(),
@@ -384,9 +384,18 @@ async fn load_then_bytemass_matches_footer_totals() {
     )
     .await
     .unwrap();
-    let summary = pqbench::bytemass::aggregate(&rows).unwrap();
-    assert_eq!(summary.file_count, 2);
-    assert_eq!(summary.row_count, 8);
+    assert_eq!(files.len(), 2);
+    let measured_values: u64 = files
+        .iter()
+        .flat_map(|file| &file.columns)
+        .map(|column| column.value_count.unwrap_or(0))
+        .sum();
+    assert_eq!(measured_values, 8);
+    let measured_bytes: u64 = files
+        .iter()
+        .flat_map(|file| &file.columns)
+        .map(|column| column.compressed_bytes.unwrap_or(0))
+        .sum();
     let mut expected_bytes = 0;
     for relative in ["data/first.parquet", "data/second.parquet"] {
         let mass = default_metadata_parser()
@@ -394,7 +403,7 @@ async fn load_then_bytemass_matches_footer_totals() {
             .unwrap();
         expected_bytes += mass.columns[0].compressed_bytes;
     }
-    assert_eq!(summary.columns[0].compressed_bytes, expected_bytes);
+    assert_eq!(measured_bytes, expected_bytes);
 }
 
 #[tokio::test]
