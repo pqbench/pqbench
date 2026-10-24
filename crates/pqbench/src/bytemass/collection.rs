@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::third_party::object_store::api::ObjectStat;
-use crate::third_party::parquet::api::{read_file_masses, ColumnMass, Error, FileMass};
+use crate::third_party::parquet::api::{read_file_masses, ColumnMass, FileMass};
 use crate::Lake;
 
 use super::api::MassRow;
 use super::remote;
+use super::Error;
 
 /// One column's byte mass summed across a collection of Parquet files.
 #[derive(Debug, Clone, Serialize)]
@@ -147,7 +148,7 @@ pub(super) async fn expand_inputs(
             let options: Vec<_> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for uri in crate::third_party::object_store::api::expand_glob(lake, input, &options)
                 .await
-                .map_err(|e| Error(e.to_string()))?
+                .map_err(Error::Storage)?
             {
                 paths.insert(PathBuf::from(uri));
             }
@@ -163,17 +164,18 @@ pub(super) async fn expand_inputs(
 /// Insert every local file a glob mask matches.
 fn insert_glob(mask: &str, paths: &mut BTreeSet<PathBuf>) -> Result<(), Error> {
     let mut matched = false;
-    for entry in glob::glob(&escape_literal_brackets(mask))
-        .map_err(|e| Error(format!("invalid mask {mask}: {e}")))?
-    {
-        let path = entry.map_err(|e| Error(format!("cannot expand mask {mask}: {e}")))?;
+    for entry in glob::glob(&escape_literal_brackets(mask)).map_err(|e| Error::Pattern {
+        mask: mask.to_string(),
+        source: e,
+    })? {
+        let path = entry.map_err(|e| Error::Invalid(format!("cannot expand mask {mask}: {e}")))?;
         paths.insert(path);
         matched = true;
     }
     if matched {
         Ok(())
     } else {
-        Err(Error(format!("mask matched no files: {mask}")))
+        Err(Error::NoMatch(mask.to_string()))
     }
 }
 
@@ -201,8 +203,11 @@ async fn read_input(
         .await;
     }
     let path = Path::new(input);
-    let metadata =
-        std::fs::metadata(path).map_err(|e| Error(format!("cannot stat {input}: {e}")))?;
+    let metadata = std::fs::metadata(path).map_err(|e| Error::Io {
+        context: "cannot stat",
+        input: input.to_string(),
+        source: e,
+    })?;
     let stat = ObjectStat {
         size_bytes: metadata.len(),
         identity: None,

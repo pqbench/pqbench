@@ -16,12 +16,20 @@ pub(crate) fn read_avro<T: for<'de> Deserialize<'de>>(
 
     use apache_avro::{from_value, Reader};
 
-    let reader =
-        Reader::new(Cursor::new(bytes)).map_err(|e| Error(format!("cannot read {kind}: {e}")))?;
+    let reader = Reader::new(Cursor::new(bytes)).map_err(|error| Error::Read {
+        kind: kind.to_string(),
+        source: Box::new(error),
+    })?;
     reader
         .map(|value| {
-            let value = value.map_err(|e| Error(format!("cannot read {kind}: {e}")))?;
-            from_value::<T>(&value).map_err(|e| Error(format!("cannot parse {kind}: {e}")))
+            let value = value.map_err(|error| Error::Read {
+                kind: kind.to_string(),
+                source: Box::new(error),
+            })?;
+            from_value::<T>(&value).map_err(|error| Error::Read {
+                kind: kind.to_string(),
+                source: Box::new(error),
+            })
         })
         .collect()
 }
@@ -32,7 +40,5 @@ pub(crate) fn read_avro<T: for<'de> Deserialize<'de>>(
     kind: &str,
 ) -> Result<Vec<T>, Error> {
     let _ = (bytes, kind);
-    Err(Error::from(
-        "reading Avro requires the `iceberg` feature".to_string(),
-    ))
+    Err(Error::Unsupported)
 }

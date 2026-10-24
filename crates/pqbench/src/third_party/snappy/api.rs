@@ -3,13 +3,24 @@
 //! Both functions take and return plain byte buffers; no `snappy_src` type
 //! appears here, so the backing crate can change without touching callers.
 
+use std::fmt;
+
 /// Errors from the Snappy layer.
 #[derive(Debug)]
-pub struct Error(pub String);
+pub enum Error {
+    /// The C library reported a compression failure.
+    Compress,
+    /// The C library reported a decompression failure (bad input or too small
+    /// an output buffer).
+    Decompress,
+}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "snappy: {}", self.0)
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Compress => write!(f, "snappy compression failed"),
+            Error::Decompress => write!(f, "snappy decompression failed"),
+        }
     }
 }
 

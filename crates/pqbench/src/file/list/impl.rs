@@ -24,7 +24,7 @@ pub(crate) async fn list(
         LoadRequest::new(uri.to_string(), None, env.clone()).with_commits(versions.iter().copied());
     let files = table::stream_files(lake, &request)
         .await
-        .map_err(|error| Error::from(error.to_string()))?;
+        .map_err(Error::Table)?;
     // The log names each file by its path; name it under the caller's table,
     // which a catalog named.
     let table = table.to_string();
@@ -33,6 +33,6 @@ pub(crate) async fn list(
             file.name = v1::name::table_file_name(&table, &file.path);
             file
         })
-        .map_err(|error| Error::from(error.to_string()))
+        .map_err(Error::Table)
         .boxed())
 }

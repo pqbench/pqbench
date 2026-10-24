@@ -12,19 +12,30 @@ use crate::Workspace;
 
 /// Errors listing a catalog's schemas.
 #[derive(Debug)]
-pub struct Error(String);
+pub enum Error {
+    /// The name argument was not a resource name.
+    Name(String),
+    /// The endpoint request failed.
+    Http(crate::http::Error),
+    /// The endpoint returned a structurally invalid document.
+    Malformed(String),
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "schema: {}", self.0)
+        match self {
+            Error::Name(message) | Error::Malformed(message) => write!(f, "{message}"),
+            Error::Http(error) => write!(f, "{error}"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Http(error) => Some(error),
+            _ => None,
+        }
     }
 }
 

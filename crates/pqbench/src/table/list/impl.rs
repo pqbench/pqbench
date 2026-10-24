@@ -60,7 +60,7 @@ struct Identifier {
 
 pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Table>, Error> {
     let (catalog, schema) = crate::v1::name::parse_schema(name)
-        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/schemas/… name")))?;
+        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/schemas/… name")))?;
     let mut tables = match workspace.config().dialect {
         TableFormat::Unity => unity_tables(workspace, &catalog, &schema).await?,
         TableFormat::Iceberg => iceberg_tables(workspace, &catalog, &schema).await?,
@@ -80,9 +80,9 @@ async fn unity_tables(
     loop {
         let url = unity_tables_url(&root, catalog, schema, page_token.as_deref());
         let page: UnityPage =
-            dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
                 .await
-                .map_err(Error::from)?;
+                .map_err(Error::Http)?;
         for entry in page.tables {
             tables.push(unity_table(catalog, schema, entry)?);
         }
@@ -119,7 +119,7 @@ fn unity_table(catalog: &str, schema: &str, entry: UnityTable) -> Result<Table, 
                 .filter(|name| !name.is_empty())
                 .map(|name| format!("{catalog}.{schema}.{name}"))
         })
-        .ok_or_else(|| Error::from(format!("the table in {catalog}.{schema} has no name")))?;
+        .ok_or_else(|| Error::Malformed(format!("the table in {catalog}.{schema} has no name")))?;
     let table = name.rsplit('.').next().unwrap_or(name.as_str());
     Ok(Table {
         name: crate::v1::name::table(catalog, schema, table),
@@ -146,12 +146,12 @@ async fn iceberg_tables(
             None => format!("{base}/namespaces/{namespace}/tables"),
         };
         let page: IdentifiersPage =
-            dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
                 .await
-                .map_err(Error::from)?;
+                .map_err(Error::Http)?;
         for identifier in page.identifiers {
             if identifier.name.is_empty() {
-                return Err(Error::from(
+                return Err(Error::Malformed(
                     "the endpoint listed a nameless table".to_string(),
                 ));
             }

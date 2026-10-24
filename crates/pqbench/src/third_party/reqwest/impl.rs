@@ -24,7 +24,7 @@ impl Http {
         }
         let client = builder
             .build()
-            .map_err(|error| Error::from(format!("http client: {error}")))?;
+            .map_err(|error| Error::Client(Box::new(error)))?;
         Ok(Self(client))
     }
 
@@ -54,7 +54,7 @@ impl Http {
         let response = builder
             .send()
             .await
-            .map_err(|error| Error::from(format!("request failed: {error}")))?;
+            .map_err(|error| Error::Transport(Box::new(error)))?;
         let status = response.status().as_u16();
         let headers: Vec<(String, String)> = response
             .headers()
@@ -67,7 +67,7 @@ impl Http {
             .bytes()
             .await
             .map(|bytes| bytes.to_vec())
-            .map_err(|error| Error::from(format!("response failed: {error}")))?;
+            .map_err(|error| Error::Body(Box::new(error)))?;
         Ok(Response {
             status,
             headers,

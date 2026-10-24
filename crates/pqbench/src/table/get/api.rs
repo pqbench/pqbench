@@ -14,19 +14,55 @@ use crate::{Lake, Workspace};
 
 /// Errors reading a table's record.
 #[derive(Debug)]
-pub struct Error(String);
+pub enum Error {
+    /// The name argument was not a resource name.
+    Name(String),
+    /// The endpoint request failed.
+    Http(crate::http::Error),
+    /// The endpoint returned a structurally invalid document.
+    Malformed(String),
+    /// The table loader failed.
+    Table(crate::table::Error),
+    /// The table's metadata at the catalog-named location could not be read.
+    Metadata {
+        /// The table's full name.
+        name: String,
+        /// The location the catalog named.
+        location: String,
+        /// The loader failure.
+        source: crate::table::Error,
+    },
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "table: {}", self.0)
+        match self {
+            Error::Name(message) | Error::Malformed(message) => write!(f, "{message}"),
+            Error::Http(error) => write!(f, "{error}"),
+            Error::Table(error) => write!(f, "{error}"),
+            Error::Metadata { name, location, .. } => {
+                write!(f, "cannot read {name}'s metadata at {location}")?;
+                if location.starts_with("s3://") {
+                    write!(
+                        f,
+                        " (s3:// needs credentials on the lake source; Databricks default \
+                         storage cannot be read outside Databricks compute)"
+                    )?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Http(error) => Some(error),
+            Error::Table(error) => Some(error),
+            Error::Metadata { source, .. } => Some(source),
+            _ => None,
+        }
     }
 }
 

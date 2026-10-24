@@ -6,19 +6,28 @@ use crate::v1::{EligibilityReason, ReadEligibility};
 
 /// Errors checking a table's eligibility.
 #[derive(Debug)]
-pub struct Error(String);
+pub enum Error {
+    /// The name argument was not a resource name.
+    Name(String),
+    /// The endpoint request failed.
+    Http(crate::http::Error),
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "credentials: {}", self.0)
+        match self {
+            Error::Name(message) => write!(f, "{message}"),
+            Error::Http(error) => write!(f, "{error}"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Http(error) => Some(error),
+            _ => None,
+        }
     }
 }
 
@@ -46,7 +55,7 @@ use crate::Workspace;
 /// answers with an unexpected status.
 pub async fn check(workspace: &Workspace, name: &str) -> Result<ReadEligibility, Error> {
     let (catalog, schema, table) = crate::v1::name::parse_table(name)
-        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
+        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/tables/… name")))?;
     match workspace.config().dialect {
         TableFormat::Unity => {
             if catalog == "system" {

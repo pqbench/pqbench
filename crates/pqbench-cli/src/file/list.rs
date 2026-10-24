@@ -86,13 +86,13 @@ async fn file_rows(
     let table = v1::name::table(&catalog, &schema, &table);
     let found = pqbench::file::list::list(lake, &table, &uri, &env, &partition.commit_versions)
         .await
-        .map_err(|error| CliError::from(error.to_string()))?;
+        .map_err(CliError::from)?;
     Ok(found
         .map_ok(move |mut file| {
             file.credentials = lease.clone();
             file
         })
-        .map_err(|error| CliError::from(error.to_string()))
+        .map_err(CliError::from)
         .boxed())
 }
 

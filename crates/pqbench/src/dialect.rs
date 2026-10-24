@@ -6,11 +6,7 @@
 //! base (`{root}/v1` or `{root}/v1/{prefix}`), so the commands append
 //! `/namespaces…` directly.
 
-use serde::de::DeserializeOwned;
-
-use crate::third_party::reqwest::Request;
 use crate::v1::CatalogType;
-use crate::Workspace;
 
 /// The Unity REST root, whether or not the endpoint already names it.
 pub(crate) fn api_root(endpoint: &str) -> String {
@@ -44,36 +40,6 @@ pub(crate) fn encode(value: &str) -> String {
 /// A percent-encoded Iceberg namespace: parts joined by the unit separator.
 pub(crate) fn iceberg_namespace(schema: &str) -> String {
     encode(&schema.split('.').collect::<Vec<_>>().join("\u{1f}"))
-}
-
-/// One GET returning a parsed JSON document.
-pub(crate) async fn get_json<T: DeserializeOwned>(
-    workspace: &Workspace,
-    url: &str,
-    token: Option<&str>,
-) -> Result<T, String> {
-    send_json(workspace, Request::get(url, token.map(str::to_owned))).await
-}
-
-/// Send one request and parse its JSON body.
-pub(crate) async fn send_json<T: DeserializeOwned>(
-    workspace: &Workspace,
-    request: Request,
-) -> Result<T, String> {
-    let response = workspace
-        .http()
-        .request(request)
-        .await
-        .map_err(|error| error.to_string())?;
-    if response.status != 200 {
-        return Err(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        ));
-    }
-    serde_json::from_slice(&response.bytes)
-        .map_err(|error| format!("the response was not the expected document: {error}"))
 }
 
 /// The catalog kind the endpoint reports (`MANAGED_CATALOG`, …) as the proto

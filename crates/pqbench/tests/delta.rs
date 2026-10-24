@@ -681,9 +681,15 @@ async fn load_reports_a_broken_snapshot() {
     )
     .await
     .err()
-    .unwrap()
-    .to_string();
-    assert!(error.contains("Partition column"), "{error}");
+    .unwrap();
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(error) = source {
+        message.push_str(": ");
+        message.push_str(&error.to_string());
+        source = error.source();
+    }
+    assert!(message.contains("Partition column"), "{message}");
 }
 
 #[tokio::test]

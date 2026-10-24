@@ -15,14 +15,12 @@ pub(crate) async fn load(
 ) -> Result<TableInfo, crate::table::Error> {
     #[cfg(feature = "iceberg")]
     {
-        load::load(lake, request)
-            .await
-            .map_err(|error| crate::table::Error(error.to_string()))
+        load::load(lake, request).await
     }
     #[cfg(not(feature = "iceberg"))]
     {
         let _ = (lake, request);
-        Err(crate::table::Error(
+        Err(crate::table::Error::Invalid(
             "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
         ))
     }
@@ -34,19 +32,14 @@ pub(crate) async fn stream_commits(
 ) -> Result<crate::table::CommitStream<'static>, crate::table::Error> {
     #[cfg(feature = "iceberg")]
     {
-        use futures_util::{StreamExt as _, TryStreamExt as _};
+        use futures_util::StreamExt as _;
 
-        let commits = load::stream_commits(lake, request)
-            .await
-            .map_err(|error| crate::table::Error(error.to_string()))?;
-        Ok(commits
-            .map_err(|error| crate::table::Error(error.to_string()))
-            .boxed())
+        Ok(load::stream_commits(lake, request).await?.boxed())
     }
     #[cfg(not(feature = "iceberg"))]
     {
         let _ = (lake, request);
-        Err(crate::table::Error(
+        Err(crate::table::Error::Invalid(
             "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
         ))
     }
@@ -58,19 +51,14 @@ pub(crate) async fn stream_files(
 ) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
     #[cfg(feature = "iceberg")]
     {
-        use futures_util::{StreamExt as _, TryStreamExt as _};
+        use futures_util::StreamExt as _;
 
-        let files = load::stream_files(lake, request)
-            .await
-            .map_err(|error| crate::table::Error(error.to_string()))?;
-        Ok(files
-            .map_err(|error| crate::table::Error(error.to_string()))
-            .boxed())
+        Ok(load::stream_files(lake, request).await?.boxed())
     }
     #[cfg(not(feature = "iceberg"))]
     {
         let _ = (lake, request);
-        Err(crate::table::Error(
+        Err(crate::table::Error::Invalid(
             "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
         ))
     }

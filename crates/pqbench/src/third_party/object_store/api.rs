@@ -17,15 +17,83 @@ use crate::Lake;
 
 /// Errors from the object-storage layer.
 #[derive(Debug)]
-pub struct Error(pub String);
+pub enum Error {
+    /// A URI could not be parsed.
+    Uri {
+        /// The URI that failed to parse.
+        uri: String,
+        /// The underlying parse failure.
+        source: url::ParseError,
+    },
+    /// A local path could not be turned into a file URI.
+    LocalPath(String),
+    /// The operation is not supported by this build or URI scheme.
+    Unsupported(String),
+    /// The store registry lock was poisoned.
+    Poisoned,
+    /// A key pattern was invalid.
+    Pattern {
+        /// The mask that failed to parse.
+        mask: String,
+        /// The underlying glob failure.
+        source: glob::PatternError,
+    },
+    /// The glob matched no objects.
+    NoMatch(String),
+    /// An object-store backend call failed.
+    Store(Box<dyn std::error::Error + Send + Sync>),
+    /// A local filesystem call failed.
+    Io {
+        /// What the call was doing (`"cannot stat"`, `"cannot list"`, …).
+        context: &'static str,
+        /// The path involved.
+        path: String,
+        /// The underlying I/O failure.
+        source: std::io::Error,
+    },
+    /// The transport to the store failed.
+    Transport(crate::third_party::reqwest::Error),
+    /// A store option name was not recognized.
+    Option(String),
+    /// A response was missing a required field.
+    Invalid(String),
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "object store: {}", self.0)
+        match self {
+            Error::Uri { uri, .. } => write!(f, "invalid object URI {uri}"),
+            Error::LocalPath(uri) => write!(f, "invalid local file URI: {uri}"),
+            Error::Unsupported(message) => write!(f, "{message}"),
+            Error::Poisoned => write!(f, "the store registry is poisoned"),
+            Error::Pattern { mask, .. } => write!(f, "invalid key glob {mask}"),
+            Error::NoMatch(mask) => write!(f, "the glob matched no files: {mask}"),
+            Error::Store(_) => write!(f, "object storage failed"),
+            Error::Io { context, path, .. } => write!(f, "{context} {path}"),
+            Error::Transport(_) => write!(f, "the object-store transport failed"),
+            Error::Option(key) => write!(f, "unknown object store option `{key}`"),
+            Error::Invalid(message) => write!(f, "{message}"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Uri { source, .. } => Some(source),
+            Error::Pattern { source, .. } => Some(source),
+            Error::Store(source) => Some(source.as_ref()),
+            Error::Io { source, .. } => Some(source),
+            Error::Transport(source) => Some(source),
+            Error::LocalPath(_)
+            | Error::Unsupported(_)
+            | Error::Poisoned
+            | Error::NoMatch(_)
+            | Error::Option(_)
+            | Error::Invalid(_) => None,
+        }
+    }
+}
 
 /// What one object lookup reports before any bytes are read.
 pub struct ObjectStat {
@@ -85,8 +153,11 @@ impl ObjectReader {
     pub async fn stat(&self) -> Result<ObjectStat, Error> {
         match &self.source {
             ObjectSource::Local(path) => {
-                let metadata = std::fs::metadata(path)
-                    .map_err(|e| Error(format!("cannot stat {}: {e}", path.display())))?;
+                let metadata = std::fs::metadata(path).map_err(|e| Error::Io {
+                    context: "cannot stat",
+                    path: path.display().to_string(),
+                    source: e,
+                })?;
                 Ok(ObjectStat {
                     size_bytes: metadata.len(),
                     identity: None,
@@ -128,11 +199,14 @@ pub async fn list_prefix(
     uri: &str,
     options: &[(String, String)],
 ) -> Result<PrefixListing, Error> {
-    let url = Url::parse(uri).map_err(|e| Error(format!("invalid object URI {uri}: {e}")))?;
+    let url = Url::parse(uri).map_err(|e| Error::Uri {
+        uri: uri.to_string(),
+        source: e,
+    })?;
     match url.scheme() {
         "file" => list_file(&url),
         "s3" | "s3a" => lake.stores().list_remote(&url, options).await,
-        scheme => Err(Error(format!(
+        scheme => Err(Error::Unsupported(format!(
             "listing is not supported for object URI scheme `{scheme}`"
         ))),
     }
@@ -141,19 +215,26 @@ pub async fn list_prefix(
 fn list_file(url: &Url) -> Result<PrefixListing, Error> {
     let path = url
         .to_file_path()
-        .map_err(|()| Error(format!("invalid local file URI: {url}")))?;
+        .map_err(|()| Error::LocalPath(url.to_string()))?;
     if !path.is_dir() {
         return Ok(PrefixListing {
             prefixes: Vec::new(),
             objects: Vec::new(),
         });
     }
-    let entries = std::fs::read_dir(&path)
-        .map_err(|e| Error(format!("cannot list {}: {e}", path.display())))?;
+    let entries = std::fs::read_dir(&path).map_err(|e| Error::Io {
+        context: "cannot list",
+        path: path.display().to_string(),
+        source: e,
+    })?;
     let mut prefixes = Vec::new();
     let mut objects = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| Error(format!("cannot list {}: {e}", path.display())))?;
+        let entry = entry.map_err(|e| Error::Io {
+            context: "cannot list",
+            path: path.display().to_string(),
+            source: e,
+        })?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') {
             continue;
@@ -176,18 +257,21 @@ fn list_file(url: &Url) -> Result<PrefixListing, Error> {
 /// `file` URIs always work; `s3`/`s3a` URIs require the `aws` feature. Backend
 /// options are passed through as `(key, value)` pairs.
 pub fn open(lake: &Lake, uri: &str, options: &[(String, String)]) -> Result<ObjectReader, Error> {
-    let url = Url::parse(uri).map_err(|e| Error(format!("invalid object URI {uri}: {e}")))?;
+    let url = Url::parse(uri).map_err(|e| Error::Uri {
+        uri: uri.to_string(),
+        source: e,
+    })?;
     match url.scheme() {
         "file" => {
             let path = url
                 .to_file_path()
-                .map_err(|()| Error(format!("invalid local file URI: {uri}")))?;
+                .map_err(|()| Error::LocalPath(uri.to_string()))?;
             Ok(ObjectReader {
                 source: ObjectSource::Local(path),
             })
         }
         "s3" | "s3a" => lake.stores().open_remote(&url, options),
-        scheme => Err(Error(format!(
+        scheme => Err(Error::Unsupported(format!(
             "unsupported object URI scheme `{scheme}`; supported schemes are file and s3"
         ))),
     }
@@ -213,19 +297,27 @@ pub async fn copy(
     options: &[(String, String)],
 ) -> Result<u64, Error> {
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| Error(format!("cannot create {}: {error}", parent.display())))?;
+        std::fs::create_dir_all(parent).map_err(|error| Error::Io {
+            context: "cannot create",
+            path: parent.display().to_string(),
+            source: error,
+        })?;
     }
     if !is_remote(uri) {
         let source = local_path(uri);
-        return std::fs::copy(&source, dest)
-            .map_err(|error| Error(format!("cannot copy {}: {error}", source.display())));
+        return std::fs::copy(&source, dest).map_err(|error| Error::Io {
+            context: "cannot copy",
+            path: source.display().to_string(),
+            source: error,
+        });
     }
-    let url =
-        Url::parse(uri).map_err(|error| Error(format!("invalid object URI {uri}: {error}")))?;
+    let url = Url::parse(uri).map_err(|error| Error::Uri {
+        uri: uri.to_string(),
+        source: error,
+    })?;
     match url.scheme() {
         "s3" | "s3a" => copy_remote(lake, uri, dest, options).await,
-        scheme => Err(Error(format!(
+        scheme => Err(Error::Unsupported(format!(
             "unsupported object URI scheme `{scheme}`; supported schemes are file and s3"
         ))),
     }
@@ -243,14 +335,20 @@ async fn copy_remote(
     let stat = reader.stat().await?;
     let size = stat.size_bytes;
     let identity = stat.identity.as_deref();
-    let mut file = std::fs::File::create(dest)
-        .map_err(|error| Error(format!("cannot write {}: {error}", dest.display())))?;
+    let mut file = std::fs::File::create(dest).map_err(|error| Error::Io {
+        context: "cannot write",
+        path: dest.display().to_string(),
+        source: error,
+    })?;
     let mut offset = 0;
     while offset < size {
         let end = (offset + COPY_CHUNK).min(size);
         let bytes = reader.read_range(offset..end, identity).await?;
-        file.write_all(&bytes)
-            .map_err(|error| Error(format!("cannot write {}: {error}", dest.display())))?;
+        file.write_all(&bytes).map_err(|error| Error::Io {
+            context: "cannot write",
+            path: dest.display().to_string(),
+            source: error,
+        })?;
         offset = end;
     }
     Ok(size)
@@ -270,15 +368,25 @@ fn local_path(uri: &str) -> PathBuf {
 fn read_local(path: &std::path::Path, range: Range<u64>) -> Result<Vec<u8>, Error> {
     use std::io::{Read, Seek, SeekFrom};
 
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| Error(format!("cannot open {}: {e}", path.display())))?;
+    let mut file = std::fs::File::open(path).map_err(|e| Error::Io {
+        context: "cannot open",
+        path: path.display().to_string(),
+        source: e,
+    })?;
     file.seek(SeekFrom::Start(range.start))
-        .map_err(|e| Error(format!("cannot seek {}: {e}", path.display())))?;
+        .map_err(|e| Error::Io {
+            context: "cannot seek",
+            path: path.display().to_string(),
+            source: e,
+        })?;
     let length = usize::try_from(range.end.saturating_sub(range.start))
-        .map_err(|_| Error(format!("range too large for {}", path.display())))?;
+        .map_err(|_| Error::Invalid(format!("range too large for {}", path.display())))?;
     let mut buffer = vec![0; length];
-    file.read_exact(&mut buffer)
-        .map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
+    file.read_exact(&mut buffer).map_err(|e| Error::Io {
+        context: "cannot read",
+        path: path.display().to_string(),
+        source: e,
+    })?;
     Ok(buffer)
 }
 
@@ -313,13 +421,16 @@ impl KeyPattern {
     pub fn parse(mask: &str) -> Result<Self, Error> {
         let wildcard = mask
             .find(['*', '?'])
-            .ok_or_else(|| Error("missing key wildcard".into()))?;
+            .ok_or_else(|| Error::Invalid("missing key wildcard".into()))?;
         let prefix = mask[..wildcard]
             .rfind('/')
             .map_or("", |end| &mask[..end])
             .to_owned();
-        let pattern = glob::Pattern::new(&mask.replace('[', "[[]"))
-            .map_err(|e| Error(format!("invalid key glob: {e}")))?;
+        let pattern =
+            glob::Pattern::new(&mask.replace('[', "[[]")).map_err(|e| Error::Pattern {
+                mask: mask.to_string(),
+                source: e,
+            })?;
         Ok(Self { pattern, prefix })
     }
     /// Literal directory prefix to list, empty for the bucket root.

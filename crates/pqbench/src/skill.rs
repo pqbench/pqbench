@@ -5,11 +5,20 @@
 
 /// Errors from the skill layer: an unknown skill or document.
 #[derive(Debug)]
-pub struct Error(pub String);
+pub enum Error {
+    /// The skill name is unknown.
+    UnknownSkill(String),
+    /// The skill document name is unknown.
+    UnknownDocument(String),
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "skill: {}", self.0)
+        match self {
+            Error::UnknownSkill(message) | Error::UnknownDocument(message) => {
+                write!(f, "{message}")
+            }
+        }
     }
 }
 
@@ -64,7 +73,7 @@ pub fn skill(name: &str) -> Result<&'static Skill, Error> {
         .iter()
         .find(|skill| skill.name == name)
         .ok_or_else(|| {
-            Error(format!(
+            Error::UnknownSkill(format!(
                 "unknown skill `{name}`; expected {}",
                 skills()
                     .iter()
@@ -98,7 +107,7 @@ pub fn document(name: &str, document: &str) -> Result<&'static str, Error> {
                     }
                 })
                 .collect();
-            Error(format!(
+            Error::UnknownDocument(format!(
                 "unknown skill document `{name} {document}`; expected {}",
                 extras.join(", ")
             ))
@@ -124,6 +133,6 @@ mod tests {
     #[test]
     fn unknown_skill_is_an_error() {
         let error = skill("oracle").unwrap_err();
-        assert!(error.0.contains("parquet-advisor"), "{error}");
+        assert!(error.to_string().contains("parquet-advisor"), "{error}");
     }
 }

@@ -13,6 +13,7 @@ mod dialect;
 pub mod diff;
 pub mod experiment;
 pub mod file;
+pub mod http;
 pub mod lz;
 pub mod metastore;
 pub mod partition;

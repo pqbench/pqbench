@@ -7,19 +7,28 @@ use crate::{Dialect, Workspace};
 
 /// Errors vending a table's credentials.
 #[derive(Debug)]
-pub struct Error(String);
+pub enum Error {
+    /// The name argument was not a resource name.
+    Name(String),
+    /// The endpoint request failed.
+    Http(crate::http::Error),
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "credentials: {}", self.0)
+        match self {
+            Error::Name(message) => write!(f, "{message}"),
+            Error::Http(error) => write!(f, "{error}"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Http(error) => Some(error),
+            _ => None,
+        }
     }
 }
 
@@ -37,7 +46,7 @@ impl From<String> for Error {
 /// or when it answers an unexpected status.
 pub async fn get(workspace: &Workspace, name: &str) -> Result<Option<Credentials>, Error> {
     let (catalog, schema, table_name) =
-        name::parse_table(name).ok_or_else(|| Error(format!("not a table name: {name}")))?;
+        name::parse_table(name).ok_or_else(|| Error::Name(format!("not a table name: {name}")))?;
     let env = match workspace.config().dialect {
         Dialect::Unity => {
             super::r#impl::vend_unity(workspace, &catalog, &schema, &table_name).await?

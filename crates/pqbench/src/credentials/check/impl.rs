@@ -70,7 +70,7 @@ pub(super) async fn check_unity(
     table: &str,
 ) -> Result<ReadEligibility, Error> {
     let name = format!("{catalog}.{schema}.{table}");
-    let record: TableRecord = dialect::get_json(
+    let record: TableRecord = crate::http::get_json(
         workspace,
         &format!(
             "{}/tables/{}",
@@ -80,7 +80,7 @@ pub(super) async fn check_unity(
         workspace.config().token.as_deref(),
     )
     .await
-    .map_err(Error::from)?;
+    .map_err(Error::Http)?;
     Ok(record.eligibility())
 }
 

@@ -3,17 +3,33 @@
 //! Both functions take and return plain byte buffers; no `zstd` type appears
 //! here, so the backing crate can change without touching callers.
 
+use std::fmt;
+
 /// Errors from the Zstandard layer.
 #[derive(Debug)]
-pub struct Error(pub String);
+pub enum Error {
+    /// The underlying zstd compression call failed.
+    Compress(std::io::Error),
+    /// The underlying zstd decompression call failed.
+    Decompress(std::io::Error),
+}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "zstd: {}", self.0)
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Compress(_) => write!(f, "zstd compression failed"),
+            Error::Decompress(_) => write!(f, "zstd decompression failed"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Compress(error) | Error::Decompress(error) => Some(error),
+        }
+    }
+}
 
 /// Compress `src` at `level` into a new buffer.
 ///

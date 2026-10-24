@@ -7,11 +7,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::third_party::parquet::api::Error;
 use crate::v1::FileStats;
 use crate::Lake;
 
 use super::collection;
+use super::Error;
 
 /// A measured file's identity and the table-log statistics proxied with it.
 ///
@@ -163,7 +163,7 @@ pub struct MassRow {
 /// read, or a byte total overflows.
 pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<MassRow>, Error> {
     if request.inputs.is_empty() {
-        return Err(Error("no inputs".into()));
+        return Err(Error::NoInputs);
     }
     collection::measure_inputs(lake, &request.inputs, &request.env, request.indexes).await
 }
@@ -185,7 +185,7 @@ pub async fn measure_files(
     request: &BytemassRequest,
 ) -> Result<Vec<MeasuredFile>, Error> {
     if request.inputs.is_empty() {
-        return Err(Error("no inputs".into()));
+        return Err(Error::NoInputs);
     }
     collection::measure_files(lake, &request.inputs, &request.env, request.indexes).await
 }

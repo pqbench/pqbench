@@ -7,11 +7,11 @@ use super::api::Error;
 
 /// Compress `src` as an LZ4 block.
 pub(crate) fn compress(src: &[u8]) -> Result<Vec<u8>, Error> {
-    lz4::block::compress(src, None, false).map_err(|e| Error(e.to_string()))
+    lz4::block::compress(src, None, false).map_err(Error::Compress)
 }
 
 /// Decompress `src` into a buffer of `out_cap` bytes.
 pub(crate) fn decompress(src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
     lz4::block::decompress(src, Some(i32::try_from(out_cap).unwrap_or(i32::MAX)))
-        .map_err(|e| Error(e.to_string()))
+        .map_err(Error::Decompress)
 }

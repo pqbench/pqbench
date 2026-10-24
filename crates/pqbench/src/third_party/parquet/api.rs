@@ -102,15 +102,56 @@ pub struct WriteOptions {
 
 /// Errors from the parquet layer.
 #[derive(Debug)]
-pub struct Error(pub String);
+pub enum Error {
+    /// A file or stream could not be read.
+    Io(std::io::Error),
+    /// The parquet library failed.
+    Parquet(Box<dyn std::error::Error + Send + Sync>),
+    /// A caller argument was invalid.
+    Invalid(String),
+    /// A required page header was missing.
+    Missing(&'static str),
+    /// A value did not fit its type.
+    Overflow(&'static str),
+    /// An encoding was not usable for a column kind.
+    Encoding(String),
+    /// The input used a form this parser does not accept.
+    Unsupported(String),
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "parquet: {}", self.0)
+        match self {
+            Error::Io(_) => write!(f, "parquet i/o failed"),
+            Error::Parquet(_) => write!(f, "parquet failed"),
+            Error::Invalid(message) | Error::Encoding(message) | Error::Unsupported(message) => {
+                write!(f, "{message}")
+            }
+            Error::Missing(what) => write!(f, "missing {what}"),
+            Error::Overflow(what) => write!(f, "{what} overflowed"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(error) => Some(error),
+            Error::Parquet(error) => Some(error.as_ref()),
+            Error::Invalid(_)
+            | Error::Missing(_)
+            | Error::Overflow(_)
+            | Error::Encoding(_)
+            | Error::Unsupported(_) => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        Error::Io(error)
+    }
+}
 
 /// Anything that can extract pages from an in-memory parquet byte buffer.
 pub trait PageParser {

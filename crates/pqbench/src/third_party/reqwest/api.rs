@@ -1,20 +1,35 @@
 //! Minimal async HTTP: one request in, one response out.
 
+use std::fmt;
+
 /// Errors from the HTTP transport.
 #[derive(Debug)]
-pub struct Error(String);
+pub enum Error {
+    /// The HTTP client could not be built.
+    Client(Box<dyn std::error::Error + Send + Sync>),
+    /// The request could not be sent.
+    Transport(Box<dyn std::error::Error + Send + Sync>),
+    /// The response body could not be read.
+    Body(Box<dyn std::error::Error + Send + Sync>),
+}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "reqwest: {}", self.0)
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Client(_) => write!(f, "http client failed"),
+            Error::Transport(_) => write!(f, "request failed"),
+            Error::Body(_) => write!(f, "response failed"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Client(error) | Error::Transport(error) | Error::Body(error) => {
+                Some(error.as_ref())
+            }
+        }
     }
 }
 

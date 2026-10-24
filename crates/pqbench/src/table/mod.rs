@@ -35,21 +35,83 @@ use crate::Lake;
 
 /// Errors detecting a table format or loading its metadata.
 #[derive(Debug)]
-pub struct Error(pub(crate) String);
+pub enum Error {
+    /// The location could not be opened.
+    Missing(String),
+    /// No supported table format was found at the location.
+    Unrecognized(String),
+    /// A path, URI, or metadata value was invalid.
+    Invalid(String),
+    /// A URI could not be parsed.
+    Uri(url::ParseError),
+    /// A local filesystem call failed.
+    Io {
+        /// The path involved.
+        path: String,
+        /// The underlying I/O failure.
+        source: std::io::Error,
+    },
+    /// A log record or metadata document was not valid JSON.
+    Json(serde_json::Error),
+    /// An Avro manifest could not be read.
+    Avro(crate::third_party::avro::Error),
+    /// The object store or a backend store failed.
+    Storage(Box<dyn std::error::Error + Send + Sync>),
+    /// The snapshot could not be resolved by the format's own loader.
+    Snapshot(Box<dyn std::error::Error + Send + Sync>),
+    /// A partition total exceeded `u64`.
+    Overflow {
+        /// The file whose partition total overflowed.
+        file: String,
+        /// Which total overflowed (`"byte"`, `"record"`).
+        kind: &'static str,
+    },
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "table: {}", self.0)
+        match self {
+            Error::Missing(location) => write!(f, "cannot open table {location}"),
+            Error::Unrecognized(location) => write!(
+                f,
+                "unrecognized table format at {location}; supported formats: delta, iceberg"
+            ),
+            Error::Invalid(message) => write!(f, "{message}"),
+            Error::Uri(_) => write!(f, "invalid table URI"),
+            Error::Io { path, .. } => write!(f, "cannot read {path}"),
+            Error::Json(_) => write!(f, "the document was not valid JSON"),
+            Error::Avro(_) => write!(f, "an Avro manifest could not be read"),
+            Error::Storage(_) => write!(f, "object storage failed"),
+            Error::Snapshot(_) => write!(f, "the snapshot could not be resolved"),
+            Error::Overflow { file, kind } => {
+                write!(f, "partition {kind} total overflowed for {file}")
+            }
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Uri(error) => Some(error),
+            Error::Io { source, .. } => Some(source),
+            Error::Json(error) => Some(error),
+            Error::Avro(error) => Some(error),
+            Error::Storage(error) => Some(error.as_ref()),
+            Error::Snapshot(error) => Some(error.as_ref()),
+            Error::Missing(_)
+            | Error::Unrecognized(_)
+            | Error::Invalid(_)
+            | Error::Overflow { .. } => None,
+        }
+    }
+}
 
 impl Error {
     /// Wrap a message as a table error.
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self::Invalid(message.into())
     }
 }
 
@@ -383,16 +445,20 @@ pub(crate) fn add_partition_total(
     entry.size = entry
         .size
         .checked_add(file.size_bytes.unwrap_or(0))
-        .ok_or_else(|| Error(format!("partition byte total overflowed for {}", file.name)))?;
-    entry.num_records = match (entry.num_records, file.stats.as_ref()) {
-        (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(|| {
-            Error(format!(
-                "partition record total overflowed for {}",
-                file.name
-            ))
-        })?),
-        _ => None,
-    };
+        .ok_or_else(|| Error::Overflow {
+            file: file.name.clone(),
+            kind: "byte",
+        })?;
+    entry.num_records =
+        match (entry.num_records, file.stats.as_ref()) {
+            (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(
+                || Error::Overflow {
+                    file: file.name.clone(),
+                    kind: "record",
+                },
+            )?),
+            _ => None,
+        };
     Ok(())
 }
 
@@ -431,7 +497,7 @@ pub(crate) fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
 /// Local markers `lake` and `table` share. `None` is unrecognized, not an error.
 pub(crate) fn local_format(path: &Path) -> Result<Option<v1::TableFormat>, Error> {
     if !path.exists() {
-        return Err(Error(format!("cannot open table {}", path.display())));
+        return Err(Error::Missing(path.display().to_string()));
     }
     if path.is_file() {
         return Ok(is_metadata_json_path(path).then_some(v1::TableFormat::Iceberg));
@@ -486,8 +552,12 @@ async fn probe(
     options: &[(String, String)],
 ) -> Result<bool, Error> {
     let child = join_uri(uri, relative)?;
-    let reader = object_store::open(lake, &child, options).map_err(|e| Error(e.to_string()))?;
-    reader.exists().await.map_err(|e| Error(e.to_string()))
+    let reader =
+        object_store::open(lake, &child, options).map_err(|e| Error::Storage(Box::new(e)))?;
+    reader
+        .exists()
+        .await
+        .map_err(|e| Error::Storage(Box::new(e)))
 }
 
 pub(crate) fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
@@ -502,14 +572,11 @@ pub(crate) fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
             .to_string_lossy()
             .into_owned());
     }
-    let mut url = Url::parse(base).map_err(|e| Error(format!("invalid table URI: {e}")))?;
+    let mut url = Url::parse(base).map_err(Error::Uri)?;
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    Ok(url
-        .join(relative)
-        .map_err(|e| Error(format!("invalid table path {relative}: {e}")))?
-        .into())
+    Ok(url.join(relative).map_err(Error::Uri)?.into())
 }
 
 fn is_local(uri: &str) -> bool {
@@ -521,7 +588,7 @@ fn local_path(uri: &str) -> Result<PathBuf, Error> {
         Url::parse(uri)
             .ok()
             .and_then(|url| url.to_file_path().ok())
-            .ok_or_else(|| Error("invalid local table URI".into()))
+            .ok_or_else(|| Error::Invalid("invalid local table URI".into()))
     } else {
         Ok(PathBuf::from(uri))
     }
@@ -537,10 +604,15 @@ fn has_metadata_json(metadata: &Path) -> Result<bool, Error> {
     if !metadata.exists() || !metadata.is_dir() {
         return Ok(false);
     }
-    let entries = std::fs::read_dir(metadata)
-        .map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
+    let entries = std::fs::read_dir(metadata).map_err(|e| Error::Io {
+        path: metadata.display().to_string(),
+        source: e,
+    })?;
     for entry in entries {
-        let entry = entry.map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
+        let entry = entry.map_err(|e| Error::Io {
+            path: metadata.display().to_string(),
+            source: e,
+        })?;
         if entry.path().is_file() && is_metadata_json_path(&entry.path()) {
             return Ok(true);
         }
@@ -549,7 +621,5 @@ fn has_metadata_json(metadata: &Path) -> Result<bool, Error> {
 }
 
 fn unrecognized(location: impl std::fmt::Display) -> Error {
-    Error(format!(
-        "unrecognized table format at {location}; supported formats: delta, iceberg"
-    ))
+    Error::Unrecognized(location.to_string())
 }

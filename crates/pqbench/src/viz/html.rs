@@ -1,8 +1,7 @@
 //! Static HTML: the embedded bytemass rows are drawn as a d3 treemap.
 
 use crate::bytemass::FileStat;
-use crate::third_party::parquet::api::Error;
-use crate::viz::MassRecord;
+use crate::viz::{Error, MassRecord};
 
 /// Self-contained page that groups the embedded rows and draws a d3 treemap.
 ///
@@ -10,14 +9,14 @@ use crate::viz::MassRecord;
 /// Fails when there are no rows or the rows cannot be encoded into the page.
 pub fn render_html(rows: &[MassRecord], files: &[FileStat], title: &str) -> Result<String, Error> {
     if rows.is_empty() {
-        return Err(Error("html needs bytemass rows".into()));
+        return Err(Error::Empty);
     }
     let title = html_escape(title);
     let data = serde_json::to_string(rows)
-        .map_err(|error| Error(format!("cannot encode rows: {error}")))?
+        .map_err(Error::Render)?
         .replace('<', "\\u003c");
     let files = serde_json::to_string(files)
-        .map_err(|error| Error(format!("cannot encode files: {error}")))?
+        .map_err(Error::Render)?
         .replace('<', "\\u003c");
     let mut out = String::new();
     out.push_str("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>");

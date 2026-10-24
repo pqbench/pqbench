@@ -16,15 +16,33 @@ use crate::third_party::parquet::api::Sample;
 
 /// Errors from the profile layer: an empty sample or a bad column glob.
 #[derive(Debug)]
-pub struct Error(pub String);
+pub enum Error {
+    /// The sample had no rows.
+    Empty,
+    /// No column matched the requested globs.
+    NoMatch(String),
+    /// A column glob did not parse.
+    Pattern(glob::PatternError),
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "profile: {}", self.0)
+        match self {
+            Error::Empty => write!(f, "sample has no rows"),
+            Error::NoMatch(columns) => write!(f, "no column matched: {columns}"),
+            Error::Pattern(_) => write!(f, "bad glob"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Pattern(error) => Some(error),
+            Error::Empty | Error::NoMatch(_) => None,
+        }
+    }
+}
 
 /// Which columns to profile and how many top values to keep.
 #[derive(Debug, Clone)]
@@ -98,7 +116,7 @@ pub struct Profile {
 /// `columns` glob does not parse.
 pub fn profile(sample: &Sample, request: &ProfileRequest) -> Result<Profile, Error> {
     if sample.rows.is_empty() {
-        return Err(Error("sample has no rows".into()));
+        return Err(Error::Empty);
     }
     let patterns = compile_patterns(&request.columns)?;
     let mut columns = Vec::new();
@@ -114,10 +132,7 @@ pub fn profile(sample: &Sample, request: &ProfileRequest) -> Result<Profile, Err
         columns.push(column_profile(name, &cells, request.top));
     }
     if !patterns.is_empty() && columns.is_empty() {
-        return Err(Error(format!(
-            "no column matched: {}",
-            request.columns.join(", ")
-        )));
+        return Err(Error::NoMatch(request.columns.join(", ")));
     }
     Ok(Profile {
         row_count: sample.rows.len() as u64,
@@ -129,7 +144,7 @@ pub fn profile(sample: &Sample, request: &ProfileRequest) -> Result<Profile, Err
 fn compile_patterns(patterns: &[String]) -> Result<Vec<Pattern>, Error> {
     patterns
         .iter()
-        .map(|pattern| Pattern::new(pattern).map_err(|error| Error(format!("bad glob: {error}"))))
+        .map(|pattern| Pattern::new(pattern).map_err(Error::Pattern))
         .collect()
 }
 

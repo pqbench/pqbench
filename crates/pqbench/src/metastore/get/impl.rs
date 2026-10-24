@@ -7,7 +7,6 @@ use serde::Deserialize;
 
 use super::api::{Error, Metastore};
 use crate::dialect;
-use crate::third_party::reqwest::Request;
 use crate::{Dialect, Workspace};
 
 /// The subset of `GET /metastore_summary` this command reports.
@@ -26,21 +25,10 @@ pub(crate) async fn get(workspace: &Workspace) -> Result<Metastore, Error> {
         "{}/metastore_summary",
         dialect::api_root(workspace.config().endpoint.as_str())
     );
-    let response = workspace
-        .http()
-        .request(Request::get(url, workspace.config().token.clone()))
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
-    if response.status != 200 {
-        return Err(Error::from(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        )));
-    }
-    let summary: Summary = serde_json::from_slice(&response.bytes).map_err(|error| {
-        Error::from(format!("the response was not a metastore summary: {error}"))
-    })?;
+    let summary: Summary =
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::Http)?;
     Ok(Metastore {
         name: crate::v1::name::metastore(metastore_id(workspace)),
         uid: Some(summary.metastore_id),

@@ -1,9 +1,30 @@
 //! Compare compressed column bytes from two bytemass measurements.
 
 use crate::bytemass::MassRow;
-use crate::third_party::parquet::api::Error;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+
+/// Errors comparing two measurements.
+#[derive(Debug)]
+pub enum Error {
+    /// The comparison input was invalid (bad depth, a duplicate chunk, or
+    /// inconsistent row counts).
+    Invalid(String),
+    /// A byte or row total exceeded `u64`.
+    Overflow,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Invalid(message) => write!(f, "{message}"),
+            Error::Overflow => write!(f, "a byte or row total overflowed u64"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Byte totals and change for a physical column path or prefix.
 #[derive(Debug, Clone, Serialize)]
@@ -34,7 +55,7 @@ pub fn compare(
     depth: Option<usize>,
 ) -> Result<Vec<ColumnDelta>, Error> {
     if depth == Some(0) {
-        return Err(Error("depth must be positive".into()));
+        return Err(Error::Invalid("depth must be positive".into()));
     }
     let (left, left_rows) = summarize(left, depth)?;
     let (right, right_rows) = summarize(right, depth)?;
@@ -76,7 +97,7 @@ fn summarize(
     let mut totals = BTreeMap::<String, u64>::new();
     for row in rows {
         if !chunks.insert((&row.uri, row.row_group, &row.column)) {
-            return Err(Error(format!(
+            return Err(Error::Invalid(format!(
                 "duplicate column chunk: {} {} {}",
                 row.uri, row.row_group, row.column
             )));
@@ -85,7 +106,10 @@ fn summarize(
             .insert(&row.uri, row.row_count)
             .is_some_and(|count| count != row.row_count)
         {
-            return Err(Error(format!("inconsistent row count: {}", row.uri)));
+            return Err(Error::Invalid(format!(
+                "inconsistent row count: {}",
+                row.uri
+            )));
         }
         let path = depth.map_or_else(
             || row.column.clone(),
@@ -100,11 +124,10 @@ fn summarize(
         let total = totals.entry(path).or_default();
         *total = total
             .checked_add(row.compressed_bytes)
-            .ok_or_else(|| Error("column byte total overflow".into()))?;
+            .ok_or(Error::Overflow)?;
     }
     let rows = files.values().try_fold(0u64, |sum, rows| {
-        sum.checked_add(*rows)
-            .ok_or_else(|| Error("row total overflow".into()))
+        sum.checked_add(*rows).ok_or(Error::Overflow)
     })?;
     Ok((totals, rows))
 }

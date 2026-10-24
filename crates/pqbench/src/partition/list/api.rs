@@ -14,19 +14,28 @@ use crate::Lake;
 
 /// Errors listing a table's partitions.
 #[derive(Debug)]
-pub struct Error(String);
+pub enum Error {
+    /// The window argument was invalid.
+    Invalid(String),
+    /// The table loader failed.
+    Table(crate::table::Error),
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "partition: {}", self.0)
+        match self {
+            Error::Invalid(message) => write!(f, "{message}"),
+            Error::Table(error) => write!(f, "{error}"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Table(error) => Some(error),
+            _ => None,
+        }
     }
 }
 

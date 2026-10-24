@@ -14,8 +14,8 @@ use super::api::Error;
 /// gzip-compress `src` at `level`.
 pub(crate) fn compress(src: &[u8], level: u8) -> Result<Vec<u8>, Error> {
     let mut enc = GzEncoder::new(Vec::new(), Compression::new(u32::from(level)));
-    enc.write_all(src).map_err(|e| Error(e.to_string()))?;
-    enc.finish().map_err(|e| Error(e.to_string()))
+    enc.write_all(src).map_err(Error::Compress)?;
+    enc.finish().map_err(Error::Compress)
 }
 
 /// Decompress a gzip stream `src` into at most `out_cap` bytes.
@@ -24,6 +24,6 @@ pub(crate) fn decompress(src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
     GzDecoder::new(src)
         .take(out_cap as u64)
         .read_to_end(&mut out)
-        .map_err(|e| Error(e.to_string()))?;
+        .map_err(Error::Decompress)?;
     Ok(out)
 }
