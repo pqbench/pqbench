@@ -86,6 +86,7 @@ mod tests {
             endpoint: "http://127.0.0.1:1".into(),
             token: None,
             dialect: crate::Dialect::Iceberg,
+            request_timeout: None,
         })
         .expect("the workspace builds");
         let eligibility = check(&workspace, "catalogs/catalog/schemas/schema/tables/table")

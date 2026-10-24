@@ -6,6 +6,8 @@
 //! environment, then the command line — combined with [`Combine`]; the CLI
 //! builds the layers, the library owns the type.
 
+use std::time::Duration;
+
 /// The catalog dialect a command speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dialect {
@@ -26,6 +28,9 @@ pub struct Config {
     pub token: Option<String>,
     /// The catalog dialect.
     pub dialect: Dialect,
+    /// How long one request may take. `None` leaves it to the HTTP client's own
+    /// default; a front end that knows the store's latency sets it.
+    pub request_timeout: Option<Duration>,
 }
 
 impl Default for Config {
@@ -36,6 +41,7 @@ impl Default for Config {
             endpoint: String::new(),
             token: None,
             dialect: Dialect::Unity,
+            request_timeout: None,
         }
     }
 }
@@ -84,6 +90,7 @@ impl Layer {
             endpoint: self.endpoint.unwrap_or_default(),
             token: self.token,
             dialect: self.dialect.unwrap_or(Dialect::Unity),
+            request_timeout: None,
         }
     }
 }

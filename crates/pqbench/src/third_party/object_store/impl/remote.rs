@@ -468,7 +468,7 @@ mod tests {
             store: Arc::new(Store {
                 backend: Arc::new(store),
                 signer: None,
-                http: Http::new().expect("http client"),
+                http: Http::new(None).expect("http client"),
             }),
             location: path,
         }))
@@ -532,7 +532,7 @@ mod tests {
     /// that it is never rebuilt per object.
     #[tokio::test]
     async fn one_store_per_bucket_and_options() {
-        let http = Http::new().expect("http client");
+        let http = Http::new(None).expect("http client");
         let stores = Stores::new(&http);
         let url = Url::parse("s3://store-sharing-test/key").unwrap();
         let first = stores.shared_store(&url, &[]).unwrap();

@@ -10,18 +10,19 @@ use reqwest::Client;
 
 use super::api::{Error, Method, Request, Response};
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// The one pooled client, built once at startup by [`crate::Workspace::new`].
 /// Cloning is cheap — the client is an `Arc` inside.
 #[derive(Debug, Clone)]
 pub(crate) struct Http(Client);
 
 impl Http {
-    /// Build the client.
-    pub(crate) fn new() -> Result<Self, Error> {
-        let client = Client::builder()
-            .timeout(REQUEST_TIMEOUT)
+    /// Build the client, bounding each request when the caller set a timeout.
+    pub(crate) fn new(request_timeout: Option<Duration>) -> Result<Self, Error> {
+        let mut builder = Client::builder();
+        if let Some(timeout) = request_timeout {
+            builder = builder.timeout(timeout);
+        }
+        let client = builder
             .build()
             .map_err(|error| Error::from(format!("http client: {error}")))?;
         Ok(Self(client))

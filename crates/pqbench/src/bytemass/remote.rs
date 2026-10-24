@@ -111,6 +111,7 @@ mod tests {
             endpoint: String::new(),
             token: None,
             dialect: Dialect::Unity,
+            request_timeout: None,
         })
         .expect("the workspace builds");
         Lake::new(&workspace)
