@@ -339,18 +339,19 @@ async fn commit_files(
         .actions
         .into_iter()
         .filter(|action| action.kind.as_deref() == Some("add"))
-        .filter_map(|action| action.path)
-        .map(|path| added_file(uri, path))
+        .filter_map(|action| action.path.map(|path| (path, action.size_bytes)))
+        .map(|(path, size)| added_file(uri, path, size))
         .collect()
 }
 
-/// The table file one `add` action's path describes.
-fn added_file(uri: &str, path: String) -> Result<v1::TableFile, Error> {
+/// The table file one `add` action describes: its path and the size the log
+/// declares.
+fn added_file(uri: &str, path: String, size_bytes: Option<u64>) -> Result<v1::TableFile, Error> {
     let file_uri = crate::table::join_uri(uri, &path)?;
     Ok(v1::TableFile {
         blob: Some(v1::name::blob_name(&file_uri)),
         path,
-        size_bytes: Some(0),
+        size_bytes,
         ..v1::TableFile::default()
     })
 }
@@ -530,6 +531,7 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
                 .get("path")
                 .and_then(|path| path.as_str())
                 .map(str::to_owned),
+            size_bytes: body.get("size").and_then(serde_json::Value::as_u64),
         });
     }
     Ok(ParsedCommit {

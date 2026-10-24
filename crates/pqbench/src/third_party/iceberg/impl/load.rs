@@ -99,6 +99,7 @@ fn ancestry_log(
                 actions: vec![v1::LogAction {
                     kind: Some("snapshot".into()),
                     path: Some(snapshot.manifest_list.clone()),
+                    size_bytes: None,
                 }],
             })
         })
@@ -119,12 +120,14 @@ fn attach_actions(
         commit.actions.push(v1::LogAction {
             kind: Some("add".into()),
             path: Some(file.path.clone()),
+            size_bytes: file.size_bytes,
         });
     }
     for path in deletes {
         commit.actions.push(v1::LogAction {
             kind: Some("delete".into()),
             path: Some(path.clone()),
+            size_bytes: None,
         });
     }
 }
@@ -327,8 +330,8 @@ pub(super) async fn stream_commits(
 /// that snapshot's. A request that names commits and does not name that snapshot
 /// yields none: what an older snapshot added is a separate manifest read.
 ///
-/// The size is left zero, as `v1::TableFile` documents: the manifest's size is a
-/// cross-check, and `bytemass` reads the true one from the footer.
+/// Each file carries the size the manifest declares, which `--min-file-size`
+/// reads and `bytemass` cross-checks against the footer.
 pub(super) async fn stream_files(
     lake: &Lake,
     request: &LoadRequest,
@@ -347,7 +350,7 @@ pub(super) async fn stream_files(
             Ok(v1::TableFile {
                 blob: Some(v1::name::blob_name(&uri)),
                 path: file.path,
-                size_bytes: Some(0),
+                size_bytes: file.size_bytes,
                 ..v1::TableFile::default()
             })
         },

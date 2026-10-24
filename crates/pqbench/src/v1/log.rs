@@ -54,4 +54,7 @@ pub struct LogAction {
     /// Data path when the action names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The size the log declares, when the action names one (an `add`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
 }

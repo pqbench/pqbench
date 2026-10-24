@@ -70,9 +70,11 @@ holds), and the table's storage root and lease. `list files` re-reads those
 commits and emits the files they **added** as `TableFile` records (name,
 blob, log size), each carrying the lease; a file a later commit removes is still
 named. `bytemass` measures each file as its line arrives and compares its size
-to the log. A terminal prints the files as a table and the summary (file count,
-bytes); a pipe streams NDJSON. `--format json` forces the stream, and `-o`
-also writes it without delaying stdout:
+to the log. `--min-file-size` drops files whose logged size is below the given
+size (bytes, or a number with a unit: kB/MB/GB/TB, KiB/MiB/GiB/TiB), so a walk
+can measure only the big files. A terminal prints the files as a table and the
+summary (file count, bytes); a pipe streams NDJSON. `--format json` forces the
+stream, and `-o` also writes it without delaying stdout:
 
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4
@@ -83,6 +85,9 @@ id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 files: 1
 columns: 2
+$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files --min-file-size 1KB --format table
+partitions: 1
+files: 0
 ```
 
 ## Memory use

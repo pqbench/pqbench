@@ -16,7 +16,8 @@ fn usage() {
 #[rustfmt::skip]
 #[test]
 fn document() {
-    // document, from line 77
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4", 78, None);
-    support::run("pqbench bytemass /tmp/partition.ndjson.lz4 --format table", 79, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "columns: 2"]));
+    // document, from line 79
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4", 80, None);
+    support::run("pqbench bytemass /tmp/partition.ndjson.lz4 --format table", 81, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "columns: 2"]));
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files --min-file-size 1KB --format table", 88, Some(&["partitions: 1", "files: 0"]));
 }

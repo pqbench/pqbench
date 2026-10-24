@@ -363,6 +363,9 @@ message LogAction {
   // add, remove, metaData, …
   string kind = 1;
   string path = 2;
+
+  // The size the log declares, when the action names one (an `add`).
+  int64 size_bytes = 3;
 }
 
 // ---------------------------------------------------------------------------
