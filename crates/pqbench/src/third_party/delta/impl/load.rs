@@ -250,11 +250,7 @@ pub(super) async fn stream_commits(
     // flight. A commit the log does not date has no time to contribute, and one
     // the listing named that a read no longer finds has nothing left to read,
     // so neither is yielded.
-    let versions: Vec<u64> = versions.into_iter().rev().collect();
-    let batches: Vec<Vec<u64>> = versions
-        .chunks(commit_read_width())
-        .map(<[u64]>::to_vec)
-        .collect();
+    let batches = commit_batches(versions.into_iter().rev());
     Ok(futures::stream::iter(batches)
         .then(move |chunk| {
             let store = store.clone();
@@ -316,10 +312,7 @@ pub(super) async fn stream_files(
     // Version order is the log's order, and `buffered` keeps it while bounding
     // how many commits are in flight at once; a commit's files are yielded as a
     // group once its own read lands.
-    let batches: Vec<Vec<u64>> = versions
-        .chunks(commit_read_width())
-        .map(<[u64]>::to_vec)
-        .collect();
+    let batches = commit_batches(versions);
     Ok(futures::stream::iter(batches)
         .then(move |chunk| {
             let store = store.clone();
@@ -437,6 +430,18 @@ fn commit_read_width() -> usize {
         .map(|count| count.get())
         .unwrap_or(1)
         * 4
+}
+
+/// The versions to read together, in the order given: `commit_read_width()` of
+/// them per batch, so a walk costs the log's latency once per batch rather than
+/// once per commit. A batch is the unit the consumer drives — the next one is
+/// not started until it asks for it.
+fn commit_batches(versions: impl IntoIterator<Item = u64>) -> Vec<Vec<u64>> {
+    let versions: Vec<u64> = versions.into_iter().collect();
+    versions
+        .chunks(commit_read_width())
+        .map(<[u64]>::to_vec)
+        .collect()
 }
 
 /// How far into a commit file to read for its head, in stages: `commitInfo` is a
