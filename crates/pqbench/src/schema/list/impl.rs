@@ -8,12 +8,10 @@
 //! The URLs, the page shapes, and the pagination are this command's; the
 //! transport is the third-party HTTP facade. No feature flags live here.
 
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use super::api::{Error, Schema, TableFormat};
 use crate::dialect;
-use crate::third_party::reqwest::Request;
 use crate::Workspace;
 
 /// Schema names per page; both walks follow the endpoint's page token.
@@ -44,7 +42,7 @@ struct NamespacesPage {
 
 pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Schema>, Error> {
     let catalog = crate::v1::name::parse_catalog(name)
-        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/… name")))?;
+        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/… name")))?;
     let names = match workspace.config().dialect {
         TableFormat::Unity => unity_schemas(workspace, &catalog).await?,
         TableFormat::Iceberg => iceberg_namespaces(workspace).await?,
@@ -76,10 +74,13 @@ async fn unity_schemas(workspace: &Workspace, catalog: &str) -> Result<Vec<Strin
                 dialect::encode(catalog)
             ),
         };
-        let page: SchemasPage = get_json(workspace, &url).await?;
+        let page: SchemasPage =
+            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+                .await
+                .map_err(Error::Http)?;
         for schema in page.schemas {
             if schema.name.is_empty() {
-                return Err(Error::from(
+                return Err(Error::Malformed(
                     "the endpoint listed a nameless schema".to_string(),
                 ));
             }
@@ -105,10 +106,13 @@ async fn iceberg_namespaces(workspace: &Workspace) -> Result<Vec<String>, Error>
             ),
             None => format!("{base}/namespaces"),
         };
-        let page: NamespacesPage = get_json(workspace, &url).await?;
+        let page: NamespacesPage =
+            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+                .await
+                .map_err(Error::Http)?;
         for parts in page.namespaces {
             if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
-                return Err(Error::from(
+                return Err(Error::Malformed(
                     "the endpoint listed a nameless namespace".to_string(),
                 ));
             }
@@ -120,21 +124,4 @@ async fn iceberg_namespaces(workspace: &Workspace) -> Result<Vec<String>, Error>
         }
     }
     Ok(names)
-}
-
-async fn get_json<T: DeserializeOwned>(workspace: &Workspace, url: &str) -> Result<T, Error> {
-    let response = workspace
-        .http()
-        .request(Request::get(url, workspace.config().token.clone()))
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
-    if response.status != 200 {
-        return Err(Error::from(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        )));
-    }
-    serde_json::from_slice(&response.bytes)
-        .map_err(|error| Error::from(format!("the response was not a schema page: {error}")))
 }

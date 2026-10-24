@@ -19,7 +19,7 @@ pub(crate) fn compress(src: &[u8]) -> Result<Vec<u8>, Error> {
         )
     };
     if status != snappy_src::snappy_status_SNAPPY_OK {
-        return Err(Error("compress failed".to_string()));
+        return Err(Error::Compress);
     }
     unsafe { dst.set_len(len) };
     Ok(dst)
@@ -38,7 +38,7 @@ pub(crate) fn decompress(src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
         )
     };
     if status != snappy_src::snappy_status_SNAPPY_OK {
-        return Err(Error("decompress failed".to_string()));
+        return Err(Error::Decompress);
     }
     unsafe { dst.set_len(len) };
     Ok(dst)

@@ -87,14 +87,14 @@ async fn list_stream(
                 .unwrap_or_default();
             let found = partition::list::list(lake, &name, &uri, &env, window, last)
                 .await
-                .map_err(|error| CliError::from(error.to_string()))?;
+                .map_err(CliError::from)?;
             Ok::<_, CliError>(
                 found
                     .map_ok(move |mut partition| {
                         partition.credentials = lease.clone();
                         partition
                     })
-                    .map_err(|error| CliError::from(error.to_string()))
+                    .map_err(CliError::from)
                     .boxed(),
             )
         })
@@ -120,13 +120,9 @@ async fn list_partitions(
 ) -> Result<usize, CliError> {
     let mut found = partition::list::list(lake, table, uri, &BTreeMap::new(), window, last)
         .await
-        .map_err(|error| CliError::from(error.to_string()))?;
+        .map_err(CliError::from)?;
     let mut count = 0;
-    while let Some(partition) = found
-        .try_next()
-        .await
-        .map_err(|error| CliError::from(error.to_string()))?
-    {
+    while let Some(partition) = found.try_next().await.map_err(CliError::from)? {
         emit.write_row(&partition).await?;
         count += 1;
     }

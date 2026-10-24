@@ -5,11 +5,10 @@
 //! composable data comes from [`super::json`]; `pqbench viz` builds the browser
 //! picture from that stream.
 
-use crate::third_party::parquet::api::Error;
-
 use super::aggregate::tree;
 use super::analytics::MassNode;
 use super::api::MassRow;
+use super::Error;
 
 /// Render the per-column byte-mass stats as a text table.
 ///

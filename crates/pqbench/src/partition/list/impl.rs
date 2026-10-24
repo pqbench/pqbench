@@ -21,17 +21,19 @@ pub(crate) async fn list(
     last_millis: Option<i64>,
 ) -> Result<PartitionStream<'static>, Error> {
     if window_millis <= 0 {
-        return Err(Error::from("partition window must be positive".to_string()));
+        return Err(Error::Invalid(
+            "partition window must be positive".to_string(),
+        ));
     }
     if last_millis.is_some_and(|last| last <= 0) {
-        return Err(Error::from(
+        return Err(Error::Invalid(
             "partition read window must be positive".to_string(),
         ));
     }
     let request = LoadRequest::new(uri.to_string(), None, env.clone()).without_files();
     let commits = table::stream_commits(lake, &request)
         .await
-        .map_err(|error| Error::from(error.to_string()))?;
+        .map_err(Error::Table)?;
     Ok(windows(
         commits,
         window_millis,
@@ -95,12 +97,7 @@ impl Windows {
     /// The next partition: the open window once a commit falls outside it, or the
     /// last window when the commits end or the read window is reached.
     async fn next(mut self) -> Result<Option<(Partition, Self)>, Error> {
-        while let Some(commit) = self
-            .commit_stream
-            .try_next()
-            .await
-            .map_err(|error| Error::from(error.to_string()))?
-        {
+        while let Some(commit) = self.commit_stream.try_next().await.map_err(Error::Table)? {
             let Some(commit_time) = commit.commit_time else {
                 continue;
             };

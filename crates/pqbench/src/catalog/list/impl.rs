@@ -7,7 +7,6 @@ use serde::Deserialize;
 
 use super::api::{Catalog, Error};
 use crate::dialect;
-use crate::third_party::reqwest::Request;
 use crate::v1::name;
 use crate::Workspace;
 
@@ -43,21 +42,9 @@ pub(crate) async fn list(workspace: &Workspace) -> Result<Vec<Catalog>, Error> {
             }
             None => format!("{root}/catalogs?max_results={PAGE_SIZE}"),
         };
-        let response = workspace
-            .http()
-            .request(Request::get(url, token.map(str::to_owned)))
+        let page: Page = crate::http::get_json(workspace, &url, token)
             .await
-            .map_err(|error| Error::from(error.to_string()))?;
-        if response.status != 200 {
-            return Err(Error::from(format!(
-                "the endpoint returned HTTP {}: {}",
-                response.status,
-                String::from_utf8_lossy(&response.bytes)
-            )));
-        }
-        let page: Page = serde_json::from_slice(&response.bytes).map_err(|error| {
-            Error::from(format!("the response was not a catalog page: {error}"))
-        })?;
+            .map_err(Error::Http)?;
         catalogs.extend(page.catalogs.into_iter().map(|entry| {
             Catalog {
                 name: name::catalog(&entry.name),

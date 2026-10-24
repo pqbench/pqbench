@@ -29,7 +29,7 @@ pub(crate) async fn get(
     env: &BTreeMap<String, String>,
 ) -> Result<Table, Error> {
     let (catalog, schema, table) = crate::v1::name::parse_table(name)
-        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/tables/… name")))?;
+        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/tables/… name")))?;
     let info = match workspace.config().dialect {
         Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, env).await,
         Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table, env).await,
@@ -94,13 +94,13 @@ async fn load_record(
 ) -> Result<(UnityRecord, TableInfo), Error> {
     match hint.filter(|location| !location.is_empty()) {
         Some(location) => {
-            let catalog = dialect::get_json::<UnityRecord>(
+            let catalog = crate::http::get_json::<UnityRecord>(
                 workspace,
                 url,
                 workspace.config().token.as_deref(),
             );
             let (record, info) = futures_util::future::try_join(
-                async { catalog.await.map_err(Error::from) },
+                async { catalog.await.map_err(Error::Http) },
                 load_metadata(lake, name, location, env),
             )
             .await?;
@@ -113,9 +113,9 @@ async fn load_record(
         }
         None => {
             let record: UnityRecord =
-                dialect::get_json(workspace, url, workspace.config().token.as_deref())
+                crate::http::get_json(workspace, url, workspace.config().token.as_deref())
                     .await
-                    .map_err(Error::from)?;
+                    .map_err(Error::Http)?;
             let location = catalog_location(&record, name)?;
             let info = load_metadata(lake, name, &location, env).await?;
             Ok((record, info))
@@ -157,7 +157,7 @@ fn catalog_location(record: &UnityRecord, name: &str) -> Result<String, Error> {
         .storage_location
         .clone()
         .filter(|location| !location.is_empty())
-        .ok_or_else(|| Error::from(format!("the table {name} has no storage location")))
+        .ok_or_else(|| Error::Malformed(format!("the table {name} has no storage location")))
 }
 
 /// The table's metadata at `location`, without files, naming the table and the
@@ -169,17 +169,13 @@ async fn load_metadata(
     env: &BTreeMap<String, String>,
 ) -> Result<TableInfo, Error> {
     let request = LoadRequest::new(location.to_string(), None, env.clone()).without_files();
-    table::load(lake, &request).await.map_err(|error| {
-        let hint = if location.starts_with("s3://") {
-            " (s3:// needs credentials on the lake source; Databricks default storage cannot be read outside Databricks compute)"
-        } else {
-            ""
-        };
-        Error::from(format!(
-            "cannot read {name}'s metadata at {location}: {}{hint}",
-            error.0
-        ))
-    })
+    table::load(lake, &request)
+        .await
+        .map_err(|source| Error::Metadata {
+            name: name.to_string(),
+            location: location.to_string(),
+            source,
+        })
 }
 
 /// The Iceberg REST `loadTable` subset this command reports: the metadata
@@ -253,17 +249,17 @@ async fn iceberg_record(
         dialect::encode(table)
     );
     let loaded: LoadedTable =
-        dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
             .await
-            .map_err(Error::from)?;
+            .map_err(Error::Http)?;
     if loaded.metadata_location.is_empty() {
-        return Err(Error::from(format!(
+        return Err(Error::Malformed(format!(
             "the table {name} has no metadata location"
         )));
     }
     let metadata = loaded
         .metadata
-        .ok_or_else(|| Error::from(format!("the table {name} has no metadata")))?;
+        .ok_or_else(|| Error::Malformed(format!("the table {name} has no metadata")))?;
     let columns = columns(&metadata);
     let partition_columns = partition_columns(&metadata);
     // The metadata JSON is what a later stage reads: an Iceberg table root is

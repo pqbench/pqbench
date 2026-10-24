@@ -1,9 +1,11 @@
 //! Optional bounded page-header scanning, independent of page indexes.
 use crate::third_party::{object_store, parquet};
 use crate::Lake;
-use parquet::api::{Error, PageHeader};
+use parquet::api::PageHeader;
 use serde::Serialize;
 use std::collections::BTreeMap;
+
+use super::Error;
 
 /// One page in physical file order within a column chunk.
 #[derive(Debug, Clone, Serialize)]
@@ -34,21 +36,25 @@ pub async fn scan_pages(
     let uri = if input.contains("://") {
         input.to_owned()
     } else {
-        let path = std::fs::canonicalize(input).map_err(|e| Error(e.to_string()))?;
+        let path = std::fs::canonicalize(input).map_err(|e| Error::Io {
+            context: "cannot canonicalize",
+            input: input.to_string(),
+            source: e,
+        })?;
         url::Url::from_file_path(path)
-            .map_err(|_| Error("invalid file path".into()))?
+            .map_err(|()| Error::Invalid("invalid file path".into()))?
             .to_string()
     };
     let options: Vec<_> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let (stat, mass) = super::remote::read_remote(lake, &uri, options.clone(), false).await?;
-    let reader = object_store::open(lake, &uri, &options).map_err(|e| Error(e.to_string()))?;
+    let reader = object_store::open(lake, &uri, &options).map_err(Error::Storage)?;
     let mut pages = Vec::new();
     for column in mass.columns {
         let mut offset = column.chunk_offset;
         let end = offset
             .checked_add(column.compressed_bytes)
             .filter(|end| *end <= stat.size_bytes.saturating_sub(8))
-            .ok_or_else(|| Error("column chunk outside file".into()))?;
+            .ok_or_else(|| Error::Invalid("column chunk outside file".into()))?;
         let mut page = 0;
         while offset < end {
             let mut window = 4096u64.min(end - offset);
@@ -56,11 +62,11 @@ pub async fn scan_pages(
                 let bytes = reader
                     .read_range(offset..offset + window, stat.identity.as_deref())
                     .await
-                    .map_err(|e| Error(e.to_string()))?;
+                    .map_err(Error::Storage)?;
                 match parquet::api::read_page_header(&bytes) {
                     Ok(header) => break header,
                     Err(error) if window >= 1_048_576 || window == end - offset => {
-                        return Err(Error(format!(
+                        return Err(Error::Invalid(format!(
                             "{} {} at {offset}: {error}",
                             input, column.column
                         )))
@@ -72,7 +78,7 @@ pub async fn scan_pages(
                 .checked_add(header.header_bytes)
                 .and_then(|n| n.checked_add(header.compressed_bytes))
                 .filter(|next| *next > offset && *next <= end)
-                .ok_or_else(|| Error("page outside column chunk".into()))?;
+                .ok_or_else(|| Error::Invalid("page outside column chunk".into()))?;
             pages.push(PageRecord {
                 file: input.to_owned(),
                 column: column.column.clone(),

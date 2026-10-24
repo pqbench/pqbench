@@ -54,14 +54,23 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Spec(e) => write!(f, "{e}"),
-            Error::Codec(e) => write!(f, "{e}"),
-            Error::Parquet(e) => write!(f, "{e}"),
-            Error::Json(e) => write!(f, "json: {e}"),
+            Error::Codec(_) => write!(f, "a codec failed"),
+            Error::Parquet(_) => write!(f, "the parquet layer failed"),
+            Error::Json(_) => write!(f, "the report could not be serialized"),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Codec(error) => Some(error),
+            Error::Parquet(error) => Some(error),
+            Error::Json(error) => Some(error),
+            Error::Spec(_) => None,
+        }
+    }
+}
 
 impl From<CodecError> for Error {
     fn from(e: CodecError) -> Self {

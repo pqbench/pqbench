@@ -6,13 +6,7 @@
 
 use super::aggregate::aggregate;
 use super::api::MassRow;
-use crate::third_party::parquet::api::Error;
-
-impl From<serde_json::Error> for Error {
-    fn from(e: serde_json::Error) -> Self {
-        Error(format!("json: {e}"))
-    }
-}
+use super::Error;
 
 /// Serialize the per-column byte masses as flat JSON (pretty).
 ///

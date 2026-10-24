@@ -3,17 +3,34 @@
 //! Both functions take and return plain byte buffers; no `lz4` type appears
 //! here, so the backing crate can change without touching callers.
 
+use std::fmt;
+
 /// Errors from the LZ4 layer.
 #[derive(Debug)]
-pub struct Error(pub String);
+#[non_exhaustive]
+pub enum Error {
+    /// The underlying LZ4 compression call failed.
+    Compress(std::io::Error),
+    /// The underlying LZ4 decompression call failed.
+    Decompress(std::io::Error),
+}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "lz4: {}", self.0)
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Compress(_) => write!(f, "lz4 compression failed"),
+            Error::Decompress(_) => write!(f, "lz4 decompression failed"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Compress(error) | Error::Decompress(error) => Some(error),
+        }
+    }
+}
 
 /// Compress `src` into a new buffer.
 ///

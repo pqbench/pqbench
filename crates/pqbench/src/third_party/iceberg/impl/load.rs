@@ -12,23 +12,11 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{LoadRequest, TableInfo};
+use crate::table::{Error, LoadRequest, TableInfo};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 use crate::v1;
 use crate::Lake;
-
-/// Errors resolving an Iceberg snapshot.
-#[derive(Debug)]
-pub(super) struct Error(String);
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "iceberg: {}", self.0)
-    }
-}
-
-impl std::error::Error for Error {}
 
 /// Load the current or requested Iceberg snapshot into a table record.
 ///
@@ -83,10 +71,9 @@ async fn read_metadata(
 ) -> Result<TableMetadata, Error> {
     let metadata_location = resolve_metadata_location(lake, uri, options).await?;
     let metadata_bytes = read_location(lake, &metadata_location, options).await?;
-    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes)
-        .map_err(|e| Error(format!("cannot parse metadata JSON: {e}")))?;
+    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
     if metadata.format_version != 1 && metadata.format_version != 2 {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "unsupported Iceberg format version: {}",
             metadata.format_version
         )));
@@ -290,7 +277,7 @@ fn select_snapshot(
         .iter()
         .find(|snapshot| snapshot.snapshot_id == snapshot_id)
         .map(Some)
-        .ok_or_else(|| Error(format!("Iceberg snapshot does not exist: {snapshot_id}")))
+        .ok_or_else(|| Error::Invalid(format!("Iceberg snapshot does not exist: {snapshot_id}")))
 }
 
 /// Visit the table's snapshots, newest first, without collecting them.
@@ -307,10 +294,9 @@ pub(super) async fn stream_commits(
     let options = env_options(&request.env);
     let metadata_location = resolve_metadata_location(lake, &request.uri, &options).await?;
     let metadata_bytes = read_location(lake, &metadata_location, &options).await?;
-    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes)
-        .map_err(|e| Error(format!("cannot parse metadata JSON: {e}")))?;
+    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
     if metadata.format_version != 1 && metadata.format_version != 2 {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "unsupported Iceberg format version: {}",
             metadata.format_version
         )));
@@ -357,8 +343,7 @@ pub(super) async fn stream_files(
     };
     Ok(futures_util::stream::iter(files.into_iter().map(
         move |file| {
-            let uri = crate::table::join_uri(&root, &file.path)
-                .map_err(|error| Error(error.to_string()))?;
+            let uri = crate::table::join_uri(&root, &file.path)?;
             Ok(v1::TableFile {
                 blob: Some(v1::name::blob_name(&uri)),
                 path: file.path,
@@ -414,7 +399,7 @@ async fn resolve_metadata_location(
             return Ok(candidate);
         }
     }
-    Err(Error(format!(
+    Err(Error::Invalid(format!(
         "cannot resolve Iceberg metadata for version {version}; pass the metadata JSON location"
     )))
 }
@@ -437,8 +422,10 @@ fn hint_metadata(metadata: &Path) -> Result<Option<String>, Error> {
     if !hint_path.is_file() {
         return Ok(None);
     }
-    let hint = std::fs::read_to_string(&hint_path)
-        .map_err(|e| Error(format!("cannot read {}: {e}", hint_path.display())))?;
+    let hint = std::fs::read_to_string(&hint_path).map_err(|e| Error::Io {
+        path: hint_path.display().to_string(),
+        source: e,
+    })?;
     let version = parse_hint_version(&hint)?;
     for name in hint_names(version) {
         let candidate = metadata.join(name);
@@ -446,7 +433,7 @@ fn hint_metadata(metadata: &Path) -> Result<Option<String>, Error> {
             return Ok(Some(candidate.to_string_lossy().into_owned()));
         }
     }
-    Err(Error(format!(
+    Err(Error::Invalid(format!(
         "version-hint.text is {version} but no matching metadata JSON is in {}",
         metadata.display()
     )))
@@ -454,11 +441,16 @@ fn hint_metadata(metadata: &Path) -> Result<Option<String>, Error> {
 
 /// The newest metadata JSON in the directory, by leading version.
 fn newest_metadata(metadata: &Path) -> Result<String, Error> {
-    let entries = std::fs::read_dir(metadata)
-        .map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
+    let entries = std::fs::read_dir(metadata).map_err(|e| Error::Io {
+        path: metadata.display().to_string(),
+        source: e,
+    })?;
     let mut found = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| Error(format!("cannot read {}: {e}", metadata.display())))?;
+        let entry = entry.map_err(|e| Error::Io {
+            path: metadata.display().to_string(),
+            source: e,
+        })?;
         let name = entry.file_name();
         let Some(version) = metadata_json_version(&name.to_string_lossy()) else {
             continue;
@@ -470,7 +462,7 @@ fn newest_metadata(metadata: &Path) -> Result<String, Error> {
         .pop()
         .map(|(_, path)| path.to_string_lossy().into_owned())
         .ok_or_else(|| {
-            Error(format!(
+            Error::Invalid(format!(
                 "no Iceberg metadata JSON in {}",
                 metadata.display()
             ))
@@ -480,10 +472,10 @@ fn newest_metadata(metadata: &Path) -> Result<String, Error> {
 fn parse_hint_version(hint: &str) -> Result<u64, Error> {
     let hint = hint.trim();
     if hint.is_empty() || hint.contains(['/', '\\']) || hint.contains("..") {
-        return Err(Error(format!("invalid version-hint.text: {hint}")));
+        return Err(Error::Invalid(format!("invalid version-hint.text: {hint}")));
     }
     hint.parse::<u64>()
-        .map_err(|_| Error(format!("version-hint.text is not a version: {hint}")))
+        .map_err(|_| Error::Invalid(format!("version-hint.text is not a version: {hint}")))
 }
 
 fn hint_names(version: u64) -> [String; 3] {
@@ -515,14 +507,12 @@ async fn active_files(
 ) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
     let root = table_root(table_location)?;
     let bytes = read_location(lake, manifest_list, options).await?;
-    let manifests: Vec<ManifestFile> =
-        read_avro(&bytes, "manifest list").map_err(|e| Error(e.to_string()))?;
+    let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
     let mut files = Vec::new();
     let mut deletes = Vec::new();
     for manifest in manifests {
         let bytes = read_location(lake, &manifest.manifest_path, options).await?;
-        let entries: Vec<ManifestEntry> =
-            read_avro(&bytes, "manifest").map_err(|e| Error(e.to_string()))?;
+        let entries: Vec<ManifestEntry> = read_avro(&bytes, "manifest").map_err(Error::Avro)?;
         for entry in entries {
             if entry.status == STATUS_DELETED {
                 continue;
@@ -545,13 +535,13 @@ async fn active_files(
 /// One active manifest entry as a `v1::TableFile`, checking it is Parquet.
 fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<v1::TableFile, Error> {
     if !entry.data_file.file_format.eq_ignore_ascii_case("parquet") {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "active data file is not Parquet: {}",
             entry.data_file.file_path
         )));
     }
     let size = u64::try_from(entry.data_file.file_size_bytes).map_err(|_| {
-        Error(format!(
+        Error::Invalid(format!(
             "invalid file size in manifest: {}",
             entry.data_file.file_path
         ))
@@ -575,7 +565,7 @@ fn table_root(location: &str) -> Result<TableRoot, Error> {
         let url = parse_dir_url(location)?;
         if url.scheme() == "file" {
             let path = url.to_file_path().map_err(|()| {
-                Error(format!(
+                Error::Invalid(format!(
                     "cannot convert table location to a path: {location}"
                 ))
             })?;
@@ -600,13 +590,14 @@ fn local_uri(root: &Path, location: &str) -> Result<String, Error> {
 
 fn local_data_path(root: &Path, location: &str) -> Result<PathBuf, Error> {
     let candidate = if looks_like_uri(location) {
-        let url = Url::parse(location)
-            .map_err(|e| Error(format!("active data file is not a URI: {location}: {e}")))?;
+        let url = Url::parse(location).map_err(Error::Uri)?;
         if url.scheme() != "file" {
-            return Err(Error(format!("active data file is not local: {location}")));
+            return Err(Error::Invalid(format!(
+                "active data file is not local: {location}"
+            )));
         }
         url.to_file_path().map_err(|()| {
-            Error(format!(
+            Error::Invalid(format!(
                 "cannot convert active data file to a path: {location}"
             ))
         })?
@@ -619,7 +610,7 @@ fn local_data_path(root: &Path, location: &str) -> Result<PathBuf, Error> {
         root.join(candidate)
     };
     if !local.starts_with(root) {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "active data file is outside the Iceberg table location: {location}"
         )));
     }
@@ -631,16 +622,14 @@ fn object_input(base: &Url, location: &str) -> Result<String, Error> {
         location.to_string()
     } else {
         relative_data_path(location)?;
-        base.join(location)
-            .map_err(|e| Error(format!("invalid active file path {location}: {e}")))?
-            .into()
+        base.join(location).map_err(Error::Uri)?.into()
     };
-    let url = Url::parse(&uri).map_err(|e| Error(e.to_string()))?;
+    let url = Url::parse(&uri).map_err(Error::Uri)?;
     if url.scheme() != base.scheme()
         || url.host_str() != base.host_str()
         || !url.path().starts_with(base.path())
     {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "active data file is outside the Iceberg table location: {location}"
         )));
     }
@@ -653,7 +642,7 @@ fn relative_data_path(relative: &str) -> Result<&Path, Error> {
         || relative.contains("://")
         || !path.components().all(|c| matches!(c, Component::Normal(_)))
     {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "only relative data paths inside the table are supported: {relative}"
         )));
     }
@@ -661,8 +650,7 @@ fn relative_data_path(relative: &str) -> Result<&Path, Error> {
 }
 
 fn parse_dir_url(location: &str) -> Result<Url, Error> {
-    let mut url = Url::parse(location)
-        .map_err(|e| Error(format!("invalid table location {location}: {e}")))?;
+    let mut url = Url::parse(location).map_err(Error::Uri)?;
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
@@ -671,17 +659,15 @@ fn parse_dir_url(location: &str) -> Result<Url, Error> {
 
 fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
     let mut url = if looks_like_uri(base) {
-        Url::parse(base).map_err(|e| Error(format!("invalid table URI: {e}")))?
+        Url::parse(base).map_err(Error::Uri)?
     } else {
-        Url::from_directory_path(base).map_err(|()| Error("invalid local table path".into()))?
+        Url::from_directory_path(base)
+            .map_err(|()| Error::Invalid("invalid local table path".into()))?
     };
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    Ok(url
-        .join(relative)
-        .map_err(|e| Error(format!("invalid table path {relative}: {e}")))?
-        .into())
+    Ok(url.join(relative).map_err(Error::Uri)?.into())
 }
 
 async fn read_location(
@@ -691,14 +677,20 @@ async fn read_location(
 ) -> Result<Vec<u8>, Error> {
     if looks_like_uri(location) {
         let reader =
-            object_store::open(lake, location, options).map_err(|e| Error(e.to_string()))?;
-        let stat = reader.stat().await.map_err(|e| Error(e.to_string()))?;
+            object_store::open(lake, location, options).map_err(|e| Error::Storage(Box::new(e)))?;
+        let stat = reader
+            .stat()
+            .await
+            .map_err(|e| Error::Storage(Box::new(e)))?;
         reader
             .read_range(0..stat.size_bytes, stat.identity.as_deref())
             .await
-            .map_err(|e| Error(e.to_string()))
+            .map_err(|e| Error::Storage(Box::new(e)))
     } else {
-        std::fs::read(location).map_err(|e| Error(format!("cannot read {location}: {e}")))
+        std::fs::read(location).map_err(|e| Error::Io {
+            path: location.to_string(),
+            source: e,
+        })
     }
 }
 
@@ -707,8 +699,12 @@ async fn object_exists(
     location: &str,
     options: &[(String, String)],
 ) -> Result<bool, Error> {
-    let reader = object_store::open(lake, location, options).map_err(|e| Error(e.to_string()))?;
-    reader.exists().await.map_err(|e| Error(e.to_string()))
+    let reader =
+        object_store::open(lake, location, options).map_err(|e| Error::Storage(Box::new(e)))?;
+    reader
+        .exists()
+        .await
+        .map_err(|e| Error::Storage(Box::new(e)))
 }
 
 fn env_options(env: &BTreeMap<String, String>) -> Vec<(String, String)> {
@@ -733,7 +729,7 @@ fn local_path(uri: &str) -> Result<PathBuf, Error> {
             .ok()
             .and_then(|url| url.to_file_path().ok())
             .or_else(|| Some(PathBuf::from(rest)))
-            .ok_or_else(|| Error("invalid local table URI".into()))
+            .ok_or_else(|| Error::Invalid("invalid local table URI".into()))
     } else {
         Ok(PathBuf::from(uri))
     }
@@ -744,9 +740,11 @@ fn looks_like_uri(value: &str) -> bool {
 }
 
 fn create_u64(value: i64) -> Result<u64, Error> {
-    u64::try_from(value).map_err(|_| Error(format!("Iceberg snapshot id is negative: {value}")))
+    u64::try_from(value)
+        .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is negative: {value}")))
 }
 
 fn create_i64(value: u64) -> Result<i64, Error> {
-    i64::try_from(value).map_err(|_| Error(format!("Iceberg snapshot id is too large: {value}")))
+    i64::try_from(value)
+        .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is too large: {value}")))
 }

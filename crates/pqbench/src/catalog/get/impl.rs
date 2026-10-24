@@ -7,7 +7,6 @@ use serde::Deserialize;
 
 use super::api::{Catalog, Error};
 use crate::dialect;
-use crate::third_party::reqwest::Request;
 use crate::v1::name;
 use crate::Workspace;
 
@@ -25,26 +24,16 @@ struct Record {
 
 pub(crate) async fn get(workspace: &Workspace, name: &str) -> Result<Catalog, Error> {
     let catalog = name::parse_catalog(name)
-        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/… name")))?;
+        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/… name")))?;
     let url = format!(
         "{}/catalogs/{}",
         dialect::api_root(workspace.config().endpoint.as_str()),
         catalog
     );
-    let response = workspace
-        .http()
-        .request(Request::get(url, workspace.config().token.clone()))
-        .await
-        .map_err(|error| Error::from(error.to_string()))?;
-    if response.status != 200 {
-        return Err(Error::from(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        )));
-    }
-    let record: Record = serde_json::from_slice(&response.bytes)
-        .map_err(|error| Error::from(format!("the response was not a catalog record: {error}")))?;
+    let record: Record =
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::Http)?;
     Ok(Catalog {
         name: name::catalog(&record.name),
         catalog_type: record

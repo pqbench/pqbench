@@ -54,13 +54,13 @@ impl TableRecord {
 
 /// The table's Unity record: the table id and the securable kind.
 async fn table_record(workspace: &Workspace, root: &str, name: &str) -> Result<TableRecord, Error> {
-    dialect::get_json(
+    crate::http::get_json(
         workspace,
         &format!("{root}/tables/{}", dialect::encode(name)),
         workspace.config().token.as_deref(),
     )
     .await
-    .map_err(Error::from)
+    .map_err(Error::Http)
 }
 
 pub(super) async fn vend_unity(
@@ -86,7 +86,7 @@ pub(super) async fn vend_unity(
             serde_json::json!({"table_id": table_id, "operation": "READ"}).to_string(),
         ))
         .await
-        .map_err(|error| Error::from(error.to_string()))?;
+        .map_err(|error| Error::Http(crate::http::Error::Transport(error)))?;
     if matches!(response.status, 404 | 501) {
         return Ok(None);
     }
@@ -99,17 +99,13 @@ pub(super) async fn vend_unity(
         return Ok(None);
     }
     if response.status != 200 {
-        return Err(Error::from(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        )));
+        return Err(Error::Http(crate::http::Error::Status {
+            status: response.status,
+            body: String::from_utf8_lossy(&response.bytes).into_owned(),
+        }));
     }
-    let record: CredentialsRecord = serde_json::from_slice(&response.bytes).map_err(|error| {
-        Error::from(format!(
-            "the response was not the expected document: {error}"
-        ))
-    })?;
+    let record: CredentialsRecord = serde_json::from_slice(&response.bytes)
+        .map_err(|error| Error::Http(crate::http::Error::Body(error)))?;
     Ok(record.aws_temp_credentials.map(|credentials| {
         BTreeMap::from([
             ("AWS_ACCESS_KEY_ID".to_string(), credentials.access_key_id),
@@ -155,14 +151,10 @@ pub(super) async fn vend_iceberg(
         .http()
         .request(Request::get(url, workspace.config().token.clone()))
         .await
-        .map_err(|error| Error::from(error.to_string()))?;
+        .map_err(|error| Error::Http(crate::http::Error::Transport(error)))?;
     if response.status == 200 {
-        let loaded: LoadedCredentials =
-            serde_json::from_slice(&response.bytes).map_err(|error| {
-                Error::from(format!(
-                    "the response was not the expected document: {error}"
-                ))
-            })?;
+        let loaded: LoadedCredentials = serde_json::from_slice(&response.bytes)
+            .map_err(|error| Error::Http(crate::http::Error::Body(error)))?;
         return Ok(credential_options(&loaded.storage_credentials));
     }
     vend_iceberg_load(workspace, schema, table).await
@@ -190,7 +182,7 @@ async fn vend_iceberg_load(
         .http()
         .request(request)
         .await
-        .map_err(|error| Error::from(error.to_string()))?;
+        .map_err(|error| Error::Http(crate::http::Error::Transport(error)))?;
     if matches!(response.status, 404 | 501) {
         return Ok(None);
     }
@@ -200,17 +192,13 @@ async fn vend_iceberg_load(
         return Ok(None);
     }
     if response.status != 200 {
-        return Err(Error::from(format!(
-            "the endpoint returned HTTP {}: {}",
-            response.status,
-            String::from_utf8_lossy(&response.bytes)
-        )));
+        return Err(Error::Http(crate::http::Error::Status {
+            status: response.status,
+            body: String::from_utf8_lossy(&response.bytes).into_owned(),
+        }));
     }
-    let loaded: LoadedTable = serde_json::from_slice(&response.bytes).map_err(|error| {
-        Error::from(format!(
-            "the response was not the expected document: {error}"
-        ))
-    })?;
+    let loaded: LoadedTable = serde_json::from_slice(&response.bytes)
+        .map_err(|error| Error::Http(crate::http::Error::Body(error)))?;
     let location = loaded
         .metadata
         .and_then(|metadata| metadata.location)

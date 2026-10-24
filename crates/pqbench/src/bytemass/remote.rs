@@ -7,9 +7,11 @@
 use crate::third_party::object_store;
 use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{
-    page_index_start, read_footer_masses, read_tail_masses, Error, FileMass,
+    page_index_start, read_footer_masses, read_tail_masses, FileMass,
 };
 use crate::Lake;
+
+use super::Error;
 
 const PARQUET_FOOTER_SIZE: u64 = 8;
 
@@ -32,7 +34,7 @@ pub(super) async fn read_remote(
     let stat = reader.stat().await.map_err(storage_error)?;
     let size = stat.size_bytes;
     if size < PARQUET_FOOTER_SIZE {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "object {uri} is too small to be a Parquet file: {size} bytes"
         )));
     }
@@ -42,28 +44,31 @@ pub(super) async fn read_remote(
         .read_range(size - PARQUET_FOOTER_SIZE..size, identity)
         .await
         .map_err(storage_error)?;
-    let trailer: [u8; 8] = trailer
-        .as_slice()
-        .try_into()
-        .map_err(|_| Error(format!("object {uri} returned a truncated Parquet trailer")))?;
+    let trailer: [u8; 8] = trailer.as_slice().try_into().map_err(|_| {
+        Error::Invalid(format!("object {uri} returned a truncated Parquet trailer"))
+    })?;
     let [a, b, c, d, ..] = trailer;
     if &trailer[4..] != b"PAR1" {
-        return Err(Error(format!("object {uri} has no Parquet footer magic")));
+        return Err(Error::Invalid(format!(
+            "object {uri} has no Parquet footer magic"
+        )));
     }
 
     let metadata_size = u64::from(u32::from_le_bytes([a, b, c, d]));
     let metadata_start = size
         .checked_sub(PARQUET_FOOTER_SIZE + metadata_size)
         .filter(|start| *start >= 4)
-        .ok_or_else(|| Error(format!("object {uri} has an invalid Parquet footer size")))?;
+        .ok_or_else(|| {
+            Error::Invalid(format!("object {uri} has an invalid Parquet footer size"))
+        })?;
     let metadata_len = usize::try_from(metadata_size)
-        .map_err(|_| Error(format!("object {uri} metadata size exceeds usize")))?;
+        .map_err(|_| Error::Invalid(format!("object {uri} metadata size exceeds usize")))?;
     let mut footer = reader
         .read_range(metadata_start..size - PARQUET_FOOTER_SIZE, identity)
         .await
         .map_err(storage_error)?;
     if footer.len() != metadata_len {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "object {uri} returned truncated Parquet metadata"
         )));
     }
@@ -71,13 +76,12 @@ pub(super) async fn read_remote(
     if !indexes {
         return Ok((stat, read_footer_masses(&footer)?));
     }
-    let masses = read_remote_indexes(&reader, uri, &footer, metadata_start, size, identity).await?;
+    let masses = read_remote_indexes(&reader, &footer, metadata_start, size, identity).await?;
     Ok((stat, masses))
 }
 
 async fn read_remote_indexes(
     reader: &object_store::api::ObjectReader,
-    uri: &str,
     footer: &[u8],
     metadata_start: u64,
     size: u64,
@@ -85,7 +89,7 @@ async fn read_remote_indexes(
 ) -> Result<FileMass, Error> {
     let start = page_index_start(footer)?.filter(|start| *start < metadata_start);
     let Some(start) = start else {
-        return read_footer_masses(footer);
+        return read_footer_masses(footer).map_err(Error::Parquet);
     };
     let index_bytes = reader
         .read_range(start..metadata_start, identity)
@@ -93,11 +97,11 @@ async fn read_remote_indexes(
         .map_err(storage_error)?;
     let mut tail = index_bytes;
     tail.extend_from_slice(footer);
-    read_tail_masses(&tail, size).map_err(|error| Error(format!("object {uri}: {error}")))
+    read_tail_masses(&tail, size).map_err(Error::Parquet)
 }
 
 fn storage_error(error: object_store::Error) -> Error {
-    Error(error.to_string())
+    Error::Storage(error)
 }
 
 #[cfg(test)]

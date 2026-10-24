@@ -16,6 +16,7 @@ use serde::Serialize;
 
 /// Errors from the codec layer.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     Io(std::io::Error),
     Level {
@@ -24,13 +25,16 @@ pub enum Error {
         first_level: u32,
         last_level: u32,
     },
-    Codec(String),
+    /// A compress/decompress round trip did not return the input.
+    RoundTrip,
+    /// The codec backend failed.
+    Codec(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Io(e) => write!(f, "io: {e}"),
+            Error::Io(_) => write!(f, "codec i/o failed"),
             Error::Level {
                 codec,
                 level,
@@ -42,12 +46,21 @@ impl fmt::Display for Error {
                     "level {level} out of range for {codec}: {first_level}..={last_level}"
                 )
             }
-            Error::Codec(e) => write!(f, "codec error: {e}"),
+            Error::RoundTrip => write!(f, "round-trip mismatch"),
+            Error::Codec(_) => write!(f, "codec failed"),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(error) => Some(error),
+            Error::Codec(error) => Some(error.as_ref()),
+            Error::Level { .. } | Error::RoundTrip => None,
+        }
+    }
+}
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
@@ -56,8 +69,8 @@ impl From<std::io::Error> for Error {
 }
 
 /// Wrap a codec backend's error.
-fn codec_error(e: impl fmt::Display) -> Error {
-    Error::Codec(e.to_string())
+fn codec_error(e: impl std::error::Error + Send + Sync + 'static) -> Error {
+    Error::Codec(Box::new(e))
 }
 
 /// A codec's valid compression levels, inclusive (AIP-145: levels are a
@@ -281,7 +294,7 @@ pub fn bench_pages(
         let c = codec.compress(level, p)?;
         let back = codec.decompress(level, &c, p.len())?;
         if back != *p {
-            return Err(Error::Codec("round-trip mismatch".to_string()));
+            return Err(Error::RoundTrip);
         }
         page_compressed_sizes.push(c.len());
         compressed.push(c);

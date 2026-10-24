@@ -21,8 +21,6 @@ use crate::third_party::object_store::api::{
 };
 use crate::third_party::reqwest::r#impl::Http;
 
-use super::error_chain;
-
 /// The one `reqwest` client backs every store. `object_store` builds a fresh
 /// client on each `build()`, and `reqwest` re-parses the platform CA bundle
 /// inside every client build; handing it the shared [`Http`] keeps one pool and
@@ -226,9 +224,14 @@ impl Stores {
         options: &[(String, String)],
     ) -> Result<Vec<String>, Error> {
         // Escape '?' before URL parsing, since it belongs to the key pattern.
-        let url = Url::parse(&uri.replace('?', "%3F")).map_err(|e| Error(e.to_string()))?;
+        let url = Url::parse(&uri.replace('?', "%3F")).map_err(|e| Error::Uri {
+            uri: uri.to_string(),
+            source: e,
+        })?;
         if !matches!(url.scheme(), "s3" | "s3a") {
-            return Err(Error("remote globs require an s3:// or s3a:// URI".into()));
+            return Err(Error::Unsupported(
+                "remote globs require an s3:// or s3a:// URI".into(),
+            ));
         }
         let (store, location) = self.s3_store(&url, options)?;
         let matches = match_objects(store.backend.as_ref(), location.as_ref()).await?;
@@ -253,10 +256,7 @@ impl Stores {
         let mut options = options.to_vec();
         options.sort();
         let key = (url.host_str().unwrap_or_default().to_string(), options);
-        let mut registry = self
-            .registry
-            .lock()
-            .map_err(|_| Error("the store registry is poisoned".into()))?;
+        let mut registry = self.registry.lock().map_err(|_| Error::Poisoned)?;
         if let Some(store) = registry.get(&key) {
             return Ok(Arc::clone(store));
         }
@@ -281,7 +281,7 @@ impl Stores {
             let config_key: AmazonS3ConfigKey = key
                 .to_ascii_lowercase()
                 .parse()
-                .map_err(|_| Error(format!("unknown object store option `{key}`")))?;
+                .map_err(|_| Error::Option(key.clone()))?;
             builder = builder.with_config(config_key, value.clone());
         }
         let store = builder.build().map_err(remote_error)?;
@@ -299,7 +299,7 @@ impl Stores {
     ) -> Result<(Arc<Store>, ::object_store::path::Path), Error> {
         let store = self.shared_store(url, options)?;
         let (_, location) =
-            ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error(e.to_string()))?;
+            ::object_store::ObjectStoreScheme::parse(url).map_err(|e| Error::Store(Box::new(e)))?;
         Ok((store, location))
     }
 }
@@ -326,9 +326,9 @@ async fn head_object(
             None,
         ))
         .await
-        .map_err(|error| Error(format!("cannot HEAD object: {error}")))?;
+        .map_err(Error::Transport)?;
     if !(200..300).contains(&response.status) {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "cannot HEAD object: HTTP {}",
             response.status
         )));
@@ -338,7 +338,7 @@ async fn head_object(
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .collect();
-    head_stat(&pairs).ok_or_else(|| Error("HEAD response has no object size".into()))
+    head_stat(&pairs).ok_or_else(|| Error::Invalid("HEAD response has no object size".into()))
 }
 
 async fn stat_get_opts(
@@ -401,7 +401,7 @@ fn child_name(parent: &str, child: &str) -> String {
 }
 
 fn remote_error(error: ::object_store::Error) -> Error {
-    Error(error_chain(&error))
+    Error::Store(Box::new(error))
 }
 
 async fn match_objects(store: &dyn ObjectStore, mask: &str) -> Result<Vec<String>, Error> {
@@ -414,7 +414,7 @@ async fn match_objects(store: &dyn ObjectStore, mask: &str) -> Result<Vec<String
     while let Some(object) = objects
         .try_next()
         .await
-        .map_err(|e| Error(format!("listing S3 glob: {e}")))?
+        .map_err(|e| Error::Store(Box::new(e)))?
     {
         if pattern.matches(object.location.as_ref()) {
             result.push(object.location.to_string());
@@ -423,7 +423,7 @@ async fn match_objects(store: &dyn ObjectStore, mask: &str) -> Result<Vec<String
     result.sort();
     result.dedup();
     if result.is_empty() {
-        return Err(Error(format!("S3 glob matched no files: {mask}")));
+        return Err(Error::NoMatch(mask.to_string()));
     }
     Ok(result)
 }

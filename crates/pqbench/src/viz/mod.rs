@@ -6,12 +6,49 @@
 
 mod html;
 
+use std::fmt;
 use std::path::Path;
 
 use crate::bytemass::FileStat;
-use crate::third_party::parquet::api::Error;
 
 pub use html::render_html;
+
+/// Errors writing the treemap page.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// There were no rows to draw.
+    Empty,
+    /// The rows could not be encoded into the page.
+    Render(serde_json::Error),
+    /// The page could not be written.
+    Write {
+        /// The path that could not be written.
+        path: String,
+        /// The underlying I/O failure.
+        source: std::io::Error,
+    },
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Empty => write!(f, "html needs bytemass rows"),
+            Error::Render(_) => write!(f, "cannot encode the rows"),
+            Error::Write { path, .. } => write!(f, "cannot write {path}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Render(error) => Some(error),
+            Error::Write { source, .. } => Some(source),
+            Error::Empty => None,
+        }
+    }
+}
 
 /// One collected bytemass row, tagged with the stream `id`.
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -62,8 +99,10 @@ pub struct MassRecord {
 pub fn write_report(prefix: &Path, rows: &[MassRecord], files: &[FileStat]) -> Result<(), Error> {
     let html_path = prefix.with_extension("html");
     let html = render_html(rows, files, &title(rows))?;
-    std::fs::write(&html_path, html)
-        .map_err(|error| Error(format!("cannot write {}: {error}", html_path.display())))
+    std::fs::write(&html_path, html).map_err(|error| Error::Write {
+        path: html_path.display().to_string(),
+        source: error,
+    })
 }
 
 fn title(rows: &[MassRecord]) -> String {

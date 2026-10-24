@@ -46,7 +46,7 @@ impl PageParser for ParquetRsParser {
                 let column = meta.column_path().string();
                 let compression = meta.compression();
                 if compression != Compression::UNCOMPRESSED {
-                    return Err(Error(format!(
+                    return Err(Error::Unsupported(format!(
                         "only NONE (uncompressed) parquet is supported; column {column} is {compression}"
                     )));
                 }
@@ -91,7 +91,7 @@ pub(crate) fn read_tail_masses(tail: &[u8], file_size: u64) -> Result<FileMass, 
 
 /// Decode up to `max_rows` leading rows of a local file into stringified cells.
 pub(crate) fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error> {
-    let file = std::fs::File::open(path).map_err(|error| Error(error.to_string()))?;
+    let file = std::fs::File::open(path).map_err(Error::Io)?;
     let reader = SerializedFileReader::new(file)?;
     let mut sample = Sample::default();
     for row in reader.get_row_iter(None)? {
@@ -129,7 +129,7 @@ pub(crate) fn read_typed_sample(
     path: &Path,
     max_rows: Option<usize>,
 ) -> Result<TypedSample, Error> {
-    let file = std::fs::File::open(path).map_err(|error| Error(error.to_string()))?;
+    let file = std::fs::File::open(path).map_err(Error::Io)?;
     let reader = SerializedFileReader::new(file)?;
     let mut sample = TypedSample::default();
     let mut kinds: Vec<Option<Kind>> = Vec::new();
@@ -231,7 +231,7 @@ pub(crate) fn write_parquet(
     options: &WriteOptions,
 ) -> Result<Vec<u8>, Error> {
     if columns.is_empty() {
-        return Err(Error("no columns to write".into()));
+        return Err(Error::Invalid("no columns to write".into()));
     }
     let schema = schema_from_columns(columns)?;
     let mut builder = WriterProperties::builder()
@@ -250,7 +250,7 @@ pub(crate) fn write_parquet(
             }
         }
         if applied == 0 {
-            return Err(Error(format!(
+            return Err(Error::Encoding(format!(
                 "encoding `{encoding}` applies to no column in the sample"
             )));
         }
@@ -267,7 +267,7 @@ pub(crate) fn write_parquet(
                     .iter()
                     .position(|column| &column.name == name)
                     .ok_or_else(|| {
-                        Error(format!("sorting column `{name}` is not in the sample"))
+                        Error::Invalid(format!("sorting column `{name}` is not in the sample"))
                     })?;
                 Ok(SortingColumn {
                     column_idx: i32::try_from(index).unwrap_or(0),
@@ -291,7 +291,7 @@ pub(crate) fn write_parquet(
         for (index, column) in columns.iter().enumerate() {
             let mut writer = group
                 .next_column()?
-                .ok_or_else(|| Error("writer ran out of columns".into()))?;
+                .ok_or_else(|| Error::Invalid("writer ran out of columns".into()))?;
             let values: Vec<&Value> = chunk
                 .iter()
                 .map(|row| row.get(index).unwrap_or(&Value::Null))
@@ -321,14 +321,14 @@ fn schema_from_columns(columns: &[TypedColumn]) -> Result<Arc<Type>, Error> {
                 .with_repetition(Repetition::OPTIONAL)
                 .build()
                 .map(Arc::new)
-                .map_err(|error| Error(error.to_string()))
+                .map_err(|error| Error::Parquet(Box::new(error)))
         })
         .collect::<Result<Vec<_>, _>>()?;
     Type::group_type_builder("schema")
         .with_fields(fields)
         .build()
         .map(Arc::new)
-        .map_err(|error| Error(error.to_string()))
+        .map_err(|error| Error::Parquet(Box::new(error)))
 }
 
 /// Parse a codec name and optional level into a Parquet `Compression`.
@@ -338,16 +338,16 @@ fn parse_compression(name: &str, level: Option<i32>) -> Result<Compression, Erro
         "snappy" => Ok(Compression::SNAPPY),
         "gzip" => {
             let level = u32::try_from(level.unwrap_or(6))
-                .map_err(|_| Error("gzip level must be non-negative".into()))?;
+                .map_err(|_| Error::Invalid("gzip level must be non-negative".into()))?;
             GzipLevel::try_new(level)
                 .map(Compression::GZIP)
-                .map_err(|error| Error(error.to_string()))
+                .map_err(|error| Error::Parquet(Box::new(error)))
         }
         "lz4" => Ok(Compression::LZ4_RAW),
         "zstd" => ZstdLevel::try_new(level.unwrap_or(3))
             .map(Compression::ZSTD)
-            .map_err(|error| Error(error.to_string())),
-        other => Err(Error(format!(
+            .map_err(|error| Error::Parquet(Box::new(error))),
+        other => Err(Error::Invalid(format!(
             "unknown codec `{other}`; expected uncompressed, snappy, gzip, lz4, zstd"
         ))),
     }
@@ -366,7 +366,7 @@ fn compatible_encoding(name: &str, kind: Kind) -> Result<Option<Encoding>, Error
         "byte_stream_split" if kind == Kind::Number => Some(Encoding::BYTE_STREAM_SPLIT),
         "delta" | "rle" | "delta_length" | "delta_byte_array" | "byte_stream_split" => None,
         other => {
-            return Err(Error(format!(
+            return Err(Error::Encoding(format!(
                 "unknown encoding `{other}`; expected plain, delta, rle, delta_length, delta_byte_array, byte_stream_split"
             )));
         }
@@ -530,7 +530,7 @@ fn index_start(metadata: &ParquetMetaData) -> Option<u64> {
 
 /// Read byte masses from a local file. `indexes` loads ColumnIndex/OffsetIndex.
 pub(crate) fn read_file_masses(path: &Path, indexes: bool) -> Result<FileMass, Error> {
-    let file = std::fs::File::open(path).map_err(|error| Error(error.to_string()))?;
+    let file = std::fs::File::open(path).map_err(Error::Io)?;
     let policy = if indexes {
         PageIndexPolicy::Optional
     } else {
@@ -617,16 +617,15 @@ fn create_masses(metadata: &ParquetMetaData) -> Result<FileMass, Error> {
                     } else {
                         column.uncompressed_size()
                     };
-                    let size =
-                        u64::try_from(size).map_err(|_| Error("negative column size".into()))?;
+                    let size = u64::try_from(size).map_err(|_| Error::Overflow("column size"))?;
                     total
                         .checked_add(size)
-                        .ok_or_else(|| Error("row-group size overflow".into()))
+                        .ok_or_else(|| Error::Overflow("row-group size"))
                 })
             };
             Ok(RowGroupMetadata {
                 row_count: u64::try_from(group.num_rows())
-                    .map_err(|_| Error("negative row count".into()))?,
+                    .map_err(|_| Error::Overflow("row count"))?,
                 compressed_bytes: sum(true)?,
                 uncompressed_bytes: sum(false)?,
                 column_indexes: group
@@ -731,7 +730,7 @@ fn create_page(page: ParquetPage) -> Page {
 
 impl From<parquet::errors::ParquetError> for Error {
     fn from(e: parquet::errors::ParquetError) -> Self {
-        Error(e.to_string())
+        Error::Parquet(Box::new(e))
     }
 }
 
@@ -741,9 +740,9 @@ pub(crate) fn read_page_header(bytes: &[u8]) -> Result<super::api::PageHeader, E
     let mut protocol =
         parquet_format_safe::thrift::protocol::TCompactInputProtocol::new(&mut input, 1_048_576);
     let header = PageHeader::read_from_in_protocol(&mut protocol)
-        .map_err(|e| Error(format!("page header: {e}")))?;
+        .map_err(|e| Error::Parquet(Box::new(e)))?;
     let positive =
-        |value: i32| u64::try_from(value).map_err(|_| Error("negative page size or count".into()));
+        |value: i32| u64::try_from(value).map_err(|_| Error::Overflow("page size or count"));
     let mut result = super::api::PageHeader {
         header_bytes: input.position(),
         page_type: match header.type_ {
@@ -764,14 +763,14 @@ pub(crate) fn read_page_header(bytes: &[u8]) -> Result<super::api::PageHeader, E
         PageType::DATA_PAGE => {
             let data = header
                 .data_page_header
-                .ok_or_else(|| Error("missing DATA_PAGE header".into()))?;
+                .ok_or_else(|| Error::Missing("DATA_PAGE header"))?;
             result.value_count = Some(positive(data.num_values)?);
             result.encoding = Some(encoding_name(data.encoding.0));
         }
         PageType::DATA_PAGE_V2 => {
             let data = header
                 .data_page_header_v2
-                .ok_or_else(|| Error("missing DATA_PAGE_V2 header".into()))?;
+                .ok_or_else(|| Error::Missing("DATA_PAGE_V2 header"))?;
             result.value_count = Some(positive(data.num_values)?);
             result.row_count = Some(positive(data.num_rows)?);
             positive(data.num_nulls)?;
@@ -782,7 +781,7 @@ pub(crate) fn read_page_header(bytes: &[u8]) -> Result<super::api::PageHeader, E
         PageType::DICTIONARY_PAGE => {
             let data = header
                 .dictionary_page_header
-                .ok_or_else(|| Error("missing DICTIONARY_PAGE header".into()))?;
+                .ok_or_else(|| Error::Missing("DICTIONARY_PAGE header"))?;
             result.dictionary_entries = Some(positive(data.num_values)?);
             result.encoding = Some(encoding_name(data.encoding.0));
         }

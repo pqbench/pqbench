@@ -23,15 +23,39 @@ const DEFAULT_ROW_GROUP_ROWS: usize = 2048;
 /// Errors from the experiment layer: a bad aim, a bad rewrite, or a write
 /// failure.
 #[derive(Debug)]
-pub struct Error(pub String);
+#[non_exhaustive]
+pub enum Error {
+    /// The sample had no rows.
+    Empty,
+    /// A rewrite spec was invalid.
+    Spec(String),
+    /// A rewrite named a column not in the sample.
+    Column(String),
+    /// A value could not be cast to the requested type.
+    Cast(String),
+    /// The parquet writer or reader failed.
+    Parquet(crate::third_party::parquet::api::Error),
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "experiment: {}", self.0)
+        match self {
+            Error::Empty => write!(f, "sample has no rows"),
+            Error::Spec(message) | Error::Cast(message) => write!(f, "{message}"),
+            Error::Column(name) => write!(f, "column `{name}` is not in the sample"),
+            Error::Parquet(_) => write!(f, "the parquet layer failed"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Parquet(error) => Some(error),
+            Error::Empty | Error::Spec(_) | Error::Column(_) | Error::Cast(_) => None,
+        }
+    }
+}
 
 /// What to measure after a rewrite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +78,7 @@ impl Aim {
             "storage" => Ok(Self::Storage),
             "skipping" => Ok(Self::Skipping),
             "all" => Ok(Self::All),
-            other => Err(Error(format!(
+            other => Err(Error::Spec(format!(
                 "unknown aim `{other}`; expected storage, skipping, or all"
             ))),
         }
@@ -192,7 +216,7 @@ pub struct ColumnTrial {
 /// sample is empty, or when the writer cannot emit Parquet.
 pub fn experiment(sample: &TypedSample, request: &ExperimentRequest) -> Result<Experiment, Error> {
     if sample.rows.is_empty() {
-        return Err(Error("sample has no rows".into()));
+        return Err(Error::Empty);
     }
     let names: Vec<String> = sample.columns.iter().map(|c| c.name.clone()).collect();
     let parsed: Vec<TrialSpec> = request
@@ -247,7 +271,7 @@ impl CastTo {
             "int64" => Ok(Self::Int64),
             "double" => Ok(Self::Double),
             "string" => Ok(Self::String),
-            other => Err(Error(format!(
+            other => Err(Error::Spec(format!(
                 "cast target `{other}` must be int64, double, or string"
             ))),
         }
@@ -301,14 +325,14 @@ impl TrialSpec {
             spec.apply(part, columns)?;
         }
         if spec.rewrites.is_empty() {
-            return Err(Error("trial has no rewrites".into()));
+            return Err(Error::Spec("trial has no rewrites".into()));
         }
         Ok(spec)
     }
 
     fn apply(&mut self, part: &str, columns: &[String]) -> Result<(), Error> {
         let (key, value) = part.split_once(':').ok_or_else(|| {
-            Error(format!(
+            Error::Spec(format!(
                 "rewrite `{part}` must be key:value (sort, zorder, hilbert, codec, dictionary, \
                  encoding, page-size, row-group-size, cast)"
             ))
@@ -319,7 +343,7 @@ impl TrialSpec {
             "hilbert" => {
                 let names = column_list(value, columns)?;
                 if names.len() != 2 {
-                    return Err(Error(
+                    return Err(Error::Spec(
                         "hilbert needs exactly two columns; use zorder for more".into(),
                     ));
                 }
@@ -343,7 +367,7 @@ impl TrialSpec {
             "row-group-size" => self.row_group_size = Some(parse_usize(value, "row-group-size")?),
             "cast" => self.casts.push(parse_cast(value, columns)?),
             other => {
-                return Err(Error(format!(
+                return Err(Error::Spec(format!(
                     "unknown rewrite `{other}`; expected sort, zorder, hilbert, codec, dictionary, \
                      encoding, page-size, row-group-size, cast"
                 )));
@@ -368,9 +392,9 @@ impl TrialSpec {
 fn parse_usize(value: &str, name: &str) -> Result<usize, Error> {
     let number: usize = value
         .parse()
-        .map_err(|_| Error(format!("{name} `{value}` is not a positive integer")))?;
+        .map_err(|_| Error::Spec(format!("{name} `{value}` is not a positive integer")))?;
     if number == 0 {
-        return Err(Error(format!("{name} must be >= 1")));
+        return Err(Error::Spec(format!("{name} must be >= 1")));
     }
     Ok(number)
 }
@@ -379,7 +403,7 @@ fn parse_usize(value: &str, name: &str) -> Result<usize, Error> {
 fn parse_cast(value: &str, columns: &[String]) -> Result<(String, CastTo), Error> {
     let (column, target) = value
         .split_once(':')
-        .ok_or_else(|| Error(format!("cast `{value}` must be COL:int64|double|string")))?;
+        .ok_or_else(|| Error::Spec(format!("cast `{value}` must be COL:int64|double|string")))?;
     let column = require_column(column.trim(), columns)?;
     Ok((column, CastTo::parse(target.trim())?))
 }
@@ -390,7 +414,7 @@ fn require_column(name: &str, columns: &[String]) -> Result<String, Error> {
         .iter()
         .find(|column| column.as_str() == name)
         .cloned()
-        .ok_or_else(|| Error(format!("column `{name}` is not in the sample")))
+        .ok_or_else(|| Error::Column(name.to_string()))
 }
 
 /// Parse an encoding name, returning it unchanged when known.
@@ -399,7 +423,7 @@ fn parse_encoding(value: &str) -> Result<&str, Error> {
         "plain" | "delta" | "rle" | "delta_length" | "delta_byte_array" | "byte_stream_split" => {
             Ok(value)
         }
-        other => Err(Error(format!(
+        other => Err(Error::Spec(format!(
             "unknown encoding `{other}`; expected plain, delta, rle, delta_length, \
              delta_byte_array, byte_stream_split"
         ))),
@@ -417,11 +441,11 @@ fn column_list(value: &str, columns: &[String]) -> Result<Vec<String>, Error> {
                 .iter()
                 .find(|column| column.as_str() == name)
                 .cloned()
-                .ok_or_else(|| Error(format!("column `{name}` is not in the sample")))
+                .ok_or_else(|| Error::Column(name.to_string()))
         })
         .collect::<Result<_, _>>()?;
     if names.is_empty() {
-        return Err(Error("sort needs at least one column".into()));
+        return Err(Error::Spec("sort needs at least one column".into()));
     }
     Ok(names)
 }
@@ -432,7 +456,7 @@ fn parse_codec(value: &str) -> Result<(String, Option<i32>), Error> {
         Some((name, level)) => {
             let level: i32 = level
                 .parse()
-                .map_err(|_| Error(format!("codec level `{level}` is not an integer")))?;
+                .map_err(|_| Error::Spec(format!("codec level `{level}` is not an integer")))?;
             (name, Some(level))
         }
         None => (value, None),
@@ -441,7 +465,7 @@ fn parse_codec(value: &str) -> Result<(String, Option<i32>), Error> {
         "uncompressed" | "none" | "snappy" | "gzip" | "lz4" | "zstd" => {
             Ok((name.to_string(), level))
         }
-        other => Err(Error(format!(
+        other => Err(Error::Spec(format!(
             "unknown codec `{other}`; expected uncompressed, snappy, gzip, lz4, zstd"
         ))),
     }
@@ -467,7 +491,7 @@ fn write_trial(sample: &TypedSample, spec: &TrialSpec, aim: Aim) -> Result<Vec<u
         sorting_columns,
         row_group_size: spec.row_group_rows(sample.rows.len(), aim),
     };
-    api::write_parquet(&columns, &rows, &options).map_err(|error| Error(error.to_string()))
+    api::write_parquet(&columns, &rows, &options).map_err(Error::Parquet)
 }
 
 /// Apply each cast to the column kinds and every row's value.
@@ -480,7 +504,7 @@ fn apply_casts(
         let index = columns
             .iter()
             .position(|column| &column.name == name)
-            .ok_or_else(|| Error(format!("column `{name}` is not in the sample")))?;
+            .ok_or_else(|| Error::Column(name.to_string()))?;
         columns[index].kind = match target {
             CastTo::Int64 => Kind::Integer,
             CastTo::Double => Kind::Number,
@@ -507,8 +531,8 @@ fn cast_value(value: &Value, to: CastTo, name: &str) -> Result<Value, Error> {
                 .trim()
                 .parse()
                 .map(Value::Integer)
-                .map_err(|_| Error(format!("cannot cast `{name}` to int64"))),
-            _ => Err(Error(format!("cannot cast `{name}` to int64"))),
+                .map_err(|_| Error::Cast(format!("cannot cast `{name}` to int64"))),
+            _ => Err(Error::Cast(format!("cannot cast `{name}` to int64"))),
         },
         CastTo::Double => match value {
             Value::Number(number) => Ok(Value::Number(*number)),
@@ -517,8 +541,8 @@ fn cast_value(value: &Value, to: CastTo, name: &str) -> Result<Value, Error> {
                 .trim()
                 .parse()
                 .map(Value::Number)
-                .map_err(|_| Error(format!("cannot cast `{name}` to double"))),
-            _ => Err(Error(format!("cannot cast `{name}` to double"))),
+                .map_err(|_| Error::Cast(format!("cannot cast `{name}` to double"))),
+            _ => Err(Error::Cast(format!("cannot cast `{name}` to double"))),
         },
         CastTo::String => Ok(match value {
             Value::Bytes(bytes) => Value::Bytes(bytes.clone()),
@@ -566,7 +590,7 @@ fn column_indexes(columns: &[TypedColumn], names: &[String]) -> Result<Vec<usize
             columns
                 .iter()
                 .position(|column| &column.name == name)
-                .ok_or_else(|| Error(format!("column `{name}` is not in the sample")))
+                .ok_or_else(|| Error::Column(name.to_string()))
         })
         .collect()
 }
@@ -732,7 +756,7 @@ fn measure(
     control: Option<&Trial>,
     row_count: u64,
 ) -> Result<Trial, Error> {
-    let mass = api::read_buffer_masses(bytes, false).map_err(|error| Error(error.to_string()))?;
+    let mass = api::read_buffer_masses(bytes, false).map_err(Error::Parquet)?;
     let size = bytes.len() as u64;
     let ratio =
         control.and_then(|control| (control.bytes > 0).then(|| size as f64 / control.bytes as f64));
@@ -829,6 +853,18 @@ fn skip_equal(chunks: &[&ColumnMass]) -> f64 {
 mod tests {
     use super::*;
     use crate::third_party::parquet::api::Kind;
+
+    /// The error and its whole source chain, as the CLI renders it.
+    fn rendered(error: &Error) -> String {
+        let mut message = error.to_string();
+        let mut source = std::error::Error::source(error);
+        while let Some(error) = source {
+            message.push_str(": ");
+            message.push_str(&error.to_string());
+            source = error.source();
+        }
+        message
+    }
 
     fn sample(columns: &[(&str, Kind)], rows: Vec<Vec<Value>>) -> TypedSample {
         TypedSample {
@@ -934,7 +970,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.0.contains("rewrite"), "{error}");
+        assert!(error.to_string().contains("rewrite"), "{error}");
     }
 
     #[test]
@@ -1027,7 +1063,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.0.contains("two columns"), "{error}");
+        assert!(error.to_string().contains("two columns"), "{error}");
     }
 
     #[test]
@@ -1074,7 +1110,7 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(error.0.contains("encod"), "{error}");
+        assert!(rendered(&error).contains("encod"), "{error}");
 
         let mixed = sample(
             &[("n", Kind::Integer), ("text", Kind::Bytes)],

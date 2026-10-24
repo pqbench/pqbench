@@ -13,19 +13,25 @@ use crate::Lake;
 
 /// Errors listing a partition's files.
 #[derive(Debug)]
-pub struct Error(String);
+#[non_exhaustive]
+pub enum Error {
+    /// The table loader failed.
+    Table(crate::table::Error),
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "file: {}", self.0)
+        match self {
+            Error::Table(_) => write!(f, "the table loader failed"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Table(error) => Some(error),
+        }
     }
 }
 

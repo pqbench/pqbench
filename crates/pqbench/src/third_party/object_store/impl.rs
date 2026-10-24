@@ -36,7 +36,7 @@ impl Stores {
         _url: &Url,
         _options: &[(String, String)],
     ) -> Result<ObjectReader, Error> {
-        Err(Error(
+        Err(Error::Unsupported(
             "object URI scheme `s3` requires the `aws` feature".into(),
         ))
     }
@@ -46,7 +46,7 @@ impl Stores {
         _url: &Url,
         _options: &[(String, String)],
     ) -> Result<PrefixListing, Error> {
-        Err(Error(
+        Err(Error::Unsupported(
             "object URI scheme `s3` requires the `aws` feature".into(),
         ))
     }
@@ -56,22 +56,8 @@ impl Stores {
         _uri: &str,
         _options: &[(String, String)],
     ) -> Result<Vec<String>, Error> {
-        Err(Error("S3 glob expansion requires the `aws` feature".into()))
+        Err(Error::Unsupported(
+            "S3 glob expansion requires the `aws` feature".into(),
+        ))
     }
-}
-
-/// Render an error with its whole source chain. `Display` alone drops the
-/// cause: an object-store transport failure reads only "error sending
-/// request", while the socket-level error (reset, exhaustion, DNS) sits one
-/// `source()` deeper.
-#[cfg(any(feature = "aws", feature = "delta"))]
-pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
-    let mut rendered = error.to_string();
-    let mut source = error.source();
-    while let Some(error) = source {
-        rendered.push_str("\n  caused by: ");
-        rendered.push_str(&error.to_string());
-        source = error.source();
-    }
-    rendered
 }

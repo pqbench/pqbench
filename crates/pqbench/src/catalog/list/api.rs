@@ -11,19 +11,29 @@ use crate::Workspace;
 
 /// Errors listing catalogs.
 #[derive(Debug)]
-pub struct Error(String);
+#[non_exhaustive]
+pub enum Error {
+    /// The name argument was not a resource name.
+    Name(String),
+    /// The endpoint request failed.
+    Http(crate::http::Error),
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "catalog: {}", self.0)
+        match self {
+            Error::Name(message) => write!(f, "{message}"),
+            Error::Http(_) => write!(f, "the endpoint request failed"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Http(error) => Some(error),
+            Error::Name(_) => None,
+        }
     }
 }
 

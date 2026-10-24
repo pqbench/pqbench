@@ -19,23 +19,11 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, LoadRequest, PartitionMass,
+    add_partition_total, bytes_per_row, finish_partition_masses, Error, LoadRequest, PartitionMass,
     TableInfo,
 };
 use crate::v1;
 use crate::Lake;
-
-/// Errors resolving a snapshot through delta-rs.
-#[derive(Debug)]
-pub(super) struct Error(String);
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "delta: {}", self.0)
-    }
-}
-
-impl std::error::Error for Error {}
 
 /// Resolve the transaction log and the active files of a Delta table.
 pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
@@ -87,13 +75,13 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
 /// absolute.
 fn table_url(request: &LoadRequest) -> Result<Url, Error> {
     if request.uri.contains("://") {
-        let url = Url::parse(&request.uri).map_err(|e| Error(format!("invalid table URI: {e}")))?;
+        let url = Url::parse(&request.uri).map_err(Error::Uri)?;
         if url.scheme() != "file" {
             return Ok(url);
         }
         let path = url
             .to_file_path()
-            .map_err(|()| Error("invalid local table URI".into()))?;
+            .map_err(|()| Error::Invalid("invalid local table URI".into()))?;
         return directory_url(&local_root(&path)?);
     }
     directory_url(&local_root(Path::new(&request.uri))?)
@@ -101,15 +89,19 @@ fn table_url(request: &LoadRequest) -> Result<Url, Error> {
 
 fn directory_url(root: &Path) -> Result<Url, Error> {
     Url::from_directory_path(root)
-        .map_err(|()| Error("cannot convert table path to a local file URL".into()))
+        .map_err(|()| Error::Invalid("cannot convert table path to a local file URL".into()))
 }
 
 fn local_root(path: &Path) -> Result<PathBuf, Error> {
-    let root = path
-        .canonicalize()
-        .map_err(|e| Error(format!("cannot open table {}: {e}", path.display())))?;
+    let root = path.canonicalize().map_err(|e| Error::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     if !root.join("_delta_log").is_dir() {
-        return Err(Error(format!("missing _delta_log in {}", root.display())));
+        return Err(Error::Invalid(format!(
+            "missing _delta_log in {}",
+            root.display()
+        )));
     }
     Ok(root)
 }
@@ -143,7 +135,7 @@ fn shared_store(
             let store = lake
                 .stores()
                 .root_store(url, &options)
-                .map_err(|error| Error(error.to_string()))?;
+                .map_err(|error| Error::Storage(Box::new(error)))?;
             return Ok(Some(store));
         }
     }
@@ -354,7 +346,7 @@ async fn commit_files(
 
 /// The table file one `add` action's path describes.
 fn added_file(uri: &str, path: String) -> Result<v1::TableFile, Error> {
-    let file_uri = crate::table::join_uri(uri, &path).map_err(|error| Error(error.to_string()))?;
+    let file_uri = crate::table::join_uri(uri, &path)?;
     Ok(v1::TableFile {
         blob: Some(v1::name::blob_name(&file_uri)),
         path,
@@ -392,15 +384,15 @@ async fn commit_versions(
             },
         )
         .await
-        .map_err(|error| Error(error.to_string()))?;
+        .map_err(|error| Error::Storage(Box::new(error)))?;
     if !listed {
-        return Err(Error(format!("no _delta_log in {uri}")));
+        return Err(Error::Invalid(format!("no _delta_log in {uri}")));
     }
     versions.retain(|version| head.is_none_or(|head| *version <= head));
     versions.sort_unstable();
     versions.dedup();
     if let Some(gap) = versions.windows(2).find(|pair| pair[1] > pair[0] + 1) {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "the log misses commit {}: versions {} and {} are not contiguous",
             gap[0] + 1,
             gap[0],
@@ -515,20 +507,19 @@ struct ParsedCommit {
 
 fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|e| Error(format!("commit {version} is not UTF-8: {e}")))?;
+        .map_err(|e| Error::Invalid(format!("commit {version} is not UTF-8: {e}")))?;
     let mut actions = Vec::new();
     let mut commit_time = None;
     let mut commit_info = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let value: serde_json::Value = serde_json::from_str(line)
-            .map_err(|e| Error(format!("cannot parse commit {version}: {e}")))?;
+        let value: serde_json::Value = serde_json::from_str(line).map_err(Error::Json)?;
         let object = value
             .as_object()
-            .ok_or_else(|| Error(format!("commit {version} action is not an object")))?;
+            .ok_or_else(|| Error::Invalid(format!("commit {version} action is not an object")))?;
         let (kind, body) = object
             .iter()
             .next()
-            .ok_or_else(|| Error(format!("commit {version} action is empty")))?;
+            .ok_or_else(|| Error::Invalid(format!("commit {version} action is empty")))?;
         if kind == "commitInfo" && commit_info.is_none() {
             commit_info = Some(body.clone());
             commit_time = body.get("timestamp").and_then(serde_json::Value::as_i64);
@@ -560,7 +551,7 @@ async fn active_files(
             table
                 .table_url()
                 .to_file_path()
-                .map_err(|()| Error("invalid local table URI".into()))?,
+                .map_err(|()| Error::Invalid("invalid local table URI".into()))?,
         )
     } else {
         None
@@ -570,7 +561,7 @@ async fn active_files(
     let mut totals = std::collections::BTreeMap::new();
     while let Some(file) = files.try_next().await.map_err(delta_error)? {
         let table_file = data_file(&root, table.table_url(), &file, request.file_stats)?;
-        add_partition_total(&mut totals, &table_file).map_err(|error| Error(error.to_string()))?;
+        add_partition_total(&mut totals, &table_file)?;
         active.push(table_file);
     }
     Ok((active, finish_partition_masses(totals)))
@@ -586,7 +577,7 @@ fn data_file(
 ) -> Result<v1::TableFile, Error> {
     let relative = file.path().to_string();
     let size = u64::try_from(file.size())
-        .map_err(|_| Error(format!("invalid file size in log: {relative}")))?;
+        .map_err(|_| Error::Invalid(format!("invalid file size in log: {relative}")))?;
     let uri = match root {
         Some(root) => local_uri(root, &relative)?,
         None => object_uri(table_url, &relative)?,
@@ -694,7 +685,7 @@ fn relative_data_path(relative: &str) -> Result<&Path, Error> {
         || relative.contains("://")
         || !path.components().all(|c| matches!(c, Component::Normal(_)))
     {
-        return Err(Error(format!(
+        return Err(Error::Invalid(format!(
             "only relative data paths inside the table are supported: {relative}"
         )));
     }
@@ -707,10 +698,7 @@ fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {
     if !directory.path().ends_with('/') {
         directory.set_path(&format!("{}/", directory.path()));
     }
-    Ok(directory
-        .join(relative)
-        .map_err(|e| Error(format!("invalid active file path {relative}: {e}")))?
-        .into())
+    Ok(directory.join(relative).map_err(Error::Uri)?.into())
 }
 
 /// Join a local active file without opening it. Size is the log's claim;
@@ -721,6 +709,5 @@ fn local_uri(root: &Path, relative: &str) -> Result<String, Error> {
 }
 
 fn delta_error(error: deltalake::DeltaTableError) -> Error {
-    use crate::third_party::object_store::r#impl::error_chain;
-    Error(format!("cannot resolve snapshot: {}", error_chain(&error)))
+    Error::Snapshot(Box::new(error))
 }

@@ -8,23 +8,40 @@
 //! `iceberg` feature compiles it; without it [`read_avro`] fails and names the
 //! feature. There are no feature flags outside this folder.
 
+use std::fmt;
+
 use serde::Deserialize;
 
 /// Errors reading Avro records.
 #[derive(Debug)]
-pub struct Error(pub(crate) String);
+#[non_exhaustive]
+pub enum Error {
+    /// The `iceberg` feature is off.
+    Unsupported,
+    /// The Avro container could not be decoded.
+    Read {
+        /// What was being read (`"manifest entry"`, `"manifest list"`).
+        kind: String,
+        /// The underlying Avro failure.
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "avro: {}", self.0)
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Unsupported => write!(f, "reading Avro requires the `iceberg` feature"),
+            Error::Read { kind, .. } => write!(f, "cannot read {kind}"),
+        }
     }
 }
 
-impl std::error::Error for Error {}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Self(message)
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Read { source, .. } => Some(source.as_ref()),
+            Error::Unsupported => None,
+        }
     }
 }
 

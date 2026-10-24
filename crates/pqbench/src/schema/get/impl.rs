@@ -39,7 +39,7 @@ struct Namespace {
 
 pub(crate) async fn get(workspace: &Workspace, name: &str) -> Result<Schema, Error> {
     let (catalog, schema) = crate::v1::name::parse_schema(name)
-        .ok_or_else(|| Error::from(format!("{name} is not a catalogs/…/schemas/… name")))?;
+        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/schemas/… name")))?;
     match workspace.config().dialect {
         TableFormat::Unity => unity_schema(workspace, &catalog, &schema).await,
         TableFormat::Iceberg => iceberg_schema(workspace, &catalog, &schema).await,
@@ -54,9 +54,9 @@ async fn unity_schema(workspace: &Workspace, catalog: &str, schema: &str) -> Res
         dialect::encode(&full_name)
     );
     let record: UnityRecord =
-        dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
             .await
-            .map_err(Error::from)?;
+            .map_err(Error::Http)?;
     let name = record
         .name
         .filter(|name| !name.is_empty())
@@ -83,9 +83,9 @@ async fn iceberg_schema(
         dialect::iceberg_namespace(schema)
     );
     let namespace: Namespace =
-        dialect::get_json(workspace, &url, workspace.config().token.as_deref())
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
             .await
-            .map_err(Error::from)?;
+            .map_err(Error::Http)?;
     let mut properties = namespace.properties.unwrap_or_default();
     let location = properties
         .remove("location")

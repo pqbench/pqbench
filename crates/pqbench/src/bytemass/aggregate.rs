@@ -3,12 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::third_party::parquet::api::Error;
-
 use super::analytics::{self, MassNode};
 use super::api::MassRow;
 use super::collection::{ColumnMassSummary, MassSummary};
 use super::raw;
+use super::Error;
 
 /// Sum the measured table across all files into a per-column summary.
 ///
@@ -58,8 +57,7 @@ fn add_row(total: &mut ColumnMassSummary, row: &MassRow) -> Result<(), Error> {
 }
 
 fn checked_sum(left: u64, right: u64) -> Result<u64, Error> {
-    left.checked_add(right)
-        .ok_or_else(|| Error("metadata totals exceed u64".into()))
+    left.checked_add(right).ok_or_else(|| Error::Overflow)
 }
 
 /// One entry per contiguous run of rows from the same file: the run's first row.
