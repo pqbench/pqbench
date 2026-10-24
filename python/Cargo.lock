@@ -2713,7 +2713,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "apache-avro",
  "async-trait",
@@ -2737,7 +2737,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench-py"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "futures",
  "pqbench",
