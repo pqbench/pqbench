@@ -228,7 +228,7 @@ async fn read_log(
     Ok(commits.into_iter().flatten().collect())
 }
 
-/// Stream the table's commits in version order, oldest first.
+/// Stream the table's commits, newest first.
 ///
 /// The log names its commits, so the versions come from one listing of it: every
 /// retained version, none probed, nothing asked for below retention, no hole to
@@ -244,12 +244,9 @@ pub(super) async fn stream_commits(
     let store = open_store(lake, request)?;
     let versions = commit_versions(&store, &request.uri, request.snapshot_version).await?;
     let table = v1::name::local_table(&request.uri);
-    // The log names every commit, so a batch of reads goes at once and comes
-    // back in version order, newest first; the next batch starts only when the
-    // consumer asks for another item, so a stalled consumer leaves no read in
-    // flight. A commit the log does not date has no time to contribute, and one
-    // the listing named that a read no longer finds has nothing left to read,
-    // so neither is yielded.
+    // A commit the log does not date has no time to contribute, and one the
+    // listing named that a read no longer finds has nothing left to read, so
+    // neither is yielded.
     let batches = commit_batches(versions.into_iter().rev());
     Ok(futures::stream::iter(batches)
         .then(move |chunk| {
@@ -309,8 +306,8 @@ pub(super) async fn stream_files(
         None => commit_versions(&store, &request.uri, request.snapshot_version).await?,
     };
     let uri = request.uri.clone();
-    // Version order is the log's order, and `buffered` keeps it while bounding
-    // how many commits are in flight at once; a commit's files are yielded as a
+    // Version order is the log's order, and a batch keeps it while bounding how
+    // many commits are in flight at once; a commit's files are yielded as a
     // group once its own read lands.
     let batches = commit_batches(versions);
     Ok(futures::stream::iter(batches)
