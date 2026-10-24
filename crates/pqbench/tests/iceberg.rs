@@ -339,14 +339,11 @@ async fn file_ls_names_the_files_a_snapshot_added() {
         &[1],
     )
     .await
+    .unwrap()
+    .try_collect::<Vec<_>>()
+    .await
     .unwrap();
-    let mut uris: Vec<_> = files
-        .try_collect::<Vec<_>>()
-        .await
-        .unwrap()
-        .iter()
-        .map(|file| file.uri().unwrap())
-        .collect();
+    let mut uris: Vec<_> = files.iter().map(|file| file.uri().unwrap()).collect();
     uris.sort();
     let mut expected = vec![
         fixture
@@ -364,6 +361,15 @@ async fn file_ls_names_the_files_a_snapshot_added() {
     ];
     expected.sort();
     assert_eq!(uris, expected);
+    // Each file carries the size the manifest declares.
+    let mut sizes: Vec<_> = files
+        .iter()
+        .map(|file| file.size_bytes.unwrap_or(0))
+        .collect();
+    sizes.sort_unstable();
+    let mut expected_sizes = vec![fixture.first_size, fixture.second_size];
+    expected_sizes.sort_unstable();
+    assert_eq!(sizes, expected_sizes);
 }
 
 #[tokio::test]

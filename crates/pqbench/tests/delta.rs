@@ -193,6 +193,25 @@ async fn file_stream_reads_every_commit_when_none_are_named() {
     assert_eq!(files.len(), 3);
 }
 
+/// The stream carries the size the log declares, so `list files` can filter on
+/// it before reading any data file.
+#[tokio::test]
+async fn file_stream_carries_the_log_size() {
+    let fixture = Fixture::new();
+    let request = load_request(fixture.path().to_string_lossy(), None);
+    let files = table::stream_files(common::lake(), &request)
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    for path in ["part=a/added.parquet", "part=b/kept.parquet"] {
+        let file = files.iter().find(|file| file.path == path).unwrap();
+        let expected = std::fs::metadata(fixture.path().join(path)).unwrap().len();
+        assert_eq!(file.size_bytes, Some(expected), "{path}");
+    }
+}
+
 async fn file_uris(fixture: &Fixture, versions: &[u64]) -> Vec<String> {
     file_uris_path(&fixture.path().to_string_lossy(), versions).await
 }
