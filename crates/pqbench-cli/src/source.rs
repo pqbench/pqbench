@@ -251,8 +251,31 @@ pub(crate) async fn parent_names(
         .map(|record| record.map(|record| record["name"].as_str().unwrap_or_default().to_owned())))
 }
 
-/// flatMap over the parents: read each name, write its rows, report and count
-/// the failures. Returns the number of records lost.
+/// Write a stream of records, reporting a failed element and counting it.
+///
+/// This is fs2's `flatMap(Stream.emits) >>> compile.drain` with the failure
+/// branch kept: a record's read that fails is named on standard error and the
+/// stream carries on. Returns the number of records lost.
+pub(crate) async fn drain<T: serde::Serialize>(
+    items: impl Stream<Item = Result<T, CliError>>,
+    emit: &mut crate::emit::Emitter,
+) -> Result<usize, CliError> {
+    let mut dropped = 0;
+    futures_util::pin_mut!(items);
+    while let Some(item) = items.next().await {
+        match item {
+            Ok(row) => emit.write(&row).await?,
+            Err(error) => {
+                crate::error::report(&error);
+                dropped += 1;
+            }
+        }
+    }
+    Ok(dropped)
+}
+
+/// `parEvalMapUnordered(n)(read) >>> drain`: read each parent into its rows
+/// with `n` in flight, then write them in completion order.
 pub(crate) async fn stage<I, T, F>(
     items: impl Stream<Item = Result<I, CliError>>,
     fan_out: usize,
@@ -263,11 +286,11 @@ where
     T: serde::Serialize,
     F: std::ops::AsyncFn(I) -> Result<Vec<T>, CliError> + Copy,
 {
-    let mut dropped = 0;
     let reads = items
         .map(|item| async move { read(item?).await })
         .buffer_unordered(fan_out.max(1));
     futures_util::pin_mut!(reads);
+    let mut dropped = 0;
     while let Some(read) = reads.next().await {
         match read {
             Ok(rows) => {

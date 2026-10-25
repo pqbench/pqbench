@@ -3,13 +3,15 @@
 use std::collections::BTreeMap;
 
 use clap::Args;
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream::{self, StreamExt, TryStreamExt};
 use pqbench::bytemass;
 use pqbench::v1;
+use serde::Serialize;
 
 use crate::document::{self, Record};
 use crate::emit::Emitter;
-use crate::error::{context, fail_when_dropped, report};
+use crate::error::{context, fail_when_dropped};
+use crate::source::{drain, stage};
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -46,24 +48,19 @@ async fn measure_document(
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open();
-    let mut dropped = 0;
     let records = document::records(input).await?;
-    let mut reads = records
-        .map(|record| measure_record(lake, record))
-        .buffer_unordered(args.fan_out.max(1));
-    while let Some(batch) = reads.next().await {
-        for read in batch? {
-            match read {
-                Ok(measured) => {
-                    emit_measured(&mut emit, measured).await?;
-                }
-                Err(error) => {
-                    report(&error);
-                    dropped += 1;
-                }
-            }
-        }
-    }
+    let files = records
+        .map(|record| async move { measure_record(lake, record).await })
+        .buffer_unordered(args.fan_out.max(1))
+        .map_ok(stream::iter)
+        .try_flatten_unordered(Some(args.fan_out.max(1)))
+        .flat_map(|file| {
+            stream::iter(match file {
+                Ok(file) => measured_rows(file).into_iter().map(Ok).collect(),
+                Err(error) => vec![Err(error)],
+            })
+        });
+    let dropped = drain(files, &mut emit).await?;
     emit.finish().await?;
     fail_when_dropped(dropped)
 }
@@ -75,28 +72,20 @@ async fn measure(
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open();
-    let mut dropped = 0;
-    let mut reads = stream::iter(bytemass::expand_inputs(lake, &inputs, &env).await?)
-        .map(|input| {
-            let env = env.clone();
-            async move {
-                read_file(lake, &input, &env)
-                    .await
-                    .map_err(|error| context(&input, error))
-            }
-        })
-        .buffer_unordered(args.fan_out.max(1));
-    while let Some(read) = reads.next().await {
-        match read {
-            Ok(measured) => {
-                emit_measured(&mut emit, measured).await?;
-            }
-            Err(error) => {
-                report(&error);
-                dropped += 1;
-            }
-        }
-    }
+    let inputs = bytemass::expand_inputs(lake, &inputs, &env).await?;
+    let env = &env;
+    let dropped = stage(
+        stream::iter(inputs.into_iter().map(Ok)),
+        args.fan_out,
+        &mut emit,
+        |input: String| async move {
+            let measured = read_file(lake, &input, env)
+                .await
+                .map_err(|error| context(&input, error))?;
+            Ok(measured_rows(measured))
+        },
+    )
+    .await?;
     emit.finish().await?;
     fail_when_dropped(dropped)
 }
@@ -191,14 +180,18 @@ async fn read_table_file(
     Ok(Ok(measured))
 }
 
-/// Emit one measured file: its blob, then one row per column.
-async fn emit_measured(
-    emit: &mut Emitter,
-    measured: bytemass::MeasuredFile,
-) -> Result<(), CliError> {
-    emit.write(&measured.blob).await?;
-    for column in &measured.columns {
-        emit.write(column).await?;
-    }
-    Ok(())
+/// One output record: a file's blob, then one row per column.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Out {
+    Blob(v1::Blob),
+    Column(v1::Bytemass),
+}
+
+/// The records one measured file writes, in order.
+fn measured_rows(measured: bytemass::MeasuredFile) -> Vec<Out> {
+    let mut rows = Vec::with_capacity(1 + measured.columns.len());
+    rows.push(Out::Blob(measured.blob));
+    rows.extend(measured.columns.into_iter().map(Out::Column));
+    rows
 }
