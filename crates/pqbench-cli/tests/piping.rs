@@ -152,8 +152,8 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
 
 #[test]
 fn list_files_rejects_a_malformed_partition_record() {
-    // A bad name is the input's contract, not a failed read: it fails the
-    // level instead of being dropped and counted.
+    // A bad name is the record's contract: it is named and dropped, and the
+    // level still exits non-zero.
     let output = pipe_env(
         &["list", "files"],
         br#"{"name":"nope","uri":"file:///tmp"}"#,
@@ -161,7 +161,7 @@ fn list_files_rejects_a_malformed_partition_record() {
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("a partition name must be"), "{stderr}");
+    assert!(stderr.contains("a partition record needs a"), "{stderr}");
     assert!(!stderr.contains("could not be read"), "{stderr}");
 }
 

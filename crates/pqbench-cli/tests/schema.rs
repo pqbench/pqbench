@@ -7,10 +7,6 @@ fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
 
-fn pipe(args: &[&str], source: &[(&str, &str)]) -> std::process::Output {
-    pipe_env(args, b"", source)
-}
-
 /// pqbench with stdin, no extra environment.
 fn pipe_stdin(args: &[&str], stdin: &[u8]) -> std::process::Output {
     pipe_env(args, stdin, &[])
@@ -113,6 +109,11 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
 }
 
 /// The walk's config: `PQB_ENDPOINT` names the endpoint.
+/// One parent record, as the stream carries it.
+fn parent(name: &str) -> Vec<u8> {
+    format!(r#"{{"name":"{name}"}}"#).into_bytes()
+}
+
 fn source(endpoint: &str) -> [(&str, &str); 1] {
     [("PQB_ENDPOINT", endpoint)]
 }
@@ -159,7 +160,11 @@ const CATALOG_REFS_BAD_FIRST: &str = concat!(
 #[test]
 fn schema_get_prints_the_record_as_a_table() {
     let address = server(200, SCHEMA);
-    let output = pipe(&["get", "schema", "dbx_samples.nyctaxi"], &source(&address));
+    let output = pipe_env(
+        &["get", "schema"],
+        &parent("catalogs/dbx_samples/schemas/nyctaxi"),
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -174,7 +179,11 @@ fn schema_get_prints_the_record_as_a_table() {
 #[test]
 fn schema_get_streams_the_record_as_ndjson() {
     let address = server(200, SCHEMA);
-    let output = pipe(&["get", "schema", "dbx_samples.nyctaxi"], &source(&address));
+    let output = pipe_env(
+        &["get", "schema"],
+        &parent("catalogs/dbx_samples/schemas/nyctaxi"),
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -193,8 +202,8 @@ fn schema_get_streams_the_record_as_ndjson() {
 fn schema_get_reads_the_iceberg_rest_namespace() {
     let address = routes(&[("/namespaces/", 200, ICEBERG_NAMESPACE)]);
     let output = pipe_env(
-        &["get", "schema", "dbx_samples.nyctaxi"],
-        b"",
+        &["get", "schema"],
+        &parent("catalogs/dbx_samples/schemas/nyctaxi"),
         &[
             ("PQB_ENDPOINT", address.as_str()),
             ("PQB_TABLE_FORMAT", "iceberg"),
@@ -234,34 +243,21 @@ fn schema_get_reads_a_schema_stream() {
 }
 
 #[test]
-fn schema_get_takes_a_schema_or_a_stream_not_both() {
+fn schema_get_rejects_a_non_schema_name() {
     let address = server(200, SCHEMA);
     let output = pipe_env(
-        &["get", "schema", "dbx_samples.nyctaxi"],
-        SCHEMA_REFS.as_bytes(),
+        &["get", "schema"],
+        &parent("catalogs/dbx_samples"),
         &[("PQB_ENDPOINT", address.as_str())],
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not both"), "{stderr}");
-}
-
-#[test]
-fn schema_get_needs_a_dotted_name() {
-    let address = server(200, SCHEMA);
-    let output = pipe_env(
-        &["get", "schema", "nyctaxi"],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("CATALOG.SCHEMA"), "{stderr}");
+    assert!(stderr.contains("a schema record needs"), "{stderr}");
 }
 
 #[test]
 fn schema_get_rejects_an_empty_document() {
-    let output = pipe_stdin(&["get", "schema", "dbx_samples.nyctaxi"], b"");
+    let output = pipe_stdin(&["get", "schema"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -270,7 +266,11 @@ fn schema_get_rejects_an_empty_document() {
 #[test]
 fn schema_ls_prints_the_schemas_as_a_table() {
     let address = server(200, SCHEMAS);
-    let output = pipe(&["list", "schemas", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["list", "schemas"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -284,7 +284,11 @@ fn schema_ls_prints_the_schemas_as_a_table() {
 #[test]
 fn schema_ls_streams_the_schemas_as_ndjson() {
     let address = server(200, SCHEMAS);
-    let output = pipe(&["list", "schemas", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["list", "schemas"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -313,7 +317,11 @@ fn schema_ls_follows_unity_page_tokens() {
         ("page_token=", 200, SCHEMAS_LAST),
         ("/schemas", 200, SCHEMAS_PAGE),
     ]);
-    let output = pipe(&["list", "schemas", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["list", "schemas"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -337,8 +345,8 @@ fn schema_ls_follows_unity_page_tokens() {
 fn schema_ls_lists_iceberg_rest_namespaces() {
     let address = routes(&[("/namespaces", 200, ICEBERG_NAMESPACES)]);
     let output = pipe_env(
-        &["list", "schemas", "dbx_samples"],
-        b"",
+        &["list", "schemas"],
+        &parent("catalogs/dbx_samples"),
         &[
             ("PQB_ENDPOINT", address.as_str()),
             ("PQB_TABLE_FORMAT", "iceberg"),
@@ -373,8 +381,8 @@ fn schema_ls_follows_iceberg_page_tokens() {
         ("/namespaces", 200, ICEBERG_PAGE),
     ]);
     let output = pipe_env(
-        &["list", "schemas", "dbx_samples"],
-        b"",
+        &["list", "schemas"],
+        &parent("catalogs/dbx_samples"),
         &[
             ("PQB_ENDPOINT", address.as_str()),
             ("PQB_TABLE_FORMAT", "iceberg"),
@@ -402,7 +410,11 @@ fn schema_ls_follows_iceberg_page_tokens() {
 #[test]
 fn schema_ls_reports_an_unknown_catalog() {
     let address = server(404, r#"{"message":"Catalog 'nope' does not exist."}"#);
-    let output = pipe(&["list", "schemas", "nope"], &source(&address));
+    let output = pipe_env(
+        &["list", "schemas"],
+        &parent("catalogs/nope"),
+        &source(&address),
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("404"), "{stderr}");
@@ -411,7 +423,11 @@ fn schema_ls_reports_an_unknown_catalog() {
 #[test]
 fn schema_ls_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
-    let output = pipe(&["list", "schemas", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["list", "schemas"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -419,7 +435,7 @@ fn schema_ls_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn schema_ls_rejects_an_empty_document() {
-    let output = pipe_stdin(&["list", "schemas", "dbx_samples"], b"");
+    let output = pipe_stdin(&["list", "schemas"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");

@@ -25,6 +25,7 @@ impl TableFormat {
 
 /// One table's record.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Table {
     /// `catalogs/{catalog}/schemas/{schema}/tables/{table}`.
     pub name: String,
@@ -64,6 +65,7 @@ pub struct Table {
 /// One column of a table's schema. Not a resource: a bounded value on its
 /// [`Table`], while a file's copy of it is the [`Column`] resource.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DeclaredColumn {
     /// The column's name within the schema.
     pub column: String,
@@ -80,6 +82,7 @@ pub struct DeclaredColumn {
 
 /// A natural partition: a half-open commit-time window.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Partition {
     /// `…/tables/{table}/partitions/{partition}`.
     pub name: String,
@@ -106,4 +109,74 @@ pub struct Partition {
     /// The table's vended credentials, when the caller holds them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
+}
+
+use serde_json::Value;
+
+use super::json::{self, FromJson};
+use super::name;
+
+impl FromJson for Table {
+    fn from_json(value: Value) -> Result<Self, String> {
+        json::record(
+            value,
+            "table",
+            "catalogs/…/tables/…",
+            Self::named,
+            |table| &table.name,
+        )
+    }
+}
+
+impl Table {
+    fn named(name: &str) -> Option<Self> {
+        if name::parse_table(name).is_some() {
+            return Some(Self {
+                name: name.to_owned(),
+                ..Self::default()
+            });
+        }
+        let (catalog, rest) = name.split_once('.')?;
+        let (schema, table) = rest.rsplit_once('.')?;
+        if catalog.is_empty() || schema.is_empty() || table.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name: name::table(catalog, schema, table),
+            ..Self::default()
+        })
+    }
+}
+
+impl FromJson for Partition {
+    fn from_json(value: Value) -> Result<Self, String> {
+        json::record(
+            value,
+            "partition",
+            "catalogs/…/tables/…/partitions/…",
+            Self::named,
+            |partition| &partition.name,
+        )
+    }
+}
+
+impl Partition {
+    fn named(name: &str) -> Option<Self> {
+        if name::parse_partition(name).is_some() {
+            return Some(Self {
+                name: name.to_owned(),
+                ..Self::default()
+            });
+        }
+        let (catalog, rest) = name.split_once('.')?;
+        let (rest, partition) = rest.rsplit_once('.')?;
+        let (schema, table) = rest.rsplit_once('.')?;
+        if catalog.is_empty() || schema.is_empty() || table.is_empty() || partition.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name: name::partition(catalog, schema, table, partition),
+            ..Self::default()
+        })
+    }
 }

@@ -11,40 +11,31 @@
 //! still succeeds. A check that fails is reported, counted, and the stage exits
 //! non-zero after the stream.
 
+use pqbench::v1;
 use pqbench::v1::EligibilityReason;
-use serde_json::Value;
 
 use super::StageArgs;
-use crate::emit::Emitter;
-use crate::error::{context, fail_when_dropped};
-use crate::source::{self, dotted_name, read_input, Carried};
+use crate::parse;
+use crate::source::{drive, filter_map};
 use crate::CliError;
+
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
-    let input = read_input("credentials check").await?;
-    if !input.piped {
-        return Err("credentials check reads table refs on standard input".into());
-    }
-    let mut emit = Emitter::open();
-    let records = source::records("credentials check", input.first, input.lines);
-    let dropped = source::stage(
-        records,
+    let parents = parse::parents::<v1::Table>("credentials check").await?;
+    drive(filter_map(
+        parents,
         args.fan_out,
-        &mut emit,
-        |record: Value| async move {
-            let name = Carried::Table.record_name(&record)?;
-            match check(workspace, &name).await {
-                Ok(None) => Ok(vec![record]),
+        |table: v1::Table| async move {
+            match check(workspace, &table.name).await {
+                Ok(None) => Ok(Some(table)),
                 Ok(Some(reason)) => {
                     eprintln!("error: {reason}");
-                    Ok(Vec::new())
+                    Ok(None)
                 }
-                Err(cause) => Err(context(dotted_name(&name), cause)),
+                Err(cause) => Err(cause),
             }
         },
-    )
-    .await?;
-    emit.finish().await?;
-    fail_when_dropped(dropped)
+    ))
+    .await
 }
 
 /// The reason a table is not readable outside Databricks compute, `None` when
@@ -57,6 +48,14 @@ async fn check(workspace: &pqbench::Workspace, name: &str) -> Result<Option<Stri
         return Ok(None);
     }
     Ok(Some(ineligible(&dotted_name(name), eligibility.reason)))
+}
+
+/// The dotted `catalog.schema.table` a table ref names, for a message.
+fn dotted_name(name: &str) -> String {
+    match pqbench::v1::name::parse_table(name) {
+        Some((catalog, schema, table)) => format!("{catalog}.{schema}.{table}"),
+        None => name.to_string(),
+    }
 }
 
 /// The message an ineligible table reports.

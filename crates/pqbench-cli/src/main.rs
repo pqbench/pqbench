@@ -21,6 +21,7 @@ mod help;
 mod list;
 mod lz;
 mod metastore;
+mod parse;
 mod partition;
 mod profile;
 mod ratelimit;

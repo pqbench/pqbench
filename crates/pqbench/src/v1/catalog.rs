@@ -27,6 +27,7 @@ impl CatalogType {
 
 /// The metastore: the entity above catalogs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Metastore {
     /// `metastores/{metastore}`.
     pub name: String,
@@ -46,6 +47,7 @@ pub struct Metastore {
 
 /// One catalog.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Catalog {
     /// `catalogs/{catalog}`.
     pub name: String,
@@ -68,6 +70,7 @@ pub struct Catalog {
 
 /// One schema.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Schema {
     /// `catalogs/{catalog}/schemas/{schema}`.
     pub name: String,
@@ -83,4 +86,66 @@ pub struct Schema {
     /// The schema properties the endpoint reports.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub properties: BTreeMap<String, String>,
+}
+
+use serde_json::Value;
+
+use super::json::{self, FromJson};
+use super::name;
+
+impl FromJson for Catalog {
+    fn from_json(value: Value) -> Result<Self, String> {
+        json::record(value, "catalog", "catalogs/…", Self::named, |catalog| {
+            &catalog.name
+        })
+    }
+}
+
+impl Catalog {
+    fn named(name: &str) -> Option<Self> {
+        if name::parse_catalog(name).is_some() {
+            return Some(Self {
+                name: name.to_owned(),
+                ..Self::default()
+            });
+        }
+        if !name.is_empty() && !name.contains('.') {
+            return Some(Self {
+                name: name::catalog(name),
+                ..Self::default()
+            });
+        }
+        None
+    }
+}
+
+impl FromJson for Schema {
+    fn from_json(value: Value) -> Result<Self, String> {
+        json::record(
+            value,
+            "schema",
+            "catalogs/…/schemas/…",
+            Self::named,
+            |schema| &schema.name,
+        )
+    }
+}
+
+impl Schema {
+    fn named(name: &str) -> Option<Self> {
+        if name::parse_schema(name).is_some() {
+            return Some(Self {
+                name: name.to_owned(),
+                ..Self::default()
+            });
+        }
+        let (catalog, schema) = name.split_once('.')?;
+        if catalog.is_empty() || schema.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name: name::schema(catalog, schema),
+            ..Self::default()
+        })
+    }
 }

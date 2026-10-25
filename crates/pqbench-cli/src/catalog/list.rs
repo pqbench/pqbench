@@ -2,33 +2,24 @@
 
 use clap::Args;
 use futures_util::stream::StreamExt;
-use pqbench::catalog::list;
+use futures_util::TryStreamExt;
+use pqbench::v1;
 
-use crate::emit::Emitter;
-use crate::source::{self, read_input};
+use crate::error::context;
+use crate::source::{drive, Records};
 use crate::CliError;
 
 /// Arguments for `list catalogs`.
 #[derive(Args)]
 pub(crate) struct ListArgs {}
 
-/// List the catalogs at the endpoint: `get metastore | list catalogs`.
+/// List the catalogs at the endpoint: the walk's root, which needs no parent.
 ///
-/// The metastore is a singleton, so a `Metastore` stream on standard input only
-/// affords the walk its shape: the refs are validated, and the endpoint's
-/// catalogs are the answer either way.
+/// The metastore is a singleton, so there is no stream to shape this: it reads
+/// nothing and writes the catalogs the endpoint serves.
 pub(crate) async fn run(workspace: &pqbench::Workspace, _args: &ListArgs) -> Result<(), CliError> {
-    let input = read_input("list catalogs").await?;
-    let mut emit = Emitter::open();
-    if input.piped {
-        let mut records = source::records("list catalogs", input.first, input.lines);
-        while let Some(record) = records.next().await {
-            source::Carried::Metastore.record_name(&record?)?;
-        }
-    }
-    let catalogs = list::list(workspace).await?;
-    for catalog in &catalogs {
-        emit.write(catalog).await?;
-    }
-    emit.finish().await
+    let rows: Records<'_, v1::Catalog> = pqbench::catalog::list::list(workspace)
+        .map_err(|cause| context("catalogs", cause))
+        .boxed_local();
+    drive(rows).await
 }

@@ -12,10 +12,14 @@ fn schema_get(
     name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
+    let schema = pqbench::v1::Schema {
+        name,
+        ..Default::default()
+    };
     one(
         py,
         async move {
-            pqbench::schema::get::get(&workspace, &name)
+            pqbench::schema::get::get(&workspace, &schema)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -30,12 +34,18 @@ fn schema_list(
     name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
+    let catalog = pqbench::v1::Catalog {
+        name,
+        ..Default::default()
+    };
     many(
         py,
         async move {
-            pqbench::schema::list::list(&workspace, &name)
-                .await
-                .map_err(|error| error.to_string())
+            futures::TryStreamExt::try_collect::<Vec<_>>(pqbench::schema::list::list(
+                &workspace, &catalog,
+            ))
+            .await
+            .map_err(|error| error.to_string())
         },
         Schema::attach,
     )

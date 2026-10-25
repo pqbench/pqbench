@@ -1,19 +1,19 @@
 //! `list partitions`: a table's natural partitions, grouped by commit time.
 
 use clap::Args;
-use futures_util::stream::{self, StreamExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use pqbench::partition;
+use pqbench::v1;
 
 use crate::emit::Emitter;
 use crate::error::{context, fail_when_dropped};
-use crate::source::{self, dotted_name, read_input, ref_credentials, ref_storage};
+use crate::parse;
+use crate::source::{self, dotted_name};
 use crate::CliError;
 
 /// Arguments for `list partitions`.
 #[derive(Args)]
 pub(crate) struct ListArgs {
-    /// table URI or a document file; without it, read table refs on stdin
-    input: Option<String>,
     /// window width, epoch-aligned: e.g. 1h, 1d, 1w [env: PQB_TABLE_EVERY]
     #[arg(
         long,
@@ -34,41 +34,18 @@ pub(crate) struct ListArgs {
 
 /// List a table's natural partitions: commits grouped into commit-time windows.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
-    let input = read_input("list partitions").await?;
-    let parents = match &args.input {
-        Some(uri) if uri != "-" => {
-            if input.first.is_some() {
-                return Err("list partitions takes a table URI or a table stream, not both".into());
-            }
-            let name = pqbench::v1::name::local_table(uri);
-            stream::iter([Ok(serde_json::json!({ "name": name, "uri": uri }))]).boxed()
-        }
-        _ => {
-            if !input.piped {
-                return Err("list partitions needs a table URI or a table stream".into());
-            }
-            source::records("list partitions", input.first, input.lines)
-                .map(|record| {
-                    record.and_then(|record| {
-                        source::Carried::Table.record_name(&record).map(|_| record)
-                    })
-                })
-                .boxed()
-        }
-    };
+    let parents = parse::parents::<v1::Table>("list partitions").await?;
     let mut emit = Emitter::open();
     let dropped = source::stage(
         parents,
         args.fan_out,
         &mut emit,
-        |record: serde_json::Value| async move {
-            let name = source::Carried::Table.record_name(&record)?;
-            let uri = ref_storage(&record)
-                .ok_or_else(|| {
-                    CliError::from("a table-ref has no storage path; run `pqbench get table` first")
-                })?
-                .to_string();
-            let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
+        |table: v1::Table| async move {
+            let name = table.name;
+            let uri = table.uri.filter(|uri| !uri.is_empty()).ok_or_else(|| {
+                CliError::from("a table-ref has no storage path; run `pqbench get table` first")
+            })?;
+            let lease = table.credentials.filter(|lease| !lease.is_empty());
             let env = lease
                 .as_ref()
                 .map(pqbench::v1::Credentials::to_env)

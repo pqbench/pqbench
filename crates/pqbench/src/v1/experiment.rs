@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 /// One rewrite `experiment` measured: the codec settings and the resulting
 /// size.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ExperimentTrial {
     /// The rewrites applied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

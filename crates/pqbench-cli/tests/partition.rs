@@ -34,6 +34,15 @@ fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// A local table ref: the fixture directory as the storage root.
+#[cfg(feature = "delta")]
+fn table_ref(path: &std::path::Path) -> String {
+    format!(
+        r#"{{"name":"catalogs/local/schemas/local/tables/t","uri":"{}"}}"#,
+        path.display()
+    )
+}
+
 #[cfg(feature = "delta")]
 fn parquet_fixture() -> &'static str {
     concat!(
@@ -151,7 +160,7 @@ fn dated_delta_fixture_commits(timestamps: &[i64]) -> DeltaFixture {
 fn partition_ls_groups_commits_into_natural_windows() {
     let timestamp = 1_700_000_000_000i64;
     let fixture = dated_delta_fixture(timestamp);
-    let output = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
+    let output = pipe(&["list", "partitions"], &table_ref(&fixture.path));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -318,7 +327,7 @@ fn partition_ls_rejects_a_bad_last_window() {
 #[test]
 fn partition_ls_skips_commits_without_a_time() {
     let fixture = delta_fixture();
-    let output = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
+    let output = pipe(&["list", "partitions"], &table_ref(&fixture.path));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -333,14 +342,8 @@ fn partition_ls_skips_commits_without_a_time() {
 fn partition_ls_rejects_a_bad_window() {
     let fixture = dated_delta_fixture(0);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1x",
-        ],
-        "",
+        &["list", "partitions", "--every", "1x"],
+        &table_ref(&fixture.path),
     );
     assert!(!output.status.success());
     assert!(
@@ -355,10 +358,17 @@ fn partition_ls_rejects_a_bad_window() {
 fn partition_ls_exits_cleanly_when_stdout_is_closed() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
     let mut child = pqbench()
-        .args(["list", "partitions", fixture.path.to_str().unwrap()])
+        .args(["list", "partitions"])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(table_ref(&fixture.path).as_bytes())
         .unwrap();
     drop(child.stdout.take());
     let output = child.wait_with_output().unwrap();

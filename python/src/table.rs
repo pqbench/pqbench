@@ -17,19 +17,20 @@ fn table_get(
     let workspace = workspace.0.clone();
     let lake = lake.0.clone();
     let credentials = crate::requests::credentials(credentials)?;
-    let env = credentials
-        .as_ref()
-        .map(pqbench::v1::Credentials::to_env)
-        .unwrap_or_default();
+    let table = pqbench::v1::Table {
+        name,
+        uri,
+        credentials: credentials.clone(),
+        ..Default::default()
+    };
     one(
         py,
         async move {
-            let mut table =
-                pqbench::table::get::get(&workspace, &lake, &name, uri.as_deref(), &env)
-                    .await
-                    .map_err(|error| error.to_string())?;
-            table.credentials = credentials;
-            Ok(table)
+            let mut record = pqbench::table::get::get(&workspace, &lake, &table)
+                .await
+                .map_err(|error| error.to_string())?;
+            record.credentials = credentials;
+            Ok(record)
         },
         Table::attach,
     )
@@ -42,12 +43,18 @@ fn table_list(
     name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
+    let schema = pqbench::v1::Schema {
+        name,
+        ..Default::default()
+    };
     many(
         py,
         async move {
-            pqbench::table::list::list(&workspace, &name)
-                .await
-                .map_err(|error| error.to_string())
+            futures::TryStreamExt::try_collect::<Vec<_>>(pqbench::table::list::list(
+                &workspace, &schema,
+            ))
+            .await
+            .map_err(|error| error.to_string())
         },
         Table::attach,
     )

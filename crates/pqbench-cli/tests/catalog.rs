@@ -147,6 +147,11 @@ const PAGES: [&str; 2] = [
 ];
 
 /// The walk's config: `PQB_ENDPOINT` names the endpoint.
+/// One parent record, as the stream carries it.
+fn parent(name: &str) -> Vec<u8> {
+    format!(r#"{{"name":"{name}"}}"#).into_bytes()
+}
+
 fn source(endpoint: &str) -> [(&str, &str); 1] {
     [("PQB_ENDPOINT", endpoint)]
 }
@@ -154,7 +159,11 @@ fn source(endpoint: &str) -> [(&str, &str); 1] {
 #[test]
 fn catalog_get_prints_the_record_as_a_table() {
     let address = server(200, CATALOG);
-    let output = pipe(&["get", "catalog", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -168,7 +177,11 @@ fn catalog_get_prints_the_record_as_a_table() {
 #[test]
 fn catalog_get_streams_the_record_as_ndjson() {
     let address = server(200, CATALOG);
-    let output = pipe(&["get", "catalog", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -186,7 +199,11 @@ fn catalog_get_streams_the_record_as_ndjson() {
 #[test]
 fn catalog_get_reports_an_unknown_catalog() {
     let address = server(404, r#"{"message":"Catalog 'nope' does not exist."}"#);
-    let output = pipe(&["get", "catalog", "nope"], &source(&address));
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/nope"),
+        &source(&address),
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("404"), "{stderr}");
@@ -195,7 +212,11 @@ fn catalog_get_reports_an_unknown_catalog() {
 #[test]
 fn catalog_get_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
-    let output = pipe(&["get", "catalog", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -203,7 +224,7 @@ fn catalog_get_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn catalog_get_rejects_an_empty_document() {
-    let output = pipe_stdin(&["get", "catalog", "dbx_samples"], b"");
+    let output = pipe_stdin(&["get", "catalog"], &parent("catalogs/dbx_samples"));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -238,21 +259,8 @@ fn catalog_get_enriches_a_catalog_stream() {
 }
 
 #[test]
-fn catalog_get_takes_a_catalog_or_a_stream_not_both() {
-    let address = server(200, CATALOG);
-    let output = pipe_env(
-        &["get", "catalog", "dbx_samples"],
-        CATALOG_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not both"), "{stderr}");
-}
-
-#[test]
 fn catalog_get_rejects_a_bad_fan_out() {
-    let output = pipe_stdin(&["get", "catalog", "dbx_samples", "--fan-out", "lots"], b"");
+    let output = pipe_stdin(&["get", "catalog", "--fan-out", "lots"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("fan-out"), "{stderr}");
@@ -358,18 +366,4 @@ fn catalog_ls_reads_a_metastore_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(ndjson(&output.stdout).len(), 2);
-}
-
-#[test]
-fn catalog_ls_rejects_a_non_metastore_stream() {
-    let address = server(200, CATALOGS);
-    let record = json!({"name": "catalogs/dbx_samples"});
-    let output = pipe_env(
-        &["list", "catalogs"],
-        record.to_string().as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("metastore"), "{stderr}");
 }

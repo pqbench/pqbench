@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 /// A storage blob: the bytes a data file lives in — a local file or an S3
 /// object, named by its service.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Blob {
     /// `blobs/{service}/{locator}`.
     pub name: String,
@@ -26,6 +27,7 @@ pub struct Blob {
 /// A table's reference to one [`Blob`]: a row of the table's log (the Delta
 /// `add`). The AIP-124 association between them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TableFile {
     /// `…/tables/{table}/files/{file}`.
     pub name: String,
@@ -62,6 +64,7 @@ impl TableFile {
 
 /// A file's copy of a declared column: the physical unit the analyses read.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Column {
     /// `…/blobs/{service}/{locator}/columns/{column}`.
     pub name: String,

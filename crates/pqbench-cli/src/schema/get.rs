@@ -1,23 +1,18 @@
 //! `get schema`: one schema's record.
 
-use pqbench::schema::get;
+use pqbench::v1;
 
 use super::NameArgs;
-use crate::emit::Emitter;
-use crate::error::{context, fail_when_dropped};
-use crate::source::{self, Carried};
+use crate::parse;
+use crate::source::{drive, map};
 use crate::CliError;
 
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
-    let names = source::parent_names("get schema", args.schema.as_deref(), Carried::Schema).await?;
-    let mut emit = Emitter::open();
-    let dropped = source::stage(names, args.fan_out, &mut emit, |name: String| async move {
-        let record = get::get(workspace, &name)
-            .await
-            .map_err(|cause| context(&name, cause))?;
-        Ok(vec![record])
-    })
-    .await?;
-    emit.finish().await?;
-    fail_when_dropped(dropped)
+    let parents = parse::parents::<v1::Schema>("get schema").await?;
+    drive(map(
+        parents,
+        args.fan_out,
+        |schema: v1::Schema| async move { pqbench::schema::get::get(workspace, &schema).await },
+    ))
+    .await
 }

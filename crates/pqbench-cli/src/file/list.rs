@@ -6,10 +6,9 @@ use clap::Args;
 use futures_util::stream::StreamExt;
 use pqbench::v1;
 
-use crate::document::invalid_json;
 use crate::emit::Emitter;
 use crate::error::{context, fail_when_dropped};
-use crate::source::{self, expand, read_input};
+use crate::source::expand;
 use crate::CliError;
 
 /// Arguments for `list files`.
@@ -32,17 +31,13 @@ pub(crate) struct ListArgs {
 /// blob and carrying the partition's lease, so the storage stage reads it
 /// without a catalog call.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
-    let input = read_input("list files").await?;
-    if !input.piped {
-        return Err("list files reads partition records on standard input".into());
-    }
+    let parents = crate::parse::parents::<v1::Partition>("list files").await?;
     let mut emit = Emitter::open();
     let dropped = expand(
-        source::records("list files", input.first, input.lines),
+        parents,
         args.fan_out,
         &mut emit,
-        |record: serde_json::Value| async move {
-            let partition: v1::Partition = serde_json::from_value(record).map_err(invalid_json)?;
+        |partition: v1::Partition| async move {
             partition_files(lake, partition, args.min_file_size).await
         },
     )

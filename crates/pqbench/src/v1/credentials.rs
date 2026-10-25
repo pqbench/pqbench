@@ -28,6 +28,7 @@ impl EligibilityReason {
 /// Vended storage credentials. Non-sensitive for now, so a [`Table`] may carry
 /// them; a later pass moves them off the wire.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Credentials {
     /// The access key id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,6 +83,7 @@ impl Credentials {
 
 /// The result `credentials check` returns.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ReadEligibility {
     /// Whether the table is readable outside Databricks compute.
     #[serde(default)]

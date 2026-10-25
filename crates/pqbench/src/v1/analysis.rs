@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 /// A column's byte mass (the footer's `ColumnMetaData`), aggregated by column:
 /// one per column, over its column chunks.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Bytemass {
     /// `…/columns/{column}/bytemass`.
     pub name: String,
@@ -49,6 +50,7 @@ pub struct Bytemass {
 
 /// A codec sweep of a column.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CompressionReport {
     /// `…/columns/{column}/compression/{codec}`.
     pub name: String,
@@ -71,6 +73,7 @@ pub struct CompressionReport {
 
 /// A decoded-sample profile of a column.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ColumnProfile {
     /// `…/columns/{column}/profile`.
     pub name: String,

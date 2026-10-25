@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 /// One commit of a table's log.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Commit {
     /// `…/tables/{table}/commits/{commit}`.
     pub name: String,
@@ -24,6 +25,7 @@ pub struct Commit {
 
 /// Statistics copied from a log's `add` action.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FileStats {
     /// `numRecords` from the log.
     pub record_count: u64,
@@ -47,6 +49,7 @@ pub struct FileStats {
 
 /// One action from a commit file, in file order.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LogAction {
     /// Action kind as stored (`add`, `remove`, `metaData`, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]

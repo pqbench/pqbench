@@ -5,8 +5,10 @@
 
 use std::fmt;
 
+use futures_util::stream::{self, Stream, TryStreamExt};
+
 pub use crate::config::Dialect as TableFormat;
-pub use crate::v1::Schema;
+pub use crate::v1::{Catalog, Schema};
 
 use crate::Workspace;
 
@@ -40,12 +42,21 @@ impl std::error::Error for Error {
     }
 }
 
-/// List the schemas in the catalog `name` — a `catalogs/{catalog}` resource
-/// name — at the workspace's endpoint.
+/// List the schemas in the catalog `catalog` names, at the workspace's
+/// endpoint.
 ///
-/// # Errors
-/// Fails when `name` is not a catalog name, the endpoint cannot be reached,
-/// answers with an unexpected status, or returns a malformed schema page.
-pub async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Schema>, Error> {
-    super::r#impl::list(workspace, name).await
+/// The stream owns the catalog name, so it borrows the workspace and nothing
+/// else; a failure listing a page is an `Err` item, so the records read before
+/// it stand.
+pub fn list<'a>(
+    workspace: &'a Workspace,
+    catalog: &Catalog,
+) -> impl Stream<Item = Result<Schema, Error>> + 'a {
+    let name = catalog.name.clone();
+    stream::once(async move {
+        super::r#impl::list(workspace, &name)
+            .await
+            .map(|rows| stream::iter(rows.into_iter().map(Ok)))
+    })
+    .try_flatten()
 }
