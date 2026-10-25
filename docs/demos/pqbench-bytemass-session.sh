@@ -12,10 +12,10 @@ prompt() {
 
 parquet=crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet
 
-prompt "pqbench bytemass $parquet"
-pqbench bytemass "$parquet" | cat
+prompt "pqbench table-file $parquet | pqbench bytemass"
+pqbench table-file "$parquet" | pqbench bytemass | cat
 sleep 2
 
-prompt "pqbench bytemass $parquet"
-pqbench bytemass "$parquet" | cat
+prompt "pqbench table-file $parquet | pqbench bytemass"
+pqbench table-file "$parquet" | pqbench bytemass | cat
 sleep 2

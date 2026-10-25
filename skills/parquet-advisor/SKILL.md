@@ -28,7 +28,7 @@ $ pqbench skill parquet-advisor recipes | head -1
 
 | Layer | Command | Returns | Cost |
 | --- | --- | --- | --- |
-| L0 footer | `pqbench bytemass FILE` | per column: compressed/uncompressed bytes, codec, encodings, dictionary, value count, null fraction, first/last value, bytes per value, compression ratio | cheap (footer only) |
+| L0 footer | `pqbench table-file FILE | pqbench bytemass` | per column: compressed/uncompressed bytes, codec, encodings, dictionary, value count, null fraction, first/last value, bytes per value, compression ratio | cheap (footer only) |
 | Table files | `pqbench list partitions DIR \| pqbench list files` | the files a window's commits added (path, blob, size) | cheap (log only) |
 | L1 columns | `pqbench profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
 
@@ -42,7 +42,7 @@ unverified).
 
 ## Workflow
 
-1. **Where are the bytes?** `pqbench bytemass FILE`. Rank columns by
+1. **Where are the bytes?** `pqbench table-file FILE | pqbench bytemass`. Rank columns by
    `compressed_bytes`. Do not tune a 0.2% column before the 70% column.
 2. **Column facts.** `pqbench profile data.parquet --rows first:8192`.
    Pass the same local file, or a file `list files` named from a table.
