@@ -4,7 +4,7 @@
 //! placeholder; the last placeholder names the resource, so the noun is not
 //! repeated. An optional `alias` adds the dotted shorthand:
 //!
-//! ```ignore
+//! ```text
 //! #[derive(Resource)]
 //! pub struct Table {
 //!     #[resource(

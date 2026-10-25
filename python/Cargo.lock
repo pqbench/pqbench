@@ -2727,12 +2727,22 @@ dependencies = [
  "object_store",
  "parquet",
  "parquet-format-safe",
+ "pqbench-resource",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "snappy_src",
  "url",
  "zstd",
+]
+
+[[package]]
+name = "pqbench-derive"
+version = "0.0.6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2746,6 +2756,15 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "pqbench-resource"
+version = "0.0.6"
+dependencies = [
+ "pqbench-derive",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
