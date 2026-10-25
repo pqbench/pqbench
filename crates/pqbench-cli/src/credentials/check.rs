@@ -47,15 +47,7 @@ async fn check(workspace: &pqbench::Workspace, name: &str) -> Result<Option<Stri
     if eligibility.eligible {
         return Ok(None);
     }
-    Ok(Some(ineligible(&dotted_name(name), eligibility.reason)))
-}
-
-/// The dotted `catalog.schema.table` a table ref names, for a message.
-fn dotted_name(name: &str) -> String {
-    match pqbench::v1::Table::parse_name(name) {
-        Some((catalog, schema, table)) => format!("{catalog}.{schema}.{table}"),
-        None => name.to_string(),
-    }
+    Ok(Some(ineligible(name, eligibility.reason)))
 }
 
 /// The message an ineligible table reports.
