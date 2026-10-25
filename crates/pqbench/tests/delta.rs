@@ -51,6 +51,62 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     assert_eq!(row_count, 14);
 }
 
+/// Spark writes a bare `NULL` as a `void` column. Delta leaves the type
+/// undefined, so a reader must not fail resolving the snapshot: the table loads
+/// its files and keeps the column in the declared schema.
+#[tokio::test]
+async fn load_reads_a_void_column() {
+    let directory = tempfile::tempdir().unwrap();
+    let log = directory.path().join("_delta_log");
+    std::fs::create_dir(&log).unwrap();
+    write_parquet(&directory.path().join("data.parquet"), 1);
+    let size = std::fs::metadata(directory.path().join("data.parquet"))
+        .unwrap()
+        .len();
+    let schema = json!({
+        "type": "struct",
+        "fields": [
+            {"name": "id", "type": "long", "nullable": true, "metadata": {}},
+            {"name": "note", "type": "void", "nullable": true, "metadata": {}}
+        ]
+    });
+    let commit = format!(
+        "{}\n{}\n{}\n",
+        json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}),
+        json!({"metaData": {
+            "id": "5b0f6a3e-2f7d-4f43-9a55-8f0c0c1d2e3f",
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": schema.to_string(),
+            "partitionColumns": [],
+            "configuration": {},
+            "createdTime": 1_760_000_000_000i64
+        }}),
+        json!({"add": {
+            "path": "data.parquet",
+            "size": size,
+            "partitionValues": {},
+            "modificationTime": 1_760_000_000_000i64,
+            "dataChange": true
+        }})
+    );
+    std::fs::write(log.join("00000000000000000000.json"), commit).unwrap();
+
+    let info = table::load(
+        common::lake(),
+        &load_request(directory.path().to_string_lossy(), None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(info.format, TableFormat::Delta);
+    assert_eq!(info.files.len(), 1);
+    let columns: Vec<_> = info
+        .columns
+        .iter()
+        .map(|column| (column.column.as_str(), column.data_type.as_deref()))
+        .collect();
+    assert_eq!(columns, [("id", Some("long")), ("note", Some("void"))]);
+}
+
 /// `list partitions` streams the log for commit times: each commit arrives with
 /// its version, its time and the `commitInfo` the log stored, and no action, so
 /// nothing grows with a commit's file list. A commit the log does not date is

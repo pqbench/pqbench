@@ -39,6 +39,8 @@ bytes = "1"
 parquet-format-safe = "0.2.4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# 1.x parses `void` (Spark's NullType) in the log's schema; 0.32 fails the
+# whole snapshot on a table with such a column.
 deltalake = { version = "1.0", default-features = false, features = ["rustls"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
