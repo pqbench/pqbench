@@ -69,7 +69,9 @@ fn server(status: u16, body: &'static str) -> String {
 }
 
 /// One endpoint that answers by request-line substring: the first matching
-/// route wins, so put the more specific needle first. No match is a 404.
+/// route wins, so put the more specific needle first. No match is a 404; a `0`
+/// status closes the connection with no answer, which the caller sees as a
+/// transport failure.
 fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
@@ -84,6 +86,10 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
                 .find(|(needle, _, _)| request.contains(needle))
                 .map(|(_, status, body)| (*status, *body))
                 .unwrap_or((404, "{}"));
+            if status == 0 {
+                drop(stream);
+                continue;
+            }
             let response = format!(
                 "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
@@ -474,4 +480,52 @@ fn schema_ls_lists_a_catalog_stream() {
     };
     assert_eq!(schemas("dbx_samples"), ["bakehouse", "nyctaxi"]);
     assert_eq!(schemas("system"), ["bakehouse", "nyctaxi"]);
+}
+
+#[test]
+fn schema_ls_drops_a_catalog_that_never_answers() {
+    // The walk shares one endpoint: one catalog's request gets no answer (a
+    // timeout or a dropped connection) while the rest answer. The level reports
+    // it and carries on, so one unreachable ref does not end the walk.
+    let address = routes(&[
+        ("catalog_name=dbx_samples", 200, SCHEMAS),
+        ("catalog_name=system", 0, ""),
+    ]);
+    let output = pipe_env(
+        &["list", "schemas", "--format", "json"],
+        CATALOG_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(records.iter().all(|record| record["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("catalogs/dbx_samples/")));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("catalogs/system"), "{stderr}");
+    assert!(stderr.contains("1 catalog(s)"), "{stderr}");
+}
+
+#[test]
+fn schema_ls_still_fails_when_a_catalog_answers_an_error() {
+    // An endpoint answer is not a timeout: a 500 still fails the level, so the
+    // shell's retry at a lower rate sees it (decision 0007).
+    let address = routes(&[
+        ("catalog_name=dbx_samples", 200, SCHEMAS),
+        ("catalog_name=system", 500, r#"{"message":"boom"}"#),
+    ]);
+    let output = pipe_env(
+        &["list", "schemas", "--format", "json"],
+        CATALOG_REFS.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("500"), "{stderr}");
 }

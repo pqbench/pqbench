@@ -11,7 +11,8 @@ use serde_json::Value;
 use super::StageArgs;
 use crate::document::invalid_json;
 use crate::emit::{Align, Emitter, Row};
-use crate::source::{self, read_input};
+use crate::error::{report_dropped, tolerate};
+use crate::source::{self, dotted_name, read_input};
 use crate::CliError;
 
 pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
@@ -22,16 +23,23 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let records = source::records("credentials get", input.first, input.lines);
     let mut tables = 0;
+    let mut dropped = 0;
     let mut vends = records
         .map(|record| async {
             let table: pqbench::v1::Table =
                 serde_json::from_value(record?).map_err(invalid_json)?;
-            let credentials = pqbench::credentials::get::get(workspace, &table.name).await?;
-            Ok::<_, CliError>((table, credentials))
+            let name = dotted_name(&table.name);
+            let credentials = pqbench::credentials::get::get(workspace, &table.name)
+                .await
+                .map_err(CliError::from);
+            Ok::<_, CliError>(tolerate(&name, credentials)?.map(|credentials| (table, credentials)))
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(result) = vends.next().await {
-        let (mut table, credentials) = result?;
+        let Some((mut table, credentials)) = result? else {
+            dropped += 1;
+            continue;
+        };
         if let Some(credentials) = credentials {
             table.credentials = Some(credentials);
         }
@@ -42,7 +50,9 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         .await?;
         tables += 1;
     }
-    emit.finish(&format!("tables: {tables}\n")).await
+    emit.finish(&format!("tables: {tables}\n")).await?;
+    report_dropped("table", dropped);
+    Ok(())
 }
 
 /// The row `credentials get` writes: the ref, plus whether creds were vended.

@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use super::StageArgs;
 use crate::emit::{Align, Emitter, Row};
+use crate::error::{error_chain, is_transient, report_dropped};
 use crate::source::{self, dotted_name, read_input, table_ref};
 use crate::CliError;
 
@@ -28,20 +29,31 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
     let records = source::records("credentials check", input.first, input.lines);
     let mut tables = 0;
-    let mut dropped = 0;
+    let mut ineligible = 0;
+    let mut unread = 0;
     let mut checks = records
         .map(|record| async {
             let record = record?;
             let name = table_ref("credentials check", &record)?;
-            let reason = check(workspace, &name).await?;
-            Ok::<_, CliError>((record, reason))
+            match check(workspace, &name).await {
+                Ok(reason) => Ok::<_, CliError>((record, reason, false)),
+                Err(error) if is_transient(&error) => {
+                    let reason = format!("{}: {}", dotted_name(&name), error_chain(error.as_ref()));
+                    Ok((record, Some(reason), true))
+                }
+                Err(error) => Err(error),
+            }
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(checked) = checks.next().await {
-        let (record, reason) = checked?;
+        let (record, reason, transient) = checked?;
         if let Some(reason) = reason {
             eprintln!("error: {reason}");
-            dropped += 1;
+            if transient {
+                unread += 1;
+            } else {
+                ineligible += 1;
+            }
             continue;
         }
         emit.write_row(&CheckedRef { record }).await?;
@@ -51,10 +63,12 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     // A drop is the filter working, not a failure: the walk composes on this
     // stage for a mixed schema, and a whole-catalog walk always has tables
     // (system, views, managed default storage) it cannot read outside compute.
-    // Only a real error — a missing table, an endpoint fault — fails the stage.
-    if dropped > 0 {
-        eprintln!("{dropped} table(s) are not readable outside Databricks compute");
+    // A transient endpoint failure drops the ref the same way; only an error
+    // the level cannot use — a malformed name, a status answer — fails it.
+    if ineligible > 0 {
+        eprintln!("{ineligible} table(s) are not readable outside Databricks compute");
     }
+    report_dropped("table", unread);
     Ok(())
 }
 

@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
+use crate::error::{report_dropped, tolerate};
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -57,15 +58,21 @@ async fn measure_document(
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
+    let mut dropped = 0;
     let records = document::records(input).await?;
     let mut reads = records
         .map(|record| measure_record(lake, record))
         .buffer_unordered(args.fan_out.max(1));
     while let Some(batch) = reads.next().await {
-        for measured in batch? {
+        let Some(batch) = batch? else {
+            dropped += 1;
+            continue;
+        };
+        for measured in batch {
             emit_measured(&mut emit, &mut stats, measured).await?;
         }
     }
+    report_dropped("file", dropped);
     finish_stream(emit, &stats, args.output.as_deref()).await
 }
 
@@ -77,40 +84,68 @@ async fn measure(
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
     let mut stats = MassStats::default();
+    let mut dropped = 0;
     let mut reads = stream::iter(bytemass::expand_inputs(lake, &inputs, &env).await?)
         .map(|input| {
             let env = env.clone();
-            async move { read_file(lake, &input, &env).await }
+            async move {
+                let read = read_file(lake, &input, &env).await;
+                tolerate(&input, read)
+            }
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(measured) = reads.next().await {
-        emit_measured(&mut emit, &mut stats, measured?).await?;
+        let Some(measured) = measured? else {
+            dropped += 1;
+            continue;
+        };
+        emit_measured(&mut emit, &mut stats, measured).await?;
     }
+    report_dropped("file", dropped);
     finish_stream(emit, &stats, args.output.as_deref()).await
 }
 
 /// Measure every file one document record names: a table-file is one file; a
-/// remote-source expands its inputs first.
+/// remote-source expands its inputs first. A file that cannot be read is
+/// reported and dropped, so one timeout does not end the walk.
 async fn measure_record(
     lake: &pqbench::Lake,
     record: Result<Record, CliError>,
-) -> Result<Vec<bytemass::MeasuredFile>, CliError> {
+) -> Result<Option<Vec<bytemass::MeasuredFile>>, CliError> {
     match record? {
-        Record::File(file) => Ok(vec![read_table_file(lake, file).await?]),
+        Record::File(file) => {
+            let reference = file
+                .blob
+                .clone()
+                .unwrap_or_else(|| "a table file".to_string());
+            let read = read_table_file(lake, file)
+                .await
+                .map(|measured| vec![measured]);
+            tolerate(&reference, read)
+        }
         Record::RemoteSource(source) => {
-            let mut measured = Vec::new();
-            for uri in source.inputs {
-                let inputs = std::slice::from_ref(&uri);
-                for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
-                    measured.push(read_file(lake, &input, &source.env).await?);
-                }
-            }
-            Ok(measured)
+            let reference = source.inputs.join(", ");
+            tolerate(&reference, measure_source(lake, source).await)
         }
         Record::Blob(_) | Record::Bytemass(_) => {
             Err("a bytemass stream goes to `pqbench viz`".into())
         }
     }
+}
+
+/// Measure every file a remote source names.
+async fn measure_source(
+    lake: &pqbench::Lake,
+    source: document::RemoteSource,
+) -> Result<Vec<bytemass::MeasuredFile>, CliError> {
+    let mut measured = Vec::new();
+    for uri in source.inputs {
+        let inputs = std::slice::from_ref(&uri);
+        for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
+            measured.push(read_file(lake, &input, &source.env).await?);
+        }
+    }
+    Ok(measured)
 }
 
 /// Read one file's footer. This is the I/O the fanout overlaps; [`emit_measured`]

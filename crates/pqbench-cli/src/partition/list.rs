@@ -2,13 +2,18 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use clap::Args;
-use futures_util::stream::{StreamExt, TryStreamExt};
+use futures_util::stream::{self, StreamExt, TryStreamExt};
 use pqbench::partition;
 
 use crate::emit::{Emitter, Format};
-use crate::source::{self, read_input, ref_credentials, ref_storage, table_ref, Input};
+use crate::error::{error_chain, is_transient, report_dropped, tolerate};
+use crate::source::{
+    self, dotted_name, read_input, ref_credentials, ref_storage, table_ref, Input,
+};
 use crate::CliError;
 
 /// Arguments for `list partitions`.
@@ -71,41 +76,59 @@ async fn list_stream(
         return Err("list partitions needs a table URI or a table stream".into());
     }
     let records = source::records("list partitions", input.first, input.lines);
+    let dropped = Arc::new(AtomicUsize::new(0));
     let reads = records
-        .map(|record| async {
-            let record = record?;
-            let name = table_ref("list partitions", &record)?;
-            let uri = ref_storage(&record)
-                .ok_or_else(|| {
-                    CliError::from("a table-ref has no storage path; run `pqbench get table` first")
-                })?
-                .to_string();
-            let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
-            let env = lease
-                .as_ref()
-                .map(pqbench::v1::Credentials::to_env)
-                .unwrap_or_default();
-            let found = partition::list::list(lake, &name, &uri, &env, window, last)
-                .await
-                .map_err(CliError::from)?;
-            Ok::<_, CliError>(
-                found
+        .map(|record| {
+            let dropped = Arc::clone(&dropped);
+            async move {
+                let record = record?;
+                let name = table_ref("list partitions", &record)?;
+                let uri = ref_storage(&record)
+                    .ok_or_else(|| {
+                        CliError::from(
+                            "a table-ref has no storage path; run `pqbench get table` first",
+                        )
+                    })?
+                    .to_string();
+                let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
+                let env = lease
+                    .as_ref()
+                    .map(pqbench::v1::Credentials::to_env)
+                    .unwrap_or_default();
+                let found = partition::list::list(lake, &name, &uri, &env, window, last)
+                    .await
+                    .map_err(CliError::from);
+                let Some(found) = tolerate(&dotted_name(&name), found)? else {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                    return Ok::<_, CliError>(stream::empty().boxed());
+                };
+                Ok(found
                     .map_ok(move |mut partition| {
                         partition.credentials = lease.clone();
                         partition
                     })
                     .map_err(CliError::from)
-                    .boxed(),
-            )
+                    .boxed())
+            }
         })
         .buffer_unordered(fan_out.max(1))
         .boxed();
     let mut found = reads.try_flatten_unordered(Some(fan_out.max(1)));
     let mut partitions = 0;
-    while let Some(partition) = found.try_next().await? {
+    while let Some(partition) = found.next().await {
+        let partition = match partition {
+            Ok(partition) => partition,
+            Err(error) if is_transient(&error) => {
+                eprintln!("error: {}", error_chain(error.as_ref()));
+                dropped.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         emit.write_row(&partition).await?;
         partitions += 1;
     }
+    report_dropped("table", dropped.load(Ordering::Relaxed));
     Ok(partitions)
 }
 

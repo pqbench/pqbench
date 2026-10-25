@@ -7,6 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::schema::list;
 
 use crate::emit::{Emitter, Format};
+use crate::error::{report_dropped, tolerate};
 use crate::source::{self, catalog_ref, read_input, Input};
 use crate::CliError;
 
@@ -66,17 +67,24 @@ async fn list_stream(
     }
     let records = source::records("list schemas", input.first, input.lines);
     let mut schemas = 0;
+    let mut dropped = 0;
     let mut lists = records
         .map(|record| async {
             let name = catalog_ref("list schemas", &record?)?;
-            Ok::<_, CliError>(list::list(workspace, &name).await?)
+            let listed = list::list(workspace, &name).await.map_err(CliError::from);
+            tolerate(&name, listed)
         })
         .buffer_unordered(fan_out.max(1));
     while let Some(listed) = lists.next().await {
-        for schema in listed? {
+        let Some(listed) = listed? else {
+            dropped += 1;
+            continue;
+        };
+        for schema in listed {
             emit.write_row(&schema).await?;
             schemas += 1;
         }
     }
+    report_dropped("catalog", dropped);
     Ok(schemas)
 }

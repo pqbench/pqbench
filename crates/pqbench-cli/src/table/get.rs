@@ -8,8 +8,9 @@ use futures_util::stream::StreamExt;
 use pqbench::table::get;
 
 use crate::emit::{Emitter, Format};
+use crate::error::{report_dropped, tolerate};
 use crate::source::{
-    self, read_input, ref_credentials, ref_storage, split_table, table_ref, Input,
+    self, dotted_name, read_input, ref_credentials, ref_storage, split_table, table_ref, Input,
 };
 use crate::CliError;
 
@@ -88,6 +89,7 @@ async fn get_stream(
     }
     let records = source::records("get table", input.first, input.lines);
     let mut tables = 0;
+    let mut dropped = 0;
     let mut reads = records
         .map(|record| async {
             let record = record?;
@@ -98,14 +100,24 @@ async fn get_stream(
                 .as_ref()
                 .map(pqbench::v1::Credentials::to_env)
                 .unwrap_or_default();
-            let mut table = get::get(workspace, lake, &name, uri, &env).await?;
-            table.credentials = lease;
-            Ok::<_, CliError>(table)
+            let read = get::get(workspace, lake, &name, uri, &env)
+                .await
+                .map_err(CliError::from)
+                .map(|mut table| {
+                    table.credentials = lease;
+                    table
+                });
+            tolerate(&dotted_name(&name), read)
         })
         .buffer_unordered(fan_out.max(1));
     while let Some(record) = reads.next().await {
-        emit.write_row(&record?).await?;
+        let Some(record) = record? else {
+            dropped += 1;
+            continue;
+        };
+        emit.write_row(&record).await?;
         tables += 1;
     }
+    report_dropped("table", dropped);
     Ok(tables)
 }

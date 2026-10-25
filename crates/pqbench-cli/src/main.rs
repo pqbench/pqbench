@@ -13,6 +13,7 @@ mod credentials;
 mod diff;
 mod document;
 mod emit;
+mod error;
 mod file;
 mod get;
 mod help;
@@ -35,20 +36,6 @@ mod viz;
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.
 pub(crate) type CliError = Box<dyn std::error::Error + Send + Sync>;
-
-/// Render an error with its whole source chain. `Display` alone drops the
-/// cause: a transport failure reads only "request failed", while the
-/// socket-level error (reset, exhaustion, DNS) sits one `source()` deeper.
-fn error_chain(error: &dyn std::error::Error) -> String {
-    let mut rendered = error.to_string();
-    let mut source = error.source();
-    while let Some(error) = source {
-        rendered.push_str("\n  caused by: ");
-        rendered.push_str(&error.to_string());
-        source = error.source();
-    }
-    rendered
-}
 
 #[derive(Parser)]
 #[command(
@@ -164,7 +151,7 @@ async fn main() -> ExitCode {
     match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {}", error_chain(e.as_ref()));
+            eprintln!("error: {}", error::error_chain(e.as_ref()));
             ExitCode::FAILURE
         }
     }

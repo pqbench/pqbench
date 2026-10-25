@@ -176,6 +176,14 @@ until pqbench list catalogs | pqbench ratelimit --rate "$rate" | pqbench list sc
 done
 ```
 
+A ref whose request never answers — a timeout or a dropped connection, or a
+storage read that faults after the object store's own retries — is not an
+endpoint answer: the level names the ref and the cause on standard error,
+drops it, and carries on, so one unreachable table does not end a walk. A
+status answer (429/4xx/5xx) still fails the level, so the retry at a lower
+rate above still sees a throttle. The level prints how many records it
+dropped, and still exits 0.
+
 `list catalogs | list schemas` lists every schema at the endpoint; `list catalogs |
 get catalog` enriches each catalog instead. `get` emits the same kind of resource
 as the `list` it reads from, so you can insert it into a walk or skip it; `tee`
@@ -266,8 +274,9 @@ walk's single filter: it drops a `system` catalog ref, a view (the catalog
 reports no location), and a table on Databricks default storage, with the
 reason on standard error; eligible refs pass through unchanged. A drop is the
 filter working, not a failure — a whole-catalog walk always has tables it
-cannot read outside compute — so the stage still succeeds; only a real error (a
-missing table, an endpoint fault) fails it. `credentials get` is the stage that materializes the
+cannot read outside compute — so the stage still succeeds; a ref whose request
+never answers is dropped the same way, and only an error it cannot use (a
+malformed name, a status answer) fails it. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
 `temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the
