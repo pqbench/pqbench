@@ -36,3 +36,19 @@ pub struct Partition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::Partition;
+
+    #[test]
+    fn a_dotted_string_names_a_partition() {
+        let partition = Partition::from_json(json!("a.b.c.2026-01-01")).unwrap();
+        assert_eq!(
+            partition.name,
+            "catalogs/a/schemas/b/tables/c/partitions/2026-01-01"
+        );
+    }
+}

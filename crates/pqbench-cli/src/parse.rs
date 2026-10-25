@@ -4,13 +4,13 @@
 //! parser for both. A level names the type it reads; it has no other syntax.
 
 use futures_util::stream::StreamExt;
-use pqbench::v1::Resource;
 
+use crate::record::Record;
 use crate::source::{self, Records};
 use crate::CliError;
 
 /// The level's parents: the stream on standard input, exactly.
-pub(crate) async fn parents<M: Resource>(
+pub(crate) async fn parents<M: Record>(
     command: &'static str,
 ) -> Result<Records<'static, M>, CliError> {
     let input = source::read_input(command).await?;
@@ -23,6 +23,6 @@ pub(crate) async fn parents<M: Resource>(
 }
 
 /// One parent record: an object with a `name`, or the name itself.
-fn decode<M: Resource>(value: serde_json::Value) -> Result<M, CliError> {
+fn decode<M: Record>(value: serde_json::Value) -> Result<M, CliError> {
     M::from_json(value).map_err(CliError::from)
 }

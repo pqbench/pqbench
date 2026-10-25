@@ -22,3 +22,14 @@ pub struct Metastore {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Metastore;
+
+    #[test]
+    fn a_metastore_is_named_by_its_path() {
+        assert_eq!(Metastore::parse_name("m"), None);
+        assert_eq!(Metastore::parse_name("metastores/m"), Some("m".to_string()));
+    }
+}

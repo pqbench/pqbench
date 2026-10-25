@@ -45,3 +45,40 @@ pub struct Table {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::Table;
+
+    #[test]
+    fn a_dotted_table_name_parses() {
+        assert_eq!(
+            Table::parse_name("a.b.c"),
+            Some(("a".to_string(), "b".to_string(), "c".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_dotted_object_name_is_normalized() {
+        let table = Table::from_json(json!({"name": "a.b.c", "uri": "/lake/c"})).unwrap();
+        assert_eq!(table.name, "catalogs/a/schemas/b/tables/c");
+        assert_eq!(table.uri.as_deref(), Some("/lake/c"));
+    }
+
+    #[test]
+    fn a_canonical_object_name_is_kept() {
+        let table = Table::from_json(json!({"name": "catalogs/a/schemas/b/tables/c"})).unwrap();
+        assert_eq!(table.name, "catalogs/a/schemas/b/tables/c");
+    }
+
+    #[test]
+    fn a_record_round_trips_through_json() {
+        let table = Table::from_json(json!({"name": "a.b.c", "uri": "/lake/c"})).unwrap();
+        assert_eq!(
+            table.to_json().unwrap()["name"],
+            "catalogs/a/schemas/b/tables/c"
+        );
+    }
+}
