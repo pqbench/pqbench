@@ -125,6 +125,7 @@ impl FromJson for Table {
             "catalogs/…/tables/…",
             Self::named,
             |table| &table.name,
+            |table| &mut table.name,
         )
     }
 }
@@ -157,6 +158,7 @@ impl FromJson for Partition {
             "catalogs/…/tables/…/partitions/…",
             Self::named,
             |partition| &partition.name,
+            |partition| &mut partition.name,
         )
     }
 }

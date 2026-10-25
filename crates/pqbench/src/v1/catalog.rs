@@ -96,9 +96,14 @@ use super::Parent;
 
 impl FromJson for Catalog {
     fn from_json(value: Value) -> Result<Self, String> {
-        json::record(value, "catalog", "catalogs/…", Self::named, |catalog| {
-            &catalog.name
-        })
+        json::record(
+            value,
+            "catalog",
+            "catalogs/…",
+            Self::named,
+            |catalog| &catalog.name,
+            |catalog| &mut catalog.name,
+        )
     }
 }
 
@@ -128,6 +133,7 @@ impl FromJson for Schema {
             "catalogs/…/schemas/…",
             Self::named,
             |schema| &schema.name,
+            |schema| &mut schema.name,
         )
     }
 }
