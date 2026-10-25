@@ -280,15 +280,24 @@ fn bytemass_measures_mixed_table_ids() {
 /// read that materializes files would fail.
 #[cfg(feature = "delta")]
 fn delta_table(dir: &std::path::Path) {
+    write_delta_table(
+        dir,
+        json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "long", "nullable": true, "metadata": {}},
+                {"name": "label", "type": "string", "nullable": true, "metadata": {}}
+            ]
+        }),
+    );
+}
+
+/// A minimal Delta table whose log declares `schema` and names a data file that
+/// does not exist, so a read that materializes files would fail.
+#[cfg(feature = "delta")]
+fn write_delta_table(dir: &std::path::Path, schema: serde_json::Value) {
     let log = dir.join("_delta_log");
     std::fs::create_dir_all(&log).unwrap();
-    let schema = json!({
-        "type": "struct",
-        "fields": [
-            {"name": "id", "type": "long", "nullable": true, "metadata": {}},
-            {"name": "label", "type": "string", "nullable": true, "metadata": {}}
-        ]
-    });
     let commit = format!(
         "{}\n{}\n{}\n",
         json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}),
@@ -310,22 +319,54 @@ fn delta_table(dir: &std::path::Path) {
     std::fs::write(log.join("00000000000000000000.json"), commit).unwrap();
 }
 
+/// The columns a Unity table for the Delta fixture declares.
+#[cfg(feature = "delta")]
+fn unity_columns() -> serde_json::Value {
+    json!([
+        {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
+        {"name": "label", "type_name": "STRING", "type_text": "string", "nullable": true}
+    ])
+}
+
 /// A Unity `/tables/{full_name}` record for a local table.
 #[cfg(feature = "delta")]
 fn unity_record(location: &std::path::Path) -> String {
+    unity_table_record(location, unity_columns())
+}
+
+/// A Unity `/tables/{full_name}` record for a local table, with `columns`.
+#[cfg(feature = "delta")]
+fn unity_table_record(location: &std::path::Path, columns: serde_json::Value) -> String {
     json!({
         "name": "trips",
         "catalog_name": "dbx_samples",
         "schema_name": "nyctaxi",
         "data_source_format": "DELTA",
         "storage_location": location.to_string_lossy(),
-        "columns": [
-            {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
-            {"name": "label", "type_name": "STRING", "type_text": "string", "nullable": true}
-        ],
+        "columns": columns,
         "properties": {"owner": "data"}
     })
     .to_string()
+}
+
+/// Run `get table` for the local Unity table at `dir`, whose catalog declares
+/// `columns`, and return the one record it emits.
+#[cfg(feature = "delta")]
+fn read_unity_table(dir: &std::path::Path, columns: serde_json::Value) -> serde_json::Value {
+    let address = routes_owned(vec![("/tables/", 200, unity_table_record(dir, columns))]);
+    let output = pipe_env(
+        &["get", "table"],
+        &parent("catalogs/dbx_samples/schemas/nyctaxi/tables/trips"),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut records = ndjson_records(&output.stdout);
+    assert_eq!(records.len(), 1);
+    records.remove(0)
 }
 
 /// An Iceberg REST `loadTable` record with the metadata JSON inline. The
@@ -358,20 +399,7 @@ fn loaded_table(location: &str) -> String {
 fn table_get_reads_a_unity_table() {
     let dir = tempfile::tempdir().unwrap();
     delta_table(dir.path());
-    let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
-    let output = pipe_env(
-        &["get", "table"],
-        &parent("catalogs/dbx_samples/schemas/nyctaxi/tables/trips"),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson_records(&output.stdout);
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
+    let record = read_unity_table(dir.path(), unity_columns());
     assert_eq!(
         record["name"],
         "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
@@ -389,6 +417,45 @@ fn table_get_reads_a_unity_table() {
     assert_eq!(record["properties"]["owner"], "data");
     assert_eq!(record["properties"]["delta.appendOnly"], "false");
     assert!(record.get("iceberg_properties").is_none(), "{record:?}");
+}
+
+/// Spark writes a bare `NULL` as a `void` column. Delta leaves the type
+/// undefined; `get table` still resolves the snapshot and reports the catalog's
+/// columns instead of failing the whole table.
+#[cfg(feature = "delta")]
+#[test]
+fn table_get_reads_a_void_column() {
+    let dir = tempfile::tempdir().unwrap();
+    write_delta_table(
+        dir.path(),
+        json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "long", "nullable": true, "metadata": {}},
+                {"name": "note", "type": "void", "nullable": true, "metadata": {}}
+            ]
+        }),
+    );
+    let record = read_unity_table(
+        dir.path(),
+        json!([
+            {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
+            {"name": "note", "type_name": "VOID", "type_text": "void", "nullable": true}
+        ]),
+    );
+    assert_eq!(record["snapshot_version"], 0);
+    let columns: Vec<(&str, &str)> = record["declared_columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|column| {
+            (
+                column["column"].as_str().unwrap(),
+                column["data_type"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(columns, [("id", "long"), ("note", "void")]);
 }
 
 #[cfg(feature = "delta")]
