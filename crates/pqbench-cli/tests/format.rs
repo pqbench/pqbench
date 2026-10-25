@@ -1,3 +1,5 @@
+mod common;
+
 use std::process::Command;
 
 fn pqbench() -> Command {
@@ -12,15 +14,20 @@ fn parquet_fixture() -> &'static str {
 }
 
 fn table(args: &[&str]) -> String {
-    use std::io::Write as _;
-    use std::process::Stdio;
-
     let output = pqbench().args(args).output().unwrap();
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    format_stream(&output.stdout)
+}
+
+/// `pqbench format` over a record stream.
+fn format_stream(records: &[u8]) -> String {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
     let mut child = pqbench()
         .arg("format")
         .stdin(Stdio::piped())
@@ -28,12 +35,7 @@ fn table(args: &[&str]) -> String {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(&output.stdout)
-        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(records).unwrap();
     let formatted = child.wait_with_output().unwrap();
     assert!(
         formatted.status.success(),
@@ -95,7 +97,9 @@ fn format_json_forces_ndjson() {
 
 #[test]
 fn bytemass_table_format_lists_columns() {
-    let stdout = table(&["bytemass", parquet_fixture()]);
+    let measured = common::measured(parquet_fixture());
+    assert!(measured.status.success());
+    let stdout = format_stream(&measured.stdout);
     assert!(stdout.contains("column"), "{stdout}");
     assert!(stdout.contains("codec"), "{stdout}");
     assert!(stdout.contains("url_encoded"), "{stdout}");

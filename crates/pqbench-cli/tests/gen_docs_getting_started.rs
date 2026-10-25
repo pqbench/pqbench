@@ -8,7 +8,7 @@ mod support;
 #[test]
 fn measure_one_file() {
     // measure_one_file, from line 38
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench format", 39, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
+    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format", 39, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
 }
 
 #[rustfmt::skip]
@@ -30,5 +30,5 @@ fn the_metadata_walk() {
 #[test]
 fn draw_the_result() {
     // draw_the_result, from line 81
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 82, None);
+    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 82, None);
 }

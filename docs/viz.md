@@ -5,7 +5,7 @@ those records into a static HTML page. Measurement and presentation are separate
 commands so either end can change without the other.
 
 ```console run delta
-$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 

@@ -44,7 +44,7 @@ stand up, `pqbench list partitions <table> | pqbench list files | pqbench bytema
 | pqbench format` prints the same column table as a bare parquet:
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet | pqbench format
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8

@@ -8,8 +8,8 @@ mod support;
 #[test]
 fn visual_demos() {
     // visual_demos, from line 6
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench format", 7, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
-    support::run("pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report", 12, None);
+    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format", 7, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
+    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 12, None);
 }
 
 #[cfg(feature = "delta")]
@@ -54,7 +54,7 @@ fn a_table_s_partitions_2() {
 #[test]
 fn one_parquet_file() {
     // one_parquet_file, from line 105
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench format", 106, Some(&["column            codec         encodings                  bytes  values", "----------------  ------------  ------------------------  ------  ------", "text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000"]));
+    support::run("pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format", 106, Some(&["column            codec         encodings                  bytes  values", "----------------  ------------  ------------------------  ------  ------", "text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000"]));
 }
 
 #[cfg(feature = "delta")]

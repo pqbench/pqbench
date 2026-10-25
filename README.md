@@ -71,7 +71,7 @@ verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
 2.1 MB Reddit comments sample, three of seven columns are 99.7% of the bytes:
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench format
+$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -134,7 +134,7 @@ Per-column byte masses — the on-disk bytes each column takes, with its
 value count, its chunks summed over the file's row groups.
 
 ```console run
-$ pqbench bytemass data/samples/delta_byte_array.parquet | pqbench format
+$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench format
 column                 codec         encodings         bytes  values
 ---------------------  ------------  ----------------  -----  ------
 c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
@@ -210,7 +210,7 @@ Collect a bytemass stream into a static HTML treemap — no server, no build
 step.
 
 ```console run delta
-$ pqbench bytemass data/samples/delta_byte_array.parquet | pqbench viz -o /tmp/report
+$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 

@@ -8,7 +8,7 @@ mod support;
 #[test]
 fn showcases() {
     // showcases, from line 73
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench format", 74, Some(&["column            codec         encodings                  bytes  values", "----------------  ------------  ------------------------  ------  ------", "text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000"]));
+    support::run("pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format", 74, Some(&["column            codec         encodings                  bytes  values", "----------------  ------------  ------------------------  ------  ------", "text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000"]));
 }
 
 #[rustfmt::skip]
@@ -29,7 +29,7 @@ fn compression() {
 #[test]
 fn bytemass() {
     // bytemass, from line 136
-    support::run("pqbench bytemass data/samples/delta_byte_array.parquet | pqbench format", 137, Some(&["column                 codec         encodings         bytes  values", "---------------------  ------------  ----------------  -----  ------", "c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000"]));
+    support::run("pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench format", 137, Some(&["column                 codec         encodings         bytes  values", "---------------------  ------------  ----------------  -----  ------", "c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000"]));
 }
 
 #[cfg(feature = "delta")]
@@ -53,6 +53,6 @@ fn list_files() {
 #[test]
 fn viz() {
     // viz, from line 212
-    support::run("pqbench bytemass data/samples/delta_byte_array.parquet | pqbench viz -o /tmp/report", 213, None);
+    support::run("pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 213, None);
     support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 214, None);
 }

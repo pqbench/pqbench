@@ -4,12 +4,12 @@ pqbench measures Parquet footers. A file is one input. A table is a snapshot
 of files. The pipe is the same in every case:
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet | pqbench format
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
 year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
-$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 Standard output is NDJSON (`Partition`, `TableFile`, `Blob`, `Bytemass`);
@@ -103,7 +103,7 @@ table (`| pqbench format`). The local stand (`make lakehouse`) exports
 ## One Parquet file
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench format
+$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000

@@ -1,3 +1,5 @@
+mod common;
+
 use std::process::Command;
 
 fn command() -> Command {
@@ -14,7 +16,7 @@ fn fixture() -> &'static str {
 fn file_and_saved_stream_comparisons_agree() {
     let directory = tempfile::tempdir().unwrap();
     let saved = directory.path().join("mass.ndjson");
-    let measured = command().args(["bytemass", fixture()]).output().unwrap();
+    let measured = common::measured(fixture());
     assert!(measured.status.success());
     std::fs::write(&saved, &measured.stdout).unwrap();
     let diff = command()

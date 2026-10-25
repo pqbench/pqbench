@@ -22,7 +22,7 @@ A 2.1 MB Reddit sample. Before tuning anything, find the columns that own the
 bytes — `bytemass` reads only the footer, so it answers in milliseconds:
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench format
+$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -61,7 +61,7 @@ free. Optimize the three big columns; leave the rest alone.
 The same stream draws a treemap, with no server and no build step:
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench viz -o /tmp/reddit
+$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench viz -o /tmp/reddit
 ```
 
 ## Which codec
@@ -93,7 +93,8 @@ encoding). `bytemass` folds each column's row groups into one record, so the
 stream is already a per-column total:
 
 ```console run
-$ pqbench bytemass data/samples/squad.parquet \
+$ pqbench table-file data/samples/squad.parquet \
+>     | pqbench bytemass \
 >     | jq -r 'select(.name | endswith("/bytemass")) | [(.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), .compressed_bytes] | @tsv' \
 >     | sort -k2 -nr
 context                             8490172
@@ -112,7 +113,7 @@ compare two layouts.
 A real table with a non-default encoding reads the same way:
 
 ```console run
-$ pqbench bytemass data/samples/delta_byte_array.parquet | pqbench format
+$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench format
 column                 codec         encodings         bytes  values
 ---------------------  ------------  ----------------  -----  ------
 c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000

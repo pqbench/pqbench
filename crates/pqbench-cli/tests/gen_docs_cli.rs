@@ -8,14 +8,14 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn what_to_run() {
-    // what_to_run, from line 46
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 47, None);
+    // what_to_run, from line 47
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 48, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn catalog_config_unity_databricks_iceberg_rest() {
-    // catalog_config_unity_databricks_iceberg_rest, from line 308
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench format", 309, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1"]));
+    // catalog_config_unity_databricks_iceberg_rest, from line 309
+    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench format", 310, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1"]));
 }

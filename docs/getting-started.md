@@ -36,7 +36,7 @@ make build          # or: cargo build --release
 an aligned table; on a pipe, NDJSON.
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet | pqbench format
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
@@ -79,7 +79,7 @@ names itself. See [delta.md](delta.md) and [iceberg.md](iceberg.md).
 build step:
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`; open it in a browser. See [viz.md](viz.md).

@@ -33,6 +33,7 @@ mod skill;
 mod source;
 mod stdin;
 mod table;
+mod table_file;
 mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
@@ -88,6 +89,8 @@ enum Command {
     Get(get::GetArgs),
     #[command(about = "Render an NDJSON stream as tables")]
     Format(format::FormatArgs),
+    #[command(about = "Name storage paths as table-file records")]
+    TableFile(table_file::TableFileArgs),
     #[command(
         about = help::LIST_ABOUT,
         long_about = help::LIST_LONG_ABOUT,
@@ -179,6 +182,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Bytemass(args) => bytemass::run(&lake, &args).await,
         Command::Get(args) => get::run(&workspace, &lake, &args).await,
         Command::Format(args) => format::run(&args).await,
+        Command::TableFile(args) => table_file::run(&args).await,
         Command::List(args) => list::run(&workspace, &lake, &args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
@@ -199,6 +203,7 @@ impl Command {
             Command::Bytemass(_) => "bytemass",
             Command::Get(args) => args.name(),
             Command::Format(_) => "format",
+            Command::TableFile(_) => "table-file",
             Command::List(args) => args.name(),
             Command::Credentials(_) => "credentials",
             Command::RateLimit(_) => "ratelimit",

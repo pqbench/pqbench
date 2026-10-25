@@ -8,7 +8,8 @@ that command and links back. This file is the durable copy.
 
 | Goal | Command |
 | --- | --- |
-| On-disk bytes per column | `pqbench bytemass FILE` |
+| Name a file for measurement | `pqbench table-file FILE` |
+| On-disk bytes per column | `pqbench bytemass` (records on stdin) |
 | List a table's natural partitions | `pqbench list partitions DIR` (Table refs on stdin) |
 | List a partition's files | `pqbench list files` (partitions on stdin) |
 | Read the endpoint's metastore record | `pqbench get metastore` (`PQB_ENDPOINT`) |
@@ -61,7 +62,7 @@ pqbench never writes them into the process environment itself.
 | `Schema` | `list schemas`, `get schema` | `get schema`, `list tables` |
 | `Table` | `list tables`, `get table`, `credentials get` | `get table`, `list partitions`, `credentials get` |
 | `Partition` | `list partitions` | `list files`, humans / scripts  |
-| `TableFile` | `list files` | `bytemass`, humans / scripts  |
+| `TableFile` | `list files`, `table-file` | `bytemass`, humans / scripts  |
 | `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts  |
 | `pqbench.profile-column` | `profile` | humans / scripts  |
 | `pqbench.skill` | `skill` (list) | an agent |
@@ -100,7 +101,7 @@ reads the default AWS provider chain, then applies the table's `credentials`.
 Process env (instance role, SSO, shared credentials):
 
 ```console no-run
-AWS_PROFILE=analytics pqbench bytemass s3://bucket/table/part-0.parquet
+AWS_PROFILE=analytics pqbench table-file s3://bucket/table/part-0.parquet | pqbench bytemass
 ```
 
 ### Catalog config (Unity / Databricks / Iceberg REST)
