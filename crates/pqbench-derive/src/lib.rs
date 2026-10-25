@@ -1,4 +1,4 @@
-//! `#[derive(Resource)]`: the `Parent` impl a v1 resource needs.
+//! `#[derive(Resource)]`: the `Resource` impl a v1 type needs.
 //!
 //! The name field carries the path, one segment per `/`, with `{id}` for a
 //! placeholder; the last placeholder names the resource, so the noun is not
@@ -16,7 +16,7 @@
 //! }
 //! ```
 //!
-//! The derive fills [`Parent::from_name`], `name`, and `name_mut`; the parse
+//! The derive fills [`Resource::from_name`], `name`, and `name_mut`; the parse
 //! itself is [`pqbench::v1::name::pattern_name`], so the dotted shorthand and
 //! the canonical spelling live there, not in the macro.
 
@@ -91,7 +91,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             }
         }
 
-        impl #impl_generics ::pqbench::v1::Parent for #ident #ty_generics #where_clause {
+        impl #impl_generics ::pqbench::v1::Resource for #ident #ty_generics #where_clause {
             const NOUN: &'static str = #noun;
             const SHAPE: &'static str = #shape;
 

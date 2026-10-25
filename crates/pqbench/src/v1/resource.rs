@@ -1,12 +1,14 @@
-//! A stream's parent record: what a level reads, and the noun a message calls
-//! it.
+//! A resource's wire form: its name grammar, and the object or name it reads.
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-/// A level's parent record: a resource read on standard input, and the noun a
-/// message calls it.
-pub trait Parent: DeserializeOwned + serde::Serialize {
+/// A resource on the wire: its name grammar and its JSON form.
+///
+/// The derive fills `from_name`, `name`, `name_mut`, `NOUN`, and `SHAPE`;
+/// `from_json`/`to_json` are provided once here, so a record reads as an
+/// object, its resource name, or its dotted shorthand.
+pub trait Resource: DeserializeOwned + serde::Serialize {
     /// The stream's noun, for messages.
     const NOUN: &'static str;
 
@@ -48,7 +50,7 @@ pub trait Parent: DeserializeOwned + serde::Serialize {
     }
 }
 
-/// The body of [`Parent::from_json`]: read the name a value is, or read the
+/// The body of [`Resource::from_json`]: read the name a value is, or read the
 /// object and check the name it carries.
 ///
 /// `named` is the model's own grammar: it builds the record from a resource
@@ -78,7 +80,7 @@ fn record<T: DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
-    use super::Parent;
+    use super::Resource;
     use crate::v1::{Blob, Metastore, Partition, Table};
     use serde_json::json;
 
