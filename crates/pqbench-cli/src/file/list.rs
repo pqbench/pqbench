@@ -3,13 +3,13 @@
 use std::collections::BTreeMap;
 
 use clap::Args;
-use futures_util::stream::{self, StreamExt, TryStreamExt};
+use futures_util::stream::StreamExt;
 use pqbench::v1;
-use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::document::invalid_json;
 use crate::emit::Emitter;
-use crate::error::{context, fail_when_dropped, report};
-use crate::stdin::is_stream;
+use crate::error::{context, fail_when_dropped};
+use crate::source::{self, expand, read_input};
 use crate::CliError;
 
 /// Arguments for `list files`.
@@ -32,70 +32,67 @@ pub(crate) struct ListArgs {
 /// blob and carrying the partition's lease, so the storage stage reads it
 /// without a catalog call.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
-    if !is_stream() {
+    let input = read_input("list files").await?;
+    if !input.piped {
         return Err("list files reads partition records on standard input".into());
     }
     let mut emit = Emitter::open();
-    let lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut dropped = 0usize;
-    let streams = partition_stream(lines)
-        .map(|partition| async move {
-            let partition = partition?;
-            let v1::Partition {
-                name,
-                commit_versions,
-                uri,
-                credentials,
-                ..
-            } = partition;
-            let prepared = prepare_file_read(&name, uri, credentials)?;
-            let found = pqbench::file::list::list(
-                lake,
-                &prepared.table,
-                &prepared.uri,
-                &prepared.env,
-                &commit_versions,
-            )
-            .await
-            .map_err(|error| context(&name, error));
-            Ok::<_, CliError>(match found {
-                Ok(found) => found
-                    .map(move |item| {
-                        Ok::<_, CliError>(
-                            item.map(|mut file| {
-                                file.credentials = prepared.lease.clone();
-                                file
-                            })
-                            .map_err(|error| context(&name, error)),
-                        )
-                    })
-                    .boxed(),
-                Err(error) => stream::iter([Ok::<_, CliError>(Err(error))]).boxed(),
-            })
-        })
-        .buffer_unordered(args.fan_out.max(1))
-        .boxed();
-    let mut found = streams.try_flatten_unordered(Some(args.fan_out.max(1)));
-    while let Some(read) = found.try_next().await? {
-        match read {
-            Ok(file) => {
-                if !meets_min_file_size(&file, args.min_file_size) {
-                    continue;
-                }
-                emit.write(&file).await?;
-            }
-            Err(error) => {
-                report(&error);
-                dropped += 1;
-            }
-        }
-    }
+    let dropped = expand(
+        source::records("list files", input.first, input.lines),
+        args.fan_out,
+        &mut emit,
+        |record: serde_json::Value| async move {
+            let partition: v1::Partition = serde_json::from_value(record).map_err(invalid_json)?;
+            partition_files(lake, partition, args.min_file_size).await
+        },
+    )
+    .await?;
     emit.finish().await?;
     fail_when_dropped(dropped)
 }
 
+/// The files one partition's window added, each carrying the partition's lease.
+/// A file whose read fails stays in the list as an `Err`, so its siblings are
+/// still written; a partition that cannot be read at all fails on its own.
+async fn partition_files(
+    lake: &pqbench::Lake,
+    partition: v1::Partition,
+    min_file_size: Option<u64>,
+) -> Result<Vec<Result<v1::TableFile, CliError>>, CliError> {
+    let v1::Partition {
+        name,
+        commit_versions,
+        uri,
+        credentials,
+        ..
+    } = partition;
+    let prepared = prepare_file_read(&name, uri, credentials)?;
+    let mut found = pqbench::file::list::list(
+        lake,
+        &prepared.table,
+        &prepared.uri,
+        &prepared.env,
+        &commit_versions,
+    )
+    .await
+    .map_err(|error| context(&name, error))?;
+    let mut files = Vec::new();
+    while let Some(file) = found.next().await {
+        match file {
+            Ok(mut file) => {
+                file.credentials = prepared.lease.clone();
+                if meets_min_file_size(&file, min_file_size) {
+                    files.push(Ok(file));
+                }
+            }
+            Err(error) => files.push(Err(context(&name, error))),
+        }
+    }
+    Ok(files)
+}
+
 /// The parts a partition's file read needs, after the record's own contract
-/// checks: a bad name or a missing storage root fails the level, not the read.
+/// checks: a bad name or a missing storage root fails that record, not the run.
 struct FileRead {
     table: String,
     uri: String,
@@ -126,29 +123,6 @@ fn prepare_file_read(
 /// The error for a partition record whose name is not a partition resource.
 fn not_a_partition(name: &str) -> CliError {
     format!("a partition name must be `…/tables/{{table}}/partitions/{{partition}}`: {name}").into()
-}
-
-/// Read partition records off a line stream, one at a time.
-fn partition_stream(
-    lines: tokio::io::Lines<BufReader<tokio::io::Stdin>>,
-) -> impl stream::Stream<Item = Result<v1::Partition, CliError>> + Unpin {
-    Box::pin(stream::try_unfold(lines, |mut lines| async move {
-        loop {
-            let Some(line) = lines.next_line().await? else {
-                return Ok(None);
-            };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let partition: v1::Partition = serde_json::from_str(&line).map_err(|error| {
-                CliError::from(format!("list files reads partition NDJSON: {error}"))
-            })?;
-            if partition.uri.is_none() {
-                return Err("a partition record needs a table storage root".into());
-            }
-            return Ok(Some((partition, lines)));
-        }
-    }))
 }
 
 /// Whether a file's logged size clears `--min-file-size`. A file whose log

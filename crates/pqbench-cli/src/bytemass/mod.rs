@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use clap::Args;
-use futures_util::stream::{self, StreamExt, TryStreamExt};
+use futures_util::stream;
 use pqbench::bytemass;
 use pqbench::v1;
 use serde::Serialize;
@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::document::{self, Record};
 use crate::emit::Emitter;
 use crate::error::{context, fail_when_dropped};
-use crate::source::{drain, stage};
+use crate::source::{expand, stage};
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -48,19 +48,13 @@ async fn measure_document(
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
     let mut emit = Emitter::open();
-    let records = document::records(input).await?;
-    let files = records
-        .map(|record| async move { measure_record(lake, record).await })
-        .buffer_unordered(args.fan_out.max(1))
-        .map_ok(stream::iter)
-        .try_flatten_unordered(Some(args.fan_out.max(1)))
-        .flat_map(|file| {
-            stream::iter(match file {
-                Ok(file) => measured_rows(file).into_iter().map(Ok).collect(),
-                Err(error) => vec![Err(error)],
-            })
-        });
-    let dropped = drain(files, &mut emit).await?;
+    let dropped = expand(
+        document::records(input).await?,
+        args.fan_out,
+        &mut emit,
+        |record: Record| async move { measure_record(lake, record).await },
+    )
+    .await?;
     emit.finish().await?;
     fail_when_dropped(dropped)
 }
@@ -95,15 +89,30 @@ async fn measure(
 /// `Err`; the caller reports it and carries on.
 async fn measure_record(
     lake: &pqbench::Lake,
-    record: Result<Record, CliError>,
-) -> Result<Vec<Result<bytemass::MeasuredFile, CliError>>, CliError> {
-    match record? {
-        Record::File(file) => Ok(vec![read_table_file(lake, file).await?]),
-        Record::RemoteSource(source) => measure_source(lake, source).await,
+    record: Record,
+) -> Result<Vec<Result<Out, CliError>>, CliError> {
+    match record {
+        Record::File(file) => Ok(batch_rows(vec![read_table_file(lake, file).await?])),
+        Record::RemoteSource(source) => Ok(batch_rows(measure_source(lake, source).await?)),
         Record::Blob(_) | Record::Bytemass(_) => {
             Err("a bytemass stream goes to `pqbench viz`".into())
         }
     }
+}
+
+/// The output rows of measured files, keeping a file's failure as a row so the
+/// files that did measure are written.
+fn batch_rows(
+    measured: Vec<Result<bytemass::MeasuredFile, CliError>>,
+) -> Vec<Result<Out, CliError>> {
+    let mut rows = Vec::new();
+    for file in measured {
+        match file {
+            Ok(file) => rows.extend(measured_rows(file).into_iter().map(Ok)),
+            Err(error) => rows.push(Err(error)),
+        }
+    }
+    rows
 }
 
 /// Measure every file a remote source names. Expanding the source is a contract
@@ -125,8 +134,8 @@ async fn measure_source(
     Ok(measured)
 }
 
-/// Read one file's footer. This is the I/O the fanout overlaps; [`emit_measured`]
-/// writes each result as it finishes.
+/// Read one file's footer. This is the I/O the fan-out overlaps; the level
+/// writes each result, and its rows, as the file finishes.
 async fn read_file(
     lake: &pqbench::Lake,
     uri: &str,
