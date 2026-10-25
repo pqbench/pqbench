@@ -10,17 +10,25 @@
 //! PQB_ENDPOINT=… PQB_TOKEN=… pqbench list catalogs | pqbench list schemas | …
 //! ```
 //!
-//! `tee` (or `-o`) writes each level into the job tree; `get` stages emit the
-//! same resource as the `list` they read from, so they enrich a stream in
-//! place.
+//! `tee` writes each level into the job tree; `get` stages emit the same
+//! resource as the `list` they read from, so they enrich a stream in place.
 //!
-//! Records are read one at a time as the command consumes them, so a level
-//! never buffers its parent: a slow consumer stops reading, and the pipe
-//! backpressures the producer.
+//! A one-record level reads a batch of `fan_out` parents to completion before
+//! it writes the batch's first record. A streaming level runs each core stream
+//! in its own task, and the core stream reads a batch, writes it, and only then
+//! reads again. Either way, a slow consumer blocks on a write with no read in
+//! flight, so a request timeout cannot fire on a read the consumer stalled; the
+//! trade is one straggler per batch.
 
-use futures_util::stream::{self, Stream, StreamExt};
+use std::future::Future;
+use std::pin::Pin;
+
+use futures_util::future::join_all;
+use futures_util::stream::{self, LocalBoxStream, Stream, StreamExt};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
+
+use pqbench::v1::Resource;
 
 use crate::stdin::is_stream;
 use crate::CliError;
@@ -84,107 +92,195 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
     })
 }
 
-/// The metastore id a metastore ref names: a `metastores/{metastore}` resource
-/// name. The metastore is a singleton, so the value only validates the input.
-pub(crate) fn metastore_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .and_then(pqbench::v1::name::parse_metastore)
-        .ok_or_else(|| {
-            format!(
-                "{command} reads pqbench metastore resources; a record needs a `metastores/…` name"
-            )
-            .into()
-        })
+/// A command's records: each record, or the failure that replaced it.
+pub(crate) type Records<'a, B> = LocalBoxStream<'a, Result<B, CliError>>;
+
+/// `map` over batches of parents: one record per parent.
+pub(crate) fn map<'a, A, B, E, F, Fut>(
+    parents: impl Stream<Item = Result<A, CliError>> + 'a,
+    fan_out: usize,
+    read: F,
+) -> Records<'a, B>
+where
+    A: Resource + 'a,
+    B: 'a,
+    E: Into<CliError> + 'a,
+    F: Fn(A) -> Fut + Clone + 'a,
+    Fut: Future<Output = Result<B, E>> + 'a,
+{
+    filter_map(parents, fan_out, move |parent| {
+        let read = read.clone();
+        async move { read(parent).await.map(Some) }
+    })
 }
 
-/// The `catalogs/{catalog}` name a catalog ref carries.
-pub(crate) fn catalog_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .filter(|name| pqbench::v1::name::parse_catalog(name).is_some())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            format!("{command} reads pqbench catalog resources; a record needs a `catalogs/…` name")
-                .into()
+/// A parent keeps one record or none; a batch is read whole before it is
+/// written, so a stalled consumer leaves no read in flight.
+pub(crate) fn filter_map<'a, A, B, E, F, Fut>(
+    parents: impl Stream<Item = Result<A, CliError>> + 'a,
+    fan_out: usize,
+    read: F,
+) -> Records<'a, B>
+where
+    A: Resource + 'a,
+    B: 'a,
+    E: Into<CliError> + 'a,
+    F: Fn(A) -> Fut + Clone + 'a,
+    Fut: Future<Output = Result<Option<B>, E>> + 'a,
+{
+    let parents: Pin<Box<dyn Stream<Item = Result<A, CliError>> + 'a>> = Box::pin(parents);
+    parents
+        .chunks(fan_out.max(1))
+        .then(move |batch| {
+            let read = read.clone();
+            async move { read_batch(batch, read).await }
         })
+        .flat_map(stream::iter)
+        .filter_map(|row| async move {
+            match row {
+                Ok(Some(row)) => Some(Ok(row)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .boxed_local()
 }
 
-/// The `catalogs/{catalog}/schemas/{schema}` name a schema ref carries.
-pub(crate) fn schema_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .filter(|name| pqbench::v1::name::parse_schema(name).is_some())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "{command} reads pqbench schema resources; a record needs a `catalogs/…/schemas/…` name"
-            )
-            .into()
-        })
-}
-
-/// Split `catalog.schema` at the first dot; an Iceberg namespace keeps its
-/// remaining dots.
-pub(crate) fn split_schema(command: &str, fqn: &str) -> Result<(String, String), CliError> {
-    let Some((catalog, schema)) = fqn.split_once('.') else {
-        return Err(format!("{command} takes CATALOG.SCHEMA; got {fqn:?}").into());
-    };
-    if catalog.is_empty() || schema.is_empty() {
-        return Err(format!("{command} takes CATALOG.SCHEMA; got {fqn:?}").into());
+/// Read one batch of parents to completion. A parent that failed to parse is
+/// reported with the batch's other failures, before its records.
+async fn read_batch<A, B, E, F, Fut>(
+    batch: Vec<Result<A, CliError>>,
+    read: F,
+) -> Vec<Result<Option<B>, CliError>>
+where
+    A: Resource,
+    E: Into<CliError>,
+    F: Fn(A) -> Fut + Clone,
+    Fut: Future<Output = Result<Option<B>, E>>,
+{
+    let mut errors = Vec::new();
+    let mut reads = Vec::with_capacity(batch.len());
+    for record in batch {
+        match record {
+            Ok(parent) => {
+                let reference = parent.name().to_owned();
+                let read = read.clone();
+                reads.push(async move {
+                    read(parent)
+                        .await
+                        .map_err(move |cause| crate::error::context(&reference, cause))
+                });
+            }
+            Err(error) => errors.push(Err(error)),
+        }
     }
-    Ok((catalog.to_string(), schema.to_string()))
+    let mut rows: Vec<Result<Option<B>, CliError>> = errors;
+    rows.extend(join_all(reads).await);
+    rows
 }
 
-/// The `catalogs/{catalog}/schemas/{schema}/tables/{table}` name a table ref
-/// carries.
-pub(crate) fn table_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .filter(|name| pqbench::v1::name::parse_table(name).is_some())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "{command} reads pqbench table resources; a record needs a `catalogs/…/tables/…` name"
-            )
-            .into()
-        })
-}
-
-/// The dotted `catalog.schema.table` a table ref names, for a message; the ref
-/// itself when the name is not a table ref (a path read names a local table).
-pub(crate) fn dotted_name(name: &str) -> String {
-    match pqbench::v1::name::parse_table(name) {
-        Some((catalog, schema, table)) => format!("{catalog}.{schema}.{table}"),
-        None => name.to_string(),
-    }
-}
-
-/// The storage location a table ref names: the [`Table`]'s `uri`. `None` when
-/// the ref names no location (a view, or an Iceberg identifier until
-/// `get table` resolves it).
+/// `flatMap` with `fan_out` streams in flight: a parent becomes its stream,
+/// and each stream is driven by its own task.
 ///
-/// [`Table`]: pqbench::v1::Table
-pub(crate) fn ref_storage(record: &Value) -> Option<&str> {
-    record["uri"].as_str().filter(|value| !value.is_empty())
+/// The core stream owns the read/write invariant: it reads a batch, yields
+/// its rows, and only then reads again. Driving it from the sink's task would
+/// break that invariant under backpressure: the sink blocks on a row from one
+/// stream, and every other stream stays polled out at its next batch read.
+/// A task per stream keeps those reads advancing; the bounded channel makes a
+/// blocked consumer block the task on `send`, where no request is in flight.
+///
+/// `read` may fail before it yields anything (the table it loads, a window it
+/// rejects); that failure is reported under the parent, like a stream item.
+pub(crate) fn flat_map<A, B, E, S, F, Fut>(
+    parents: impl Stream<Item = Result<A, CliError>> + 'static,
+    fan_out: usize,
+    read: F,
+) -> Records<'static, B>
+where
+    A: Resource + Send + 'static,
+    B: Send + 'static,
+    E: Into<CliError> + Send + 'static,
+    S: Stream<Item = Result<B, E>> + Send + 'static,
+    F: Fn(A) -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = Result<S, CliError>> + Send + 'static,
+{
+    let fan_out = fan_out.max(1);
+    let (tx, rx) = tokio::sync::mpsc::channel(fan_out);
+    let parents: Pin<Box<dyn Stream<Item = Result<A, CliError>> + 'static>> = Box::pin(parents);
+    stream::unfold(
+        (parents, tokio::task::JoinSet::new(), rx, Some(tx), false),
+        move |(mut parents, mut tasks, mut rx, mut tx, mut done)| {
+            let read = read.clone();
+            async move {
+                loop {
+                    while tasks.len() < fan_out && !done {
+                        match parents.as_mut().next().await {
+                            Some(Ok(parent)) => {
+                                let reference = parent.name().to_owned();
+                                let read = read.clone();
+                                let sender =
+                                    tx.as_ref().expect("the sender outlives the tasks").clone();
+                                tasks.spawn(async move {
+                                    let stream = match read(parent).await {
+                                        Ok(stream) => stream,
+                                        Err(error) => {
+                                            let _ = sender
+                                                .send(Err(crate::error::context(&reference, error)))
+                                                .await;
+                                            return;
+                                        }
+                                    };
+                                    futures_util::pin_mut!(stream);
+                                    while let Some(row) = stream.next().await {
+                                        if sender.send(row.map_err(Into::into)).await.is_err() {
+                                            return;
+                                        }
+                                    }
+                                });
+                            }
+                            Some(Err(error)) => {
+                                return Some((Err(error), (parents, tasks, rx, tx, done)));
+                            }
+                            None => {
+                                done = true;
+                                tx = None;
+                            }
+                        }
+                    }
+                    if done && tasks.is_empty() {
+                        return rx
+                            .recv()
+                            .await
+                            .map(|row| (row, (parents, tasks, rx, tx, done)));
+                    }
+                    tokio::select! {
+                        row = rx.recv() => {
+                            return row.map(|row| (row, (parents, tasks, rx, tx, done)));
+                        }
+                        Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+                    }
+                }
+            }
+        },
+    )
+    .boxed_local()
 }
 
-/// Split `catalog.schema.table` at the first and last dots; an Iceberg
-/// namespace keeps its remaining dots.
-pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, String), CliError> {
-    let Some((catalog, rest)) = fqn.split_once('.') else {
-        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
-    };
-    let Some((schema, table)) = rest.rsplit_once('.') else {
-        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
-    };
-    if catalog.is_empty() || schema.is_empty() || table.is_empty() {
-        return Err(format!("{command} takes CATALOG.SCHEMA.TABLE; got {fqn:?}").into());
+/// The sink: write every record, name a failure on stderr, count it, and set
+/// the exit status.
+pub(crate) async fn drive<B: serde::Serialize>(rows: Records<'_, B>) -> Result<(), CliError> {
+    let mut emit = crate::emit::Emitter::open();
+    futures_util::pin_mut!(rows);
+    let mut dropped = 0;
+    while let Some(row) = rows.next().await {
+        match row {
+            Ok(row) => emit.write(&row).await?,
+            Err(error) => {
+                crate::error::report(&error);
+                dropped += 1;
+            }
+        }
     }
-    Ok((catalog.to_string(), schema.to_string(), table.to_string()))
-}
-
-/// The vended lease a ref carries, when it carries one.
-pub(crate) fn ref_credentials(record: &Value) -> Option<pqbench::v1::Credentials> {
-    serde_json::from_value(record["credentials"].clone()).ok()
+    emit.finish().await?;
+    crate::error::fail_when_dropped(dropped)
 }

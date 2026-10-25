@@ -29,7 +29,7 @@ module that names the `object_store` crate is `pqbench::object_store`.
 
 ## Usage
 
-List the current snapshot's partitions, then their files. A terminal prints the
+List the current snapshot's partitions, then their files. `format` prints the
 snapshot's partitions as a table; a pipe writes the full `Partition`
 document. The URI may be a table root or the metadata JSON itself.
 
@@ -40,32 +40,34 @@ reads the same metadata inline from the REST `loadTable` response instead.)
 
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
 it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
-stand up, `pqbench list partitions <table> | pqbench list files | pqbench bytemass
---format table` prints the same column table as a bare parquet:
+stand up, `cat docker/e2e-lakehouse/iceberg.ndjson | pqbench list partitions |
+pqbench list files | pqbench bytemass | pqbench format` prints the same column
+table as a bare parquet:
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet --format table
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
 year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
-files: 1
-columns: 2
 ```
 
 Two invocations from the `iceberg` cargo feature:
 
-cargo run -p pqbench-cli --features iceberg -- list partitions ./path/to/table
-cargo run -p pqbench-cli --features iceberg -- list partitions ./path/to/table/metadata/v1.metadata.json
+echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' \
+  | cargo run -p pqbench-cli --features iceberg -- list partitions
+echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table/metadata/v1.metadata.json"}' \
+  | cargo run -p pqbench-cli --features iceberg -- list partitions
 
 Remote metadata and data objects are resolved with `iceberg-s3` (which enables
 `aws`). A remote table root needs `metadata/version-hint.text`; otherwise pass
 the metadata JSON URI:
 
-cargo run -p pqbench-cli --features iceberg-s3 -- list partitions s3://bucket/table
+echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/table"}' \
+  | cargo run -p pqbench-cli --features iceberg-s3 -- list partitions
 
 A producer can supply the table URI and vended credentials as
-a `remote-source` document; `list partitions` reads the snapshot, and the credentials
+a table record; `list partitions` reads the snapshot, and the credentials
 travel to `list files` and `bytemass`.
 
 ## Backends

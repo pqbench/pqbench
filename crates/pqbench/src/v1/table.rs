@@ -1,32 +1,17 @@
-use super::Credentials;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// An on-disk table format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum TableFormat {
-    #[serde(rename = "TABLE_FORMAT_DELTA")]
-    Delta,
-    #[serde(rename = "TABLE_FORMAT_ICEBERG")]
-    Iceberg,
-}
-
-impl TableFormat {
-    /// The proto value name, as the wire spells it.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Delta => "TABLE_FORMAT_DELTA",
-            Self::Iceberg => "TABLE_FORMAT_ICEBERG",
-        }
-    }
-}
+use super::{Credentials, DeclaredColumn, Resource, TableFormat};
 
 /// One table's record.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
+#[serde(default)]
 pub struct Table {
     /// `catalogs/{catalog}/schemas/{schema}/tables/{table}`.
+    #[resource(
+        name = "catalogs/{catalog}/schemas/{schema}/tables/{table}",
+        alias = "{catalog}.{schema}.{table}"
+    )]
     pub name: String,
     /// The system UUID, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,49 +46,39 @@ pub struct Table {
     pub credentials: Option<Credentials>,
 }
 
-/// One column of a table's schema. Not a resource: a bounded value on its
-/// [`Table`], while a file's copy of it is the [`Column`] resource.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct DeclaredColumn {
-    /// The column's name within the schema.
-    pub column: String,
-    /// The data type as the format reports it (e.g. `long`, `string`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_type: Option<String>,
-    /// Whether the column accepts nulls.
-    #[serde(default)]
-    pub nullable: bool,
-    /// The column's position in the schema.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub position: Option<u64>,
-}
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
 
-/// A natural partition: a half-open commit-time window.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Partition {
-    /// `…/tables/{table}/partitions/{partition}`.
-    pub name: String,
-    /// Inclusive start of the window, milliseconds since the Unix epoch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start_time: Option<u64>,
-    /// Exclusive end of the window, milliseconds since the Unix epoch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end_time: Option<u64>,
-    /// Commits in the window, in version order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commit_versions: Vec<u64>,
-    /// The commits' `commitInfo` actions, index-aligned with
-    /// [`commit_versions`](Self::commit_versions): the operation, its
-    /// parameters and metrics, and the writer's identity, as the log stores
-    /// them. Empty when no commit in the window has one — Iceberg carries none,
-    /// and a Delta writer may leave it out.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commit_info: Vec<serde_json::Value>,
-    /// The table's storage root URI. Denormalized onto the partition so the
-    /// files stage reads the log without a catalog call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub uri: Option<String>,
-    /// The table's vended credentials, when the caller holds them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<Credentials>,
+    use super::{Resource, Table};
+
+    #[test]
+    fn a_dotted_table_name_parses() {
+        assert_eq!(
+            Table::parse_name("a.b.c"),
+            Some(("a".to_string(), "b".to_string(), "c".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_dotted_object_name_is_normalized() {
+        let table = Table::from_json(json!({"name": "a.b.c", "uri": "/lake/c"})).unwrap();
+        assert_eq!(table.name, "catalogs/a/schemas/b/tables/c");
+        assert_eq!(table.uri.as_deref(), Some("/lake/c"));
+    }
+
+    #[test]
+    fn a_canonical_object_name_is_kept() {
+        let table = Table::from_json(json!({"name": "catalogs/a/schemas/b/tables/c"})).unwrap();
+        assert_eq!(table.name, "catalogs/a/schemas/b/tables/c");
+    }
+
+    #[test]
+    fn a_record_round_trips_through_json() {
+        let table = Table::from_json(json!({"name": "a.b.c", "uri": "/lake/c"})).unwrap();
+        assert_eq!(
+            table.to_json().unwrap()["name"],
+            "catalogs/a/schemas/b/tables/c"
+        );
+    }
 }

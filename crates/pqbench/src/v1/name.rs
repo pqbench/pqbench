@@ -111,49 +111,72 @@ pub fn parse_metastore(value: &str) -> Option<String> {
     }
 }
 
-/// The catalog id in a `catalogs/{catalog}` name.
-#[must_use]
-pub fn parse_catalog(value: &str) -> Option<String> {
-    match split(value).as_slice() {
-        ["catalogs", catalog] => Some(decode(catalog)),
-        _ => None,
-    }
-}
+/// The table path, for the table-file name: `…/tables/{table}`.
+const TABLE_PATH: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
 
-/// The catalog and schema in a `…/schemas/{schema}` name.
-#[must_use]
-pub fn parse_schema(value: &str) -> Option<(String, String)> {
-    match split(value).as_slice() {
-        ["catalogs", catalog, "schemas", schema] => Some((decode(catalog), decode(schema))),
-        _ => None,
-    }
-}
-
-/// The catalog, schema, and table in a `…/tables/{table}` name.
-#[must_use]
-pub fn parse_table(value: &str) -> Option<(String, String, String)> {
-    match split(value).as_slice() {
-        ["catalogs", catalog, "schemas", schema, "tables", table] => {
-            Some((decode(catalog), decode(schema), decode(table)))
+/// The ids a name spells: its resource path (`segments`, a literal or `""`
+/// for an id), or else the dotted shorthand.
+pub(crate) fn ids(value: &str, segments: &[&str], alias: Option<&[&str]>) -> Option<Vec<String>> {
+    let parts = split(value);
+    if parts.len() == segments.len() {
+        let mut ids = Vec::with_capacity(segments.len());
+        for (want, got) in segments.iter().zip(&parts) {
+            if want.is_empty() {
+                ids.push(decode(got));
+            } else if *want != &got[..] {
+                return None;
+            }
         }
-        _ => None,
+        return Some(ids);
     }
+    dotted_ids(value, alias?.len())
 }
 
-/// The catalog, schema, table, and partition in a `…/partitions/{…}` name.
-#[must_use]
-pub fn parse_partition(value: &str) -> Option<(String, String, String, String)> {
-    match split(value).as_slice() {
-        ["catalogs", catalog, "schemas", schema, "tables", table, "partitions", partition] => {
-            Some((
-                decode(catalog),
-                decode(schema),
-                decode(table),
-                decode(partition),
-            ))
-        }
-        _ => None,
+/// The ids the dotted shorthand spells: the first id up to the first dot, the
+/// second across the dots, and the rest one each. So `a.b.c.d` is `a`, `b.c`,
+/// `d`: a schema id may contain a dot, the other ids may not.
+fn dotted_ids(value: &str, placeholders: usize) -> Option<Vec<String>> {
+    if value.contains('/') {
+        return None;
     }
+    let pieces: Vec<&str> = value.split('.').collect();
+    if pieces.len() < placeholders || pieces.iter().any(|piece| piece.is_empty()) {
+        return None;
+    }
+    if placeholders == 1 {
+        return (pieces.len() == 1).then(|| vec![pieces[0].to_owned()]);
+    }
+    let tail = placeholders - 2;
+    let middle = pieces.len() - tail;
+    let mut ids = Vec::with_capacity(placeholders);
+    ids.push(pieces[0].to_owned());
+    ids.push(pieces[1..middle].join("."));
+    ids.extend(pieces[middle..].iter().map(|piece| (*piece).to_owned()));
+    Some(ids)
+}
+
+/// The canonical name a resource name or its dotted shorthand spells, laid out
+/// as `segments` (a literal, or `""` for an id). This is the one call the
+/// `Resource` derive makes.
+pub(crate) fn pattern_name(
+    value: &str,
+    segments: &[&str],
+    alias: Option<&[&str]>,
+) -> Option<String> {
+    let ids = ids(value, segments, alias)?;
+    let mut name = String::new();
+    let mut ids = ids.into_iter();
+    for (at, segment) in segments.iter().enumerate() {
+        if at > 0 {
+            name.push('/');
+        }
+        if segment.is_empty() {
+            name.push_str(&encode(&ids.next()?));
+        } else {
+            name.push_str(segment);
+        }
+    }
+    Some(name)
 }
 
 /// The `local` catalog and schema a path-read table lives in: a storage
@@ -207,7 +230,7 @@ pub fn parse_blob(value: &str) -> Option<(String, String)> {
 #[must_use]
 pub fn parse_table_file(value: &str) -> Option<(String, String)> {
     let (table, file) = value.rsplit_once("/files/")?;
-    parse_table(table)?;
+    ids(table, TABLE_PATH, None)?;
     Some((table.to_string(), decode(file)))
 }
 
@@ -262,19 +285,20 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::v1::{Catalog, Partition, Schema, Table};
 
     #[test]
     fn names_round_trip_through_their_parsers() {
         assert_eq!(
-            parse_catalog(&catalog("dbx_samples")).as_deref(),
-            Some("dbx_samples")
+            Catalog::parse_name(&catalog("dbx_samples")),
+            Some("dbx_samples".to_string())
         );
         assert_eq!(
-            parse_schema(&schema("dbx_samples", "nyctaxi")),
+            Schema::parse_name(&schema("dbx_samples", "nyctaxi")),
             Some(("dbx_samples".to_string(), "nyctaxi".to_string()))
         );
         assert_eq!(
-            parse_table(&table("dbx_samples", "nyctaxi", "trips")),
+            Table::parse_name(&table("dbx_samples", "nyctaxi", "trips")),
             Some((
                 "dbx_samples".to_string(),
                 "nyctaxi".to_string(),
@@ -282,7 +306,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            parse_partition(&partition("c", "s", "t", "1")),
+            Partition::parse_name(&partition("c", "s", "t", "1")),
             Some((
                 "c".to_string(),
                 "s".to_string(),
@@ -297,15 +321,15 @@ mod tests {
         let value = table("c", "s", "t/x");
         assert!(value.contains("%2F"), "{value}");
         assert_eq!(
-            parse_table(&value),
+            Table::parse_name(&value),
             Some(("c".to_string(), "s".to_string(), "t/x".to_string()))
         );
     }
 
     #[test]
     fn a_name_of_another_shape_parses_as_none() {
-        assert_eq!(parse_table("catalogs/dbx_samples"), None);
-        assert_eq!(parse_schema("catalogs/dbx_samples"), None);
+        assert_eq!(Table::parse_name("catalogs/dbx_samples"), None);
+        assert_eq!(Schema::parse_name("catalogs/dbx_samples"), None);
     }
 
     #[test]
@@ -336,7 +360,7 @@ mod tests {
             "catalogs/local/schemas/local/tables/events"
         );
         assert_eq!(
-            parse_table(&local_table("s3://bucket/events/")),
+            Table::parse_name(&local_table("s3://bucket/events/")),
             Some((
                 "local".to_string(),
                 "local".to_string(),
@@ -368,5 +392,75 @@ mod tests {
         );
         assert_eq!(parse_bytemass(&blob), None);
         assert_eq!(parse_bytemass("blobs/s3/bucket/columns/x"), None);
+    }
+
+    #[test]
+    fn a_bare_catalog_id_parses() {
+        assert_eq!(
+            Catalog::parse_name("dbx_samples"),
+            Some("dbx_samples".to_string())
+        );
+        assert_eq!(Catalog::parse_name("a.b"), None);
+        assert_eq!(Catalog::parse_name("catalogs/a"), Some("a".to_string()));
+    }
+
+    #[test]
+    fn a_dotted_schema_parses() {
+        assert_eq!(
+            Schema::parse_name("a.b"),
+            Some(("a".to_string(), "b".to_string()))
+        );
+        assert_eq!(
+            Schema::parse_name("a.b.c"),
+            Some(("a".to_string(), "b.c".to_string()))
+        );
+        assert_eq!(Schema::parse_name("a"), None);
+    }
+
+    #[test]
+    fn a_dotted_table_parses() {
+        assert_eq!(
+            Table::parse_name("a.b.c"),
+            Some(("a".to_string(), "b".to_string(), "c".to_string()))
+        );
+        assert_eq!(
+            Table::parse_name("a.b.c.d"),
+            Some(("a".to_string(), "b.c".to_string(), "d".to_string()))
+        );
+        assert_eq!(Table::parse_name("a.b"), None);
+    }
+
+    #[test]
+    fn a_dotted_partition_parses() {
+        assert_eq!(
+            Partition::parse_name("a.b.c.2026-01-01"),
+            Some((
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "2026-01-01".to_string()
+            ))
+        );
+        assert_eq!(Partition::parse_name("a.b.c"), None);
+    }
+
+    #[test]
+    fn a_pattern_renders_the_canonical_name() {
+        const TABLE: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
+        const ALIAS: &[&str] = &["", "", ""];
+        assert_eq!(
+            pattern_name("a.b.c", TABLE, Some(ALIAS)),
+            Some(table("a", "b", "c"))
+        );
+        assert_eq!(
+            pattern_name("a.b.c.d", TABLE, Some(ALIAS)),
+            Some(table("a", "b.c", "d"))
+        );
+        assert_eq!(
+            pattern_name("catalogs/a/schemas/b/tables/c", TABLE, None),
+            Some(table("a", "b", "c"))
+        );
+        assert_eq!(pattern_name("a.b.c", TABLE, None), None);
+        assert_eq!(pattern_name("metastores/x", TABLE, None), None);
     }
 }

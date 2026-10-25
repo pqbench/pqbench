@@ -12,10 +12,14 @@ fn catalog_get(
     name: String,
 ) -> PyResult<Py<PyAny>> {
     let workspace = workspace.0.clone();
+    let catalog = pqbench::v1::Catalog {
+        name,
+        ..Default::default()
+    };
     one(
         py,
         async move {
-            pqbench::catalog::get::get(&workspace, &name)
+            pqbench::catalog::get::get(&workspace, &catalog)
                 .await
                 .map_err(|error| error.to_string())
         },
@@ -29,7 +33,7 @@ fn catalog_list(py: Python<'_>, workspace: PyRef<'_, Workspace>) -> PyResult<Py<
     many(
         py,
         async move {
-            pqbench::catalog::list::list(&workspace)
+            futures::TryStreamExt::try_collect::<Vec<_>>(pqbench::catalog::list::list(&workspace))
                 .await
                 .map_err(|error| error.to_string())
         },

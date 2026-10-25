@@ -42,7 +42,6 @@ fn get_help_stays_local_and_points_at_neighbors() {
 #[test]
 fn bytemass_help_points_at_list_and_viz() {
     let stdout = help(&["bytemass", "--help"]);
-    assert!(stdout.contains("--json"), "{stdout}");
     assert!(stdout.contains("pqbench list --help"), "{stdout}");
     assert!(stdout.contains("pqbench viz --help"), "{stdout}");
     assert!(stdout.contains("pqbench --help"), "{stdout}");

@@ -37,13 +37,11 @@ impl std::error::Error for Error {
     }
 }
 
-/// Read the record of the schema `name` — a
-/// `catalogs/{catalog}/schemas/{schema}` resource name — at the workspace's
-/// endpoint.
+/// Read the record of the schema `schema` names, at the workspace's endpoint.
 ///
 /// # Errors
-/// Fails when `name` is not a schema name, the endpoint cannot be reached,
+/// Fails when the name is not a schema name, the endpoint cannot be reached,
 /// answers with an unexpected status, or returns a malformed schema record.
-pub async fn get(workspace: &Workspace, name: &str) -> Result<Schema, Error> {
-    super::r#impl::get(workspace, name).await
+pub async fn get(workspace: &Workspace, schema: &Schema) -> Result<Schema, Error> {
+    super::r#impl::get(workspace, &schema.name).await
 }

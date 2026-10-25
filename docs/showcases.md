@@ -22,7 +22,7 @@ A 2.1 MB Reddit sample. Before tuning anything, find the columns that own the
 bytes — `bytemass` reads only the footer, so it answers in milliseconds:
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
+$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -32,8 +32,6 @@ communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
 datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
 username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
 url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
-files: 1
-columns: 7
 ```
 
 Three columns — `url_encoded` (907 KB), `text` (744 KB), `username_encoded`
@@ -43,7 +41,7 @@ Three columns — `url_encoded` (907 KB), `text` (744 KB), `username_encoded`
 `profile` decodes a row sample to explain *why*:
 
 ```console run
-$ pqbench profile crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
+$ pqbench profile crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench format
 id                                                           column            kind    values  nulls   ndv
 -----------------------------------------------------------  ----------------  ------  ------  -----  ----
 crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  text              string    3000      0  2753
@@ -53,9 +51,6 @@ crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  communityName     s
 crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  datetime          string    3000      0     1
 crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  username_encoded  string    3000      0  3000
 crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  url_encoded       string    3000      0  3000
-files: 1
-rows: 3000
-columns: 7
 ```
 
 `url_encoded` and `username_encoded` are unique on every row (NDV 3000) — they
@@ -66,7 +61,7 @@ free. Optimize the three big columns; leave the rest alone.
 The same stream draws a treemap, with no server and no build step:
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench viz -o /tmp/reddit
+$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench viz -o /tmp/reddit
 ```
 
 ## Which codec
@@ -75,16 +70,13 @@ The sample is stored **uncompressed**, so the codec is the first lever. Sweep
 the codecs over the file's encoded pages:
 
 ```console run
-$ pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 --format table
+$ pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqbench format
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 zstd        1           ±458            ±1722   0.56
 gzip        1            ±68             ±270   0.58
 lz4         1           ±897            ±8476   0.81
 snappy      1           ±912            ±2101   0.81
-file: crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet
-rows: 4
-columns: 0
 ```
 
 Speeds vary run to run; the ratios do not. zstd takes the file to 0.56 of its
@@ -101,7 +93,8 @@ encoding). `bytemass` folds each column's row groups into one record, so the
 stream is already a per-column total:
 
 ```console run
-$ pqbench bytemass data/samples/squad.parquet --format json \
+$ pqbench table-file data/samples/squad.parquet \
+>     | pqbench bytemass \
 >     | jq -r 'select(.name | endswith("/bytemass")) | [(.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), .compressed_bytes] | @tsv' \
 >     | sort -k2 -nr
 context                             8490172
@@ -120,7 +113,7 @@ compare two layouts.
 A real table with a non-default encoding reads the same way:
 
 ```console run
-$ pqbench bytemass data/samples/delta_byte_array.parquet --format table
+$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench format
 column                 codec         encodings         bytes  values
 ---------------------  ------------  ----------------  -----  ------
 c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
@@ -132,8 +125,6 @@ c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
 c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
 c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
 c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
-files: 1
-columns: 9
 ```
 
 The footer reports the encoding the writer actually used, and

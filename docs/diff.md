@@ -4,7 +4,7 @@
 lz4). One input may be `-` for stdin. Differences are right minus left.
 
 ```console
-$ pqbench diff before.parquet after.parquet --format table
+$ pqbench diff before.parquet after.parquet | pqbench format
 $ pqbench diff before.ndjson after.ndjson --depth 2
 ```
 
@@ -22,5 +22,5 @@ data or schema; compare the same logical data before interpreting a reduction
 as a saving.
 
 The command rejects incomplete streams, duplicate columns, non-`Bytemass`
-records, and arithmetic overflow. `--format` chooses table or JSON output, and
-`-o FILE` also saves the lz4 NDJSON stream.
+records, and arithmetic overflow. Output is NDJSON; `pqbench format` renders resources, and a delta (which has no
+name) is JSON-only.

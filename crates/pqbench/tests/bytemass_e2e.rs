@@ -41,17 +41,6 @@ async fn measures_a_local_file_from_its_footer() {
 }
 
 #[tokio::test]
-async fn expands_globs_into_more_than_one_file() {
-    let mask = format!("{}/tests/fixtures/*.parquet", env!("CARGO_MANIFEST_DIR"));
-    let files = measure_files(common::lake(), &request(vec![mask]))
-        .await
-        .unwrap();
-
-    assert!(files.len() > 1, "{}", files.len());
-    assert!(files.iter().all(|file| !file.columns.is_empty()));
-}
-
-#[tokio::test]
 async fn treats_brackets_as_literal_path_characters() {
     let directory = tempfile::tempdir().unwrap();
     let literal = directory.path().join("archive[1].parquet");
@@ -66,15 +55,18 @@ async fn treats_brackets_as_literal_path_characters() {
 }
 
 #[tokio::test]
-async fn rejects_empty_inputs_and_unmatched_masks() {
+async fn rejects_empty_inputs() {
     assert!(bytemass(common::lake(), &request(vec![])).await.is_err());
+}
 
+#[tokio::test]
+async fn a_pattern_is_not_expanded() {
     let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
     let error = bytemass(common::lake(), &request(vec![missing]))
         .await
         .unwrap_err()
         .to_string();
-    assert!(error.contains("mask matched no files"), "{error}");
+    assert!(!error.contains("mask matched no files"), "{error}");
 }
 
 #[tokio::test]

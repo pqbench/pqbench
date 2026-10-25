@@ -1,4 +1,4 @@
-use std::process::{Command, Stdio};
+mod common;
 
 // `small_reddit_none.parquet` is a 3000-row NONE-compressed subset of the
 // MIT-licensed reddit_dataset_90 (goldentraversy07/reddit_dataset_90).
@@ -35,11 +35,7 @@ fn is_blob(record: &serde_json::Value) -> bool {
 /// column.
 #[test]
 fn bytemass_streams_column_rows() {
-    let exe = env!("CARGO_BIN_EXE_pqbench");
-    let out = Command::new(exe)
-        .args(["bytemass", parquet_fixture()])
-        .output()
-        .unwrap();
+    let out = common::measured(parquet_fixture());
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -91,11 +87,7 @@ fn bytemass_streams_column_rows() {
 /// End-to-end: `--json` is the same NDJSON stream.
 #[test]
 fn bytemass_json_is_the_stream() {
-    let exe = env!("CARGO_BIN_EXE_pqbench");
-    let out = Command::new(exe)
-        .args(["bytemass", parquet_fixture(), "--json"])
-        .output()
-        .unwrap();
+    let out = common::measured(parquet_fixture());
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -109,11 +101,7 @@ fn bytemass_json_is_the_stream() {
 
 #[test]
 fn bytemass_rows_include_footer_facts() {
-    let exe = env!("CARGO_BIN_EXE_pqbench");
-    let out = Command::new(exe)
-        .args(["bytemass", parquet_fixture()])
-        .output()
-        .unwrap();
+    let out = common::measured(parquet_fixture());
     assert!(
         out.status.success(),
         "stderr: {}",
@@ -135,13 +123,7 @@ fn bytemass_rows_include_footer_facts() {
 /// End-to-end: a reader that closes early ends the stream, not the command.
 #[test]
 fn bytemass_exits_cleanly_when_stdout_is_closed() {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_pqbench"));
-    command
-        .arg("bytemass")
-        .arg(parquet_fixture())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().unwrap();
+    let mut child = common::measure(parquet_fixture());
     drop(child.stdout.take());
     let out = child.wait_with_output().unwrap();
     assert!(

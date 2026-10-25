@@ -48,11 +48,12 @@ async fn collect(input: &str) -> Result<(Vec<v1::Bytemass>, Vec<v1::Blob>), CliE
         match record? {
             Record::Blob(blob) => blobs.push(blob),
             Record::Bytemass(column) => columns.push(column),
-            Record::File(_) | Record::RemoteSource(_) => {
-                return Err(
-                    "viz reads a pqbench.bytemass stream; measure with `pqbench bytemass` first"
-                        .into(),
-                );
+            Record::File(file) => {
+                return Err(format!(
+                    "viz reads a pqbench.bytemass stream, not `{}`; measure with `pqbench bytemass` first",
+                    file.name
+                )
+                .into());
             }
         }
     }

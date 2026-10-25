@@ -69,7 +69,7 @@ long-lived key in the pipe.
 ```bash
 TABLE=$(curl -s $UC/tables/pqbench.demo.events)
 
-# Unity vends a session; put it in the environment and read the table by URI.
+# Unity vends a session; put it in the environment and name the table record.
 read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(
   curl -s -X POST $UC/temporary-table-credentials -H 'Content-Type: application/json' \
     -d "$(jq -c '{table_id, operation: "READ"}' <<< "$TABLE")" |
@@ -78,7 +78,9 @@ export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export AWS_REGION=us-east-1 AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
 export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 
-"$BIN" list partitions "$(jq -r .storage_location <<< "$TABLE")" |
+jq -cn --arg uri "$(jq -r .storage_location <<< "$TABLE")" \
+    '{name:"catalogs/local/schemas/local/tables/events", uri:$uri}' |
+  "$BIN" list partitions |
   "$BIN" list files |
   "$BIN" bytemass
 ```
@@ -112,7 +114,8 @@ export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1
 export AWS_ENDPOINT=$S3 AWS_ENDPOINT_URL=$S3
 export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 
-"$BIN" list tables pqbench.demo --format json |
+echo '{"name":"catalogs/pqbench/schemas/demo"}' |
+  "$BIN" list tables |
   "$BIN" get table |
   "$BIN" list partitions | "$BIN" list files | "$BIN" bytemass
 ```
@@ -121,17 +124,17 @@ export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 Iceberg walk. Stop after `pqbench list partitions` and pipe to `jq .` to read the
 partition document itself.
 
-A producer document is `{"version": 1, "inputs": [...], "env": {...}}`;
-`pqbench bytemass` measures the files it
-names, and a table's files come from the walk, `pqbench list partitions | pqbench
-list files`. The walk's context is the environment: `PQB_ENDPOINT`,
+A table-file record names one blob; `pqbench table-file PATH` writes one, and
+`list files` writes one per file the walk names. `pqbench bytemass` measures
+them, and a table's files come from the walk, `pqbench list partitions |
+pqbench list files`. The walk's context is the environment: `PQB_ENDPOINT`,
 `PQB_TOKEN`, `PQB_TABLE_FORMAT` for the catalog, and `AWS_*` for storage.
 pqbench keeps no catalog dependency. A producer whose catalog vends expiring
-credentials puts them in `env` instead, which travels on the table document
-to `bytemass`; only `AWS_*` names are accepted there, and anything else is a
+credentials puts them on the record's `credentials` instead, which travels to
+`bytemass`; only `AWS_*` names are accepted there, and anything else is a
 loud error. Both endpoint names appear because pqbench's object store reads
 `AWS_ENDPOINT` while delta-rs reads `AWS_ENDPOINT_URL`; against real AWS
-neither is needed. `inputs` is one table URI.
+neither is needed.
 
 One caveat before copying this shape onto real infrastructure. Unity Catalog OSS
 mints vended credentials by calling AWS STS `AssumeRole` and cannot send that
@@ -164,7 +167,9 @@ read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(
     /tmp/pqbench-vend.json)
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION=us-east-1
 
-pqbench list partitions "$(jq -r .url /tmp/pqbench-vend.json)" |
+jq -cn --arg uri "$(jq -r .url /tmp/pqbench-vend.json)" \
+    '{name:"catalogs/local/schemas/local/tables/events", uri:$uri}' |
+  pqbench list partitions |
   pqbench list files |
   pqbench bytemass
 ```

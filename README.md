@@ -39,7 +39,7 @@ $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
 $ pqbench list catalogs | pqbench list schemas | pqbench list tables \
     | pqbench credentials check | pqbench credentials get | pqbench get table \
-    | pqbench list partitions | pqbench list files | pqbench bytemass --format table
+    | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
 ```
 
 Read it left to right:
@@ -71,7 +71,7 @@ verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
 2.1 MB Reddit comments sample, three of seven columns are 99.7% of the bytes:
 
 ```console run
-$ pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table
+$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -81,8 +81,6 @@ communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
 datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
 username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
 url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
-files: 1
-columns: 7
 ```
 
 `profile` explains it and `compression` picks the codec. The
@@ -102,18 +100,16 @@ every wired codec (zstd, lz4, gzip, snappy); `-c codec@level` (repeatable)
 picks one config:
 
 ```console run
-$ pqbench lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 --format table
+$ pqbench lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 | pqbench format
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 gzip        1            ±44             ±226   0.85
 zstd        1           ±915            ±1391   0.85
 lz4         1          ±2176            ±5180   0.98
 snappy      1          ±1608            ±1981   0.99
-file: data/samples/squad.parquet
-rows: 4
 ```
 
-Speeds vary run to run; `--format json` (or `--json`) emits NDJSON.
+Speeds vary run to run; the stream is NDJSON.
 
 ### compression
 
@@ -121,19 +117,16 @@ The same sweep over a parquet file's encoded pages. The input must be
 NONE-compressed; `--per-column` adds a report per column.
 
 ```console run
-$ pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 --format table
+$ pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqbench format
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 zstd        1           ±458            ±1722   0.56
 gzip        1            ±68             ±270   0.58
 lz4         1           ±897            ±8476   0.81
 snappy      1           ±912            ±2101   0.81
-file: crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet
-rows: 4
-columns: 0
 ```
 
-`--format json` (or `--json`) emits NDJSON.
+The stream is NDJSON.
 
 ### bytemass
 
@@ -141,7 +134,7 @@ Per-column byte masses — the on-disk bytes each column takes, with its
 value count, its chunks summed over the file's row groups.
 
 ```console run
-$ pqbench bytemass data/samples/delta_byte_array.parquet --format table
+$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench format
 column                 codec         encodings         bytes  values
 ---------------------  ------------  ----------------  -----  ------
 c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
@@ -153,15 +146,13 @@ c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
 c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
 c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
 c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
-files: 1
-columns: 9
 ```
 
 - Reads only the footer, so it works on any file, compressed or not.
-- Accepts paths, quoted globs, `s3://` URIs, and a `TableFile` /
-  `remote-source` document.
+- Reads `TableFile` records on stdin: `table-file PATH` names one path or URI,
+  and `list files` names a table's files.
 - `s3://` needs the `aws` feature; a pipe streams one `Blob` per file and one
-  `Bytemass` per column (`--format json`, or `-o FILE`).
+  `Bytemass` per column.
 
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/demo/).
@@ -172,11 +163,10 @@ List a table's natural partitions — its commits grouped into epoch-aligned
 commit-time windows.
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table --format table
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
-partitions: 1
 ```
 
 - Reads each table's Delta / Iceberg log, never the data files.
@@ -192,28 +182,22 @@ partitions: 1
 List the files a partition's commits added — the input to `bytemass`.
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-files: 1
-columns: 2
 ```
 
 - `list files` re-reads the window's commits and emits the files they
   **added** — a file a later commit removes is still named.
 - The lease rides on every file, so a short-lived lease travels to `bytemass`.
 
-A producer can hand `bytemass` a `remote-source` document — one table
-URI plus `AWS_*` credentials:
+A producer names a file with `table-file`; `AWS_*` in the environment (or a
+vended lease on the file record) supplies storage access:
 
 ```console no-run
-$ cat <<'EOF' | pqbench bytemass --format table
-{"version":1,
- "inputs":["s3://bucket/table/part-0.parquet"],
- "env":{"AWS_ACCESS_KEY_ID":"…","AWS_SECRET_ACCESS_KEY":"…","AWS_SESSION_TOKEN":"…","AWS_REGION":"us-east-1"}}
-EOF
+$ pqbench table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqbench bytemass | pqbench format
 ```
 
 ### viz
@@ -222,8 +206,8 @@ Collect a bytemass stream into a static HTML treemap — no server, no build
 step.
 
 ```console run delta
-$ pqbench bytemass data/samples/delta_byte_array.parquet | pqbench viz -o /tmp/report
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.

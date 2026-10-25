@@ -5,13 +5,12 @@ those records into a static HTML page. Measurement and presentation are separate
 commands so either end can change without the other.
 
 ```console run delta
-$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
-`-o report` writes `report.html` (here `/tmp/report.html`). A terminal prints a
-short summary. The HTML file embeds the measured columns; open it without a
-server.
+`-o report` writes `report.html` (here `/tmp/report.html`) and prints a short
+summary. The HTML file embeds the measured columns; open it without a server.
 
 ```mermaid
 flowchart LR

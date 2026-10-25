@@ -3,11 +3,12 @@
 //! [`list`] is the only public function. It returns [`Partition`] resources;
 //! the CLI forwards them as-is.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
-use futures_util::stream::BoxStream;
+use futures_util::stream::{BoxStream, StreamExt};
+use futures_util::TryStreamExt;
 
+use crate::v1;
 pub use crate::v1::Partition;
 
 use crate::Lake;
@@ -57,25 +58,39 @@ pub type PartitionStream<'a> = BoxStream<'a, Result<Partition, Error>>;
 /// retained commit, and only windows the horizon covers whole are yielded, so a
 /// window never under-counts.
 ///
-/// `table` is the table's resource name; the partition names it as its parent.
-/// `uri` is the table's storage root, carried on each partition so the files
-/// stage reads the log without a catalog call. Each partition carries its
-/// commits' versions and, index-aligned with them, the `commitInfo` the log
-/// stored for each — its operation, parameters, metrics and writer — so a reader
-/// can select by operation without re-reading the log. The caller, which holds
-/// the lease, sets each partition's `credentials`.
+/// The table's resource name names each partition as its parent; its `uri` is
+/// the storage root carried on each partition, so the files stage reads the log
+/// without a catalog call, and its `credentials` are the lease each partition
+/// carries. Each partition carries its commits' versions and, index-aligned
+/// with them, the `commitInfo` the log stored for each — its operation,
+/// parameters, metrics and writer — so a reader can select by operation without
+/// re-reading the log.
 ///
 /// # Errors
-/// Fails when the table cannot be loaded, a window is not positive, or the read
-/// window is not positive; an error raised after the first partition arrives as
-/// a stream item.
+/// Fails when the table names no storage root, cannot be loaded, a window is
+/// not positive, or the read window is not positive; an error raised after the
+/// first partition arrives as a stream item.
 pub async fn list(
     lake: &Lake,
-    table: &str,
-    uri: &str,
-    env: &BTreeMap<String, String>,
+    table: &v1::Table,
     window_millis: i64,
     last_millis: Option<i64>,
 ) -> Result<PartitionStream<'static>, Error> {
-    super::r#impl::list(lake, table, uri, env, window_millis, last_millis).await
+    let uri = table.uri.as_deref().ok_or_else(|| {
+        Error::Invalid("a table record has no storage path; run `pqbench get table` first".into())
+    })?;
+    let env = table
+        .credentials
+        .as_ref()
+        .map(v1::Credentials::to_env)
+        .unwrap_or_default();
+    let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
+    let partitions =
+        super::r#impl::list(lake, &table.name, uri, &env, window_millis, last_millis).await?;
+    Ok(partitions
+        .map_ok(move |mut partition| {
+            partition.credentials = lease.clone();
+            partition
+        })
+        .boxed())
 }

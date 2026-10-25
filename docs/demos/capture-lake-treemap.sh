@@ -21,7 +21,7 @@ test -x "$bin" || cargo build -p pqbench-cli --features delta
 html=.docker-data/pqbench-table.html
 frames=.docker-data/table-frames
 mkdir -p "$frames" .docker-data
-"$bin" list partitions docker/e2e-lakehouse/table |
+cat docker/e2e-lakehouse/table.ndjson | "$bin" list partitions |
     "$bin" list files |
     "$bin" bytemass |
     "$bin" viz -o .docker-data/pqbench-table

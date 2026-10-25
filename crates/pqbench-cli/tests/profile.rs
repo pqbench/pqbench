@@ -33,7 +33,11 @@ fn profile_streams_column_facts_for_a_sample() {
     let records = ndjson(&output.stdout);
     let columns: Vec<&serde_json::Value> = records
         .iter()
-        .filter(|record| record["kind"] == "pqbench.profile-column")
+        .filter(|record| {
+            record["name"]
+                .as_str()
+                .is_some_and(|name| name.ends_with("/profile"))
+        })
         .collect();
     assert!(!columns.is_empty(), "{records:?}");
     let column = columns[0];
@@ -64,7 +68,11 @@ fn profile_honours_columns_and_rows() {
     let records = ndjson(&output.stdout);
     let columns: Vec<&serde_json::Value> = records
         .iter()
-        .filter(|record| record["kind"] == "pqbench.profile-column")
+        .filter(|record| {
+            record["name"]
+                .as_str()
+                .is_some_and(|name| name.ends_with("/profile"))
+        })
         .collect();
     assert_eq!(columns.len(), 1);
     assert_eq!(columns[0]["column"], "text");

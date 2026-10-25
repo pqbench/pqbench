@@ -17,14 +17,17 @@ fn file_list(
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
     let credentials = crate::requests::credentials(credentials)?;
-    let env = credentials
-        .as_ref()
-        .map(pqbench::v1::Credentials::to_env)
-        .unwrap_or_default();
+    let partition = pqbench::v1::Partition {
+        name: pqbench::v1::name::partition_name(&table, "0"),
+        uri: Some(uri),
+        commit_versions: versions,
+        credentials: credentials.clone(),
+        ..pqbench::v1::Partition::default()
+    };
     stream_listing(
         py,
         async move {
-            let found = pqbench::file::list::list(&lake, &table, &uri, &env, &versions).await?;
+            let found = pqbench::file::list::list(&lake, &partition).await?;
             Ok(found.map_ok(move |mut file| {
                 file.credentials = credentials.clone();
                 file

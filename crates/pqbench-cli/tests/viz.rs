@@ -1,4 +1,6 @@
 use std::io::Write;
+mod common;
+
 use std::process::{Command, Stdio};
 
 fn pqbench() -> Command {
@@ -26,10 +28,7 @@ fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
 
 #[test]
 fn viz_collects_a_bytemass_stream_into_html() {
-    let measured = pqbench()
-        .args(["bytemass", parquet_fixture()])
-        .output()
-        .unwrap();
+    let measured = common::measured(parquet_fixture());
     assert!(
         measured.status.success(),
         "stderr: {}",
@@ -107,10 +106,7 @@ fn viz_rejects_a_table_file() {
 
 #[test]
 fn viz_requires_output() {
-    let measured = pqbench()
-        .args(["bytemass", parquet_fixture()])
-        .output()
-        .unwrap();
+    let measured = common::measured(parquet_fixture());
     assert!(measured.status.success());
     let output = pipe(&["viz"], &measured.stdout);
     assert!(!output.status.success());

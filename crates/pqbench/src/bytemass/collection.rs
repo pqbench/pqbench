@@ -1,7 +1,7 @@
 //! Measure Parquet files into per-column byte masses.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{read_file_masses, ColumnMass, FileMass};
@@ -20,12 +20,20 @@ pub(super) async fn measure_files(
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<MeasuredFile>, Error> {
     let mut files = Vec::new();
-    for path in expand_inputs(lake, inputs, env).await? {
-        let uri = path.to_string_lossy().into_owned();
-        let (stat, mass) = read_input(lake, &uri, env).await?;
-        files.push(measured_file(&uri, &stat, mass));
+    for uri in inputs {
+        files.push(measure_file(lake, uri, env).await?);
     }
     Ok(files)
+}
+
+/// Measure one file: its footer read once, its chunks folded per column.
+pub(super) async fn measure_file(
+    lake: &Lake,
+    uri: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<MeasuredFile, Error> {
+    let (stat, mass) = read_input(lake, uri, env).await?;
+    Ok(measured_file(uri, &stat, mass))
 }
 
 /// Name a file's masses: its `Blob`, and each column's `Bytemass` under it.
@@ -94,56 +102,6 @@ fn add(total: Option<u64>, part: u64) -> Option<u64> {
 fn ratio(numerator: Option<u64>, denominator: Option<u64>) -> Option<f64> {
     let denominator = denominator?;
     (denominator > 0).then(|| numerator.unwrap_or(0) as f64 / denominator as f64)
-}
-
-pub(super) async fn expand_inputs(
-    lake: &Lake,
-    inputs: &[String],
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<PathBuf>, Error> {
-    let mut paths = BTreeSet::new();
-    for input in inputs {
-        if has_glob_metachar(input) && input.contains("://") {
-            let options: Vec<_> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            for uri in crate::third_party::object_store::api::expand_glob(lake, input, &options)
-                .await
-                .map_err(Error::Storage)?
-            {
-                paths.insert(PathBuf::from(uri));
-            }
-        } else if has_glob_metachar(input) {
-            insert_glob(input, &mut paths)?;
-        } else {
-            paths.insert(PathBuf::from(input));
-        }
-    }
-    Ok(paths.into_iter().collect())
-}
-
-/// Insert every local file a glob mask matches.
-fn insert_glob(mask: &str, paths: &mut BTreeSet<PathBuf>) -> Result<(), Error> {
-    let mut matched = false;
-    for entry in glob::glob(&escape_literal_brackets(mask)).map_err(|e| Error::Pattern {
-        mask: mask.to_string(),
-        source: e,
-    })? {
-        let path = entry.map_err(|e| Error::Invalid(format!("cannot expand mask {mask}: {e}")))?;
-        paths.insert(path);
-        matched = true;
-    }
-    if matched {
-        Ok(())
-    } else {
-        Err(Error::NoMatch(mask.to_string()))
-    }
-}
-
-fn has_glob_metachar(input: &str) -> bool {
-    input.contains(['*', '?'])
-}
-
-fn escape_literal_brackets(input: &str) -> String {
-    input.replace('[', "[[]")
 }
 
 async fn read_input(

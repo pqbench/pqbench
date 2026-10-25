@@ -55,7 +55,7 @@ use crate::Workspace;
 /// Fails when `name` is not a table name, the endpoint cannot be reached, or it
 /// answers with an unexpected status.
 pub async fn check(workspace: &Workspace, name: &str) -> Result<ReadEligibility, Error> {
-    let (catalog, schema, table) = crate::v1::name::parse_table(name)
+    let (catalog, schema, table) = crate::v1::Table::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/tables/… name")))?;
     match workspace.config().dialect {
         TableFormat::Unity => {

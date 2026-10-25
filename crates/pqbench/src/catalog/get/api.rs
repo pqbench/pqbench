@@ -37,12 +37,12 @@ impl std::error::Error for Error {
     }
 }
 
-/// Read the record of the catalog `name` — a `catalogs/{catalog}` resource
-/// name — from the workspace's endpoint.
+/// Read the record of the catalog `catalog` names, from the workspace's
+/// endpoint.
 ///
 /// # Errors
-/// Fails when `name` is not a catalog name, the endpoint cannot be reached,
+/// Fails when the name is not a catalog name, the endpoint cannot be reached,
 /// answers with an unexpected status, or returns a malformed catalog record.
-pub async fn get(workspace: &Workspace, name: &str) -> Result<Catalog, Error> {
-    super::r#impl::get(workspace, name).await
+pub async fn get(workspace: &Workspace, catalog: &Catalog) -> Result<Catalog, Error> {
+    super::r#impl::get(workspace, &catalog.name).await
 }

@@ -9,15 +9,15 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 33
-    support::run("pqbench list partitions docker/e2e-lakehouse/table --format table", 34, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1", "partitions: 1"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format", 34, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn document() {
-    // document, from line 79
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4", 80, None);
-    support::run("pqbench bytemass /tmp/partition.ndjson.lz4 --format table", 81, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3", "files: 1", "columns: 2"]));
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files --min-file-size 1KB --format table", 88, Some(&["partitions: 1", "files: 0"]));
+    // document, from line 76
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files > /tmp/partition.ndjson", 77, None);
+    support::run("pqbench bytemass < /tmp/partition.ndjson | pqbench format", 78, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files --min-file-size 1KB | pqbench format", 83, None);
 }

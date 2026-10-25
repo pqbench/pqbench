@@ -24,21 +24,11 @@
 //!
 //! Setup: `docs/auth.md`.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-
-/// Decode an lz4 frame (`-o` output) into its NDJSON bytes.
-fn decode_lz4(bytes: &[u8]) -> Vec<u8> {
-    let mut decoded = Vec::new();
-    lz4::Decoder::new(std::io::Cursor::new(bytes))
-        .unwrap()
-        .read_to_end(&mut decoded)
-        .unwrap();
-    decoded
-}
 
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
@@ -144,6 +134,17 @@ fn fqn(record: &Value) -> String {
         .join(".")
 }
 
+/// A catalog resource document from a short catalog name.
+fn catalog_ref(name: &str) -> String {
+    json!({"name": format!("catalogs/{name}")}).to_string()
+}
+
+/// A schema resource document from a dotted `catalog.schema` name.
+fn schema_ref(name: &str) -> String {
+    let parts: Vec<&str> = name.split('.').collect();
+    json!({"name": format!("catalogs/{}/schemas/{}", parts[0], parts[1])}).to_string()
+}
+
 /// A table resource document from a dotted `catalog.schema.table` name.
 fn table_ref(name: &str) -> String {
     let parts: Vec<&str> = name.split('.').collect();
@@ -229,11 +230,7 @@ fn metastore_get_reads_the_live_metastore() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe_live(
-        &["get", "metastore", "--format", "json"],
-        &unity_endpoint(&host),
-        Some(&token),
-    );
+    let output = pipe_live(&["get", "metastore"], &unity_endpoint(&host), Some(&token));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -270,11 +267,7 @@ fn catalog_ls_lists_the_live_catalogs() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe_live(
-        &["list", "catalogs", "--format", "json"],
-        &unity_endpoint(&host),
-        Some(&token),
-    );
+    let output = pipe_live(&["list", "catalogs"], &unity_endpoint(&host), Some(&token));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -296,42 +289,13 @@ fn catalog_ls_lists_the_live_catalogs() {
         ]
     );
 
-    let output = pipe_live(
-        &["list", "catalogs", "--format", "table"],
-        &unity_endpoint(&host),
-        Some(&token),
-    );
+    let output = pipe_live(&["list", "catalogs"], &unity_endpoint(&host), Some(&token));
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("dbx_samples"), "{stdout}");
-    assert!(stdout.contains("catalogs: 5"), "{stdout}");
-
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("catalogs.ndjson.lz4");
-    let output = pipe_live(
-        &[
-            "list",
-            "catalogs",
-            "--format",
-            "json",
-            "-o",
-            file.to_str().unwrap(),
-        ],
-        &unity_endpoint(&host),
-        Some(&token),
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let bytes = std::fs::read(&file).unwrap();
-    let decoded = decode_lz4(&bytes);
-    assert_eq!(ndjson(&decoded).len(), 5);
+    assert_eq!(ndjson(&output.stdout).len(), 5);
 }
 
 /// The issue-#58 walk, for the commands that exist: a job directory holds
@@ -357,24 +321,14 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
     std::fs::create_dir_all(&metastore).unwrap();
 
     let metastore_info = metastore.join("info.jsonl");
-    let output = pipe_output_env(
-        &["get", "metastore", "--format", "json"],
-        b"",
-        &metastore_info,
-        &config,
-    );
+    let output = pipe_output_env(&["get", "metastore"], b"", &metastore_info, &config);
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let catalogs = metastore.join("catalogs.jsonl");
-    let output = pipe_output_env(
-        &["list", "catalogs", "--format", "json"],
-        b"",
-        &catalogs,
-        &config,
-    );
+    let output = pipe_output_env(&["list", "catalogs"], b"", &catalogs, &config);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -411,8 +365,8 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
         std::fs::create_dir_all(&dir).unwrap();
         let catalog_info = dir.join("info.jsonl");
         let output = pipe_output_env(
-            &["get", "catalog", name, "--format", "json"],
-            b"",
+            &["get", "catalog"],
+            catalog_ref(name).as_bytes(),
             &catalog_info,
             &config,
         );
@@ -433,8 +387,8 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
 
         let catalog_schemas = dir.join("schemas.jsonl");
         let output = pipe_output_env(
-            &["list", "schemas", name, "--format", "json"],
-            b"",
+            &["list", "schemas"],
+            catalog_ref(name).as_bytes(),
             &catalog_schemas,
             &config,
         );
@@ -459,8 +413,8 @@ fn metastore_walk_writes_the_job_tree_and_prints_the_result() {
             std::fs::create_dir_all(&dir).unwrap();
             let tables = dir.join("tables.jsonl");
             let output = pipe_output_env(
-                &["list", "tables", &fqn, "--format", "json"],
-                b"",
+                &["list", "tables"],
+                schema_ref(&fqn).as_bytes(),
                 &tables,
                 &config,
             );
@@ -489,10 +443,10 @@ fn catalog_get_reads_the_live_catalog() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe_live(
-        &["get", "catalog", "dbx_samples", "--format", "json"],
-        &unity_endpoint(&host),
-        Some(&token),
+    let output = pipe_env(
+        &["get", "catalog"],
+        catalog_ref("dbx_samples").as_bytes(),
+        &source(&unity_endpoint(&host), Some(&token)),
     );
     assert!(
         output.status.success(),
@@ -526,10 +480,10 @@ fn schema_ls_lists_the_live_schemas() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe_live(
-        &["list", "schemas", "dbx_samples", "--format", "json"],
-        &unity_endpoint(&host),
-        Some(&token),
+    let output = pipe_env(
+        &["list", "schemas"],
+        catalog_ref("dbx_samples").as_bytes(),
+        &source(&unity_endpoint(&host), Some(&token)),
     );
     assert!(
         output.status.success(),
@@ -569,11 +523,7 @@ const EXTERNAL_FIXTURE_SCHEMAS: [&str; 12] = [
 /// The table ids `list tables` lists for one `pqbench_ext` schema.
 fn external_schema_ids(env: &[(&str, &str)], schema: &str) -> Vec<String> {
     let qualified = format!("pqbench_ext.{schema}");
-    let output = pipe_env(
-        &["list", "tables", &qualified, "--format", "json"],
-        b"",
-        env,
-    );
+    let output = pipe_env(&["list", "tables"], schema_ref(&qualified).as_bytes(), env);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -610,8 +560,8 @@ fn schema_ls_lists_the_external_fixture() {
     ];
 
     let output = pipe_env(
-        &["list", "schemas", "pqbench_ext", "--format", "json"],
-        b"",
+        &["list", "schemas"],
+        catalog_ref("pqbench_ext").as_bytes(),
         &env,
     );
     assert!(
@@ -688,8 +638,8 @@ fn schema_get_reads_the_live_schema() {
         let iceberg = endpoint.contains("/iceberg-rest");
         let output = if iceberg {
             pipe_env(
-                &["get", "schema", "dbx_samples.nyctaxi", "--format", "json"],
-                b"",
+                &["get", "schema"],
+                schema_ref("dbx_samples.nyctaxi").as_bytes(),
                 &[
                     ("PQB_ENDPOINT", endpoint.as_str()),
                     ("PQB_TOKEN", token.as_str()),
@@ -698,8 +648,8 @@ fn schema_get_reads_the_live_schema() {
             )
         } else {
             pipe_env(
-                &["get", "schema", "dbx_samples.nyctaxi", "--format", "json"],
-                b"",
+                &["get", "schema"],
+                schema_ref("dbx_samples.nyctaxi").as_bytes(),
                 &source(&endpoint, Some(&token)),
             )
         };
@@ -728,10 +678,10 @@ fn table_ls_lists_the_live_tables() {
         eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
         return;
     };
-    let output = pipe_live(
-        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
-        &unity_endpoint(&host),
-        Some(&token),
+    let output = pipe_env(
+        &["list", "tables"],
+        schema_ref("dbx_samples.nyctaxi").as_bytes(),
+        &source(&unity_endpoint(&host), Some(&token)),
     );
     assert!(
         output.status.success(),
@@ -762,8 +712,8 @@ fn table_ls_lists_the_live_tables() {
         unity_endpoint(&host)
     );
     let output = pipe_env(
-        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
+        &["list", "tables"],
+        schema_ref("dbx_samples.nyctaxi").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
             ("PQB_TOKEN", token.as_str()),
@@ -789,7 +739,7 @@ fn table_ls_lists_the_live_tables() {
     // The new tree enriches its own v2 refs: `get table` reads the
     // `loadTable` metadata inline, so no storage read runs.
     let info = pipe_env(
-        &["get", "table", "--format", "json"],
+        &["get", "table"],
         &output.stdout,
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -833,14 +783,8 @@ fn table_get_reads_the_live_iceberg_table() {
         unity_endpoint(&host)
     );
     let output = pipe_env(
-        &[
-            "get",
-            "table",
-            "dbx_samples.nyctaxi.trips",
-            "--format",
-            "json",
-        ],
-        b"",
+        &["get", "table"],
+        table_ref("dbx_samples.nyctaxi.trips").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
             ("PQB_TOKEN", token.as_str()),
@@ -879,10 +823,10 @@ fn table_get_names_the_location_when_the_metadata_cannot_be_read() {
         return;
     };
     let endpoint = unity_endpoint(&host);
-    let output = pipe_live(
-        &["get", "table", "dbx_samples.nyctaxi.trips"],
-        &endpoint,
-        Some(&token),
+    let output = pipe_env(
+        &["get", "table"],
+        table_ref("dbx_samples.nyctaxi.trips").as_bytes(),
+        &source(&endpoint, Some(&token)),
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -913,14 +857,17 @@ fn credentials_check_filters_the_live_tables() {
     ];
     let reference = |id: &str| table_ref(id);
     let unsupported = pipe_env(
-        &["credentials", "check", "--format", "json"],
+        &["credentials", "check"],
         format!("{}\n", reference("dbx_samples.nyctaxi.pqbench_delta_test")).as_bytes(),
         &env,
     );
-    assert!(unsupported.status.success());
+    assert!(
+        unsupported.status.success(),
+        "a credentials filter drop is not a failed read"
+    );
     let stderr = String::from_utf8_lossy(&unsupported.stderr);
     assert!(
-        stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
+        stderr.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"),
         "{stderr}"
     );
     assert!(stderr.contains("managed default storage"), "{stderr}");
@@ -929,7 +876,7 @@ fn credentials_check_filters_the_live_tables() {
         "a drop emits no ref"
     );
     let eligible = pipe_env(
-        &["credentials", "check", "--format", "json"],
+        &["credentials", "check"],
         format!("{}\n", reference("dbx_samples.nyctaxi.trips")).as_bytes(),
         &env,
     );
@@ -945,8 +892,8 @@ fn credentials_check_filters_the_live_tables() {
     // A mixed schema drops the ineligible table and keeps the eligible ones:
     // the filter the walk composes on.
     let refs = pipe_env(
-        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
+        &["list", "tables"],
+        schema_ref("dbx_samples.nyctaxi").as_bytes(),
         &env,
     );
     assert!(
@@ -954,15 +901,11 @@ fn credentials_check_filters_the_live_tables() {
         "stderr: {}",
         String::from_utf8_lossy(&refs.stderr)
     );
-    let mixed = pipe_env(
-        &["credentials", "check", "--format", "json"],
-        &refs.stdout,
-        &env,
-    );
+    let mixed = pipe_env(&["credentials", "check"], &refs.stdout, &env);
     assert!(mixed.status.success());
     let mixed_stderr = String::from_utf8_lossy(&mixed.stderr);
     assert!(
-        mixed_stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
+        mixed_stderr.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"),
         "{mixed_stderr}"
     );
     assert!(
@@ -1010,27 +953,19 @@ fn credentials_get_vends_the_external_fixture() {
     let mut tables = 0;
     for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"] {
         let fqn = format!("pqbench_ext.{schema}");
-        let listed = pipe_env(&["list", "tables", &fqn, "--format", "json"], b"", &env);
+        let listed = pipe_env(&["list", "tables"], schema_ref(&fqn).as_bytes(), &env);
         assert!(
             listed.status.success(),
             "stderr: {}",
             String::from_utf8_lossy(&listed.stderr)
         );
-        let checked = pipe_env(
-            &["credentials", "check", "--format", "json"],
-            &listed.stdout,
-            &env,
-        );
+        let checked = pipe_env(&["credentials", "check"], &listed.stdout, &env);
         assert!(
             checked.status.success(),
             "stderr: {}",
             String::from_utf8_lossy(&checked.stderr)
         );
-        let vended = pipe_env(
-            &["credentials", "get", "--format", "json"],
-            &checked.stdout,
-            &env,
-        );
+        let vended = pipe_env(&["credentials", "get"], &checked.stdout, &env);
         assert!(
             vended.status.success(),
             "stderr: {}",
@@ -1075,37 +1010,25 @@ fn partition_ls_groups_the_external_fixture() {
     let mut partitions = 0;
     for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"] {
         let fqn = format!("pqbench_ext.{schema}");
-        let listed = pipe_env(&["list", "tables", &fqn, "--format", "json"], b"", &env);
+        let listed = pipe_env(&["list", "tables"], schema_ref(&fqn).as_bytes(), &env);
         assert!(
             listed.status.success(),
             "stderr: {}",
             String::from_utf8_lossy(&listed.stderr)
         );
-        let checked = pipe_env(
-            &["credentials", "check", "--format", "json"],
-            &listed.stdout,
-            &env,
-        );
+        let checked = pipe_env(&["credentials", "check"], &listed.stdout, &env);
         assert!(
             checked.status.success(),
             "stderr: {}",
             String::from_utf8_lossy(&checked.stderr)
         );
-        let vended = pipe_env(
-            &["credentials", "get", "--format", "json"],
-            &checked.stdout,
-            &env,
-        );
+        let vended = pipe_env(&["credentials", "get"], &checked.stdout, &env);
         assert!(
             vended.status.success(),
             "stderr: {}",
             String::from_utf8_lossy(&vended.stderr)
         );
-        let grouped = pipe_env(
-            &["list", "partitions", "--format", "json"],
-            &vended.stdout,
-            &env,
-        );
+        let grouped = pipe_env(&["list", "partitions"], &vended.stdout, &env);
         assert!(
             grouped.status.success(),
             "stderr: {}",
@@ -1175,13 +1098,13 @@ fn external_fixture_walks_to_bytemass() {
         ("AWS_REGION", region.as_str()),
     ];
 
-    let (listed, _) = timed_stage(&env, &["list", "tables", &schema, "--format", "json"], b"");
-    let (checked, _) = timed_stage(&env, &["credentials", "check", "--format", "json"], &listed);
-    let (vended, _) = timed_stage(&env, &["credentials", "get", "--format", "json"], &checked);
-    let (info, _) = timed_stage(&env, &["get", "table", "--format", "json"], &vended);
-    let (partitions, _) = timed_stage(&env, &["list", "partitions", "--format", "json"], &info);
-    let (files, _) = timed_stage(&env, &["list", "files", "--format", "json"], &partitions);
-    let (measured, _) = timed_stage(&env, &["bytemass", "--format", "json"], &files);
+    let (listed, _) = timed_stage(&env, &["list", "tables"], schema_ref(&schema).as_bytes());
+    let (checked, _) = timed_stage(&env, &["credentials", "check"], &listed);
+    let (vended, _) = timed_stage(&env, &["credentials", "get"], &checked);
+    let (info, _) = timed_stage(&env, &["get", "table"], &vended);
+    let (partitions, _) = timed_stage(&env, &["list", "partitions"], &info);
+    let (files, _) = timed_stage(&env, &["list", "files"], &partitions);
+    let (measured, _) = timed_stage(&env, &["bytemass"], &files);
 
     // The walk narrows: tables → partitions → files → columns.
     let tables = ndjson(&info).len();
@@ -1242,7 +1165,7 @@ fn table_get_reads_the_external_aws_table() {
     let endpoint = unity_endpoint(&host);
     let reference = table_ref(&table);
     let vended = pipe_env(
-        &["credentials", "get", "--format", "json"],
+        &["credentials", "get"],
         format!("{reference}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -1265,7 +1188,7 @@ fn table_get_reads_the_external_aws_table() {
     );
     let enriched = vended[0].to_string();
     let output = pipe_env(
-        &["get", "table", "--format", "json"],
+        &["get", "table"],
         format!("{enriched}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
@@ -1324,8 +1247,8 @@ fn credentials_get_vends_the_live_tables() {
         ("PQB_TOKEN", token.as_str()),
     ];
     let refs = pipe_env(
-        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
+        &["list", "tables"],
+        schema_ref("dbx_samples.nyctaxi").as_bytes(),
         &env,
     );
     assert!(
@@ -1333,11 +1256,7 @@ fn credentials_get_vends_the_live_tables() {
         "stderr: {}",
         String::from_utf8_lossy(&refs.stderr)
     );
-    let output = pipe_env(
-        &["credentials", "get", "--format", "json"],
-        &refs.stdout,
-        &env,
-    );
+    let output = pipe_env(&["credentials", "get"], &refs.stdout, &env);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -1395,8 +1314,8 @@ fn credentials_get_iceberg_vends_the_live_tables() {
         ("PQB_TABLE_FORMAT", "iceberg"),
     ];
     let refs = pipe_env(
-        &["list", "tables", "dbx_samples.nyctaxi", "--format", "json"],
-        b"",
+        &["list", "tables"],
+        schema_ref("dbx_samples.nyctaxi").as_bytes(),
         &env,
     );
     assert!(
@@ -1404,11 +1323,7 @@ fn credentials_get_iceberg_vends_the_live_tables() {
         "stderr: {}",
         String::from_utf8_lossy(&refs.stderr)
     );
-    let output = pipe_env(
-        &["credentials", "get", "--format", "json"],
-        &refs.stdout,
-        &env,
-    );
+    let output = pipe_env(&["credentials", "get"], &refs.stdout, &env);
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -1459,7 +1374,7 @@ fn catalog_ls_pipes_into_catalog_get_and_ls() {
         ("PQB_TOKEN", token.as_str()),
     ];
 
-    let catalogs = pipe_env(&["list", "catalogs", "--format", "json"], b"", &env);
+    let catalogs = pipe_env(&["list", "catalogs"], b"", &env);
     assert!(
         catalogs.status.success(),
         "stderr: {}",
@@ -1481,7 +1396,7 @@ fn catalog_ls_pipes_into_catalog_get_and_ls() {
         ]
     );
 
-    let info = pipe_env(&["get", "catalog", "--format", "json"], &refs, &env);
+    let info = pipe_env(&["get", "catalog"], &refs, &env);
     assert!(
         info.status.success(),
         "stderr: {}",
@@ -1494,7 +1409,7 @@ fn catalog_ls_pipes_into_catalog_get_and_ls() {
         assert!(names.contains(&id(record).to_string()));
     }
 
-    let schemas = pipe_env(&["list", "schemas", "--format", "json"], &refs, &env);
+    let schemas = pipe_env(&["list", "schemas"], &refs, &env);
     assert!(
         schemas.status.success(),
         "stderr: {}",
@@ -1531,8 +1446,8 @@ fn schema_ls_lists_the_live_iceberg_rest_namespaces() {
         unity_endpoint(&host)
     );
     let output = pipe_env(
-        &["list", "schemas", "dbx_samples", "--format", "json"],
-        b"",
+        &["list", "schemas"],
+        catalog_ref("dbx_samples").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
             ("PQB_TOKEN", token.as_str()),

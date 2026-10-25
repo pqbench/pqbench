@@ -1,82 +1,39 @@
 //! `list schemas`: the schemas in a catalog, one `Schema` line each.
 
-use std::path::PathBuf;
-
 use clap::Args;
-use futures_util::stream::StreamExt;
-use pqbench::schema::list;
+use futures_util::TryStreamExt;
+use pqbench::v1;
 
-use crate::emit::{Emitter, Format};
-use crate::source::{self, catalog_ref, read_input, Input};
+use crate::parse;
+use crate::source::{drive, flat_map};
 use crate::CliError;
+use futures_util::stream;
 
 /// Arguments for `list schemas`.
 #[derive(Args)]
 pub(crate) struct ListArgs {
-    /// catalog name; without it, read `Catalog` refs on stdin
-    catalog: Option<String>,
-    /// stdout format: auto (table on a terminal) | table | json
-    #[arg(long, value_enum, default_value_t = Format::Auto)]
-    format: Format,
-    /// also write the lz4 NDJSON stream to FILE
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    output: Option<PathBuf>,
     /// catalogs in flight at once
     #[arg(long, default_value_t = 64)]
     fan_out: usize,
 }
 
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
-    let input = read_input("list schemas").await?;
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let schemas = match &args.catalog {
-        Some(catalog) => {
-            if input.first.is_some() {
-                return Err("list schemas takes CATALOG or a catalog stream, not both".into());
+    let parents = parse::parents::<v1::Catalog>("list schemas").await?;
+    let workspace = workspace.clone();
+    drive(flat_map(
+        parents,
+        args.fan_out,
+        move |catalog: v1::Catalog| {
+            let workspace = workspace.clone();
+            async move {
+                let rows = pqbench::schema::list::list(&workspace, &catalog)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                Ok(stream::iter(
+                    rows.into_iter().map(Ok::<_, std::convert::Infallible>),
+                ))
             }
-            list_catalog(workspace, catalog, &mut emit).await?
-        }
-        None => list_stream(workspace, input, args.fan_out, &mut emit).await?,
-    };
-    emit.finish(&format!("schemas: {schemas}\n")).await
-}
-
-/// List one named catalog's schemas.
-async fn list_catalog(
-    workspace: &pqbench::Workspace,
-    catalog: &str,
-    emit: &mut Emitter,
-) -> Result<usize, CliError> {
-    let schemas = list::list(workspace, &pqbench::v1::name::catalog(catalog)).await?;
-    for schema in &schemas {
-        emit.write_row(schema).await?;
-    }
-    Ok(schemas.len())
-}
-
-/// List every catalog's schemas from a catalog stream.
-async fn list_stream(
-    workspace: &pqbench::Workspace,
-    input: Input,
-    fan_out: usize,
-    emit: &mut Emitter,
-) -> Result<usize, CliError> {
-    if !input.piped {
-        return Err("list schemas needs CATALOG or a catalog stream".into());
-    }
-    let records = source::records("list schemas", input.first, input.lines);
-    let mut schemas = 0;
-    let mut lists = records
-        .map(|record| async {
-            let name = catalog_ref("list schemas", &record?)?;
-            Ok::<_, CliError>(list::list(workspace, &name).await?)
-        })
-        .buffer_unordered(fan_out.max(1));
-    while let Some(listed) = lists.next().await {
-        for schema in listed? {
-            emit.write_row(&schema).await?;
-            schemas += 1;
-        }
-    }
-    Ok(schemas)
+        },
+    ))
+    .await
 }

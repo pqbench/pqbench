@@ -36,13 +36,11 @@ make build          # or: cargo build --release
 an aligned table; on a pipe, NDJSON.
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet --format table
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
 year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
-files: 1
-columns: 2
 ```
 
 `profile` decodes a row sample and reports per-column facts (nulls, distinct
@@ -50,14 +48,11 @@ values, entropy, runs). It reads values, so it is the complement of `bytemass`,
 which reads only the footer.
 
 ```console run
-$ pqbench profile examples/quickstart.parquet --format table
+$ pqbench profile examples/quickstart.parquet | pqbench format
 id                           column  kind     values  nulls  ndv
 ---------------------------  ------  -------  ------  -----  ---
 examples/quickstart.parquet  id      integer       8      0    8
 examples/quickstart.parquet  year    integer       8      0    8
-files: 1
-rows: 8
-columns: 2
 ```
 
 ## The metadata walk
@@ -67,13 +62,11 @@ those files. The walk lists a table's partitions, then their files, then
 measures them:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass --format table
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-files: 1
-columns: 2
 ```
 
 Reading a Delta or Iceberg log needs its cargo feature (`delta` / `iceberg`;
@@ -86,7 +79,7 @@ names itself. See [delta.md](delta.md) and [iceberg.md](iceberg.md).
 build step:
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet | pqbench viz -o /tmp/report
+$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`; open it in a browser. See [viz.md](viz.md).

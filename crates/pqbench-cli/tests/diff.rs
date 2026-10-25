@@ -1,3 +1,5 @@
+mod common;
+
 use std::process::Command;
 
 fn command() -> Command {
@@ -13,13 +15,10 @@ fn fixture() -> &'static str {
 #[test]
 fn file_and_saved_stream_comparisons_agree() {
     let directory = tempfile::tempdir().unwrap();
-    let saved = directory.path().join("mass.lz4");
-    let measured = command()
-        .args(["bytemass", fixture(), "-o"])
-        .arg(&saved)
-        .output()
-        .unwrap();
+    let saved = directory.path().join("mass.ndjson");
+    let measured = common::measured(fixture());
     assert!(measured.status.success());
+    std::fs::write(&saved, &measured.stdout).unwrap();
     let diff = command()
         .args(["diff", fixture()])
         .arg(&saved)
@@ -35,10 +34,7 @@ fn file_and_saved_stream_comparisons_agree() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    let columns: Vec<_> = rows
-        .iter()
-        .filter(|row| row["kind"] == "pqbench.diff-column")
-        .collect();
+    let columns: Vec<_> = rows.iter().collect();
     assert_eq!(columns.len(), 7);
     assert!(columns
         .iter()

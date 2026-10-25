@@ -33,7 +33,7 @@ pub struct Config {
 /// total time is the sum of the means and its SE² is the sum of the SE²s
 /// (independent variances add). `fastest` mode falls out naturally — a single
 /// sample has SE² 0.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, serde::Deserialize)]
 pub struct Estimate {
     /// Number of samples the mean is over.
     pub n: u64,

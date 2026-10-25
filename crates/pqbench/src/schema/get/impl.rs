@@ -38,7 +38,7 @@ struct Namespace {
 }
 
 pub(crate) async fn get(workspace: &Workspace, name: &str) -> Result<Schema, Error> {
-    let (catalog, schema) = crate::v1::name::parse_schema(name)
+    let (catalog, schema) = Schema::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/schemas/… name")))?;
     match workspace.config().dialect {
         TableFormat::Unity => unity_schema(workspace, &catalog, &schema).await,

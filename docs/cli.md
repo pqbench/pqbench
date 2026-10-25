@@ -8,16 +8,18 @@ that command and links back. This file is the durable copy.
 
 | Goal | Command |
 | --- | --- |
-| On-disk bytes per column | `pqbench bytemass FILE` |
-| List a table's natural partitions | `pqbench list partitions DIR` (Table refs on stdin) |
+| Name a file for measurement | `pqbench table-file FILE` |
+| On-disk bytes per column | `pqbench bytemass` (records on stdin) |
+| List a table's natural partitions | `pqbench list partitions` (Table refs on stdin) |
 | List a partition's files | `pqbench list files` (partitions on stdin) |
 | Read the endpoint's metastore record | `pqbench get metastore` (`PQB_ENDPOINT`) |
 | List the catalogs at a catalog endpoint | `pqbench list catalogs` (`PQB_ENDPOINT`) |
-| Read one catalog's record | `pqbench get catalog [CATALOG]` (refs on stdin) |
-| List the schemas in a catalog | `pqbench list schemas [CATALOG]` (refs on stdin) |
-| Read one schema's record | `pqbench get schema CATALOG.SCHEMA` (refs on stdin) |
-| List the tables in a schema | `pqbench list tables CATALOG.SCHEMA` (refs on stdin) |
-| Read one table's record | `pqbench get table CATALOG.SCHEMA.TABLE` (Table refs on stdin) |
+| Read one catalog's record | `pqbench get catalog` (Catalog refs on stdin) |
+| List the schemas in a catalog | `pqbench list schemas` (Catalog refs on stdin) |
+| Read one schema's record | `pqbench get schema` (Schema refs on stdin) |
+| List the tables in a schema | `pqbench list tables` (Schema refs on stdin) |
+| Read one table's record | `pqbench get table` (Table refs on stdin) |
+| Render a stream as tables | `pqbench format` (NDJSON on stdin) |
 | Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -28,27 +30,25 @@ that command and links back. This file is the durable copy.
 
 The walk reads with two verbs: `get` reads one resource of the walk, `list`
 lists one of its collections. Each level reads its parent's refs on standard
-input, or takes the parent as its argument, so the walk is a pipe:
+input, so the walk is a pipe:
 
 ```console no-run
 $ pqbench list catalogs | pqbench list schemas | pqbench list tables
-$ pqbench get table dbx_samples.nyctaxi.trips
+$ echo '"dbx_samples.nyctaxi.trips"' | pqbench get table
 ```
 
 A level reads standard input only when it is a stream — a pipeline's pipe, or a
-`<file` redirect. A terminal, and a notebook kernel's socket, are not: the level
-falls back to its argument (or its own error) instead of blocking on a read that
-never returns.
+`<file` redirect. A terminal, and a notebook kernel's socket, are not, so a
+level run with no input fails instead of blocking on a read that never returns.
 
 The usual walk:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
-A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
-the stream clean: only data rows are shown, bounded to 1000 rows, with the
-count of hidden rows reported. Credentials travel on the refs (`AWS_*`) —
+Standard output is NDJSON. `pqbench format` renders it as aligned tables: one
+section per record type, with only the curated columns shown. Credentials travel on the refs (`AWS_*`) —
 `credentials get` writes the vended keys onto the refs it passes on, and
 pqbench never writes them into the process environment itself.
 
@@ -56,15 +56,14 @@ pqbench never writes them into the process environment itself.
 
 | resource | Produced by | Consumed by |
 | --- | --- | --- |
-| `Metastore` | `get metastore` | humans / scripts (`--json`) |
-| `Catalog` | `list catalogs`, `get catalog` | `get catalog`, `list schemas`, humans / scripts (`--json`) |
+| `Metastore` | `get metastore` | humans / scripts  |
+| `Catalog` | `list catalogs`, `get catalog` | `get catalog`, `list schemas`, humans / scripts  |
 | `Schema` | `list schemas`, `get schema` | `get schema`, `list tables` |
 | `Table` | `list tables`, `get table`, `credentials get` | `get table`, `list partitions`, `credentials get` |
-| `Partition` | `list partitions` | `list files`, humans / scripts (`--json`) |
-| `TableFile` | `list files` | `bytemass`, humans / scripts (`--json`) |
-| `remote-source` | a producer | `bytemass` |
-| `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts (`--json`) |
-| `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
+| `Partition` | `list partitions` | `list files`, humans / scripts  |
+| `TableFile` | `list files`, `table-file` | `bytemass`, humans / scripts  |
+| `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts  |
+| `pqbench.profile-column` | `profile` | humans / scripts  |
 | `pqbench.skill` | `skill` (list) | an agent |
 
 A resource's `name` is its identity: the collection segment (`catalogs`,
@@ -75,9 +74,6 @@ a `kind` or a version of its own — the API version is the package's.
 
 | Flag | Meaning |
 | --- | --- |
-| `-o` / `--output` | `FILE` for the lz4 NDJSON stream; `PREFIX` on `viz`. Independent of what stdout shows. |
-| `--format` | Every streaming command: `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
-| `--json` | `bytemass`, `lz`, `compression`, `profile`: stream NDJSON on stdout (same as `--format json`). |
 
 ## Auth — how to reach data
 
@@ -101,23 +97,10 @@ reads the default AWS provider chain, then applies the table's `credentials`.
 | `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` | `false` for path-style |
 | `AWS_SKIP_SIGNATURE` | `true` for a public bucket |
 
-Only `AWS_*` names are accepted on a `remote-source` document.
-
 Process env (instance role, SSO, shared credentials):
 
 ```console no-run
-AWS_PROFILE=analytics pqbench bytemass s3://bucket/table/part-0.parquet
-```
-
-Vended STS on a producer document piped into `bytemass`:
-
-```console no-run
-cat <<'EOF' | pqbench bytemass
-{"version":1,
- "inputs":["s3://bucket/table/part-0.parquet"],
- "env":{"AWS_ACCESS_KEY_ID":"…","AWS_SECRET_ACCESS_KEY":"…",
-        "AWS_SESSION_TOKEN":"…","AWS_REGION":"us-east-1"}}
-EOF
+AWS_PROFILE=analytics pqbench table-file s3://bucket/table/part-0.parquet | pqbench bytemass
 ```
 
 ### Catalog config (Unity / Databricks / Iceberg REST)
@@ -164,9 +147,16 @@ requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
 instead of buffering. A `pqbench ratelimit` stage
 paces the refs between two levels at a target rate — records pass through
-unchanged, one bucket per resource type, nothing dropped. A 429 fails the level with the
-endpoint's status and body; pace the walk and retry it at a lower rate in the
-shell:
+unchanged, one bucket per resource type, nothing dropped. A ref whose read
+fails — a timeout, a dropped connection, an endpoint answer such as a 429, or
+a storage fault — is dropped by the level: it names the ref and the cause on
+standard error, finishes the stream, and exits non-zero with the count, so one
+bad ref does not truncate a walk. The drop is only the read: a ref that does not
+name a resource, a record whose fields are wrong, or an output failure still
+fails the level. `ratelimit` keeps the endpoint from answering
+429 in the first place; a level that fails outright — the root `list catalogs`,
+a malformed stream — still fails the pipeline, and the shell can retry it at a
+lower rate:
 
 ```console
 set -o pipefail
@@ -178,8 +168,7 @@ done
 
 `list catalogs | list schemas` lists every schema at the endpoint; `list catalogs |
 get catalog` enriches each catalog instead. `get` emits the same kind of resource
-as the `list` it reads from, so you can insert it into a walk or skip it; `tee`
-(or `-o`) writes each level into the job tree.
+as the `list` it reads from, so you can insert it into a walk or skip it; `tee` writes each level into the job tree.
 
 ```console no-run
 $ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
@@ -189,13 +178,12 @@ name                                   comment  uri
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
 catalogs/dbx_samples/schemas/nyctaxi    …        s3://lakehouse/nyctaxi
 catalogs/samples/schemas/accuweather    …        s3://lakehouse/weather
-schemas: 3
 ```
 
 `get schema` reads one schema (catalog, name, comment, location, properties)
-from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `list tables`
-lists the tables in it, one `Table` line each — the
-document `get table` enriches. Unity's `/tables` pages carry the full name
+from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`; it takes
+`Schema` records on standard input. `list tables` lists the tables in a schema,
+one `Table` line each — the document `get table` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries its name and no storage URI — `get table` derives the
 `loadTable` URL and reads the metadata inline.
@@ -209,10 +197,11 @@ the same lease:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi --format json |
+$ echo '"dbx_samples.nyctaxi"' |
+    pqbench list tables |
     pqbench credentials check |
     pqbench credentials get |
-    pqbench get table --format json
+    pqbench get table
 ```
 
 `pqbench setup` prints that environment for the shell to evaluate:
@@ -266,8 +255,9 @@ walk's single filter: it drops a `system` catalog ref, a view (the catalog
 reports no location), and a table on Databricks default storage, with the
 reason on standard error; eligible refs pass through unchanged. A drop is the
 filter working, not a failure — a whole-catalog walk always has tables it
-cannot read outside compute — so the stage still succeeds; only a real error (a
-missing table, an endpoint fault) fails it. `credentials get` is the stage that materializes the
+cannot read outside compute — so an ineligible ref still leaves the stage
+green; a ref whose check fails is dropped and counted, and the stage exits
+non-zero. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
 `temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the
@@ -279,7 +269,8 @@ cannot serve passes through with its own credentials.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi --format json |
+$ echo '"dbx_samples.nyctaxi"' |
+    pqbench list tables |
     pqbench credentials check | pqbench credentials get
 ```
 
@@ -298,32 +289,30 @@ measures.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi --format json |
+$ echo '"dbx_samples.nyctaxi"' |
+    pqbench list tables |
     pqbench credentials check |
     pqbench credentials get |
     pqbench list partitions
 name                  first_time     last_time  commits
 --------------------  -----------  ------------  -------
 …                     …            …                   1
-partitions: 1
 ```
 
 ```console no-run
-$ PQB_ENDPOINT=… pqbench get table pqbench.demo.events
+$ echo '{"name":"pqbench.demo.events"}' | PQB_ENDPOINT=… pqbench get table
 name                           format  snapshot_version  columns  uri
 -----------------------------  ------  ----------------  -------  ----------------------
 catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/unity/events
-tables: 1
 ```
 
-List a table's partitions by URI; a terminal prints them:
+List a table's partitions from a table record; a terminal prints them:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table --format table
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
-partitions: 1
 ```
 
 List the catalogs at the endpoint:
@@ -334,28 +323,25 @@ name                  catalog_type
 --------------------  -----------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
 catalogs/samples      CATALOG_TYPE_SYSTEM
-catalogs: 2
 ```
 
 Read one catalog's record:
 
 ```console no-run
-$ pqbench get catalog dbx_samples
+$ echo '"dbx_samples"' | pqbench get catalog
 name                  catalog_type
 --------------------  --------------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
-catalogs: 1
 ```
 
 List the schemas in a catalog:
 
 ```console no-run
-$ pqbench list schemas dbx_samples
+$ echo '"dbx_samples"' | pqbench list schemas
 name                                   comment  uri
 -------------------------------------  -------  ----------------------
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
 catalogs/dbx_samples/schemas/nyctaxi    …        s3://lakehouse/nyctaxi
-schemas: 2
 ```
 
 ### Databricks-governed tables
@@ -435,21 +421,6 @@ is a shell job on the stream (`jq`, `sort`, `head`, `xargs`) — see
 [demo.md](demo.md). `bytemass` reads its files in flight (`--fan-out`, 128 by
 default), so the per-file footer round trips overlap instead of adding up.
 
-## S3 file patterns
-
-With the `aws` feature, `bytemass` expands quoted S3 key patterns before
-reading footers. `*` and `?` match within one path component; `**` can span
-subdirectories. Listing starts at the literal directory prefix and consumes
-all listing pages. Results are sorted and deduplicated. No matches and listing
-permission failures are explicit errors; exact URIs never require listing.
-Percent-encode literal wildcard characters when addressing an exact key.
-
-```console
-$ pqbench bytemass 's3://bucket/table/*.parquet'
-$ pqbench bytemass 's3://bucket/table/**/*.parquet'
-```
-
-These patterns enumerate physical objects, not a table's active snapshot.
-Use `list partitions | list files` for Delta/Iceberg analysis to avoid counting
-obsolete files.
-
+`bytemass` measures the table-file records it is given; it does not expand
+patterns or list a prefix. A pattern belongs to the producer: `list files`
+names a table's files from its log, and `table-file` names one path or URI.

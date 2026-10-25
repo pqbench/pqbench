@@ -19,7 +19,7 @@ $ pqbench skill parquet-advisor recipes | head -1
 # Recipes: write path, DDL, compression levels
 ```
 
-No `-o` on a TTY. A named skill is raw markdown.
+A named skill is raw markdown.
 
 ## parquet-advisor
 

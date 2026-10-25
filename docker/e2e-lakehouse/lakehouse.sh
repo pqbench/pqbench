@@ -187,6 +187,22 @@ expect_events() {
     echo "$measured"
 }
 
+catalog_json() {
+    printf '{"name":"catalogs/%s"}\n' "$1"
+}
+
+schema_json() {
+    local catalog schema
+    IFS=. read -r catalog schema <<< "$1"
+    printf '{"name":"catalogs/%s/schemas/%s"}\n' "$catalog" "$schema"
+}
+
+table_json() {
+    local catalog schema table
+    IFS=. read -r catalog schema table <<< "$1"
+    printf '{"name":"catalogs/%s/schemas/%s/tables/%s"}\n' "$catalog" "$schema" "$table"
+}
+
 check_unity() {
     ensure_pqbench
     set -a
@@ -204,9 +220,9 @@ check_unity() {
                 jq -c '{table_id, operation: "READ"}')" |
         jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv')
     walk_env "" "" "$vended_key" "$vended_secret" "$vended_token"
-    measurement=$("$pqbench_bin" list partitions "$table_location" |
+    measurement=$(printf '{"name":"catalogs/local/schemas/local/tables/events","uri":"%s"}\n' "$table_location" | "$pqbench_bin" list partitions |
         "$pqbench_bin" list files |
-        "$pqbench_bin" bytemass --json) || {
+        "$pqbench_bin" bytemass) || {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
     }
@@ -215,11 +231,11 @@ check_unity() {
     # `list tables` lists the same table from Unity; the walk reads it under the
     # lease the environment carries, and measures the files the window added.
     walk_env "$unity_catalog" "" "$VENDED_ACCESS_KEY_ID" "$VENDED_SECRET_ACCESS_KEY" "$VENDED_SESSION_TOKEN"
-    measurement=$("$pqbench_bin" list tables pqbench.demo --format json |
+    measurement=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
         "$pqbench_bin" get table |
         "$pqbench_bin" list partitions |
         "$pqbench_bin" list files |
-        "$pqbench_bin" bytemass --json) || {
+        "$pqbench_bin" bytemass) || {
         echo "check failed: the lake pipe produced no measurement" >&2
         exit 1
     }
@@ -227,7 +243,7 @@ check_unity() {
 
     # `list schemas` lists Unity's schemas for the same catalog.
     local schemas
-    schemas=$("$pqbench_bin" list schemas pqbench --format json |
+    schemas=$(catalog_json pqbench | "$pqbench_bin" list schemas |
         jq -r 'select(.name | startswith("catalogs/pqbench/schemas/")) | .name | split("/") | last') || {
         echo "check failed: list schemas produced no schemas" >&2
         exit 1
@@ -239,7 +255,7 @@ check_unity() {
 
     # `list tables` lists Unity's tables for the same schema.
     local tables
-    tables=$("$pqbench_bin" list tables pqbench.demo --format json |
+    tables=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
         jq -r 'select(.name | contains("/tables/")) | (.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) " + (.uri // "-")') || {
         echo "check failed: list tables produced no tables" >&2
         exit 1
@@ -252,7 +268,7 @@ check_unity() {
     # `get table` reads the record without files: the Unity record plus the
     # Delta snapshot metadata, as an enriched `pqbench.table-ref` v2.
     local table_info
-    table_info=$("$pqbench_bin" get table pqbench.demo.events --format json |
+    table_info=$(table_json pqbench.demo.events | "$pqbench_bin" get table |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) snapshot=\(.snapshot_version) columns=[\([.declared_columns[].column] | join(","))]"') || {
         echo "check failed: get table produced no table" >&2
         exit 1
@@ -267,8 +283,8 @@ check_unity() {
     # lease (keys + token) only — the endpoint stays in the environment.
     walk_env "$unity_catalog" "" "" ""
     local vended_ref
-    vended_ref=$("$pqbench_bin" list tables pqbench.demo --format json |
-        "$pqbench_bin" credentials get --format json |
+    vended_ref=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
+        "$pqbench_bin" credentials get |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) key=\(.credentials.access_key_id // "-") session=\(if .credentials.session_token then "set" else "unset" end) endpoint=-"') || {
         echo "check failed: credentials get produced no ref" >&2
         exit 1
@@ -279,9 +295,9 @@ check_unity() {
     }
 
     local vended_info
-    vended_info=$("$pqbench_bin" list tables pqbench.demo --format json |
-        "$pqbench_bin" credentials get --format json |
-        "$pqbench_bin" get table --format json |
+    vended_info=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
+        "$pqbench_bin" credentials get |
+        "$pqbench_bin" get table |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) snapshot=\(.snapshot_version) columns=[\([.declared_columns[].column] | join(","))] env=\(if .credentials then "set" else "none" end)"') || {
         echo "check failed: the vended table loop produced no record" >&2
         exit 1
@@ -301,11 +317,11 @@ check_iceberg() {
     # loadTable's inline metadata and fills the storage path (the metadata
     # JSON), then the walk measures the files the window added.
     walk_env "$iceberg_rest/v1" "iceberg" "test" "test"
-    measurement=$("$pqbench_bin" list tables pqbench.demo --format json |
+    measurement=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
         "$pqbench_bin" get table |
         "$pqbench_bin" list partitions |
         "$pqbench_bin" list files |
-        "$pqbench_bin" bytemass --json) || {
+        "$pqbench_bin" bytemass) || {
         echo "check failed: the Iceberg lake pipe produced no measurement" >&2
         exit 1
     }
@@ -313,7 +329,7 @@ check_iceberg() {
 
     # `get table` reads loadTable's inline metadata, without files.
     local table_info
-    table_info=$("$pqbench_bin" get table pqbench.demo.events --format json |
+    table_info=$(table_json pqbench.demo.events | "$pqbench_bin" get table |
         jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) columns=[\([.declared_columns[].column] | join(","))] snapshot=\(if .snapshot_version > 0 then "set" else "unset" end)"') || {
         echo "check failed: get table produced no Iceberg table" >&2
         exit 1

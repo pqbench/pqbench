@@ -8,42 +8,43 @@ mod support;
 #[test]
 fn where_the_bytes_go() {
     // where_the_bytes_go, from line 24
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table", 25, Some(&["column            codec         encodings                  bytes  values", "----------------  ------------  ------------------------  ------  ------", "text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000", "files: 1", "columns: 7"]));
+    support::run("pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format", 25, Some(&["column            codec         encodings                  bytes  values", "----------------  ------------  ------------------------  ------  ------", "text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000", "label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000", "dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000", "communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000", "datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000", "username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000", "url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn where_the_bytes_go_2() {
-    // where_the_bytes_go_2, from line 45
-    support::run("pqbench profile crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --format table", 46, Some(&["id                                                           column            kind    values  nulls   ndv", "-----------------------------------------------------------  ----------------  ------  ------  -----  ----", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  text              string    3000      0  2753", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  label             string    3000      0    32", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  dataType          string    3000      0     2", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  communityName     string    3000      0    32", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  datetime          string    3000      0     1", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  username_encoded  string    3000      0  3000", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  url_encoded       string    3000      0  3000", "files: 1", "rows: 3000", "columns: 7"]));
+    // where_the_bytes_go_2, from line 43
+    support::run("pqbench profile crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench format", 44, Some(&["id                                                           column            kind    values  nulls   ndv", "-----------------------------------------------------------  ----------------  ------  ------  -----  ----", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  text              string    3000      0  2753", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  label             string    3000      0    32", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  dataType          string    3000      0     2", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  communityName     string    3000      0    32", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  datetime          string    3000      0     1", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  username_encoded  string    3000      0  3000", "crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  url_encoded       string    3000      0  3000"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn where_the_bytes_go_3() {
-    // where_the_bytes_go_3, from line 68
-    support::run("pqbench bytemass crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench viz -o /tmp/reddit", 69, None);
+    // where_the_bytes_go_3, from line 63
+    support::run("pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench viz -o /tmp/reddit", 64, None);
 }
 
 #[rustfmt::skip]
 #[test]
 fn which_codec() {
-    // which_codec, from line 77
-    support::run("pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 --format table", 78, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "zstd        1           ±458            ±1722   0.56", "gzip        1            ±68             ±270   0.58", "lz4         1           ±897            ±8476   0.81", "snappy      1           ±912            ±2101   0.81", "file: crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet", "rows: 4", "columns: 0"]));
+    // which_codec, from line 72
+    support::run("pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqbench format", 73, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "zstd        1           ±458            ±1722   0.56", "gzip        1            ±68             ±270   0.58", "lz4         1           ±897            ±8476   0.81", "snappy      1           ±912            ±2101   0.81"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn files_from_the_wild() {
-    // files_from_the_wild, from line 103
-    support::run(r#"pqbench bytemass data/samples/squad.parquet --format json \
+    // files_from_the_wild, from line 95
+    support::run(r#"pqbench table-file data/samples/squad.parquet \
+    | pqbench bytemass \
     | jq -r 'select(.name | endswith("/bytemass")) | [(.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), .compressed_bytes] | @tsv' \
-    | sort -k2 -nr"#, 104, Some(&["context                             8490172", "question                            3027096", "answers.text.list.item              1515148", "id                                   709562", "answers.answer_start.list.item       304136", "title                                 18488"]));
+    | sort -k2 -nr"#, 96, Some(&["context                             8490172", "question                            3027096", "answers.text.list.item              1515148", "id                                   709562", "answers.answer_start.list.item       304136", "title                                 18488"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn files_from_the_wild_2() {
-    // files_from_the_wild_2, from line 122
-    support::run("pqbench bytemass data/samples/delta_byte_array.parquet --format table", 123, Some(&["column                 codec         encodings         bytes  values", "---------------------  ------------  ----------------  -----  ------", "c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000", "files: 1", "columns: 9"]));
+    // files_from_the_wild_2, from line 115
+    support::run("pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench format", 116, Some(&["column                 codec         encodings         bytes  values", "---------------------  ------------  ----------------  -----  ------", "c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000"]));
 }

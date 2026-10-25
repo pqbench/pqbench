@@ -14,7 +14,7 @@
 
 use serde::Deserialize;
 
-use super::api::{Error, Table};
+use super::api::{Error, Schema, Table};
 use crate::dialect;
 use crate::schema::TableFormat;
 use crate::Workspace;
@@ -59,7 +59,7 @@ struct Identifier {
 }
 
 pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Table>, Error> {
-    let (catalog, schema) = crate::v1::name::parse_schema(name)
+    let (catalog, schema) = Schema::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/schemas/… name")))?;
     let mut tables = match workspace.config().dialect {
         TableFormat::Unity => unity_tables(workspace, &catalog, &schema).await?,

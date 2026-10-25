@@ -28,28 +28,27 @@ interface (`stat` + `read_range`) the rest of the crate uses.
 ## Usage
 
 List the table's natural partitions, then their files, then measure them. A
-terminal prints the partitions as a table and a summary:
+terminal prints the partitions as a table:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table --format table
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
-partitions: 1
 ```
 
-Build with the feature when you run from source, e.g.
-`cargo run -p pqbench-cli --features delta -- list partitions ./path/to/table`, or run
+Build with the feature when you run from source: name the table on stdin, e.g.
+`echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' | cargo run -p pqbench-cli --features delta -- list partitions`, or run
 the same command in a container.
 
 Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
 A table's vended credentials travel as its `credentials` value (`AWS_*` keys);
 they are not written into the process environment. The cargo command is
-`cargo run -p pqbench-cli --features delta-s3 -- list partitions s3://bucket/table`.
+`echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/table"}' | cargo run -p pqbench-cli --features delta-s3 -- list partitions`.
 
 A producer can supply the table URI and vended credentials as
-a `remote-source` document. `list partitions` reads the log, and the credentials travel
-to `list files` and `bytemass`:
+a table record. `list partitions` reads the log, and the credentials travel to
+`list files` and `bytemass`:
 
 ## Backends
 
@@ -72,22 +71,16 @@ blob, log size), each carrying the lease; a file a later commit removes is still
 named. `bytemass` measures each file as its line arrives and compares its size
 to the log. `--min-file-size` drops files whose logged size is below the given
 size (bytes, or a number with a unit: kB/MB/GB/TB, KiB/MiB/GiB/TiB), so a walk
-can measure only the big files. A terminal prints the files as a table and the
-summary (file count, bytes); a pipe streams NDJSON. `--format json` forces the
-stream, and `-o` also writes it without delaying stdout:
+can measure only the big files. The stream is NDJSON, and `>` captures it:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files -o /tmp/partition.ndjson.lz4
-$ pqbench bytemass /tmp/partition.ndjson.lz4 --format table
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files > /tmp/partition.ndjson
+$ pqbench bytemass < /tmp/partition.ndjson | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-files: 1
-columns: 2
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files --min-file-size 1KB --format table
-partitions: 1
-files: 0
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files --min-file-size 1KB | pqbench format
 ```
 
 ## Memory use

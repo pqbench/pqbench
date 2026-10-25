@@ -13,12 +13,15 @@ mod credentials;
 mod diff;
 mod document;
 mod emit;
+mod error;
 mod file;
+mod format;
 mod get;
 mod help;
 mod list;
 mod lz;
 mod metastore;
+mod parse;
 mod partition;
 mod profile;
 mod ratelimit;
@@ -30,25 +33,12 @@ mod skill;
 mod source;
 mod stdin;
 mod table;
+mod table_file;
 mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.
 pub(crate) type CliError = Box<dyn std::error::Error + Send + Sync>;
-
-/// Render an error with its whole source chain. `Display` alone drops the
-/// cause: a transport failure reads only "request failed", while the
-/// socket-level error (reset, exhaustion, DNS) sits one `source()` deeper.
-fn error_chain(error: &dyn std::error::Error) -> String {
-    let mut rendered = error.to_string();
-    let mut source = error.source();
-    while let Some(error) = source {
-        rendered.push_str("\n  caused by: ");
-        rendered.push_str(&error.to_string());
-        source = error.source();
-    }
-    rendered
-}
 
 #[derive(Parser)]
 #[command(
@@ -97,6 +87,10 @@ enum Command {
         after_long_help = help::GET_AFTER
     )]
     Get(get::GetArgs),
+    #[command(about = "Render an NDJSON stream as tables")]
+    Format(format::FormatArgs),
+    #[command(about = "Name storage paths as table-file records")]
+    TableFile(table_file::TableFileArgs),
     #[command(
         about = help::LIST_ABOUT,
         long_about = help::LIST_LONG_ABOUT,
@@ -164,7 +158,9 @@ async fn main() -> ExitCode {
     match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {}", error_chain(e.as_ref()));
+            if e.downcast_ref::<error::Partial>().is_none() {
+                eprintln!("error: {}", error::error_chain(e.as_ref()));
+            }
             ExitCode::FAILURE
         }
     }
@@ -185,6 +181,8 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &args).await,
         Command::Get(args) => get::run(&workspace, &lake, &args).await,
+        Command::Format(args) => format::run(&args).await,
+        Command::TableFile(args) => table_file::run(&args).await,
         Command::List(args) => list::run(&workspace, &lake, &args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
@@ -204,6 +202,8 @@ impl Command {
             Command::Compression(_) => "compression",
             Command::Bytemass(_) => "bytemass",
             Command::Get(args) => args.name(),
+            Command::Format(_) => "format",
+            Command::TableFile(_) => "table-file",
             Command::List(args) => args.name(),
             Command::Credentials(_) => "credentials",
             Command::RateLimit(_) => "ratelimit",

@@ -14,7 +14,7 @@ use super::Error;
 /// Arguments for the `bytemass` command.
 #[derive(Debug, Clone, Default)]
 pub struct BytemassRequest {
-    /// Parquet paths or glob masks; quote masks to prevent shell expansion.
+    /// Parquet paths or storage URIs.
     pub inputs: Vec<String>,
     /// Storage options (`AWS_*` names) for remote inputs.
     pub env: BTreeMap<String, String>,
@@ -29,13 +29,12 @@ pub struct MeasuredFile {
 
 /// Measure the per-column byte masses of Parquet files.
 ///
-/// Inputs are local paths or storage URIs, each possibly a local or S3 glob
-/// mask. Only file footers are read. The result is one [`v1::Bytemass`] per
-/// column, in input order.
+/// Inputs are local paths or storage URIs. Only file footers are read. The
+/// result is one [`v1::Bytemass`] per column, in input order.
 ///
 /// # Errors
-/// Fails when there are no inputs, a mask matches no files, an input cannot be
-/// read, or a byte total overflows.
+/// Fails when there are no inputs, an input cannot be read, or a byte total
+/// overflows.
 pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<v1::Bytemass>, Error> {
     if request.inputs.is_empty() {
         return Err(Error::NoInputs);
@@ -47,10 +46,58 @@ pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<v1::
         .collect())
 }
 
+/// Measure the file a table-file record names.
+///
+/// The record's blob is its storage location, its credentials are the lease
+/// the read uses, and its size (when nonzero) is the log's claim, checked
+/// against the footer.
+///
+/// # Errors
+/// Fails when the record names no blob, the blob name is invalid, the file
+/// cannot be read, or its footer size differs from the log.
+pub async fn measure(lake: &Lake, file: &v1::TableFile) -> Result<MeasuredFile, Error> {
+    let blob = file
+        .blob
+        .as_deref()
+        .ok_or_else(|| Error::Invalid("a table-file record needs a blob to read".into()))?;
+    let uri = v1::name::blob_uri(blob)
+        .ok_or_else(|| Error::Invalid(format!("not a blob name: {blob}")))?;
+    let env = file
+        .credentials
+        .as_ref()
+        .map(v1::Credentials::to_env)
+        .unwrap_or_default();
+    let measured = measure_file(lake, &uri, &env).await?;
+    if let Some(size) = file.size_bytes.filter(|size| *size != 0) {
+        if measured.blob.size_bytes != Some(size) {
+            return Err(Error::Invalid(format!(
+                "active file size differs from log: {uri} (expected {size}, found {:?})",
+                measured.blob.size_bytes
+            )));
+        }
+    }
+    Ok(measured)
+}
+
+/// Measure one file into its blob and its per-column masses.
+///
+/// The footer is read once; only file metadata is fetched, never data pages.
+///
+/// # Errors
+/// Fails for an unreadable object, an invalid Parquet footer, or an
+/// unsupported URI.
+pub async fn measure_file(
+    lake: &Lake,
+    uri: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<MeasuredFile, Error> {
+    super::collection::measure_file(lake, uri, env).await
+}
+
 /// Measure each expanded input into a [`MeasuredFile`].
 ///
 /// # Errors
-/// Fails for empty inputs, unmatched patterns, invalid footers or I/O failures.
+/// Fails for empty inputs, invalid footers or I/O failures.
 pub async fn measure_files(
     lake: &Lake,
     request: &BytemassRequest,
@@ -59,20 +106,4 @@ pub async fn measure_files(
         return Err(Error::NoInputs);
     }
     super::collection::measure_files(lake, &request.inputs, &request.env).await
-}
-
-/// Resolve local and S3 patterns to sorted, unique object paths.
-///
-/// # Errors
-/// Invalid patterns, missing backend, listing errors, or unmatched patterns.
-pub async fn expand_inputs(
-    lake: &Lake,
-    inputs: &[String],
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<String>, Error> {
-    Ok(super::collection::expand_inputs(lake, inputs, env)
-        .await?
-        .into_iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect())
 }

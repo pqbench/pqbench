@@ -21,12 +21,12 @@ Commands compose on pipes: each writes a resource the next command reads.
   bytemass      → Blob + Bytemass      footer byte masses (one line per column)
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
+  format        → tables               render a stream (NDJSON on stdin)
 
 The walk reads with two verbs: `get` reads one resource, `list` lists a
 collection.
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format
-table|json` overrides either. `-o` also writes the lz4 NDJSON stream.
+Standard output is NDJSON; `pqbench format` renders it as tables.
 Subcommand help is local (`pqbench get --help`).
 Auth, documents, and format skills are here.
 
@@ -35,15 +35,17 @@ Guide: docs/cli.md";
 /// Extensive after-text for `pqbench --help` only.
 pub const ROOT_AFTER: &str = "\
 Examples:
-  pqbench bytemass data.parquet
-  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass
+  pqbench table-file data.parquet | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass
   pqbench list catalogs | pqbench list schemas | pqbench list tables
-  pqbench list tables CAT.SCHEMA | pqbench credentials check | pqbench credentials get \\
-    | pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass
+  pqbench list catalogs | pqbench list schemas | pqbench list tables \\
+    | pqbench credentials check | pqbench credentials get | pqbench get table \\
+    | pqbench list partitions | pqbench list files | pqbench bytemass
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
   pqbench skill parquet-advisor
+  pqbench list catalogs | pqbench format
 
 Documents:
   Metastore              the endpoint's metastore record (get metastore)
@@ -51,11 +53,10 @@ Documents:
   Schema                 a catalog's schemas (list schemas) / one record (get schema)
   Table                  a schema's tables (list tables) / one record (get table, credentials get)
   Partition              a table's natural partitions (list partitions)
-  TableFile              one file of a partition (list files)
-  remote-source          one URI + AWS_* from a producer
+  TableFile              one table file (list files, table-file)
   Blob                   one file's footer facts (bytemass)
   Bytemass               one column's byte mass (bytemass)
-  pqbench.profile-column one column's profile
+  pqbench.profile-column one column's profile (profile | format)
   pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
@@ -89,10 +90,9 @@ Auth (how to reach data):
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
   Producer pipe
-    echo '{\"version\":1,\"inputs\":[\"s3://b/t\"],
-      \"env\":{\"AWS_ACCESS_KEY_ID\":\"…\",\"AWS_SECRET_ACCESS_KEY\":\"…\",
-             \"AWS_SESSION_TOKEN\":\"…\",\"AWS_REGION\":\"us-east-1\"}}' \\
-      | pqbench bytemass
+    pqbench table-file s3://bucket/table/part-0.parquet | pqbench bytemass
+    (the table-file record names the blob; AWS_* in the environment or a
+     vended lease supplies storage access)
 
 Format skills (read these when the input is Parquet or a table):
   Parquet file format      https://parquet.apache.org/docs/file-format/
@@ -112,20 +112,19 @@ Read Parquet footers only and report the on-disk bytes of each column, its
 chunks folded over the file's row groups. Works on compressed files
 (HEAD + ranged GETs on a URI).
 
-Inputs: parquet paths, quoted globs, s3://, a TableFile or
-remote-source document, or '-' / stdin. List a table's files with
-`pqbench list partitions | pqbench list files` first.
+Inputs: a stream of table-file records on standard input. `list files`
+names a table's files; `table-file PATH` names one path. A glob is a shell
+job on that list, not a bytemass feature. A table-file record carries the
+file's blob and, when vended, its lease.
 
-A terminal prints one row per column as a table; a pipe streams one `Blob`
-per file and one `Bytemass` per column as NDJSON. `--format json` (or
-`--json`) forces the stream, and `-o` also writes it. Pipe the stream to `viz`.";
+One `Blob` per file and one `Bytemass` per column, as NDJSON. `pqbench
+format` renders the columns as a table; pipe the stream to `viz`.";
 
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
-  pqbench bytemass data.parquet
-  pqbench bytemass 'data/*.parquet' -o masses.ndjson.lz4
-  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass
-  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass | pqbench viz -o report
+  pqbench table-file data.parquet | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o report
 
 See also:
   pqbench list --help      list the partitions whose files this command measures
@@ -140,15 +139,17 @@ Read one resource of the walk, by type:
 
   metastore  the endpoint's record (name, uid, cloud, region), one line
   catalog    one catalog's record (name, catalog_type, comment, owner)
-  schema     one schema's record (name, comment, uri, properties), from
-             CATALOG.SCHEMA
+  schema     one schema's record (name, comment, uri, properties), from a
+             Catalog ref
   table      one table's record (format, snapshot, columns, partition columns,
-             format properties), from CATALOG.SCHEMA.TABLE
+             format properties), from a Schema ref
 
 The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
-PQB_TABLE_FORMAT; a `get` reads a catalog, so it needs an endpoint. Without a
-name the command reads that type's resources on standard input — one per line —
-so it enriches a listing: `pqbench list catalogs | pqbench get catalog`.
+PQB_TABLE_FORMAT; a `get` reads a catalog, so it needs an endpoint. `get`
+reads the matching resource records on standard input — one per line — so it
+enriches a listing: `pqbench list catalogs | pqbench get catalog`. A JSON
+record names the resource: `echo '\"dbx_samples.nyctaxi\"' | pqbench
+get schema`.
 
 Unity REST serves /schemas/{full_name} and /tables/{full_name}; the catalog's
 declared columns and properties are merged over the Delta log, which is read
@@ -162,16 +163,15 @@ check` gates the walk on tables the catalog marks readable outside compute. The
 emitted record keeps its credentials, so a later stage reads the table's files
 under the same lease.
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
+The stream is NDJSON.";
 
 pub const GET_AFTER: &str = "\
 Examples:
   pqbench get metastore
-  pqbench get catalog dbx_samples
-  pqbench get schema dbx_samples.nyctaxi
-  pqbench get table dbx_samples.nyctaxi.trips
-  pqbench list tables dbx_samples.nyctaxi | pqbench get table
+  pqbench list catalogs | pqbench get catalog
+  echo '\"dbx_samples.nyctaxi\"' | pqbench list tables | pqbench get table
+  pqbench list schemas | pqbench get schema
+  pqbench list tables | pqbench get table
 
 See also:
   pqbench list --help      the walk's collections
@@ -185,12 +185,12 @@ pub const LIST_LONG_ABOUT: &str = "\
 List a collection of the walk, by name:
 
   catalogs    the catalogs at the endpoint, one Catalog line each
-  schemas     the schemas in a catalog (CATALOG), one Schema line each
-  tables      the tables in a schema (CATALOG.SCHEMA), one Table line each —
-              the record `get table` enriches
-  partitions  a table's natural partitions (DIR, or a Table stream on standard
-              input): its commits grouped into epoch-aligned, half-open UTC
-              windows
+  schemas     the schemas in a catalog (Catalog refs on standard input), one
+              Schema line each
+  tables      the tables in a schema (Schema refs on standard input), one Table
+              line each — the record `get table` enriches
+  partitions  a table's natural partitions (Table refs on standard input): its
+              commits grouped into epoch-aligned, half-open UTC windows
   files       a partition's files — the ones its commits added
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
@@ -212,8 +212,8 @@ stream is what `bytemass` measures. --min-file-size drops files whose logged
 size is below SIZE (bytes, or a number with a unit: kB/MB/GB/TB or
 KiB/MiB/GiB/TiB), so a walk can measure only the big files.
 
-Every level reads its parent's refs on standard input, or takes the parent as
-its argument, and writes one resource per line, so the walk is a pipe:
+Every level reads its parent's refs on standard input and writes one resource
+per line, so the walk is a pipe:
 
   pqbench list catalogs | pqbench list schemas | pqbench list tables |
   pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass
@@ -222,16 +222,16 @@ Detection: _delta_log is Delta (wins UniForm). Iceberg is
 metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json path.
 Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
+The stream is NDJSON.";
 
 pub const LIST_AFTER: &str = "\
 Examples:
   pqbench list catalogs
-  pqbench list schemas dbx_samples
-  pqbench list tables dbx_samples.nyctaxi
-  pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass
-  pqbench list partitions ./delta-table | pqbench list files --min-file-size 100MB | pqbench bytemass
+  pqbench list catalogs | pqbench list schemas | pqbench list tables
+  echo '\"dbx_samples\"' | pqbench list schemas
+  echo '\"dbx_samples.nyctaxi\"' | pqbench list tables
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files --min-file-size 100MB | pqbench bytemass
 
 See also:
   pqbench get --help       read one resource
@@ -270,13 +270,16 @@ PQB_TABLE_FORMAT and AWS_*.
          it falls back to the delegated loadTable, and a table the catalog
          cannot serve via Iceberg passes through with its own env.
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
+The stream is NDJSON.";
 
 pub const CREDENTIALS_AFTER: &str = "\
 Examples:
-  PQB_ENDPOINT=… pqbench list tables CAT.SCHEMA | pqbench credentials check | pqbench credentials get
-  PQB_ENDPOINT=… pqbench list tables CAT.SCHEMA | pqbench credentials check | pqbench credentials get | pqbench get table
+  export PQB_ENDPOINT=… PQB_TOKEN=…
+  echo '{\"name\":\"catalogs/dbx_samples/schemas/nyctaxi\"}' \
+    | pqbench list tables | pqbench credentials check | pqbench credentials get
+  echo '{\"name\":\"catalogs/dbx_samples/schemas/nyctaxi\"}' \
+    | pqbench list tables | pqbench credentials check | pqbench credentials get \
+    | pqbench get table
 
 See also:
   pqbench list --help  the tables in a schema
@@ -300,7 +303,7 @@ rate. A 429 fails the level; retry it at a lower --rate.";
 pub const RATELIMIT_AFTER: &str = "\
 Examples:
   pqbench list catalogs | pqbench ratelimit | pqbench list schemas
-  pqbench list schemas CATALOG | pqbench ratelimit --rate 5 | pqbench list tables
+  pqbench list schemas | pqbench ratelimit --rate 5 | pqbench list tables
 
 See also:
   pqbench list --help     the walk's collections
@@ -316,8 +319,8 @@ treemap of bytes per value. Does not measure files. `-o PREFIX` is required.";
 
 pub const VIZ_AFTER: &str = "\
 Examples:
-  pqbench bytemass data.parquet | pqbench viz -o report
-  pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass | pqbench viz -o report
+  pqbench table-file data.parquet | pqbench bytemass | pqbench viz -o report
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o report
   xdg-open report.html
 
 See also:
@@ -331,13 +334,13 @@ pub const LZ_LONG_ABOUT: &str = "\
 Compress the whole file as opaque bytes. -c codec@level is repeatable;
 omitting -c sweeps every wired codec (zstd, lz4, gzip, snappy). --samples
 timed passes after --warmup-iterations. --mode fastest keeps the best pass;
-mean averages all. A terminal prints the sweep as a table; `--format json`
-(or `--json`) streams the same report as composable NDJSON.";
+mean averages all. The report is composable NDJSON; `pqbench format`
+renders it as a table.";
 
 pub const LZ_AFTER: &str = "\
 Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
-  pqbench lz file.bin --json
+  pqbench lz file.bin | pqbench format
 
 See also:
   pqbench compression --help  same sweep over Parquet pages (NONE input)
@@ -350,15 +353,14 @@ pub const COMPRESSION_ABOUT: &str =
 pub const COMPRESSION_LONG_ABOUT: &str = "\
 Same sweep as lz, but over each column chunk's encoded pages. The file must
 be NONE-compressed; a compressed file is rejected. --per-column adds one
-report row per column chunk. A terminal prints the sweep as a table (report
-rows, then per-column rows); `--format json` (or `--json`) streams the same
-report as composable NDJSON.";
+report row per column chunk. The report is composable NDJSON (report rows,
+then per-column rows); `pqbench format` renders it as a table.";
 
 pub const COMPRESSION_AFTER: &str = "\
 Examples:
   pqbench compression data.parquet
   pqbench compression data.parquet --per-column
-  pqbench compression data.parquet -c zstd@3 --json
+  pqbench compression data.parquet -c zstd@3 | pqbench format
 
 See also:
   pqbench lz --help        raw-byte sweep (any file)
@@ -381,16 +383,13 @@ keeps every column, and a glob matching nothing is an error. --rows is
 `all` or `first:N` (default first:8192). --top bounds top_values per
 column (default 8).
 
-A terminal prints one row per column as a table; a pipe streams one
-`pqbench.profile-column` per column. `--format json`
-(or `--json`) forces the stream, and `-o` also writes it.";
+One record per column, as NDJSON.";
 
 pub const PROFILE_AFTER: &str = "\
 Examples:
   pqbench profile data.parquet
   pqbench profile data.parquet --columns 'text' --top 5
-  pqbench profile data.parquet --rows first:1024 -o profile.ndjson.lz4
-  pqbench profile data.parquet --rows all --json
+  pqbench profile data.parquet --rows all | pqbench format
 
 See also:
   pqbench bytemass --help  footer byte masses without decoding rows
@@ -401,8 +400,8 @@ See also:
 pub const SKILL_ABOUT: &str = "Print a bundled agent skill (write / DDL / compression recipes)";
 
 pub const SKILL_LONG_ABOUT: &str = "\
-Print an agent skill that is compiled into this binary. No TTY `-o`
-requirement: this is a document, like `--help`.
+Print an agent skill that is compiled into this binary: this is a
+document, like `--help`.
 
   pqbench skill                       list skills as pqbench.skill lines
   pqbench skill parquet-advisor       the advisor workflow
@@ -417,8 +416,9 @@ pub const SKILL_AFTER: &str = "\
 Examples:
   pqbench skill
   pqbench skill parquet-advisor
+  pqbench list catalogs | pqbench format
   pqbench skill parquet-advisor recipes
-  pqbench bytemass data.parquet
+  pqbench table-file data.parquet | pqbench bytemass
   pqbench profile data.parquet --rows first:8192
 
 See also:

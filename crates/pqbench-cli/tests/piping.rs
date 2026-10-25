@@ -78,7 +78,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
     ]);
     let env = [("PQB_ENDPOINT", address.as_str())];
 
-    let catalogs = pipe_env(&["list", "catalogs", "--format", "json"], b"", &env);
+    let catalogs = pipe_env(&["list", "catalogs"], b"", &env);
     assert!(
         catalogs.status.success(),
         "stderr: {}",
@@ -87,7 +87,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
     let refs = catalogs.stdout;
     assert_eq!(ndjson(&refs).len(), 2);
 
-    let enriched = pipe_env(&["get", "catalog", "--format", "json"], &refs, &env);
+    let enriched = pipe_env(&["get", "catalog"], &refs, &env);
     assert!(
         enriched.status.success(),
         "stderr: {}",
@@ -104,7 +104,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
         .iter()
         .any(|record| record["name"] == "catalogs/system"));
 
-    let schemas = pipe_env(&["list", "schemas", "--format", "json"], &refs, &env);
+    let schemas = pipe_env(&["list", "schemas"], &refs, &env);
     assert!(
         schemas.status.success(),
         "stderr: {}",
@@ -119,11 +119,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
-    let enriched = pipe_env(
-        &["get", "schema", "--format", "json"],
-        &schemas.stdout,
-        &env,
-    );
+    let enriched = pipe_env(&["get", "schema"], &schemas.stdout, &env);
     assert!(
         enriched.status.success(),
         "stderr: {}",
@@ -139,11 +135,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
 
-    let tables = pipe_env(
-        &["list", "tables", "--format", "json"],
-        &schemas.stdout,
-        &env,
-    );
+    let tables = pipe_env(&["list", "tables"], &schemas.stdout, &env);
     assert!(
         tables.status.success(),
         "stderr: {}",
@@ -156,4 +148,19 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
     assert!(records
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi/tables/trips"));
+}
+
+#[test]
+fn list_files_rejects_a_malformed_partition_record() {
+    // A bad name is the record's contract: it is named and dropped, and the
+    // level still exits non-zero.
+    let output = pipe_env(
+        &["list", "files"],
+        br#"{"name":"nope","uri":"file:///tmp"}"#,
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("a partition record needs a"), "{stderr}");
+    assert!(!stderr.contains("could not be read"), "{stderr}");
 }

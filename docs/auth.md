@@ -21,7 +21,7 @@ databricks service-principal-secrets-proxy create <numeric-id> --profile DEFAULT
 #     workspace-access or workspace-consume entitlements."
 databricks api patch /api/2.0/preview/scim/v2/ServicePrincipals/<numeric-id> \
   --profile DEFAULT \
-  --json '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+  '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
            "Operations":[{"op":"add","path":"entitlements",
                           "value":[{"value":"workspace-access"}]}]}'
 ```

@@ -34,6 +34,15 @@ fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// A local table ref: the fixture directory as the storage root.
+#[cfg(feature = "delta")]
+fn table_ref(path: &std::path::Path) -> String {
+    format!(
+        r#"{{"name":"catalogs/local/schemas/local/tables/t","uri":"{}"}}"#,
+        path.display()
+    )
+}
+
 #[cfg(feature = "delta")]
 fn parquet_fixture() -> &'static str {
     concat!(
@@ -151,16 +160,7 @@ fn dated_delta_fixture_commits(timestamps: &[i64]) -> DeltaFixture {
 fn partition_ls_groups_commits_into_natural_windows() {
     let timestamp = 1_700_000_000_000i64;
     let fixture = dated_delta_fixture(timestamp);
-    let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    let output = pipe(&["list", "partitions"], &table_ref(&fixture.path));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -186,16 +186,8 @@ fn partition_ls_honors_the_window_width() {
     let timestamp = 1_700_000_000_000i64;
     let fixture = dated_delta_fixture(timestamp);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1h",
-            "--format",
-            "json",
-        ],
-        "",
+        &["list", "partitions", "--every", "1h"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -219,18 +211,8 @@ fn partition_ls_last_bounds_the_read_to_recent_windows() {
     let base = 1_700_000_000_000i64.div_euclid(day) * day;
     let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1d",
-            "--last",
-            "2d",
-            "--format",
-            "json",
-        ],
-        "",
+        &["list", "partitions", "--every", "1d", "--last", "2d"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -252,18 +234,8 @@ fn partition_ls_last_covering_the_span_reads_every_window() {
     let base = 1_700_000_000_000i64.div_euclid(day) * day;
     let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1d",
-            "--last",
-            "1w",
-            "--format",
-            "json",
-        ],
-        "",
+        &["list", "partitions", "--every", "1d", "--last", "1w"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -285,18 +257,8 @@ fn partition_ls_last_covering_the_span_reads_every_window() {
 fn partition_ls_last_drops_a_window_the_horizon_cuts() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1d",
-            "--last",
-            "1h",
-            "--format",
-            "json",
-        ],
-        "",
+        &["list", "partitions", "--every", "1d", "--last", "1h"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -312,14 +274,8 @@ fn partition_ls_last_drops_a_window_the_horizon_cuts() {
 fn partition_ls_rejects_a_bad_last_window() {
     let fixture = dated_delta_fixture(0);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--last",
-            "1x",
-        ],
-        "",
+        &["list", "partitions", "--last", "1x"],
+        &table_ref(&fixture.path),
     );
     assert!(!output.status.success());
     assert!(
@@ -335,16 +291,7 @@ fn partition_ls_rejects_a_bad_last_window() {
 #[test]
 fn partition_ls_skips_commits_without_a_time() {
     let fixture = delta_fixture();
-    let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    let output = pipe(&["list", "partitions"], &table_ref(&fixture.path));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -359,14 +306,8 @@ fn partition_ls_skips_commits_without_a_time() {
 fn partition_ls_rejects_a_bad_window() {
     let fixture = dated_delta_fixture(0);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1x",
-        ],
-        "",
+        &["list", "partitions", "--every", "1x"],
+        &table_ref(&fixture.path),
     );
     assert!(!output.status.success());
     assert!(
@@ -381,10 +322,17 @@ fn partition_ls_rejects_a_bad_window() {
 fn partition_ls_exits_cleanly_when_stdout_is_closed() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
     let mut child = pqbench()
-        .args(["list", "partitions", fixture.path.to_str().unwrap()])
+        .args(["list", "partitions"])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(table_ref(&fixture.path).as_bytes())
         .unwrap();
     drop(child.stdout.take());
     let output = child.wait_with_output().unwrap();

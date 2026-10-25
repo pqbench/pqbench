@@ -3,16 +3,6 @@ use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
 
-/// Decode an lz4 frame (`-o` output) into its NDJSON bytes.
-fn decode_lz4(bytes: &[u8]) -> Vec<u8> {
-    let mut decoded = Vec::new();
-    lz4::Decoder::new(std::io::Cursor::new(bytes))
-        .unwrap()
-        .read_to_end(&mut decoded)
-        .unwrap();
-    decoded
-}
-
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
@@ -36,7 +26,7 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    let _ = child.stdin.take().unwrap().write_all(stdin);
     child.wait_with_output().unwrap()
 }
 
@@ -48,6 +38,27 @@ fn ndjson(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
+/// Render a command's stdout with `pqbench format`.
+fn table(bytes: &[u8]) -> String {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pqbench"))
+        .arg("format")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(bytes).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
 /// One endpoint that answers every GET with `status` and `body`.
 fn server(status: u16, body: &'static str) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -136,6 +147,11 @@ const PAGES: [&str; 2] = [
 ];
 
 /// The walk's config: `PQB_ENDPOINT` names the endpoint.
+/// One parent record, as the stream carries it.
+fn parent(name: &str) -> Vec<u8> {
+    format!(r#"{{"name":"{name}"}}"#).into_bytes()
+}
+
 fn source(endpoint: &str) -> [(&str, &str); 1] {
     [("PQB_ENDPOINT", endpoint)]
 }
@@ -143,8 +159,9 @@ fn source(endpoint: &str) -> [(&str, &str); 1] {
 #[test]
 fn catalog_get_prints_the_record_as_a_table() {
     let address = server(200, CATALOG);
-    let output = pipe(
-        &["get", "catalog", "dbx_samples", "--format", "table"],
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/dbx_samples"),
         &source(&address),
     );
     assert!(
@@ -152,17 +169,17 @@ fn catalog_get_prints_the_record_as_a_table() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = table(&output.stdout);
     assert!(stdout.contains("dbx_samples"), "{stdout}");
     assert!(stdout.contains("CATALOG_TYPE_MANAGED"), "{stdout}");
-    assert!(stdout.contains("catalogs: 1"), "{stdout}");
 }
 
 #[test]
 fn catalog_get_streams_the_record_as_ndjson() {
     let address = server(200, CATALOG);
-    let output = pipe(
-        &["get", "catalog", "dbx_samples", "--format", "json"],
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/dbx_samples"),
         &source(&address),
     );
     assert!(
@@ -180,38 +197,13 @@ fn catalog_get_streams_the_record_as_ndjson() {
 }
 
 #[test]
-fn catalog_get_exports_the_ndjson_stream() {
-    let address = server(200, CATALOG);
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("catalog.ndjson.lz4");
-    let output = pipe(
-        &[
-            "get",
-            "catalog",
-            "dbx_samples",
-            "--format",
-            "table",
-            "-o",
-            file.to_str().unwrap(),
-        ],
-        &source(&address),
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let bytes = std::fs::read(&file).unwrap();
-    let decoded = decode_lz4(&bytes);
-    let records = ndjson(&decoded);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "catalogs/dbx_samples");
-}
-
-#[test]
 fn catalog_get_reports_an_unknown_catalog() {
     let address = server(404, r#"{"message":"Catalog 'nope' does not exist."}"#);
-    let output = pipe(&["get", "catalog", "nope"], &source(&address));
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/nope"),
+        &source(&address),
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("404"), "{stderr}");
@@ -220,7 +212,11 @@ fn catalog_get_reports_an_unknown_catalog() {
 #[test]
 fn catalog_get_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
-    let output = pipe(&["get", "catalog", "dbx_samples"], &source(&address));
+    let output = pipe_env(
+        &["get", "catalog"],
+        &parent("catalogs/dbx_samples"),
+        &source(&address),
+    );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("401"), "{stderr}");
@@ -228,7 +224,7 @@ fn catalog_get_reports_an_unauthorized_endpoint() {
 
 #[test]
 fn catalog_get_rejects_an_empty_document() {
-    let output = pipe_stdin(&["get", "catalog", "dbx_samples"], b"");
+    let output = pipe_stdin(&["get", "catalog"], &parent("catalogs/dbx_samples"));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("PQB_ENDPOINT"), "{stderr}");
@@ -241,7 +237,7 @@ fn catalog_get_enriches_a_catalog_stream() {
         ("/catalogs/system", 200, SYSTEM_CATALOG),
     ]);
     let output = pipe_env(
-        &["get", "catalog", "--format", "json"],
+        &["get", "catalog"],
         CATALOG_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -263,38 +259,8 @@ fn catalog_get_enriches_a_catalog_stream() {
 }
 
 #[test]
-fn catalog_get_takes_a_catalog_or_a_stream_not_both() {
-    let address = server(200, CATALOG);
-    let output = pipe_env(
-        &["get", "catalog", "dbx_samples"],
-        CATALOG_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not both"), "{stderr}");
-}
-
-#[test]
-fn catalog_get_reports_an_empty_stream() {
-    let address = server(200, CATALOG);
-    let output = pipe_env(
-        &["get", "catalog", "--format", "table"],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("catalogs: 0"), "{stdout}");
-}
-
-#[test]
 fn catalog_get_rejects_a_bad_fan_out() {
-    let output = pipe_stdin(&["get", "catalog", "dbx_samples", "--fan-out", "lots"], b"");
+    let output = pipe_stdin(&["get", "catalog", "--fan-out", "lots"], b"");
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("fan-out"), "{stderr}");
@@ -303,25 +269,21 @@ fn catalog_get_rejects_a_bad_fan_out() {
 #[test]
 fn catalog_ls_prints_the_catalogs_as_a_table() {
     let address = server(200, CATALOGS);
-    let output = pipe(
-        &["list", "catalogs", "--format", "table"],
-        &source(&address),
-    );
+    let output = pipe(&["list", "catalogs"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = table(&output.stdout);
     assert!(stdout.contains("dbx_samples"), "{stdout}");
     assert!(stdout.contains("CATALOG_TYPE_MANAGED"), "{stdout}");
-    assert!(stdout.contains("catalogs: 2"), "{stdout}");
 }
 
 #[test]
 fn catalog_ls_streams_one_catalog_per_line() {
     let address = server(200, CATALOGS);
-    let output = pipe(&["list", "catalogs", "--format", "json"], &source(&address));
+    let output = pipe(&["list", "catalogs"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -338,7 +300,7 @@ fn catalog_ls_streams_one_catalog_per_line() {
 #[test]
 fn catalog_ls_follows_the_next_page_token() {
     let address = server_pages(&PAGES);
-    let output = pipe(&["list", "catalogs", "--format", "json"], &source(&address));
+    let output = pipe(&["list", "catalogs"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -360,22 +322,6 @@ fn catalog_ls_follows_the_next_page_token() {
 }
 
 #[test]
-fn catalog_ls_reports_an_empty_catalog_list() {
-    let address = server(200, r#"{"catalogs":[]}"#);
-    let output = pipe(
-        &["list", "catalogs", "--format", "table"],
-        &source(&address),
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("catalogs: 0"), "{stdout}");
-}
-
-#[test]
 fn catalog_ls_reports_an_unauthorized_endpoint() {
     let address = server(401, r#"{"message":"Unauthorized"}"#);
     let output = pipe(&["list", "catalogs"], &source(&address));
@@ -388,7 +334,7 @@ fn catalog_ls_reports_an_unauthorized_endpoint() {
 fn catalog_ls_reads_the_endpoint_from_the_environment() {
     let address = server(200, CATALOGS);
     let output = pipe_env(
-        &["list", "catalogs", "--format", "json"],
+        &["list", "catalogs"],
         b"",
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -410,7 +356,7 @@ fn catalog_ls_reads_a_metastore_stream() {
     let address = server(200, CATALOGS);
     let record = json!({"name": "metastores/unity"});
     let output = pipe_env(
-        &["list", "catalogs", "--format", "json"],
+        &["list", "catalogs"],
         record.to_string().as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
@@ -420,18 +366,4 @@ fn catalog_ls_reads_a_metastore_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(ndjson(&output.stdout).len(), 2);
-}
-
-#[test]
-fn catalog_ls_rejects_a_non_metastore_stream() {
-    let address = server(200, CATALOGS);
-    let record = json!({"name": "catalogs/dbx_samples"});
-    let output = pipe_env(
-        &["list", "catalogs", "--format", "json"],
-        record.to_string().as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("metastore"), "{stderr}");
 }

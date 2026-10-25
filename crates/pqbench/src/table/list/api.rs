@@ -5,7 +5,9 @@
 
 use std::fmt;
 
-pub use crate::v1::Table;
+use futures_util::stream::{self, Stream, TryStreamExt};
+
+pub use crate::v1::{Schema, Table};
 
 use crate::Workspace;
 
@@ -39,16 +41,21 @@ impl std::error::Error for Error {
     }
 }
 
-/// List the tables in the schema `name` — a
-/// `catalogs/{catalog}/schemas/{schema}` resource name — at the workspace's
-/// endpoint.
+/// List the tables in the schema `schema` names, at the workspace's endpoint.
 ///
 /// Unity pages carry a storage location; Iceberg REST lists identifiers only,
-/// so `uri` is unset there until `pqbench get table` resolves it.
-///
-/// # Errors
-/// Fails when `name` is not a schema name, the endpoint cannot be reached,
-/// answers with an unexpected status, or returns a malformed table page.
-pub async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Table>, Error> {
-    super::r#impl::list(workspace, name).await
+/// so `uri` is unset there until `pqbench get table` resolves it. The stream
+/// owns the schema name, so it borrows the workspace and nothing else; a
+/// failure listing a page is an `Err` item, so the records read before it stand.
+pub fn list<'a>(
+    workspace: &'a Workspace,
+    schema: &Schema,
+) -> impl Stream<Item = Result<Table, Error>> + 'a {
+    let name = schema.name.clone();
+    stream::once(async move {
+        super::r#impl::list(workspace, &name)
+            .await
+            .map(|rows| stream::iter(rows.into_iter().map(Ok)))
+    })
+    .try_flatten()
 }

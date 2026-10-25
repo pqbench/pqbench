@@ -4,7 +4,6 @@
 //! the wire form of the loaded [`TableInfo`](crate::table::TableInfo) — and the
 //! CLI forwards it as-is.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 pub use crate::config::Dialect as TableFormat;
@@ -71,21 +70,21 @@ impl std::error::Error for Error {
 /// metadata is read without files (`without_files()` for Delta, the metadata
 /// JSON only for Iceberg), so the cost is O(1) in files.
 ///
-/// `uri` is where the ref already says the metadata is, when it does: the
-/// storage read then starts alongside the catalog call, and the catalog's own
-/// location stays authoritative. `env` is the `AWS_*` options that read needs;
-/// empty reads under whatever the process environment holds. The caller, which
-/// holds the lease, sets the returned record's `credentials`.
+/// `table` carries the name, the location the ref already says, and the lease:
+/// the storage read starts alongside the catalog call, and the catalog's own
+/// location stays authoritative. The record's credentials are not copied onto
+/// the answer; the caller that holds the lease sets them.
 ///
 /// # Errors
-/// Fails when `name` is not a table name, the endpoint cannot be reached,
+/// Fails when the name is not a table name, the endpoint cannot be reached,
 /// answers with an unexpected status, or the table's metadata cannot be read.
-pub async fn get(
-    workspace: &Workspace,
-    lake: &Lake,
-    name: &str,
-    uri: Option<&str>,
-    env: &BTreeMap<String, String>,
-) -> Result<Table, Error> {
-    super::r#impl::get(workspace, lake, name, uri, env).await
+pub async fn get(workspace: &Workspace, lake: &Lake, table: &Table) -> Result<Table, Error> {
+    let env = table
+        .credentials
+        .as_ref()
+        .filter(|lease| !lease.is_empty())
+        .map(crate::v1::Credentials::to_env)
+        .unwrap_or_default();
+    let uri = table.uri.as_deref().filter(|uri| !uri.is_empty());
+    super::r#impl::get(workspace, lake, &table.name, uri, &env).await
 }
