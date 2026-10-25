@@ -7,7 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::schema::list;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{fail_when_dropped, tolerate};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::source::{self, catalog_ref, read_input, Input};
 use crate::CliError;
 
@@ -40,7 +40,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Resu
         None => list_stream(workspace, input, args.fan_out, &mut emit).await?,
     };
     emit.finish(&format!("schemas: {schemas}\n")).await?;
-    fail_when_dropped("catalog", dropped)
+    fail_when_dropped(&[("catalog", dropped)])
 }
 
 /// List one named catalog's schemas.
@@ -72,18 +72,25 @@ async fn list_stream(
     let mut lists = records
         .map(|record| async {
             let name = catalog_ref("list schemas", &record?)?;
-            let listed = list::list(workspace, &name).await.map_err(CliError::from);
-            Ok::<_, CliError>(tolerate(&name, listed))
+            let outcome = match list::list(workspace, &name).await {
+                Ok(listed) => ReadOutcome::Record(listed),
+                Err(error) => ReadOutcome::Dropped(RecordError::new("catalog", &name, error)),
+            };
+            Ok::<_, CliError>(outcome)
         })
         .buffer_unordered(fan_out.max(1));
-    while let Some(listed) = lists.next().await {
-        let Some(listed) = listed? else {
-            dropped += 1;
-            continue;
-        };
-        for schema in listed {
-            emit.write_row(&schema).await?;
-            schemas += 1;
+    while let Some(outcome) = lists.next().await {
+        match outcome? {
+            ReadOutcome::Record(listed) => {
+                for schema in listed {
+                    emit.write_row(&schema).await?;
+                    schemas += 1;
+                }
+            }
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                dropped += 1;
+            }
         }
     }
     Ok((schemas, dropped))

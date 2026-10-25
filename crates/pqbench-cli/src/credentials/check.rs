@@ -7,8 +7,9 @@
 //! standard error. Eligible refs pass through unchanged, so the stage composes
 //! ahead of `credentials get` and a mixed schema keeps going. A drop is the
 //! filter working, not a failure: a whole-catalog walk always has tables it
-//! cannot read outside compute, so the stage still succeeds and only a real
-//! error (a missing table, an endpoint fault) fails it.
+//! cannot read outside compute, so an ineligible table is reported and the stage
+//! still succeeds. A check that fails is reported, counted, and the stage exits
+//! non-zero after the stream.
 
 use futures_util::stream::StreamExt;
 use pqbench::v1::EligibilityReason;
@@ -17,7 +18,7 @@ use serde_json::Value;
 
 use super::StageArgs;
 use crate::emit::{Align, Emitter, Row};
-use crate::error::{error_chain, fail_when_dropped};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::source::{self, dotted_name, read_input, table_ref};
 use crate::CliError;
 
@@ -35,39 +36,41 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         .map(|record| async {
             let record = record?;
             let name = table_ref("credentials check", &record)?;
-            match check(workspace, &name).await {
-                Ok(reason) => Ok::<_, CliError>((record, reason, false)),
+            let outcome = match check(workspace, &name).await {
+                Ok(reason) => ReadOutcome::Record((record, reason)),
                 Err(error) => {
-                    let reason = format!("{}: {}", dotted_name(&name), error_chain(error.as_ref()));
-                    Ok((record, Some(reason), true))
+                    ReadOutcome::Dropped(RecordError::new("table", dotted_name(&name), error))
                 }
-            }
+            };
+            Ok::<_, CliError>(outcome)
         })
         .buffer_unordered(args.fan_out.max(1));
-    while let Some(checked) = checks.next().await {
-        let (record, reason, transient) = checked?;
-        if let Some(reason) = reason {
-            eprintln!("error: {reason}");
-            if transient {
-                unread += 1;
-            } else {
+    while let Some(outcome) = checks.next().await {
+        match outcome? {
+            ReadOutcome::Record((record, None)) => {
+                emit.write_row(&CheckedRef { record }).await?;
+                tables += 1;
+            }
+            ReadOutcome::Record((_, Some(reason))) => {
+                eprintln!("error: {reason}");
                 ineligible += 1;
             }
-            continue;
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                unread += 1;
+            }
         }
-        emit.write_row(&CheckedRef { record }).await?;
-        tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await?;
     // A drop is the filter working, not a failure: the walk composes on this
     // stage for a mixed schema, and a whole-catalog walk always has tables
     // (system, views, managed default storage) it cannot read outside compute.
-    // A transient endpoint failure drops the ref the same way; only an error
-    // the level cannot use — a malformed name, a status answer — fails it.
+    // An ineligible table is reported and the stage succeeds; a check that fails
+    // is reported and counted, and the stage exits non-zero after the stream.
     if ineligible > 0 {
         eprintln!("{ineligible} table(s) are not readable outside Databricks compute");
     }
-    fail_when_dropped("table", unread)
+    fail_when_dropped(&[("table", unread)])
 }
 
 /// The reason a table is not readable outside Databricks compute, `None` when

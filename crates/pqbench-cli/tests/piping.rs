@@ -157,3 +157,34 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
         .iter()
         .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi/tables/trips"));
 }
+
+#[test]
+fn list_files_rejects_a_malformed_partition_record() {
+    // A bad name is the input's contract, not a failed read: it fails the
+    // level instead of being dropped and counted.
+    let output = pipe_env(
+        &["list", "files", "--format", "json"],
+        br#"{"name":"nope","uri":"file:///tmp"}"#,
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("a partition name must be"), "{stderr}");
+    assert!(!stderr.contains("could not be read"), "{stderr}");
+}
+
+#[test]
+fn bytemass_rejects_a_remote_source_that_matches_nothing() {
+    // Expanding the source is a contract step; only each file's read is
+    // dropped.
+    let source = concat!(
+        r#"{"version":1,"inputs":[""#,
+        env!("CARGO_MANIFEST_DIR"),
+        r#"/tests/fixtures/no-such-*.parquet"],"env":{}}"#,
+    );
+    let output = pipe_env(&["bytemass", "--format", "json"], source.as_bytes(), &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("mask matched no files"), "{stderr}");
+    assert!(!stderr.contains("could not be read"), "{stderr}");
+}

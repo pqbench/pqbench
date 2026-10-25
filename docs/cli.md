@@ -168,7 +168,9 @@ unchanged, one bucket per resource type, nothing dropped. A ref whose read
 fails — a timeout, a dropped connection, an endpoint answer such as a 429, or
 a storage fault — is dropped by the level: it names the ref and the cause on
 standard error, finishes the stream, and exits non-zero with the count, so one
-bad ref does not truncate a walk. `ratelimit` keeps the endpoint from answering
+bad ref does not truncate a walk. The drop is only the read: a ref that does not
+name a resource, a record whose fields are wrong, or an output failure still
+fails the level. `ratelimit` keeps the endpoint from answering
 429 in the first place; a level that fails outright — the root `list catalogs`,
 a malformed stream — still fails the pipeline, and the shell can retry it at a
 lower rate:

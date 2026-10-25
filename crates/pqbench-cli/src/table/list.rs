@@ -7,7 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::table::list;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{fail_when_dropped, tolerate};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::source::{self, read_input, schema_ref, split_schema, Input};
 use crate::CliError;
 
@@ -42,7 +42,7 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Resu
         None => list_stream(workspace, input, args.fan_out, &mut emit).await?,
     };
     emit.finish(&format!("tables: {tables}\n")).await?;
-    fail_when_dropped("schema", dropped)
+    fail_when_dropped(&[("schema", dropped)])
 }
 
 /// List one named schema's tables.
@@ -75,18 +75,25 @@ async fn list_stream(
     let mut lists = records
         .map(|record| async {
             let name = schema_ref("list tables", &record?)?;
-            let listed = list::list(workspace, &name).await.map_err(CliError::from);
-            Ok::<_, CliError>(tolerate(&name, listed))
+            let outcome = match list::list(workspace, &name).await {
+                Ok(listed) => ReadOutcome::Record(listed),
+                Err(error) => ReadOutcome::Dropped(RecordError::new("schema", &name, error)),
+            };
+            Ok::<_, CliError>(outcome)
         })
         .buffer_unordered(fan_out.max(1));
-    while let Some(listed) = lists.next().await {
-        let Some(listed) = listed? else {
-            dropped += 1;
-            continue;
-        };
-        for table in listed {
-            emit.write_row(&table).await?;
-            tables += 1;
+    while let Some(outcome) = lists.next().await {
+        match outcome? {
+            ReadOutcome::Record(listed) => {
+                for table in listed {
+                    emit.write_row(&table).await?;
+                    tables += 1;
+                }
+            }
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                dropped += 1;
+            }
         }
     }
     Ok((tables, dropped))

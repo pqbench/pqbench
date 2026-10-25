@@ -2,15 +2,13 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use clap::Args;
 use futures_util::stream::{self, StreamExt, TryStreamExt};
 use pqbench::partition;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{error_chain, fail_when_dropped, tolerate};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::source::{
     self, dotted_name, read_input, ref_credentials, ref_storage, table_ref, Input,
 };
@@ -49,7 +47,7 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list partitions").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let (partitions, dropped) = match &args.input {
+    let (partitions, dropped_tables, dropped_partitions) = match &args.input {
         Some(uri) if uri != "-" => {
             if input.first.is_some() {
                 return Err("list partitions takes a table URI or a table stream, not both".into());
@@ -58,12 +56,13 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
             (
                 list_partitions(lake, &table, uri, args.every, args.last, &mut emit).await?,
                 0,
+                0,
             )
         }
         _ => list_stream(lake, input, args.every, args.last, args.fan_out, &mut emit).await?,
     };
     emit.finish(&format!("partitions: {partitions}\n")).await?;
-    fail_when_dropped("table", dropped)
+    fail_when_dropped(&[("table", dropped_tables), ("partition", dropped_partitions)])
 }
 
 /// Emit every table's partitions from a table stream: tables in flight at
@@ -75,67 +74,70 @@ async fn list_stream(
     last: Option<i64>,
     fan_out: usize,
     emit: &mut Emitter,
-) -> Result<(usize, usize), CliError> {
+) -> Result<(usize, usize, usize), CliError> {
     if !input.piped {
         return Err("list partitions needs a table URI or a table stream".into());
     }
     let records = source::records("list partitions", input.first, input.lines);
-    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut partitions = 0;
+    let mut dropped_tables = 0;
+    let mut dropped_partitions = 0;
     let reads = records
-        .map(|record| {
-            let dropped = Arc::clone(&dropped);
-            async move {
-                let record = record?;
-                let name = table_ref("list partitions", &record)?;
-                let uri = ref_storage(&record)
-                    .ok_or_else(|| {
-                        CliError::from(
-                            "a table-ref has no storage path; run `pqbench get table` first",
-                        )
-                    })?
-                    .to_string();
-                let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
-                let env = lease
-                    .as_ref()
-                    .map(pqbench::v1::Credentials::to_env)
-                    .unwrap_or_default();
-                let label = dotted_name(&name);
-                let found = partition::list::list(lake, &name, &uri, &env, window, last)
-                    .await
-                    .map_err(CliError::from);
-                let Some(found) = tolerate(&label, found) else {
-                    dropped.fetch_add(1, Ordering::Relaxed);
-                    return Ok::<_, CliError>(
-                        stream::empty::<Result<pqbench::partition::list::Partition, CliError>>()
-                            .boxed(),
-                    );
-                };
-                Ok(found
-                    .map_ok(move |mut partition| {
-                        partition.credentials = lease.clone();
-                        partition
+        .map(|record| async move {
+            let record = record?;
+            let name = table_ref("list partitions", &record)?;
+            let uri = ref_storage(&record)
+                .ok_or_else(|| {
+                    CliError::from("a table-ref has no storage path; run `pqbench get table` first")
+                })?
+                .to_string();
+            let lease = ref_credentials(&record).filter(|lease| !lease.is_empty());
+            let env = lease
+                .as_ref()
+                .map(pqbench::v1::Credentials::to_env)
+                .unwrap_or_default();
+            let found = partition::list::list(lake, &name, &uri, &env, window, last).await;
+            Ok::<_, CliError>(match found {
+                Ok(found) => found
+                    .map(move |item| {
+                        Ok::<_, CliError>(match item {
+                            Ok(mut partition) => {
+                                partition.credentials = lease.clone();
+                                ReadOutcome::Record(partition)
+                            }
+                            Err(error) => ReadOutcome::Dropped(RecordError::new(
+                                "partition",
+                                dotted_name(&name),
+                                error,
+                            )),
+                        })
                     })
-                    .map_err(CliError::from)
-                    .filter_map(move |item| match item {
-                        Ok(partition) => std::future::ready(Some(Ok(partition))),
-                        Err(error) => {
-                            eprintln!("error: {}", error_chain(error.as_ref()));
-                            dropped.fetch_add(1, Ordering::Relaxed);
-                            std::future::ready(None)
-                        }
-                    })
-                    .boxed())
-            }
+                    .boxed(),
+                Err(error) => stream::iter([Ok::<_, CliError>(ReadOutcome::Dropped(
+                    RecordError::new("table", dotted_name(&name), error),
+                ))])
+                .boxed(),
+            })
         })
         .buffer_unordered(fan_out.max(1))
         .boxed();
     let mut found = reads.try_flatten_unordered(Some(fan_out.max(1)));
-    let mut partitions = 0;
-    while let Some(partition) = found.try_next().await? {
-        emit.write_row(&partition).await?;
-        partitions += 1;
+    while let Some(outcome) = found.try_next().await? {
+        match outcome {
+            ReadOutcome::Record(partition) => {
+                emit.write_row(&partition).await?;
+                partitions += 1;
+            }
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                match error.what() {
+                    "table" => dropped_tables += 1,
+                    _ => dropped_partitions += 1,
+                }
+            }
+        }
     }
-    Ok((partitions, dropped.load(Ordering::Relaxed)))
+    Ok((partitions, dropped_tables, dropped_partitions))
 }
 
 /// Emit one table's partitions as they arrive; returns how many were written.

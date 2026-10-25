@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
-use crate::error::{fail_when_dropped, tolerate};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -64,16 +64,20 @@ async fn measure_document(
         .map(|record| measure_record(lake, record))
         .buffer_unordered(args.fan_out.max(1));
     while let Some(batch) = reads.next().await {
-        let Some(batch) = batch? else {
-            dropped += 1;
-            continue;
-        };
-        for measured in batch {
-            emit_measured(&mut emit, &mut stats, measured).await?;
+        for read in batch? {
+            match read {
+                ReadOutcome::Record(measured) => {
+                    emit_measured(&mut emit, &mut stats, measured).await?;
+                }
+                ReadOutcome::Dropped(error) => {
+                    error.report();
+                    dropped += 1;
+                }
+            }
         }
     }
     finish_stream(emit, &stats, args.output.as_deref()).await?;
-    fail_when_dropped("file", dropped)
+    fail_when_dropped(&[("file", dropped)])
 }
 
 async fn measure(
@@ -89,53 +93,59 @@ async fn measure(
         .map(|input| {
             let env = env.clone();
             async move {
-                let read = read_file(lake, &input, &env).await;
-                tolerate(&input, read)
+                match read_file(lake, &input, &env).await {
+                    Ok(measured) => ReadOutcome::Record(measured),
+                    Err(error) => ReadOutcome::Dropped(RecordError::new("file", &input, error)),
+                }
             }
         })
         .buffer_unordered(args.fan_out.max(1));
-    while let Some(measured) = reads.next().await {
-        let Some(measured) = measured else {
-            dropped += 1;
-            continue;
-        };
-        emit_measured(&mut emit, &mut stats, measured).await?;
+    while let Some(read) = reads.next().await {
+        match read {
+            ReadOutcome::Record(measured) => {
+                emit_measured(&mut emit, &mut stats, measured).await?;
+            }
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                dropped += 1;
+            }
+        }
     }
     finish_stream(emit, &stats, args.output.as_deref()).await?;
-    fail_when_dropped("file", dropped)
+    fail_when_dropped(&[("file", dropped)])
 }
 
 /// Measure every file one document record names: a table-file is one file; a
-/// remote-source expands its inputs first. A file that cannot be read is
-/// reported and dropped, so one timeout does not end the walk.
+/// remote source expands its inputs first. A read that fails is returned as a
+/// dropped outcome; the caller reports it and carries on.
 async fn measure_record(
     lake: &pqbench::Lake,
     record: Result<Record, CliError>,
-) -> Result<Option<Vec<bytemass::MeasuredFile>>, CliError> {
+) -> Result<Vec<ReadOutcome<bytemass::MeasuredFile>>, CliError> {
     match record? {
-        Record::File(file) => read_table_file(lake, file)
-            .await
-            .map(|measured| measured.map(|measured| vec![measured])),
-        Record::RemoteSource(source) => {
-            let reference = source.inputs.join(", ");
-            Ok(tolerate(&reference, measure_source(lake, source).await))
-        }
+        Record::File(file) => Ok(vec![read_table_file(lake, file).await?]),
+        Record::RemoteSource(source) => measure_source(lake, source).await,
         Record::Blob(_) | Record::Bytemass(_) => {
             Err("a bytemass stream goes to `pqbench viz`".into())
         }
     }
 }
 
-/// Measure every file a remote source names.
+/// Measure every file a remote source names. Expanding the source is a contract
+/// step — a bad source fails the level; only each file's read is dropped.
 async fn measure_source(
     lake: &pqbench::Lake,
     source: document::RemoteSource,
-) -> Result<Vec<bytemass::MeasuredFile>, CliError> {
+) -> Result<Vec<ReadOutcome<bytemass::MeasuredFile>>, CliError> {
     let mut measured = Vec::new();
     for uri in source.inputs {
         let inputs = std::slice::from_ref(&uri);
         for input in bytemass::expand_inputs(lake, inputs, &source.env).await? {
-            measured.push(read_file(lake, &input, &source.env).await?);
+            let read = match read_file(lake, &input, &source.env).await {
+                Ok(measured) => ReadOutcome::Record(measured),
+                Err(error) => ReadOutcome::Dropped(RecordError::new("file", &input, error)),
+            };
+            measured.push(read);
         }
     }
     Ok(measured)
@@ -161,12 +171,12 @@ async fn read_file(
 }
 
 /// Read a table file's blob, and cross-check the log's size against the
-/// footer's. A read that fails is dropped; a name or size the record gets
-/// wrong still fails the command.
+/// footer's. A read that fails is returned as a dropped outcome; a name or size
+/// the record gets wrong still fails the command.
 async fn read_table_file(
     lake: &pqbench::Lake,
     file: v1::TableFile,
-) -> Result<Option<bytemass::MeasuredFile>, CliError> {
+) -> Result<ReadOutcome<bytemass::MeasuredFile>, CliError> {
     let blob = file
         .blob
         .as_deref()
@@ -178,8 +188,11 @@ async fn read_table_file(
         .as_ref()
         .map(v1::Credentials::to_env)
         .unwrap_or_default();
-    let Some(measured) = tolerate(&uri, read_file(lake, &uri, &env).await) else {
-        return Ok(None);
+    let measured = match read_file(lake, &uri, &env).await {
+        Ok(measured) => measured,
+        Err(error) => {
+            return Ok(ReadOutcome::Dropped(RecordError::new("file", &uri, error)));
+        }
     };
     if let Some(size) = file.size_bytes {
         if size != 0 && measured.blob.size_bytes != Some(size) {
@@ -190,7 +203,7 @@ async fn read_table_file(
             .into());
         }
     }
-    Ok(Some(measured))
+    Ok(ReadOutcome::Record(measured))
 }
 
 /// Emit one measured file: its blob, then one row per column.

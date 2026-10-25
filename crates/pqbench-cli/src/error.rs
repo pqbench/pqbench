@@ -1,15 +1,12 @@
-//! The CLI's error channel: rendering a cause chain, and the per-record
-//! boundary that keeps one failed read from ending a walk.
+//! The CLI's error channel: a failed record read carries its reference and its
+//! source chain to the level, which reports it and carries on; the level's end
+//! turns the count into exit 1 after the output is finished.
 //!
-//! A level fans out one request per ref, so a single failure would otherwise
-//! end the whole walk: the `?` in the consumer drops the stream, the process
-//! exits non-zero, and `pipefail` fails the pipeline. [`tolerate`] is the
-//! boundary instead — report the ref and the cause on standard error, drop the
-//! record, keep the stream going.
-//!
-//! It is deliberately type-agnostic. The CLI decides what a failed record
-//! read means; it does not read the core's error taxonomy, so a new core error
-//! variant cannot silently change the policy.
+//! The read only wraps: it does not decide. The level's loop decides whether a
+//! record's read failed (report, count, continue) or the input/output failed
+//! (propagate with `?`). The wrapper keeps the error itself, so the rendered
+//! message has the same cause chain as a top-level `?` — no error is reduced to
+//! a string at the point of failure.
 
 use crate::CliError;
 
@@ -27,26 +24,59 @@ pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
     rendered
 }
 
-/// The record's read: `Some(value)`, or `None` when it failed and has been
-/// reported on standard error. Every per-record failure is dropped; the level
-/// carries on and summarises what it lost.
-pub(crate) fn tolerate<T>(reference: &str, result: Result<T, CliError>) -> Option<T> {
-    match result {
-        Ok(value) => Some(value),
-        Err(error) => {
-            eprintln!("error: {reference}: {}", error_chain(error.as_ref()));
-            None
+/// A failed per-record read: the record's reference and the error, with its
+/// source chain intact. The read attaches the reference; the level reports it
+/// and counts it. `what` is the record kind for the level's summary.
+pub(crate) struct RecordError {
+    what: &'static str,
+    reference: String,
+    error: CliError,
+}
+
+impl RecordError {
+    pub(crate) fn new(
+        what: &'static str,
+        reference: impl Into<String>,
+        error: impl Into<CliError>,
+    ) -> Self {
+        Self {
+            what,
+            reference: reference.into(),
+            error: error.into(),
         }
     }
+
+    pub(crate) fn what(&self) -> &'static str {
+        self.what
+    }
+
+    pub(crate) fn report(&self) {
+        eprintln!(
+            "error: {}: {}",
+            self.reference,
+            error_chain(self.error.as_ref())
+        );
+    }
+}
+
+/// One record's read: the record, or the failure with its reference.
+pub(crate) enum ReadOutcome<T> {
+    Record(T),
+    Dropped(RecordError),
 }
 
 /// The level's end: after the output is finished, report a partial run as a
 /// failure. The dropped records were already named on standard error; this
 /// carries the count into the exit status, so the run is green only when
 /// nothing was lost.
-pub(crate) fn fail_when_dropped(what: &str, dropped: usize) -> Result<(), CliError> {
-    if dropped == 0 {
+pub(crate) fn fail_when_dropped(counts: &[(&str, usize)]) -> Result<(), CliError> {
+    let lost: Vec<String> = counts
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(what, count)| format!("{count} {what}(s)"))
+        .collect();
+    if lost.is_empty() {
         return Ok(());
     }
-    Err(format!("{dropped} {what}(s) could not be read").into())
+    Err(format!("{} could not be read", lost.join(" and ")).into())
 }

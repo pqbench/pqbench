@@ -8,7 +8,7 @@ use futures_util::stream::StreamExt;
 use pqbench::table::get;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{fail_when_dropped, tolerate};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::source::{
     self, dotted_name, read_input, ref_credentials, ref_storage, split_table, table_ref, Input,
 };
@@ -60,7 +60,7 @@ pub(crate) async fn run(
         None => get_stream(workspace, lake, input, args.fan_out, &mut emit).await?,
     };
     emit.finish(&format!("tables: {tables}\n")).await?;
-    fail_when_dropped("table", dropped)
+    fail_when_dropped(&[("table", dropped)])
 }
 
 /// Read one named table's record.
@@ -101,23 +101,30 @@ async fn get_stream(
                 .as_ref()
                 .map(pqbench::v1::Credentials::to_env)
                 .unwrap_or_default();
-            let read = get::get(workspace, lake, &name, uri, &env)
-                .await
-                .map_err(CliError::from)
-                .map(|mut table| {
+            let read = get::get(workspace, lake, &name, uri, &env).await;
+            let outcome = match read {
+                Ok(mut table) => {
                     table.credentials = lease;
-                    table
-                });
-            Ok::<_, CliError>(tolerate(&dotted_name(&name), read))
+                    ReadOutcome::Record(table)
+                }
+                Err(error) => {
+                    ReadOutcome::Dropped(RecordError::new("table", dotted_name(&name), error))
+                }
+            };
+            Ok::<_, CliError>(outcome)
         })
         .buffer_unordered(fan_out.max(1));
-    while let Some(record) = reads.next().await {
-        let Some(record) = record? else {
-            dropped += 1;
-            continue;
-        };
-        emit.write_row(&record).await?;
-        tables += 1;
+    while let Some(outcome) = reads.next().await {
+        match outcome? {
+            ReadOutcome::Record(record) => {
+                emit.write_row(&record).await?;
+                tables += 1;
+            }
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                dropped += 1;
+            }
+        }
     }
     Ok((tables, dropped))
 }

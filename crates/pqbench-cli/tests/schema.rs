@@ -136,6 +136,15 @@ const CATALOG_REFS: &str = concat!(
     "\n",
 );
 
+/// The same stream with the unreachable catalog first, so a drop cannot be
+/// confused with the stream ending.
+const CATALOG_REFS_BAD_FIRST: &str = concat!(
+    r#"{"name":"catalogs/system"}"#,
+    "\n",
+    r#"{"name":"catalogs/dbx_samples"}"#,
+    "\n",
+);
+
 #[test]
 fn schema_get_prints_the_record_as_a_table() {
     let address = server(200, SCHEMA);
@@ -541,4 +550,79 @@ fn schema_ls_drops_a_catalog_that_answers_an_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("catalogs/system"), "{stderr}");
     assert!(stderr.contains("500"), "{stderr}");
+}
+
+#[test]
+fn schema_ls_keeps_reading_after_a_drop() {
+    // The failed ref is first and one request is in flight, so the good
+    // catalog's schemas are read only after the drop — not already buffered
+    // when the stream ends.
+    let address = routes(&[
+        ("catalog_name=dbx_samples", 200, SCHEMAS),
+        ("catalog_name=system", 0, ""),
+    ]);
+    let output = pipe_env(
+        &["list", "schemas", "--fan-out", "1", "--format", "json"],
+        CATALOG_REFS_BAD_FIRST.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        !output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(records.iter().all(|record| record["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("catalogs/dbx_samples/")));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("catalogs/system"), "{stderr}");
+    assert!(stderr.contains("1 catalog(s)"), "{stderr}");
+}
+
+#[test]
+fn schema_ls_counts_every_dropped_catalog() {
+    let refs = concat!(
+        r#"{"name":"catalogs/system"}"#,
+        "\n",
+        r#"{"name":"catalogs/system"}"#,
+        "\n",
+    );
+    let address = routes(&[("catalog_name=system", 0, "")]);
+    let output = pipe_env(
+        &["list", "schemas", "--fan-out", "1", "--format", "json"],
+        refs.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.matches("error: catalogs/system").count(),
+        2,
+        "{stderr}"
+    );
+    assert!(stderr.contains("2 catalog(s)"), "{stderr}");
+}
+
+#[test]
+fn schema_ls_finishes_the_table_before_a_drop() {
+    let address = routes(&[
+        ("catalog_name=dbx_samples", 200, SCHEMAS),
+        ("catalog_name=system", 0, ""),
+    ]);
+    let output = pipe_env(
+        &["list", "schemas", "--fan-out", "1", "--format", "table"],
+        CATALOG_REFS_BAD_FIRST.as_bytes(),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        !output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("dbx_samples"), "{stdout}");
+    assert!(stdout.contains("schemas: 2"), "{stdout}");
 }

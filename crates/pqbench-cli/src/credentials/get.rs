@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::StageArgs;
 use crate::document::invalid_json;
 use crate::emit::{Align, Emitter, Row};
-use crate::error::{fail_when_dropped, tolerate};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::source::{self, dotted_name, read_input};
 use crate::CliError;
 
@@ -28,17 +28,23 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         .map(|record| async {
             let table: pqbench::v1::Table =
                 serde_json::from_value(record?).map_err(invalid_json)?;
-            let name = dotted_name(&table.name);
-            let credentials = pqbench::credentials::get::get(workspace, &table.name)
-                .await
-                .map_err(CliError::from);
-            Ok::<_, CliError>(tolerate(&name, credentials).map(|credentials| (table, credentials)))
+            let outcome = match pqbench::credentials::get::get(workspace, &table.name).await {
+                Ok(credentials) => ReadOutcome::Record((table, credentials)),
+                Err(error) => {
+                    ReadOutcome::Dropped(RecordError::new("table", dotted_name(&table.name), error))
+                }
+            };
+            Ok::<_, CliError>(outcome)
         })
         .buffer_unordered(args.fan_out.max(1));
-    while let Some(result) = vends.next().await {
-        let Some((mut table, credentials)) = result? else {
-            dropped += 1;
-            continue;
+    while let Some(outcome) = vends.next().await {
+        let (mut table, credentials) = match outcome? {
+            ReadOutcome::Record((table, credentials)) => (table, credentials),
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                dropped += 1;
+                continue;
+            }
         };
         if let Some(credentials) = credentials {
             table.credentials = Some(credentials);
@@ -51,7 +57,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await?;
-    fail_when_dropped("table", dropped)
+    fail_when_dropped(&[("table", dropped)])
 }
 
 /// The row `credentials get` writes: the ref, plus whether creds were vended.

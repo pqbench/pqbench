@@ -1,16 +1,17 @@
 //! `list files`: the files each partition's commits added.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use clap::Args;
-use futures_util::stream::{self, BoxStream, StreamExt, TryStreamExt};
+use futures_util::stream::{self, StreamExt, TryStreamExt};
 use pqbench::v1;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::emit::{Emitter, Format};
-use crate::error::{error_chain, fail_when_dropped, tolerate};
+use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -47,84 +48,110 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
     let lines = BufReader::new(tokio::io::stdin()).lines();
     let mut files = 0usize;
     // Partition streams in flight at once, each streaming its files as its
-    // commits are read; `started` counts them so the summary separates
-    // partitions from files, and `dropped` counts the streams or files a
-    // failed read made unreadable.
+    // commits are read; `started` counts the streams that opened so the summary
+    // separates partitions from files.
     let started = Arc::new(AtomicUsize::new(0));
-    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut dropped_partitions = 0usize;
+    let mut dropped_files = 0usize;
     let streams = partition_stream(lines)
         .map(|partition| {
             let started = Arc::clone(&started);
-            let dropped = Arc::clone(&dropped);
             async move {
                 let partition = partition?;
-                let reference = partition.name.clone();
-                let found = file_rows(lake, partition).await;
-                let Some(found) = tolerate(&reference, found) else {
-                    dropped.fetch_add(1, Ordering::Relaxed);
-                    return Ok::<_, CliError>(
-                        stream::empty::<Result<v1::TableFile, CliError>>().boxed(),
-                    );
-                };
-                started.fetch_add(1, Ordering::Relaxed);
-                Ok(found
-                    .filter_map(move |item| match item {
-                        Ok(file) => std::future::ready(Some(Ok(file))),
-                        Err(error) => {
-                            eprintln!("error: {}", error_chain(error.as_ref()));
-                            dropped.fetch_add(1, Ordering::Relaxed);
-                            std::future::ready(None)
-                        }
-                    })
-                    .boxed())
+                let v1::Partition {
+                    name,
+                    commit_versions,
+                    uri,
+                    credentials,
+                    ..
+                } = partition;
+                let prepared = prepare_file_read(&name, uri, credentials)?;
+                let found = pqbench::file::list::list(
+                    lake,
+                    &prepared.table,
+                    &prepared.uri,
+                    &prepared.env,
+                    &commit_versions,
+                )
+                .await;
+                Ok::<_, CliError>(match found {
+                    Ok(found) => {
+                        started.fetch_add(1, Ordering::Relaxed);
+                        found
+                            .map(move |item| {
+                                Ok::<_, CliError>(match item {
+                                    Ok(mut file) => {
+                                        file.credentials = prepared.lease.clone();
+                                        ReadOutcome::Record(file)
+                                    }
+                                    Err(error) => {
+                                        ReadOutcome::Dropped(RecordError::new("file", &name, error))
+                                    }
+                                })
+                            })
+                            .boxed()
+                    }
+                    Err(error) => stream::iter([Ok::<_, CliError>(ReadOutcome::Dropped(
+                        RecordError::new("partition", &name, error),
+                    ))])
+                    .boxed(),
+                })
             }
         })
         .buffer_unordered(args.fan_out.max(1))
         .boxed();
     let mut found = streams.try_flatten_unordered(Some(args.fan_out.max(1)));
-    while let Some(file) = found.try_next().await? {
-        if !meets_min_file_size(&file, args.min_file_size) {
-            continue;
+    while let Some(outcome) = found.try_next().await? {
+        match outcome {
+            ReadOutcome::Record(file) => {
+                if !meets_min_file_size(&file, args.min_file_size) {
+                    continue;
+                }
+                emit.write_row(&file).await?;
+                files += 1;
+            }
+            ReadOutcome::Dropped(error) => {
+                error.report();
+                match error.what() {
+                    "partition" => dropped_partitions += 1,
+                    _ => dropped_files += 1,
+                }
+            }
         }
-        emit.write_row(&file).await?;
-        files += 1;
     }
     let partitions = started.load(Ordering::Relaxed);
-    let dropped = dropped.load(Ordering::Relaxed);
     emit.finish(&format!("partitions: {partitions}\nfiles: {files}\n"))
         .await?;
-    fail_when_dropped("partition", dropped)
+    fail_when_dropped(&[("partition", dropped_partitions), ("file", dropped_files)])
 }
 
-/// One partition's rows: the files its commits added, each becoming a table
-/// file as it arrives — so the first file is written while the window's later
-/// commits are still being read.
-async fn file_rows(
-    lake: &pqbench::Lake,
-    partition: v1::Partition,
-) -> Result<BoxStream<'static, Result<v1::TableFile, CliError>>, CliError> {
-    let (catalog, schema, table, _) = v1::name::parse_partition(&partition.name)
-        .ok_or_else(|| not_a_partition(&partition.name))?;
-    let uri = partition
-        .uri
-        .clone()
-        .ok_or("a partition record needs a table storage root")?;
-    let lease = partition.credentials;
-    let env = lease
+/// The parts a partition's file read needs, after the record's own contract
+/// checks: a bad name or a missing storage root fails the level, not the read.
+struct FileRead {
+    table: String,
+    uri: String,
+    lease: Option<v1::Credentials>,
+    env: BTreeMap<String, String>,
+}
+
+fn prepare_file_read(
+    name: &str,
+    uri: Option<String>,
+    credentials: Option<v1::Credentials>,
+) -> Result<FileRead, CliError> {
+    let (catalog, schema, table, _) =
+        v1::name::parse_partition(name).ok_or_else(|| not_a_partition(name))?;
+    let uri = uri.ok_or("a partition record needs a table storage root")?;
+    let env = credentials
         .as_ref()
         .map(v1::Credentials::to_env)
         .unwrap_or_default();
-    let table = v1::name::table(&catalog, &schema, &table);
-    let found = pqbench::file::list::list(lake, &table, &uri, &env, &partition.commit_versions)
-        .await
-        .map_err(CliError::from)?;
-    Ok(found
-        .map_ok(move |mut file| {
-            file.credentials = lease.clone();
-            file
-        })
-        .map_err(CliError::from)
-        .boxed())
+    Ok(FileRead {
+        table: v1::name::table(&catalog, &schema, &table),
+        uri,
+        lease: credentials,
+        env,
+    })
 }
 
 /// The error for a partition record whose name is not a partition resource.
