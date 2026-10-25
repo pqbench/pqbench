@@ -52,7 +52,7 @@ fn list_files() {
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 212
-    support::run("pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 213, None);
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 214, None);
+    // viz, from line 208
+    support::run("pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 209, None);
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 210, None);
 }

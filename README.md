@@ -149,8 +149,8 @@ c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
 ```
 
 - Reads only the footer, so it works on any file, compressed or not.
-- Accepts paths, quoted globs, `s3://` URIs, and a `TableFile` /
-  `remote-source` document.
+- Reads `TableFile` records on stdin: `table-file PATH` names one path or URI,
+  and `list files` names a table's files.
 - `s3://` needs the `aws` feature; a pipe streams one `Blob` per file and one
   `Bytemass` per column.
 
@@ -193,15 +193,11 @@ label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
   **added** — a file a later commit removes is still named.
 - The lease rides on every file, so a short-lived lease travels to `bytemass`.
 
-A producer can hand `bytemass` a `remote-source` document — one table
-URI plus `AWS_*` credentials:
+A producer names a file with `table-file`; `AWS_*` in the environment (or a
+vended lease on the file record) supplies storage access:
 
 ```console no-run
-$ cat <<'EOF' | pqbench bytemass | pqbench format
-{"version":1,
- "inputs":["s3://bucket/table/part-0.parquet"],
- "env":{"AWS_ACCESS_KEY_ID":"…","AWS_SECRET_ACCESS_KEY":"…","AWS_SESSION_TOKEN":"…","AWS_REGION":"us-east-1"}}
-EOF
+$ pqbench table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqbench bytemass | pqbench format
 ```
 
 ### viz

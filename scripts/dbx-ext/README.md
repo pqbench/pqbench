@@ -5,7 +5,7 @@ The live Databricks half of the e2e: a Unity Catalog catalog whose tables are
 runs end to end —
 
 ```console no-run
-$ pqbench list tables <catalog>.<schema> | pqbench credentials check \
+$ echo '"CAT.SCHEMA"' | pqbench list tables | pqbench credentials check \
     | pqbench credentials get | pqbench get table \
     | pqbench list partitions | pqbench list files | pqbench bytemass
 ```

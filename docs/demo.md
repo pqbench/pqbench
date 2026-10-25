@@ -89,7 +89,7 @@ its files:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables CAT.SCHEMA |
+$ echo '"CAT.SCHEMA"' | pqbench list tables |
     pqbench credentials check |
     pqbench credentials get |
     pqbench get table |
@@ -147,7 +147,7 @@ fixture stores data as `s3://lakehouse/...`, so measure it through the stand
 (`make lakehouse`), not just the feature:
 
 ```console no-run
-$ pqbench list partitions docker/e2e-lakehouse/iceberg > /tmp/iceberg.ndjson
+$ cat docker/e2e-lakehouse/iceberg.ndjson | pqbench list partitions > /tmp/iceberg.ndjson
 ```
 
 With the stand up, walk the Iceberg REST catalog (`PQB_ENDPOINT=…

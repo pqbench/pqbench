@@ -14,11 +14,11 @@ that command and links back. This file is the durable copy.
 | List a partition's files | `pqbench list files` (partitions on stdin) |
 | Read the endpoint's metastore record | `pqbench get metastore` (`PQB_ENDPOINT`) |
 | List the catalogs at a catalog endpoint | `pqbench list catalogs` (`PQB_ENDPOINT`) |
-| Read one catalog's record | `pqbench get catalog [CATALOG]` (refs on stdin) |
-| List the schemas in a catalog | `pqbench list schemas [CATALOG]` (refs on stdin) |
-| Read one schema's record | `pqbench get schema CATALOG.SCHEMA` (refs on stdin) |
-| List the tables in a schema | `pqbench list tables CATALOG.SCHEMA` (refs on stdin) |
-| Read one table's record | `pqbench get table CATALOG.SCHEMA.TABLE` (Table refs on stdin) |
+| Read one catalog's record | `pqbench get catalog` (Catalog refs on stdin) |
+| List the schemas in a catalog | `pqbench list schemas` (Catalog refs on stdin) |
+| Read one schema's record | `pqbench get schema` (Schema refs on stdin) |
+| List the tables in a schema | `pqbench list tables` (Schema refs on stdin) |
+| Read one table's record | `pqbench get table` (Table refs on stdin) |
 | Render a stream as tables | `pqbench format` (NDJSON on stdin) |
 | Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
@@ -30,17 +30,16 @@ that command and links back. This file is the durable copy.
 
 The walk reads with two verbs: `get` reads one resource of the walk, `list`
 lists one of its collections. Each level reads its parent's refs on standard
-input, or takes the parent as its argument, so the walk is a pipe:
+input, so the walk is a pipe:
 
 ```console no-run
 $ pqbench list catalogs | pqbench list schemas | pqbench list tables
-$ pqbench get table dbx_samples.nyctaxi.trips
+$ echo '"dbx_samples.nyctaxi.trips"' | pqbench get table
 ```
 
 A level reads standard input only when it is a stream — a pipeline's pipe, or a
-`<file` redirect. A terminal, and a notebook kernel's socket, are not: the level
-falls back to its argument (or its own error) instead of blocking on a read that
-never returns.
+`<file` redirect. A terminal, and a notebook kernel's socket, are not, so a
+level run with no input fails instead of blocking on a read that never returns.
 
 The usual walk:
 
@@ -182,9 +181,9 @@ catalogs/samples/schemas/accuweather    …        s3://lakehouse/weather
 ```
 
 `get schema` reads one schema (catalog, name, comment, location, properties)
-from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`. `list tables`
-lists the tables in it, one `Table` line each — the
-document `get table` enriches. Unity's `/tables` pages carry the full name
+from Unity `/schemas/{full_name}` or Iceberg REST `loadNamespace`; it takes
+`Schema` records on standard input. `list tables` lists the tables in a schema,
+one `Table` line each — the document `get table` enriches. Unity's `/tables` pages carry the full name
 and storage location, so the ref is complete; Iceberg REST lists identifiers
 only, so the ref carries its name and no storage URI — `get table` derives the
 `loadTable` URL and reads the metadata inline.
@@ -198,7 +197,8 @@ the same lease:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi |
+$ echo '"dbx_samples.nyctaxi"' |
+    pqbench list tables |
     pqbench credentials check |
     pqbench credentials get |
     pqbench get table
@@ -269,7 +269,8 @@ cannot serve passes through with its own credentials.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi |
+$ echo '"dbx_samples.nyctaxi"' |
+    pqbench list tables |
     pqbench credentials check | pqbench credentials get
 ```
 
@@ -288,7 +289,8 @@ measures.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi |
+$ echo '"dbx_samples.nyctaxi"' |
+    pqbench list tables |
     pqbench credentials check |
     pqbench credentials get |
     pqbench list partitions
@@ -298,13 +300,13 @@ name                  first_time     last_time  commits
 ```
 
 ```console no-run
-$ PQB_ENDPOINT=… pqbench get table pqbench.demo.events
+$ echo '{"name":"pqbench.demo.events"}' | PQB_ENDPOINT=… pqbench get table
 name                           format  snapshot_version  columns  uri
 -----------------------------  ------  ----------------  -------  ----------------------
 catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/unity/events
 ```
 
-List a table's partitions by URI; a terminal prints them:
+List a table's partitions from a table record; a terminal prints them:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
@@ -326,7 +328,7 @@ catalogs/samples      CATALOG_TYPE_SYSTEM
 Read one catalog's record:
 
 ```console no-run
-$ pqbench get catalog dbx_samples
+$ echo '"dbx_samples"' | pqbench get catalog
 name                  catalog_type
 --------------------  --------------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
@@ -335,7 +337,7 @@ catalogs/dbx_samples  CATALOG_TYPE_MANAGED
 List the schemas in a catalog:
 
 ```console no-run
-$ pqbench list schemas dbx_samples
+$ echo '"dbx_samples"' | pqbench list schemas
 name                                   comment  uri
 -------------------------------------  -------  ----------------------
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
@@ -419,7 +421,6 @@ is a shell job on the stream (`jq`, `sort`, `head`, `xargs`) — see
 [demo.md](demo.md). `bytemass` reads its files in flight (`--fan-out`, 128 by
 default), so the per-file footer round trips overlap instead of adding up.
 
-`bytemass` measures the paths and records it is given; it does not expand
+`bytemass` measures the table-file records it is given; it does not expand
 patterns or list a prefix. A pattern belongs to the producer: `list files`
-names a table's files from its log, and a `remote-source` document names the
-objects to read.
+names a table's files from its log, and `table-file` names one path or URI.

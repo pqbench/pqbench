@@ -40,8 +40,9 @@ reads the same metadata inline from the REST `loadTable` response instead.)
 
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
 it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
-stand up, `pqbench list partitions <table> | pqbench list files | pqbench bytemass
-| pqbench format` prints the same column table as a bare parquet:
+stand up, `cat docker/e2e-lakehouse/iceberg.ndjson | pqbench list partitions |
+pqbench list files | pqbench bytemass | pqbench format` prints the same column
+table as a bare parquet:
 
 ```console run
 $ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
@@ -53,14 +54,17 @@ year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
 
 Two invocations from the `iceberg` cargo feature:
 
-cargo run -p pqbench-cli --features iceberg -- list partitions ./path/to/table
-cargo run -p pqbench-cli --features iceberg -- list partitions ./path/to/table/metadata/v1.metadata.json
+echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' \
+  | cargo run -p pqbench-cli --features iceberg -- list partitions
+echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table/metadata/v1.metadata.json"}' \
+  | cargo run -p pqbench-cli --features iceberg -- list partitions
 
 Remote metadata and data objects are resolved with `iceberg-s3` (which enables
 `aws`). A remote table root needs `metadata/version-hint.text`; otherwise pass
 the metadata JSON URI:
 
-cargo run -p pqbench-cli --features iceberg-s3 -- list partitions s3://bucket/table
+echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/table"}' \
+  | cargo run -p pqbench-cli --features iceberg-s3 -- list partitions
 
 A producer can supply the table URI and vended credentials as
 a table record; `list partitions` reads the snapshot, and the credentials

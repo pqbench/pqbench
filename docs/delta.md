@@ -37,14 +37,14 @@ name                           first_time      last_time  commits
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
 ```
 
-Build with the feature when you run from source, e.g.
-`cargo run -p pqbench-cli --features delta -- list partitions ./path/to/table`, or run
+Build with the feature when you run from source: name the table on stdin, e.g.
+`echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' | cargo run -p pqbench-cli --features delta -- list partitions`, or run
 the same command in a container.
 
 Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
 A table's vended credentials travel as its `credentials` value (`AWS_*` keys);
 they are not written into the process environment. The cargo command is
-`cargo run -p pqbench-cli --features delta-s3 -- list partitions s3://bucket/table`.
+`echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/table"}' | cargo run -p pqbench-cli --features delta-s3 -- list partitions`.
 
 A producer can supply the table URI and vended credentials as
 a table record. `list partitions` reads the log, and the credentials travel to
