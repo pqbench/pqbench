@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use super::json::{self, FromJson};
 use super::name;
 use super::CatalogType;
 use super::Parent;
@@ -29,33 +27,24 @@ pub struct Catalog {
     pub owner: Option<String>,
 }
 
-impl FromJson for Catalog {
-    fn from_json(value: Value) -> Result<Self, String> {
-        json::record(
-            value,
-            "catalog",
-            "catalogs/…",
-            Self::named,
-            |catalog| &catalog.name,
-            |catalog| &mut catalog.name,
-        )
-    }
-}
+impl Parent for Catalog {
+    const NOUN: &'static str = "catalog";
 
-impl Catalog {
-    fn named(name: &str) -> Option<Self> {
+    const SHAPE: &'static str = "catalogs/…";
+
+    fn from_name(name: &str) -> Option<Self> {
         let catalog = name::parse_catalog(name)?;
         Some(Self {
             name: name::catalog(&catalog),
             ..Self::default()
         })
     }
-}
-
-impl Parent for Catalog {
-    const NOUN: &'static str = "catalog";
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn name_mut(&mut self) -> &mut String {
+        &mut self.name
     }
 }

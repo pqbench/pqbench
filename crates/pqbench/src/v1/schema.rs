@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use serde_json::Value;
-
-use super::json::{self, FromJson};
 use super::name;
 use super::Parent;
 
@@ -27,33 +24,24 @@ pub struct Schema {
     pub properties: BTreeMap<String, String>,
 }
 
-impl FromJson for Schema {
-    fn from_json(value: Value) -> Result<Self, String> {
-        json::record(
-            value,
-            "schema",
-            "catalogs/…/schemas/…",
-            Self::named,
-            |schema| &schema.name,
-            |schema| &mut schema.name,
-        )
-    }
-}
+impl Parent for Schema {
+    const NOUN: &'static str = "schema";
 
-impl Schema {
-    fn named(name: &str) -> Option<Self> {
+    const SHAPE: &'static str = "catalogs/…/schemas/…";
+
+    fn from_name(name: &str) -> Option<Self> {
         let (catalog, schema) = name::parse_schema(name)?;
         Some(Self {
             name: name::schema(&catalog, &schema),
             ..Self::default()
         })
     }
-}
-
-impl Parent for Schema {
-    const NOUN: &'static str = "schema";
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn name_mut(&mut self) -> &mut String {
+        &mut self.name
     }
 }

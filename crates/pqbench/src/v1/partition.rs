@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use super::json::{self, FromJson};
 use super::name;
 use super::{Credentials, Parent};
 
@@ -36,33 +34,24 @@ pub struct Partition {
     pub credentials: Option<Credentials>,
 }
 
-impl FromJson for Partition {
-    fn from_json(value: Value) -> Result<Self, String> {
-        json::record(
-            value,
-            "partition",
-            "catalogs/…/tables/…/partitions/…",
-            Self::named,
-            |partition| &partition.name,
-            |partition| &mut partition.name,
-        )
-    }
-}
+impl Parent for Partition {
+    const NOUN: &'static str = "partition";
 
-impl Partition {
-    fn named(name: &str) -> Option<Self> {
+    const SHAPE: &'static str = "catalogs/…/tables/…/partitions/…";
+
+    fn from_name(name: &str) -> Option<Self> {
         let (catalog, schema, table, partition) = name::parse_partition(name)?;
         Some(Self {
             name: name::partition(&catalog, &schema, &table, &partition),
             ..Self::default()
         })
     }
-}
-
-impl Parent for Partition {
-    const NOUN: &'static str = "partition";
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn name_mut(&mut self) -> &mut String {
+        &mut self.name
     }
 }

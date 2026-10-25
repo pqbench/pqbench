@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use serde_json::Value;
-
-use super::json::{self, FromJson};
 use super::name;
 use super::{Credentials, DeclaredColumn, Parent, TableFormat};
 
@@ -46,33 +43,24 @@ pub struct Table {
     pub credentials: Option<Credentials>,
 }
 
-impl FromJson for Table {
-    fn from_json(value: Value) -> Result<Self, String> {
-        json::record(
-            value,
-            "table",
-            "catalogs/…/tables/…",
-            Self::named,
-            |table| &table.name,
-            |table| &mut table.name,
-        )
-    }
-}
+impl Parent for Table {
+    const NOUN: &'static str = "table";
 
-impl Table {
-    fn named(name: &str) -> Option<Self> {
+    const SHAPE: &'static str = "catalogs/…/tables/…";
+
+    fn from_name(name: &str) -> Option<Self> {
         let (catalog, schema, table) = name::parse_table(name)?;
         Some(Self {
             name: name::table(&catalog, &schema, &table),
             ..Self::default()
         })
     }
-}
-
-impl Parent for Table {
-    const NOUN: &'static str = "table";
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn name_mut(&mut self) -> &mut String {
+        &mut self.name
     }
 }
