@@ -260,11 +260,11 @@ pub(crate) async fn write(text: &str) -> Result<(), CliError> {
     use tokio::io::AsyncWriteExt;
 
     let mut stdout = tokio::io::stdout();
-    match stdout
-        .write_all(text.as_bytes())
-        .await
-        .and(stdout.flush().await)
-    {
+    let written = match stdout.write_all(text.as_bytes()).await {
+        Ok(()) => stdout.flush().await,
+        Err(error) => Err(error),
+    };
+    match written {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         Err(error) => Err(error.into()),
