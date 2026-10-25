@@ -164,9 +164,14 @@ requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
 instead of buffering. A `pqbench ratelimit` stage
 paces the refs between two levels at a target rate — records pass through
-unchanged, one bucket per resource type, nothing dropped. A 429 fails the level with the
-endpoint's status and body; pace the walk and retry it at a lower rate in the
-shell:
+unchanged, one bucket per resource type, nothing dropped. A ref whose read
+fails — a timeout, a dropped connection, an endpoint answer such as a 429, or
+a storage fault — is dropped by the level: it names the ref and the cause on
+standard error, finishes the stream, and exits non-zero with the count, so one
+bad ref does not truncate a walk. `ratelimit` keeps the endpoint from answering
+429 in the first place; a level that fails outright — the root `list catalogs`,
+a malformed stream — still fails the pipeline, and the shell can retry it at a
+lower rate:
 
 ```console
 set -o pipefail
@@ -175,14 +180,6 @@ until pqbench list catalogs | pqbench ratelimit --rate "$rate" | pqbench list sc
     rate=$((rate / 2))
 done
 ```
-
-A ref whose request never answers — a timeout or a dropped connection, or a
-storage read that faults after the object store's own retries — is not an
-endpoint answer: the level names the ref and the cause on standard error,
-drops it, and carries on, so one unreachable table does not end a walk. A
-status answer (429/4xx/5xx) still fails the level, so the retry at a lower
-rate above still sees a throttle. The level prints how many records it
-dropped, and still exits 0.
 
 `list catalogs | list schemas` lists every schema at the endpoint; `list catalogs |
 get catalog` enriches each catalog instead. `get` emits the same kind of resource
@@ -274,9 +271,9 @@ walk's single filter: it drops a `system` catalog ref, a view (the catalog
 reports no location), and a table on Databricks default storage, with the
 reason on standard error; eligible refs pass through unchanged. A drop is the
 filter working, not a failure — a whole-catalog walk always has tables it
-cannot read outside compute — so the stage still succeeds; a ref whose request
-never answers is dropped the same way, and only an error it cannot use (a
-malformed name, a status answer) fails it. `credentials get` is the stage that materializes the
+cannot read outside compute — so an ineligible ref still leaves the stage
+green; a ref whose check fails is dropped and counted, and the stage exits
+non-zero. `credentials get` is the stage that materializes the
 credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`) on the refs for the table read and other tools: Unity's
 `temporary-table-credentials`, or under `PQB_TABLE_FORMAT=iceberg` the

@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::StageArgs;
 use crate::document::invalid_json;
 use crate::emit::{Align, Emitter, Row};
-use crate::error::{report_dropped, tolerate};
+use crate::error::{fail_when_dropped, tolerate};
 use crate::source::{self, dotted_name, read_input};
 use crate::CliError;
 
@@ -32,7 +32,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
             let credentials = pqbench::credentials::get::get(workspace, &table.name)
                 .await
                 .map_err(CliError::from);
-            Ok::<_, CliError>(tolerate(&name, credentials)?.map(|credentials| (table, credentials)))
+            Ok::<_, CliError>(tolerate(&name, credentials).map(|credentials| (table, credentials)))
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(result) = vends.next().await {
@@ -51,8 +51,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
         tables += 1;
     }
     emit.finish(&format!("tables: {tables}\n")).await?;
-    report_dropped("table", dropped);
-    Ok(())
+    fail_when_dropped("table", dropped)
 }
 
 /// The row `credentials get` writes: the ref, plus whether creds were vended.

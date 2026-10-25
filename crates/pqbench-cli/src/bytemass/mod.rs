@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::document::{self, Record};
 use crate::emit::{Align, Emitter, Format, Row};
-use crate::error::{report_dropped, tolerate};
+use crate::error::{fail_when_dropped, tolerate};
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -72,8 +72,8 @@ async fn measure_document(
             emit_measured(&mut emit, &mut stats, measured).await?;
         }
     }
-    report_dropped("file", dropped);
-    finish_stream(emit, &stats, args.output.as_deref()).await
+    finish_stream(emit, &stats, args.output.as_deref()).await?;
+    fail_when_dropped("file", dropped)
 }
 
 async fn measure(
@@ -95,14 +95,14 @@ async fn measure(
         })
         .buffer_unordered(args.fan_out.max(1));
     while let Some(measured) = reads.next().await {
-        let Some(measured) = measured? else {
+        let Some(measured) = measured else {
             dropped += 1;
             continue;
         };
         emit_measured(&mut emit, &mut stats, measured).await?;
     }
-    report_dropped("file", dropped);
-    finish_stream(emit, &stats, args.output.as_deref()).await
+    finish_stream(emit, &stats, args.output.as_deref()).await?;
+    fail_when_dropped("file", dropped)
 }
 
 /// Measure every file one document record names: a table-file is one file; a
@@ -113,19 +113,12 @@ async fn measure_record(
     record: Result<Record, CliError>,
 ) -> Result<Option<Vec<bytemass::MeasuredFile>>, CliError> {
     match record? {
-        Record::File(file) => {
-            let reference = file
-                .blob
-                .clone()
-                .unwrap_or_else(|| "a table file".to_string());
-            let read = read_table_file(lake, file)
-                .await
-                .map(|measured| vec![measured]);
-            tolerate(&reference, read)
-        }
+        Record::File(file) => read_table_file(lake, file)
+            .await
+            .map(|measured| measured.map(|measured| vec![measured])),
         Record::RemoteSource(source) => {
             let reference = source.inputs.join(", ");
-            tolerate(&reference, measure_source(lake, source).await)
+            Ok(tolerate(&reference, measure_source(lake, source).await))
         }
         Record::Blob(_) | Record::Bytemass(_) => {
             Err("a bytemass stream goes to `pqbench viz`".into())
@@ -168,11 +161,12 @@ async fn read_file(
 }
 
 /// Read a table file's blob, and cross-check the log's size against the
-/// footer's.
+/// footer's. A read that fails is dropped; a name or size the record gets
+/// wrong still fails the command.
 async fn read_table_file(
     lake: &pqbench::Lake,
     file: v1::TableFile,
-) -> Result<bytemass::MeasuredFile, CliError> {
+) -> Result<Option<bytemass::MeasuredFile>, CliError> {
     let blob = file
         .blob
         .as_deref()
@@ -184,7 +178,9 @@ async fn read_table_file(
         .as_ref()
         .map(v1::Credentials::to_env)
         .unwrap_or_default();
-    let measured = read_file(lake, &uri, &env).await?;
+    let Some(measured) = tolerate(&uri, read_file(lake, &uri, &env).await) else {
+        return Ok(None);
+    };
     if let Some(size) = file.size_bytes {
         if size != 0 && measured.blob.size_bytes != Some(size) {
             return Err(format!(
@@ -194,7 +190,7 @@ async fn read_table_file(
             .into());
         }
     }
-    Ok(measured)
+    Ok(Some(measured))
 }
 
 /// Emit one measured file: its blob, then one row per column.

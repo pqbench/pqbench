@@ -7,7 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::schema::list;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{report_dropped, tolerate};
+use crate::error::{fail_when_dropped, tolerate};
 use crate::source::{self, catalog_ref, read_input, Input};
 use crate::CliError;
 
@@ -30,16 +30,17 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list schemas").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let schemas = match &args.catalog {
+    let (schemas, dropped) = match &args.catalog {
         Some(catalog) => {
             if input.first.is_some() {
                 return Err("list schemas takes CATALOG or a catalog stream, not both".into());
             }
-            list_catalog(workspace, catalog, &mut emit).await?
+            (list_catalog(workspace, catalog, &mut emit).await?, 0)
         }
         None => list_stream(workspace, input, args.fan_out, &mut emit).await?,
     };
-    emit.finish(&format!("schemas: {schemas}\n")).await
+    emit.finish(&format!("schemas: {schemas}\n")).await?;
+    fail_when_dropped("catalog", dropped)
 }
 
 /// List one named catalog's schemas.
@@ -61,7 +62,7 @@ async fn list_stream(
     input: Input,
     fan_out: usize,
     emit: &mut Emitter,
-) -> Result<usize, CliError> {
+) -> Result<(usize, usize), CliError> {
     if !input.piped {
         return Err("list schemas needs CATALOG or a catalog stream".into());
     }
@@ -72,7 +73,7 @@ async fn list_stream(
         .map(|record| async {
             let name = catalog_ref("list schemas", &record?)?;
             let listed = list::list(workspace, &name).await.map_err(CliError::from);
-            tolerate(&name, listed)
+            Ok::<_, CliError>(tolerate(&name, listed))
         })
         .buffer_unordered(fan_out.max(1));
     while let Some(listed) = lists.next().await {
@@ -85,6 +86,5 @@ async fn list_stream(
             schemas += 1;
         }
     }
-    report_dropped("catalog", dropped);
-    Ok(schemas)
+    Ok((schemas, dropped))
 }

@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use super::StageArgs;
 use crate::emit::{Align, Emitter, Row};
-use crate::error::{error_chain, is_transient, report_dropped};
+use crate::error::{error_chain, fail_when_dropped};
 use crate::source::{self, dotted_name, read_input, table_ref};
 use crate::CliError;
 
@@ -37,11 +37,10 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
             let name = table_ref("credentials check", &record)?;
             match check(workspace, &name).await {
                 Ok(reason) => Ok::<_, CliError>((record, reason, false)),
-                Err(error) if is_transient(&error) => {
+                Err(error) => {
                     let reason = format!("{}: {}", dotted_name(&name), error_chain(error.as_ref()));
                     Ok((record, Some(reason), true))
                 }
-                Err(error) => Err(error),
             }
         })
         .buffer_unordered(args.fan_out.max(1));
@@ -68,8 +67,7 @@ pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Res
     if ineligible > 0 {
         eprintln!("{ineligible} table(s) are not readable outside Databricks compute");
     }
-    report_dropped("table", unread);
-    Ok(())
+    fail_when_dropped("table", unread)
 }
 
 /// The reason a table is not readable outside Databricks compute, `None` when

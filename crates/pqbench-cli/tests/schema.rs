@@ -486,7 +486,8 @@ fn schema_ls_lists_a_catalog_stream() {
 fn schema_ls_drops_a_catalog_that_never_answers() {
     // The walk shares one endpoint: one catalog's request gets no answer (a
     // timeout or a dropped connection) while the rest answer. The level reports
-    // it and carries on, so one unreachable ref does not end the walk.
+    // it, finishes the stream, and then exits non-zero — one unreachable ref
+    // does not truncate the walk.
     let address = routes(&[
         ("catalog_name=dbx_samples", 200, SCHEMAS),
         ("catalog_name=system", 0, ""),
@@ -497,7 +498,7 @@ fn schema_ls_drops_a_catalog_that_never_answers() {
         &[("PQB_ENDPOINT", address.as_str())],
     );
     assert!(
-        output.status.success(),
+        !output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -513,9 +514,10 @@ fn schema_ls_drops_a_catalog_that_never_answers() {
 }
 
 #[test]
-fn schema_ls_still_fails_when_a_catalog_answers_an_error() {
-    // An endpoint answer is not a timeout: a 500 still fails the level, so the
-    // shell's retry at a lower rate sees it (decision 0007).
+fn schema_ls_drops_a_catalog_that_answers_an_error() {
+    // The drop is type-agnostic: a 500 is treated like a timeout, named on
+    // standard error, and the rest of the walk carries on. The run exits
+    // non-zero after the stream finishes.
     let address = routes(&[
         ("catalog_name=dbx_samples", 200, SCHEMAS),
         ("catalog_name=system", 500, r#"{"message":"boom"}"#),
@@ -525,7 +527,18 @@ fn schema_ls_still_fails_when_a_catalog_answers_an_error() {
         CATALOG_REFS.as_bytes(),
         &[("PQB_ENDPOINT", address.as_str())],
     );
-    assert!(!output.status.success());
+    assert!(
+        !output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(records.iter().all(|record| record["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("catalogs/dbx_samples/")));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("catalogs/system"), "{stderr}");
     assert!(stderr.contains("500"), "{stderr}");
 }

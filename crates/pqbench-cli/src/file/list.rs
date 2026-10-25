@@ -10,7 +10,7 @@ use pqbench::v1;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::emit::{Emitter, Format};
-use crate::error::{error_chain, is_transient, report_dropped, tolerate};
+use crate::error::{error_chain, fail_when_dropped, tolerate};
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -49,7 +49,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
     // Partition streams in flight at once, each streaming its files as its
     // commits are read; `started` counts them so the summary separates
     // partitions from files, and `dropped` counts the streams or files a
-    // transient failure made unreadable.
+    // failed read made unreadable.
     let started = Arc::new(AtomicUsize::new(0));
     let dropped = Arc::new(AtomicUsize::new(0));
     let streams = partition_stream(lines)
@@ -60,27 +60,29 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
                 let partition = partition?;
                 let reference = partition.name.clone();
                 let found = file_rows(lake, partition).await;
-                let Some(found) = tolerate(&reference, found)? else {
+                let Some(found) = tolerate(&reference, found) else {
                     dropped.fetch_add(1, Ordering::Relaxed);
-                    return Ok::<_, CliError>(stream::empty().boxed());
+                    return Ok::<_, CliError>(
+                        stream::empty::<Result<v1::TableFile, CliError>>().boxed(),
+                    );
                 };
                 started.fetch_add(1, Ordering::Relaxed);
-                Ok(found)
+                Ok(found
+                    .filter_map(move |item| match item {
+                        Ok(file) => std::future::ready(Some(Ok(file))),
+                        Err(error) => {
+                            eprintln!("error: {}", error_chain(error.as_ref()));
+                            dropped.fetch_add(1, Ordering::Relaxed);
+                            std::future::ready(None)
+                        }
+                    })
+                    .boxed())
             }
         })
         .buffer_unordered(args.fan_out.max(1))
         .boxed();
     let mut found = streams.try_flatten_unordered(Some(args.fan_out.max(1)));
-    while let Some(file) = found.next().await {
-        let file = match file {
-            Ok(file) => file,
-            Err(error) if is_transient(&error) => {
-                eprintln!("error: {}", error_chain(error.as_ref()));
-                dropped.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
+    while let Some(file) = found.try_next().await? {
         if !meets_min_file_size(&file, args.min_file_size) {
             continue;
         }
@@ -88,9 +90,10 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
         files += 1;
     }
     let partitions = started.load(Ordering::Relaxed);
-    report_dropped("partition", dropped.load(Ordering::Relaxed));
+    let dropped = dropped.load(Ordering::Relaxed);
     emit.finish(&format!("partitions: {partitions}\nfiles: {files}\n"))
-        .await
+        .await?;
+    fail_when_dropped("partition", dropped)
 }
 
 /// One partition's rows: the files its commits added, each becoming a table

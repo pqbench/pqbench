@@ -10,7 +10,7 @@ use futures_util::stream::{self, StreamExt, TryStreamExt};
 use pqbench::partition;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{error_chain, is_transient, report_dropped, tolerate};
+use crate::error::{error_chain, fail_when_dropped, tolerate};
 use crate::source::{
     self, dotted_name, read_input, ref_credentials, ref_storage, table_ref, Input,
 };
@@ -49,17 +49,21 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list partitions").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let partitions = match &args.input {
+    let (partitions, dropped) = match &args.input {
         Some(uri) if uri != "-" => {
             if input.first.is_some() {
                 return Err("list partitions takes a table URI or a table stream, not both".into());
             }
             let table = pqbench::v1::name::local_table(uri);
-            list_partitions(lake, &table, uri, args.every, args.last, &mut emit).await?
+            (
+                list_partitions(lake, &table, uri, args.every, args.last, &mut emit).await?,
+                0,
+            )
         }
         _ => list_stream(lake, input, args.every, args.last, args.fan_out, &mut emit).await?,
     };
-    emit.finish(&format!("partitions: {partitions}\n")).await
+    emit.finish(&format!("partitions: {partitions}\n")).await?;
+    fail_when_dropped("table", dropped)
 }
 
 /// Emit every table's partitions from a table stream: tables in flight at
@@ -71,7 +75,7 @@ async fn list_stream(
     last: Option<i64>,
     fan_out: usize,
     emit: &mut Emitter,
-) -> Result<usize, CliError> {
+) -> Result<(usize, usize), CliError> {
     if !input.piped {
         return Err("list partitions needs a table URI or a table stream".into());
     }
@@ -95,12 +99,16 @@ async fn list_stream(
                     .as_ref()
                     .map(pqbench::v1::Credentials::to_env)
                     .unwrap_or_default();
+                let label = dotted_name(&name);
                 let found = partition::list::list(lake, &name, &uri, &env, window, last)
                     .await
                     .map_err(CliError::from);
-                let Some(found) = tolerate(&dotted_name(&name), found)? else {
+                let Some(found) = tolerate(&label, found) else {
                     dropped.fetch_add(1, Ordering::Relaxed);
-                    return Ok::<_, CliError>(stream::empty().boxed());
+                    return Ok::<_, CliError>(
+                        stream::empty::<Result<pqbench::partition::list::Partition, CliError>>()
+                            .boxed(),
+                    );
                 };
                 Ok(found
                     .map_ok(move |mut partition| {
@@ -108,6 +116,14 @@ async fn list_stream(
                         partition
                     })
                     .map_err(CliError::from)
+                    .filter_map(move |item| match item {
+                        Ok(partition) => std::future::ready(Some(Ok(partition))),
+                        Err(error) => {
+                            eprintln!("error: {}", error_chain(error.as_ref()));
+                            dropped.fetch_add(1, Ordering::Relaxed);
+                            std::future::ready(None)
+                        }
+                    })
                     .boxed())
             }
         })
@@ -115,21 +131,11 @@ async fn list_stream(
         .boxed();
     let mut found = reads.try_flatten_unordered(Some(fan_out.max(1)));
     let mut partitions = 0;
-    while let Some(partition) = found.next().await {
-        let partition = match partition {
-            Ok(partition) => partition,
-            Err(error) if is_transient(&error) => {
-                eprintln!("error: {}", error_chain(error.as_ref()));
-                dropped.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
+    while let Some(partition) = found.try_next().await? {
         emit.write_row(&partition).await?;
         partitions += 1;
     }
-    report_dropped("table", dropped.load(Ordering::Relaxed));
-    Ok(partitions)
+    Ok((partitions, dropped.load(Ordering::Relaxed)))
 }
 
 /// Emit one table's partitions as they arrive; returns how many were written.

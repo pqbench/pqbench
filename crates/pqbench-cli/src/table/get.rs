@@ -8,7 +8,7 @@ use futures_util::stream::StreamExt;
 use pqbench::table::get;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{report_dropped, tolerate};
+use crate::error::{fail_when_dropped, tolerate};
 use crate::source::{
     self, dotted_name, read_input, ref_credentials, ref_storage, split_table, table_ref, Input,
 };
@@ -48,18 +48,19 @@ pub(crate) async fn run(
 ) -> Result<(), CliError> {
     let input = read_input("get table").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let tables = match &args.table {
+    let (tables, dropped) = match &args.table {
         Some(table) => {
             if input.first.is_some() {
                 return Err(
                     "get table takes CATALOG.SCHEMA.TABLE or a table stream, not both".into(),
                 );
             }
-            get_one(workspace, lake, table, &mut emit).await?
+            (get_one(workspace, lake, table, &mut emit).await?, 0)
         }
         None => get_stream(workspace, lake, input, args.fan_out, &mut emit).await?,
     };
-    emit.finish(&format!("tables: {tables}\n")).await
+    emit.finish(&format!("tables: {tables}\n")).await?;
+    fail_when_dropped("table", dropped)
 }
 
 /// Read one named table's record.
@@ -83,7 +84,7 @@ async fn get_stream(
     input: Input,
     fan_out: usize,
     emit: &mut Emitter,
-) -> Result<usize, CliError> {
+) -> Result<(usize, usize), CliError> {
     if !input.piped {
         return Err("get table needs CATALOG.SCHEMA.TABLE or a table stream".into());
     }
@@ -107,7 +108,7 @@ async fn get_stream(
                     table.credentials = lease;
                     table
                 });
-            tolerate(&dotted_name(&name), read)
+            Ok::<_, CliError>(tolerate(&dotted_name(&name), read))
         })
         .buffer_unordered(fan_out.max(1));
     while let Some(record) = reads.next().await {
@@ -118,6 +119,5 @@ async fn get_stream(
         emit.write_row(&record).await?;
         tables += 1;
     }
-    report_dropped("table", dropped);
-    Ok(tables)
+    Ok((tables, dropped))
 }

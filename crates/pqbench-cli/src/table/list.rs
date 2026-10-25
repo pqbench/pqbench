@@ -7,7 +7,7 @@ use futures_util::stream::StreamExt;
 use pqbench::table::list;
 
 use crate::emit::{Emitter, Format};
-use crate::error::{report_dropped, tolerate};
+use crate::error::{fail_when_dropped, tolerate};
 use crate::source::{self, read_input, schema_ref, split_schema, Input};
 use crate::CliError;
 
@@ -32,16 +32,17 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list tables").await?;
     let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let tables = match &args.schema {
+    let (tables, dropped) = match &args.schema {
         Some(schema) => {
             if input.first.is_some() {
                 return Err("list tables takes CATALOG.SCHEMA or a schema stream, not both".into());
             }
-            list_schema(workspace, schema, &mut emit).await?
+            (list_schema(workspace, schema, &mut emit).await?, 0)
         }
         None => list_stream(workspace, input, args.fan_out, &mut emit).await?,
     };
-    emit.finish(&format!("tables: {tables}\n")).await
+    emit.finish(&format!("tables: {tables}\n")).await?;
+    fail_when_dropped("schema", dropped)
 }
 
 /// List one named schema's tables.
@@ -64,7 +65,7 @@ async fn list_stream(
     input: Input,
     fan_out: usize,
     emit: &mut Emitter,
-) -> Result<usize, CliError> {
+) -> Result<(usize, usize), CliError> {
     if !input.piped {
         return Err("list tables needs CATALOG.SCHEMA or a schema stream".into());
     }
@@ -75,7 +76,7 @@ async fn list_stream(
         .map(|record| async {
             let name = schema_ref("list tables", &record?)?;
             let listed = list::list(workspace, &name).await.map_err(CliError::from);
-            tolerate(&name, listed)
+            Ok::<_, CliError>(tolerate(&name, listed))
         })
         .buffer_unordered(fan_out.max(1));
     while let Some(listed) = lists.next().await {
@@ -88,6 +89,5 @@ async fn list_stream(
             tables += 1;
         }
     }
-    report_dropped("schema", dropped);
-    Ok(tables)
+    Ok((tables, dropped))
 }
