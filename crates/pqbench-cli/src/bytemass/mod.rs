@@ -20,11 +20,15 @@ pub(crate) struct BytemassArgs {
 /// Measure each table file as its record arrives.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::TableFile>("bytemass").await?;
-    let rows = flat_map(parents, args.fan_out, |file: v1::TableFile| async move {
-        let measured = bytemass::measure(lake, &file).await?;
-        Ok(stream::iter(
-            measured_rows(measured).into_iter().map(Ok::<_, CliError>),
-        ))
+    let lake = lake.clone();
+    let rows = flat_map(parents, args.fan_out, move |file: v1::TableFile| {
+        let lake = lake.clone();
+        async move {
+            let measured = bytemass::measure(&lake, &file).await?;
+            Ok(stream::iter(
+                measured_rows(measured).into_iter().map(Ok::<_, CliError>),
+            ))
+        }
     });
     drive(rows).await
 }

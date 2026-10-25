@@ -19,16 +19,20 @@ pub(crate) struct ListArgs {
 
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Catalog>("list schemas").await?;
+    let workspace = workspace.clone();
     drive(flat_map(
         parents,
         args.fan_out,
-        |catalog: v1::Catalog| async move {
-            let rows = pqbench::schema::list::list(workspace, &catalog)
-                .try_collect::<Vec<_>>()
-                .await?;
-            Ok(stream::iter(
-                rows.into_iter().map(Ok::<_, std::convert::Infallible>),
-            ))
+        move |catalog: v1::Catalog| {
+            let workspace = workspace.clone();
+            async move {
+                let rows = pqbench::schema::list::list(&workspace, &catalog)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                Ok(stream::iter(
+                    rows.into_iter().map(Ok::<_, std::convert::Infallible>),
+                ))
+            }
         },
     ))
     .await

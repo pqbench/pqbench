@@ -28,22 +28,22 @@ pub(crate) struct ListArgs {
 /// without a catalog call.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let parents = crate::parse::parents::<v1::Partition>("list files").await?;
-    let rows = source::flat_map(
-        parents,
-        args.fan_out,
-        |partition: v1::Partition| async move {
-            let files = pqbench::file::list::list(lake, &partition)
+    let lake = lake.clone();
+    let min = args.min_file_size;
+    let rows = source::flat_map(parents, args.fan_out, move |partition: v1::Partition| {
+        let lake = lake.clone();
+        async move {
+            let files = pqbench::file::list::list(&lake, &partition)
                 .await
                 .map_err(CliError::from)?;
-            let min = args.min_file_size;
             Ok(files.filter_map(move |file| async move {
                 match file {
                     Ok(file) => meets_min_file_size(&file, min).then_some(Ok(file)),
                     Err(error) => Some(Err(error)),
                 }
             }))
-        },
-    );
+        }
+    });
     source::drive(rows).await
 }
 

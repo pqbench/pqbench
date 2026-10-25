@@ -31,10 +31,16 @@ pub(crate) struct ListArgs {
 /// List a table's natural partitions: commits grouped into commit-time windows.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("list partitions").await?;
-    let rows = source::flat_map(parents, args.fan_out, |table: v1::Table| async move {
-        pqbench::partition::list::list(lake, &table, args.every, args.last)
-            .await
-            .map_err(CliError::from)
+    let lake = lake.clone();
+    let every = args.every;
+    let last = args.last;
+    let rows = source::flat_map(parents, args.fan_out, move |table: v1::Table| {
+        let lake = lake.clone();
+        async move {
+            pqbench::partition::list::list(&lake, &table, every, last)
+                .await
+                .map_err(CliError::from)
+        }
     });
     source::drive(rows).await
 }
