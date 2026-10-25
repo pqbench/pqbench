@@ -47,6 +47,21 @@ pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<v1::
         .collect())
 }
 
+/// Measure one file into its blob and its per-column masses.
+///
+/// The footer is read once; only file metadata is fetched, never data pages.
+///
+/// # Errors
+/// Fails for an unreadable object, an invalid Parquet footer, or an
+/// unsupported URI.
+pub async fn measure_file(
+    lake: &Lake,
+    uri: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<MeasuredFile, Error> {
+    super::collection::measure_file(lake, uri, env).await
+}
+
 /// Measure each expanded input into a [`MeasuredFile`].
 ///
 /// # Errors

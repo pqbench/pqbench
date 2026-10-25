@@ -49,7 +49,6 @@ fn a_command_does_not_read_a_socket_standard_input() {
         &["list", "partitions"][..],
         &["list", "files"][..],
         &["bytemass"][..],
-        &["bytemass", "-"][..],
         &["diff", "-", "unused.parquet"][..],
         &["ratelimit"][..],
     ] {

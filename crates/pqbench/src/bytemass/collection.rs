@@ -21,11 +21,19 @@ pub(super) async fn measure_files(
 ) -> Result<Vec<MeasuredFile>, Error> {
     let mut files = Vec::new();
     for path in expand_inputs(lake, inputs, env).await? {
-        let uri = path.to_string_lossy().into_owned();
-        let (stat, mass) = read_input(lake, &uri, env).await?;
-        files.push(measured_file(&uri, &stat, mass));
+        files.push(measure_file(lake, &path.to_string_lossy(), env).await?);
     }
     Ok(files)
+}
+
+/// Measure one file: its footer read once, its chunks folded per column.
+pub(super) async fn measure_file(
+    lake: &Lake,
+    uri: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<MeasuredFile, Error> {
+    let (stat, mass) = read_input(lake, uri, env).await?;
+    Ok(measured_file(uri, &stat, mass))
 }
 
 /// Name a file's masses: its `Blob`, and each column's `Bytemass` under it.

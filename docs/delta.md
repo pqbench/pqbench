@@ -75,7 +75,7 @@ can measure only the big files. The stream is NDJSON, and `>` captures it:
 
 ```console run delta
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files > /tmp/partition.ndjson
-$ pqbench bytemass /tmp/partition.ndjson | pqbench format
+$ pqbench bytemass < /tmp/partition.ndjson | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3

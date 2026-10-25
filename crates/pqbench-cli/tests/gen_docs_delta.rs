@@ -18,6 +18,6 @@ fn usage() {
 fn document() {
     // document, from line 76
     support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files > /tmp/partition.ndjson", 77, None);
-    support::run("pqbench bytemass /tmp/partition.ndjson | pqbench format", 78, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    support::run("pqbench bytemass < /tmp/partition.ndjson | pqbench format", 78, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
     support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files --min-file-size 1KB | pqbench format", 83, None);
 }
