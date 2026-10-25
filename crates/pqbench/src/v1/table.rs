@@ -61,19 +61,9 @@ impl FromJson for Table {
 
 impl Table {
     fn named(name: &str) -> Option<Self> {
-        if name::parse_table(name).is_some() {
-            return Some(Self {
-                name: name.to_owned(),
-                ..Self::default()
-            });
-        }
-        let (catalog, rest) = name.split_once('.')?;
-        let (schema, table) = rest.rsplit_once('.')?;
-        if catalog.is_empty() || schema.is_empty() || table.is_empty() {
-            return None;
-        }
+        let (catalog, schema, table) = name::parse_table(name)?;
         Some(Self {
-            name: name::table(catalog, schema, table),
+            name: name::table(&catalog, &schema, &table),
             ..Self::default()
         })
     }

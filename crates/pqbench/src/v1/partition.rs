@@ -51,20 +51,9 @@ impl FromJson for Partition {
 
 impl Partition {
     fn named(name: &str) -> Option<Self> {
-        if name::parse_partition(name).is_some() {
-            return Some(Self {
-                name: name.to_owned(),
-                ..Self::default()
-            });
-        }
-        let (catalog, rest) = name.split_once('.')?;
-        let (rest, partition) = rest.rsplit_once('.')?;
-        let (schema, table) = rest.rsplit_once('.')?;
-        if catalog.is_empty() || schema.is_empty() || table.is_empty() || partition.is_empty() {
-            return None;
-        }
+        let (catalog, schema, table, partition) = name::parse_partition(name)?;
         Some(Self {
-            name: name::partition(catalog, schema, table, partition),
+            name: name::partition(&catalog, &schema, &table, &partition),
             ..Self::default()
         })
     }

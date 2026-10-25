@@ -44,19 +44,11 @@ impl FromJson for Catalog {
 
 impl Catalog {
     fn named(name: &str) -> Option<Self> {
-        if name::parse_catalog(name).is_some() {
-            return Some(Self {
-                name: name.to_owned(),
-                ..Self::default()
-            });
-        }
-        if !name.is_empty() && !name.contains('.') {
-            return Some(Self {
-                name: name::catalog(name),
-                ..Self::default()
-            });
-        }
-        None
+        let catalog = name::parse_catalog(name)?;
+        Some(Self {
+            name: name::catalog(&catalog),
+            ..Self::default()
+        })
     }
 }
 

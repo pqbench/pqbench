@@ -111,36 +111,70 @@ pub fn parse_metastore(value: &str) -> Option<String> {
     }
 }
 
-/// The catalog id in a `catalogs/{catalog}` name.
+/// The first dotted segment and the rest: `catalog.schema.table`.
+///
+/// `None` when the value is a resource name (it has a `/`), or has no dot; a
+/// dotted spelling is a shorthand for the name, not another name format.
+fn dotted(value: &str) -> Option<(&str, &str)> {
+    if value.contains('/') {
+        return None;
+    }
+    let (first, rest) = value.split_once('.')?;
+    (!first.is_empty() && !rest.is_empty()).then_some((first, rest))
+}
+
+/// The catalog id in a `catalogs/{catalog}` name or the bare id.
 #[must_use]
 pub fn parse_catalog(value: &str) -> Option<String> {
     match split(value).as_slice() {
         ["catalogs", catalog] => Some(decode(catalog)),
+        _ if !value.is_empty() && !value.contains('/') && !value.contains('.') => {
+            Some(value.to_owned())
+        }
         _ => None,
     }
 }
 
-/// The catalog and schema in a `…/schemas/{schema}` name.
+/// The catalog and schema in a `…/schemas/{schema}` name or `catalog.schema`.
+///
+/// The dot splits once, after the catalog, so a schema id may itself contain a
+/// dot.
 #[must_use]
 pub fn parse_schema(value: &str) -> Option<(String, String)> {
     match split(value).as_slice() {
         ["catalogs", catalog, "schemas", schema] => Some((decode(catalog), decode(schema))),
-        _ => None,
+        _ => {
+            let (catalog, schema) = dotted(value)?;
+            Some((catalog.to_owned(), schema.to_owned()))
+        }
     }
 }
 
-/// The catalog, schema, and table in a `…/tables/{table}` name.
+/// The catalog, schema, and table in a `…/tables/{table}` name or
+/// `catalog.schema.table`.
+///
+/// The dots split at the first and the last, so the schema id may contain a
+/// dot (`a.b.c.d` is catalog `a`, schema `b.c`, table `d`).
 #[must_use]
 pub fn parse_table(value: &str) -> Option<(String, String, String)> {
     match split(value).as_slice() {
         ["catalogs", catalog, "schemas", schema, "tables", table] => {
             Some((decode(catalog), decode(schema), decode(table)))
         }
-        _ => None,
+        _ => {
+            let (catalog, rest) = dotted(value)?;
+            let (schema, table) = rest.rsplit_once('.')?;
+            (!schema.is_empty() && !table.is_empty())
+                .then(|| (catalog.to_owned(), schema.to_owned(), table.to_owned()))
+        }
     }
 }
 
-/// The catalog, schema, table, and partition in a `…/partitions/{…}` name.
+/// The catalog, schema, table, and partition in a `…/partitions/{…}` name or
+/// `catalog.schema.table.partition`.
+///
+/// The dots split at the first and the last; the table is the second-to-last,
+/// so the schema id may contain a dot.
 #[must_use]
 pub fn parse_partition(value: &str) -> Option<(String, String, String, String)> {
     match split(value).as_slice() {
@@ -152,7 +186,19 @@ pub fn parse_partition(value: &str) -> Option<(String, String, String, String)> 
                 decode(partition),
             ))
         }
-        _ => None,
+        _ => {
+            let (catalog, rest) = dotted(value)?;
+            let (rest, partition) = rest.rsplit_once('.')?;
+            let (schema, table) = rest.rsplit_once('.')?;
+            (!schema.is_empty() && !table.is_empty() && !partition.is_empty()).then(|| {
+                (
+                    catalog.to_owned(),
+                    schema.to_owned(),
+                    table.to_owned(),
+                    partition.to_owned(),
+                )
+            })
+        }
     }
 }
 
@@ -368,5 +414,55 @@ mod tests {
         );
         assert_eq!(parse_bytemass(&blob), None);
         assert_eq!(parse_bytemass("blobs/s3/bucket/columns/x"), None);
+    }
+
+    #[test]
+    fn a_bare_catalog_id_parses() {
+        assert_eq!(
+            parse_catalog("dbx_samples"),
+            Some("dbx_samples".to_string())
+        );
+        assert_eq!(parse_catalog("a.b"), None);
+        assert_eq!(parse_catalog("catalogs/a"), Some("a".to_string()));
+    }
+
+    #[test]
+    fn a_dotted_schema_parses() {
+        assert_eq!(
+            parse_schema("a.b"),
+            Some(("a".to_string(), "b".to_string()))
+        );
+        assert_eq!(
+            parse_schema("a.b.c"),
+            Some(("a".to_string(), "b.c".to_string()))
+        );
+        assert_eq!(parse_schema("a"), None);
+    }
+
+    #[test]
+    fn a_dotted_table_parses() {
+        assert_eq!(
+            parse_table("a.b.c"),
+            Some(("a".to_string(), "b".to_string(), "c".to_string()))
+        );
+        assert_eq!(
+            parse_table("a.b.c.d"),
+            Some(("a".to_string(), "b.c".to_string(), "d".to_string()))
+        );
+        assert_eq!(parse_table("a.b"), None);
+    }
+
+    #[test]
+    fn a_dotted_partition_parses() {
+        assert_eq!(
+            parse_partition("a.b.c.2026-01-01"),
+            Some((
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "2026-01-01".to_string()
+            ))
+        );
+        assert_eq!(parse_partition("a.b.c"), None);
     }
 }

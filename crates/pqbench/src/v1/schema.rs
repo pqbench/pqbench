@@ -42,18 +42,9 @@ impl FromJson for Schema {
 
 impl Schema {
     fn named(name: &str) -> Option<Self> {
-        if name::parse_schema(name).is_some() {
-            return Some(Self {
-                name: name.to_owned(),
-                ..Self::default()
-            });
-        }
-        let (catalog, schema) = name.split_once('.')?;
-        if catalog.is_empty() || schema.is_empty() {
-            return None;
-        }
+        let (catalog, schema) = name::parse_schema(name)?;
         Some(Self {
-            name: name::schema(catalog, schema),
+            name: name::schema(&catalog, &schema),
             ..Self::default()
         })
     }
