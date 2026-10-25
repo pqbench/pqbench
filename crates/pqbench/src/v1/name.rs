@@ -111,95 +111,125 @@ pub fn parse_metastore(value: &str) -> Option<String> {
     }
 }
 
-/// The first dotted segment and the rest: `catalog.schema.table`.
-///
-/// `None` when the value is a resource name (it has a `/`), or has no dot; a
-/// dotted spelling is a shorthand for the name, not another name format.
-fn dotted(value: &str) -> Option<(&str, &str)> {
+/// The catalog path: `catalogs/{catalog}`.
+const CATALOG_PATH: &[&str] = &["catalogs", ""];
+
+/// The schema path: `catalogs/{catalog}/schemas/{schema}`.
+const SCHEMA_PATH: &[&str] = &["catalogs", "", "schemas", ""];
+
+/// The table path: `…/schemas/{schema}/tables/{table}`.
+const TABLE_PATH: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
+
+/// The partition path: `…/tables/{table}/partitions/{partition}`.
+const PARTITION_PATH: &[&str] = &[
+    "catalogs",
+    "",
+    "schemas",
+    "",
+    "tables",
+    "",
+    "partitions",
+    "",
+];
+
+/// The ids a name spells: its resource path (`segments`, a literal or `""`
+/// for an id), or else the dotted shorthand.
+fn ids(value: &str, segments: &[&str]) -> Option<Vec<String>> {
+    let parts = split(value);
+    if parts.len() == segments.len() {
+        let mut ids = Vec::with_capacity(segments.len());
+        for (want, got) in segments.iter().zip(&parts) {
+            if want.is_empty() {
+                ids.push(decode(got));
+            } else if *want != &got[..] {
+                return None;
+            }
+        }
+        return Some(ids);
+    }
+    let placeholders = segments.iter().filter(|segment| segment.is_empty()).count();
+    dotted_ids(value, placeholders)
+}
+
+/// The ids the dotted shorthand spells: the first id up to the first dot, the
+/// second across the dots, and the rest one each. So `a.b.c.d` is `a`, `b.c`,
+/// `d`: a schema id may contain a dot, the other ids may not.
+fn dotted_ids(value: &str, placeholders: usize) -> Option<Vec<String>> {
     if value.contains('/') {
         return None;
     }
-    let (first, rest) = value.split_once('.')?;
-    (!first.is_empty() && !rest.is_empty()).then_some((first, rest))
+    let pieces: Vec<&str> = value.split('.').collect();
+    if pieces.len() < placeholders || pieces.iter().any(|piece| piece.is_empty()) {
+        return None;
+    }
+    if placeholders == 1 {
+        return (pieces.len() == 1).then(|| vec![pieces[0].to_owned()]);
+    }
+    let tail = placeholders - 2;
+    let middle = pieces.len() - tail;
+    let mut ids = Vec::with_capacity(placeholders);
+    ids.push(pieces[0].to_owned());
+    ids.push(pieces[1..middle].join("."));
+    ids.extend(pieces[middle..].iter().map(|piece| (*piece).to_owned()));
+    Some(ids)
+}
+
+/// The canonical name a resource name or its dotted shorthand spells, laid out
+/// as `segments` (a literal, or `""` for an id). This is the one call the
+/// `Resource` derive makes.
+pub(crate) fn pattern_name(value: &str, segments: &[&str]) -> Option<String> {
+    let ids = ids(value, segments)?;
+    let mut name = String::new();
+    let mut ids = ids.into_iter();
+    for (at, segment) in segments.iter().enumerate() {
+        if at > 0 {
+            name.push('/');
+        }
+        if segment.is_empty() {
+            name.push_str(&encode(&ids.next()?));
+        } else {
+            name.push_str(segment);
+        }
+    }
+    Some(name)
 }
 
 /// The catalog id in a `catalogs/{catalog}` name or the bare id.
 #[must_use]
 pub fn parse_catalog(value: &str) -> Option<String> {
-    match split(value).as_slice() {
-        ["catalogs", catalog] => Some(decode(catalog)),
-        _ if !value.is_empty() && !value.contains('/') && !value.contains('.') => {
-            Some(value.to_owned())
-        }
-        _ => None,
-    }
+    ids(value, CATALOG_PATH)?.pop()
 }
 
 /// The catalog and schema in a `…/schemas/{schema}` name or `catalog.schema`.
-///
-/// The dot splits once, after the catalog, so a schema id may itself contain a
-/// dot.
 #[must_use]
 pub fn parse_schema(value: &str) -> Option<(String, String)> {
-    match split(value).as_slice() {
-        ["catalogs", catalog, "schemas", schema] => Some((decode(catalog), decode(schema))),
-        _ => {
-            let (catalog, schema) = dotted(value)?;
-            Some((catalog.to_owned(), schema.to_owned()))
-        }
-    }
+    let mut ids = ids(value, SCHEMA_PATH)?;
+    let schema = ids.pop()?;
+    let catalog = ids.pop()?;
+    Some((catalog, schema))
 }
 
 /// The catalog, schema, and table in a `…/tables/{table}` name or
 /// `catalog.schema.table`.
-///
-/// The dots split at the first and the last, so the schema id may contain a
-/// dot (`a.b.c.d` is catalog `a`, schema `b.c`, table `d`).
 #[must_use]
 pub fn parse_table(value: &str) -> Option<(String, String, String)> {
-    match split(value).as_slice() {
-        ["catalogs", catalog, "schemas", schema, "tables", table] => {
-            Some((decode(catalog), decode(schema), decode(table)))
-        }
-        _ => {
-            let (catalog, rest) = dotted(value)?;
-            let (schema, table) = rest.rsplit_once('.')?;
-            (!schema.is_empty() && !table.is_empty())
-                .then(|| (catalog.to_owned(), schema.to_owned(), table.to_owned()))
-        }
-    }
+    let mut ids = ids(value, TABLE_PATH)?;
+    let table = ids.pop()?;
+    let schema = ids.pop()?;
+    let catalog = ids.pop()?;
+    Some((catalog, schema, table))
 }
 
 /// The catalog, schema, table, and partition in a `…/partitions/{…}` name or
 /// `catalog.schema.table.partition`.
-///
-/// The dots split at the first and the last; the table is the second-to-last,
-/// so the schema id may contain a dot.
 #[must_use]
 pub fn parse_partition(value: &str) -> Option<(String, String, String, String)> {
-    match split(value).as_slice() {
-        ["catalogs", catalog, "schemas", schema, "tables", table, "partitions", partition] => {
-            Some((
-                decode(catalog),
-                decode(schema),
-                decode(table),
-                decode(partition),
-            ))
-        }
-        _ => {
-            let (catalog, rest) = dotted(value)?;
-            let (rest, partition) = rest.rsplit_once('.')?;
-            let (schema, table) = rest.rsplit_once('.')?;
-            (!schema.is_empty() && !table.is_empty() && !partition.is_empty()).then(|| {
-                (
-                    catalog.to_owned(),
-                    schema.to_owned(),
-                    table.to_owned(),
-                    partition.to_owned(),
-                )
-            })
-        }
-    }
+    let mut ids = ids(value, PARTITION_PATH)?;
+    let partition = ids.pop()?;
+    let table = ids.pop()?;
+    let schema = ids.pop()?;
+    let catalog = ids.pop()?;
+    Some((catalog, schema, table, partition))
 }
 
 /// The `local` catalog and schema a path-read table lives in: a storage
@@ -464,5 +494,22 @@ mod tests {
             ))
         );
         assert_eq!(parse_partition("a.b.c"), None);
+    }
+
+    #[test]
+    fn a_pattern_renders_the_canonical_name() {
+        assert_eq!(
+            pattern_name("a.b.c", TABLE_PATH),
+            Some(table("a", "b", "c"))
+        );
+        assert_eq!(
+            pattern_name("a.b.c.d", TABLE_PATH),
+            Some(table("a", "b.c", "d"))
+        );
+        assert_eq!(
+            pattern_name("catalogs/a/schemas/b/tables/c", TABLE_PATH),
+            Some(table("a", "b", "c"))
+        );
+        assert_eq!(pattern_name("metastores/x", TABLE_PATH), None);
     }
 }

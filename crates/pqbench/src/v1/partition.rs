@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use super::name;
-use super::{Credentials, Parent};
+use super::{Credentials, Resource};
 
 /// A natural partition: a half-open commit-time window.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
+#[resource(noun = "partition")]
 #[serde(default)]
 pub struct Partition {
     /// `…/tables/{table}/partitions/{partition}`.
+    #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}")]
     pub name: String,
     /// Inclusive start of the window, milliseconds since the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -32,26 +33,4 @@ pub struct Partition {
     /// The table's vended credentials, when the caller holds them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
-}
-
-impl Parent for Partition {
-    const NOUN: &'static str = "partition";
-
-    const SHAPE: &'static str = "catalogs/…/tables/…/partitions/…";
-
-    fn from_name(name: &str) -> Option<Self> {
-        let (catalog, schema, table, partition) = name::parse_partition(name)?;
-        Some(Self {
-            name: name::partition(&catalog, &schema, &table, &partition),
-            ..Self::default()
-        })
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn name_mut(&mut self) -> &mut String {
-        &mut self.name
-    }
 }

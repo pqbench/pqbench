@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::name;
-use super::{Credentials, DeclaredColumn, Parent, TableFormat};
+use super::{Credentials, DeclaredColumn, Resource, TableFormat};
 
 /// One table's record.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
+#[resource(noun = "table")]
 #[serde(default)]
 pub struct Table {
     /// `catalogs/{catalog}/schemas/{schema}/tables/{table}`.
+    #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}")]
     pub name: String,
     /// The system UUID, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,26 +42,4 @@ pub struct Table {
     /// table so a downstream stage reads the table's own lease.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
-}
-
-impl Parent for Table {
-    const NOUN: &'static str = "table";
-
-    const SHAPE: &'static str = "catalogs/…/tables/…";
-
-    fn from_name(name: &str) -> Option<Self> {
-        let (catalog, schema, table) = name::parse_table(name)?;
-        Some(Self {
-            name: name::table(&catalog, &schema, &table),
-            ..Self::default()
-        })
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn name_mut(&mut self) -> &mut String {
-        &mut self.name
-    }
 }

@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-use super::name;
 use super::CatalogType;
-use super::Parent;
+use super::Resource;
 
 /// One catalog.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
+#[resource(noun = "catalog")]
 #[serde(default)]
 pub struct Catalog {
     /// `catalogs/{catalog}`.
+    #[resource(name = "catalogs/{catalog}")]
     pub name: String,
     /// The system UUID, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25,26 +26,4 @@ pub struct Catalog {
     /// The catalog owner, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<String>,
-}
-
-impl Parent for Catalog {
-    const NOUN: &'static str = "catalog";
-
-    const SHAPE: &'static str = "catalogs/…";
-
-    fn from_name(name: &str) -> Option<Self> {
-        let catalog = name::parse_catalog(name)?;
-        Some(Self {
-            name: name::catalog(&catalog),
-            ..Self::default()
-        })
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn name_mut(&mut self) -> &mut String {
-        &mut self.name
-    }
 }

@@ -8,6 +8,7 @@ members = [
     "crates/pyicheck",
     "crates/pyicheck-cli",
     "crates/pqbench",
+    "crates/pqbench-derive",
     "crates/pqbench-cli",
 ]
 exclude = ["python"]
@@ -19,6 +20,7 @@ default-members = [
     "crates/pyicheck",
     "crates/pyicheck-cli",
     "crates/pqbench",
+    "crates/pqbench-derive",
     "crates/pqbench-cli",
 ]
 

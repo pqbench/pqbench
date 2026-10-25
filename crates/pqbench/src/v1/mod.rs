@@ -60,6 +60,7 @@ pub use log_action::LogAction;
 pub use metastore::Metastore;
 pub use parent::Parent;
 pub use partition::Partition;
+pub use pqbench_derive::Resource;
 pub use read_eligibility::ReadEligibility;
 pub use schema::Schema;
 pub use table::Table;

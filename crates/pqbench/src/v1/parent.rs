@@ -8,7 +8,7 @@ use super::json;
 
 /// A level's parent record: a resource read on standard input, and the noun a
 /// message calls it.
-pub trait Parent: DeserializeOwned {
+pub trait Parent: DeserializeOwned + serde::Serialize {
     /// The stream's noun, for messages.
     const NOUN: &'static str;
 
@@ -40,6 +40,14 @@ pub trait Parent: DeserializeOwned {
             Self::name_mut,
         )
     }
+
+    /// The record as its wire object.
+    ///
+    /// # Errors
+    /// Fails when the record cannot be serialized.
+    fn to_json(&self) -> Result<Value, String> {
+        serde_json::to_value(self).map_err(|error| error.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -59,6 +67,15 @@ mod tests {
     fn a_canonical_object_name_is_kept() {
         let table = Table::from_json(json!({"name": "catalogs/a/schemas/b/tables/c"})).unwrap();
         assert_eq!(table.name, "catalogs/a/schemas/b/tables/c");
+    }
+
+    #[test]
+    fn a_record_round_trips_through_json() {
+        let table = Table::from_json(json!({"name": "a.b.c", "uri": "/lake/c"})).unwrap();
+        assert_eq!(
+            table.to_json().unwrap()["name"],
+            "catalogs/a/schemas/b/tables/c"
+        );
     }
 
     #[test]

@@ -42,6 +42,7 @@ serde_json = "1.0.151"
 deltalake = { version = "1.0", default-features = false, features = ["rustls"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+pqbench-derive = { path = "../pqbench-derive" }
 url = "2"
 # Must match delta-rs's ObjectStore trait version: stores cross that internal
 # boundary. Keep the pin until delta-rs upgrades its dependency.
