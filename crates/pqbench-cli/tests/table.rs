@@ -315,16 +315,19 @@ fn write_delta_table(dir: &std::path::Path, schema: serde_json::Value) {
     std::fs::write(log.join("00000000000000000000.json"), commit).unwrap();
 }
 
+/// The columns a Unity table for the Delta fixture declares.
+#[cfg(feature = "delta")]
+fn unity_columns() -> serde_json::Value {
+    json!([
+        {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
+        {"name": "label", "type_name": "STRING", "type_text": "string", "nullable": true}
+    ])
+}
+
 /// A Unity `/tables/{full_name}` record for a local table.
 #[cfg(feature = "delta")]
 fn unity_record(location: &std::path::Path) -> String {
-    unity_table_record(
-        location,
-        json!([
-            {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
-            {"name": "label", "type_name": "STRING", "type_text": "string", "nullable": true}
-        ]),
-    )
+    unity_table_record(location, unity_columns())
 }
 
 /// A Unity `/tables/{full_name}` record for a local table, with `columns`.
@@ -340,6 +343,32 @@ fn unity_table_record(location: &std::path::Path, columns: serde_json::Value) ->
         "properties": {"owner": "data"}
     })
     .to_string()
+}
+
+/// Run `get table` for the local Unity table at `dir`, whose catalog declares
+/// `columns`, and return the one record it emits.
+#[cfg(feature = "delta")]
+fn read_unity_table(dir: &std::path::Path, columns: serde_json::Value) -> serde_json::Value {
+    let address = routes_owned(vec![("/tables/", 200, unity_table_record(dir, columns))]);
+    let output = pipe_env(
+        &[
+            "get",
+            "table",
+            "dbx_samples.nyctaxi.trips",
+            "--format",
+            "json",
+        ],
+        b"",
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut records = ndjson_records(&output.stdout);
+    assert_eq!(records.len(), 1);
+    records.remove(0)
 }
 
 /// An Iceberg REST `loadTable` record with the metadata JSON inline. The
@@ -372,26 +401,7 @@ fn loaded_table(location: &str) -> String {
 fn table_get_reads_a_unity_table() {
     let dir = tempfile::tempdir().unwrap();
     delta_table(dir.path());
-    let address = routes_owned(vec![("/tables/", 200, unity_record(dir.path()))]);
-    let output = pipe_env(
-        &[
-            "get",
-            "table",
-            "dbx_samples.nyctaxi.trips",
-            "--format",
-            "json",
-        ],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson_records(&output.stdout);
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
+    let record = read_unity_table(dir.path(), unity_columns());
     assert_eq!(
         record["name"],
         "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
@@ -428,36 +438,13 @@ fn table_get_reads_a_void_column() {
             ]
         }),
     );
-    let address = routes_owned(vec![(
-        "/tables/",
-        200,
-        unity_table_record(
-            dir.path(),
-            json!([
-                {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
-                {"name": "note", "type_name": "VOID", "type_text": "void", "nullable": true}
-            ]),
-        ),
-    )]);
-    let output = pipe_env(
-        &[
-            "get",
-            "table",
-            "dbx_samples.nyctaxi.trips",
-            "--format",
-            "json",
-        ],
-        b"",
-        &[("PQB_ENDPOINT", address.as_str())],
+    let record = read_unity_table(
+        dir.path(),
+        json!([
+            {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
+            {"name": "note", "type_name": "VOID", "type_text": "void", "nullable": true}
+        ]),
     );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson_records(&output.stdout);
-    assert_eq!(records.len(), 1);
-    let record = &records[0];
     assert_eq!(record["snapshot_version"], 0);
     let columns: Vec<(&str, &str)> = record["declared_columns"]
         .as_array()
