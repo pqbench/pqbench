@@ -862,8 +862,8 @@ fn credentials_check_filters_the_live_tables() {
         &env,
     );
     assert!(
-        !unsupported.status.success(),
-        "a drop sets the exit status after the stream"
+        unsupported.status.success(),
+        "a credentials filter drop is not a failed read"
     );
     let stderr = String::from_utf8_lossy(&unsupported.stderr);
     assert!(
