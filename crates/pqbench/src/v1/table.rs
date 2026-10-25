@@ -115,6 +115,7 @@ use serde_json::Value;
 
 use super::json::{self, FromJson};
 use super::name;
+use super::Parent;
 
 impl FromJson for Table {
     fn from_json(value: Value) -> Result<Self, String> {
@@ -178,5 +179,21 @@ impl Partition {
             name: name::partition(catalog, schema, table, partition),
             ..Self::default()
         })
+    }
+}
+
+impl Parent for Table {
+    const NOUN: &'static str = "table";
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl Parent for Partition {
+    const NOUN: &'static str = "partition";
+
+    fn name(&self) -> &str {
+        &self.name
     }
 }

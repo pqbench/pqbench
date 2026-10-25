@@ -36,3 +36,13 @@ pub use file::{Blob, Column, TableFile};
 pub use json::FromJson;
 pub use log::{Commit, FileStats, LogAction};
 pub use table::{DeclaredColumn, Partition, Table, TableFormat};
+
+/// A level's parent record: a resource read on standard input, and the noun a
+/// message calls it.
+pub trait Parent: json::FromJson {
+    /// The stream's noun, for messages.
+    const NOUN: &'static str;
+
+    /// The record's resource name: what a failure is reported under.
+    fn name(&self) -> &str;
+}

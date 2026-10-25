@@ -5,10 +5,8 @@ use futures_util::TryStreamExt;
 use pqbench::partition;
 use pqbench::v1;
 
-use crate::emit::Emitter;
-use crate::error::{context, fail_when_dropped};
 use crate::parse;
-use crate::source::{self, dotted_name};
+use crate::source;
 use crate::CliError;
 
 /// Arguments for `list partitions`.
@@ -35,39 +33,24 @@ pub(crate) struct ListArgs {
 /// List a table's natural partitions: commits grouped into commit-time windows.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("list partitions").await?;
-    let mut emit = Emitter::open();
-    let dropped = source::stage(
-        parents,
-        args.fan_out,
-        &mut emit,
-        |table: v1::Table| async move {
-            let name = table.name;
-            let uri = table.uri.filter(|uri| !uri.is_empty()).ok_or_else(|| {
-                CliError::from("a table-ref has no storage path; run `pqbench get table` first")
-            })?;
-            let lease = table.credentials.filter(|lease| !lease.is_empty());
-            let env = lease
-                .as_ref()
-                .map(pqbench::v1::Credentials::to_env)
-                .unwrap_or_default();
-            let mut found = partition::list::list(lake, &name, &uri, &env, args.every, args.last)
-                .await
-                .map_err(|cause| context(dotted_name(&name), cause))?;
-            let mut partitions = Vec::new();
-            while let Some(mut partition) = found
-                .try_next()
-                .await
-                .map_err(|cause| context(dotted_name(&name), cause))?
-            {
-                partition.credentials = lease.clone();
-                partitions.push(partition);
-            }
-            Ok(partitions)
-        },
-    )
-    .await?;
-    emit.finish().await?;
-    fail_when_dropped(dropped)
+    let rows = source::flat_map(parents, args.fan_out, |table: v1::Table| async move {
+        let uri = table.uri.filter(|uri| !uri.is_empty()).ok_or_else(|| {
+            CliError::from("a table record has no storage path; run `pqbench get table` first")
+        })?;
+        let lease = table.credentials.filter(|lease| !lease.is_empty());
+        let env = lease
+            .as_ref()
+            .map(pqbench::v1::Credentials::to_env)
+            .unwrap_or_default();
+        let found = partition::list::list(lake, &table.name, &uri, &env, args.every, args.last)
+            .await
+            .map_err(CliError::from)?;
+        Ok(found.map_ok(move |mut partition| {
+            partition.credentials = lease.clone();
+            partition
+        }))
+    });
+    source::drive(rows).await
 }
 
 /// Parse `--every`: a positive window width.

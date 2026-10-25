@@ -17,8 +17,10 @@ pub(crate) struct ListArgs {
 
 pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Schema>("list tables").await?;
-    drive(flat_map(parents, args.fan_out, |schema: v1::Schema| {
-        pqbench::table::list::list(workspace, &schema)
-    }))
+    drive(flat_map(
+        parents,
+        args.fan_out,
+        |schema: v1::Schema| async move { Ok(pqbench::table::list::list(workspace, &schema)) },
+    ))
     .await
 }

@@ -1,14 +1,10 @@
 //! `list files`: the files each partition's commits added.
 
-use std::collections::BTreeMap;
-
 use clap::Args;
-use futures_util::stream::StreamExt;
+use futures_util::StreamExt;
 use pqbench::v1;
 
-use crate::emit::Emitter;
-use crate::error::{context, fail_when_dropped};
-use crate::source::expand;
+use crate::source;
 use crate::CliError;
 
 /// Arguments for `list files`.
@@ -32,92 +28,52 @@ pub(crate) struct ListArgs {
 /// without a catalog call.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let parents = crate::parse::parents::<v1::Partition>("list files").await?;
-    let mut emit = Emitter::open();
-    let dropped = expand(
+    let rows = source::flat_map(
         parents,
         args.fan_out,
-        &mut emit,
         |partition: v1::Partition| async move {
-            partition_files(lake, partition, args.min_file_size).await
-        },
-    )
-    .await?;
-    emit.finish().await?;
-    fail_when_dropped(dropped)
-}
-
-/// The files one partition's window added, each carrying the partition's lease.
-/// A file whose read fails stays in the list as an `Err`, so its siblings are
-/// still written; a partition that cannot be read at all fails on its own.
-async fn partition_files(
-    lake: &pqbench::Lake,
-    partition: v1::Partition,
-    min_file_size: Option<u64>,
-) -> Result<Vec<Result<v1::TableFile, CliError>>, CliError> {
-    let v1::Partition {
-        name,
-        commit_versions,
-        uri,
-        credentials,
-        ..
-    } = partition;
-    let prepared = prepare_file_read(&name, uri, credentials)?;
-    let mut found = pqbench::file::list::list(
-        lake,
-        &prepared.table,
-        &prepared.uri,
-        &prepared.env,
-        &commit_versions,
-    )
-    .await
-    .map_err(|error| context(&name, error))?;
-    let mut files = Vec::new();
-    while let Some(file) = found.next().await {
-        match file {
-            Ok(mut file) => {
-                file.credentials = prepared.lease.clone();
-                if meets_min_file_size(&file, min_file_size) {
-                    files.push(Ok(file));
+            let uri = partition
+                .uri
+                .clone()
+                .ok_or("a partition record needs a table storage root")?;
+            let lease = partition.credentials.filter(|lease| !lease.is_empty());
+            let env = lease
+                .as_ref()
+                .map(v1::Credentials::to_env)
+                .unwrap_or_default();
+            let found = pqbench::file::list::list(
+                lake,
+                &table_name(&partition.name)?,
+                &uri,
+                &env,
+                &partition.commit_versions,
+            )
+            .await
+            .map_err(CliError::from)?;
+            let min = args.min_file_size;
+            Ok(found.filter_map(move |file| {
+                let lease = lease.clone();
+                async move {
+                    match file {
+                        Ok(mut file) => {
+                            file.credentials = lease;
+                            meets_min_file_size(&file, min).then_some(Ok(file))
+                        }
+                        Err(error) => Some(Err(error)),
+                    }
                 }
-            }
-            Err(error) => files.push(Err(context(&name, error))),
-        }
-    }
-    Ok(files)
+            }))
+        },
+    );
+    source::drive(rows).await
 }
 
-/// The parts a partition's file read needs, after the record's own contract
-/// checks: a bad name or a missing storage root fails that record, not the run.
-struct FileRead {
-    table: String,
-    uri: String,
-    lease: Option<v1::Credentials>,
-    env: BTreeMap<String, String>,
-}
-
-fn prepare_file_read(
-    name: &str,
-    uri: Option<String>,
-    credentials: Option<v1::Credentials>,
-) -> Result<FileRead, CliError> {
-    let (catalog, schema, table, _) =
-        v1::name::parse_partition(name).ok_or_else(|| not_a_partition(name))?;
-    let uri = uri.ok_or("a partition record needs a table storage root")?;
-    let env = credentials
-        .as_ref()
-        .map(v1::Credentials::to_env)
-        .unwrap_or_default();
-    Ok(FileRead {
-        table: v1::name::table(&catalog, &schema, &table),
-        uri,
-        lease: credentials,
-        env,
-    })
-}
-
-/// The error for a partition record whose name is not a partition resource.
-fn not_a_partition(name: &str) -> CliError {
-    format!("a partition name must be `…/tables/{{table}}/partitions/{{partition}}`: {name}").into()
+/// The table a partition's name names: the read that names its files takes the
+/// table resource, not the window.
+fn table_name(name: &str) -> Result<String, CliError> {
+    let (catalog, schema, table, _) = v1::name::parse_partition(name)
+        .ok_or("a partition record needs a `/tables/{table}/partitions/{partition}` name")?;
+    Ok(v1::name::table(&catalog, &schema, &table))
 }
 
 /// Whether a file's logged size clears `--min-file-size`. A file whose log

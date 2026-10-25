@@ -23,6 +23,8 @@ use serde_json::Value;
 use std::future::Future;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
+use pqbench::v1::Parent;
+
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -83,15 +85,6 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
         first,
         lines,
     })
-}
-
-/// The dotted `catalog.schema.table` a table ref names, for a message; the ref
-/// itself when the name is not a table ref (a path read names a local table).
-pub(crate) fn dotted_name(name: &str) -> String {
-    match pqbench::v1::name::parse_table(name) {
-        Some((catalog, schema, table)) => format!("{catalog}.{schema}.{table}"),
-        None => name.to_string(),
-    }
 }
 
 /// Write every record a level's parent expands to, reporting what fails and
@@ -161,11 +154,6 @@ where
 /// A command's records: each record, or the failure that replaced it.
 pub(crate) type Records<'a, B> = LocalBoxStream<'a, Result<B, CliError>>;
 
-/// What a failure is reported under: the parent record's resource name.
-pub(crate) trait Reference {
-    fn reference(&self) -> &str;
-}
-
 /// `map` with `fan_out` reads in flight: one record per parent.
 pub(crate) fn map<'a, A, B, E, F, Fut>(
     parents: impl Stream<Item = Result<A, CliError>> + 'a,
@@ -173,7 +161,7 @@ pub(crate) fn map<'a, A, B, E, F, Fut>(
     read: F,
 ) -> Records<'a, B>
 where
-    A: Reference + 'a,
+    A: Parent + 'a,
     B: 'a,
     E: Into<CliError> + 'a,
     F: Fn(A) -> Fut + Clone + 'a,
@@ -184,7 +172,7 @@ where
             let read = read.clone();
             async move {
                 let parent = parent?;
-                let reference = parent.reference().to_owned();
+                let reference = parent.name().to_owned();
                 read(parent)
                     .await
                     .map_err(move |cause| crate::error::context(&reference, cause))
@@ -202,7 +190,7 @@ pub(crate) fn filter_map<'a, A, B, E, F, Fut>(
     read: F,
 ) -> Records<'a, B>
 where
-    A: Reference + 'a,
+    A: Parent + 'a,
     B: 'a,
     E: Into<CliError> + 'a,
     F: Fn(A) -> Fut + Clone + 'a,
@@ -213,7 +201,7 @@ where
             let read = read.clone();
             async move {
                 let parent = parent?;
-                let reference = parent.reference().to_owned();
+                let reference = parent.name().to_owned();
                 read(parent)
                     .await
                     .map_err(move |cause| crate::error::context(&reference, cause))
@@ -231,28 +219,43 @@ where
 }
 
 /// `flatMap` with `fan_out` streams in flight: a parent becomes its stream.
-pub(crate) fn flat_map<'a, A, B, E, S, F>(
+///
+/// `read` may fail before it yields anything (the table it loads, a window it
+/// rejects); that failure is reported under the parent, like a stream item.
+pub(crate) fn flat_map<'a, A, B, E, S, F, Fut>(
     parents: impl Stream<Item = Result<A, CliError>> + 'a,
     fan_out: usize,
     read: F,
 ) -> Records<'a, B>
 where
-    A: Reference + 'a,
+    A: Parent + 'a,
     B: 'a,
     E: Into<CliError> + 'a,
     S: Stream<Item = Result<B, E>> + 'a,
-    F: Fn(A) -> S + Clone + 'a,
+    F: Fn(A) -> Fut + Clone + 'a,
+    Fut: Future<Output = Result<S, CliError>> + 'a,
 {
     parents
-        .map(move |parent| match parent {
-            Ok(parent) => {
-                let reference = parent.reference().to_owned();
-                read(parent)
-                    .map_err(move |cause| crate::error::context(&reference, cause))
-                    .boxed_local()
+        .map(move |parent| {
+            let read = read.clone();
+            async move {
+                let parent = match parent {
+                    Ok(parent) => parent,
+                    Err(error) => return stream::iter([Err(error)]).boxed_local(),
+                };
+                let reference = parent.name().to_owned();
+                match read(parent).await {
+                    Ok(stream) => stream
+                        .map_err(move |cause| crate::error::context(&reference, cause))
+                        .boxed_local(),
+                    Err(cause) => {
+                        let error = crate::error::context(&reference, cause);
+                        stream::iter([Err(error)]).boxed_local()
+                    }
+                }
             }
-            Err(error) => stream::iter([Err(error)]).boxed_local(),
         })
+        .buffer_unordered(fan_out.max(1))
         .flatten_unordered(Some(fan_out.max(1)))
         .boxed_local()
 }

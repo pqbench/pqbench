@@ -92,6 +92,7 @@ use serde_json::Value;
 
 use super::json::{self, FromJson};
 use super::name;
+use super::Parent;
 
 impl FromJson for Catalog {
     fn from_json(value: Value) -> Result<Self, String> {
@@ -147,5 +148,21 @@ impl Schema {
             name: name::schema(catalog, schema),
             ..Self::default()
         })
+    }
+}
+
+impl Parent for Catalog {
+    const NOUN: &'static str = "catalog";
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl Parent for Schema {
+    const NOUN: &'static str = "schema";
+
+    fn name(&self) -> &str {
+        &self.name
     }
 }
