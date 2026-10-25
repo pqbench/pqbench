@@ -218,19 +218,6 @@ fn bytemass_reads_a_table_file_from_stdin() {
 }
 
 #[test]
-fn bytemass_rejects_a_non_aws_env_key() {
-    let document = json!({
-        "version": 1,
-        "inputs": [parquet_fixture()],
-        "env": {"NOT_AWS": "x"}
-    });
-    let output = pipe(&["bytemass"], &document.to_string());
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("AWS_*"), "{stderr}");
-}
-
-#[test]
 fn bytemass_rejects_a_size_mismatch_on_a_table_file() {
     let document = table_file(LOCAL_TABLE, parquet_fixture(), Some(1));
     let output = pipe(&["bytemass"], &document.to_string());

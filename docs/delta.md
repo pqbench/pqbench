@@ -47,8 +47,8 @@ they are not written into the process environment. The cargo command is
 `cargo run -p pqbench-cli --features delta-s3 -- list partitions s3://bucket/table`.
 
 A producer can supply the table URI and vended credentials as
-a `remote-source` document. `list partitions` reads the log, and the credentials travel
-to `list files` and `bytemass`:
+a table record. `list partitions` reads the log, and the credentials travel to
+`list files` and `bytemass`:
 
 ## Backends
 

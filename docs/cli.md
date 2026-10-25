@@ -62,7 +62,6 @@ pqbench never writes them into the process environment itself.
 | `Table` | `list tables`, `get table`, `credentials get` | `get table`, `list partitions`, `credentials get` |
 | `Partition` | `list partitions` | `list files`, humans / scripts  |
 | `TableFile` | `list files` | `bytemass`, humans / scripts  |
-| `remote-source` | a producer | `bytemass` |
 | `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts  |
 | `pqbench.profile-column` | `profile` | humans / scripts  |
 | `pqbench.skill` | `skill` (list) | an agent |
@@ -98,23 +97,10 @@ reads the default AWS provider chain, then applies the table's `credentials`.
 | `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` | `false` for path-style |
 | `AWS_SKIP_SIGNATURE` | `true` for a public bucket |
 
-Only `AWS_*` names are accepted on a `remote-source` document.
-
 Process env (instance role, SSO, shared credentials):
 
 ```console no-run
 AWS_PROFILE=analytics pqbench bytemass s3://bucket/table/part-0.parquet
-```
-
-Vended STS on a producer document piped into `bytemass`:
-
-```console no-run
-cat <<'EOF' | pqbench bytemass
-{"version":1,
- "inputs":["s3://bucket/table/part-0.parquet"],
- "env":{"AWS_ACCESS_KEY_ID":"…","AWS_SECRET_ACCESS_KEY":"…",
-        "AWS_SESSION_TOKEN":"…","AWS_REGION":"us-east-1"}}
-EOF
 ```
 
 ### Catalog config (Unity / Databricks / Iceberg REST)

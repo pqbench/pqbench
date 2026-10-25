@@ -1,140 +1,74 @@
 //! `bytemass`: read a Parquet footer and emit per-column byte masses.
 
-use std::collections::BTreeMap;
-
 use clap::Args;
-use futures_util::stream::{self, BoxStream, StreamExt};
+use futures_util::stream::{self, StreamExt};
 use pqbench::bytemass;
 use pqbench::v1;
-use serde::Serialize;
 
-use crate::document::{self, Record};
-use crate::emit::Emitter;
-use crate::error::{context, fail_when_dropped};
-use crate::source::stage;
+use crate::error::context;
+use crate::parse;
+use crate::source::{drive, flat_map};
 use crate::CliError;
 
 /// Arguments for `bytemass`.
 #[derive(Args)]
 pub(crate) struct BytemassArgs {
-    /// a Parquet path or storage URI; omit to read records on standard input
+    /// a Parquet path or storage URI; omit to read table-file records on
+    /// standard input
     file: Option<String>,
     /// files in flight at once
     #[arg(long, default_value_t = 128)]
     fan_out: usize,
 }
 
-/// Read the files the argument or the records name, and stream each record as
-/// it is ready.
+/// Measure each table file as its record arrives.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(), CliError> {
-    let mut emit = Emitter::open();
-    let inputs = match &args.file {
-        Some(file) => stream::iter([Ok(Input {
-            uri: file.clone(),
-            env: BTreeMap::new(),
-            size_bytes: None,
-        })])
-        .boxed(),
-        None => document_inputs().await?,
+    let parents = match &args.file {
+        Some(file) => stream::iter([Ok(table_file(file))]).boxed_local(),
+        None => parse::parents::<v1::TableFile>("bytemass").await?,
     };
-    let dropped = stage(inputs, args.fan_out, &mut emit, |input: Input| async move {
-        measure(lake, input).await
-    })
-    .await?;
-    emit.finish().await?;
-    fail_when_dropped(dropped)
+    let rows = flat_map(parents, args.fan_out, |file: v1::TableFile| async move {
+        let rows = measure(lake, file).await?;
+        Ok(stream::iter(rows.into_iter().map(Ok::<_, CliError>)))
+    });
+    drive(rows).await
 }
 
-/// One file to read.
-struct Input {
-    /// The file's location.
-    uri: String,
-    /// The storage environment to read it with.
-    env: BTreeMap<String, String>,
-    /// The size the record claimed, when it carried one.
-    size_bytes: Option<u64>,
-}
-
-/// A document's records as files: a record that cannot be named becomes an
-/// item of its own, so the stage reports it and carries on.
-async fn document_inputs() -> Result<BoxStream<'static, Result<Input, CliError>>, CliError> {
-    let records = document::records("-").await?;
-    Ok(records
-        .flat_map(|record| match record {
-            Ok(record) => match record_inputs(record) {
-                Ok(inputs) => stream::iter(inputs.into_iter().map(Ok::<_, CliError>)).boxed(),
-                Err(error) => stream::iter([Err(error)]).boxed(),
-            },
-            Err(error) => stream::iter([Err(error)]).boxed(),
-        })
-        .boxed())
-}
-
-/// The files one record names: a table-file is its blob and lease, a blob is
-/// its location, and a remote source is its inputs with its env.
-fn record_inputs(record: Record) -> Result<Vec<Input>, CliError> {
-    match record {
-        Record::File(file) => Ok(vec![file_input(file)?]),
-        Record::Blob(blob) => Ok(vec![blob_input(blob)?]),
-        Record::RemoteSource(source) => {
-            let env = source.env;
-            Ok(source
-                .inputs
-                .into_iter()
-                .map(|uri| Input {
-                    uri,
-                    env: env.clone(),
-                    size_bytes: None,
-                })
-                .collect())
-        }
-        Record::Bytemass(_) => Err("a bytemass stream goes to `pqbench viz`".into()),
+/// The table-file a path argument names, under the `local` catalog.
+fn table_file(path: &str) -> v1::TableFile {
+    let name = path
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(path);
+    v1::TableFile {
+        name: v1::name::table_file_name(&v1::name::local_table(path), name),
+        blob: Some(v1::name::blob_name(path)),
+        ..v1::TableFile::default()
     }
 }
 
-/// A table-file's read: its blob's location, the lease's env, and the size the
-/// log logged for the cross-check after the footer is read.
-fn file_input(file: v1::TableFile) -> Result<Input, CliError> {
+/// Measure one file, cross-check the log's size when the record carried one,
+/// and yield its blob and column rows.
+async fn measure(lake: &pqbench::Lake, file: v1::TableFile) -> Result<Vec<Out>, CliError> {
     let blob = file
         .blob
         .as_deref()
         .ok_or("a table-file record needs a blob to read")?;
-    Ok(Input {
-        uri: blob_uri(blob)?,
-        env: file
-            .credentials
-            .as_ref()
-            .map(v1::Credentials::to_env)
-            .unwrap_or_default(),
-        size_bytes: file.size_bytes,
-    })
-}
-
-/// A blob's read: its location, and the size it claims.
-fn blob_input(blob: v1::Blob) -> Result<Input, CliError> {
-    Ok(Input {
-        uri: blob_uri(&blob.name)?,
-        env: BTreeMap::new(),
-        size_bytes: blob.size_bytes,
-    })
-}
-
-/// The storage location a blob name reads.
-fn blob_uri(blob: &str) -> Result<String, CliError> {
-    v1::name::blob_uri(blob).ok_or_else(|| CliError::from(format!("not a blob name: {blob}")))
-}
-
-/// Read one file's footer, cross-check the claimed size, and yield its blob
-/// and column rows.
-async fn measure(lake: &pqbench::Lake, input: Input) -> Result<Vec<Out>, CliError> {
-    let measured = bytemass::measure_file(lake, &input.uri, &input.env)
+    let uri = v1::name::blob_uri(blob)
+        .ok_or_else(|| CliError::from(format!("not a blob name: {blob}")))?;
+    let env = file
+        .credentials
+        .as_ref()
+        .map(v1::Credentials::to_env)
+        .unwrap_or_default();
+    let measured = bytemass::measure_file(lake, &uri, &env)
         .await
-        .map_err(|error| context(&input.uri, error))?;
-    if let Some(size) = input.size_bytes.filter(|size| *size != 0) {
+        .map_err(|error| context(&uri, error))?;
+    if let Some(size) = file.size_bytes.filter(|size| *size != 0) {
         if measured.blob.size_bytes != Some(size) {
             return Err(format!(
-                "active file size differs from log: {} (expected {size}, found {:?})",
-                input.uri, measured.blob.size_bytes
+                "active file size differs from log: {uri} (expected {size}, found {:?})",
+                measured.blob.size_bytes
             )
             .into());
         }
@@ -143,7 +77,7 @@ async fn measure(lake: &pqbench::Lake, input: Input) -> Result<Vec<Out>, CliErro
 }
 
 /// One output record: a file's blob, then one row per column.
-#[derive(Serialize)]
+#[derive(serde::Serialize)]
 #[serde(untagged)]
 enum Out {
     Blob(v1::Blob),

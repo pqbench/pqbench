@@ -1,38 +1,23 @@
 //! Documents on stdin or a file. The resource's name decides what it is.
 //!
-//! A producer resolves a table and pqbench measures bytes. A [`v1::TableFile`]
-//! names the blob to read and carries its lease; a `remote-source` names inputs
-//! and an env; the bytemass kinds are its own output. The `name`'s collection
-//! segment identifies each record (AIP-122), so no record carries a `kind`. A
-//! pipe writes NDJSON; a terminal prints an aligned table (override with
+//! A [`v1::TableFile`] names the blob to read and carries its lease; the
+//! bytemass kinds are its own output. The `name`'s collection segment
+//! identifies each record (AIP-122), so no record carries a `kind`. A pipe
+//! writes NDJSON; a terminal prints an aligned table (override with
 //! `--format`).
-
-use std::collections::BTreeMap;
 
 use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines, Stdin};
 
 use pqbench::v1;
-use serde::Deserialize;
 
 use crate::stdin::is_stream;
 use crate::CliError;
-
-/// A versioned document naming what an external producer resolved, plus the
-/// storage environment to read it with.
-#[derive(Debug, Deserialize)]
-pub(crate) struct RemoteSource {
-    pub version: u32,
-    pub inputs: Vec<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-}
 
 /// One JSON value from a table-file stream or a one-object document.
 pub(crate) enum Record {
     /// One table file: its blob and the lease to read it.
     File(v1::TableFile),
-    RemoteSource(RemoteSource),
     /// One measured file's facts.
     Blob(v1::Blob),
     /// One measured column's byte mass.
@@ -146,8 +131,7 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             Ok(Record::File(parse_file(value)?))
         }
         Some(name) => Err(invalid_name(name)),
-        None if value.get("inputs").is_some() => Ok(Record::RemoteSource(parse_remote(value)?)),
-        None => Err("a document record needs a name or inputs".into()),
+        None => Err("a document record needs a name".into()),
     }
 }
 
@@ -162,25 +146,6 @@ fn parse_file(value: serde_json::Value) -> Result<v1::TableFile, CliError> {
         return Err("a table-file record needs a blob to read".into());
     }
     Ok(file)
-}
-
-fn parse_remote(value: serde_json::Value) -> Result<RemoteSource, CliError> {
-    let source: RemoteSource = from_value(value)?;
-    if source.version != 1 {
-        return Err("unsupported remote-source document; expected version 1".into());
-    }
-    if source.inputs.is_empty() {
-        return Err("source document contains no inputs".into());
-    }
-    ensure_aws_env(&source.env)?;
-    Ok(source)
-}
-
-fn ensure_aws_env(env: &BTreeMap<String, String>) -> Result<(), CliError> {
-    if let Some(key) = env.keys().find(|key| !key.starts_with("AWS_")) {
-        return Err(format!("document may only set AWS_* variables, not `{key}`").into());
-    }
-    Ok(())
 }
 
 const LZ4_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];
@@ -225,5 +190,6 @@ pub(crate) fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_name(name: &str) -> CliError {
-    format!("unsupported document name `{name}`; expected a table-file, a blob, a bytemass, or a remote-source").into()
+    format!("unsupported document name `{name}`; expected a table-file, a blob, or a bytemass")
+        .into()
 }

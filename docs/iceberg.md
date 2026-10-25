@@ -63,7 +63,7 @@ the metadata JSON URI:
 cargo run -p pqbench-cli --features iceberg-s3 -- list partitions s3://bucket/table
 
 A producer can supply the table URI and vended credentials as
-a `remote-source` document; `list partitions` reads the snapshot, and the credentials
+a table record; `list partitions` reads the snapshot, and the credentials
 travel to `list files` and `bytemass`.
 
 ## Backends
