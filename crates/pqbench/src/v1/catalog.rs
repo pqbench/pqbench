@@ -5,7 +5,6 @@ use super::Resource;
 
 /// One catalog.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
-#[resource(noun = "catalog")]
 #[serde(default)]
 pub struct Catalog {
     /// `catalogs/{catalog}`.

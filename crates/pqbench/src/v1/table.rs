@@ -5,7 +5,6 @@ use super::{Credentials, DeclaredColumn, Resource, TableFormat};
 
 /// One table's record.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
-#[resource(noun = "table")]
 #[serde(default)]
 pub struct Table {
     /// `catalogs/{catalog}/schemas/{schema}/tables/{table}`.

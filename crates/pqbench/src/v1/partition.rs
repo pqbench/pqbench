@@ -4,7 +4,6 @@ use super::{Credentials, Resource};
 
 /// A natural partition: a half-open commit-time window.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
-#[resource(noun = "partition")]
 #[serde(default)]
 pub struct Partition {
     /// `…/tables/{table}/partitions/{partition}`.

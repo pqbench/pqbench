@@ -1,11 +1,11 @@
 //! `#[derive(Resource)]`: the `Parent` impl a v1 resource needs.
 //!
-//! The struct names its noun; its name field carries the path, one segment per
-//! `/`, with `{id}` for a placeholder:
+//! The name field carries the path, one segment per `/`, with `{id}` for a
+//! placeholder; the last placeholder names the resource, so the noun is not
+//! repeated:
 //!
 //! ```ignore
 //! #[derive(Resource)]
-//! #[resource(noun = "table")]
 //! pub struct Table {
 //!     #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}")]
 //!     pub name: String,
@@ -31,10 +31,19 @@ pub fn resource(input: TokenStream) -> TokenStream {
 }
 
 fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    if input
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("resource"))
+    {
+        return Err(syn::Error::new_spanned(
+            input,
+            "the noun is the name pattern's last placeholder",
+        ));
+    }
     let ident = &input.ident;
-    let noun = option(input, "noun")?;
     let (field, pattern) = name_field(input)?;
-    let segments = pattern_segments(&pattern)?;
+    let (segments, noun) = pattern_segments(&pattern)?;
     let shape = segments
         .iter()
         .map(|segment| {
@@ -67,29 +76,6 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 &mut self.#field
             }
         }
-    })
-}
-
-/// The `#[resource(key = "…")]` string on the struct.
-fn option(input: &DeriveInput, key: &str) -> syn::Result<LitStr> {
-    let mut value = None;
-    for attr in &input.attrs {
-        if !attr.path().is_ident("resource") {
-            continue;
-        }
-        attr.parse_nested_meta(|meta| {
-            if !meta.path.is_ident(key) {
-                return Err(meta.error(format!("expected `{key} = \"…\"`")));
-            }
-            value = Some(meta.value()?.parse()?);
-            Ok(())
-        })?;
-    }
-    value.ok_or_else(|| {
-        syn::Error::new_spanned(
-            input,
-            format!("a resource needs `#[resource({key} = \"…\")]`"),
-        )
     })
 }
 
@@ -154,10 +140,11 @@ fn is_string(ty: &Type) -> bool {
         .is_some_and(|segment| segment.ident == "String")
 }
 
-/// The path segments: a literal, or `""` for an id placeholder.
-fn pattern_segments(pattern: &LitStr) -> syn::Result<Vec<String>> {
+/// The path segments (a literal, or `""` for a placeholder) and the noun: the
+/// last placeholder's name.
+fn pattern_segments(pattern: &LitStr) -> syn::Result<(Vec<String>, String)> {
     let mut segments = Vec::new();
-    let mut ids = 0;
+    let mut noun = None;
     for segment in pattern.value().split('/') {
         if segment.is_empty() {
             return Err(syn::Error::new(
@@ -175,7 +162,7 @@ fn pattern_segments(pattern: &LitStr) -> syn::Result<Vec<String>> {
                     "a name placeholder is `{id}` with an alphanumeric id",
                 ));
             }
-            ids += 1;
+            noun = Some(id.to_owned());
             segments.push(String::new());
         } else if segment.contains('{') || segment.contains('}') {
             return Err(syn::Error::new(
@@ -186,11 +173,11 @@ fn pattern_segments(pattern: &LitStr) -> syn::Result<Vec<String>> {
             segments.push(segment.to_owned());
         }
     }
-    if ids == 0 {
+    let Some(noun) = noun else {
         return Err(syn::Error::new(
             pattern.span(),
             "a name pattern has no placeholder",
         ));
-    }
-    Ok(segments)
+    };
+    Ok((segments, noun))
 }

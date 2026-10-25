@@ -5,7 +5,6 @@ use super::Resource;
 
 /// One schema.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
-#[resource(noun = "schema")]
 #[serde(default)]
 pub struct Schema {
     /// `catalogs/{catalog}/schemas/{schema}`.
