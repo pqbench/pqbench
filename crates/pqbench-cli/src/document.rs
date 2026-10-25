@@ -5,7 +5,7 @@
 //! and an env; the bytemass kinds are its own output. The `name`'s collection
 //! segment identifies each record (AIP-122), so no record carries a `kind`. A
 //! pipe writes NDJSON; a terminal prints an aligned table (override with
-//! `--format`). `-o` also writes the lz4 NDJSON stream.
+//! `--format`).
 
 use std::collections::BTreeMap;
 

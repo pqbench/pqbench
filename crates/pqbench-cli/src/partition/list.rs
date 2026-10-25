@@ -1,17 +1,12 @@
 //! `list partitions`: a table's natural partitions, grouped by commit time.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-
 use clap::Args;
 use futures_util::stream::{self, StreamExt, TryStreamExt};
 use pqbench::partition;
 
-use crate::emit::{Emitter, Format};
-use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
-use crate::source::{
-    self, dotted_name, read_input, ref_credentials, ref_storage, table_ref, Input,
-};
+use crate::emit::Emitter;
+use crate::error::{context, fail_when_dropped};
+use crate::source::{self, dotted_name, read_input, ref_credentials, ref_storage};
 use crate::CliError;
 
 /// Arguments for `list partitions`.
@@ -32,12 +27,6 @@ pub(crate) struct ListArgs {
     /// [env: PQB_TABLE_LAST]
     #[arg(long, value_parser = parse_last, value_name = "WINDOW", env = "PQB_TABLE_LAST")]
     last: Option<i64>,
-    /// stdout format: auto (table on a terminal) | table | json
-    #[arg(long, value_enum, default_value_t = Format::Auto)]
-    format: Format,
-    /// also write the lz4 NDJSON stream to FILE
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    output: Option<PathBuf>,
     /// tables in flight at once [env: PQB_TABLE_FAN_OUT]
     #[arg(long, default_value_t = 64, env = "PQB_TABLE_FAN_OUT")]
     fan_out: usize,
@@ -46,46 +35,34 @@ pub(crate) struct ListArgs {
 /// List a table's natural partitions: commits grouped into commit-time windows.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let input = read_input("list partitions").await?;
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
-    let (partitions, dropped_tables, dropped_partitions) = match &args.input {
+    let parents = match &args.input {
         Some(uri) if uri != "-" => {
             if input.first.is_some() {
                 return Err("list partitions takes a table URI or a table stream, not both".into());
             }
-            let table = pqbench::v1::name::local_table(uri);
-            (
-                list_partitions(lake, &table, uri, args.every, args.last, &mut emit).await?,
-                0,
-                0,
-            )
+            let name = pqbench::v1::name::local_table(uri);
+            stream::iter([Ok(serde_json::json!({ "name": name, "uri": uri }))]).boxed()
         }
-        _ => list_stream(lake, input, args.every, args.last, args.fan_out, &mut emit).await?,
+        _ => {
+            if !input.piped {
+                return Err("list partitions needs a table URI or a table stream".into());
+            }
+            source::records("list partitions", input.first, input.lines)
+                .map(|record| {
+                    record.and_then(|record| {
+                        source::Carried::Table.record_name(&record).map(|_| record)
+                    })
+                })
+                .boxed()
+        }
     };
-    emit.finish(&format!("partitions: {partitions}\n")).await?;
-    fail_when_dropped(&[("table", dropped_tables), ("partition", dropped_partitions)])
-}
-
-/// Emit every table's partitions from a table stream: tables in flight at
-/// once, each streaming its partitions as its windows close.
-async fn list_stream(
-    lake: &pqbench::Lake,
-    input: Input,
-    window: i64,
-    last: Option<i64>,
-    fan_out: usize,
-    emit: &mut Emitter,
-) -> Result<(usize, usize, usize), CliError> {
-    if !input.piped {
-        return Err("list partitions needs a table URI or a table stream".into());
-    }
-    let records = source::records("list partitions", input.first, input.lines);
-    let mut partitions = 0;
-    let mut dropped_tables = 0;
-    let mut dropped_partitions = 0;
-    let reads = records
-        .map(|record| async move {
-            let record = record?;
-            let name = table_ref("list partitions", &record)?;
+    let mut emit = Emitter::open();
+    let dropped = source::stage(
+        parents,
+        args.fan_out,
+        &mut emit,
+        |record: serde_json::Value| async move {
+            let name = source::Carried::Table.record_name(&record)?;
             let uri = ref_storage(&record)
                 .ok_or_else(|| {
                     CliError::from("a table-ref has no storage path; run `pqbench get table` first")
@@ -96,68 +73,24 @@ async fn list_stream(
                 .as_ref()
                 .map(pqbench::v1::Credentials::to_env)
                 .unwrap_or_default();
-            let found = partition::list::list(lake, &name, &uri, &env, window, last).await;
-            Ok::<_, CliError>(match found {
-                Ok(found) => found
-                    .map(move |item| {
-                        Ok::<_, CliError>(match item {
-                            Ok(mut partition) => {
-                                partition.credentials = lease.clone();
-                                ReadOutcome::Record(partition)
-                            }
-                            Err(error) => ReadOutcome::Dropped(RecordError::new(
-                                "partition",
-                                dotted_name(&name),
-                                error,
-                            )),
-                        })
-                    })
-                    .boxed(),
-                Err(error) => stream::iter([Ok::<_, CliError>(ReadOutcome::Dropped(
-                    RecordError::new("table", dotted_name(&name), error),
-                ))])
-                .boxed(),
-            })
-        })
-        .buffer_unordered(fan_out.max(1))
-        .boxed();
-    let mut found = reads.try_flatten_unordered(Some(fan_out.max(1)));
-    while let Some(outcome) = found.try_next().await? {
-        match outcome {
-            ReadOutcome::Record(partition) => {
-                emit.write_row(&partition).await?;
-                partitions += 1;
+            let mut found = partition::list::list(lake, &name, &uri, &env, args.every, args.last)
+                .await
+                .map_err(|cause| context(dotted_name(&name), cause))?;
+            let mut partitions = Vec::new();
+            while let Some(mut partition) = found
+                .try_next()
+                .await
+                .map_err(|cause| context(dotted_name(&name), cause))?
+            {
+                partition.credentials = lease.clone();
+                partitions.push(partition);
             }
-            ReadOutcome::Dropped(error) => {
-                error.report();
-                match error.what() {
-                    "table" => dropped_tables += 1,
-                    _ => dropped_partitions += 1,
-                }
-            }
-        }
-    }
-    Ok((partitions, dropped_tables, dropped_partitions))
-}
-
-/// Emit one table's partitions as they arrive; returns how many were written.
-async fn list_partitions(
-    lake: &pqbench::Lake,
-    table: &str,
-    uri: &str,
-    window: i64,
-    last: Option<i64>,
-    emit: &mut Emitter,
-) -> Result<usize, CliError> {
-    let mut found = partition::list::list(lake, table, uri, &BTreeMap::new(), window, last)
-        .await
-        .map_err(CliError::from)?;
-    let mut count = 0;
-    while let Some(partition) = found.try_next().await.map_err(CliError::from)? {
-        emit.write_row(&partition).await?;
-        count += 1;
-    }
-    Ok(count)
+            Ok(partitions)
+        },
+    )
+    .await?;
+    emit.finish().await?;
+    fail_when_dropped(dropped)
 }
 
 /// Parse `--every`: a positive window width.

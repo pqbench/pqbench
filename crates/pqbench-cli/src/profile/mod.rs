@@ -1,13 +1,10 @@
 //! `profile`: decode a row sample into per-column facts.
 
-use std::path::PathBuf;
-
 use clap::Args;
-use pqbench::profile::{self, ColumnProfile, ProfileRequest};
+use pqbench::profile::{self, ProfileRequest};
 use pqbench::third_party::parquet::api::read_sample;
-use serde::Serialize;
 
-use crate::emit::{Align, Emitter, Format, Row};
+use crate::emit::Emitter;
 use crate::rows::{parse_rows, RowLimit};
 use crate::CliError;
 
@@ -17,15 +14,6 @@ use crate::CliError;
 pub(crate) struct ProfileArgs {
     /// parquet paths to sample
     inputs: Vec<String>,
-    /// also write the lz4 NDJSON stream to FILE
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    output: Option<PathBuf>,
-    /// stream NDJSON (same as --format json; kept for scripts)
-    #[arg(long = "json")]
-    json: bool,
-    /// stdout format: auto (table on a terminal) | table | json
-    #[arg(long, value_enum, default_value_t = Format::Auto)]
-    format: Format,
     /// column name glob, repeatable; default: every column
     #[arg(long = "columns", value_name = "GLOB")]
     columns: Vec<String>,
@@ -46,63 +34,19 @@ pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
         columns: args.columns.clone(),
         top: args.top,
     };
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(args.json))?;
-    let mut column_count = 0usize;
-    let mut row_count = 0u64;
+    let mut emit = Emitter::open();
     for input in &args.inputs {
         let sample = read_sample(std::path::Path::new(input), max_rows)?;
         let report = profile::profile(&sample, &request)?;
-        row_count += report.row_count;
+        let blob = pqbench::v1::name::blob_name(input);
         for column in &report.columns {
-            emit.write_row(&ColumnRecord {
-                kind: "pqbench.profile-column",
-                id: input,
-                column,
+            emit.write(&crate::render::ProfileRow {
+                name: format!("{blob}/columns/{}/profile", column.column),
+                id: input.clone(),
+                profile: column.clone(),
             })
             .await?;
-            column_count += 1;
         }
     }
-    let mut summary = format!(
-        "files: {}\nrows: {}\ncolumns: {}\n",
-        args.inputs.len(),
-        row_count,
-        column_count
-    );
-    if let Some(path) = &args.output {
-        summary.push_str(&format!("output: {}\n", path.display()));
-    }
-    emit.finish(&summary).await
-}
-
-#[derive(Serialize)]
-struct ColumnRecord<'a> {
-    kind: &'static str,
-    id: &'a str,
-    #[serde(flatten)]
-    column: &'a ColumnProfile,
-}
-
-impl Row for ColumnRecord<'_> {
-    const HEADER: &'static [&'static str] = &["id", "column", "kind", "values", "nulls", "ndv"];
-    const ALIGN: &'static [Align] = &[
-        Align::Left,
-        Align::Left,
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-    ];
-
-    fn cells(&self) -> Vec<String> {
-        let column = self.column;
-        vec![
-            self.id.to_string(),
-            column.column.clone(),
-            column.physical_kind.clone(),
-            column.num_values.to_string(),
-            column.null_count.to_string(),
-            column.ndv.to_string(),
-        ]
-    }
+    emit.finish().await
 }

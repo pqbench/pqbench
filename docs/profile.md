@@ -7,21 +7,17 @@ data — `profile` reads row values and decodes them.
 ## Usage
 
 ```console run
-$ pqbench profile examples/quickstart.parquet --format table
+$ pqbench profile examples/quickstart.parquet | pqbench format
 id                           column  kind     values  nulls  ndv
 ---------------------------  ------  -------  ------  -----  ---
 examples/quickstart.parquet  id      integer       8      0    8
 examples/quickstart.parquet  year    integer       8      0    8
-files: 1
-rows: 8
-columns: 2
-$ pqbench profile examples/quickstart.parquet --columns 'id' --top 5 -o /tmp/profile.ndjson.lz4
 ```
 
 The stream is the explicit machine output, useful for the next command:
 
 ```console run json
-$ pqbench profile examples/quickstart.parquet --rows all --json | head -1 | jq -c '{column, physical_kind, ndv}'
+$ pqbench profile examples/quickstart.parquet --rows all | head -1 | jq -c '{column, physical_kind, ndv}'
 {"column":"id","physical_kind":"integer","ndv":8}
 ```
 
@@ -33,9 +29,6 @@ rows are decoded, and a profile is computed per selected column.
 | `--columns GLOB` | Repeatable. A `glob::Pattern` matched against the whole column name. Default: every column. A glob that matches nothing is an error. |
 | `--rows METHOD` | `all` or `first:N` with `N >= 1`. Default: `first:8192`. |
 | `--top N` | How many top values to keep per column. Default: 8. |
-| `-o` / `--output FILE` | Also write the lz4 NDJSON stream to FILE, independent of what stdout shows. |
-| `--format` | `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
-| `--json` | Stream NDJSON on stdout (same as `--format json`). |
 
 A pipe streams one `pqbench.profile-column` line per column.
 

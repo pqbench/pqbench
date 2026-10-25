@@ -8,5 +8,5 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 46
-    support::run("pqbench bytemass examples/quickstart.parquet --format table", 47, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8", "files: 1", "columns: 2"]));
+    support::run("pqbench bytemass examples/quickstart.parquet | pqbench format", 47, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
 }

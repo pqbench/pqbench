@@ -11,66 +11,40 @@
 //! still succeeds. A check that fails is reported, counted, and the stage exits
 //! non-zero after the stream.
 
-use futures_util::stream::StreamExt;
 use pqbench::v1::EligibilityReason;
-use serde::Serialize;
 use serde_json::Value;
 
 use super::StageArgs;
-use crate::emit::{Align, Emitter, Row};
-use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
-use crate::source::{self, dotted_name, read_input, table_ref};
+use crate::emit::Emitter;
+use crate::error::{context, fail_when_dropped};
+use crate::source::{self, dotted_name, read_input, Carried};
 use crate::CliError;
-
-pub(super) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &StageArgs) -> Result<(), CliError> {
     let input = read_input("credentials check").await?;
     if !input.piped {
         return Err("credentials check reads table refs on standard input".into());
     }
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    let mut emit = Emitter::open();
     let records = source::records("credentials check", input.first, input.lines);
-    let mut tables = 0;
-    let mut ineligible = 0;
-    let mut unread = 0;
-    let mut checks = records
-        .map(|record| async {
-            let record = record?;
-            let name = table_ref("credentials check", &record)?;
-            let outcome = match check(workspace, &name).await {
-                Ok(reason) => ReadOutcome::Record((record, reason)),
-                Err(error) => {
-                    ReadOutcome::Dropped(RecordError::new("table", dotted_name(&name), error))
+    let dropped = source::stage(
+        records,
+        args.fan_out,
+        &mut emit,
+        |record: Value| async move {
+            let name = Carried::Table.record_name(&record)?;
+            match check(workspace, &name).await {
+                Ok(None) => Ok(vec![record]),
+                Ok(Some(reason)) => {
+                    eprintln!("error: {reason}");
+                    Ok(Vec::new())
                 }
-            };
-            Ok::<_, CliError>(outcome)
-        })
-        .buffer_unordered(args.fan_out.max(1));
-    while let Some(outcome) = checks.next().await {
-        match outcome? {
-            ReadOutcome::Record((record, None)) => {
-                emit.write_row(&CheckedRef { record }).await?;
-                tables += 1;
+                Err(cause) => Err(context(dotted_name(&name), cause)),
             }
-            ReadOutcome::Record((_, Some(reason))) => {
-                eprintln!("error: {reason}");
-                ineligible += 1;
-            }
-            ReadOutcome::Dropped(error) => {
-                error.report();
-                unread += 1;
-            }
-        }
-    }
-    emit.finish(&format!("tables: {tables}\n")).await?;
-    // A drop is the filter working, not a failure: the walk composes on this
-    // stage for a mixed schema, and a whole-catalog walk always has tables
-    // (system, views, managed default storage) it cannot read outside compute.
-    // An ineligible table is reported and the stage succeeds; a check that fails
-    // is reported and counted, and the stage exits non-zero after the stream.
-    if ineligible > 0 {
-        eprintln!("{ineligible} table(s) are not readable outside Databricks compute");
-    }
-    fail_when_dropped(&[("table", unread)])
+        },
+    )
+    .await?;
+    emit.finish().await?;
+    fail_when_dropped(dropped)
 }
 
 /// The reason a table is not readable outside Databricks compute, `None` when
@@ -98,28 +72,4 @@ fn ineligible(name: &str, reason: Option<EligibilityReason>) -> String {
     format!(
         "{name} is {because}: read it with Databricks compute, or copy it to an external location"
     )
-}
-
-/// The row `credentials check` writes: the ref, gated on eligibility. The
-/// serialized form is the ref itself.
-struct CheckedRef {
-    record: Value,
-}
-
-impl Serialize for CheckedRef {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.record.serialize(serializer)
-    }
-}
-
-impl Row for CheckedRef {
-    const HEADER: &'static [&'static str] = &["name", "eligible"];
-    const ALIGN: &[Align] = &[Align::Left, Align::Left];
-
-    fn cells(&self) -> Vec<String> {
-        vec![
-            self.record["id"].as_str().unwrap_or_default().to_string(),
-            "yes".to_string(),
-        ]
-    }
 }

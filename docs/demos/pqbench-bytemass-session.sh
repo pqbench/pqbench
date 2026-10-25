@@ -12,10 +12,10 @@ prompt() {
 
 parquet=crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet
 
-prompt "pqbench bytemass $parquet -o /tmp/pqbench-demo-bytemass.ndjson.lz4"
-pqbench bytemass "$parquet" -o /tmp/pqbench-demo-bytemass.ndjson.lz4
+prompt "pqbench bytemass $parquet"
+pqbench bytemass "$parquet" | cat
 sleep 2
 
-prompt "pqbench bytemass $parquet --json"
-pqbench bytemass "$parquet" --json | cat
+prompt "pqbench bytemass $parquet"
+pqbench bytemass "$parquet" | cat
 sleep 2

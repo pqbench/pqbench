@@ -5,8 +5,6 @@ use std::path::PathBuf;
 use clap::{Args, ValueEnum};
 use pqbench::stats;
 
-use crate::emit::Format;
-
 /// Arguments shared by the `lz` and `compression` sweeps.
 #[derive(Args)]
 pub(crate) struct BenchArgs {
@@ -24,15 +22,6 @@ pub(crate) struct BenchArgs {
     /// how to reduce the samples: fastest = mean over the best pass, mean = mean over all
     #[arg(long, value_enum, default_value_t = BenchMode::Fastest)]
     pub(crate) mode: BenchMode,
-    /// stream NDJSON (same as --format json; kept for scripts)
-    #[arg(long = "json")]
-    pub(crate) json: bool,
-    /// stdout format: auto (table on a terminal) | table | json
-    #[arg(long, value_enum, default_value_t = Format::Auto)]
-    pub(crate) format: Format,
-    /// also write the lz4 NDJSON stream to FILE
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    pub(crate) output: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]

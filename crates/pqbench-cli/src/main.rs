@@ -15,6 +15,7 @@ mod document;
 mod emit;
 mod error;
 mod file;
+mod format;
 mod get;
 mod help;
 mod list;
@@ -84,6 +85,8 @@ enum Command {
         after_long_help = help::GET_AFTER
     )]
     Get(get::GetArgs),
+    #[command(about = "Render an NDJSON stream as tables")]
+    Format(format::FormatArgs),
     #[command(
         about = help::LIST_ABOUT,
         long_about = help::LIST_LONG_ABOUT,
@@ -151,7 +154,9 @@ async fn main() -> ExitCode {
     match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {}", error::error_chain(e.as_ref()));
+            if e.downcast_ref::<error::Partial>().is_none() {
+                eprintln!("error: {}", error::error_chain(e.as_ref()));
+            }
             ExitCode::FAILURE
         }
     }
@@ -172,6 +177,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &args).await,
         Command::Get(args) => get::run(&workspace, &lake, &args).await,
+        Command::Format(args) => format::run(&args).await,
         Command::List(args) => list::run(&workspace, &lake, &args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
@@ -191,6 +197,7 @@ impl Command {
             Command::Compression(_) => "compression",
             Command::Bytemass(_) => "bytemass",
             Command::Get(args) => args.name(),
+            Command::Format(_) => "format",
             Command::List(args) => args.name(),
             Command::Credentials(_) => "credentials",
             Command::RateLimit(_) => "ratelimit",

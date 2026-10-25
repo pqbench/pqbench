@@ -151,16 +151,7 @@ fn dated_delta_fixture_commits(timestamps: &[i64]) -> DeltaFixture {
 fn partition_ls_groups_commits_into_natural_windows() {
     let timestamp = 1_700_000_000_000i64;
     let fixture = dated_delta_fixture(timestamp);
-    let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    let output = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -192,8 +183,6 @@ fn partition_ls_honors_the_window_width() {
             fixture.path.to_str().unwrap(),
             "--every",
             "1h",
-            "--format",
-            "json",
         ],
         "",
     );
@@ -227,8 +216,6 @@ fn partition_ls_last_bounds_the_read_to_recent_windows() {
             "1d",
             "--last",
             "2d",
-            "--format",
-            "json",
         ],
         "",
     );
@@ -260,8 +247,6 @@ fn partition_ls_last_covering_the_span_reads_every_window() {
             "1d",
             "--last",
             "1w",
-            "--format",
-            "json",
         ],
         "",
     );
@@ -293,8 +278,6 @@ fn partition_ls_last_drops_a_window_the_horizon_cuts() {
             "1d",
             "--last",
             "1h",
-            "--format",
-            "json",
         ],
         "",
     );
@@ -335,16 +318,7 @@ fn partition_ls_rejects_a_bad_last_window() {
 #[test]
 fn partition_ls_skips_commits_without_a_time() {
     let fixture = delta_fixture();
-    let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    let output = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
     assert!(
         output.status.success(),
         "stderr: {}",

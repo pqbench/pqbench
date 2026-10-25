@@ -34,10 +34,13 @@ fn compression_sweeps_codecs() {
         .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_slice(line).expect("ndjson line"))
         .collect();
-    assert_eq!(records[0]["kind"], "pqbench.compression-row");
     let codecs: Vec<_> = records
         .iter()
-        .filter(|record| record["kind"] == "pqbench.compression-row")
+        .filter(|record| {
+            record["name"]
+                .as_str()
+                .is_some_and(|name| name.contains("/compression/"))
+        })
         .map(|record| record["codec"].as_str().unwrap().to_string())
         .collect();
     for codec in ["gzip", "lz4", "snappy", "zstd"] {
@@ -48,7 +51,7 @@ fn compression_sweeps_codecs() {
     }
     let columns: Vec<_> = records
         .iter()
-        .filter(|record| record["kind"] == "pqbench.compression-column")
+        .filter(|record| record["column"].is_string())
         .map(|record| record["column"].as_str().unwrap().to_string())
         .collect();
     for column in ["text", "label", "url_encoded"] {

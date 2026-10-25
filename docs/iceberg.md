@@ -29,7 +29,7 @@ module that names the `object_store` crate is `pqbench::object_store`.
 
 ## Usage
 
-List the current snapshot's partitions, then their files. A terminal prints the
+List the current snapshot's partitions, then their files. `format` prints the
 snapshot's partitions as a table; a pipe writes the full `Partition`
 document. The URI may be a table root or the metadata JSON itself.
 
@@ -41,16 +41,14 @@ reads the same metadata inline from the REST `loadTable` response instead.)
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
 it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
 stand up, `pqbench list partitions <table> | pqbench list files | pqbench bytemass
---format table` prints the same column table as a bare parquet:
+| pqbench format` prints the same column table as a bare parquet:
 
 ```console run
-$ pqbench bytemass examples/quickstart.parquet --format table
+$ pqbench bytemass examples/quickstart.parquet | pqbench format
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
 year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
-files: 1
-columns: 2
 ```
 
 Two invocations from the `iceberg` cargo feature:

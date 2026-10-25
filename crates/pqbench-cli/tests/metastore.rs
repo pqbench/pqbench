@@ -3,16 +3,6 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-/// Decode an lz4 frame (`-o` output) into its NDJSON bytes.
-fn decode_lz4(bytes: &[u8]) -> Vec<u8> {
-    let mut decoded = Vec::new();
-    lz4::Decoder::new(std::io::Cursor::new(bytes))
-        .unwrap()
-        .read_to_end(&mut decoded)
-        .unwrap();
-    decoded
-}
-
 fn pqbench() -> Command {
     Command::new(env!("CARGO_BIN_EXE_pqbench"))
 }
@@ -48,6 +38,27 @@ fn ndjson(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
+/// Render a command's stdout with `pqbench format`.
+fn table(bytes: &[u8]) -> String {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pqbench"))
+        .arg("format")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(bytes).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
 /// One endpoint that answers every GET with `status` and `body`.
 fn server(status: u16, body: &'static str) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -78,25 +89,21 @@ fn source(endpoint: &str) -> [(&str, &str); 1] {
 #[test]
 fn metastore_get_prints_the_record_as_a_table() {
     let address = server(200, SUMMARY);
-    let output = pipe(
-        &["get", "metastore", "--format", "table"],
-        &source(&address),
-    );
+    let output = pipe(&["get", "metastore"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = table(&output.stdout);
     assert!(stdout.contains("metastores/unity"), "{stdout}");
     assert!(stdout.contains("us-east-2"), "{stdout}");
-    assert!(stdout.contains("metastores: 1"), "{stdout}");
 }
 
 #[test]
 fn metastore_get_streams_the_record_as_ndjson() {
     let address = server(200, SUMMARY);
-    let output = pipe(&["get", "metastore", "--format", "json"], &source(&address));
+    let output = pipe(&["get", "metastore"], &source(&address));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -110,34 +117,6 @@ fn metastore_get_streams_the_record_as_ndjson() {
     assert_eq!(records[0]["cloud_provider"], "aws");
     assert_eq!(records[0]["region"], "us-east-2");
     assert!(records[0].get("kind").is_none(), "{}", records[0]);
-}
-
-#[test]
-fn metastore_get_exports_the_ndjson_stream() {
-    let address = server(200, SUMMARY);
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("metastore.ndjson.lz4");
-    let output = pipe(
-        &[
-            "get",
-            "metastore",
-            "--format",
-            "table",
-            "-o",
-            file.to_str().unwrap(),
-        ],
-        &source(&address),
-    );
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let bytes = std::fs::read(&file).unwrap();
-    let decoded = decode_lz4(&bytes);
-    let records = ndjson(&decoded);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["name"], "metastores/unity");
 }
 
 #[test]

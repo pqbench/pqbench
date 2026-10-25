@@ -93,7 +93,7 @@ fn bytemass_streams_column_rows() {
 fn bytemass_json_is_the_stream() {
     let exe = env!("CARGO_BIN_EXE_pqbench");
     let out = Command::new(exe)
-        .args(["bytemass", parquet_fixture(), "--json"])
+        .args(["bytemass", parquet_fixture()])
         .output()
         .unwrap();
     assert!(

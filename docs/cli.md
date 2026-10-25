@@ -18,6 +18,7 @@ that command and links back. This file is the durable copy.
 | Read one schema's record | `pqbench get schema CATALOG.SCHEMA` (refs on stdin) |
 | List the tables in a schema | `pqbench list tables CATALOG.SCHEMA` (refs on stdin) |
 | Read one table's record | `pqbench get table CATALOG.SCHEMA.TABLE` (Table refs on stdin) |
+| Render a stream as tables | `pqbench format` (NDJSON on stdin) |
 | Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (refs on stdin) |
 | Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
@@ -46,9 +47,8 @@ The usual walk:
 $ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
-A terminal prints an aligned table; a pipe streams NDJSON. The table keeps
-the stream clean: only data rows are shown, bounded to 1000 rows, with the
-count of hidden rows reported. Credentials travel on the refs (`AWS_*`) —
+Standard output is NDJSON. `pqbench format` renders it as aligned tables: one
+section per record type, with only the curated columns shown. Credentials travel on the refs (`AWS_*`) —
 `credentials get` writes the vended keys onto the refs it passes on, and
 pqbench never writes them into the process environment itself.
 
@@ -56,15 +56,15 @@ pqbench never writes them into the process environment itself.
 
 | resource | Produced by | Consumed by |
 | --- | --- | --- |
-| `Metastore` | `get metastore` | humans / scripts (`--json`) |
-| `Catalog` | `list catalogs`, `get catalog` | `get catalog`, `list schemas`, humans / scripts (`--json`) |
+| `Metastore` | `get metastore` | humans / scripts  |
+| `Catalog` | `list catalogs`, `get catalog` | `get catalog`, `list schemas`, humans / scripts  |
 | `Schema` | `list schemas`, `get schema` | `get schema`, `list tables` |
 | `Table` | `list tables`, `get table`, `credentials get` | `get table`, `list partitions`, `credentials get` |
-| `Partition` | `list partitions` | `list files`, humans / scripts (`--json`) |
-| `TableFile` | `list files` | `bytemass`, humans / scripts (`--json`) |
+| `Partition` | `list partitions` | `list files`, humans / scripts  |
+| `TableFile` | `list files` | `bytemass`, humans / scripts  |
 | `remote-source` | a producer | `bytemass` |
-| `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts (`--json`) |
-| `pqbench.profile-column` | `profile` | humans / scripts (`--json`) |
+| `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts  |
+| `pqbench.profile-column` | `profile` | humans / scripts  |
 | `pqbench.skill` | `skill` (list) | an agent |
 
 A resource's `name` is its identity: the collection segment (`catalogs`,
@@ -75,9 +75,6 @@ a `kind` or a version of its own — the API version is the package's.
 
 | Flag | Meaning |
 | --- | --- |
-| `-o` / `--output` | `FILE` for the lz4 NDJSON stream; `PREFIX` on `viz`. Independent of what stdout shows. |
-| `--format` | Every streaming command: `auto` (table on a terminal, NDJSON on a pipe), `table`, or `json`. |
-| `--json` | `bytemass`, `lz`, `compression`, `profile`: stream NDJSON on stdout (same as `--format json`). |
 
 ## Auth — how to reach data
 
@@ -185,8 +182,7 @@ done
 
 `list catalogs | list schemas` lists every schema at the endpoint; `list catalogs |
 get catalog` enriches each catalog instead. `get` emits the same kind of resource
-as the `list` it reads from, so you can insert it into a walk or skip it; `tee`
-(or `-o`) writes each level into the job tree.
+as the `list` it reads from, so you can insert it into a walk or skip it; `tee` writes each level into the job tree.
 
 ```console no-run
 $ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
@@ -196,7 +192,6 @@ name                                   comment  uri
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
 catalogs/dbx_samples/schemas/nyctaxi    …        s3://lakehouse/nyctaxi
 catalogs/samples/schemas/accuweather    …        s3://lakehouse/weather
-schemas: 3
 ```
 
 `get schema` reads one schema (catalog, name, comment, location, properties)
@@ -216,10 +211,10 @@ the same lease:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi --format json |
+$ pqbench list tables dbx_samples.nyctaxi |
     pqbench credentials check |
     pqbench credentials get |
-    pqbench get table --format json
+    pqbench get table
 ```
 
 `pqbench setup` prints that environment for the shell to evaluate:
@@ -287,7 +282,7 @@ cannot serve passes through with its own credentials.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi --format json |
+$ pqbench list tables dbx_samples.nyctaxi |
     pqbench credentials check | pqbench credentials get
 ```
 
@@ -306,14 +301,13 @@ measures.
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ pqbench list tables dbx_samples.nyctaxi --format json |
+$ pqbench list tables dbx_samples.nyctaxi |
     pqbench credentials check |
     pqbench credentials get |
     pqbench list partitions
 name                  first_time     last_time  commits
 --------------------  -----------  ------------  -------
 …                     …            …                   1
-partitions: 1
 ```
 
 ```console no-run
@@ -321,17 +315,15 @@ $ PQB_ENDPOINT=… pqbench get table pqbench.demo.events
 name                           format  snapshot_version  columns  uri
 -----------------------------  ------  ----------------  -------  ----------------------
 catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/unity/events
-tables: 1
 ```
 
 List a table's partitions by URI; a terminal prints them:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table --format table
+$ pqbench list partitions docker/e2e-lakehouse/table | pqbench format
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
-partitions: 1
 ```
 
 List the catalogs at the endpoint:
@@ -342,7 +334,6 @@ name                  catalog_type
 --------------------  -----------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
 catalogs/samples      CATALOG_TYPE_SYSTEM
-catalogs: 2
 ```
 
 Read one catalog's record:
@@ -352,7 +343,6 @@ $ pqbench get catalog dbx_samples
 name                  catalog_type
 --------------------  --------------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
-catalogs: 1
 ```
 
 List the schemas in a catalog:
@@ -363,7 +353,6 @@ name                                   comment  uri
 -------------------------------------  -------  ----------------------
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
 catalogs/dbx_samples/schemas/nyctaxi    …        s3://lakehouse/nyctaxi
-schemas: 2
 ```
 
 ### Databricks-governed tables

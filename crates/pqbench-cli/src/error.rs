@@ -2,11 +2,11 @@
 //! source chain to the level, which reports it and carries on; the level's end
 //! turns the count into exit 1 after the output is finished.
 //!
-//! The read only wraps: it does not decide. The level's loop decides whether a
-//! record's read failed (report, count, continue) or the input/output failed
-//! (propagate with `?`). The wrapper keeps the error itself, so the rendered
-//! message has the same cause chain as a top-level `?` — no error is reduced to
-//! a string at the point of failure.
+//! A failed record read is an `Err` with `context`'s reference on it: the cause
+//! chain survives, so the rendered message reads like a top-level `?` and no
+//! error is reduced to a string at the point of failure. The combinator
+//! reports the failure on standard error and counts it; the exit status is the
+//! only aggregate.
 
 use crate::CliError;
 
@@ -24,59 +24,58 @@ pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
     rendered
 }
 
-/// A failed per-record read: the record's reference and the error, with its
-/// source chain intact. The read attaches the reference; the level reports it
-/// and counts it. `what` is the record kind for the level's summary.
-pub(crate) struct RecordError {
-    what: &'static str,
+/// A failure with the record it came from; the cause stays in the chain.
+#[derive(Debug)]
+struct Context {
     reference: String,
-    error: CliError,
+    cause: CliError,
 }
 
-impl RecordError {
-    pub(crate) fn new(
-        what: &'static str,
-        reference: impl Into<String>,
-        error: impl Into<CliError>,
-    ) -> Self {
-        Self {
-            what,
-            reference: reference.into(),
-            error: error.into(),
-        }
-    }
-
-    pub(crate) fn what(&self) -> &'static str {
-        self.what
-    }
-
-    pub(crate) fn report(&self) {
-        eprintln!(
-            "error: {}: {}",
-            self.reference,
-            error_chain(self.error.as_ref())
-        );
+impl std::fmt::Display for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reference)
     }
 }
 
-/// One record's read: the record, or the failure with its reference.
-pub(crate) enum ReadOutcome<T> {
-    Record(T),
-    Dropped(RecordError),
+impl std::error::Error for Context {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
 }
 
-/// The level's end: after the output is finished, report a partial run as a
-/// failure. The dropped records were already named on standard error; this
-/// carries the count into the exit status, so the run is green only when
-/// nothing was lost.
-pub(crate) fn fail_when_dropped(counts: &[(&str, usize)]) -> Result<(), CliError> {
-    let lost: Vec<String> = counts
-        .iter()
-        .filter(|(_, count)| *count > 0)
-        .map(|(what, count)| format!("{count} {what}(s)"))
-        .collect();
-    if lost.is_empty() {
+/// Attach a record's reference to a failure, keeping its cause chain.
+pub(crate) fn context(reference: impl Into<String>, cause: impl Into<CliError>) -> CliError {
+    Box::new(Context {
+        reference: reference.into(),
+        cause: cause.into(),
+    })
+}
+
+/// The level's end: after the output is finished, a run that lost records is a
+/// failure. The losses were already named on standard error; this only carries
+/// the fact into the exit status, so the run is green when nothing was lost.
+pub(crate) fn fail_when_dropped(dropped: usize) -> Result<(), CliError> {
+    if dropped == 0 {
         return Ok(());
     }
-    Err(format!("{} could not be read", lost.join(" and ")).into())
+    Err(Box::new(Partial))
+}
+
+/// A run that wrote its output but lost records. The losses are already on
+/// standard error; the type exists only to set the exit status without
+/// printing a second message.
+#[derive(Debug)]
+pub(crate) struct Partial;
+
+impl std::fmt::Display for Partial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("partial run")
+    }
+}
+
+impl std::error::Error for Partial {}
+
+/// Report a failure on standard error, with its cause chain.
+pub(crate) fn report(error: &CliError) {
+    eprintln!("error: {}", error_chain(error.as_ref()));
 }

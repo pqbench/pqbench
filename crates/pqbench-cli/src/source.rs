@@ -10,9 +10,8 @@
 //! PQB_ENDPOINT=… PQB_TOKEN=… pqbench list catalogs | pqbench list schemas | …
 //! ```
 //!
-//! `tee` (or `-o`) writes each level into the job tree; `get` stages emit the
-//! same resource as the `list` they read from, so they enrich a stream in
-//! place.
+//! `tee` writes each level into the job tree; `get` stages emit the same
+//! resource as the `list` they read from, so they enrich a stream in place.
 //!
 //! Records are read one at a time as the command consumes them, so a level
 //! never buffers its parent: a slow consumer stops reading, and the pipe
@@ -84,46 +83,6 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
     })
 }
 
-/// The metastore id a metastore ref names: a `metastores/{metastore}` resource
-/// name. The metastore is a singleton, so the value only validates the input.
-pub(crate) fn metastore_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .and_then(pqbench::v1::name::parse_metastore)
-        .ok_or_else(|| {
-            format!(
-                "{command} reads pqbench metastore resources; a record needs a `metastores/…` name"
-            )
-            .into()
-        })
-}
-
-/// The `catalogs/{catalog}` name a catalog ref carries.
-pub(crate) fn catalog_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .filter(|name| pqbench::v1::name::parse_catalog(name).is_some())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            format!("{command} reads pqbench catalog resources; a record needs a `catalogs/…` name")
-                .into()
-        })
-}
-
-/// The `catalogs/{catalog}/schemas/{schema}` name a schema ref carries.
-pub(crate) fn schema_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .filter(|name| pqbench::v1::name::parse_schema(name).is_some())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "{command} reads pqbench schema resources; a record needs a `catalogs/…/schemas/…` name"
-            )
-            .into()
-        })
-}
-
 /// Split `catalog.schema` at the first dot; an Iceberg namespace keeps its
 /// remaining dots.
 pub(crate) fn split_schema(command: &str, fqn: &str) -> Result<(String, String), CliError> {
@@ -134,21 +93,6 @@ pub(crate) fn split_schema(command: &str, fqn: &str) -> Result<(String, String),
         return Err(format!("{command} takes CATALOG.SCHEMA; got {fqn:?}").into());
     }
     Ok((catalog.to_string(), schema.to_string()))
-}
-
-/// The `catalogs/{catalog}/schemas/{schema}/tables/{table}` name a table ref
-/// carries.
-pub(crate) fn table_ref(command: &str, record: &Value) -> Result<String, CliError> {
-    record["name"]
-        .as_str()
-        .filter(|name| pqbench::v1::name::parse_table(name).is_some())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            format!(
-                "{command} reads pqbench table resources; a record needs a `catalogs/…/tables/…` name"
-            )
-            .into()
-        })
 }
 
 /// The dotted `catalog.schema.table` a table ref names, for a message; the ref
@@ -187,4 +131,155 @@ pub(crate) fn split_table(command: &str, fqn: &str) -> Result<(String, String, S
 /// The vended lease a ref carries, when it carries one.
 pub(crate) fn ref_credentials(record: &Value) -> Option<pqbench::v1::Credentials> {
     serde_json::from_value(record["credentials"].clone()).ok()
+}
+
+/// What a level's parent stream carries (and what its one argument names).
+#[derive(Clone, Copy)]
+pub(crate) enum Carried {
+    Metastore,
+    Catalog,
+    Schema,
+    Table,
+}
+
+impl Carried {
+    /// The positional's spelling, for messages.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Metastore => "METASTORE",
+            Self::Catalog => "CATALOG",
+            Self::Schema => "CATALOG.SCHEMA",
+            Self::Table => "CATALOG.SCHEMA.TABLE",
+        }
+    }
+
+    /// The stream's noun, for messages.
+    pub(crate) fn noun(self) -> &'static str {
+        match self {
+            Self::Metastore => "catalog",
+            Self::Catalog => "catalog",
+            Self::Schema => "schema",
+            Self::Table => "table",
+        }
+    }
+
+    /// The resource name a parent record carries.
+    pub(crate) fn record_name(self, record: &Value) -> Result<String, CliError> {
+        let name = record["name"].as_str().unwrap_or_default();
+        let well_formed = match self {
+            Self::Metastore => pqbench::v1::name::parse_metastore(name).is_some(),
+            Self::Catalog => pqbench::v1::name::parse_catalog(name).is_some(),
+            Self::Schema => pqbench::v1::name::parse_schema(name).is_some(),
+            Self::Table => pqbench::v1::name::parse_table(name).is_some(),
+        };
+        if well_formed {
+            return Ok(name.to_owned());
+        }
+        Err(format!(
+            "a {} record needs a `{}` name",
+            self.noun(),
+            match self {
+                Self::Metastore => "metastores/…",
+                Self::Catalog => "catalogs/…",
+                Self::Schema => "catalogs/…/schemas/…",
+                Self::Table => "catalogs/…/tables/…",
+            }
+        )
+        .into())
+    }
+
+    /// The resource name the positional spells.
+    pub(crate) fn argument_name(self, command: &str, argument: &str) -> Result<String, CliError> {
+        match self {
+            Self::Catalog if !argument.is_empty() => Ok(pqbench::v1::name::catalog(argument)),
+            Self::Schema => {
+                let (catalog, schema) = split_schema(command, argument)?;
+                Ok(pqbench::v1::name::schema(&catalog, &schema))
+            }
+            Self::Table => {
+                let (catalog, schema, table) = split_table(command, argument)?;
+                Ok(pqbench::v1::name::table(&catalog, &schema, &table))
+            }
+            _ => Err(format!("{command} takes no {} argument", self.label()).into()),
+        }
+    }
+}
+
+/// The level's parents: its one positional, or the parent stream on standard
+/// input — exactly one. A positional becomes the record its name stands for,
+/// so the read below sees one shape either way.
+pub(crate) async fn parents(
+    command: &'static str,
+    argument: Option<&str>,
+    carried: Carried,
+) -> Result<impl Stream<Item = Result<Value, CliError>> + Unpin, CliError> {
+    let input = read_input(command).await?;
+    let present = input.first.is_some();
+    match (argument, present, input.piped) {
+        (Some(_), true, _) => Err(format!(
+            "{command} takes {} or a {} stream, not both",
+            carried.label(),
+            carried.noun()
+        )
+        .into()),
+        (Some(argument), false, _) => {
+            let name = carried.argument_name(command, argument)?;
+            Ok(stream::iter([Ok(serde_json::json!({ "name": name }))]).boxed())
+        }
+        (None, _, false) => Err(format!(
+            "{command} needs {} or a {} stream",
+            carried.label(),
+            carried.noun()
+        )
+        .into()),
+        (None, _, true) => Ok(records(command, input.first, input.lines)
+            .map(move |record| {
+                record.and_then(|record| carried.record_name(&record).map(|_| record))
+            })
+            .boxed()),
+    }
+}
+
+/// [`parents`], as the resource names alone.
+pub(crate) async fn parent_names(
+    command: &'static str,
+    argument: Option<&str>,
+    carried: Carried,
+) -> Result<impl Stream<Item = Result<String, CliError>> + Unpin, CliError> {
+    Ok(parents(command, argument, carried)
+        .await?
+        .map(|record| record.map(|record| record["name"].as_str().unwrap_or_default().to_owned())))
+}
+
+/// flatMap over the parents: read each name, write its rows, report and count
+/// the failures. Returns the number of records lost.
+pub(crate) async fn stage<I, T, F>(
+    items: impl Stream<Item = Result<I, CliError>>,
+    fan_out: usize,
+    emit: &mut crate::emit::Emitter,
+    read: F,
+) -> Result<usize, CliError>
+where
+    T: serde::Serialize,
+    F: std::ops::AsyncFn(I) -> Result<Vec<T>, CliError> + Copy,
+{
+    let mut dropped = 0;
+    let reads = items
+        .map(|item| async move { read(item?).await })
+        .buffer_unordered(fan_out.max(1));
+    futures_util::pin_mut!(reads);
+    while let Some(read) = reads.next().await {
+        match read {
+            Ok(rows) => {
+                for row in rows {
+                    emit.write(&row).await?;
+                }
+            }
+            Err(error) => {
+                crate::error::report(&error);
+                dropped += 1;
+            }
+        }
+    }
+    Ok(dropped)
 }

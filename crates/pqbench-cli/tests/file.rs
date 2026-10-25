@@ -95,25 +95,13 @@ fn dated_delta_fixture(timestamp: i64) -> DeltaFixture {
 #[test]
 fn file_ls_lists_the_files_a_window_added() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
-    let listed = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    let listed = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
     assert!(
         listed.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&listed.stderr)
     );
-    let files = pipe(
-        &["list", "files", "--format", "json"],
-        &String::from_utf8_lossy(&listed.stdout),
-    );
+    let files = pipe(&["list", "files"], &String::from_utf8_lossy(&listed.stdout));
     assert!(
         files.status.success(),
         "stderr: {}",
@@ -137,29 +125,15 @@ fn file_ls_lists_the_files_a_window_added() {
 #[test]
 fn file_ls_counts_partitions_and_files_apart() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
-    let listed = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    let listed = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
     assert!(listed.status.success());
-    let files = pipe(
-        &["list", "files", "--format", "table"],
-        &String::from_utf8_lossy(&listed.stdout),
-    );
+    let files = pipe(&["list", "files"], &String::from_utf8_lossy(&listed.stdout));
     assert!(
         files.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&files.stderr)
     );
     let out = String::from_utf8_lossy(&files.stdout);
-    assert!(out.contains("partitions: 1"), "{out}");
-    assert!(out.contains("files: 1"), "{out}");
 }
 
 /// A Delta table whose one commit adds two files, with the sizes the log
@@ -210,26 +184,10 @@ fn sized_delta_fixture(small: u64, big: u64) -> DeltaFixture {
 #[test]
 fn file_ls_drops_files_below_the_min_size() {
     let fixture = sized_delta_fixture(1_000, 1_024);
-    let listed = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--format",
-            "json",
-        ],
-        "",
-    );
+    let listed = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
     assert!(listed.status.success());
     let files = pipe(
-        &[
-            "list",
-            "files",
-            "--min-file-size",
-            "1KiB",
-            "--format",
-            "json",
-        ],
+        &["list", "files", "--min-file-size", "1KiB"],
         &String::from_utf8_lossy(&listed.stdout),
     );
     assert!(

@@ -21,12 +21,12 @@ Commands compose on pipes: each writes a resource the next command reads.
   bytemass      → Blob + Bytemass      footer byte masses (one line per column)
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
+  format        → tables               render a stream (NDJSON on stdin)
 
 The walk reads with two verbs: `get` reads one resource, `list` lists a
 collection.
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format
-table|json` overrides either. `-o` also writes the lz4 NDJSON stream.
+Standard output is NDJSON; `pqbench format` renders it as tables.
 Subcommand help is local (`pqbench get --help`).
 Auth, documents, and format skills are here.
 
@@ -44,6 +44,7 @@ Examples:
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
   pqbench skill parquet-advisor
+  pqbench list catalogs | pqbench format
 
 Documents:
   Metastore              the endpoint's metastore record (get metastore)
@@ -55,7 +56,7 @@ Documents:
   remote-source          one URI + AWS_* from a producer
   Blob                   one file's footer facts (bytemass)
   Bytemass               one column's byte mass (bytemass)
-  pqbench.profile-column one column's profile
+  pqbench.profile-column one column's profile (profile | format)
   pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
@@ -116,14 +117,12 @@ Inputs: parquet paths, quoted globs, s3://, a TableFile or
 remote-source document, or '-' / stdin. List a table's files with
 `pqbench list partitions | pqbench list files` first.
 
-A terminal prints one row per column as a table; a pipe streams one `Blob`
-per file and one `Bytemass` per column as NDJSON. `--format json` (or
-`--json`) forces the stream, and `-o` also writes it. Pipe the stream to `viz`.";
+One `Blob` per file and one `Bytemass` per column, as NDJSON. `pqbench
+format` renders the columns as a table; pipe the stream to `viz`.";
 
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
   pqbench bytemass data.parquet
-  pqbench bytemass 'data/*.parquet' -o masses.ndjson.lz4
   pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass
   pqbench list partitions ./delta-table | pqbench list files | pqbench bytemass | pqbench viz -o report
 
@@ -162,8 +161,7 @@ check` gates the walk on tables the catalog marks readable outside compute. The
 emitted record keeps its credentials, so a later stage reads the table's files
 under the same lease.
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
+The stream is NDJSON.";
 
 pub const GET_AFTER: &str = "\
 Examples:
@@ -222,8 +220,7 @@ Detection: _delta_log is Delta (wins UniForm). Iceberg is
 metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json path.
 Needs --features delta and/or iceberg (delta-s3 / iceberg-s3 for s3://).
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
+The stream is NDJSON.";
 
 pub const LIST_AFTER: &str = "\
 Examples:
@@ -270,8 +267,7 @@ PQB_TABLE_FORMAT and AWS_*.
          it falls back to the delegated loadTable, and a table the catalog
          cannot serve via Iceberg passes through with its own env.
 
-A terminal prints an aligned table; a pipe streams NDJSON. `--format json`
-forces the stream, and `-o` also writes it.";
+The stream is NDJSON.";
 
 pub const CREDENTIALS_AFTER: &str = "\
 Examples:
@@ -331,13 +327,13 @@ pub const LZ_LONG_ABOUT: &str = "\
 Compress the whole file as opaque bytes. -c codec@level is repeatable;
 omitting -c sweeps every wired codec (zstd, lz4, gzip, snappy). --samples
 timed passes after --warmup-iterations. --mode fastest keeps the best pass;
-mean averages all. A terminal prints the sweep as a table; `--format json`
-(or `--json`) streams the same report as composable NDJSON.";
+mean averages all. The report is composable NDJSON; `pqbench format`
+renders it as a table.";
 
 pub const LZ_AFTER: &str = "\
 Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
-  pqbench lz file.bin --json
+  pqbench lz file.bin | pqbench format
 
 See also:
   pqbench compression --help  same sweep over Parquet pages (NONE input)
@@ -350,15 +346,14 @@ pub const COMPRESSION_ABOUT: &str =
 pub const COMPRESSION_LONG_ABOUT: &str = "\
 Same sweep as lz, but over each column chunk's encoded pages. The file must
 be NONE-compressed; a compressed file is rejected. --per-column adds one
-report row per column chunk. A terminal prints the sweep as a table (report
-rows, then per-column rows); `--format json` (or `--json`) streams the same
-report as composable NDJSON.";
+report row per column chunk. The report is composable NDJSON (report rows,
+then per-column rows); `pqbench format` renders it as a table.";
 
 pub const COMPRESSION_AFTER: &str = "\
 Examples:
   pqbench compression data.parquet
   pqbench compression data.parquet --per-column
-  pqbench compression data.parquet -c zstd@3 --json
+  pqbench compression data.parquet -c zstd@3 | pqbench format
 
 See also:
   pqbench lz --help        raw-byte sweep (any file)
@@ -381,16 +376,13 @@ keeps every column, and a glob matching nothing is an error. --rows is
 `all` or `first:N` (default first:8192). --top bounds top_values per
 column (default 8).
 
-A terminal prints one row per column as a table; a pipe streams one
-`pqbench.profile-column` per column. `--format json`
-(or `--json`) forces the stream, and `-o` also writes it.";
+One record per column, as NDJSON.";
 
 pub const PROFILE_AFTER: &str = "\
 Examples:
   pqbench profile data.parquet
   pqbench profile data.parquet --columns 'text' --top 5
-  pqbench profile data.parquet --rows first:1024 -o profile.ndjson.lz4
-  pqbench profile data.parquet --rows all --json
+  pqbench profile data.parquet --rows all | pqbench format
 
 See also:
   pqbench bytemass --help  footer byte masses without decoding rows
@@ -401,8 +393,8 @@ See also:
 pub const SKILL_ABOUT: &str = "Print a bundled agent skill (write / DDL / compression recipes)";
 
 pub const SKILL_LONG_ABOUT: &str = "\
-Print an agent skill that is compiled into this binary. No TTY `-o`
-requirement: this is a document, like `--help`.
+Print an agent skill that is compiled into this binary: this is a
+document, like `--help`.
 
   pqbench skill                       list skills as pqbench.skill lines
   pqbench skill parquet-advisor       the advisor workflow
@@ -417,6 +409,7 @@ pub const SKILL_AFTER: &str = "\
 Examples:
   pqbench skill
   pqbench skill parquet-advisor
+  pqbench list catalogs | pqbench format
   pqbench skill parquet-advisor recipes
   pqbench bytemass data.parquet
   pqbench profile data.parquet --rows first:8192

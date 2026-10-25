@@ -1,29 +1,20 @@
 //! `list files`: the files each partition's commits added.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use clap::Args;
 use futures_util::stream::{self, StreamExt, TryStreamExt};
 use pqbench::v1;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::emit::{Emitter, Format};
-use crate::error::{fail_when_dropped, ReadOutcome, RecordError};
+use crate::emit::Emitter;
+use crate::error::{context, fail_when_dropped, report};
 use crate::stdin::is_stream;
 use crate::CliError;
 
 /// Arguments for `list files`.
 #[derive(Args)]
 pub(crate) struct ListArgs {
-    /// stdout format: auto (table on a terminal) | table | json
-    #[arg(long, value_enum, default_value_t = Format::Auto)]
-    format: Format,
-    /// also write the lz4 NDJSON stream to FILE
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
-    output: Option<PathBuf>,
     /// partitions in flight at once
     #[arg(long, default_value_t = 64)]
     fan_out: usize,
@@ -44,85 +35,63 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
     if !is_stream() {
         return Err("list files reads partition records on standard input".into());
     }
-    let mut emit = Emitter::open(args.output.as_deref(), args.format.resolve(false))?;
+    let mut emit = Emitter::open();
     let lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut files = 0usize;
-    // Partition streams in flight at once, each streaming its files as its
-    // commits are read; `started` counts the streams that opened so the summary
-    // separates partitions from files.
-    let started = Arc::new(AtomicUsize::new(0));
-    let mut dropped_partitions = 0usize;
-    let mut dropped_files = 0usize;
+    let mut dropped = 0usize;
     let streams = partition_stream(lines)
-        .map(|partition| {
-            let started = Arc::clone(&started);
-            async move {
-                let partition = partition?;
-                let v1::Partition {
-                    name,
-                    commit_versions,
-                    uri,
-                    credentials,
-                    ..
-                } = partition;
-                let prepared = prepare_file_read(&name, uri, credentials)?;
-                let found = pqbench::file::list::list(
-                    lake,
-                    &prepared.table,
-                    &prepared.uri,
-                    &prepared.env,
-                    &commit_versions,
-                )
-                .await;
-                Ok::<_, CliError>(match found {
-                    Ok(found) => {
-                        started.fetch_add(1, Ordering::Relaxed);
-                        found
-                            .map(move |item| {
-                                Ok::<_, CliError>(match item {
-                                    Ok(mut file) => {
-                                        file.credentials = prepared.lease.clone();
-                                        ReadOutcome::Record(file)
-                                    }
-                                    Err(error) => {
-                                        ReadOutcome::Dropped(RecordError::new("file", &name, error))
-                                    }
-                                })
+        .map(|partition| async move {
+            let partition = partition?;
+            let v1::Partition {
+                name,
+                commit_versions,
+                uri,
+                credentials,
+                ..
+            } = partition;
+            let prepared = prepare_file_read(&name, uri, credentials)?;
+            let found = pqbench::file::list::list(
+                lake,
+                &prepared.table,
+                &prepared.uri,
+                &prepared.env,
+                &commit_versions,
+            )
+            .await
+            .map_err(|error| context(&name, error));
+            Ok::<_, CliError>(match found {
+                Ok(found) => found
+                    .map(move |item| {
+                        Ok::<_, CliError>(
+                            item.map(|mut file| {
+                                file.credentials = prepared.lease.clone();
+                                file
                             })
-                            .boxed()
-                    }
-                    Err(error) => stream::iter([Ok::<_, CliError>(ReadOutcome::Dropped(
-                        RecordError::new("partition", &name, error),
-                    ))])
+                            .map_err(|error| context(&name, error)),
+                        )
+                    })
                     .boxed(),
-                })
-            }
+                Err(error) => stream::iter([Ok::<_, CliError>(Err(error))]).boxed(),
+            })
         })
         .buffer_unordered(args.fan_out.max(1))
         .boxed();
     let mut found = streams.try_flatten_unordered(Some(args.fan_out.max(1)));
-    while let Some(outcome) = found.try_next().await? {
-        match outcome {
-            ReadOutcome::Record(file) => {
+    while let Some(read) = found.try_next().await? {
+        match read {
+            Ok(file) => {
                 if !meets_min_file_size(&file, args.min_file_size) {
                     continue;
                 }
-                emit.write_row(&file).await?;
-                files += 1;
+                emit.write(&file).await?;
             }
-            ReadOutcome::Dropped(error) => {
-                error.report();
-                match error.what() {
-                    "partition" => dropped_partitions += 1,
-                    _ => dropped_files += 1,
-                }
+            Err(error) => {
+                report(&error);
+                dropped += 1;
             }
         }
     }
-    let partitions = started.load(Ordering::Relaxed);
-    emit.finish(&format!("partitions: {partitions}\nfiles: {files}\n"))
-        .await?;
-    fail_when_dropped(&[("partition", dropped_partitions), ("file", dropped_files)])
+    emit.finish().await?;
+    fail_when_dropped(dropped)
 }
 
 /// The parts a partition's file read needs, after the record's own contract
@@ -217,7 +186,7 @@ fn parse_file_size(value: &str) -> Result<u64, CliError> {
             return Err(format!(
                 "--min-file-size unit must be B, kB, MB, GB, TB, KiB, MiB, GiB, or TiB: {value}"
             )
-            .into())
+            .into());
         }
     };
     count
