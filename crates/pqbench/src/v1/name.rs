@@ -116,7 +116,7 @@ const TABLE_PATH: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
 
 /// The ids a name spells: its resource path (`segments`, a literal or `""`
 /// for an id), or else the dotted shorthand.
-pub(crate) fn ids(value: &str, segments: &[&str]) -> Option<Vec<String>> {
+pub(crate) fn ids(value: &str, segments: &[&str], alias: Option<&[&str]>) -> Option<Vec<String>> {
     let parts = split(value);
     if parts.len() == segments.len() {
         let mut ids = Vec::with_capacity(segments.len());
@@ -129,8 +129,7 @@ pub(crate) fn ids(value: &str, segments: &[&str]) -> Option<Vec<String>> {
         }
         return Some(ids);
     }
-    let placeholders = segments.iter().filter(|segment| segment.is_empty()).count();
-    dotted_ids(value, placeholders)
+    dotted_ids(value, alias?.len())
 }
 
 /// The ids the dotted shorthand spells: the first id up to the first dot, the
@@ -159,8 +158,12 @@ fn dotted_ids(value: &str, placeholders: usize) -> Option<Vec<String>> {
 /// The canonical name a resource name or its dotted shorthand spells, laid out
 /// as `segments` (a literal, or `""` for an id). This is the one call the
 /// `Resource` derive makes.
-pub(crate) fn pattern_name(value: &str, segments: &[&str]) -> Option<String> {
-    let ids = ids(value, segments)?;
+pub(crate) fn pattern_name(
+    value: &str,
+    segments: &[&str],
+    alias: Option<&[&str]>,
+) -> Option<String> {
+    let ids = ids(value, segments, alias)?;
     let mut name = String::new();
     let mut ids = ids.into_iter();
     for (at, segment) in segments.iter().enumerate() {
@@ -227,7 +230,7 @@ pub fn parse_blob(value: &str) -> Option<(String, String)> {
 #[must_use]
 pub fn parse_table_file(value: &str) -> Option<(String, String)> {
     let (table, file) = value.rsplit_once("/files/")?;
-    ids(table, TABLE_PATH)?;
+    ids(table, TABLE_PATH, None)?;
     Some((table.to_string(), decode(file)))
 }
 
@@ -444,12 +447,20 @@ mod tests {
     #[test]
     fn a_pattern_renders_the_canonical_name() {
         const TABLE: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
-        assert_eq!(pattern_name("a.b.c", TABLE), Some(table("a", "b", "c")));
-        assert_eq!(pattern_name("a.b.c.d", TABLE), Some(table("a", "b.c", "d")));
+        const ALIAS: &[&str] = &["", "", ""];
         assert_eq!(
-            pattern_name("catalogs/a/schemas/b/tables/c", TABLE),
+            pattern_name("a.b.c", TABLE, Some(ALIAS)),
             Some(table("a", "b", "c"))
         );
-        assert_eq!(pattern_name("metastores/x", TABLE), None);
+        assert_eq!(
+            pattern_name("a.b.c.d", TABLE, Some(ALIAS)),
+            Some(table("a", "b.c", "d"))
+        );
+        assert_eq!(
+            pattern_name("catalogs/a/schemas/b/tables/c", TABLE, None),
+            Some(table("a", "b", "c"))
+        );
+        assert_eq!(pattern_name("a.b.c", TABLE, None), None);
+        assert_eq!(pattern_name("metastores/x", TABLE, None), None);
     }
 }

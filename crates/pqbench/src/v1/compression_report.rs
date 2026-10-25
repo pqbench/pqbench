@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use super::Resource;
+
 /// A codec sweep of a column.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct CompressionReport {
     /// `…/columns/{column}/compression/{codec}`.
+    #[resource(name = "blobs/{service}/{locator}/columns/{column}/compression/{codec}")]
     pub name: String,
     /// The codec swept.
     #[serde(default, skip_serializing_if = "Option::is_none")]

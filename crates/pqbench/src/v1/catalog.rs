@@ -9,6 +9,7 @@ use super::Resource;
 pub struct Catalog {
     /// `catalogs/{catalog}`.
     #[resource(name = "catalogs/{catalog}")]
+    #[resource(name = "catalogs/{catalog}", alias = "{catalog}")]
     pub name: String,
     /// The system UUID, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

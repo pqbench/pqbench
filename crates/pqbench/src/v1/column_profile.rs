@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use super::Resource;
+
 /// A decoded-sample profile of a column.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct ColumnProfile {
     /// `…/columns/{column}/profile`.
+    #[resource(name = "blobs/{service}/{locator}/columns/{column}/profile")]
     pub name: String,
     /// Nulls among the sampled rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]

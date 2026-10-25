@@ -53,7 +53,7 @@ pub trait Parent: DeserializeOwned + serde::Serialize {
 #[cfg(test)]
 mod tests {
     use super::Parent;
-    use crate::v1::{Partition, Table};
+    use crate::v1::{Blob, Metastore, Partition, Table};
     use serde_json::json;
 
     #[test]
@@ -67,6 +67,17 @@ mod tests {
     fn a_canonical_object_name_is_kept() {
         let table = Table::from_json(json!({"name": "catalogs/a/schemas/b/tables/c"})).unwrap();
         assert_eq!(table.name, "catalogs/a/schemas/b/tables/c");
+    }
+
+    #[test]
+    fn only_a_resource_with_an_alias_takes_the_dotted_form() {
+        assert_eq!(
+            Table::parse_name("a.b.c"),
+            Some(("a".to_string(), "b".to_string(), "c".to_string()))
+        );
+        assert_eq!(Blob::parse_name("a.b.c"), None);
+        assert_eq!(Metastore::parse_name("m"), None);
+        assert_eq!(Metastore::parse_name("metastores/m"), Some("m".to_string()));
     }
 
     #[test]

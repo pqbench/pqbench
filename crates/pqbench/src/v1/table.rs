@@ -8,7 +8,10 @@ use super::{Credentials, DeclaredColumn, Resource, TableFormat};
 #[serde(default)]
 pub struct Table {
     /// `catalogs/{catalog}/schemas/{schema}/tables/{table}`.
-    #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}")]
+    #[resource(
+        name = "catalogs/{catalog}/schemas/{schema}/tables/{table}",
+        alias = "{catalog}.{schema}.{table}"
+    )]
     pub name: String,
     /// The system UUID, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

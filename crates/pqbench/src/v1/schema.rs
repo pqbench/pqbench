@@ -8,7 +8,10 @@ use super::Resource;
 #[serde(default)]
 pub struct Schema {
     /// `catalogs/{catalog}/schemas/{schema}`.
-    #[resource(name = "catalogs/{catalog}/schemas/{schema}")]
+    #[resource(
+        name = "catalogs/{catalog}/schemas/{schema}",
+        alias = "{catalog}.{schema}"
+    )]
     pub name: String,
     /// The system UUID, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

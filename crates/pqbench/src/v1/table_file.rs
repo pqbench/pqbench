@@ -2,14 +2,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::name;
-use super::{Credentials, FileStats};
+use super::{Credentials, FileStats, Resource};
 
 /// A table's reference to one [`Blob`](super::Blob): a row of the table's
 /// log (the Delta `add`). The AIP-124 association between them.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct TableFile {
     /// `…/tables/{table}/files/{file}`.
+    #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}/files/{file}")]
     pub name: String,
     /// The blob holding the bytes, a [`Blob`](super::Blob) name.
     #[serde(default, skip_serializing_if = "Option::is_none")]

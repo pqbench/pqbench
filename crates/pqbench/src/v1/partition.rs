@@ -7,7 +7,10 @@ use super::{Credentials, Resource};
 #[serde(default)]
 pub struct Partition {
     /// `…/tables/{table}/partitions/{partition}`.
-    #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}")]
+    #[resource(
+        name = "catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}",
+        alias = "{catalog}.{schema}.{table}.{partition}"
+    )]
     pub name: String,
     /// Inclusive start of the window, milliseconds since the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+use super::Resource;
+
 /// A storage blob: the bytes a data file lives in — a local file or an S3
 /// object, named by its service.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct Blob {
     /// `blobs/{service}/{locator}`.
+    #[resource(name = "blobs/{service}/{locator}")]
     pub name: String,
     /// The object's size in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]

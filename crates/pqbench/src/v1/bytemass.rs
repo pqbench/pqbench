@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+use super::Resource;
+
 /// A column's byte mass (the footer's `ColumnMetaData`), aggregated by column:
 /// one per column, over its column chunks.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct Bytemass {
     /// `…/columns/{column}/bytemass`.
+    #[resource(name = "blobs/{service}/{locator}/columns/{column}/bytemass")]
     pub name: String,
     /// On-disk (compressed) bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]

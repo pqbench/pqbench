@@ -1,12 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+use super::Resource;
+
 use super::LogAction;
 
 /// One commit of a table's log.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct Commit {
     /// `…/tables/{table}/commits/{commit}`.
+    #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}/commits/{commit}")]
     pub name: String,
     /// The log version.
     pub version: u64,

@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+use super::Resource;
+
 /// A file's copy of a declared column: the physical unit the analyses read.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct Column {
     /// `…/blobs/{service}/{locator}/columns/{column}`.
+    #[resource(name = "blobs/{service}/{locator}/columns/{column}")]
     pub name: String,
     /// The declared column this file column is a copy of.
     #[serde(default, skip_serializing_if = "Option::is_none")]

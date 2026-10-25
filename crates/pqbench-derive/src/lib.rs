@@ -2,12 +2,15 @@
 //!
 //! The name field carries the path, one segment per `/`, with `{id}` for a
 //! placeholder; the last placeholder names the resource, so the noun is not
-//! repeated:
+//! repeated. An optional `alias` adds the dotted shorthand:
 //!
 //! ```ignore
 //! #[derive(Resource)]
 //! pub struct Table {
-//!     #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}")]
+//!     #[resource(
+//!         name = "catalogs/{catalog}/schemas/{schema}/tables/{table}",
+//!         alias = "{catalog}.{schema}.{table}",
+//!     )]
 //!     pub name: String,
 //!     // …
 //! }
@@ -42,8 +45,17 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         ));
     }
     let ident = &input.ident;
-    let (field, pattern) = name_field(input)?;
-    let (segments, noun) = pattern_segments(&pattern)?;
+    let (field, pattern, alias) = name_field(input)?;
+    let (segments, ids) = pattern_segments(&pattern)?;
+    let noun = ids.last().expect("a pattern has an id");
+    let alias = alias
+        .map(|alias| alias_segments(&alias, &ids))
+        .transpose()?
+        .map(|alias| {
+            let alias = (0..alias.len()).map(|_| String::new()).collect::<Vec<_>>();
+            quote!(Some(&[#(#alias),*][..]))
+        })
+        .unwrap_or_else(|| quote!(None));
     let shape = segments
         .iter()
         .map(|segment| {
@@ -74,7 +86,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             /// The ids the name spells, in path order: the resource name or
             /// its dotted shorthand.
             pub fn parse_name(value: &str) -> Option<#parts_type> {
-                let ids = ::pqbench::v1::name::ids(value, &[#(#segments),*])?;
+                let ids = ::pqbench::v1::name::ids(value, &[#(#segments),*], #alias)?;
                 Some(#parts)
             }
         }
@@ -85,7 +97,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
             fn from_name(value: &str) -> Option<Self> {
                 Some(Self {
-                    #field: ::pqbench::v1::name::pattern_name(value, &[#(#segments),*])?,
+                    #field: ::pqbench::v1::name::pattern_name(value, &[#(#segments),*], #alias)?,
                     ..Self::default()
                 })
             }
@@ -101,8 +113,8 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     })
 }
 
-/// The field the name pattern is on, and the pattern.
-fn name_field(input: &DeriveInput) -> syn::Result<(syn::Ident, LitStr)> {
+/// The field the name pattern is on, the pattern, and the optional alias.
+fn name_field(input: &DeriveInput) -> syn::Result<(syn::Ident, LitStr, Option<LitStr>)> {
     let Data::Struct(data) = &input.data else {
         return Err(syn::Error::new_spanned(input, "Resource is for structs"));
     };
@@ -115,15 +127,22 @@ fn name_field(input: &DeriveInput) -> syn::Result<(syn::Ident, LitStr)> {
     let mut found = None;
     for field in &fields.named {
         let mut pattern = None;
+        let mut alias = None;
         for attr in &field.attrs {
             if !attr.path().is_ident("resource") {
                 continue;
             }
             attr.parse_nested_meta(|meta| {
-                if !meta.path.is_ident("name") {
-                    return Err(meta.error("expected `name = \"…\"`"));
+                if meta.path.is_ident("name") {
+                    pattern = Some(meta.value()?.parse()?);
+                } else if meta.path.is_ident("alias") {
+                    if alias.is_some() {
+                        return Err(meta.error("one alias per name"));
+                    }
+                    alias = Some(meta.value()?.parse()?);
+                } else {
+                    return Err(meta.error("expected `name` or `alias`"));
                 }
-                pattern = Some(meta.value()?.parse()?);
                 Ok(())
             })?;
         }
@@ -142,7 +161,7 @@ fn name_field(input: &DeriveInput) -> syn::Result<(syn::Ident, LitStr)> {
                 "the name field must be a `String`",
             ));
         }
-        found = Some((field.ident.clone().expect("named field"), pattern));
+        found = Some((field.ident.clone().expect("named field"), pattern, alias));
     }
     found.ok_or_else(|| {
         syn::Error::new_spanned(
@@ -162,11 +181,11 @@ fn is_string(ty: &Type) -> bool {
         .is_some_and(|segment| segment.ident == "String")
 }
 
-/// The path segments (a literal, or `""` for a placeholder) and the noun: the
-/// last placeholder's name.
-fn pattern_segments(pattern: &LitStr) -> syn::Result<(Vec<String>, String)> {
+/// The path segments (a literal, or `""` for a placeholder) and the placeholder
+/// ids, in order.
+fn pattern_segments(pattern: &LitStr) -> syn::Result<(Vec<String>, Vec<String>)> {
     let mut segments = Vec::new();
-    let mut noun = None;
+    let mut ids = Vec::new();
     for segment in pattern.value().split('/') {
         if segment.is_empty() {
             return Err(syn::Error::new(
@@ -184,7 +203,7 @@ fn pattern_segments(pattern: &LitStr) -> syn::Result<(Vec<String>, String)> {
                     "a name placeholder is `{id}` with an alphanumeric id",
                 ));
             }
-            noun = Some(id.to_owned());
+            ids.push(id.to_owned());
             segments.push(String::new());
         } else if segment.contains('{') || segment.contains('}') {
             return Err(syn::Error::new(
@@ -195,11 +214,35 @@ fn pattern_segments(pattern: &LitStr) -> syn::Result<(Vec<String>, String)> {
             segments.push(segment.to_owned());
         }
     }
-    let Some(noun) = noun else {
+    if ids.is_empty() {
         return Err(syn::Error::new(
             pattern.span(),
             "a name pattern has no placeholder",
         ));
-    };
-    Ok((segments, noun))
+    }
+    Ok((segments, ids))
+}
+
+/// The alias's ids, which must be the pattern's ids in order.
+fn alias_segments(alias: &LitStr, ids: &[String]) -> syn::Result<Vec<String>> {
+    let mut alias_ids = Vec::new();
+    for segment in alias.value().split('.') {
+        let Some(id) = segment
+            .strip_prefix('{')
+            .and_then(|rest| rest.strip_suffix('}'))
+        else {
+            return Err(syn::Error::new(
+                alias.span(),
+                "an alias is dot-separated placeholders",
+            ));
+        };
+        alias_ids.push(id.to_owned());
+    }
+    if alias_ids != ids {
+        return Err(syn::Error::new(
+            alias.span(),
+            "an alias names the pattern's ids in order",
+        ));
+    }
+    Ok(alias_ids)
 }
