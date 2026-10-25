@@ -46,6 +46,39 @@ pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<v1::
         .collect())
 }
 
+/// Measure the file a table-file record names.
+///
+/// The record's blob is its storage location, its credentials are the lease
+/// the read uses, and its size (when nonzero) is the log's claim, checked
+/// against the footer.
+///
+/// # Errors
+/// Fails when the record names no blob, the blob name is invalid, the file
+/// cannot be read, or its footer size differs from the log.
+pub async fn measure(lake: &Lake, file: &v1::TableFile) -> Result<MeasuredFile, Error> {
+    let blob = file
+        .blob
+        .as_deref()
+        .ok_or_else(|| Error::Invalid("a table-file record needs a blob to read".into()))?;
+    let uri = v1::name::blob_uri(blob)
+        .ok_or_else(|| Error::Invalid(format!("not a blob name: {blob}")))?;
+    let env = file
+        .credentials
+        .as_ref()
+        .map(v1::Credentials::to_env)
+        .unwrap_or_default();
+    let measured = measure_file(lake, &uri, &env).await?;
+    if let Some(size) = file.size_bytes.filter(|size| *size != 0) {
+        if measured.blob.size_bytes != Some(size) {
+            return Err(Error::Invalid(format!(
+                "active file size differs from log: {uri} (expected {size}, found {:?})",
+                measured.blob.size_bytes
+            )));
+        }
+    }
+    Ok(measured)
+}
+
 /// Measure one file into its blob and its per-column masses.
 ///
 /// The footer is read once; only file metadata is fetched, never data pages.

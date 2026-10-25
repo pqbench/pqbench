@@ -32,48 +32,19 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
         parents,
         args.fan_out,
         |partition: v1::Partition| async move {
-            let uri = partition
-                .uri
-                .clone()
-                .ok_or("a partition record needs a table storage root")?;
-            let lease = partition.credentials.filter(|lease| !lease.is_empty());
-            let env = lease
-                .as_ref()
-                .map(v1::Credentials::to_env)
-                .unwrap_or_default();
-            let found = pqbench::file::list::list(
-                lake,
-                &table_name(&partition.name)?,
-                &uri,
-                &env,
-                &partition.commit_versions,
-            )
-            .await
-            .map_err(CliError::from)?;
+            let files = pqbench::file::list::list(lake, &partition)
+                .await
+                .map_err(CliError::from)?;
             let min = args.min_file_size;
-            Ok(found.filter_map(move |file| {
-                let lease = lease.clone();
-                async move {
-                    match file {
-                        Ok(mut file) => {
-                            file.credentials = lease;
-                            meets_min_file_size(&file, min).then_some(Ok(file))
-                        }
-                        Err(error) => Some(Err(error)),
-                    }
+            Ok(files.filter_map(move |file| async move {
+                match file {
+                    Ok(file) => meets_min_file_size(&file, min).then_some(Ok(file)),
+                    Err(error) => Some(Err(error)),
                 }
             }))
         },
     );
     source::drive(rows).await
-}
-
-/// The table a partition's name names: the read that names its files takes the
-/// table resource, not the window.
-fn table_name(name: &str) -> Result<String, CliError> {
-    let (catalog, schema, table, _) = v1::Partition::parse_name(name)
-        .ok_or("a partition record needs a `/tables/{table}/partitions/{partition}` name")?;
-    Ok(v1::name::table(&catalog, &schema, &table))
 }
 
 /// Whether a file's logged size clears `--min-file-size`. A file whose log

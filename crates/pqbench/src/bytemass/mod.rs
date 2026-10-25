@@ -11,7 +11,7 @@ mod api;
 mod collection;
 mod remote;
 
-pub use api::{bytemass, measure_file, measure_files, BytemassRequest, MeasuredFile};
+pub use api::{bytemass, measure, measure_file, measure_files, BytemassRequest, MeasuredFile};
 
 use std::fmt;
 

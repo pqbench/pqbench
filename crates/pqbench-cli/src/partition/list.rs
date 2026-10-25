@@ -1,8 +1,6 @@
 //! `list partitions`: a table's natural partitions, grouped by commit time.
 
 use clap::Args;
-use futures_util::TryStreamExt;
-use pqbench::partition;
 use pqbench::v1;
 
 use crate::parse;
@@ -34,21 +32,9 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("list partitions").await?;
     let rows = source::flat_map(parents, args.fan_out, |table: v1::Table| async move {
-        let uri = table.uri.filter(|uri| !uri.is_empty()).ok_or_else(|| {
-            CliError::from("a table record has no storage path; run `pqbench get table` first")
-        })?;
-        let lease = table.credentials.filter(|lease| !lease.is_empty());
-        let env = lease
-            .as_ref()
-            .map(pqbench::v1::Credentials::to_env)
-            .unwrap_or_default();
-        let found = partition::list::list(lake, &table.name, &uri, &env, args.every, args.last)
+        pqbench::partition::list::list(lake, &table, args.every, args.last)
             .await
-            .map_err(CliError::from)?;
-        Ok(found.map_ok(move |mut partition| {
-            partition.credentials = lease.clone();
-            partition
-        }))
+            .map_err(CliError::from)
     });
     source::drive(rows).await
 }

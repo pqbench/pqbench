@@ -5,7 +5,6 @@ use futures_util::stream::{self, StreamExt};
 use pqbench::bytemass;
 use pqbench::v1;
 
-use crate::error::context;
 use crate::parse;
 use crate::source::{drive, flat_map};
 use crate::CliError;
@@ -28,8 +27,10 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(),
         None => parse::parents::<v1::TableFile>("bytemass").await?,
     };
     let rows = flat_map(parents, args.fan_out, |file: v1::TableFile| async move {
-        let rows = measure(lake, file).await?;
-        Ok(stream::iter(rows.into_iter().map(Ok::<_, CliError>)))
+        let measured = bytemass::measure(lake, &file).await?;
+        Ok(stream::iter(
+            measured_rows(measured).into_iter().map(Ok::<_, CliError>),
+        ))
     });
     drive(rows).await
 }
@@ -45,35 +46,6 @@ fn table_file(path: &str) -> v1::TableFile {
         blob: Some(v1::name::blob_name(path)),
         ..v1::TableFile::default()
     }
-}
-
-/// Measure one file, cross-check the log's size when the record carried one,
-/// and yield its blob and column rows.
-async fn measure(lake: &pqbench::Lake, file: v1::TableFile) -> Result<Vec<Out>, CliError> {
-    let blob = file
-        .blob
-        .as_deref()
-        .ok_or("a table-file record needs a blob to read")?;
-    let uri = v1::name::blob_uri(blob)
-        .ok_or_else(|| CliError::from(format!("not a blob name: {blob}")))?;
-    let env = file
-        .credentials
-        .as_ref()
-        .map(v1::Credentials::to_env)
-        .unwrap_or_default();
-    let measured = bytemass::measure_file(lake, &uri, &env)
-        .await
-        .map_err(|error| context(&uri, error))?;
-    if let Some(size) = file.size_bytes.filter(|size| *size != 0) {
-        if measured.blob.size_bytes != Some(size) {
-            return Err(format!(
-                "active file size differs from log: {uri} (expected {size}, found {:?})",
-                measured.blob.size_bytes
-            )
-            .into());
-        }
-    }
-    Ok(measured_rows(measured))
 }
 
 /// One output record: a file's blob, then one row per column.
