@@ -638,8 +638,8 @@ fn schema_get_reads_the_live_schema() {
         let iceberg = endpoint.contains("/iceberg-rest");
         let output = if iceberg {
             pipe_env(
-                &["get", "schema", "dbx_samples.nyctaxi"],
-                b"",
+                &["get", "schema"],
+                schema_ref("dbx_samples.nyctaxi").as_bytes(),
                 &[
                     ("PQB_ENDPOINT", endpoint.as_str()),
                     ("PQB_TOKEN", token.as_str()),
@@ -648,8 +648,8 @@ fn schema_get_reads_the_live_schema() {
             )
         } else {
             pipe_env(
-                &["get", "schema", "dbx_samples.nyctaxi"],
-                b"",
+                &["get", "schema"],
+                schema_ref("dbx_samples.nyctaxi").as_bytes(),
                 &source(&endpoint, Some(&token)),
             )
         };
@@ -861,7 +861,10 @@ fn credentials_check_filters_the_live_tables() {
         format!("{}\n", reference("dbx_samples.nyctaxi.pqbench_delta_test")).as_bytes(),
         &env,
     );
-    assert!(unsupported.status.success());
+    assert!(
+        !unsupported.status.success(),
+        "a drop sets the exit status after the stream"
+    );
     let stderr = String::from_utf8_lossy(&unsupported.stderr);
     assert!(
         stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
