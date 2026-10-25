@@ -13,14 +13,19 @@
 //! `tee` writes each level into the job tree; `get` stages emit the same
 //! resource as the `list` they read from, so they enrich a stream in place.
 //!
-//! Records are read one at a time as the command consumes them, so a level
-//! never buffers its parent: a slow consumer stops reading, and the pipe
-//! backpressures the producer.
+//! A level reads a batch of `fan_out` parents to completion before it writes
+//! the batch's first record. A slow consumer then backpressures the pipe with
+//! no read in flight, so a request timeout cannot fire on a read the consumer
+//! stalled; the trade is one straggler per batch.
 
+use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
+
+use futures_util::future::join_all;
 use futures_util::stream::{self, LocalBoxStream, Stream, StreamExt};
 use futures_util::TryStreamExt;
 use serde_json::Value;
-use std::future::Future;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
 use pqbench::v1::Resource;
@@ -90,7 +95,7 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
 /// A command's records: each record, or the failure that replaced it.
 pub(crate) type Records<'a, B> = LocalBoxStream<'a, Result<B, CliError>>;
 
-/// `map` with `fan_out` reads in flight: one record per parent.
+/// `map` over batches of parents: one record per parent.
 pub(crate) fn map<'a, A, B, E, F, Fut>(
     parents: impl Stream<Item = Result<A, CliError>> + 'a,
     fan_out: usize,
@@ -103,23 +108,14 @@ where
     F: Fn(A) -> Fut + Clone + 'a,
     Fut: Future<Output = Result<B, E>> + 'a,
 {
-    parents
-        .map(move |parent| {
-            let read = read.clone();
-            async move {
-                let parent = parent?;
-                let reference = parent.name().to_owned();
-                read(parent)
-                    .await
-                    .map_err(move |cause| crate::error::context(&reference, cause))
-            }
-        })
-        .buffer_unordered(fan_out.max(1))
-        .boxed_local()
+    filter_map(parents, fan_out, move |parent| {
+        let read = read.clone();
+        async move { read(parent).await.map(Some) }
+    })
 }
 
-/// `filterMap` with `fan_out` reads in flight: a parent keeps one record or
-/// none, and a dropped parent is not a failure.
+/// A parent keeps one record or none; a batch is read whole before it is
+/// written, so a stalled consumer leaves no read in flight.
 pub(crate) fn filter_map<'a, A, B, E, F, Fut>(
     parents: impl Stream<Item = Result<A, CliError>> + 'a,
     fan_out: usize,
@@ -132,32 +128,68 @@ where
     F: Fn(A) -> Fut + Clone + 'a,
     Fut: Future<Output = Result<Option<B>, E>> + 'a,
 {
-    parents
-        .map(move |parent| {
+    let parents: Pin<Box<dyn Stream<Item = Result<A, CliError>> + 'a>> = Box::pin(parents);
+    stream::unfold(
+        (parents, VecDeque::new(), false),
+        move |(mut parents, mut rows, mut done)| {
             let read = read.clone();
             async move {
-                let parent = parent?;
-                let reference = parent.name().to_owned();
-                read(parent)
-                    .await
-                    .map_err(move |cause| crate::error::context(&reference, cause))
+                loop {
+                    if let Some(row) = rows.pop_front() {
+                        return Some((row, (parents, rows, done)));
+                    }
+                    if done {
+                        return None;
+                    }
+                    let mut batch = Vec::with_capacity(fan_out.max(1));
+                    while batch.len() < fan_out.max(1) {
+                        match parents.as_mut().next().await {
+                            Some(record) => batch.push(record),
+                            None => {
+                                done = true;
+                                break;
+                            }
+                        }
+                    }
+                    let mut reads = Vec::with_capacity(batch.len());
+                    for record in batch {
+                        match record {
+                            Ok(parent) => {
+                                let reference = parent.name().to_owned();
+                                let read = read.clone();
+                                reads.push(async move {
+                                    read(parent).await.map_err(move |cause| {
+                                        crate::error::context(&reference, cause)
+                                    })
+                                });
+                            }
+                            Err(error) => rows.push_back(Err(error)),
+                        }
+                    }
+                    rows.extend(
+                        join_all(reads)
+                            .await
+                            .into_iter()
+                            .filter_map(|row| match row {
+                                Ok(Some(row)) => Some(Ok(row)),
+                                Ok(None) => None,
+                                Err(error) => Some(Err(error)),
+                            }),
+                    );
+                }
             }
-        })
-        .buffer_unordered(fan_out.max(1))
-        .filter_map(|row| async move {
-            match row {
-                Ok(Some(row)) => Some(Ok(row)),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            }
-        })
-        .boxed_local()
+        },
+    )
+    .boxed_local()
 }
 
-/// `flatMap` with `fan_out` streams in flight: a parent becomes its stream.
+/// `flatMap` over batches of parents: a parent becomes its stream, and every
+/// parent read in a batch completes before its first row is written.
 ///
 /// `read` may fail before it yields anything (the table it loads, a window it
 /// rejects); that failure is reported under the parent, like a stream item.
+/// A returned stream must not leave a read pending across items: the sink may
+/// block on a slow consumer between them.
 pub(crate) fn flat_map<'a, A, B, E, S, F, Fut>(
     parents: impl Stream<Item = Result<A, CliError>> + 'a,
     fan_out: usize,
@@ -171,29 +203,69 @@ where
     F: Fn(A) -> Fut + Clone + 'a,
     Fut: Future<Output = Result<S, CliError>> + 'a,
 {
-    parents
-        .map(move |parent| {
+    let parents: Pin<Box<dyn Stream<Item = Result<A, CliError>> + 'a>> = Box::pin(parents);
+    let flat: Option<LocalBoxStream<'a, Result<B, CliError>>> = None;
+    stream::unfold(
+        (parents, flat, false),
+        move |(mut parents, mut flat, mut done)| {
             let read = read.clone();
             async move {
-                let parent = match parent {
-                    Ok(parent) => parent,
-                    Err(error) => return stream::iter([Err(error)]).boxed_local(),
-                };
-                let reference = parent.name().to_owned();
-                match read(parent).await {
-                    Ok(stream) => stream
-                        .map_err(move |cause| crate::error::context(&reference, cause))
-                        .boxed_local(),
-                    Err(cause) => {
-                        let error = crate::error::context(&reference, cause);
-                        stream::iter([Err(error)]).boxed_local()
+                loop {
+                    if let Some(rows) = flat.as_mut() {
+                        if let Some(row) = rows.next().await {
+                            return Some((row, (parents, flat, done)));
+                        }
                     }
+                    if done {
+                        return None;
+                    }
+                    let mut batch = Vec::with_capacity(fan_out.max(1));
+                    while batch.len() < fan_out.max(1) {
+                        match parents.as_mut().next().await {
+                            Some(record) => batch.push(record),
+                            None => {
+                                done = true;
+                                break;
+                            }
+                        }
+                    }
+                    if batch.is_empty() {
+                        return None;
+                    }
+                    let mut reads = Vec::with_capacity(batch.len());
+                    let mut errors = VecDeque::new();
+                    for record in batch {
+                        match record {
+                            Ok(parent) => {
+                                let reference = parent.name().to_owned();
+                                let read = read.clone();
+                                reads.push(async move {
+                                    read(parent).await.map_err(move |cause| {
+                                        crate::error::context(&reference, cause)
+                                    })
+                                });
+                            }
+                            Err(error) => errors.push_back(Err(error)),
+                        }
+                    }
+                    let mut streams = Vec::new();
+                    for result in join_all(reads).await {
+                        match result {
+                            Ok(stream) => {
+                                let stream: LocalBoxStream<'a, Result<B, CliError>> =
+                                    stream.map_err(Into::into).boxed_local();
+                                streams.push(stream);
+                            }
+                            Err(error) => errors.push_back(Err(error)),
+                        }
+                    }
+                    let streamed = stream::iter(streams).flatten_unordered(Some(fan_out.max(1)));
+                    flat = Some(stream::iter(errors).chain(streamed).boxed_local());
                 }
             }
-        })
-        .buffer_unordered(fan_out.max(1))
-        .flatten_unordered(Some(fan_out.max(1)))
-        .boxed_local()
+        },
+    )
+    .boxed_local()
 }
 
 /// The sink: write every record, name a failure on stderr, count it, and set

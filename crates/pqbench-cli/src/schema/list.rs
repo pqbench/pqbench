@@ -1,11 +1,13 @@
 //! `list schemas`: the schemas in a catalog, one `Schema` line each.
 
 use clap::Args;
+use futures_util::TryStreamExt;
 use pqbench::v1;
 
 use crate::parse;
 use crate::source::{drive, flat_map};
 use crate::CliError;
+use futures_util::stream;
 
 /// Arguments for `list schemas`.
 #[derive(Args)]
@@ -20,7 +22,14 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Resu
     drive(flat_map(
         parents,
         args.fan_out,
-        |catalog: v1::Catalog| async move { Ok(pqbench::schema::list::list(workspace, &catalog)) },
+        |catalog: v1::Catalog| async move {
+            let rows = pqbench::schema::list::list(workspace, &catalog)
+                .try_collect::<Vec<_>>()
+                .await?;
+            Ok(stream::iter(
+                rows.into_iter().map(Ok::<_, std::convert::Infallible>),
+            ))
+        },
     ))
     .await
 }

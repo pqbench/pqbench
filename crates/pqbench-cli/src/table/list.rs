@@ -1,11 +1,13 @@
 //! `list tables`: the tables in a schema, one `Table` line each.
 
 use clap::Args;
+use futures_util::TryStreamExt;
 use pqbench::v1;
 
 use crate::parse;
 use crate::source::{drive, flat_map};
 use crate::CliError;
+use futures_util::stream;
 
 /// Arguments for `list tables`.
 #[derive(Args)]
@@ -20,7 +22,14 @@ pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Resu
     drive(flat_map(
         parents,
         args.fan_out,
-        |schema: v1::Schema| async move { Ok(pqbench::table::list::list(workspace, &schema)) },
+        |schema: v1::Schema| async move {
+            let rows = pqbench::table::list::list(workspace, &schema)
+                .try_collect::<Vec<_>>()
+                .await?;
+            Ok(stream::iter(
+                rows.into_iter().map(Ok::<_, std::convert::Infallible>),
+            ))
+        },
     ))
     .await
 }
