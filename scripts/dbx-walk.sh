@@ -72,19 +72,19 @@ keep_readable_catalog() {
 walk() {
     local dir="$WORK/walk" name status
     mkdir -p "$dir"
-    "$PQB" list catalogs --format json | tee "$dir/catalogs" |
+    "$PQB" list catalogs | tee "$dir/catalogs" |
         "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" list schemas --format json | tee "$dir/schemas" |
+        "$PQB" list schemas | tee "$dir/schemas" |
         "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" list tables --format json | tee "$dir/refs" |
+        "$PQB" list tables | tee "$dir/refs" |
         "$PQB" ratelimit --rate "$RATE" |
         keep_readable_catalog | tee "$dir/readable" |
-        "$PQB" credentials check --format json | tee "$dir/checked" |
-        "$PQB" credentials get --format json | tee "$dir/vended" |
-        "$PQB" get table --format json | tee "$dir/tables" |
-        "$PQB" list partitions --format json | tee "$dir/partitions" |
-        "$PQB" list files --format json | tee "$dir/files" |
-        "$PQB" bytemass --format json >"$dir/bytemass"
+        "$PQB" credentials check | tee "$dir/checked" |
+        "$PQB" credentials get | tee "$dir/vended" |
+        "$PQB" get table | tee "$dir/tables" |
+        "$PQB" list partitions | tee "$dir/partitions" |
+        "$PQB" list files | tee "$dir/files" |
+        "$PQB" bytemass >"$dir/bytemass"
     # `walk` runs in a condition, where the shell ignores `set -e`; return the
     # walk's status so the retry in `main` sees a failed walk.
     status=$?
