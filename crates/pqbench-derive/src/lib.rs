@@ -55,8 +55,30 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         })
         .collect::<Vec<_>>()
         .join("/");
+    let placeholders = segments.iter().filter(|segment| segment.is_empty()).count();
+    let ids = (0..placeholders)
+        .map(syn::Index::from)
+        .map(|index| quote!(ids[#index].clone()))
+        .collect::<Vec<_>>();
+    let (parts_type, parts) = if placeholders == 1 {
+        (quote!(String), quote!(ids[0].clone()))
+    } else {
+        let types = (0..placeholders)
+            .map(|_| quote!(String))
+            .collect::<Vec<_>>();
+        (quote!((#(#types),*)), quote!((#(#ids),*)))
+    };
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
+        impl #impl_generics #ident #ty_generics #where_clause {
+            /// The ids the name spells, in path order: the resource name or
+            /// its dotted shorthand.
+            pub fn parse_name(value: &str) -> Option<#parts_type> {
+                let ids = ::pqbench::v1::name::ids(value, &[#(#segments),*])?;
+                Some(#parts)
+            }
+        }
+
         impl #impl_generics ::pqbench::v1::Parent for #ident #ty_generics #where_clause {
             const NOUN: &'static str = #noun;
             const SHAPE: &'static str = #shape;

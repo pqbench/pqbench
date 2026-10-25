@@ -71,7 +71,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
 /// The table a partition's name names: the read that names its files takes the
 /// table resource, not the window.
 fn table_name(name: &str) -> Result<String, CliError> {
-    let (catalog, schema, table, _) = v1::name::parse_partition(name)
+    let (catalog, schema, table, _) = v1::Partition::parse_name(name)
         .ok_or("a partition record needs a `/tables/{table}/partitions/{partition}` name")?;
     Ok(v1::name::table(&catalog, &schema, &table))
 }

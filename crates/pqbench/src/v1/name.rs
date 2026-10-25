@@ -111,30 +111,12 @@ pub fn parse_metastore(value: &str) -> Option<String> {
     }
 }
 
-/// The catalog path: `catalogs/{catalog}`.
-const CATALOG_PATH: &[&str] = &["catalogs", ""];
-
-/// The schema path: `catalogs/{catalog}/schemas/{schema}`.
-const SCHEMA_PATH: &[&str] = &["catalogs", "", "schemas", ""];
-
-/// The table path: `…/schemas/{schema}/tables/{table}`.
+/// The table path, for the table-file name: `…/tables/{table}`.
 const TABLE_PATH: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
-
-/// The partition path: `…/tables/{table}/partitions/{partition}`.
-const PARTITION_PATH: &[&str] = &[
-    "catalogs",
-    "",
-    "schemas",
-    "",
-    "tables",
-    "",
-    "partitions",
-    "",
-];
 
 /// The ids a name spells: its resource path (`segments`, a literal or `""`
 /// for an id), or else the dotted shorthand.
-fn ids(value: &str, segments: &[&str]) -> Option<Vec<String>> {
+pub(crate) fn ids(value: &str, segments: &[&str]) -> Option<Vec<String>> {
     let parts = split(value);
     if parts.len() == segments.len() {
         let mut ids = Vec::with_capacity(segments.len());
@@ -194,44 +176,6 @@ pub(crate) fn pattern_name(value: &str, segments: &[&str]) -> Option<String> {
     Some(name)
 }
 
-/// The catalog id in a `catalogs/{catalog}` name or the bare id.
-#[must_use]
-pub fn parse_catalog(value: &str) -> Option<String> {
-    ids(value, CATALOG_PATH)?.pop()
-}
-
-/// The catalog and schema in a `…/schemas/{schema}` name or `catalog.schema`.
-#[must_use]
-pub fn parse_schema(value: &str) -> Option<(String, String)> {
-    let mut ids = ids(value, SCHEMA_PATH)?;
-    let schema = ids.pop()?;
-    let catalog = ids.pop()?;
-    Some((catalog, schema))
-}
-
-/// The catalog, schema, and table in a `…/tables/{table}` name or
-/// `catalog.schema.table`.
-#[must_use]
-pub fn parse_table(value: &str) -> Option<(String, String, String)> {
-    let mut ids = ids(value, TABLE_PATH)?;
-    let table = ids.pop()?;
-    let schema = ids.pop()?;
-    let catalog = ids.pop()?;
-    Some((catalog, schema, table))
-}
-
-/// The catalog, schema, table, and partition in a `…/partitions/{…}` name or
-/// `catalog.schema.table.partition`.
-#[must_use]
-pub fn parse_partition(value: &str) -> Option<(String, String, String, String)> {
-    let mut ids = ids(value, PARTITION_PATH)?;
-    let partition = ids.pop()?;
-    let table = ids.pop()?;
-    let schema = ids.pop()?;
-    let catalog = ids.pop()?;
-    Some((catalog, schema, table, partition))
-}
-
 /// The `local` catalog and schema a path-read table lives in: a storage
 /// root no catalog named is still a resource, and these give it one.
 const LOCAL: &str = "local";
@@ -283,7 +227,7 @@ pub fn parse_blob(value: &str) -> Option<(String, String)> {
 #[must_use]
 pub fn parse_table_file(value: &str) -> Option<(String, String)> {
     let (table, file) = value.rsplit_once("/files/")?;
-    parse_table(table)?;
+    ids(table, TABLE_PATH)?;
     Some((table.to_string(), decode(file)))
 }
 
@@ -338,19 +282,20 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::v1::{Catalog, Partition, Schema, Table};
 
     #[test]
     fn names_round_trip_through_their_parsers() {
         assert_eq!(
-            parse_catalog(&catalog("dbx_samples")).as_deref(),
-            Some("dbx_samples")
+            Catalog::parse_name(&catalog("dbx_samples")),
+            Some("dbx_samples".to_string())
         );
         assert_eq!(
-            parse_schema(&schema("dbx_samples", "nyctaxi")),
+            Schema::parse_name(&schema("dbx_samples", "nyctaxi")),
             Some(("dbx_samples".to_string(), "nyctaxi".to_string()))
         );
         assert_eq!(
-            parse_table(&table("dbx_samples", "nyctaxi", "trips")),
+            Table::parse_name(&table("dbx_samples", "nyctaxi", "trips")),
             Some((
                 "dbx_samples".to_string(),
                 "nyctaxi".to_string(),
@@ -358,7 +303,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            parse_partition(&partition("c", "s", "t", "1")),
+            Partition::parse_name(&partition("c", "s", "t", "1")),
             Some((
                 "c".to_string(),
                 "s".to_string(),
@@ -373,15 +318,15 @@ mod tests {
         let value = table("c", "s", "t/x");
         assert!(value.contains("%2F"), "{value}");
         assert_eq!(
-            parse_table(&value),
+            Table::parse_name(&value),
             Some(("c".to_string(), "s".to_string(), "t/x".to_string()))
         );
     }
 
     #[test]
     fn a_name_of_another_shape_parses_as_none() {
-        assert_eq!(parse_table("catalogs/dbx_samples"), None);
-        assert_eq!(parse_schema("catalogs/dbx_samples"), None);
+        assert_eq!(Table::parse_name("catalogs/dbx_samples"), None);
+        assert_eq!(Schema::parse_name("catalogs/dbx_samples"), None);
     }
 
     #[test]
@@ -412,7 +357,7 @@ mod tests {
             "catalogs/local/schemas/local/tables/events"
         );
         assert_eq!(
-            parse_table(&local_table("s3://bucket/events/")),
+            Table::parse_name(&local_table("s3://bucket/events/")),
             Some((
                 "local".to_string(),
                 "local".to_string(),
@@ -449,43 +394,43 @@ mod tests {
     #[test]
     fn a_bare_catalog_id_parses() {
         assert_eq!(
-            parse_catalog("dbx_samples"),
+            Catalog::parse_name("dbx_samples"),
             Some("dbx_samples".to_string())
         );
-        assert_eq!(parse_catalog("a.b"), None);
-        assert_eq!(parse_catalog("catalogs/a"), Some("a".to_string()));
+        assert_eq!(Catalog::parse_name("a.b"), None);
+        assert_eq!(Catalog::parse_name("catalogs/a"), Some("a".to_string()));
     }
 
     #[test]
     fn a_dotted_schema_parses() {
         assert_eq!(
-            parse_schema("a.b"),
+            Schema::parse_name("a.b"),
             Some(("a".to_string(), "b".to_string()))
         );
         assert_eq!(
-            parse_schema("a.b.c"),
+            Schema::parse_name("a.b.c"),
             Some(("a".to_string(), "b.c".to_string()))
         );
-        assert_eq!(parse_schema("a"), None);
+        assert_eq!(Schema::parse_name("a"), None);
     }
 
     #[test]
     fn a_dotted_table_parses() {
         assert_eq!(
-            parse_table("a.b.c"),
+            Table::parse_name("a.b.c"),
             Some(("a".to_string(), "b".to_string(), "c".to_string()))
         );
         assert_eq!(
-            parse_table("a.b.c.d"),
+            Table::parse_name("a.b.c.d"),
             Some(("a".to_string(), "b.c".to_string(), "d".to_string()))
         );
-        assert_eq!(parse_table("a.b"), None);
+        assert_eq!(Table::parse_name("a.b"), None);
     }
 
     #[test]
     fn a_dotted_partition_parses() {
         assert_eq!(
-            parse_partition("a.b.c.2026-01-01"),
+            Partition::parse_name("a.b.c.2026-01-01"),
             Some((
                 "a".to_string(),
                 "b".to_string(),
@@ -493,23 +438,18 @@ mod tests {
                 "2026-01-01".to_string()
             ))
         );
-        assert_eq!(parse_partition("a.b.c"), None);
+        assert_eq!(Partition::parse_name("a.b.c"), None);
     }
 
     #[test]
     fn a_pattern_renders_the_canonical_name() {
+        const TABLE: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
+        assert_eq!(pattern_name("a.b.c", TABLE), Some(table("a", "b", "c")));
+        assert_eq!(pattern_name("a.b.c.d", TABLE), Some(table("a", "b.c", "d")));
         assert_eq!(
-            pattern_name("a.b.c", TABLE_PATH),
+            pattern_name("catalogs/a/schemas/b/tables/c", TABLE),
             Some(table("a", "b", "c"))
         );
-        assert_eq!(
-            pattern_name("a.b.c.d", TABLE_PATH),
-            Some(table("a", "b.c", "d"))
-        );
-        assert_eq!(
-            pattern_name("catalogs/a/schemas/b/tables/c", TABLE_PATH),
-            Some(table("a", "b", "c"))
-        );
-        assert_eq!(pattern_name("metastores/x", TABLE_PATH), None);
+        assert_eq!(pattern_name("metastores/x", TABLE), None);
     }
 }

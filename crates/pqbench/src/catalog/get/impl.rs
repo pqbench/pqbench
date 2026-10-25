@@ -23,7 +23,7 @@ struct Record {
 }
 
 pub(crate) async fn get(workspace: &Workspace, name: &str) -> Result<Catalog, Error> {
-    let catalog = name::parse_catalog(name)
+    let catalog = Catalog::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/… name")))?;
     let url = format!(
         "{}/catalogs/{}",

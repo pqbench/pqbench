@@ -101,13 +101,13 @@ fn classify(record: &Value) -> Option<Class> {
         return None;
     } else if v1::name::parse_table_file(name).is_some() {
         Class::TableFile
-    } else if v1::name::parse_partition(name).is_some() {
+    } else if v1::Partition::parse_name(name).is_some() {
         Class::Partition
-    } else if v1::name::parse_table(name).is_some() {
+    } else if v1::Table::parse_name(name).is_some() {
         Class::Table
-    } else if v1::name::parse_schema(name).is_some() {
+    } else if v1::Schema::parse_name(name).is_some() {
         Class::Schema
-    } else if v1::name::parse_catalog(name).is_some() {
+    } else if v1::Catalog::parse_name(name).is_some() {
         Class::Catalog
     } else if v1::name::parse_metastore(name).is_some() {
         Class::Metastore

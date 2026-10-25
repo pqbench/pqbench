@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::v1::{name, Credentials};
+use crate::v1::{Credentials, Table};
 use crate::{Dialect, Workspace};
 
 /// Errors vending a table's credentials.
@@ -47,7 +47,7 @@ impl std::error::Error for Error {
 /// or when it answers an unexpected status.
 pub async fn get(workspace: &Workspace, name: &str) -> Result<Option<Credentials>, Error> {
     let (catalog, schema, table_name) =
-        name::parse_table(name).ok_or_else(|| Error::Name(format!("not a table name: {name}")))?;
+        Table::parse_name(name).ok_or_else(|| Error::Name(format!("not a table name: {name}")))?;
     let env = match workspace.config().dialect {
         Dialect::Unity => {
             super::r#impl::vend_unity(workspace, &catalog, &schema, &table_name).await?

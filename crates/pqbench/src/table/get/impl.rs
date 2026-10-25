@@ -28,7 +28,7 @@ pub(crate) async fn get(
     uri: Option<&str>,
     env: &BTreeMap<String, String>,
 ) -> Result<Table, Error> {
-    let (catalog, schema, table) = crate::v1::name::parse_table(name)
+    let (catalog, schema, table) = Table::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/tables/… name")))?;
     let info = match workspace.config().dialect {
         Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, env).await,
