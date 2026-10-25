@@ -50,7 +50,7 @@ pub struct Table {
 mod tests {
     use serde_json::json;
 
-    use super::Table;
+    use super::{Resource, Table};
 
     #[test]
     fn a_dotted_table_name_parses() {

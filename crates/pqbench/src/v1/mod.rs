@@ -57,7 +57,7 @@ pub use file_stats::FileStats;
 pub use log_action::LogAction;
 pub use metastore::Metastore;
 pub use partition::Partition;
-pub use pqbench_derive::Resource;
+pub use pqbench_resource::Resource;
 pub use read_eligibility::ReadEligibility;
 pub use schema::Schema;
 pub use table::Table;

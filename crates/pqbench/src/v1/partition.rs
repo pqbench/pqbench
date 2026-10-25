@@ -41,7 +41,7 @@ pub struct Partition {
 mod tests {
     use serde_json::json;
 
-    use super::Partition;
+    use super::{Partition, Resource};
 
     #[test]
     fn a_dotted_string_names_a_partition() {

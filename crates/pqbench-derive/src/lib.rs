@@ -1,4 +1,4 @@
-//! `#[derive(Resource)]`: the name and wire methods a v1 type needs.
+//! `#[derive(Resource)]`: the name grammar a v1 type implements.
 //!
 //! The name field carries the path, one segment per `/`, with `{id}` for a
 //! placeholder; the last placeholder names the resource, so the noun is not
@@ -16,10 +16,10 @@
 //! }
 //! ```
 //!
-//! The derive fills `from_name`, `name`, `name_mut`, and the serde-like
-//! `from_json`/`to_json`; the parse itself is
-//! [`pqbench::v1::name::pattern_name`], so the dotted shorthand and the
-//! canonical spelling live there, not in the macro.
+//! The derive fills `Resource::from_name`, `name`, and `name_mut`; the parse
+//! itself is `pqbench::v1::name::pattern_name`, so the dotted shorthand and
+//! the canonical spelling live there, not in the macro. The `from_json` and
+//! `to_json` pair is provided once by `pqbench_resource::Resource`.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -90,62 +90,28 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 let ids = ::pqbench::v1::name::ids(value, &[#(#segments),*], #alias)?;
                 Some(#parts)
             }
+        }
 
-            /// The record a name spells: the resource name or its dotted
-            /// shorthand.
-            pub fn from_name(value: &str) -> Option<Self> {
+        impl #impl_generics ::pqbench_resource::Resource for #ident #ty_generics #where_clause {
+            const NOUN: &'static str = #noun;
+            const SHAPE: &'static str = #shape;
+
+            fn from_name(value: &str) -> Option<Self> {
                 Some(Self {
                     #field: ::pqbench::v1::name::pattern_name(value, &[#(#segments),*], #alias)?,
                     ..Self::default()
                 })
             }
 
-            /// The record's resource name.
-            pub fn name(&self) -> &str {
+            fn name(&self) -> &str {
                 &self.#field
             }
 
-            /// The record's resource name, to replace a dotted spelling with
-            /// the canonical one.
-            pub fn name_mut(&mut self) -> &mut String {
+            fn name_mut(&mut self) -> &mut String {
                 &mut self.#field
             }
-
-            /// Read the record an object or a name spells.
-            ///
-            /// # Errors
-            /// Fails when the value is not the record's shape, or its `name`
-            /// is not this resource's name or dotted spelling.
-            pub fn from_json(
-                value: ::serde_json::Value,
-            ) -> ::std::result::Result<Self, ::std::string::String> {
-                if let Some(name) = value.as_str() {
-                    return Self::from_name(name).ok_or_else(|| {
-                        format!(
-                            "a {} record needs a `{}` name or its dotted spelling",
-                            #noun, #shape
-                        )
-                    });
-                }
-                let mut record: Self =
-                    ::serde_json::from_value(value).map_err(|error| error.to_string())?;
-                let Some(built) = Self::from_name(record.name()) else {
-                    return Err(format!("a {} record needs a `{}` name", #noun, #shape));
-                };
-                *record.name_mut() = built.name().to_owned();
-                Ok(record)
-            }
-
-            /// The record as its wire object.
-            ///
-            /// # Errors
-            /// Fails when the record cannot be serialized.
-            pub fn to_json(
-                &self,
-            ) -> ::std::result::Result<::serde_json::Value, ::std::string::String> {
-                ::serde_json::to_value(self).map_err(|error| error.to_string())
-            }
         }
+
     })
 }
 

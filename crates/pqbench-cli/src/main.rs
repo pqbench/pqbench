@@ -25,7 +25,6 @@ mod parse;
 mod partition;
 mod profile;
 mod ratelimit;
-mod record;
 mod render;
 mod rows;
 mod schema;

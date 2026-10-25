@@ -23,7 +23,8 @@ use serde_json::Value;
 use std::future::Future;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
-use crate::record::Record;
+use pqbench::v1::Resource;
+
 use crate::stdin::is_stream;
 use crate::CliError;
 
@@ -160,7 +161,7 @@ pub(crate) fn map<'a, A, B, E, F, Fut>(
     read: F,
 ) -> Records<'a, B>
 where
-    A: Record + 'a,
+    A: Resource + 'a,
     B: 'a,
     E: Into<CliError> + 'a,
     F: Fn(A) -> Fut + Clone + 'a,
@@ -189,7 +190,7 @@ pub(crate) fn filter_map<'a, A, B, E, F, Fut>(
     read: F,
 ) -> Records<'a, B>
 where
-    A: Record + 'a,
+    A: Resource + 'a,
     B: 'a,
     E: Into<CliError> + 'a,
     F: Fn(A) -> Fut + Clone + 'a,
@@ -227,7 +228,7 @@ pub(crate) fn flat_map<'a, A, B, E, S, F, Fut>(
     read: F,
 ) -> Records<'a, B>
 where
-    A: Record + 'a,
+    A: Resource + 'a,
     B: 'a,
     E: Into<CliError> + 'a,
     S: Stream<Item = Result<B, E>> + 'a,
