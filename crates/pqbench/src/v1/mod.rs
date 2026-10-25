@@ -35,6 +35,7 @@ pub mod json;
 mod log_action;
 mod metastore;
 pub mod name;
+mod parent;
 mod partition;
 mod read_eligibility;
 mod schema;
@@ -58,19 +59,10 @@ pub use file_stats::FileStats;
 pub use json::FromJson;
 pub use log_action::LogAction;
 pub use metastore::Metastore;
+pub use parent::Parent;
 pub use partition::Partition;
 pub use read_eligibility::ReadEligibility;
 pub use schema::Schema;
 pub use table::Table;
 pub use table_file::TableFile;
 pub use table_format::TableFormat;
-
-/// A level's parent record: a resource read on standard input, and the noun a
-/// message calls it.
-pub trait Parent: json::FromJson {
-    /// The stream's noun, for messages.
-    const NOUN: &'static str;
-
-    /// The record's resource name: what a failure is reported under.
-    fn name(&self) -> &str;
-}
