@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aipnaming"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "tree-sitter",
  "tree-sitter-rust",
@@ -47,7 +47,7 @@ dependencies = [
 
 [[package]]
 name = "aipnaming-cli"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "aipnaming",
  "clap",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "docscheck"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "tempfile",
  "tree-sitter",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "docscheck-cli"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "clap",
  "docscheck",
@@ -2911,7 +2911,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "apache-avro",
  "async-trait",
@@ -2938,7 +2938,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench-cli"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "clap",
  "futures-util",
@@ -2953,7 +2953,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench-derive"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2962,7 +2962,7 @@ dependencies = [
 
 [[package]]
 name = "pqbench-resource"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "pqbench-derive",
  "serde",
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "pyicheck"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "tree-sitter",
  "tree-sitter-python",
@@ -3021,7 +3021,7 @@ dependencies = [
 
 [[package]]
 name = "pyicheck-cli"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "clap",
  "pyicheck",
