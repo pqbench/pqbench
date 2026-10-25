@@ -432,21 +432,7 @@ is a shell job on the stream (`jq`, `sort`, `head`, `xargs`) — see
 [demo.md](demo.md). `bytemass` reads its files in flight (`--fan-out`, 128 by
 default), so the per-file footer round trips overlap instead of adding up.
 
-## S3 file patterns
-
-With the `aws` feature, `bytemass` expands quoted S3 key patterns before
-reading footers. `*` and `?` match within one path component; `**` can span
-subdirectories. Listing starts at the literal directory prefix and consumes
-all listing pages. Results are sorted and deduplicated. No matches and listing
-permission failures are explicit errors; exact URIs never require listing.
-Percent-encode literal wildcard characters when addressing an exact key.
-
-```console
-$ pqbench bytemass 's3://bucket/table/*.parquet'
-$ pqbench bytemass 's3://bucket/table/**/*.parquet'
-```
-
-These patterns enumerate physical objects, not a table's active snapshot.
-Use `list partitions | list files` for Delta/Iceberg analysis to avoid counting
-obsolete files.
-
+`bytemass` measures the paths and records it is given; it does not expand
+patterns or list a prefix. A pattern belongs to the producer: `list files`
+names a table's files from its log, and a `remote-source` document names the
+objects to read.

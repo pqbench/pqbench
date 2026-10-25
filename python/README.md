@@ -145,8 +145,8 @@ token=None, dialect=None).resolve()` combines configuration layers into a
 `credentials` is a `Credentials` record — what `credentials.get` returns — or
 the mapping of the same fields; a read given none falls back to the process
 environment. A request's `env` is the library's `BTreeMap<String, String>`,
-passed straight through. A `BytemassRequest` names `inputs` (paths or glob
-masks) and `env` (the `AWS_*` options a remote read uses).
+passed straight through. A `BytemassRequest` names `inputs` (paths or storage
+URIs) and `env` (the `AWS_*` options a remote read uses).
 
 ## Publish to PyPI
 

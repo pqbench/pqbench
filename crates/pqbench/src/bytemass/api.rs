@@ -14,7 +14,7 @@ use super::Error;
 /// Arguments for the `bytemass` command.
 #[derive(Debug, Clone, Default)]
 pub struct BytemassRequest {
-    /// Parquet paths or glob masks; quote masks to prevent shell expansion.
+    /// Parquet paths or storage URIs.
     pub inputs: Vec<String>,
     /// Storage options (`AWS_*` names) for remote inputs.
     pub env: BTreeMap<String, String>,
@@ -29,13 +29,12 @@ pub struct MeasuredFile {
 
 /// Measure the per-column byte masses of Parquet files.
 ///
-/// Inputs are local paths or storage URIs, each possibly a local or S3 glob
-/// mask. Only file footers are read. The result is one [`v1::Bytemass`] per
-/// column, in input order.
+/// Inputs are local paths or storage URIs. Only file footers are read. The
+/// result is one [`v1::Bytemass`] per column, in input order.
 ///
 /// # Errors
-/// Fails when there are no inputs, a mask matches no files, an input cannot be
-/// read, or a byte total overflows.
+/// Fails when there are no inputs, an input cannot be read, or a byte total
+/// overflows.
 pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<v1::Bytemass>, Error> {
     if request.inputs.is_empty() {
         return Err(Error::NoInputs);
@@ -65,7 +64,7 @@ pub async fn measure_file(
 /// Measure each expanded input into a [`MeasuredFile`].
 ///
 /// # Errors
-/// Fails for empty inputs, unmatched patterns, invalid footers or I/O failures.
+/// Fails for empty inputs, invalid footers or I/O failures.
 pub async fn measure_files(
     lake: &Lake,
     request: &BytemassRequest,
@@ -74,20 +73,4 @@ pub async fn measure_files(
         return Err(Error::NoInputs);
     }
     super::collection::measure_files(lake, &request.inputs, &request.env).await
-}
-
-/// Resolve local and S3 patterns to sorted, unique object paths.
-///
-/// # Errors
-/// Invalid patterns, missing backend, listing errors, or unmatched patterns.
-pub async fn expand_inputs(
-    lake: &Lake,
-    inputs: &[String],
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<String>, Error> {
-    Ok(super::collection::expand_inputs(lake, inputs, env)
-        .await?
-        .into_iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect())
 }

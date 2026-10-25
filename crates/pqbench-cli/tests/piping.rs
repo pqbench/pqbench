@@ -166,17 +166,16 @@ fn list_files_rejects_a_malformed_partition_record() {
 }
 
 #[test]
-fn bytemass_rejects_a_remote_source_that_matches_nothing() {
-    // Expanding the source is a contract step; only each file's read is
-    // dropped.
+fn bytemass_reports_a_remote_source_file_that_cannot_be_read() {
+    // The source names exact files; a file that cannot be read is dropped and
+    // named, and the run is non-zero.
     let source = concat!(
         r#"{"version":1,"inputs":[""#,
         env!("CARGO_MANIFEST_DIR"),
-        r#"/tests/fixtures/no-such-*.parquet"],"env":{}}"#,
+        r#"/tests/fixtures/no-such-file.parquet"],"env":{}}"#,
     );
     let output = pipe_env(&["bytemass"], source.as_bytes(), &[]);
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("mask matched no files"), "{stderr}");
-    assert!(!stderr.contains("could not be read"), "{stderr}");
+    assert!(stderr.contains("no-such-file.parquet"), "{stderr}");
 }

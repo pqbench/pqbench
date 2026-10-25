@@ -17,8 +17,7 @@ use crate::CliError;
 /// Arguments for `bytemass`.
 #[derive(Args)]
 pub(crate) struct BytemassArgs {
-    /// a Parquet path or storage URI (a glob expands); omit to read records
-    /// on standard input
+    /// a Parquet path or storage URI; omit to read records on standard input
     file: Option<String>,
     /// files in flight at once
     #[arg(long, default_value_t = 128)]
@@ -30,8 +29,13 @@ pub(crate) struct BytemassArgs {
 pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open();
     let inputs = match &args.file {
-        Some(file) => path_inputs(lake, file).await?,
-        None => document_inputs(lake, args.fan_out).await?,
+        Some(file) => stream::iter([Ok(Input {
+            uri: file.clone(),
+            env: BTreeMap::new(),
+            size_bytes: None,
+        })])
+        .boxed(),
+        None => document_inputs().await?,
     };
     let dropped = stage(inputs, args.fan_out, &mut emit, |input: Input| async move {
         measure(lake, input).await
@@ -51,61 +55,38 @@ struct Input {
     size_bytes: Option<u64>,
 }
 
-/// A path or glob as files: local and S3 patterns expand here.
-async fn path_inputs(
-    lake: &pqbench::Lake,
-    file: &str,
-) -> Result<BoxStream<'static, Result<Input, CliError>>, CliError> {
-    let files = [file.to_string()];
-    let paths = bytemass::expand_inputs(lake, &files, &BTreeMap::new()).await?;
-    Ok(stream::iter(paths.into_iter().map(|uri| {
-        Ok(Input {
-            uri,
-            env: BTreeMap::new(),
-            size_bytes: None,
-        })
-    }))
-    .boxed())
-}
-
-/// A document's records as files: each record expands with `fan_out` of them
-/// in flight, and a record that cannot be expanded becomes an item of its own,
-/// so the stage reports it and carries on.
-async fn document_inputs<'a>(
-    lake: &'a pqbench::Lake,
-    fan_out: usize,
-) -> Result<BoxStream<'a, Result<Input, CliError>>, CliError> {
+/// A document's records as files: a record that cannot be named becomes an
+/// item of its own, so the stage reports it and carries on.
+async fn document_inputs() -> Result<BoxStream<'static, Result<Input, CliError>>, CliError> {
     let records = document::records("-").await?;
     Ok(records
-        .map(move |record| async move { record_inputs(lake, record?).await })
-        .buffer_unordered(fan_out.max(1))
-        .flat_map(|inputs| match inputs {
-            Ok(inputs) => stream::iter(inputs.into_iter().map(Ok::<_, CliError>)).boxed(),
+        .flat_map(|record| match record {
+            Ok(record) => match record_inputs(record) {
+                Ok(inputs) => stream::iter(inputs.into_iter().map(Ok::<_, CliError>)).boxed(),
+                Err(error) => stream::iter([Err(error)]).boxed(),
+            },
             Err(error) => stream::iter([Err(error)]).boxed(),
         })
         .boxed())
 }
 
 /// The files one record names: a table-file is its blob and lease, a blob is
-/// its location, and a remote source is its inputs, expanded with its env.
-async fn record_inputs(lake: &pqbench::Lake, record: Record) -> Result<Vec<Input>, CliError> {
+/// its location, and a remote source is its inputs with its env.
+fn record_inputs(record: Record) -> Result<Vec<Input>, CliError> {
     match record {
         Record::File(file) => Ok(vec![file_input(file)?]),
         Record::Blob(blob) => Ok(vec![blob_input(blob)?]),
         Record::RemoteSource(source) => {
-            let mut inputs = Vec::new();
-            for uri in &source.inputs {
-                for path in
-                    bytemass::expand_inputs(lake, std::slice::from_ref(uri), &source.env).await?
-                {
-                    inputs.push(Input {
-                        uri: path,
-                        env: source.env.clone(),
-                        size_bytes: None,
-                    });
-                }
-            }
-            Ok(inputs)
+            let env = source.env;
+            Ok(source
+                .inputs
+                .into_iter()
+                .map(|uri| Input {
+                    uri,
+                    env: env.clone(),
+                    size_bytes: None,
+                })
+                .collect())
         }
         Record::Bytemass(_) => Err("a bytemass stream goes to `pqbench viz`".into()),
     }
