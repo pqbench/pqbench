@@ -37,7 +37,7 @@ fn bytemass() {
 #[test]
 fn list_partitions() {
     // list_partitions, from line 165
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench format", 166, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format", 166, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1"]));
 }
 
 #[cfg(feature = "delta")]
@@ -45,7 +45,7 @@ fn list_partitions() {
 #[test]
 fn list_files() {
     // list_files, from line 184
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench format", 185, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format", 185, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
 }
 
 #[cfg(feature = "delta")]
@@ -54,5 +54,5 @@ fn list_files() {
 fn viz() {
     // viz, from line 212
     support::run("pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 213, None);
-    support::run("pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 214, None);
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report", 214, None);
 }

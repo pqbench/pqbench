@@ -10,7 +10,7 @@ that command and links back. This file is the durable copy.
 | --- | --- |
 | Name a file for measurement | `pqbench table-file FILE` |
 | On-disk bytes per column | `pqbench bytemass` (records on stdin) |
-| List a table's natural partitions | `pqbench list partitions DIR` (Table refs on stdin) |
+| List a table's natural partitions | `pqbench list partitions` (Table refs on stdin) |
 | List a partition's files | `pqbench list files` (partitions on stdin) |
 | Read the endpoint's metastore record | `pqbench get metastore` (`PQB_ENDPOINT`) |
 | List the catalogs at a catalog endpoint | `pqbench list catalogs` (`PQB_ENDPOINT`) |
@@ -45,7 +45,7 @@ never returns.
 The usual walk:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 Standard output is NDJSON. `pqbench format` renders it as aligned tables: one
@@ -307,7 +307,7 @@ catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/un
 List a table's partitions by URI; a terminal prints them:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1

@@ -10,10 +10,10 @@ prompt() {
     sleep 1
 }
 
-prompt "pqbench list partitions docker/e2e-lakehouse/table | head -3"
-pqbench list partitions docker/e2e-lakehouse/table | head -3
+prompt "cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | head -3"
+cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | head -3
 sleep 2
 
-prompt "pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass"
-pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | cat
+prompt "cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass"
+cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | cat
 sleep 2

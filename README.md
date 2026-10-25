@@ -163,7 +163,7 @@ List a table's natural partitions — its commits grouped into epoch-aligned
 commit-time windows.
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
@@ -182,7 +182,7 @@ catalogs/local/schemas/local/tables/table/partitions/1789862400000  178986240000
 List the files a partition's commits added — the input to `bytemass`.
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -211,7 +211,7 @@ step.
 
 ```console run delta
 $ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.

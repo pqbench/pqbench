@@ -31,7 +31,7 @@ List the table's natural partitions, then their files, then measure them. A
 terminal prints the partitions as a table:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
 name                           first_time      last_time  commits
 --------------------------  -------------  -------------  -------
 catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
@@ -74,13 +74,13 @@ size (bytes, or a number with a unit: kB/MB/GB/TB, KiB/MiB/GiB/TiB), so a walk
 can measure only the big files. The stream is NDJSON, and `>` captures it:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files > /tmp/partition.ndjson
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files > /tmp/partition.ndjson
 $ pqbench bytemass < /tmp/partition.ndjson | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files --min-file-size 1KB | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files --min-file-size 1KB | pqbench format
 ```
 
 ## Memory use

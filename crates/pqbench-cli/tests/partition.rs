@@ -186,14 +186,8 @@ fn partition_ls_honors_the_window_width() {
     let timestamp = 1_700_000_000_000i64;
     let fixture = dated_delta_fixture(timestamp);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1h",
-        ],
-        "",
+        &["list", "partitions", "--every", "1h"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -217,16 +211,8 @@ fn partition_ls_last_bounds_the_read_to_recent_windows() {
     let base = 1_700_000_000_000i64.div_euclid(day) * day;
     let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1d",
-            "--last",
-            "2d",
-        ],
-        "",
+        &["list", "partitions", "--every", "1d", "--last", "2d"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -248,16 +234,8 @@ fn partition_ls_last_covering_the_span_reads_every_window() {
     let base = 1_700_000_000_000i64.div_euclid(day) * day;
     let fixture = dated_delta_fixture_commits(&[base, base + day, base + 2 * day, base + 3 * day]);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1d",
-            "--last",
-            "1w",
-        ],
-        "",
+        &["list", "partitions", "--every", "1d", "--last", "1w"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -279,16 +257,8 @@ fn partition_ls_last_covering_the_span_reads_every_window() {
 fn partition_ls_last_drops_a_window_the_horizon_cuts() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--every",
-            "1d",
-            "--last",
-            "1h",
-        ],
-        "",
+        &["list", "partitions", "--every", "1d", "--last", "1h"],
+        &table_ref(&fixture.path),
     );
     assert!(
         output.status.success(),
@@ -304,14 +274,8 @@ fn partition_ls_last_drops_a_window_the_horizon_cuts() {
 fn partition_ls_rejects_a_bad_last_window() {
     let fixture = dated_delta_fixture(0);
     let output = pipe(
-        &[
-            "list",
-            "partitions",
-            fixture.path.to_str().unwrap(),
-            "--last",
-            "1x",
-        ],
-        "",
+        &["list", "partitions", "--last", "1x"],
+        &table_ref(&fixture.path),
     );
     assert!(!output.status.success());
     assert!(

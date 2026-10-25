@@ -22,6 +22,18 @@ fn pipe(args: &[&str], stdin: &str) -> std::process::Output {
     pipe_env(args, stdin.as_bytes(), &[])
 }
 
+/// `pqbench format` over a record stream: the table a person reads.
+#[cfg(feature = "delta")]
+fn table(records: &[u8]) -> String {
+    let output = pipe_env(&["format"], records, &[]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
 /// pqbench with extra environment: the walk's context can come from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
     let mut child = pqbench()

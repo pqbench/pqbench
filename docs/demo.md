@@ -28,7 +28,8 @@ records by `name`, and `sort`, `head`, or `awk` sample by name:
 
 ```console run delta json
 # one file: keep only the part-* records
-$ pqbench list partitions docker/e2e-lakehouse/table \
+$ cat docker/e2e-lakehouse/table.ndjson \
+>   | pqbench list partitions \
 >   | pqbench list files \
 >   | jq -c 'select(.name | contains("/files/part-"))' \
 >   | pqbench bytemass \
@@ -36,7 +37,8 @@ $ pqbench list partitions docker/e2e-lakehouse/table \
 {"column":"label","compressed_bytes":72}
 
 # first N by name: sort the file records, cap them, then measure
-$ pqbench list partitions docker/e2e-lakehouse/table \
+$ cat docker/e2e-lakehouse/table.ndjson \
+>   | pqbench list partitions \
 >   | pqbench list files \
 >   | sort | head -10 \
 >   | pqbench bytemass \
@@ -44,7 +46,8 @@ $ pqbench list partitions docker/e2e-lakehouse/table \
 {"column":"label","compressed_bytes":72}
 
 # every Nth file
-$ pqbench list partitions docker/e2e-lakehouse/table \
+$ cat docker/e2e-lakehouse/table.ndjson \
+>   | pqbench list partitions \
 >   | pqbench list files \
 >   | awk 'NR % 2 == 1' \
 >   | pqbench bytemass \
@@ -63,13 +66,13 @@ file its `blob` names.
 The whole walk is three commands:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![one table viz page](images/pqbench-lake-treemap.gif)
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -125,12 +128,12 @@ url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 NDJSON for `list files` and `bytemass`; `format` renders it:
 
 ```console run delta
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-$ pqbench list partitions docker/e2e-lakehouse/table | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![pqbench table CLI walkthrough](images/pqbench-delta-bytemass.gif)

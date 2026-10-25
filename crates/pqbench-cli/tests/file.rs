@@ -26,6 +26,21 @@ fn pipe(args: &[&str], stdin: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+/// The table record a local Delta path names, under `local.local`.
+fn table_record(path: &str) -> String {
+    let table = std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("a fixture path has a final segment");
+    format!(
+        "{}\n",
+        json!({
+            "name": format!("catalogs/local/schemas/local/tables/{table}"),
+            "uri": path,
+        })
+    )
+}
+
 fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
     stdout
         .split(|byte| *byte == b'\n')
@@ -95,7 +110,10 @@ fn dated_delta_fixture(timestamp: i64) -> DeltaFixture {
 #[test]
 fn file_ls_lists_the_files_a_window_added() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
-    let listed = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
+    let listed = pipe(
+        &["list", "partitions"],
+        &table_record(fixture.path.to_str().unwrap()),
+    );
     assert!(
         listed.status.success(),
         "stderr: {}",
@@ -125,7 +143,10 @@ fn file_ls_lists_the_files_a_window_added() {
 #[test]
 fn file_ls_counts_partitions_and_files_apart() {
     let fixture = dated_delta_fixture(1_700_000_000_000);
-    let listed = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
+    let listed = pipe(
+        &["list", "partitions"],
+        &table_record(fixture.path.to_str().unwrap()),
+    );
     assert!(listed.status.success());
     let files = pipe(&["list", "files"], &String::from_utf8_lossy(&listed.stdout));
     assert!(
@@ -133,7 +154,24 @@ fn file_ls_counts_partitions_and_files_apart() {
         "stderr: {}",
         String::from_utf8_lossy(&files.stderr)
     );
-    let out = String::from_utf8_lossy(&files.stdout);
+    let partitions = ndjson_records(&listed.stdout);
+    assert_eq!(
+        partitions.len(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&listed.stdout)
+    );
+    assert!(partitions[0]["name"]
+        .as_str()
+        .unwrap()
+        .contains("/partitions/"));
+    let records = ndjson_records(&files.stdout);
+    assert_eq!(
+        records.len(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&files.stdout)
+    );
 }
 
 /// A Delta table whose one commit adds two files, with the sizes the log
@@ -184,7 +222,10 @@ fn sized_delta_fixture(small: u64, big: u64) -> DeltaFixture {
 #[test]
 fn file_ls_drops_files_below_the_min_size() {
     let fixture = sized_delta_fixture(1_000, 1_024);
-    let listed = pipe(&["list", "partitions", fixture.path.to_str().unwrap()], "");
+    let listed = pipe(
+        &["list", "partitions"],
+        &table_record(fixture.path.to_str().unwrap()),
+    );
     assert!(listed.status.success());
     let files = pipe(
         &["list", "files", "--min-file-size", "1KiB"],
