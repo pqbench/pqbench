@@ -867,7 +867,7 @@ fn credentials_check_filters_the_live_tables() {
     );
     let stderr = String::from_utf8_lossy(&unsupported.stderr);
     assert!(
-        stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
+        stderr.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"),
         "{stderr}"
     );
     assert!(stderr.contains("managed default storage"), "{stderr}");
@@ -905,7 +905,7 @@ fn credentials_check_filters_the_live_tables() {
     assert!(mixed.status.success());
     let mixed_stderr = String::from_utf8_lossy(&mixed.stderr);
     assert!(
-        mixed_stderr.contains("dbx_samples.nyctaxi.pqbench_delta_test"),
+        mixed_stderr.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"),
         "{mixed_stderr}"
     );
     assert!(
