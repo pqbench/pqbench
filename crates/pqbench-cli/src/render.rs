@@ -239,12 +239,12 @@ fn format_row<'a>(
         let pad = width.saturating_sub(cell.chars().count());
         match align.get(index).copied().unwrap_or(Align::Left) {
             Align::Right => {
-                line.push_str(&" ".repeat(pad));
+                line.extend(std::iter::repeat_n(' ', pad));
                 line.push_str(cell);
             }
             Align::Left => {
                 line.push_str(cell);
-                line.push_str(&" ".repeat(pad));
+                line.extend(std::iter::repeat_n(' ', pad));
             }
         }
     }

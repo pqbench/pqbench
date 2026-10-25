@@ -208,7 +208,7 @@ fn push_typed<T: Row + serde::de::DeserializeOwned>(
     rows: &mut Vec<T>,
     record: Value,
 ) -> Option<Value> {
-    match serde_json::from_value(record.clone()) {
+    match T::deserialize(&record) {
         Ok(row) => {
             rows.push(row);
             None

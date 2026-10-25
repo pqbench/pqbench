@@ -133,27 +133,7 @@ where
         .chunks(fan_out.max(1))
         .then(move |batch| {
             let read = read.clone();
-            async move {
-                let mut errors = Vec::new();
-                let mut reads = Vec::new();
-                for record in batch {
-                    match record {
-                        Ok(parent) => {
-                            let reference = parent.name().to_owned();
-                            let read = read.clone();
-                            reads.push(async move {
-                                read(parent)
-                                    .await
-                                    .map_err(move |cause| crate::error::context(&reference, cause))
-                            });
-                        }
-                        Err(error) => errors.push(Err(error)),
-                    }
-                }
-                let mut rows: Vec<Result<Option<B>, CliError>> = errors;
-                rows.extend(join_all(reads).await);
-                rows
-            }
+            async move { read_batch(batch, read).await }
         })
         .flat_map(stream::iter)
         .filter_map(|row| async move {
@@ -164,6 +144,39 @@ where
             }
         })
         .boxed_local()
+}
+
+/// Read one batch of parents to completion. A parent that failed to parse is
+/// reported with the batch's other failures, before its records.
+async fn read_batch<A, B, E, F, Fut>(
+    batch: Vec<Result<A, CliError>>,
+    read: F,
+) -> Vec<Result<Option<B>, CliError>>
+where
+    A: Resource,
+    E: Into<CliError>,
+    F: Fn(A) -> Fut + Clone,
+    Fut: Future<Output = Result<Option<B>, E>>,
+{
+    let mut errors = Vec::new();
+    let mut reads = Vec::with_capacity(batch.len());
+    for record in batch {
+        match record {
+            Ok(parent) => {
+                let reference = parent.name().to_owned();
+                let read = read.clone();
+                reads.push(async move {
+                    read(parent)
+                        .await
+                        .map_err(move |cause| crate::error::context(&reference, cause))
+                });
+            }
+            Err(error) => errors.push(Err(error)),
+        }
+    }
+    let mut rows: Vec<Result<Option<B>, CliError>> = errors;
+    rows.extend(join_all(reads).await);
+    rows
 }
 
 /// `flatMap` with `fan_out` streams in flight: a parent becomes its stream,
