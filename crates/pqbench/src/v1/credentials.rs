@@ -1,31 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Why a table is not readable outside Databricks compute.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum EligibilityReason {
-    #[serde(rename = "ELIGIBILITY_REASON_SYSTEM_TABLE")]
-    SystemTable,
-    #[serde(rename = "ELIGIBILITY_REASON_NOT_A_TABLE")]
-    NotATable,
-    #[serde(rename = "ELIGIBILITY_REASON_NO_EXTERNAL_READ")]
-    NoExternalRead,
-}
-
-impl EligibilityReason {
-    /// The proto value name, as the wire spells it.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::SystemTable => "ELIGIBILITY_REASON_SYSTEM_TABLE",
-            Self::NotATable => "ELIGIBILITY_REASON_NOT_A_TABLE",
-            Self::NoExternalRead => "ELIGIBILITY_REASON_NO_EXTERNAL_READ",
-        }
-    }
-}
-
-/// Vended storage credentials. Non-sensitive for now, so a [`Table`] may carry
+/// Vended storage credentials. Non-sensitive for now, so a [`Table`](super::Table) may carry
 /// them; a later pass moves them off the wire.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -79,16 +55,4 @@ impl Credentials {
             && self.session_token.is_none()
             && self.expire_time.is_none()
     }
-}
-
-/// The result `credentials check` returns.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ReadEligibility {
-    /// Whether the table is readable outside Databricks compute.
-    #[serde(default)]
-    pub eligible: bool,
-    /// Why not, when it is not.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<EligibilityReason>,
 }

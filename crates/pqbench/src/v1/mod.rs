@@ -1,7 +1,7 @@
 //! The pqbench wire types, and the one home for resource names.
 //!
-//! Each area of the model lives in its own module, so a change to one
-//! touches one file.
+//! Each resource lives in its own module, so a change to one touches one
+//! file.
 //!
 //! One definition per resource and value, so a command and the CLI share a
 //! type instead of each declaring its own. The CLI forwards these as-is (it
@@ -18,24 +18,52 @@
 //! [`name`] is the one place a name format lives, so changing it (say, to a
 //! URN) is a one-module change.
 
-mod analysis;
+mod blob;
+mod bytemass;
 mod catalog;
+mod catalog_type;
+mod column;
+mod column_profile;
+mod commit;
+mod compression_report;
 mod credentials;
-mod experiment;
-mod file;
+mod declared_column;
+mod eligibility_reason;
+mod experiment_trial;
+mod file_stats;
 pub mod json;
-mod log;
+mod log_action;
+mod metastore;
 pub mod name;
+mod partition;
+mod read_eligibility;
+mod schema;
 mod table;
+mod table_file;
+mod table_format;
 
-pub use analysis::{Bytemass, ColumnProfile, CompressionReport};
-pub use catalog::{Catalog, CatalogType, Metastore, Schema};
-pub use credentials::{Credentials, EligibilityReason, ReadEligibility};
-pub use experiment::ExperimentTrial;
-pub use file::{Blob, Column, TableFile};
+pub use blob::Blob;
+pub use bytemass::Bytemass;
+pub use catalog::Catalog;
+pub use catalog_type::CatalogType;
+pub use column::Column;
+pub use column_profile::ColumnProfile;
+pub use commit::Commit;
+pub use compression_report::CompressionReport;
+pub use credentials::Credentials;
+pub use declared_column::DeclaredColumn;
+pub use eligibility_reason::EligibilityReason;
+pub use experiment_trial::ExperimentTrial;
+pub use file_stats::FileStats;
 pub use json::FromJson;
-pub use log::{Commit, FileStats, LogAction};
-pub use table::{DeclaredColumn, Partition, Table, TableFormat};
+pub use log_action::LogAction;
+pub use metastore::Metastore;
+pub use partition::Partition;
+pub use read_eligibility::ReadEligibility;
+pub use schema::Schema;
+pub use table::Table;
+pub use table_file::TableFile;
+pub use table_format::TableFormat;
 
 /// A level's parent record: a resource read on standard input, and the noun a
 /// message calls it.
