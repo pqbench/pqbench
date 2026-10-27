@@ -49,9 +49,11 @@ The page embeds the hierarchy as JSON and loads the d3 modules it uses
 1. catalogs, sized by the on-disk bytes of their tables;
 2. a catalog's schemas;
 3. a schema's tables;
-4. a table's columns, sized by on-disk bytes and labelled with bytes per row.
-   The table cell counts the files behind it; the files themselves are not
-   drawn, because one table can carry thousands.
+4. a table's columns, sized by on-disk bytes and labelled with bytes per row
+   and the compression ratio, uncompressed over compressed (7.5×, not the
+   compressed fraction the codec benchmarks report). The table cell counts the
+   files behind it; the files themselves are not drawn, because one table can
+   carry thousands.
 
 Click a cell to descend; the breadcrumb walks back up, and the hash keeps the
 level, so a link can point at one. When the stream carries a file's storage

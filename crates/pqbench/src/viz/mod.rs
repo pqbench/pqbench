@@ -135,6 +135,10 @@ pub struct ColumnNode {
     pub value_count: u64,
     /// [`Self::compressed_bytes`] divided by [`Self::value_count`].
     pub bytes_per_value: f64,
+    /// Uncompressed bytes over compressed bytes, when every measurement of the
+    /// column reported both. A value above 1 means the bytes did compress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression_ratio: Option<f64>,
     /// The table's monthly storage cost, apportioned by
     /// [`Self::compressed_bytes`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,10 +167,22 @@ pub fn write_report(
 }
 
 /// What one column adds up to while a table is folded.
-#[derive(Default)]
 struct ColumnBytes {
     compressed_bytes: u64,
+    uncompressed_bytes: u64,
+    uncompressed_complete: bool,
     value_count: u64,
+}
+
+impl Default for ColumnBytes {
+    fn default() -> Self {
+        Self {
+            compressed_bytes: 0,
+            uncompressed_bytes: 0,
+            uncompressed_complete: true,
+            value_count: 0,
+        }
+    }
 }
 
 /// What one table's columns add up to while the report is built.
@@ -201,6 +217,10 @@ fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
         table.blobs.insert(blob);
         let total = table.columns.entry(path).or_default();
         total.compressed_bytes += bytes;
+        match column.uncompressed_bytes {
+            Some(bytes) => total.uncompressed_bytes += bytes,
+            None => total.uncompressed_complete = false,
+        }
         total.value_count += values;
     }
 
@@ -211,16 +231,25 @@ fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
         let mut columns: Vec<ColumnNode> = table
             .columns
             .into_iter()
-            .map(|(column, total)| ColumnNode {
-                column,
-                compressed_bytes: total.compressed_bytes,
-                value_count: total.value_count,
-                bytes_per_value: if total.value_count == 0 {
-                    0.0
+            .map(|(column, total)| {
+                let compression_ratio = if total.uncompressed_complete && total.compressed_bytes > 0
+                {
+                    Some(total.uncompressed_bytes as f64 / total.compressed_bytes as f64)
                 } else {
-                    total.compressed_bytes as f64 / total.value_count as f64
-                },
-                storage_cost_per_month: None,
+                    None
+                };
+                ColumnNode {
+                    column,
+                    compressed_bytes: total.compressed_bytes,
+                    value_count: total.value_count,
+                    bytes_per_value: if total.value_count == 0 {
+                        0.0
+                    } else {
+                        total.compressed_bytes as f64 / total.value_count as f64
+                    },
+                    compression_ratio,
+                    storage_cost_per_month: None,
+                }
             })
             .collect();
         if let Some(cost) = storage_cost_per_month {
@@ -448,6 +477,19 @@ mod tests {
         }
     }
 
+    fn measured(
+        file: &v1::Blob,
+        table: Option<&str>,
+        path: &str,
+        compressed_bytes: u64,
+        uncompressed_bytes: u64,
+    ) -> v1::Bytemass {
+        v1::Bytemass {
+            uncompressed_bytes: Some(uncompressed_bytes),
+            ..column(file, table, path, compressed_bytes)
+        }
+    }
+
     #[test]
     fn folds_columns_up_the_catalog_hierarchy() {
         let sales = blob("/lake/sales/part-0.parquet");
@@ -519,6 +561,39 @@ mod tests {
         assert_eq!(node.columns[0].compressed_bytes, 100);
         assert_eq!(node.columns[0].value_count, 20);
         assert_eq!(node.columns[0].bytes_per_value, 5.0);
+    }
+
+    #[test]
+    fn folds_the_compression_ratio_over_the_column_files() {
+        let first = blob("/lake/lineitem/part-0.parquet");
+        let second = blob("/lake/lineitem/part-1.parquet");
+        let table = "catalogs/tpch/schemas/sf1/tables/lineitem";
+        let report = fold(
+            &[
+                measured(&first, Some(table), "l_comment", 8, 24),
+                measured(&second, Some(table), "l_comment", 4, 12),
+            ],
+            &[first, second],
+        );
+
+        let node = &report.catalogs[0].schemas[0].tables[0].columns[0];
+        assert_eq!(node.compression_ratio, Some(3.0));
+    }
+
+    #[test]
+    fn leaves_the_ratio_unknown_when_a_measurement_omits_uncompressed_bytes() {
+        let file = blob("/lake/lineitem/part-0.parquet");
+        let table = "catalogs/tpch/schemas/sf1/tables/lineitem";
+        let report = fold(
+            &[
+                measured(&file, Some(table), "l_comment", 8, 24),
+                column(&file, Some(table), "l_comment", 4),
+            ],
+            std::slice::from_ref(&file),
+        );
+
+        let node = &report.catalogs[0].schemas[0].tables[0].columns[0];
+        assert_eq!(node.compression_ratio, None);
     }
 
     #[test]
