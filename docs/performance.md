@@ -16,6 +16,7 @@ $ pqbench list catalogs \
     | pqbench list schemas \
     | pqbench ratelimit --rate 15 \
     | pqbench list tables \
+    | pqbench ratelimit --rate 15 \
     | pqbench credentials check \
     | pqbench credentials get \
     | pqbench get table \
