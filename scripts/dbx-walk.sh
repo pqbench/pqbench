@@ -5,13 +5,14 @@
 # The walk is the issue-#58 pipeline, one process per level:
 #
 #   list catalogs | ratelimit --rate 15 | list schemas | ratelimit --rate 15
-#     | list tables | ratelimit --rate 15 | credentials check | credentials get
+#     | list tables | credentials check | credentials get
 #     | get table | list partitions | list files | bytemass
 #
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
 # SDK's own ceiling and is safe — decisions/0006-catalog-rate-limit.md), so a
-# `ratelimit --rate` stage paces the refs ahead of each fan-out.
+# `ratelimit --rate` stage paces the refs ahead of each catalog-level fan-out:
+# `list schemas` (one request per catalog) and `list tables` (one per schema).
 # `credentials check`/`credentials get` are one-to-one and the storage levels
 # (`get table` down) read object storage, not the catalog, so neither is paced.
 #
@@ -77,7 +78,6 @@ walk() {
         "$PQB" list schemas | tee "$dir/schemas" |
         "$PQB" ratelimit --rate "$RATE" |
         "$PQB" list tables | tee "$dir/refs" |
-        "$PQB" ratelimit --rate "$RATE" |
         keep_readable_catalog | tee "$dir/readable" |
         "$PQB" credentials check | tee "$dir/checked" |
         "$PQB" credentials get | tee "$dir/vended" |

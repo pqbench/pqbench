@@ -33,7 +33,11 @@ lists one of its collections. Each level reads its parent's refs on standard
 input, so the walk is a pipe:
 
 ```console no-run
-$ pqbench list catalogs | pqbench list schemas | pqbench list tables
+$ pqbench list catalogs \
+    | pqbench ratelimit --rate 15 \
+    | pqbench list schemas \
+    | pqbench ratelimit --rate 15 \
+    | pqbench list tables
 $ echo '"dbx_samples.nyctaxi.trips"' | pqbench get table
 ```
 
@@ -44,7 +48,11 @@ level run with no input fails instead of blocking on a read that never returns.
 The usual walk:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson \
+>   | pqbench list partitions \
+>   | pqbench list files \
+>   | pqbench bytemass \
+>   | pqbench viz -o /tmp/report
 ```
 
 Standard output is NDJSON. `pqbench format` renders it as aligned tables: one
