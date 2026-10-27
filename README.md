@@ -49,7 +49,7 @@ $ pqbench list catalogs \
     | pqbench list partitions \
     | pqbench list files \
     | pqbench bytemass \
-    | pqbench format
+    | pqbench viz -o /tmp/report
 ```
 
 Read it left to right:
