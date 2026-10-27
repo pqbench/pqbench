@@ -29,6 +29,7 @@ pub fn render_html(report: &Report, title: &str) -> Result<String, Error> {
     out.push_str("#crumbs { padding: 0 16px 12px; color: #6b655c; }\n");
     out.push_str("#crumbs a { color: #1f5e2a; }\n");
     out.push_str("#crumbs span { margin: 0 6px; }\n");
+    out.push_str("#note { padding: 0 16px 16px; color: #6b655c; font-size: 13px; }\n");
     out.push_str("section { padding: 0 16px 16px; }\n");
     out.push_str("h2 { font-size: 16px; color: #332f2a; margin: 8px 0; }\n");
     out.push_str("svg { display: block; }\n");
@@ -38,7 +39,10 @@ pub fn render_html(report: &Report, title: &str) -> Result<String, Error> {
     out.push_str("</style>\n</head>\n<body>\n<div id=\"title\">");
     out.push_str(&title);
     out.push_str("</div>\n<nav id=\"crumbs\"></nav>\n<main>\n");
-    out.push_str("<section><h2 id=\"heading\"></h2><svg id=\"map\"></svg></section>\n</main>\n");
+    out.push_str("<section><h2 id=\"heading\"></h2><svg id=\"map\"></svg></section>\n");
+    out.push_str("<p id=\"note\">Cost: S3 list price range per GiB-month (us-east-1). ");
+    out.push_str("Intelligent-Tiering ranges over its access sub-tiers; ");
+    out.push_str("a class S3 omits is STANDARD; local files are not priced.</p>\n</main>\n");
     out.push_str("<script type=\"module\">\n");
     out.push_str(
         "import {hierarchy, treemap} from \"https://cdn.jsdelivr.net/npm/d3-hierarchy@3/+esm\";\n",
@@ -61,6 +65,20 @@ fn encode(value: &(impl serde::Serialize + ?Sized)) -> Result<String, Error> {
 }
 
 const PAGE_SCRIPT: &str = r##"
+function dollars(value) {
+  if (value >= 1000) return "$" + (value / 1000).toFixed(1) + "k";
+  if (value >= 1) return "$" + value.toFixed(2);
+  if (value >= 0.01) return "$" + value.toFixed(3);
+  return "$" + value.toFixed(4);
+}
+function money(cost) {
+  if (cost == null) return "";
+  const first = dollars(cost.first), last = dollars(cost.last);
+  return first === last ? first : first + "–" + last;
+}
+function costNote(node) {
+  return node.storage_cost_per_month == null ? "" : " · " + money(node.storage_cost_per_month) + "/mo";
+}
 function humanBytes(value) {
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let size = value, unit = 0;
@@ -119,23 +137,26 @@ function count(number, singular, plural) {
   return number + " " + (number === 1 ? singular : plural);
 }
 function detail(node, depth) {
+  const head = humanBytes(node.compressed_bytes) + costNote(node);
   switch (depth) {
-    case 0: return humanBytes(node.compressed_bytes) + " · " + count(node.schemas.length, "schema", "schemas");
-    case 1: return humanBytes(node.compressed_bytes) + " · " + count(node.tables.length, "table", "tables");
-    case 2: return humanBytes(node.compressed_bytes) + " · " + count(node.columns.length, "column", "columns");
-    default: return humanBytes(node.compressed_bytes) + " · " + node.bytes_per_value.toFixed(1) + " B/row";
+    case 0: return head + " · " + count(node.schemas.length, "schema", "schemas");
+    case 1: return head + " · " + count(node.tables.length, "table", "tables");
+    case 2: return head + " · " + count(node.columns.length, "column", "columns");
+    default: return head + " · " + node.bytes_per_value.toFixed(1) + " B/row";
   }
 }
 function describe(node, depth) {
+  const head = humanBytes(node.compressed_bytes) + costNote(node);
   switch (depth) {
-    case 0: return node.display_name + " — " + humanBytes(node.compressed_bytes) + " over " +
+    case 0: return node.display_name + " — " + head + " over " +
       count(node.schemas.reduce((sum, schema) => sum + schema.tables.length, 0), "table", "tables");
-    case 1: return node.display_name + " — " + humanBytes(node.compressed_bytes) + " over " +
+    case 1: return node.display_name + " — " + head + " over " +
       count(node.tables.length, "table", "tables");
-    case 2: return node.display_name + " — " + humanBytes(node.compressed_bytes) + " over " +
+    case 2: return node.display_name + " — " + head + " over " +
       count(node.columns.length, "column", "columns") + " in " +
-      count(node.file_count, "file", "files");
-    default: return node.column + " — " + humanBytes(node.compressed_bytes) + " (" +
+      count(node.file_count, "file", "files") +
+      (node.storage_classes.length ? " [" + node.storage_classes.join(", ") + "]" : "");
+    default: return node.column + " — " + head + " (" +
       node.bytes_per_value.toFixed(1) + " bytes per row)";
   }
 }

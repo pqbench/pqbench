@@ -77,11 +77,12 @@ async fn viz_draws_measured_columns() {
     )
     .await
     .unwrap();
+    let blobs: Vec<_> = files.iter().map(|file| file.blob.clone()).collect();
     let columns: Vec<_> = files.into_iter().flat_map(|file| file.columns).collect();
 
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
-    pqbench::viz::write_report(&prefix, &columns).unwrap();
+    pqbench::viz::write_report(&prefix, &columns, &blobs).unwrap();
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains("d3-hierarchy@3"));

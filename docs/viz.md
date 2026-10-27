@@ -48,4 +48,8 @@ The page embeds the hierarchy as JSON and loads the d3 modules it uses
    drawn, because one table can carry thousands.
 
 Click a cell to descend; the breadcrumb walks back up, and the hash keeps the
-level, so a link can point at one. No build step, no npm, no local server.
+level, so a link can point at one. When the stream carries a file's storage
+class, each cell shows the estimated monthly S3 storage cost next to its bytes:
+an absent class on S3 is STANDARD, Intelligent-Tiering is a range over its
+access sub-tiers, and local files are not priced. No build step, no npm, no
+local server.

@@ -59,6 +59,16 @@ pub struct Report {
     pub catalogs: Vec<CatalogNode>,
 }
 
+/// A monthly storage cost estimate in US dollars: a range, because some
+/// classes (Intelligent-Tiering) choose their price by access sub-tier.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct CostEstimate {
+    /// The lowest monthly cost.
+    pub first: f64,
+    /// The highest monthly cost.
+    pub last: f64,
+}
+
 /// One catalog: the total over its schemas.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct CatalogNode {
@@ -68,6 +78,9 @@ pub struct CatalogNode {
     pub display_name: String,
     /// On-disk bytes over every measured table.
     pub compressed_bytes: u64,
+    /// Estimated monthly storage cost, when every file is priced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_cost_per_month: Option<CostEstimate>,
     /// The catalog's schemas, sorted by id.
     pub schemas: Vec<SchemaNode>,
 }
@@ -81,6 +94,9 @@ pub struct SchemaNode {
     pub display_name: String,
     /// On-disk bytes over every measured table.
     pub compressed_bytes: u64,
+    /// Estimated monthly storage cost, when every file is priced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_cost_per_month: Option<CostEstimate>,
     /// The schema's tables, sorted by id.
     pub tables: Vec<TableNode>,
 }
@@ -96,6 +112,12 @@ pub struct TableNode {
     pub display_name: String,
     /// On-disk bytes over every measured column.
     pub compressed_bytes: u64,
+    /// Estimated monthly storage cost, when every file is priced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_cost_per_month: Option<CostEstimate>,
+    /// The distinct storage classes behind the files, when known.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub storage_classes: Vec<String>,
     /// The table's columns, sorted by path.
     pub columns: Vec<ColumnNode>,
     /// Distinct measured files behind the columns.
@@ -113,14 +135,22 @@ pub struct ColumnNode {
     pub value_count: u64,
     /// [`Self::compressed_bytes`] divided by [`Self::value_count`].
     pub bytes_per_value: f64,
+    /// The table's monthly storage cost, apportioned by
+    /// [`Self::compressed_bytes`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_cost_per_month: Option<CostEstimate>,
 }
 
-/// Write `path.html` from the measured columns.
+/// Write `path.html` from the measured columns and the blobs they came from.
 ///
 /// # Errors
 /// Fails when there are no columns or the HTML page cannot be written.
-pub fn write_report(prefix: &Path, columns: &[v1::Bytemass]) -> Result<(), Error> {
-    let report = fold(columns);
+pub fn write_report(
+    prefix: &Path,
+    columns: &[v1::Bytemass],
+    blobs: &[v1::Blob],
+) -> Result<(), Error> {
+    let report = fold(columns, blobs);
     if report.catalogs.is_empty() {
         return Err(Error::Empty);
     }
@@ -148,7 +178,11 @@ struct TableBytes {
 }
 
 /// Group the columns by their table and fold the totals up the hierarchy.
-fn fold(columns: &[v1::Bytemass]) -> Report {
+fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
+    let facts: BTreeMap<&str, &v1::Blob> = blobs
+        .iter()
+        .map(|blob| (blob.name.as_str(), blob))
+        .collect();
     let mut tables: BTreeMap<(String, String, String), TableBytes> = BTreeMap::new();
     for column in columns {
         let Some((blob, path)) = v1::name::parse_bytemass(&column.name) else {
@@ -173,24 +207,40 @@ fn fold(columns: &[v1::Bytemass]) -> Report {
     let mut report = Report::default();
     for ((catalog, schema, name), table) in tables {
         let bytes = table.compressed_bytes;
+        let (storage_cost_per_month, storage_classes) = table_cost(&table.blobs, &facts);
+        let mut columns: Vec<ColumnNode> = table
+            .columns
+            .into_iter()
+            .map(|(column, total)| ColumnNode {
+                column,
+                compressed_bytes: total.compressed_bytes,
+                value_count: total.value_count,
+                bytes_per_value: if total.value_count == 0 {
+                    0.0
+                } else {
+                    total.compressed_bytes as f64 / total.value_count as f64
+                },
+                storage_cost_per_month: None,
+            })
+            .collect();
+        if let Some(cost) = storage_cost_per_month {
+            if bytes > 0 {
+                for column in &mut columns {
+                    let share = column.compressed_bytes as f64 / bytes as f64;
+                    column.storage_cost_per_month = Some(CostEstimate {
+                        first: cost.first * share,
+                        last: cost.last * share,
+                    });
+                }
+            }
+        }
         let node = TableNode {
             name: v1::name::table(&catalog, &schema, &name),
             display_name: name,
             compressed_bytes: bytes,
-            columns: table
-                .columns
-                .into_iter()
-                .map(|(column, total)| ColumnNode {
-                    column,
-                    compressed_bytes: total.compressed_bytes,
-                    value_count: total.value_count,
-                    bytes_per_value: if total.value_count == 0 {
-                        0.0
-                    } else {
-                        total.compressed_bytes as f64 / total.value_count as f64
-                    },
-                })
-                .collect(),
+            storage_cost_per_month,
+            storage_classes,
+            columns,
             file_count: table.blobs.len() as u64,
         };
         {
@@ -201,7 +251,106 @@ fn fold(columns: &[v1::Bytemass]) -> Report {
         }
         ensure_catalog(&mut report, &catalog).compressed_bytes += bytes;
     }
+    for catalog in &mut report.catalogs {
+        for schema in &mut catalog.schemas {
+            schema.storage_cost_per_month = sum_costs(
+                schema
+                    .tables
+                    .iter()
+                    .map(|table| table.storage_cost_per_month),
+            );
+        }
+        catalog.storage_cost_per_month = sum_costs(
+            catalog
+                .schemas
+                .iter()
+                .map(|schema| schema.storage_cost_per_month),
+        );
+    }
     report
+}
+
+/// The monthly S3 list-price cost of a table's files, and the distinct classes
+/// behind them. `None` when a file is not a priced S3 object (a local file, an
+/// unknown class, or a blob the stream did not describe).
+fn table_cost(
+    blobs: &BTreeSet<String>,
+    facts: &BTreeMap<&str, &v1::Blob>,
+) -> (Option<CostEstimate>, Vec<String>) {
+    let mut first = 0.0;
+    let mut last = 0.0;
+    let mut priced = true;
+    let mut classes = BTreeSet::new();
+    for blob in blobs {
+        let Some((service, _)) = v1::name::parse_blob(blob) else {
+            priced = false;
+            continue;
+        };
+        // Only object storage has a monthly bill; a path on disk does not.
+        if service != "s3" {
+            priced = false;
+            continue;
+        }
+        let Some(facts) = facts.get(blob.as_str()) else {
+            priced = false;
+            continue;
+        };
+        let Some(size) = facts.size_bytes else {
+            priced = false;
+            continue;
+        };
+        // S3 omits the class of a STANDARD object; absent means STANDARD.
+        let class = facts.storage_class.as_deref().unwrap_or("STANDARD");
+        let Some((low, high)) = storage_price(class) else {
+            priced = false;
+            continue;
+        };
+        let gigabytes = size as f64 / GIBIBYTE;
+        first += gigabytes * low;
+        last += gigabytes * high;
+        classes.insert(class.to_string());
+    }
+    let cost = (priced && !blobs.is_empty()).then_some(CostEstimate { first, last });
+    (cost, classes.into_iter().collect())
+}
+
+/// Bytes in a gibibyte. The list prices are quoted per GB-month; this uses the
+/// binary gigabyte AWS bills against.
+const GIBIBYTE: f64 = 1_073_741_824.0;
+
+/// The S3 list price range per GiB-month (us-east-1) for a storage class.
+///
+/// Intelligent-Tiering bills by access sub-tier (Frequent Access down to Deep
+/// Archive Access), and HEAD reports only the class, not the sub-tier, so it
+/// is the one class with a range. The sub-tier is chosen by how often the
+/// object is read; the object monitoring fee is not included.
+fn storage_price(storage_class: &str) -> Option<(f64, f64)> {
+    Some(match storage_class {
+        "STANDARD" => (0.023, 0.023),
+        "REDUCED_REDUNDANCY" => (0.024, 0.024),
+        "INTELLIGENT_TIERING" => (0.00099, 0.023),
+        "STANDARD_IA" => (0.0125, 0.0125),
+        "ONEZONE_IA" => (0.01, 0.01),
+        "EXPRESS_ONEZONE" => (0.016, 0.016),
+        "GLACIER_IR" => (0.004, 0.004),
+        "GLACIER" => (0.0036, 0.0036),
+        "DEEP_ARCHIVE" => (0.00099, 0.00099),
+        _ => return None,
+    })
+}
+
+/// Add child costs; `None` when any child is unpriced.
+fn sum_costs(costs: impl Iterator<Item = Option<CostEstimate>>) -> Option<CostEstimate> {
+    let mut first = 0.0;
+    let mut last = 0.0;
+    let mut any = false;
+    for cost in costs {
+        let cost = cost?;
+        first += cost.first;
+        last += cost.last;
+        any = true;
+    }
+    any.then_some(CostEstimate { first, last })
 }
 
 /// The table a measurement names: the table-file's table, or the local table a
@@ -329,7 +478,7 @@ mod tests {
                 5,
             ),
         ];
-        let report = fold(&columns);
+        let report = fold(&columns, &[sales, web]);
 
         assert_eq!(report.catalogs.len(), 1);
         let catalog = &report.catalogs[0];
@@ -355,10 +504,13 @@ mod tests {
         let first = blob("/lake/lineitem/part-0.parquet");
         let second = blob("/lake/lineitem/part-1.parquet");
         let table = "catalogs/tpch/schemas/sf1/tables/lineitem";
-        let report = fold(&[
-            column(&first, Some(table), "l_comment", 60),
-            column(&second, Some(table), "l_comment", 40),
-        ]);
+        let report = fold(
+            &[
+                column(&first, Some(table), "l_comment", 60),
+                column(&second, Some(table), "l_comment", 40),
+            ],
+            &[first, second],
+        );
 
         let node = &report.catalogs[0].schemas[0].tables[0];
         assert_eq!(node.file_count, 2);
@@ -370,9 +522,65 @@ mod tests {
     }
 
     #[test]
+    fn prices_a_standard_s3_file_and_leaves_a_local_path_unpriced() {
+        let table = "catalogs/shop/schemas/sales/tables/orders";
+        let s3 = blob("s3://lake/orders/part-0.parquet");
+        let report = fold(
+            &[column(&s3, Some(table), "id", 4)],
+            std::slice::from_ref(&s3),
+        );
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        let expected = 40.0 / GIBIBYTE * 0.023;
+        let cost = node.storage_cost_per_month.expect("a priced file");
+        assert!((cost.first - expected).abs() < 1e-15);
+        assert!((cost.last - expected).abs() < 1e-15);
+        assert_eq!(node.storage_classes, vec!["STANDARD".to_string()]);
+        assert_eq!(node.columns[0].storage_cost_per_month, Some(cost));
+        assert_eq!(
+            report.catalogs[0].schemas[0].storage_cost_per_month,
+            Some(cost)
+        );
+        assert_eq!(report.catalogs[0].storage_cost_per_month, Some(cost));
+
+        let local = blob("/lake/local.parquet");
+        let report = fold(
+            &[column(&local, None, "id", 4)],
+            std::slice::from_ref(&local),
+        );
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        assert!(node.storage_cost_per_month.is_none());
+        assert!(node.storage_classes.is_empty());
+        assert!(report.catalogs[0].storage_cost_per_month.is_none());
+    }
+
+    #[test]
+    fn ranges_intelligent_tiering_over_its_sub_tiers() {
+        let mut file = blob("s3://lake/part-0.parquet");
+        file.size_bytes = Some(GIBIBYTE as u64);
+        file.storage_class = Some("INTELLIGENT_TIERING".into());
+        let table = "catalogs/shop/schemas/sales/tables/orders";
+        let report = fold(
+            &[column(&file, Some(table), "id", 4)],
+            std::slice::from_ref(&file),
+        );
+
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        let cost = node.storage_cost_per_month.expect("a priced file");
+        assert!((cost.first - 0.00099).abs() < 1e-12, "{cost:?}");
+        assert!((cost.last - 0.023).abs() < 1e-12, "{cost:?}");
+        assert_eq!(
+            node.storage_classes,
+            vec!["INTELLIGENT_TIERING".to_string()]
+        );
+    }
+
+    #[test]
     fn a_bare_file_takes_the_local_table() {
         let file = blob("/lake/quickstart.parquet");
-        let report = fold(&[column(&file, None, "text", 8)]);
+        let report = fold(
+            &[column(&file, None, "text", 8)],
+            std::slice::from_ref(&file),
+        );
 
         let catalog = &report.catalogs[0];
         assert_eq!(catalog.display_name, "local");
@@ -389,7 +597,12 @@ mod tests {
         let file = blob("/tmp/a<b>.parquet");
         let directory = tempfile::tempdir().unwrap();
         let prefix = directory.path().join("masses");
-        write_report(&prefix, &[column(&file, None, "text", 4)]).unwrap();
+        write_report(
+            &prefix,
+            &[column(&file, None, "text", 4)],
+            std::slice::from_ref(&file),
+        )
+        .unwrap();
 
         let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
         assert!(html.starts_with("<!DOCTYPE html>"));
@@ -402,7 +615,7 @@ mod tests {
     #[test]
     fn empty_columns_fail() {
         let directory = tempfile::tempdir().unwrap();
-        let error = write_report(&directory.path().join("empty"), &[])
+        let error = write_report(&directory.path().join("empty"), &[], &[])
             .unwrap_err()
             .to_string();
         assert!(error.contains("bytemass columns"), "{error}");
