@@ -29,7 +29,6 @@ pub fn render_html(report: &Report, title: &str) -> Result<String, Error> {
     out.push_str("#crumbs { padding: 0 16px 12px; color: #6b655c; }\n");
     out.push_str("#crumbs a { color: #1f5e2a; }\n");
     out.push_str("#crumbs span { margin: 0 6px; }\n");
-    out.push_str("#note { padding: 0 16px 16px; color: #6b655c; font-size: 13px; }\n");
     out.push_str("section { padding: 0 16px 16px; }\n");
     out.push_str("h2 { font-size: 16px; color: #332f2a; margin: 8px 0; }\n");
     out.push_str("svg { display: block; }\n");
@@ -39,10 +38,7 @@ pub fn render_html(report: &Report, title: &str) -> Result<String, Error> {
     out.push_str("</style>\n</head>\n<body>\n<div id=\"title\">");
     out.push_str(&title);
     out.push_str("</div>\n<nav id=\"crumbs\"></nav>\n<main>\n");
-    out.push_str("<section><h2 id=\"heading\"></h2><svg id=\"map\"></svg></section>\n");
-    out.push_str("<p id=\"note\">Cost: S3 list price range per GiB-month (us-east-1). ");
-    out.push_str("Intelligent-Tiering ranges over its access sub-tiers; ");
-    out.push_str("a class S3 omits is STANDARD; local files are not priced.</p>\n</main>\n");
+    out.push_str("<section><h2 id=\"heading\"></h2><svg id=\"map\"></svg></section>\n</main>\n");
     out.push_str("<script type=\"module\">\n");
     out.push_str(
         "import {hierarchy, treemap} from \"https://cdn.jsdelivr.net/npm/d3-hierarchy@3/+esm\";\n",
