@@ -60,6 +60,11 @@ pub async fn measure(lake: &Lake, file: &v1::TableFile) -> Result<MeasuredFile, 
         .blob
         .as_deref()
         .ok_or_else(|| Error::Invalid("a table-file record needs a blob to read".into()))?;
+    let table = v1::name::parse_table_file(&file.name)
+        .map(|(table, _)| table)
+        .ok_or_else(|| {
+            Error::Invalid("a table-file record needs a catalogs/…/tables/… name".into())
+        })?;
     let uri = v1::name::blob_uri(blob)
         .ok_or_else(|| Error::Invalid(format!("not a blob name: {blob}")))?;
     let env = file
@@ -67,7 +72,7 @@ pub async fn measure(lake: &Lake, file: &v1::TableFile) -> Result<MeasuredFile, 
         .as_ref()
         .map(v1::Credentials::to_env)
         .unwrap_or_default();
-    let measured = measure_file(lake, &uri, &env).await?;
+    let mut measured = measure_file(lake, &uri, &env).await?;
     if let Some(size) = file.size_bytes.filter(|size| *size != 0) {
         if measured.blob.size_bytes != Some(size) {
             return Err(Error::Invalid(format!(
@@ -75,6 +80,9 @@ pub async fn measure(lake: &Lake, file: &v1::TableFile) -> Result<MeasuredFile, 
                 measured.blob.size_bytes
             )));
         }
+    }
+    for column in &mut measured.columns {
+        column.table = Some(table.clone());
     }
     Ok(measured)
 }

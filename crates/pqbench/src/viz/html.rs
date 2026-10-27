@@ -1,19 +1,23 @@
-//! Static HTML: the embedded bytemass columns are drawn as a d3 treemap.
+//! Static HTML: one treemap level at a time, clicked down the hierarchy.
+//!
+//! The page is one file with inline styles and data; it draws with the three
+//! d3 modules it imports from a CDN, so it opens without a server. A table's
+//! files are counted, not drawn: a table can carry thousands of them.
 
-use crate::v1;
-use crate::viz::{ColumnRow, Error};
+use crate::viz::{Error, Report};
 
-/// Self-contained page that embeds the columns and blobs and draws a d3 treemap.
+/// Self-contained page that embeds the report and draws it as clickable
+/// treemaps: catalogs, a catalog's schemas, a schema's tables, and a table's
+/// columns.
 ///
 /// # Errors
-/// Fails when there are no columns or the columns cannot be encoded into the page.
-pub fn render_html(rows: &[ColumnRow], blobs: &[v1::Blob], title: &str) -> Result<String, Error> {
-    if rows.is_empty() {
+/// Fails when the report holds no catalogs or cannot be encoded into the page.
+pub fn render_html(report: &Report, title: &str) -> Result<String, Error> {
+    if report.catalogs.is_empty() {
         return Err(Error::Empty);
     }
     let title = html_escape(title);
-    let columns = encode(rows)?;
-    let files = encode(blobs)?;
+    let data = encode(report)?;
     let mut out = String::new();
     out.push_str("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>");
     out.push_str(&title);
@@ -22,27 +26,27 @@ pub fn render_html(rows: &[ColumnRow], blobs: &[v1::Blob], title: &str) -> Resul
     out.push_str(
         "#title { text-align: center; font-size: 26px; padding: 12px; color: #332f2a; }\n",
     );
+    out.push_str("#crumbs { padding: 0 16px 12px; color: #6b655c; }\n");
+    out.push_str("#crumbs a { color: #1f5e2a; }\n");
+    out.push_str("#crumbs span { margin: 0 6px; }\n");
     out.push_str("section { padding: 0 16px 16px; }\n");
     out.push_str("h2 { font-size: 16px; color: #332f2a; margin: 8px 0; }\n");
     out.push_str("svg { display: block; }\n");
-    out.push_str(".cell { stroke: #a9a49d; stroke-width: 0.8px; }\n");
-    out.push_str(".cell:hover { stroke: #332f2a; stroke-width: 1.6px; }\n");
+    out.push_str(".cell rect { stroke: #a9a49d; stroke-width: 0.8px; }\n");
+    out.push_str(".cell:hover rect { stroke: #332f2a; stroke-width: 1.6px; }\n");
     out.push_str(".label { fill: #332f2a; font-size: 13px; pointer-events: none; }\n");
     out.push_str("</style>\n</head>\n<body>\n<div id=\"title\">");
     out.push_str(&title);
-    out.push_str("</div>\n<main id=\"maps\"></main>\n");
+    out.push_str("</div>\n<nav id=\"crumbs\"></nav>\n<main>\n");
+    out.push_str("<section><h2 id=\"heading\"></h2><svg id=\"map\"></svg></section>\n</main>\n");
     out.push_str("<script type=\"module\">\n");
     out.push_str(
         "import {hierarchy, treemap} from \"https://cdn.jsdelivr.net/npm/d3-hierarchy@3/+esm\";\n",
     );
     out.push_str("import {scaleLinear} from \"https://cdn.jsdelivr.net/npm/d3-scale@4/+esm\";\n");
     out.push_str("import {select} from \"https://cdn.jsdelivr.net/npm/d3-selection@3/+esm\";\n");
-    out.push_str("const TITLE = ");
-    out.push_str(&encode(&title)?);
-    out.push_str(";\nconst COLUMNS = ");
-    out.push_str(&columns);
-    out.push_str(";\nconst FILES = ");
-    out.push_str(&files);
+    out.push_str("const REPORT = ");
+    out.push_str(&data);
     out.push_str(";\n");
     out.push_str(PAGE_SCRIPT);
     out.push_str("</script>\n</body>\n</html>\n");
@@ -57,70 +61,153 @@ fn encode(value: &(impl serde::Serialize + ?Sized)) -> Result<String, Error> {
 }
 
 const PAGE_SCRIPT: &str = r##"
-function branch(name) { return { name, value: 0, children: [] }; }
-function insert(node, parts, value) {
-  if (parts.length === 0) { node.value = value; return; }
-  let child = node.children.find(item => item.name === parts[0]);
-  if (!child) { child = branch(parts[0]); node.children.push(child); }
-  insert(child, parts.slice(1), value);
+function dollars(value) {
+  if (value >= 1000) return "$" + (value / 1000).toFixed(1) + "k";
+  if (value >= 1) return "$" + value.toFixed(2);
+  if (value >= 0.01) return "$" + value.toFixed(3);
+  return "$" + value.toFixed(4);
 }
-function recompute(node) {
-  if (node.children.length === 0) return;
-  for (const child of node.children) recompute(child);
-  node.value = node.children.reduce((sum, child) => sum + child.value, 0);
+function money(cost) {
+  if (cost == null) return "";
+  const first = dollars(cost.first), last = dollars(cost.last);
+  return first === last ? first : first + "–" + last;
 }
-function tree(name, columns) {
-  const root = branch(name);
-  for (const column of columns) {
-    const values = Math.max(column.value_count, 1);
-    insert(root, column.column.split("."), column.compressed_bytes / values);
+function costNote(node) {
+  return node.storage_cost_per_month == null ? "" : " · " + money(node.storage_cost_per_month) + "/mo";
+}
+function humanBytes(value) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let size = value, unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+  return (unit === 0 ? size.toFixed(0) : size.toFixed(1)) + " " + units[unit];
+}
+function readPath() {
+  const raw = window.location.hash.slice(1);
+  if (!raw) return [];
+  const path = [];
+  for (const part of raw.split("/")) {
+    if (!/^\d+$/.test(part)) return [];
+    path.push(Number(part));
   }
-  recompute(root);
-  return root;
+  return path;
 }
-function fileTree(name, files) {
-  const root = branch(name);
-  for (const file of files) {
-    let leaf = String(file.name).split("/").pop() || file.name;
-    if (file.storage_class) leaf += ` [${file.storage_class}]`;
-    insert(root, [leaf], file.size_bytes || 0);
+function locate(want) {
+  const catalog = REPORT.catalogs[want[0]];
+  if (!catalog) return { path: [] };
+  if (want.length === 1) return { path: [want[0]], catalog };
+  const schema = catalog.schemas[want[1]];
+  if (!schema) return { path: [want[0]], catalog };
+  if (want.length === 2) return { path: want.slice(0, 2), catalog, schema };
+  const table = schema.tables[want[2]];
+  if (!table) return { path: want.slice(0, 2), catalog, schema };
+  return { path: want.slice(0, 3), catalog, schema, table };
+}
+function crumbs(at) {
+  const nav = document.getElementById("crumbs");
+  nav.replaceChildren();
+  const items = [{ label: "catalogs", href: "#" }];
+  if (at.catalog) items.push({ label: at.catalog.display_name, href: "#" + at.path[0] });
+  if (at.schema) {
+    items.push({ label: at.schema.display_name, href: "#" + at.path.slice(0, 2).join("/") });
   }
-  recompute(root);
-  return root;
+  if (at.table) items.push({ label: at.table.display_name, href: "#" + at.path.join("/") });
+  items.forEach((item, index) => {
+    if (index > 0) {
+      const separator = document.createElement("span");
+      separator.textContent = "›";
+      nav.append(separator);
+    }
+    if (index === items.length - 1) {
+      const current = document.createElement("span");
+      current.textContent = item.label;
+      nav.append(current);
+    } else {
+      const link = document.createElement("a");
+      link.href = item.href;
+      link.textContent = item.label;
+      nav.append(link);
+    }
+  });
 }
-function draw(svg, data, unit) {
-  const width = 1600, height = 420;
-  svg.attr("width", width).attr("height", height);
-  const root = hierarchy(data).sum(d => d.children && d.children.length ? 0 : d.value);
+function count(number, singular, plural) {
+  return number + " " + (number === 1 ? singular : plural);
+}
+function detail(node, depth) {
+  const head = humanBytes(node.compressed_bytes) + costNote(node);
+  switch (depth) {
+    case 0: return head + " · " + count(node.schemas.length, "schema", "schemas");
+    case 1: return head + " · " + count(node.tables.length, "table", "tables");
+    case 2: return head + " · " + count(node.columns.length, "column", "columns");
+    default: return head + " · " + node.bytes_per_value.toFixed(1) + " B/row";
+  }
+}
+function describe(node, depth) {
+  const head = humanBytes(node.compressed_bytes) + costNote(node);
+  switch (depth) {
+    case 0: return node.display_name + " — " + head + " over " +
+      count(node.schemas.reduce((sum, schema) => sum + schema.tables.length, 0), "table", "tables");
+    case 1: return node.display_name + " — " + head + " over " +
+      count(node.tables.length, "table", "tables");
+    case 2: return node.display_name + " — " + head + " over " +
+      count(node.columns.length, "column", "columns") + " in " +
+      count(node.file_count, "file", "files") +
+      (node.storage_classes.length ? " [" + node.storage_classes.join(", ") + "]" : "");
+    default: return node.column + " — " + head + " (" +
+      node.bytes_per_value.toFixed(1) + " bytes per row)";
+  }
+}
+function draw(element, nodes, depth, path) {
+  const width = 1600, height = 460;
+  const svg = select(element).attr("width", width).attr("height", height);
+  svg.selectAll("*").remove();
+  const items = nodes.map((node, index) => ({
+    index,
+    node,
+    name: depth === 3 ? node.column : node.display_name,
+    value: node.compressed_bytes,
+    href: depth < 3 ? "#" + path.concat(index).join("/") : null,
+  }));
+  const root = hierarchy({ children: items }).sum(item => item.children ? 0 : item.value);
   treemap().size([width, height]).paddingInner(1).paddingOuter(0)(root);
-  const color = scaleLinear().domain([0, root.value]).range(["#eef3ea", "#1f5e2a"]);
-  const fmt = d => d.toFixed(1);
-  const cell = svg.selectAll("g").data(root.leaves()).join("g")
-    .attr("transform", d => `translate(${d.x0},${d.y0})`);
-  cell.append("rect").attr("width", d => d.x1 - d.x0).attr("height", d => d.y1 - d.y0)
-    .attr("fill", d => color(d.value)).attr("class", "cell");
-  cell.append("title").text(d => `${d.data.name}: ${fmt(d.value)} ${unit}`);
-  cell.filter(d => (d.x1 - d.x0) > 36 && (d.y1 - d.y0) > 16).append("text")
-    .selectAll("tspan").data(d => [d.data.name, fmt(d.value) + " " + unit]).join("tspan")
-    .attr("x", 4).attr("y", (d, i) => 15 + i * 14).attr("class", "label").text(d => d);
+  const color = scaleLinear().domain([0, Math.max(root.value, 1)]).range(["#eef3ea", "#1f5e2a"]);
+  const cell = svg.selectAll("g.cell").data(root.leaves()).join("g").attr("class", "cell")
+    .attr("transform", item => `translate(${item.x0},${item.y0})`);
+  cell.append("rect")
+    .attr("width", item => Math.max(item.x1 - item.x0, 0))
+    .attr("height", item => Math.max(item.y1 - item.y0, 0))
+    .attr("fill", item => color(item.value));
+  cell.append("title").text(item => describe(item.data.node, depth));
+  cell.filter(item => (item.x1 - item.x0) > 60 && (item.y1 - item.y0) > 24)
+    .append("text")
+    .selectAll("tspan")
+    .data(item => [item.data.name, detail(item.data.node, depth)])
+    .join("tspan")
+    .attr("x", 4)
+    .attr("y", (text, index) => 15 + index * 14)
+    .attr("class", "label")
+    .text(text => text);
+  cell.filter(item => item.data.href !== null)
+    .style("cursor", "pointer")
+    .on("click", (event, item) => { window.location.hash = item.data.href; });
 }
-const maps = document.getElementById("maps");
-const section = document.createElement("section");
-const heading = document.createElement("h2");
-heading.textContent = TITLE;
-const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-section.appendChild(heading);
-section.appendChild(svg);
-maps.appendChild(section);
-draw(select(svg), tree(TITLE, COLUMNS), "bpr");
-if (FILES.length > 0) {
-  const fileHeading = document.createElement("h2");
-  fileHeading.textContent = TITLE + " files";
-  const fileSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  section.appendChild(fileHeading);
-  section.appendChild(fileSvg);
-  draw(select(fileSvg), fileTree(TITLE, FILES), "bytes");
+function render() {
+  const at = locate(readPath());
+  const depth = at.path.length;
+  const nodes = depth === 0 ? REPORT.catalogs
+    : depth === 1 ? at.catalog.schemas
+    : depth === 2 ? at.schema.tables
+    : at.table.columns;
+  crumbs(at);
+  const heading = document.getElementById("heading");
+  heading.textContent =
+    depth === 0 ? `Catalogs (${nodes.length})`
+    : depth === 1 ? `Schemas in ${at.catalog.display_name} (${nodes.length})`
+    : depth === 2 ? `Tables in ${at.catalog.display_name}.${at.schema.display_name} (${nodes.length})`
+    : `Columns in ${at.table.display_name} (${nodes.length})`;
+  draw(document.getElementById("map"), nodes, depth, at.path);
 }
+window.addEventListener("hashchange", render);
+render();
 "##;
 
 fn html_escape(text: &str) -> String {

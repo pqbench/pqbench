@@ -141,6 +141,9 @@ message Schema {
   string uri = 4;
 
   map<string, string> properties = 5;
+
+  // The user-facing name the endpoint reports for the schema.
+  string display_name = 6;
 }
 
 message Table {
@@ -170,6 +173,9 @@ message Table {
   // The vended storage credentials for the table's files, when the caller
   // holds them. Set by the stage that read the table.
   Credentials credentials = 11;
+
+  // The user-facing name the endpoint reports for the table.
+  string display_name = 12;
 }
 
 // A column of a table's schema. Not a resource: the declared column is a
@@ -316,6 +322,9 @@ message Bytemass {
   double bytes_per_value = 12;
   double compression_ratio = 13;
   double null_fraction = 14;
+
+  // The table whose file was measured, when measured through a table file.
+  string table = 15;
 }
 
 // A codec sweep of a column.

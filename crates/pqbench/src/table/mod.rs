@@ -231,6 +231,7 @@ impl TableInfo {
         properties.extend(self.iceberg_properties.clone());
         v1::Table {
             name: v1::name::table(catalog, schema, table),
+            display_name: non_empty(table),
             uri: non_empty(&self.uri),
             format: Some(self.format),
             snapshot_version: Some(self.snapshot_version),
