@@ -170,6 +170,7 @@ class Schema(Record):
 
     name: str
     uid: str | None
+    display_name: str | None
     comment: str | None
     uri: str | None
     properties: dict[str, str]
@@ -184,6 +185,7 @@ class Table(Record):
 
     name: str
     uid: str | None
+    display_name: str | None
     uri: str | None
     format: str | None  # "TABLE_FORMAT_DELTA" | "TABLE_FORMAT_ICEBERG"
     snapshot_version: int | None
@@ -225,6 +227,7 @@ class Bytemass(Record):
     """One column's byte mass, its chunks folded over the file's row groups."""
 
     name: str
+    table: str | None
     compressed_bytes: int | None
     uncompressed_bytes: int | None
     codec: str | None

@@ -10,6 +10,12 @@ pub struct Bytemass {
     /// `…/columns/{column}/bytemass`.
     #[resource(name = "blobs/{service}/{locator}/columns/{column}/bytemass")]
     pub name: String,
+    /// The table whose file was measured, when measured through a table file.
+    ///
+    /// The blob is storage-rooted, so a bare file names no table; a file read
+    /// as a [`TableFile`](super::TableFile) names the table it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
     /// On-disk (compressed) bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compressed_bytes: Option<u64>,

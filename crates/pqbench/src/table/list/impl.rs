@@ -123,6 +123,7 @@ fn unity_table(catalog: &str, schema: &str, entry: UnityTable) -> Result<Table, 
     let table = name.rsplit('.').next().unwrap_or(name.as_str());
     Ok(Table {
         name: crate::v1::name::table(catalog, schema, table),
+        display_name: Some(table.to_string()),
         uri: storage_path,
         ..Table::default()
     })
@@ -162,6 +163,7 @@ async fn iceberg_tables(
             };
             tables.push(Table {
                 name: crate::v1::name::table(catalog, &namespace, &identifier.name),
+                display_name: Some(identifier.name),
                 ..Table::default()
             });
         }

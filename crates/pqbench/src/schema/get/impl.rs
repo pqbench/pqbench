@@ -63,6 +63,7 @@ async fn unity_schema(workspace: &Workspace, catalog: &str, schema: &str) -> Res
         .unwrap_or_else(|| schema.to_string());
     Ok(Schema {
         name: crate::v1::name::schema(catalog, &name),
+        display_name: Some(name),
         comment: record.comment.filter(|comment| !comment.is_empty()),
         uri: record
             .storage_location
@@ -97,6 +98,7 @@ async fn iceberg_schema(
     };
     Ok(Schema {
         name: crate::v1::name::schema(catalog, &name),
+        display_name: Some(name),
         uri: location,
         properties,
         ..Schema::default()

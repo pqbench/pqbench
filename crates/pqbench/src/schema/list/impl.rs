@@ -50,6 +50,7 @@ pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Schema
     let mut schemas: Vec<Schema> = names
         .into_iter()
         .map(|schema| Schema {
+            display_name: Some(schema.clone()),
             name: crate::v1::name::schema(&catalog, &schema),
             ..Schema::default()
         })

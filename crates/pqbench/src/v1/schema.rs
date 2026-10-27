@@ -16,6 +16,9 @@ pub struct Schema {
     /// The system UUID, when the endpoint reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    /// The user-facing name the endpoint reports for the schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// The schema comment, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
