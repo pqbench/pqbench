@@ -78,9 +78,17 @@ pub struct CatalogNode {
     pub display_name: String,
     /// On-disk bytes over every measured table.
     pub compressed_bytes: u64,
+    /// Uncompressed bytes over compressed bytes, when every measurement below
+    /// reported both. Above 1 means the bytes did compress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression_ratio: Option<f64>,
     /// Estimated monthly storage cost, when every file is priced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_cost_per_month: Option<CostEstimate>,
+    /// Uncompressed bytes behind the node; kept to derive
+    /// [`Self::compression_ratio`], not drawn.
+    #[serde(skip)]
+    pub uncompressed_bytes: Option<u64>,
     /// The catalog's schemas, sorted by id.
     pub schemas: Vec<SchemaNode>,
 }
@@ -94,9 +102,17 @@ pub struct SchemaNode {
     pub display_name: String,
     /// On-disk bytes over every measured table.
     pub compressed_bytes: u64,
+    /// Uncompressed bytes over compressed bytes, when every measurement below
+    /// reported both. Above 1 means the bytes did compress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression_ratio: Option<f64>,
     /// Estimated monthly storage cost, when every file is priced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_cost_per_month: Option<CostEstimate>,
+    /// Uncompressed bytes behind the node; kept to derive
+    /// [`Self::compression_ratio`], not drawn.
+    #[serde(skip)]
+    pub uncompressed_bytes: Option<u64>,
     /// The schema's tables, sorted by id.
     pub tables: Vec<TableNode>,
 }
@@ -112,6 +128,10 @@ pub struct TableNode {
     pub display_name: String,
     /// On-disk bytes over every measured column.
     pub compressed_bytes: u64,
+    /// Uncompressed bytes over compressed bytes, when every measurement of the
+    /// columns reported both. Above 1 means the bytes did compress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression_ratio: Option<f64>,
     /// Estimated monthly storage cost, when every file is priced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_cost_per_month: Option<CostEstimate>,
@@ -166,29 +186,59 @@ pub fn write_report(
     })
 }
 
-/// What one column adds up to while a table is folded.
-struct ColumnBytes {
-    compressed_bytes: u64,
-    uncompressed_bytes: u64,
-    uncompressed_complete: bool,
-    value_count: u64,
+/// Uncompressed bytes behind a fold, and whether a measurement omitted them.
+#[derive(Default)]
+struct Uncompressed {
+    bytes: u64,
+    incomplete: bool,
 }
 
-impl Default for ColumnBytes {
-    fn default() -> Self {
-        Self {
-            compressed_bytes: 0,
-            uncompressed_bytes: 0,
-            uncompressed_complete: true,
-            value_count: 0,
+impl Uncompressed {
+    fn add(&mut self, bytes: Option<u64>) {
+        match bytes {
+            Some(bytes) => self.bytes += bytes,
+            None => self.incomplete = true,
         }
     }
+
+    /// The ratio when every measurement reported its bytes.
+    fn ratio(&self, compressed_bytes: u64) -> Option<f64> {
+        if self.incomplete {
+            return None;
+        }
+        ratio(Some(self.bytes), compressed_bytes)
+    }
+}
+
+/// Uncompressed over compressed, when both are known and compressed is not
+/// zero.
+fn ratio(uncompressed_bytes: Option<u64>, compressed_bytes: u64) -> Option<f64> {
+    let uncompressed = uncompressed_bytes?;
+    (compressed_bytes > 0).then(|| uncompressed as f64 / compressed_bytes as f64)
+}
+
+/// Add one measurement's uncompressed bytes, or poison the total when it does
+/// not report them.
+fn add_uncompressed(total: &mut Option<u64>, bytes: Option<u64>) {
+    *total = match (*total, bytes) {
+        (Some(total), Some(bytes)) => Some(total + bytes),
+        _ => None,
+    };
+}
+
+/// What one column adds up to while a table is folded.
+#[derive(Default)]
+struct ColumnBytes {
+    compressed_bytes: u64,
+    uncompressed: Uncompressed,
+    value_count: u64,
 }
 
 /// What one table's columns add up to while the report is built.
 #[derive(Default)]
 struct TableBytes {
     compressed_bytes: u64,
+    uncompressed: Uncompressed,
     columns: BTreeMap<String, ColumnBytes>,
     blobs: BTreeSet<String>,
 }
@@ -214,13 +264,11 @@ fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
         let values = column.value_count.unwrap_or(0);
         let table = tables.entry((catalog, schema, name)).or_default();
         table.compressed_bytes += bytes;
+        table.uncompressed.add(column.uncompressed_bytes);
         table.blobs.insert(blob);
         let total = table.columns.entry(path).or_default();
         total.compressed_bytes += bytes;
-        match column.uncompressed_bytes {
-            Some(bytes) => total.uncompressed_bytes += bytes,
-            None => total.uncompressed_complete = false,
-        }
+        total.uncompressed.add(column.uncompressed_bytes);
         total.value_count += values;
     }
 
@@ -231,25 +279,17 @@ fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
         let mut columns: Vec<ColumnNode> = table
             .columns
             .into_iter()
-            .map(|(column, total)| {
-                let compression_ratio = if total.uncompressed_complete && total.compressed_bytes > 0
-                {
-                    Some(total.uncompressed_bytes as f64 / total.compressed_bytes as f64)
+            .map(|(column, total)| ColumnNode {
+                column,
+                compressed_bytes: total.compressed_bytes,
+                value_count: total.value_count,
+                bytes_per_value: if total.value_count == 0 {
+                    0.0
                 } else {
-                    None
-                };
-                ColumnNode {
-                    column,
-                    compressed_bytes: total.compressed_bytes,
-                    value_count: total.value_count,
-                    bytes_per_value: if total.value_count == 0 {
-                        0.0
-                    } else {
-                        total.compressed_bytes as f64 / total.value_count as f64
-                    },
-                    compression_ratio,
-                    storage_cost_per_month: None,
-                }
+                    total.compressed_bytes as f64 / total.value_count as f64
+                },
+                compression_ratio: total.uncompressed.ratio(total.compressed_bytes),
+                storage_cost_per_month: None,
             })
             .collect();
         if let Some(cost) = storage_cost_per_month {
@@ -263,25 +303,27 @@ fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
                 }
             }
         }
+        let uncompressed_bytes =
+            (!table.uncompressed.incomplete).then_some(table.uncompressed.bytes);
         let node = TableNode {
             name: v1::name::table(&catalog, &schema, &name),
             display_name: name,
             compressed_bytes: bytes,
+            compression_ratio: table.uncompressed.ratio(bytes),
             storage_cost_per_month,
             storage_classes,
             columns,
             file_count: table.blobs.len() as u64,
         };
-        {
-            let catalog_node = ensure_catalog(&mut report, &catalog);
-            let schema_node = ensure_schema(catalog_node, &schema);
-            schema_node.compressed_bytes += bytes;
-            schema_node.tables.push(node);
-        }
-        ensure_catalog(&mut report, &catalog).compressed_bytes += bytes;
+        let catalog_node = ensure_catalog(&mut report, &catalog, uncompressed_bytes);
+        catalog_node.compressed_bytes += bytes;
+        let schema_node = ensure_schema(catalog_node, &schema, uncompressed_bytes);
+        schema_node.compressed_bytes += bytes;
+        schema_node.tables.push(node);
     }
     for catalog in &mut report.catalogs {
         for schema in &mut catalog.schemas {
+            schema.compression_ratio = ratio(schema.uncompressed_bytes, schema.compressed_bytes);
             schema.storage_cost_per_month = sum_costs(
                 schema
                     .tables
@@ -289,6 +331,7 @@ fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
                     .map(|table| table.storage_cost_per_month),
             );
         }
+        catalog.compression_ratio = ratio(catalog.uncompressed_bytes, catalog.compressed_bytes);
         catalog.storage_cost_per_month = sum_costs(
             catalog
                 .schemas
@@ -392,35 +435,49 @@ fn resolve_table(column: &v1::Bytemass, blob: &str) -> Option<String> {
 }
 
 /// The catalog node, appending it when the fold reaches a new catalog.
-fn ensure_catalog<'a>(report: &'a mut Report, catalog: &str) -> &'a mut CatalogNode {
+fn ensure_catalog<'a>(
+    report: &'a mut Report,
+    catalog: &str,
+    uncompressed_bytes: Option<u64>,
+) -> &'a mut CatalogNode {
     let name = v1::name::catalog(catalog);
     if report.catalogs.last().map(|node| node.name.as_str()) != Some(name.as_str()) {
         report.catalogs.push(CatalogNode {
             name,
             display_name: catalog.to_string(),
+            uncompressed_bytes: Some(0),
             ..CatalogNode::default()
         });
     }
-    report
+    let node = report
         .catalogs
         .last_mut()
-        .expect("a catalog was just pushed")
+        .expect("a catalog was just pushed");
+    add_uncompressed(&mut node.uncompressed_bytes, uncompressed_bytes);
+    node
 }
 
 /// The schema node, appending it when the fold reaches a new schema.
-fn ensure_schema<'a>(catalog: &'a mut CatalogNode, schema: &str) -> &'a mut SchemaNode {
+fn ensure_schema<'a>(
+    catalog: &'a mut CatalogNode,
+    schema: &str,
+    uncompressed_bytes: Option<u64>,
+) -> &'a mut SchemaNode {
     let name = v1::name::schema(&catalog.display_name, schema);
     if catalog.schemas.last().map(|node| node.name.as_str()) != Some(name.as_str()) {
         catalog.schemas.push(SchemaNode {
             name,
             display_name: schema.to_string(),
+            uncompressed_bytes: Some(0),
             ..SchemaNode::default()
         });
     }
-    catalog
+    let node = catalog
         .schemas
         .last_mut()
-        .expect("a schema was just pushed")
+        .expect("a schema was just pushed");
+    add_uncompressed(&mut node.uncompressed_bytes, uncompressed_bytes);
+    node
 }
 
 /// The page title: one table's dotted name, or how many tables were measured.
@@ -576,8 +633,41 @@ mod tests {
             &[first, second],
         );
 
-        let node = &report.catalogs[0].schemas[0].tables[0].columns[0];
-        assert_eq!(node.compression_ratio, Some(3.0));
+        let catalog = &report.catalogs[0];
+        assert_eq!(catalog.compression_ratio, Some(3.0));
+        assert_eq!(catalog.schemas[0].compression_ratio, Some(3.0));
+        let table = &catalog.schemas[0].tables[0];
+        assert_eq!(table.compression_ratio, Some(3.0));
+        assert_eq!(table.columns[0].compression_ratio, Some(3.0));
+    }
+
+    #[test]
+    fn weights_the_parents_ratio_by_the_child_bytes() {
+        let orders = blob("/lake/orders/part-0.parquet");
+        let items = blob("/lake/items/part-0.parquet");
+        let report = fold(
+            &[
+                measured(
+                    &orders,
+                    Some("catalogs/shop/schemas/sales/tables/orders"),
+                    "id",
+                    10,
+                    20,
+                ),
+                measured(
+                    &items,
+                    Some("catalogs/shop/schemas/sales/tables/items"),
+                    "id",
+                    30,
+                    30,
+                ),
+            ],
+            &[orders, items],
+        );
+
+        let catalog = &report.catalogs[0];
+        assert_eq!(catalog.schemas[0].compression_ratio, Some(1.25));
+        assert_eq!(catalog.compression_ratio, Some(1.25));
     }
 
     #[test]
@@ -592,8 +682,14 @@ mod tests {
             std::slice::from_ref(&file),
         );
 
-        let node = &report.catalogs[0].schemas[0].tables[0].columns[0];
-        assert_eq!(node.compression_ratio, None);
+        let catalog = &report.catalogs[0];
+        assert_eq!(catalog.compression_ratio, None);
+        assert_eq!(catalog.schemas[0].compression_ratio, None);
+        assert_eq!(catalog.schemas[0].tables[0].compression_ratio, None);
+        assert_eq!(
+            catalog.schemas[0].tables[0].columns[0].compression_ratio,
+            None
+        );
     }
 
     #[test]

@@ -134,9 +134,16 @@ fn viz_embeds_the_ratio_uncompressed_over_compressed() {
     );
 
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
-    let node = &report(&html)["catalogs"][0]["schemas"][0]["tables"][0]["columns"][0];
-    assert_eq!(node["compression_ratio"], 2.5);
-    assert_eq!(node["bytes_per_value"], 0.8);
+    let report = report(&html);
+    let catalog = &report["catalogs"][0];
+    let schema = &catalog["schemas"][0];
+    let table = &schema["tables"][0];
+    let column = &table["columns"][0];
+    assert_eq!(catalog["compression_ratio"], 2.5);
+    assert_eq!(schema["compression_ratio"], 2.5);
+    assert_eq!(table["compression_ratio"], 2.5);
+    assert_eq!(column["compression_ratio"], 2.5);
+    assert_eq!(column["bytes_per_value"], 0.8);
 }
 
 #[test]

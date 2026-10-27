@@ -136,16 +136,16 @@ function ratioNote(node) {
   return node.compression_ratio == null ? "" : " · " + node.compression_ratio.toFixed(1) + "×";
 }
 function detail(node, depth) {
-  const head = humanBytes(node.compressed_bytes) + costNote(node);
+  const head = humanBytes(node.compressed_bytes) + ratioNote(node) + costNote(node);
   switch (depth) {
     case 0: return head + " · " + count(node.schemas.length, "schema", "schemas");
     case 1: return head + " · " + count(node.tables.length, "table", "tables");
     case 2: return head + " · " + count(node.columns.length, "column", "columns");
-    default: return head + " · " + node.bytes_per_value.toFixed(1) + " B/row" + ratioNote(node);
+    default: return head + " · " + node.bytes_per_value.toFixed(1) + " B/row";
   }
 }
 function describe(node, depth) {
-  const head = humanBytes(node.compressed_bytes) + costNote(node);
+  const head = humanBytes(node.compressed_bytes) + ratioNote(node) + costNote(node);
   switch (depth) {
     case 0: return node.display_name + " — " + head + " over " +
       count(node.schemas.reduce((sum, schema) => sum + schema.tables.length, 0), "table", "tables");
@@ -156,7 +156,7 @@ function describe(node, depth) {
       count(node.file_count, "file", "files") +
       (node.storage_classes.length ? " [" + node.storage_classes.join(", ") + "]" : "");
     default: return node.column + " — " + head + " (" +
-      node.bytes_per_value.toFixed(1) + " bytes per row" + ratioNote(node) + ")";
+      node.bytes_per_value.toFixed(1) + " bytes per row)";
   }
 }
 function draw(element, nodes, depth, path) {
