@@ -11,11 +11,18 @@ request (see the Perf box in the template).
 Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
-$ pqbench list catalogs | pqbench list schemas \
+$ pqbench list catalogs \
+    | pqbench ratelimit --rate 15 \
+    | pqbench list schemas \
+    | pqbench ratelimit --rate 15 \
     | pqbench list tables \
-    | pqbench credentials check | pqbench credentials get \
-    | pqbench get table | pqbench list partitions \
-    | pqbench list files | pqbench bytemass
+    | pqbench ratelimit --rate 15 \
+    | pqbench credentials check \
+    | pqbench credentials get \
+    | pqbench get table \
+    | pqbench list partitions \
+    | pqbench list files \
+    | pqbench bytemass
 ```
 
 `credentials check` is the walk's single filter: it drops a `system` catalog

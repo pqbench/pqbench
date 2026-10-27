@@ -11,9 +11,12 @@
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
 # SDK's own ceiling and is safe — decisions/0006-catalog-rate-limit.md), so a
-# `ratelimit --rate` stage paces the refs ahead of each fan-out.
-# `credentials check`/`credentials get` are one-to-one and the storage levels
-# (`get table` down) read object storage, not the catalog, so neither is paced.
+# `ratelimit --rate` stage paces the refs ahead of each fan-out: `list schemas`
+# (one request per catalog), `list tables` (one per schema), and the table stages
+# from `credentials check` on (one catalog request per table, including
+# `credentials get`'s record read and `get table`'s). The storage levels
+# (`list partitions` down) read object storage, not the catalog, so they take no
+# stage of their own.
 #
 # The catalog levels span the whole Unity Catalog; the table levels descend the
 # one catalog this principal may read outside compute (PQB_WALK_CATALOG,
