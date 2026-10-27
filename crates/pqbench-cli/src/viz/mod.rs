@@ -33,7 +33,7 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
         None => return Err("viz writes an html page; pass --output".into()),
     };
     let (columns, blobs) = collect(input).await?;
-    viz::write_report(&prefix, &columns, &blobs)?;
+    viz::write_report(&prefix, &columns)?;
     if std::io::stdout().is_terminal() {
         print!("{}", summary(&prefix, &columns, &blobs));
     }

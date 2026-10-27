@@ -50,11 +50,12 @@ fn viz_collects_a_bytemass_stream_into_html() {
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains("d3-hierarchy@3"));
-    assert!(html.contains("bpr"));
+    assert!(html.contains("Catalogs ("));
+    assert!(html.contains("B/row"));
 }
 
 #[test]
-fn viz_stores_proxied_file_stats() {
+fn viz_places_a_fileless_measurement_under_the_local_table() {
     let blob = pqbench::v1::name::blob_name("/tmp/part-0.parquet");
     let column = pqbench::v1::name::bytemass(&blob, "id");
     let file = serde_json::json!({
@@ -86,8 +87,12 @@ fn viz_stores_proxied_file_stats() {
         String::from_utf8_lossy(&output.stderr)
     );
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
-    assert!(html.contains("STANDARD"), "{html}");
-    assert!(html.contains("part-0.parquet"), "{html}");
+    assert!(html.contains("\"display_name\":\"local\""), "{html}");
+    assert!(
+        html.contains("\"display_name\":\"part-0.parquet\""),
+        "{html}"
+    );
+    assert!(html.contains("\"file_count\":1"), "{html}");
 }
 
 #[test]
