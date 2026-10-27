@@ -132,11 +132,18 @@ pub fn write_report(prefix: &Path, columns: &[v1::Bytemass]) -> Result<(), Error
     })
 }
 
+/// What one column adds up to while a table is folded.
+#[derive(Default)]
+struct ColumnBytes {
+    compressed_bytes: u64,
+    value_count: u64,
+}
+
 /// What one table's columns add up to while the report is built.
 #[derive(Default)]
 struct TableBytes {
     compressed_bytes: u64,
-    columns: Vec<ColumnNode>,
+    columns: BTreeMap<String, ColumnBytes>,
     blobs: BTreeSet<String>,
 }
 
@@ -158,16 +165,9 @@ fn fold(columns: &[v1::Bytemass]) -> Report {
         let table = tables.entry((catalog, schema, name)).or_default();
         table.compressed_bytes += bytes;
         table.blobs.insert(blob);
-        table.columns.push(ColumnNode {
-            column: path,
-            compressed_bytes: bytes,
-            value_count: values,
-            bytes_per_value: if values == 0 {
-                0.0
-            } else {
-                bytes as f64 / values as f64
-            },
-        });
+        let total = table.columns.entry(path).or_default();
+        total.compressed_bytes += bytes;
+        total.value_count += values;
     }
 
     let mut report = Report::default();
@@ -177,7 +177,20 @@ fn fold(columns: &[v1::Bytemass]) -> Report {
             name: v1::name::table(&catalog, &schema, &name),
             display_name: name,
             compressed_bytes: bytes,
-            columns: table.columns,
+            columns: table
+                .columns
+                .into_iter()
+                .map(|(column, total)| ColumnNode {
+                    column,
+                    compressed_bytes: total.compressed_bytes,
+                    value_count: total.value_count,
+                    bytes_per_value: if total.value_count == 0 {
+                        0.0
+                    } else {
+                        total.compressed_bytes as f64 / total.value_count as f64
+                    },
+                })
+                .collect(),
             file_count: table.blobs.len() as u64,
         };
         {
@@ -335,6 +348,25 @@ mod tests {
         assert_eq!(orders.columns[0].column, "id");
         assert_eq!(orders.columns[1].bytes_per_value, 7.0);
         assert_eq!(orders.file_count, 1);
+    }
+
+    #[test]
+    fn folds_a_column_measured_in_several_files_once() {
+        let first = blob("/lake/lineitem/part-0.parquet");
+        let second = blob("/lake/lineitem/part-1.parquet");
+        let table = "catalogs/tpch/schemas/sf1/tables/lineitem";
+        let report = fold(&[
+            column(&first, Some(table), "l_comment", 60),
+            column(&second, Some(table), "l_comment", 40),
+        ]);
+
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        assert_eq!(node.file_count, 2);
+        assert_eq!(node.columns.len(), 1);
+        assert_eq!(node.columns[0].column, "l_comment");
+        assert_eq!(node.columns[0].compressed_bytes, 100);
+        assert_eq!(node.columns[0].value_count, 20);
+        assert_eq!(node.columns[0].bytes_per_value, 5.0);
     }
 
     #[test]
