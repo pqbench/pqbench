@@ -26,6 +26,15 @@ fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn report(html: &str) -> serde_json::Value {
+    let start = html
+        .find("const REPORT = ")
+        .expect("the page embeds its report");
+    let body = &html[start + "const REPORT = ".len()..];
+    let end = body.find(";\n").expect("the report ends");
+    serde_json::from_str(&body[..end]).expect("the report is JSON")
+}
+
 #[test]
 fn viz_collects_a_bytemass_stream_into_html() {
     let measured = common::measured(parquet_fixture());
@@ -93,6 +102,48 @@ fn viz_places_a_fileless_measurement_under_the_local_table() {
         "{html}"
     );
     assert!(html.contains("\"file_count\":1"), "{html}");
+}
+
+#[test]
+fn viz_embeds_the_ratio_uncompressed_over_compressed() {
+    let blob = pqbench::v1::name::blob_name("/tmp/part-0.parquet");
+    let column = pqbench::v1::name::bytemass(&blob, "id");
+    let file = serde_json::json!({
+        "name": blob,
+        "size_bytes": 40,
+        "row_group_count": 1,
+        "column_count": 1,
+    });
+    let row = serde_json::json!({
+        "name": column,
+        "compressed_bytes": 8,
+        "uncompressed_bytes": 20,
+        "value_count": 10,
+    });
+    let document = format!("{file}\n{row}\n");
+    let directory = tempfile::tempdir().unwrap();
+    let prefix = directory.path().join("report");
+    let output = pipe(
+        &["viz", "--output", prefix.to_str().unwrap()],
+        document.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
+    let report = report(&html);
+    let catalog = &report["catalogs"][0];
+    let schema = &catalog["schemas"][0];
+    let table = &schema["tables"][0];
+    let column = &table["columns"][0];
+    assert_eq!(catalog["compression_ratio"], 2.5);
+    assert_eq!(schema["compression_ratio"], 2.5);
+    assert_eq!(table["compression_ratio"], 2.5);
+    assert_eq!(column["compression_ratio"], 2.5);
+    assert_eq!(column["bytes_per_value"], 0.8);
 }
 
 #[test]

@@ -132,8 +132,11 @@ function crumbs(at) {
 function count(number, singular, plural) {
   return number + " " + (number === 1 ? singular : plural);
 }
+function ratioNote(node) {
+  return node.compression_ratio == null ? "" : " · " + node.compression_ratio.toFixed(1) + "×";
+}
 function detail(node, depth) {
-  const head = humanBytes(node.compressed_bytes) + costNote(node);
+  const head = humanBytes(node.compressed_bytes) + ratioNote(node) + costNote(node);
   switch (depth) {
     case 0: return head + " · " + count(node.schemas.length, "schema", "schemas");
     case 1: return head + " · " + count(node.tables.length, "table", "tables");
@@ -142,7 +145,7 @@ function detail(node, depth) {
   }
 }
 function describe(node, depth) {
-  const head = humanBytes(node.compressed_bytes) + costNote(node);
+  const head = humanBytes(node.compressed_bytes) + ratioNote(node) + costNote(node);
   switch (depth) {
     case 0: return node.display_name + " — " + head + " over " +
       count(node.schemas.reduce((sum, schema) => sum + schema.tables.length, 0), "table", "tables");
