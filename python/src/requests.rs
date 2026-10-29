@@ -26,8 +26,9 @@ pub(crate) fn window(
             "pass a partition day or a last window, not both",
         )),
         (Some(day), None) => {
-            let day = u64::try_from(day)
-                .map_err(|_| pyo3::exceptions::PyValueError::new_err("partition_millis is negative"))?;
+            let day = u64::try_from(day).map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err("partition_millis is negative")
+            })?;
             Ok(Some(pqbench::time::TimeWindow::day(day)))
         }
         (None, Some(last)) => {

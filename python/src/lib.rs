@@ -24,9 +24,9 @@
 //! read and changed on its own. [`prelude`] holds the names they share, and
 //! this file is only the module tree.
 mod bytemass;
-mod file;
 mod catalog;
 mod credentials;
+mod file;
 mod handles;
 mod marshal;
 mod metastore;
