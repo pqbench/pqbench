@@ -176,8 +176,23 @@ analogy, convention, or precedent:
   reproduce a specific CI leg.
 - `cargo check --all-features` is the edit loop: no codegen, no link, the same
   artifacts. Save `make check` for the end of a change, not after each edit.
-- Pass `CARGO_BUILD_JOBS=2` to every cargo and make call, including `git
-  commit`: the all-features graph OOMs this 14 GB machine at one job per core.
+- The edit loop is incremental and cheap: `incremental = true` on
+  `[profile.dev]` (the `test` profile inherits it) makes a one-line edit to
+  `pqbench` a 1-second `cargo check --all-features -p pqbench`. A build is slow
+  only when it is not incremental — a new profile, a new feature set, a new
+  target dir, or a fresh worktree — and a profile is part of every artifact's
+  fingerprint, so changing one rebuilds all 236 crates of the graph.
+- `CARGO_BUILD_JOBS` matters only for those full rebuilds; pass 6 for them
+  (compilation leaves ten of twelve cores idle at 2 on this 14 GB machine).
+  What spikes memory is the *link* phase of `cargo test`, which allocates
+  gigabytes per binary; `split-debuginfo = "unpacked"` in `[profile.dev]` cuts
+  each binary from ~490 MB to ~250 MB and the link cost with it.
+- `sccache` is installed at `~/.local/bin/sccache`; `.cargo/config.toml` routes
+  rustc through `.cargo/scripts/rustc-wrapper.sh`, which uses it when it is on
+  `PATH`. Prepend `export PATH="$HOME/.local/bin:$PATH"` to cargo and make
+  calls: it turns a repeat compile with the same flags into cache hits (8 s for
+  a crate set into a fresh target dir). It does not help across a profile,
+  feature-set or check/clippy change.
 - Export one `CARGO_TARGET_DIR` shared by every worktree before building;
   never `cargo clean` it. A per-worktree target recompiles the ~70 AWS SDK and
   ~130 deltalake artifacts it already has. If a build says `Blocking waiting for
