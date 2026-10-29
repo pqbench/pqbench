@@ -167,9 +167,22 @@ analogy, convention, or precedent:
   documents an NDJSON line (`{"kind":"pqbench`) also fails — the docs show the
   human table; a block whose example is *about* the machine output opts in with
   ` ```console run json ` (the `json` word is not a cargo feature).
-- Features: pass `CARGO_FEATURES` to any target (quote values with a space),
-  e.g. `make check CARGO_FEATURES=--all-features`,
-  `make test CARGO_FEATURES="--features aws"`.
+- Features: everything builds with `--all-features` — the Makefile default, so
+  `make check` and the pre-commit hook use it without any flag. Do not pass a
+  subset while editing: cargo keys artifacts by feature set, so one `--features
+  delta` or `--features iceberg` call compiles a second copy of the shared graph
+  (deltalake, arrow, the AWS SDK) and everything downstream of it, and the next
+  default-feature call compiles a third. Override `CARGO_FEATURES` only to
+  reproduce a specific CI leg.
+- `cargo check --all-features` is the edit loop: no codegen, no link, the same
+  artifacts. Save `make check` for the end of a change, not after each edit.
+- Pass `CARGO_BUILD_JOBS=2` to every cargo and make call, including `git
+  commit`: the all-features graph OOMs this 14 GB machine at one job per core.
+- Export one `CARGO_TARGET_DIR` shared by every worktree before building;
+  never `cargo clean` it. A per-worktree target recompiles the ~70 AWS SDK and
+  ~130 deltalake artifacts it already has. If a build says `Blocking waiting for
+  file lock on build directory`, another session owns it: wait, do not take a
+  private target dir.
 - CI is two workflows. `.github/workflows/ci.yml` is the lightweight gate: fmt,
   aipnaming, `make check-docs`, isolation, and lfs. The heavy workflow,
   `.github/workflows/ci-heavy.yml`, runs one clippy over `--all-features` and a
