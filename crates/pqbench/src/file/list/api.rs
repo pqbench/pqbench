@@ -75,10 +75,9 @@ pub async fn list(
         .unwrap_or_default();
     let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
     let name = table.name.clone();
-    // The files are the snapshot's own active set, so the log is not read: the
-    // record is the files, and carrying the commit history would only cost
-    // memory.
-    let request = crate::table::LoadRequest::new(uri.to_string(), None, env).without_log();
+    // The files are the snapshot's own active set; the reader walks the
+    // snapshot and never builds the commit record.
+    let request = crate::table::LoadRequest::new(uri.to_string(), None, env);
     let files = crate::table::stream_active_files(lake, &request)
         .await
         .map_err(Error::Table)?;

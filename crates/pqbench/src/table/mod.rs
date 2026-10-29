@@ -284,10 +284,6 @@ pub struct LoadRequest {
     /// commits says the log's own file actions are what the caller wants, so
     /// the snapshot's active files are not replayed.
     pub commit_versions: Option<BTreeSet<u64>>,
-    /// When false, omit the commit history from the record; the snapshot's
-    /// active files are still read. The physical partition view needs the
-    /// files but not the log, and retaining the log would cost O(#commits).
-    pub log: bool,
 }
 
 impl LoadRequest {
@@ -305,7 +301,6 @@ impl LoadRequest {
             file_stats: true,
             require_files: true,
             commit_versions: None,
-            log: true,
         }
     }
 
@@ -333,16 +328,6 @@ impl LoadRequest {
     #[must_use]
     pub fn with_commits(mut self, versions: impl IntoIterator<Item = u64>) -> Self {
         self.commit_versions = Some(versions.into_iter().collect());
-        self
-    }
-
-    /// Read the snapshot's files without its commit history. The physical
-    /// partition view groups active files, so a log retained in the record
-    /// would only cost memory.
-    // aipnaming: allow(aip-136/method-prepositions)
-    #[must_use]
-    pub fn without_log(mut self) -> Self {
-        self.log = false;
         self
     }
 }

@@ -43,14 +43,12 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         }
         _ => (Vec::new(), Vec::new()),
     };
-    let mut log = if request.require_files && request.log {
+    let mut log = if request.require_files {
         ancestry_log(&metadata, selected, &v1::name::local_table(&request.uri))?
     } else {
         Vec::new()
     };
-    if request.log {
-        attach_actions(&mut log, snapshot_version, &files, &deletes);
-    }
+    attach_actions(&mut log, snapshot_version, &files, &deletes);
     let mut info = TableInfo::new(
         v1::TableFormat::Iceberg,
         request.uri.clone(),
@@ -332,8 +330,8 @@ pub(super) async fn stream_commits(
 /// that snapshot's. A request that names commits and does not name that snapshot
 /// yields none: what an older snapshot added is a separate manifest read.
 ///
-/// Each file carries the size the manifest declares, which `--min-file-size`
-/// reads and `bytemass` cross-checks against the footer.
+/// Each file carries the size the manifest declares, which `bytemass`
+/// cross-checks against the footer.
 pub(super) async fn stream_files(
     lake: &Lake,
     request: &LoadRequest,

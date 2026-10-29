@@ -49,17 +49,13 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     if !request.require_files {
         return Ok(info);
     }
-    info.log = if request.log {
-        read_log(
-            &store,
-            &request.uri,
-            Some(meta.version),
-            request.commit_versions.as_ref(),
-        )
-        .await?
-    } else {
-        Vec::new()
-    };
+    info.log = read_log(
+        &store,
+        &request.uri,
+        Some(meta.version),
+        request.commit_versions.as_ref(),
+    )
+    .await?;
     // A caller that names the commits wants the files the log itself names; the
     // snapshot's active-file replay is redundant then (and O(files)).
     if request.commit_versions.is_none() {

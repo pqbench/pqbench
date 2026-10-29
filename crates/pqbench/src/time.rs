@@ -23,8 +23,7 @@ impl TimeWindow {
     /// Whether a file's logged time falls in the window.
     ///
     /// A file whose log records no time cannot be shown to be in the window, so
-    /// it is excluded — the same rule `list files --min-file-size` uses for a
-    /// file with no logged size.
+    /// it is excluded.
     #[must_use]
     pub fn contains(&self, modification_time: Option<u64>) -> bool {
         modification_time.is_some_and(|time| (self.first_time..self.last_time).contains(&time))
