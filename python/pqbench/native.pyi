@@ -331,7 +331,7 @@ class file:
             partition_millis: int | None = None,
             last_millis: int | None = None,
         ) -> AsyncIterator[TableFile]:
-            """Stream the files active at the table's head, newest write first.
+            """Stream the files active at the table's head, in log scan order.
 
             ``partition_millis`` is the first millisecond of one UTC day;
             ``last_millis`` is a lookback window ending now. Pass one, not both.

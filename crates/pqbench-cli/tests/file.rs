@@ -182,6 +182,43 @@ fn file_ls_walks_every_table_on_the_stream() {
     assert_eq!(names, expected);
 }
 
+/// One table that cannot be read does not take the others down: its files are
+/// absent, its failure is named on stderr, and the run exits non-zero.
+#[test]
+fn file_ls_reports_a_failing_table_and_keeps_the_rest() {
+    let fixture = delta_fixture(&[("a.parquet", 0)]);
+    let missing = format!(
+        "{}\n",
+        json!({
+            "name": "catalogs/local/schemas/local/tables/missing",
+            "uri": "/nonexistent/pqbench-table",
+        })
+    );
+    let stdin = format!(
+        "{}{}",
+        table_record(fixture.path.to_str().unwrap()),
+        missing
+    );
+    let files = pipe(&["list", "files"], &stdin);
+    assert!(!files.status.success(), "a lost table must fail the run");
+    let records = ndjson_records(&files.stdout);
+    assert_eq!(
+        records.len(),
+        1,
+        "{}",
+        String::from_utf8_lossy(&files.stdout)
+    );
+    assert!(records[0]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("/files/a.parquet"));
+    let stderr = String::from_utf8_lossy(&files.stderr);
+    assert!(
+        stderr.contains("catalogs/local/schemas/local/tables/missing"),
+        "{stderr}"
+    );
+}
+
 /// `--last` and `--partition` keep only the files the log dates in the window,
 /// so a record in hand can be narrowed without re-reading the table.
 #[test]

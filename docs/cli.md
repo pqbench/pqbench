@@ -293,7 +293,9 @@ collected: a table of any size costs one decoded batch plus one file, and
 the window ending now; `--partition 2026-10-28` keeps one UTC day. The filter
 runs as each file arrives, so a daily run reads the day's writes without holding
 what the table already held. Neither flag filters the *commit*: it is the file's
-own time the log records, not the version that added it.
+own time the log records, not the version that added it. Iceberg records no
+per-file time, so a window over an Iceberg table is an error rather than an
+empty listing.
 
 ```console no-run
 $ cat table.ndjson | pqbench list files --last 1d | pqbench bytemass

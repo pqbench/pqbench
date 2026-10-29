@@ -43,11 +43,11 @@ impl std::error::Error for Error {
     }
 }
 
-/// List a table's active files, newest write first in the log's own order.
+/// List a table's active files, in the order the log's scan yields them.
 ///
 /// The snapshot is resolved first — for Delta the log, its checkpoint, and the
-/// commits after it — so the files are the ones active now, not the ones some
-/// commit added. Files a later commit removed are absent.
+/// commits after it — so the files are the ones active at that version (the
+/// table record's own, when it carries one), not the ones some commit added. Files a later commit removed are absent.
 ///
 /// `window` keeps only the files whose log records a modification time inside
 /// it; the test runs before a file reaches the caller, so a daily run holds
@@ -75,9 +75,22 @@ pub async fn list(
         .unwrap_or_default();
     let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
     let name = table.name.clone();
+    // Iceberg records no per-file time, so a window over it can only drop
+    // everything: say so rather than return an empty listing that looks like an
+    // empty table.
+    if window.is_some() {
+        let format = crate::table::detect(lake, uri, &env)
+            .await
+            .map_err(Error::Table)?;
+        if format == v1::TableFormat::Iceberg {
+            return Err(Error::Invalid(
+                "Iceberg records no per-file time; --last/--partition select nothing".into(),
+            ));
+        }
+    }
     // The files are the snapshot's own active set; the reader walks the
     // snapshot and never builds the commit record.
-    let request = crate::table::LoadRequest::new(uri.to_string(), None, env);
+    let request = crate::table::LoadRequest::new(uri.to_string(), table.snapshot_version, env);
     let files = crate::table::stream_active_files(lake, &request)
         .await
         .map_err(Error::Table)?;
