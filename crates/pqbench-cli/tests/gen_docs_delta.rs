@@ -16,8 +16,7 @@ fn usage() {
 #[rustfmt::skip]
 #[test]
 fn document() {
-    // document, from line 75
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files > /tmp/partition.ndjson", 76, None);
-    support::run("pqbench bytemass < /tmp/partition.ndjson | pqbench format", 77, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files --min-file-size 1KB | pqbench format", 82, None);
+    // document, from line 73
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files > /tmp/partition.ndjson", 74, None);
+    support::run("pqbench bytemass < /tmp/partition.ndjson | pqbench format", 75, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
 }

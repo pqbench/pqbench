@@ -200,8 +200,8 @@ Unity fills a table's storage location in the listing; Iceberg leaves it to
 `list files` resolves a snapshot and writes its active files, one TableFile per
 line, each with the table's lease — that stream is what `bytemass` measures. The
 files are the snapshot's own set, so a file a later commit removed is absent;
-nothing is collected, so a table of any size costs one log batch plus one file. --min-file-size drops files whose logged size is below SIZE (bytes, or
-a number with a unit: kB/MB/GB/TB or KiB/MiB/GiB/TiB). --last/--partition keep
+nothing is collected, so a table of any size costs one log batch plus one file.
+--last/--partition keep
 only the files the log dates in a window (e.g. 1d, 1w, or one UTC day), so a
 daily run reads the day's writes without walking what the table already held.
 

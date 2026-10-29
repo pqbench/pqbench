@@ -67,10 +67,8 @@ instead of borrowing the caller's.
 records (name, blob, path, log size, logged modification time), each carrying
 the table's lease; a file a later commit removed is absent. `bytemass` measures
 each file as its line arrives and compares its size to the log. `--last` and
-`--partition` keep only the files the log dates in a window, and
-`--min-file-size` drops files whose logged size is below the given size (bytes,
-or a number with a unit: kB/MB/GB/TB, KiB/MiB/GiB/TiB), so a walk can measure
-only the big files. The stream is NDJSON, and `>` captures it:
+`--partition` keep only the files the log dates in a window. The stream is
+NDJSON, and `>` captures it:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqbench list files > /tmp/partition.ndjson
@@ -79,7 +77,6 @@ column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files --min-file-size 1KB | pqbench format
 ```
 
 ## Memory use
