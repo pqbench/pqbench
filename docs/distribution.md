@@ -14,8 +14,11 @@ curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-c
 ```
 
 It detects the platform, downloads the matching archive, verifies the checksums,
-and installs `pqbench` into `$CARGO_HOME/bin` (default `~/.cargo/bin`). Run it
-with `--help` for the flags (pinning a version, choosing the install path, …).
+and installs `pqbench` into `$CARGO_HOME/bin` (default `~/.cargo/bin`), with
+`pqb` as a symlink to it. Run it with `--help` for the flags (pinning a
+version, choosing the install path, …). The alias comes from
+`[dist.bin-aliases]` and is created by the installer; the archive and `cargo
+install` carry only `pqbench`.
 
 The same release publishes the Python bindings to PyPI, at the same version:
 

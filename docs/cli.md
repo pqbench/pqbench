@@ -20,7 +20,7 @@ that command and links back. This file is the durable copy.
 | Read one table's record | `pqbench get table` (Table refs on stdin) |
 | Render a stream as tables | `pqbench format` (NDJSON on stdin) |
 | Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (refs on stdin) |
-| Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
+| Pace a ref stream to N records/s | `pqb rl [--rate N]` (15/s default) |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
 | Codec speed on Parquet pages | `pqbench compression FILE` (NONE-compressed only) |
@@ -32,12 +32,12 @@ lists one of its collections. Each level reads its parent's refs on standard
 input, so the walk is a pipe:
 
 ```console no-run
-$ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list tables
-$ echo '"dbx_samples.nyctaxi.trips"' | pqbench get table
+$ pqb list catalogs \
+    | pqb rl \
+    | pqb list schemas \
+    | pqb rl \
+    | pqb list tables
+$ echo '"dbx_samples.nyctaxi.trips"' | pqb get table
 ```
 
 A level reads standard input only when it is a stream — a pipeline's pipe, or a
@@ -151,7 +151,7 @@ caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
-instead of buffering. A `pqbench ratelimit` stage
+instead of buffering. A `pqb rl` stage
 paces the refs between two levels at a target rate — records pass through
 unchanged, one bucket per resource type, nothing dropped. A ref whose read
 fails — a timeout, a dropped connection, an endpoint answer such as a 429, or
@@ -159,7 +159,7 @@ a storage fault — is dropped by the level: it names the ref and the cause on
 standard error, finishes the stream, and exits non-zero with the count, so one
 bad ref does not truncate a walk. The drop is only the read: a ref that does not
 name a resource, a record whose fields are wrong, or an output failure still
-fails the level. `ratelimit` keeps the endpoint from answering
+fails the level. `rl` keeps the endpoint from answering
 429 in the first place; a level that fails outright — the root `list catalogs`,
 a malformed stream — still fails the pipeline, and the shell can retry it at a
 lower rate:
@@ -167,7 +167,7 @@ lower rate:
 ```console
 set -o pipefail
 rate=15
-until pqbench list catalogs | pqbench ratelimit --rate "$rate" | pqbench list schemas; do
+until pqb list catalogs | pqb rl --rate "$rate" | pqb list schemas; do
     rate=$((rate / 2))
 done
 ```

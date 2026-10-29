@@ -105,3 +105,17 @@ fn rejects_a_bad_rate() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("non-negative"), "{stderr}");
 }
+
+/// `rl` is the short subcommand; it reaches the same parser, which reports
+/// `--rate` and its 15/s default.
+#[test]
+fn short_subcommand_reaches_the_same_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_pqbench"))
+        .args(["rl", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("--rate"), "{stdout}");
+    assert!(stdout.contains("[default: 15]"), "{stdout}");
+}

@@ -25,3 +25,9 @@ all-features = true
 # Sigstore-backed build-provenance attestations for the release artifacts
 # (verify with `gh attestation verify <file> --repo pqbench/pqbench`).
 github-attestations = true
+
+# The installer also creates `pqb` as a symlink to `pqbench`. Aliases stay out
+# of the archives, so an unpacked tarball and `cargo install` carry only
+# `pqbench`.
+[dist.bin-aliases]
+pqbench = ["pqb"]

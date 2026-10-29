@@ -107,6 +107,7 @@ enum Command {
     Credentials(credentials::CredentialsArgs),
     #[command(
         name = "ratelimit",
+        visible_alias = "rl",
         about = help::RATELIMIT_ABOUT,
         long_about = help::RATELIMIT_LONG_ABOUT,
         after_help = help::RATELIMIT_AFTER,

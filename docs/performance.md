@@ -11,17 +11,17 @@ request (see the Perf box in the template).
 Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
-$ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list tables \
-    | pqbench ratelimit --rate 15 \
-    | pqbench credentials check \
-    | pqbench credentials get \
-    | pqbench get table \
-    | pqbench list files \
-    | pqbench bytemass
+$ pqb list catalogs \
+    | pqb rl \
+    | pqb list schemas \
+    | pqb rl \
+    | pqb list tables \
+    | pqb rl \
+    | pqb credentials check \
+    | pqb credentials get \
+    | pqb get table \
+    | pqb list files \
+    | pqb bytemass
 ```
 
 `credentials check` is the walk's single filter: it drops a `system` catalog
@@ -52,7 +52,7 @@ descend the one catalog this principal may read outside compute
 (`PQB_WALK_CATALOG`, default `pqbench_ext`). Unity refuses
 `EXTERNAL USE SCHEMA` on the sample and managed-default catalogs, and a live run
 shares the endpoint and is rate-limited, so the script paces the catalog
-fan-outs with `ratelimit` and retries the walk at a lower rate on failure.
+fan-outs with `rl` and retries the walk at a lower rate on failure.
 
 ## Run perf
 

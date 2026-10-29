@@ -25,8 +25,9 @@ curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-c
 ```
 
 The installer verifies the download against the release checksums and puts
-`pqbench` in `~/.cargo/bin`. To pin a version, build from source, or read about
-the release process, see [Distribution](https://pqbench.github.io/pqbench/distribution/).
+`pqbench` in `~/.cargo/bin`, with `pqb` as a symlink to it. To pin a version,
+build from source, or read about the release process, see
+[Distribution](https://pqbench.github.io/pqbench/distribution/).
 
 ## The walk, end to end
 
@@ -37,27 +38,28 @@ so the walk is one bash pipeline.
 ```console no-run
 $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
-$ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list tables \
-    | pqbench ratelimit --rate 15 \
-    | pqbench credentials check \
-    | pqbench credentials get \
-    | pqbench get table \
-    | pqbench list files \
-    | pqbench bytemass \
-    | pqbench viz -o /tmp/report
+$ pqb list catalogs \
+    | pqb rl \
+    | pqb list schemas \
+    | pqb rl \
+    | pqb list tables \
+    | pqb rl \
+    | pqb credentials check \
+    | pqb credentials get \
+    | pqb get table \
+    | pqb list files \
+    | pqb bytemass \
+    | pqb viz -o /tmp/report
 ```
 
 Read it left to right:
 
 - `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
-  live endpoint fans out one request per ref, so `ratelimit` paces each level at
-  15 refs/s — the schema and table listings and the table stages (`credentials
-  check`, `credentials get`, `get table`) alike; the retry-at-half-the-rate
-  recipe is in the [CLI reference](https://pqbench.github.io/pqbench/cli/).
+  live endpoint fans out one request per ref, so `rl` paces each level at
+  15 refs/s by default — the schema and table listings and the table stages
+  (`credentials check`, `credentials get`, `get table`) alike; the
+  retry-at-half-the-rate recipe is in the
+  [CLI reference](https://pqbench.github.io/pqbench/cli/).
 - `credentials check` drops the tables you can't read outside compute — a view,
   a system catalog, Databricks default storage — and prints the reason;
   `credentials get` vends a short-lived lease onto each remaining ref.
