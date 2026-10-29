@@ -1,48 +1,41 @@
-//! `ratelimit`: pace an NDJSON ref stream to a target rate.
+//! `ratelimit`: the catalog command's request pacer.
 //!
-//! A filter: records come in on standard input and go out unchanged, delayed
-//! so each record `kind` observes at most N records per second. One bucket
-//! per kind, so a mixed stream paces catalogs, schemas, and table refs
-//! independently — the walk's per-endpoint pace. Nothing is dropped.
+//! One command talks to one catalog collection, so one bucket is the whole
+//! pace: each request reserves the next slot and waits for it. [`Workspace`]
+//! owns the one instance; storage reads take the shared HTTP client directly,
+//! so object storage is not paced.
+//!
+//! [`Workspace`]: crate::Workspace
 
-use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-/// Records per second each kind is paced at by default.
-pub const DEFAULT_REQUESTS_PER_SECOND: f64 = 15.0;
-
-/// The pacing state: one next-slot time per record kind.
+/// The pacing state: when the next request may start.
 #[derive(Debug)]
 pub struct RateLimit {
     interval: Duration,
-    next_times: BTreeMap<String, Instant>,
+    next_time: Option<Instant>,
 }
 
 impl RateLimit {
-    /// Pace each kind at `requests_per_second`; `0` turns pacing off.
+    /// Pace requests at `requests_per_second`; `0` turns pacing off.
     #[must_use]
     pub fn new(requests_per_second: f64) -> Self {
-        let interval = if requests_per_second > 0.0 {
+        let interval = if requests_per_second.is_finite() && requests_per_second > 0.0 {
             Duration::from_secs_f64(1.0 / requests_per_second)
         } else {
             Duration::ZERO
         };
         Self {
             interval,
-            next_times: BTreeMap::new(),
+            next_time: None,
         }
     }
 
-    /// Reserve `kind`'s next slot at or after `now` and return how long to
-    /// wait for it. Kinds are independent, so one slow kind never delays
-    /// another.
-    pub fn delay(&mut self, kind: &str, now: Instant) -> Duration {
-        let next = match self.next_times.get_mut(kind) {
-            Some(next) => next,
-            None => self.next_times.entry(kind.to_string()).or_insert(now),
-        };
-        let start = now.max(*next);
-        *next = start + self.interval;
+    /// Reserve the next slot at or after `now` and return how long to wait.
+    /// Slots are not banked: a caller that arrives late starts from `now`.
+    pub fn delay(&mut self, now: Instant) -> Duration {
+        let start = now.max(self.next_time.unwrap_or(now));
+        self.next_time = Some(start + self.interval);
         start.saturating_duration_since(now)
     }
 }
@@ -52,16 +45,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kinds_pace_independently() {
+    fn reserves_one_slot_per_request() {
         let mut limit = RateLimit::new(10.0);
         let start = Instant::now();
-        assert_eq!(limit.delay("catalog", start), Duration::ZERO);
-        assert_eq!(limit.delay("schema", start), Duration::ZERO);
-        assert_eq!(limit.delay("catalog", start), Duration::from_millis(100));
-        assert_eq!(limit.delay("schema", start), Duration::from_millis(100));
+        assert_eq!(limit.delay(start), Duration::ZERO);
+        assert_eq!(limit.delay(start), Duration::from_millis(100));
+        assert_eq!(limit.delay(start), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn a_late_caller_does_not_bank_slots() {
+        let mut limit = RateLimit::new(10.0);
+        let start = Instant::now();
+        assert_eq!(limit.delay(start), Duration::ZERO);
+        assert_eq!(limit.delay(start + Duration::from_secs(1)), Duration::ZERO);
         assert_eq!(
-            limit.delay("catalog", start + Duration::from_millis(250)),
-            Duration::ZERO
+            limit.delay(start + Duration::from_secs(1)),
+            Duration::from_millis(100)
         );
     }
 
@@ -69,7 +69,7 @@ mod tests {
     fn zero_disables_pacing() {
         let mut limit = RateLimit::new(0.0);
         let start = Instant::now();
-        assert_eq!(limit.delay("catalog", start), Duration::ZERO);
-        assert_eq!(limit.delay("catalog", start), Duration::ZERO);
+        assert_eq!(limit.delay(start), Duration::ZERO);
+        assert_eq!(limit.delay(start), Duration::ZERO);
     }
 }

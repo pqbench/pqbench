@@ -8,18 +8,18 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn what_to_run() {
-    // what_to_run, from line 50
+    // what_to_run, from line 47
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
   | pqbench list partitions \
   | pqbench list files \
   | pqbench bytemass \
-  | pqbench viz -o /tmp/report"#, 51, None);
+  | pqbench viz -o /tmp/report"#, 48, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn catalog_config_unity_databricks_iceberg_rest() {
-    // catalog_config_unity_databricks_iceberg_rest, from line 319
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format", 320, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1"]));
+    // catalog_config_unity_databricks_iceberg_rest, from line 317
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format", 318, Some(&["name                           first_time      last_time  commits", "--------------------------  -------------  -------------  -------", "catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1"]));
 }

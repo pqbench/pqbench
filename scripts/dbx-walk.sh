@@ -4,19 +4,19 @@
 #
 # The walk is the issue-#58 pipeline, one process per level:
 #
-#   list catalogs | ratelimit --rate 15 | list schemas | ratelimit --rate 15
-#     | list tables | ratelimit --rate 15 | credentials check | credentials get
-#     | get table | list partitions | list files | bytemass
+#   list catalogs | list schemas | list tables | credentials check
+#     | credentials get | get table | list partitions | list files | bytemass
 #
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
-# SDK's own ceiling and is safe — decisions/0006-catalog-rate-limit.md), so a
-# `ratelimit --rate` stage paces the refs ahead of each fan-out: `list schemas`
-# (one request per catalog), `list tables` (one per schema), and the table stages
-# from `credentials check` on (one catalog request per table, including
+# SDK's own ceiling and is safe — decisions/0010-catalog-pacing.md). Every
+# catalog level paces its own requests at PQB_REQUESTS_PER_SECOND (15 by
+# default), so the pipeline needs no pacer stage: `list schemas` (one per
+# catalog), `list tables` (one per schema), and the table stages from
+# `credentials check` on (one catalog request per table, including
 # `credentials get`'s record read and `get table`'s). The storage levels
-# (`list partitions` down) read object storage, not the catalog, so they take no
-# stage of their own.
+# (`list partitions` down) read object storage, not the catalog, so they are
+# not paced.
 #
 # The catalog levels span the whole Unity Catalog; the table levels descend the
 # one catalog this principal may read outside compute (PQB_WALK_CATALOG,
@@ -46,15 +46,15 @@
 # Usage:
 #
 #   scripts/dbx-walk.sh
-#   PQB_RATE=5 scripts/dbx-walk.sh
+#   PQB_REQUESTS_PER_SECOND=5 scripts/dbx-walk.sh
 #
-# Tunables (environment): PQB, PQB_RATE, PQB_WALK_RETRIES, PQB_WALK_CATALOG,
-# PQB_ENDPOINT, PQB_TOKEN, AWS_REGION.
+# Tunables (environment): PQB, PQB_REQUESTS_PER_SECOND, PQB_WALK_RETRIES,
+# PQB_WALK_CATALOG, PQB_ENDPOINT, PQB_TOKEN, AWS_REGION.
 
 set -euo pipefail
 
 PQB="${PQB:-target/debug/pqbench}"
-RATE="${PQB_RATE:-15}"
+RATE="${PQB_REQUESTS_PER_SECOND:-15}"
 RETRIES="${PQB_WALK_RETRIES:-3}"
 CATALOG="${PQB_WALK_CATALOG:-pqbench_ext}"
 REGION="${AWS_REGION:-us-east-2}"
@@ -76,11 +76,8 @@ walk() {
     local dir="$WORK/walk" name status
     mkdir -p "$dir"
     "$PQB" list catalogs | tee "$dir/catalogs" |
-        "$PQB" ratelimit --rate "$RATE" |
         "$PQB" list schemas | tee "$dir/schemas" |
-        "$PQB" ratelimit --rate "$RATE" |
         "$PQB" list tables | tee "$dir/refs" |
-        "$PQB" ratelimit --rate "$RATE" |
         keep_readable_catalog | tee "$dir/readable" |
         "$PQB" credentials check | tee "$dir/checked" |
         "$PQB" credentials get | tee "$dir/vended" |
@@ -153,6 +150,7 @@ main() {
         PQB_TOKEN="$(mint_token)"
     fi
     export PQB_ENDPOINT PQB_TOKEN AWS_REGION="$REGION"
+    export PQB_REQUESTS_PER_SECOND="$RATE"
 
     # A live walk shares the endpoint; retry at half the rate before giving up
     # (docs/cli.md: "pace the walk and retry it at a lower rate in the shell").
@@ -164,6 +162,7 @@ main() {
         fi
         attempt=$((attempt + 1))
         RATE=$((RATE / 2))
+        export PQB_REQUESTS_PER_SECOND="$RATE"
         echo "retrying the walk at rate $RATE" >&2
     done
 }

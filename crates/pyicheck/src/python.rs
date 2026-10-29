@@ -5,7 +5,7 @@
 //! name. A function a module proxy attaches with `@staticmethod` is an entry;
 //! any other class-level function is a method of its class, and a bare
 //! annotation is a field, so the surface rule can read a module proxy's exports
-//! (`ratelimit.RateLimit`) as readily as a record's.
+//! (`module.Class`) as readily as a record's.
 
 use tree_sitter::{Node, Parser};
 

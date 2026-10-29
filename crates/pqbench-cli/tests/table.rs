@@ -125,6 +125,40 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
     address
 }
 
+/// Like `routes`, but records when each request arrived.
+fn timed_routes(
+    routes: &'static [(&'static str, u16, &'static str)],
+) -> (
+    String,
+    std::sync::Arc<std::sync::Mutex<Vec<std::time::Instant>>>,
+) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let arrived = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let times = arrived.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(16) {
+            let mut stream = stream.unwrap();
+            let mut buffer = [0u8; 2048];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            times.lock().unwrap().push(std::time::Instant::now());
+            let (status, body) = routes
+                .iter()
+                .find(|(needle, _, _)| request.contains(needle))
+                .map(|(_, status, body)| (*status, *body))
+                .unwrap_or((404, "{}"));
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+        }
+    });
+    (address, arrived)
+}
+
 /// One endpoint that answers by request-line substring, with owned bodies so a
 /// fixture path can be embedded. The first matching route wins; no match is a
 /// 404.
@@ -777,10 +811,14 @@ fn table_ls_multiplexes_its_refs() {
         &[("/tables", 200, TABLES)],
         std::time::Duration::from_millis(50),
     );
+    // The pacer spaces the two starts; turn it off to observe the fan-out.
     let output = pipe_env(
         &["list", "tables"],
         SCHEMA_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_REQUESTS_PER_SECOND", "0"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -791,6 +829,31 @@ fn table_ls_multiplexes_its_refs() {
     assert!(
         peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
         "the two refs' requests did not overlap"
+    );
+}
+
+#[test]
+fn table_ls_paces_its_catalog_requests() {
+    let (address, arrived) = timed_routes(&[("/tables", 200, TABLES)]);
+    let output = pipe_env(
+        &["list", "tables"],
+        SCHEMA_REFS.as_bytes(),
+        &[
+            ("PQB_ENDPOINT", address.as_str()),
+            ("PQB_REQUESTS_PER_SECOND", "5"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(ndjson(&output.stdout).len(), 4);
+    let times = arrived.lock().unwrap();
+    assert_eq!(times.len(), 2, "one request per schema ref");
+    assert!(
+        times[1] - times[0] >= std::time::Duration::from_millis(150),
+        "the second request should wait for its slot: {times:?}"
     );
 }
 

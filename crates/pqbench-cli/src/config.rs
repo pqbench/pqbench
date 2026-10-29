@@ -2,10 +2,9 @@
 //! then the command line.
 //!
 //! `~/.pqbenchrc` is an INI of named profiles — the shape of `~/.databrickscfg`
-//! — each naming an endpoint, a bearer, and a dialect, so one workspace can
-//! carry a `[unity]` and an `[iceberg]` profile. Everything else is a
-//! per-invocation flag. Least to most specific: the selected profile, then the
-//! environment, then the flags.
+//! — each naming an endpoint, a bearer, a dialect, and a catalog pace, so one
+//! workspace can carry a `[unity]` and an `[iceberg]` profile. Least to most
+//! specific: the selected profile, then the environment, then the flags.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -32,6 +31,9 @@ pub(crate) struct ConfigArgs {
     /// catalog dialect: unity (the default) or iceberg [env: PQB_TABLE_FORMAT]
     #[arg(long, global = true, value_name = "FORMAT", env = "PQB_TABLE_FORMAT", value_parser = parse_dialect)]
     pub table_format: Option<Dialect>,
+    /// catalog requests per second; 0 turns pacing off [env: PQB_REQUESTS_PER_SECOND]
+    #[arg(long = "requests-per-second", global = true, value_name = "REQUESTS_PER_SECOND", env = "PQB_REQUESTS_PER_SECOND", value_parser = parse_rate, allow_negative_numbers = true)]
+    pub requests_per_second: Option<f64>,
 }
 
 /// How long one request may take. The library leaves the bound to its caller;
@@ -104,8 +106,8 @@ fn config_path() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".pqbenchrc")))
 }
 
-/// One `[profile]` table per profile, each with `endpoint`, `token`, and
-/// `table_format` keys, with `#` comments (INI).
+/// One `[profile]` table per profile, each with `endpoint`, `token`,
+/// `table_format`, and `rate` keys, with `#` comments (INI).
 fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
     let mut profiles: BTreeMap<String, Layer> = BTreeMap::new();
     let mut profile: Option<String> = None;
@@ -139,6 +141,10 @@ fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
                 layer.dialect =
                     Some(parse_dialect(&value).map_err(|error| format!("~/.pqbenchrc: {error}"))?);
             }
+            "requests_per_second" => {
+                layer.requests_per_second =
+                    Some(parse_rate(&value).map_err(|error| format!("~/.pqbenchrc: {error}"))?);
+            }
             _ => {}
         }
     }
@@ -152,6 +158,7 @@ fn env_layer() -> Layer {
         endpoint: env_var("DATABRICKS_HOST"),
         token: env_var("DATABRICKS_TOKEN"),
         dialect: None,
+        requests_per_second: None,
     }
 }
 
@@ -162,6 +169,7 @@ fn flag_layer(args: &ConfigArgs) -> Layer {
         endpoint: non_empty(args.endpoint.clone()),
         token: non_empty(args.token.clone()),
         dialect: args.table_format,
+        requests_per_second: args.requests_per_second,
     }
 }
 
@@ -172,6 +180,17 @@ fn parse_dialect(value: &str) -> Result<Dialect, CliError> {
         "iceberg" => Ok(Dialect::Iceberg),
         other => Err(format!("table_format expects `unity` or `iceberg`, got {other:?}").into()),
     }
+}
+
+/// Parse a pace: a finite, non-negative requests-per-second.
+fn parse_rate(value: &str) -> Result<f64, CliError> {
+    let rate: f64 = value
+        .parse()
+        .map_err(|_| format!("rate expects a number, got {value:?}"))?;
+    if !rate.is_finite() || rate < 0.0 {
+        return Err(format!("rate expects a non-negative number, got {rate}").into());
+    }
+    Ok(rate)
 }
 
 /// A value with matching surrounding quotes removed.
@@ -213,6 +232,7 @@ mod tests {
              endpoint = https://example.cloud.databricks.com\n\
              token = dapi-secret\n\
              table_format = unity\n\
+             requests_per_second = 5\n\
              \n\
              [iceberg]\n\
              endpoint = https://example.cloud.databricks.com\n\
@@ -224,8 +244,18 @@ mod tests {
             Some("https://example.cloud.databricks.com")
         );
         assert_eq!(profiles["DEFAULT"].dialect, Some(Dialect::Unity));
+        assert_eq!(profiles["DEFAULT"].requests_per_second, Some(5.0));
         assert_eq!(profiles["iceberg"].dialect, Some(Dialect::Iceberg));
         assert_eq!(profiles["iceberg"].token, None);
+    }
+
+    #[test]
+    fn the_pace_rejects_a_negative_or_non_finite_value() {
+        assert_eq!(parse_rate("0").unwrap(), 0.0);
+        assert_eq!(parse_rate("15").unwrap(), 15.0);
+        for bad in ["-1", "nan", "inf"] {
+            assert!(parse_rate(bad).is_err(), "{bad} should be rejected");
+        }
     }
 
     #[test]
@@ -234,15 +264,24 @@ mod tests {
             endpoint: Some("profile".into()),
             token: None,
             dialect: Some(Dialect::Iceberg),
+            requests_per_second: Some(5.0),
         };
         let flags = Layer {
             endpoint: None,
             token: Some("flag".into()),
             dialect: None,
+            requests_per_second: None,
         };
         let config = profile.combine(flags).resolve();
         assert_eq!(config.endpoint, "profile");
         assert_eq!(config.token.as_deref(), Some("flag"));
         assert_eq!(config.dialect, Dialect::Iceberg);
+        assert_eq!(config.requests_per_second, 5.0);
+    }
+
+    #[test]
+    fn the_pace_defaults_to_fifteen() {
+        let config = Layer::default().resolve();
+        assert_eq!(config.requests_per_second, 15.0);
     }
 }

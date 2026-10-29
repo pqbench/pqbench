@@ -12,11 +12,8 @@ Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
 $ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
     | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
     | pqbench list tables \
-    | pqbench ratelimit --rate 15 \
     | pqbench credentials check \
     | pqbench credentials get \
     | pqbench get table \
@@ -52,8 +49,9 @@ The walk's catalog levels span the whole Unity Catalog; the table levels
 descend the one catalog this principal may read outside compute
 (`PQB_WALK_CATALOG`, default `pqbench_ext`). Unity refuses
 `EXTERNAL USE SCHEMA` on the sample and managed-default catalogs, and a live run
-shares the endpoint and is rate-limited, so the script paces the catalog
-fan-outs with `ratelimit` and retries the walk at a lower rate on failure.
+shares the endpoint and is rate-limited, so every level paces its catalog
+calls (`PQB_REQUESTS_PER_SECOND`, 15 per second by default) and the script
+retries the walk at a lower rate on failure.
 
 ## Run perf
 

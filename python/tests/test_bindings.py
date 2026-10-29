@@ -112,11 +112,12 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
             any("/columns/text/bytemass" in column["name"] for column in columns)
         )
 
-    def test_ratelimit_paces_by_kind(self) -> None:
-        limit = pqbench.native.ratelimit.RateLimit(10.0)
-        self.assertEqual(limit.delay("catalog"), 0.0)
-        self.assertEqual(limit.delay("schema"), 0.0)
-        self.assertGreater(limit.delay("catalog"), 0.0)
+    def test_the_workspace_config_carries_the_catalog_pace(self) -> None:
+        workspace = _workspace()
+        self.assertEqual(workspace.config.requests_per_second, 15.0)
+        paced = workspace.with_requests_per_second(5.0)
+        self.assertEqual(paced.config.requests_per_second, 5.0)
+        self.assertEqual(workspace.config.requests_per_second, 15.0)
 
     async def test_list_partitions_groups_the_log(self) -> None:
         lake = pqbench.Lake(_workspace())

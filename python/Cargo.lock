@@ -2732,6 +2732,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snappy_src",
+ "tokio",
  "url",
  "zstd",
 ]

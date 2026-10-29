@@ -44,6 +44,11 @@ pub(crate) fn run(workspace: &Workspace, args: &SetupArgs) -> Result<(), CliErro
     export(&mut out, "PQB_ENDPOINT", &config.endpoint);
     export(&mut out, "PQB_TOKEN", token);
     export(&mut out, "PQB_TABLE_FORMAT", dialect_name(config.dialect));
+    export(
+        &mut out,
+        "PQB_REQUESTS_PER_SECOND",
+        &config.requests_per_second.to_string(),
+    );
     if let Some(region) = non_empty(args.region.as_deref()) {
         export(&mut out, "AWS_REGION", region);
     }

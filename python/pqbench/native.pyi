@@ -50,18 +50,21 @@ class Dialect:
     ICEBERG: ClassVar[Dialect]
 
 class Config:
-    """The endpoint, token, and dialect a :class:`Workspace` runs under."""
+    """The endpoint, token, dialect, and catalog pace a :class:`Workspace` runs under."""
 
     def __init__(
         self,
         endpoint: str,
         token: str | None = None,
         dialect: Dialect = ...,
+        requests_per_second: float = ...,
     ) -> None: ...
     @property
     def dialect(self) -> Dialect: ...
     @property
     def endpoint(self) -> str: ...
+    @property
+    def requests_per_second(self) -> float: ...
     @property
     def token(self) -> str | None: ...
     def __repr__(self) -> str: ...
@@ -74,6 +77,7 @@ class Layer:
         endpoint: str | None = None,
         token: str | None = None,
         dialect: Dialect | None = None,
+        requests_per_second: float | None = None,
     ) -> None: ...
     def resolve(self) -> Config: ...
     def __repr__(self) -> str: ...
@@ -84,6 +88,7 @@ class Workspace:
     def __init__(self, config: Config) -> None: ...
     @property
     def config(self) -> Config: ...
+    def with_requests_per_second(self, requests_per_second: float) -> Workspace: ...
     def __repr__(self) -> str: ...
 
 class Lake:
@@ -101,23 +106,6 @@ class BytemassRequest:
         inputs: Sequence[str],
         env: dict[str, str] | None = None,
     ) -> None: ...
-
-class RateLimit:
-    """The library's rate limiter: per-kind minimum spacing between calls."""
-
-    def __init__(self, requests_per_second: float) -> None: ...
-    def delay(self, kind: str) -> float:
-        """Seconds to wait before the next call of `kind`; 0.0 when a slot is free."""
-        ...
-
-class ratelimit:
-    """``pqbench.native.ratelimit``: the library's rate limiter.
-
-    The class is reachable here and at the top level: the module exposes it
-    both ways.
-    """
-
-    RateLimit: ClassVar[type[RateLimit]]
 
 class ValueIterator:
     """A lazily-consumed stream of built values, driven on the shared runtime."""

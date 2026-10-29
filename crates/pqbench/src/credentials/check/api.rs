@@ -94,9 +94,8 @@ mod tests {
     async fn iceberg_check_is_eligible_without_a_catalog_call() {
         let workspace = Workspace::new(crate::Config {
             endpoint: "http://127.0.0.1:1".into(),
-            token: None,
             dialect: crate::Dialect::Iceberg,
-            request_timeout: None,
+            ..crate::Config::default()
         })
         .expect("the workspace builds");
         let eligibility = check(&workspace, "catalogs/catalog/schemas/schema/tables/table")

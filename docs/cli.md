@@ -21,7 +21,6 @@ that command and links back. This file is the durable copy.
 | Read one table's record | `pqbench get table` (Table refs on stdin) |
 | Render a stream as tables | `pqbench format` (NDJSON on stdin) |
 | Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (refs on stdin) |
-| Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
 | Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
 | Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
 | Codec speed on Parquet pages | `pqbench compression FILE` (NONE-compressed only) |
@@ -34,9 +33,7 @@ input, so the walk is a pipe:
 
 ```console no-run
 $ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
     | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
     | pqbench list tables
 $ echo '"dbx_samples.nyctaxi.trips"' | pqbench get table
 ```
@@ -117,10 +114,10 @@ See [configuration.md](configuration.md) for the profile file and precedence.
 
 The walk's config resolves from three layers, least to most specific:
 `~/.pqbenchrc` (an INI of named profiles, like `~/.databrickscfg`), then the
-environment, then the command line. A profile names an endpoint, a bearer, and
-a dialect, so one workspace can carry `[unity]` and `[iceberg]` profiles; pick
-one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
-`--table-format` for one run. Everything else is a per-invocation flag.
+environment, then the command line. A profile names an endpoint, a bearer, a
+dialect, and a catalog pace, so one workspace can carry `[unity]` and
+`[iceberg]` profiles; pick one with `--profile` (`PQB_PROFILE`), then override
+`--endpoint` / `--token` / `--table-format` / `--requests-per-second` for one run.
 `pqbench setup` prints the resolved config for the shell to eval:
 
 | Variable | Role |
@@ -128,6 +125,7 @@ one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
 | `PQB_ENDPOINT` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
 | `PQB_TOKEN` | Bearer PAT (`dapi-…`) or OAuth token; list API only |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
+| `PQB_REQUESTS_PER_SECOND` | Catalog requests per second, one bucket per run: 15 by default, `0` disables |
 
 The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
@@ -144,33 +142,33 @@ endpoint then names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) and
 the command reads `/namespaces` under it. Unity is the default; no config
 probe runs.
 
-The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
-carry the walk's context, and each level reads the parent's refs on standard
-input as they arrive — one `Catalog` line per catalog, then one
-`Schema` line per schema. Each ref's request starts as its record is
-read; `--fan-out` (64 on the listing levels, one per core on `get table`)
-caps the requests in flight — it is a limit,
+The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT` /
+`PQB_REQUESTS_PER_SECOND` carry the walk's context, and each level reads the
+parent's refs on standard input as they arrive — one `Catalog` line per
+catalog, then one `Schema` line per schema. Each level paces its own catalog
+requests, one bucket per run: 15 per second by default,
+`PQB_REQUESTS_PER_SECOND` / `--requests-per-second` changes it, and `0` turns
+pacing off. Storage reads are not paced — object storage has no such limit and
+retries on its own. `--fan-out` (64 on the listing levels, one per
+core on `get table`) caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
-instead of buffering. A `pqbench ratelimit` stage
-paces the refs between two levels at a target rate — records pass through
-unchanged, one bucket per resource type, nothing dropped. A ref whose read
+instead of buffering. A ref whose read
 fails — a timeout, a dropped connection, an endpoint answer such as a 429, or
 a storage fault — is dropped by the level: it names the ref and the cause on
 standard error, finishes the stream, and exits non-zero with the count, so one
 bad ref does not truncate a walk. The drop is only the read: a ref that does not
 name a resource, a record whose fields are wrong, or an output failure still
-fails the level. `ratelimit` keeps the endpoint from answering
-429 in the first place; a level that fails outright — the root `list catalogs`,
-a malformed stream — still fails the pipeline, and the shell can retry it at a
-lower rate:
+fails the level. The pace keeps the endpoint from answering a 429 in the first
+place; a level that fails outright — the root `list catalogs`, a malformed
+stream — still fails the pipeline, and the shell can retry it at a lower rate:
 
 ```console
 set -o pipefail
-rate=15
-until pqbench list catalogs | pqbench ratelimit --rate "$rate" | pqbench list schemas; do
-    rate=$((rate / 2))
+export PQB_REQUESTS_PER_SECOND=15
+until pqbench list catalogs | pqbench list schemas; do
+    export PQB_REQUESTS_PER_SECOND=$((PQB_REQUESTS_PER_SECOND / 2))
 done
 ```
 

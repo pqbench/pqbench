@@ -78,10 +78,13 @@ Auth (how to reach data):
     AWS_VIRTUAL_HOSTED_STYLE_REQUEST   false for path-style (MinIO, rustfs)
     AWS_SKIP_SIGNATURE    true for a public bucket
 
-  Catalog config  (PQB_ENDPOINT / PQB_TOKEN)
+  Catalog config  (PQB_ENDPOINT / PQB_TOKEN / PQB_REQUESTS_PER_SECOND)
     endpoint + token   a Databricks workspace URL + PAT (dapi-…), or a
     Unity OSS / Iceberg REST URL. The token is a Bearer on the list API
     only. Only AWS_* is copied onto listed tables — a PAT is not an S3 key.
+    pace          catalog requests per second, one bucket per run: 15 by
+                  default (--requests-per-second / PQB_REQUESTS_PER_SECOND),
+                  0 disables. Storage reads are not paced.
 
   Databricks-governed tables
     The walk vends storage credentials: `credentials get` materializes the
@@ -286,30 +289,6 @@ See also:
   pqbench --help          catalog auth, PQB_* config
   docs/cli.md";
 
-pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
-
-pub const RATELIMIT_LONG_ABOUT: &str = "\
-Pace an NDJSON ref stream: records pass through unchanged, delayed so each
-record kind observes at most --rate records per second (15 by default; 0
-turns pacing off). Nothing is dropped. One bucket per kind, so catalogs,
-schemas, and table refs pace independently — the walk's per-endpoint pace.
-
-  list catalogs | pqbench ratelimit | list schemas
-  list schemas | pqbench ratelimit --rate 5 | list tables
-
-A consumer that issues one request per record as it arrives sees the same
-rate. A 429 fails the level; retry it at a lower --rate.";
-
-pub const RATELIMIT_AFTER: &str = "\
-Examples:
-  pqbench list catalogs | pqbench ratelimit | pqbench list schemas
-  pqbench list schemas | pqbench ratelimit --rate 5 | pqbench list tables
-
-See also:
-  pqbench list --help     the walk's collections
-  pqbench get --help      read one resource of it
-  docs/cli.md";
-
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into a static HTML treemap";
 
 pub const VIZ_LONG_ABOUT: &str = "\
@@ -444,6 +423,7 @@ SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
   endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
   token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
   format    --table-format | PQB_TABLE_FORMAT (unity default)
+  pace      --requests-per-second | PQB_REQUESTS_PER_SECOND (15/s; 0 disables)
   region    --region   | AWS_REGION";
 
 pub const SETUP_AFTER: &str = "\

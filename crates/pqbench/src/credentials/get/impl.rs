@@ -79,7 +79,6 @@ pub(super) async fn vend_unity(
         return Ok(None);
     };
     let response = workspace
-        .http()
         .request(Request::post(
             format!("{root}/temporary-table-credentials"),
             workspace.config().token.clone(),
@@ -148,7 +147,6 @@ pub(super) async fn vend_iceberg(
         dialect::encode(table)
     );
     let response = workspace
-        .http()
         .request(Request::get(url, workspace.config().token.clone()))
         .await
         .map_err(|error| Error::Http(crate::http::Error::Transport(error)))?;
@@ -179,7 +177,6 @@ async fn vend_iceberg_load(
     let request = Request::get(url, workspace.config().token.clone())
         .header("X-Iceberg-Access-Delegation", "vended-credentials");
     let response = workspace
-        .http()
         .request(request)
         .await
         .map_err(|error| Error::Http(crate::http::Error::Transport(error)))?;

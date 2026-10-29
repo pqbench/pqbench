@@ -38,11 +38,8 @@ so the walk is one bash pipeline.
 $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
 $ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
     | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
     | pqbench list tables \
-    | pqbench ratelimit --rate 15 \
     | pqbench credentials check \
     | pqbench credentials get \
     | pqbench get table \
@@ -55,10 +52,13 @@ $ pqbench list catalogs \
 Read it left to right:
 
 - `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
-  live endpoint fans out one request per ref, so `ratelimit` paces each level at
-  15 refs/s — the schema and table listings and the table stages (`credentials
-  check`, `credentials get`, `get table`) alike; the retry-at-half-the-rate
-  recipe is in the [CLI reference](https://pqbench.github.io/pqbench/cli/).
+  live endpoint fans out one request per ref, so each level paces its own
+  catalog calls at 15 requests per second by default
+  (`PQB_REQUESTS_PER_SECOND` / `--requests-per-second` changes it) — the schema
+  and table listings and the table stages (`credentials check`,
+  `credentials get`, `get table`) alike. The storage levels are not paced; the
+  retry-at-half-the-rate recipe is in the
+  [CLI reference](https://pqbench.github.io/pqbench/cli/).
 - `credentials check` drops the tables you can't read outside compute — a view,
   a system catalog, Databricks default storage — and prints the reason;
   `credentials get` vends a short-lived lease onto each remaining ref.
@@ -103,7 +103,7 @@ end.
 
 The core measurements. The walk's [`get` and `list`](#the-walk-end-to-end) come
 first; the [CLI reference](https://pqbench.github.io/pqbench/cli/) covers `profile`, `diff`,
-`skill`, `credentials`, `ratelimit`, and `setup`.
+`skill`, `credentials`, and `setup`.
 
 ### lz
 

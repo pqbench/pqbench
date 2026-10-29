@@ -32,7 +32,6 @@ mod marshal;
 mod metastore;
 mod partition;
 mod prelude;
-mod ratelimit;
 mod records;
 mod requests;
 mod schema;
@@ -74,7 +73,6 @@ fn native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     handles::register(module)?;
     requests::register(module)?;
-    ratelimit::register(py, module)?;
     marshal::register(module)?;
     records::register(module)?;
     credentials::register(py, module)?;

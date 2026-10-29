@@ -100,7 +100,7 @@ pub(crate) const RULES: &[Rule] = &[
 /// Every name on one side exists on the other.
 ///
 /// The stub writes a module as a nested class and may hang an export on that
-/// class as an annotation instead of a nested class (`ratelimit.RateLimit`), so
+/// class as an annotation instead of a nested class (`module.Class`), so
 /// a binding module is satisfied by a stub class of the same path, and a
 /// binding name by a member of its parent's proxy class.
 fn parity(inputs: &Inputs<'_>, reporter: &mut Reporter<'_>) {

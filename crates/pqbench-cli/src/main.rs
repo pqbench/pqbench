@@ -24,7 +24,6 @@ mod metastore;
 mod parse;
 mod partition;
 mod profile;
-mod ratelimit;
 mod render;
 mod rows;
 mod schema;
@@ -106,14 +105,6 @@ enum Command {
     )]
     Credentials(credentials::CredentialsArgs),
     #[command(
-        name = "ratelimit",
-        about = help::RATELIMIT_ABOUT,
-        long_about = help::RATELIMIT_LONG_ABOUT,
-        after_help = help::RATELIMIT_AFTER,
-        after_long_help = help::RATELIMIT_AFTER
-    )]
-    RateLimit(ratelimit::RateLimitArgs),
-    #[command(
         about = help::PROFILE_ABOUT,
         long_about = help::PROFILE_LONG_ABOUT,
         after_help = help::PROFILE_AFTER,
@@ -185,7 +176,6 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::TableFile(args) => table_file::run(&args).await,
         Command::List(args) => list::run(&workspace, &lake, &args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
-        Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args).await,
@@ -206,7 +196,6 @@ impl Command {
             Command::TableFile(_) => "table-file",
             Command::List(args) => args.name(),
             Command::Credentials(_) => "credentials",
-            Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
             Command::Skill(_) => "skill",
             Command::Viz(_) => "viz",

@@ -65,11 +65,7 @@ pub(crate) async fn send_json<T: DeserializeOwned>(
     workspace: &Workspace,
     request: Request,
 ) -> Result<T, Error> {
-    let response = workspace
-        .http()
-        .request(request)
-        .await
-        .map_err(Error::Transport)?;
+    let response = workspace.request(request).await.map_err(Error::Transport)?;
     if response.status != 200 {
         return Err(Error::Status {
             status: response.status,

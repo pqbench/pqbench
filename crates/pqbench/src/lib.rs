@@ -19,7 +19,7 @@ pub mod lz;
 pub mod metastore;
 pub mod partition;
 pub mod profile;
-pub mod ratelimit;
+mod ratelimit;
 pub mod report;
 pub mod schema;
 pub mod skill;
@@ -31,4 +31,4 @@ pub mod v1;
 pub mod viz;
 
 pub use capability::{Lake, Workspace};
-pub use config::{Combine, Config, Dialect, Layer};
+pub use config::{Combine, Config, Dialect, Layer, DEFAULT_REQUESTS_PER_SECOND};
