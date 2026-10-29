@@ -85,9 +85,9 @@ $ cat docker/e2e-lakehouse/table.ndjson | pqbench list files --min-file-size 1KB
 ## Memory use
 
 With NDJSON output, `list files` emits each active file as it is read, without
-retaining a second complete history or file list in the CLI. Output writes are awaited at buffer boundaries, so a slow consumer
-still slows the producer — per buffer rather than per row, since a row's own
-write is a copy.
+retaining a second complete history or file list in the CLI. A write blocks when
+the output buffer fills, so a slow consumer still slows the producer — per
+buffer rather than per row, since a row's own write is a copy.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 the read resolves a plain delta-rs snapshot, which reads the log's actions but

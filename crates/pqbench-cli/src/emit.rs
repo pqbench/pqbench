@@ -1,11 +1,9 @@
 //! Output: one NDJSON line per record on standard output.
 //!
 //! A record is serialized straight into the buffered writer, so a line costs
-//! the writer's buffer rather than a copy of itself: a partition record naming
-//! a million files is hundreds of megabytes on the wire and never resides whole
-//! in memory. The buffer reaches the pipe when it fills and when the command
-//! finishes, and the write blocks there — which is where a slow consumer slows
-//! the producer. Writes complete before the exit status is decided, so a
+//! the writer's buffer rather than a copy of itself. The buffer reaches the
+//! pipe when it fills and when the command finishes, and the write blocks
+//! there — which is where a slow consumer slows the producer. Writes complete before the exit status is decided, so a
 //! partial run's output is never truncated by its own error.
 
 use std::io::{BufWriter, Write};
