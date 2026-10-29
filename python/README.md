@@ -110,9 +110,9 @@ cannot be read is skipped (logged at `debug`), so a mixed metastore still
 walks; records stream, so the walk holds no more than a bounded queue of them.
 
 The Unity Catalog API limits requests per endpoint and per workspace, so its
-calls go through the library's pacer — `Config.requests_per_second`, 15 by
+calls go through the library's pacer — `Config.catalog_requests_per_second`, 15 by
 default, one bucket per `Workspace`, and `0` turns pacing off. `walk`'s
-`requests_per_second` argument applies it to a copy of the workspace. The
+`catalog_requests_per_second` argument applies it to a copy of the workspace. The
 storage reads are not paced: object storage has no such limit and retries its
 own. Anything skipped is counted in a `warning` when the walk ends, so a rate
 limit shows up as a count rather than as silently missing files.
@@ -138,11 +138,11 @@ PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=<bearer> \
 
 ## Configuration
 
-`Config(endpoint, token=None, dialect=Dialect.UNITY, requests_per_second=15.0)`
+`Config(endpoint, token=None, dialect=Dialect.UNITY, catalog_requests_per_second=15.0)`
 carries the endpoint, the bearer, the dialect (`UNITY` or `ICEBERG`), and the
 catalog pace (`0` disables it); `Layer(endpoint=None, token=None, dialect=None,
-requests_per_second=None).resolve()` combines configuration layers into a
-`Config`. `Workspace.with_requests_per_second(n)` returns a workspace over the
+catalog_requests_per_second=None).resolve()` combines configuration layers into a
+`Config`. `Workspace.with_catalog_requests_per_second(n)` returns a workspace over the
 same client at a different pace.
 
 `credentials` is a `Credentials` record — what `credentials.get` returns — or

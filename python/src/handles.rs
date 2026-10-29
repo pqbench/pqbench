@@ -2,7 +2,7 @@
 
 use crate::marshal::runtime;
 use crate::prelude::*;
-use pqbench::DEFAULT_REQUESTS_PER_SECOND;
+use pqbench::DEFAULT_CATALOG_REQUESTS_PER_SECOND;
 
 use std::time::Duration;
 
@@ -41,23 +41,23 @@ pub(crate) struct Config {
     endpoint: String,
     token: Option<String>,
     dialect: LibDialect,
-    requests_per_second: f64,
+    catalog_requests_per_second: f64,
 }
 #[pymethods]
 impl Config {
     #[new]
-    #[pyo3(signature = (endpoint, token=None, dialect=Dialect::UNITY, requests_per_second=DEFAULT_REQUESTS_PER_SECOND))]
+    #[pyo3(signature = (endpoint, token=None, dialect=Dialect::UNITY, catalog_requests_per_second=DEFAULT_CATALOG_REQUESTS_PER_SECOND))]
     fn new(
         endpoint: String,
         token: Option<String>,
         dialect: Dialect,
-        requests_per_second: f64,
+        catalog_requests_per_second: f64,
     ) -> Self {
         Self {
             endpoint,
             token,
             dialect: dialect.into(),
-            requests_per_second,
+            catalog_requests_per_second,
         }
     }
 
@@ -77,17 +77,17 @@ impl Config {
     }
 
     #[getter]
-    fn requests_per_second(&self) -> f64 {
-        self.requests_per_second
+    fn catalog_requests_per_second(&self) -> f64 {
+        self.catalog_requests_per_second
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "Config(endpoint={:?}, token={:?}, dialect={:?}, requests_per_second={})",
+            "Config(endpoint={:?}, token={:?}, dialect={:?}, catalog_requests_per_second={})",
             self.endpoint,
             self.token,
             Dialect::from(self.dialect),
-            self.requests_per_second
+            self.catalog_requests_per_second
         )
     }
 }
@@ -98,23 +98,23 @@ pub(crate) struct Layer {
     endpoint: Option<String>,
     token: Option<String>,
     dialect: Option<LibDialect>,
-    requests_per_second: Option<f64>,
+    catalog_requests_per_second: Option<f64>,
 }
 #[pymethods]
 impl Layer {
     #[new]
-    #[pyo3(signature = (endpoint=None, token=None, dialect=None, requests_per_second=None))]
+    #[pyo3(signature = (endpoint=None, token=None, dialect=None, catalog_requests_per_second=None))]
     fn new(
         endpoint: Option<String>,
         token: Option<String>,
         dialect: Option<Dialect>,
-        requests_per_second: Option<f64>,
+        catalog_requests_per_second: Option<f64>,
     ) -> Self {
         Self {
             endpoint,
             token,
             dialect: dialect.map(Into::into),
-            requests_per_second,
+            catalog_requests_per_second,
         }
     }
 
@@ -123,7 +123,7 @@ impl Layer {
             endpoint: self.endpoint.clone(),
             token: self.token.clone(),
             dialect: self.dialect,
-            requests_per_second: self.requests_per_second,
+            catalog_requests_per_second: self.catalog_requests_per_second,
         }
         .resolve()
         .into()
@@ -131,8 +131,8 @@ impl Layer {
 
     fn __repr__(&self) -> String {
         format!(
-            "Layer(endpoint={:?}, token={:?}, requests_per_second={:?})",
-            self.endpoint, self.token, self.requests_per_second
+            "Layer(endpoint={:?}, token={:?}, catalog_requests_per_second={:?})",
+            self.endpoint, self.token, self.catalog_requests_per_second
         )
     }
 }
@@ -142,7 +142,7 @@ impl From<LibConfig> for Config {
             endpoint: value.endpoint,
             token: value.token,
             dialect: value.dialect,
-            requests_per_second: value.requests_per_second,
+            catalog_requests_per_second: value.catalog_requests_per_second,
         }
     }
 }
@@ -160,7 +160,7 @@ impl Workspace {
             token: config.token.clone(),
             dialect: config.dialect,
             request_timeout: Some(REQUEST_TIMEOUT),
-            requests_per_second: config.requests_per_second,
+            catalog_requests_per_second: config.catalog_requests_per_second,
         };
         Ok(Self(LibWorkspace::new(config).map_err(runtime)?))
     }
@@ -170,8 +170,8 @@ impl Workspace {
         self.0.config().clone().into()
     }
 
-    fn with_requests_per_second(&self, requests_per_second: f64) -> Self {
-        Self(self.0.with_requests_per_second(requests_per_second))
+    fn with_catalog_requests_per_second(&self, catalog_requests_per_second: f64) -> Self {
+        Self(self.0.with_catalog_requests_per_second(catalog_requests_per_second))
     }
 
     fn __repr__(&self) -> String {

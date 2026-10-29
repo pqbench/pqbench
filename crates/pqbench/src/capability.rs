@@ -33,7 +33,9 @@ impl Workspace {
     /// Fails when the operating system's TLS trust store cannot be read.
     pub fn new(config: Config) -> Result<Self, crate::third_party::reqwest::Error> {
         let http = Http::new(config.request_timeout)?;
-        let limit = Arc::new(Mutex::new(RateLimit::new(config.requests_per_second)));
+        let limit = Arc::new(Mutex::new(RateLimit::new(
+            config.catalog_requests_per_second,
+        )));
         Ok(Self {
             config,
             http,
@@ -46,16 +48,16 @@ impl Workspace {
         &self.config
     }
 
-    /// This workspace over the same client, paced at `requests_per_second`.
+    /// This workspace over the same client, paced at `catalog_requests_per_second`.
     // aipnaming: allow(aip-136/method-prepositions)
     #[must_use]
-    pub fn with_requests_per_second(&self, requests_per_second: f64) -> Self {
+    pub fn with_catalog_requests_per_second(&self, catalog_requests_per_second: f64) -> Self {
         let mut config = self.config.clone();
-        config.requests_per_second = requests_per_second;
+        config.catalog_requests_per_second = catalog_requests_per_second;
         Self {
             config,
             http: self.http.clone(),
-            limit: Arc::new(Mutex::new(RateLimit::new(requests_per_second))),
+            limit: Arc::new(Mutex::new(RateLimit::new(catalog_requests_per_second))),
         }
     }
 

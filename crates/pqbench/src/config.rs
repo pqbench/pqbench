@@ -10,7 +10,7 @@ use std::time::Duration;
 
 /// Catalog requests per second a command paces at by default: the Databricks
 /// SDKs' own ceiling, and well under the rate the endpoint starts refusing.
-pub const DEFAULT_REQUESTS_PER_SECOND: f64 = 15.0;
+pub const DEFAULT_CATALOG_REQUESTS_PER_SECOND: f64 = 15.0;
 
 /// The catalog dialect a command speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +37,7 @@ pub struct Config {
     pub request_timeout: Option<Duration>,
     /// Catalog requests per second. `0` turns pacing off; the pacer covers
     /// catalog calls only, never object storage.
-    pub requests_per_second: f64,
+    pub catalog_requests_per_second: f64,
 }
 
 impl Default for Config {
@@ -49,7 +49,7 @@ impl Default for Config {
             token: None,
             dialect: Dialect::Unity,
             request_timeout: None,
-            requests_per_second: DEFAULT_REQUESTS_PER_SECOND,
+            catalog_requests_per_second: DEFAULT_CATALOG_REQUESTS_PER_SECOND,
         }
     }
 }
@@ -65,7 +65,7 @@ pub struct Layer {
     /// The catalog dialect, when this layer names one.
     pub dialect: Option<Dialect>,
     /// Catalog requests per second, when this layer names one.
-    pub requests_per_second: Option<f64>,
+    pub catalog_requests_per_second: Option<f64>,
 }
 
 /// A setting several layers each contribute. `self.combine(higher)` overlays a
@@ -87,14 +87,16 @@ impl Combine for Layer {
             endpoint: self.endpoint.combine(higher.endpoint),
             token: self.token.combine(higher.token),
             dialect: self.dialect.combine(higher.dialect),
-            requests_per_second: self.requests_per_second.combine(higher.requests_per_second),
+            catalog_requests_per_second: self
+                .catalog_requests_per_second
+                .combine(higher.catalog_requests_per_second),
         }
     }
 }
 
 impl Layer {
     /// Apply the defaults, yielding the run's [`Config`]: the dialect defaults
-    /// to Unity, the pace to [`DEFAULT_REQUESTS_PER_SECOND`], and a missing
+    /// to Unity, the pace to [`DEFAULT_CATALOG_REQUESTS_PER_SECOND`], and a missing
     /// endpoint stays empty — a command that reads only storage needs none.
     pub fn resolve(self) -> Config {
         Config {
@@ -102,9 +104,9 @@ impl Layer {
             token: self.token,
             dialect: self.dialect.unwrap_or(Dialect::Unity),
             request_timeout: None,
-            requests_per_second: self
-                .requests_per_second
-                .unwrap_or(DEFAULT_REQUESTS_PER_SECOND),
+            catalog_requests_per_second: self
+                .catalog_requests_per_second
+                .unwrap_or(DEFAULT_CATALOG_REQUESTS_PER_SECOND),
         }
     }
 }

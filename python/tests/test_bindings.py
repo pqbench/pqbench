@@ -96,7 +96,7 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
                 pass
         for rate in (-1.0, float("nan"), float("inf")):
             with self.assertRaises(ValueError):
-                async for _ in pqbench.walk(workspace, requests_per_second=rate):
+                async for _ in pqbench.walk(workspace, catalog_requests_per_second=rate):
                     pass
 
     async def test_bytemass_streams_columns(self) -> None:
@@ -114,10 +114,10 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
 
     def test_the_workspace_config_carries_the_catalog_pace(self) -> None:
         workspace = _workspace()
-        self.assertEqual(workspace.config.requests_per_second, 15.0)
-        paced = workspace.with_requests_per_second(5.0)
-        self.assertEqual(paced.config.requests_per_second, 5.0)
-        self.assertEqual(workspace.config.requests_per_second, 15.0)
+        self.assertEqual(workspace.config.catalog_requests_per_second, 15.0)
+        paced = workspace.with_catalog_requests_per_second(5.0)
+        self.assertEqual(paced.config.catalog_requests_per_second, 5.0)
+        self.assertEqual(workspace.config.catalog_requests_per_second, 15.0)
 
     async def test_list_partitions_groups_the_log(self) -> None:
         lake = pqbench.Lake(_workspace())

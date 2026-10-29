@@ -31,9 +31,6 @@ pub(crate) struct ConfigArgs {
     /// catalog dialect: unity (the default) or iceberg [env: PQB_TABLE_FORMAT]
     #[arg(long, global = true, value_name = "FORMAT", env = "PQB_TABLE_FORMAT", value_parser = parse_dialect)]
     pub table_format: Option<Dialect>,
-    /// catalog requests per second; 0 turns pacing off [env: PQB_REQUESTS_PER_SECOND]
-    #[arg(long = "requests-per-second", global = true, value_name = "REQUESTS_PER_SECOND", env = "PQB_REQUESTS_PER_SECOND", value_parser = parse_rate, allow_negative_numbers = true)]
-    pub requests_per_second: Option<f64>,
 }
 
 /// How long one request may take. The library leaves the bound to its caller;
@@ -53,7 +50,7 @@ pub(crate) fn resolve(
     require_endpoint: bool,
 ) -> Result<pqbench::Config, CliError> {
     let mut config = profile(args)?
-        .combine(env_layer())
+        .combine(env_layer()?)
         .combine(flag_layer(args))
         .resolve();
     config.request_timeout = Some(REQUEST_TIMEOUT);
@@ -141,9 +138,11 @@ fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
                 layer.dialect =
                     Some(parse_dialect(&value).map_err(|error| format!("~/.pqbenchrc: {error}"))?);
             }
-            "requests_per_second" => {
-                layer.requests_per_second =
-                    Some(parse_rate(&value).map_err(|error| format!("~/.pqbenchrc: {error}"))?);
+            "catalog_requests_per_second" => {
+                layer.catalog_requests_per_second = Some(
+                    parse_catalog_requests_per_second(&value)
+                        .map_err(|error| format!("~/.pqbenchrc: {error}"))?,
+                );
             }
             _ => {}
         }
@@ -151,15 +150,22 @@ fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
     Ok(profiles)
 }
 
-/// The environment's contribution. clap already merged the flags over `PQB_*`,
-/// so this layer is the lower-priority `DATABRICKS_*` fallback.
-fn env_layer() -> Layer {
-    Layer {
+/// The environment's contribution. The endpoint and bearer fall back to
+/// `DATABRICKS_*`; the pace has no flag, so it is read here.
+fn env_layer() -> Result<Layer, CliError> {
+    let catalog_requests_per_second = match env_var("PQB_CATALOG_REQUESTS_PER_SECOND") {
+        Some(value) => Some(
+            parse_catalog_requests_per_second(&value)
+                .map_err(|error| format!("PQB_CATALOG_REQUESTS_PER_SECOND: {error}"))?,
+        ),
+        None => None,
+    };
+    Ok(Layer {
         endpoint: env_var("DATABRICKS_HOST"),
         token: env_var("DATABRICKS_TOKEN"),
         dialect: None,
-        requests_per_second: None,
-    }
+        catalog_requests_per_second,
+    })
 }
 
 /// The command line's contribution, with clap's `PQB_*` fallback already
@@ -169,7 +175,7 @@ fn flag_layer(args: &ConfigArgs) -> Layer {
         endpoint: non_empty(args.endpoint.clone()),
         token: non_empty(args.token.clone()),
         dialect: args.table_format,
-        requests_per_second: args.requests_per_second,
+        catalog_requests_per_second: None,
     }
 }
 
@@ -182,15 +188,18 @@ fn parse_dialect(value: &str) -> Result<Dialect, CliError> {
     }
 }
 
-/// Parse a pace: a finite, non-negative requests-per-second.
-fn parse_rate(value: &str) -> Result<f64, CliError> {
-    let rate: f64 = value
+/// Parse the catalog pace: a finite, non-negative requests per second.
+fn parse_catalog_requests_per_second(value: &str) -> Result<f64, CliError> {
+    let pace: f64 = value
         .parse()
-        .map_err(|_| format!("rate expects a number, got {value:?}"))?;
-    if !rate.is_finite() || rate < 0.0 {
-        return Err(format!("rate expects a non-negative number, got {rate}").into());
+        .map_err(|_| format!("catalog_requests_per_second expects a number, got {value:?}"))?;
+    if !pace.is_finite() || pace < 0.0 {
+        return Err(format!(
+            "catalog_requests_per_second expects a non-negative number, got {pace}"
+        )
+        .into());
     }
-    Ok(rate)
+    Ok(pace)
 }
 
 /// A value with matching surrounding quotes removed.
@@ -232,7 +241,7 @@ mod tests {
              endpoint = https://example.cloud.databricks.com\n\
              token = dapi-secret\n\
              table_format = unity\n\
-             requests_per_second = 5\n\
+             catalog_requests_per_second = 5\n\
              \n\
              [iceberg]\n\
              endpoint = https://example.cloud.databricks.com\n\
@@ -244,17 +253,20 @@ mod tests {
             Some("https://example.cloud.databricks.com")
         );
         assert_eq!(profiles["DEFAULT"].dialect, Some(Dialect::Unity));
-        assert_eq!(profiles["DEFAULT"].requests_per_second, Some(5.0));
+        assert_eq!(profiles["DEFAULT"].catalog_requests_per_second, Some(5.0));
         assert_eq!(profiles["iceberg"].dialect, Some(Dialect::Iceberg));
         assert_eq!(profiles["iceberg"].token, None);
     }
 
     #[test]
     fn the_pace_rejects_a_negative_or_non_finite_value() {
-        assert_eq!(parse_rate("0").unwrap(), 0.0);
-        assert_eq!(parse_rate("15").unwrap(), 15.0);
+        assert_eq!(parse_catalog_requests_per_second("0").unwrap(), 0.0);
+        assert_eq!(parse_catalog_requests_per_second("15").unwrap(), 15.0);
         for bad in ["-1", "nan", "inf"] {
-            assert!(parse_rate(bad).is_err(), "{bad} should be rejected");
+            assert!(
+                parse_catalog_requests_per_second(bad).is_err(),
+                "{bad} should be rejected"
+            );
         }
     }
 
@@ -264,24 +276,24 @@ mod tests {
             endpoint: Some("profile".into()),
             token: None,
             dialect: Some(Dialect::Iceberg),
-            requests_per_second: Some(5.0),
+            catalog_requests_per_second: Some(5.0),
         };
         let flags = Layer {
             endpoint: None,
             token: Some("flag".into()),
             dialect: None,
-            requests_per_second: None,
+            catalog_requests_per_second: None,
         };
         let config = profile.combine(flags).resolve();
         assert_eq!(config.endpoint, "profile");
         assert_eq!(config.token.as_deref(), Some("flag"));
         assert_eq!(config.dialect, Dialect::Iceberg);
-        assert_eq!(config.requests_per_second, 5.0);
+        assert_eq!(config.catalog_requests_per_second, 5.0);
     }
 
     #[test]
     fn the_pace_defaults_to_fifteen() {
         let config = Layer::default().resolve();
-        assert_eq!(config.requests_per_second, 15.0);
+        assert_eq!(config.catalog_requests_per_second, 15.0);
     }
 }

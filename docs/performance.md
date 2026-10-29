@@ -50,7 +50,7 @@ descend the one catalog this principal may read outside compute
 (`PQB_WALK_CATALOG`, default `pqbench_ext`). Unity refuses
 `EXTERNAL USE SCHEMA` on the sample and managed-default catalogs, and a live run
 shares the endpoint and is rate-limited, so every level paces its catalog
-calls (`PQB_REQUESTS_PER_SECOND`, 15 per second by default) and the script
+calls (`PQB_CATALOG_REQUESTS_PER_SECOND`, 15 per second by default) and the script
 retries the walk at a lower rate on failure.
 
 ## Run perf

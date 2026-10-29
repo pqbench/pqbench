@@ -54,7 +54,7 @@ async def walk(
     lake: native.Lake | None = None,
     catalog: str | None = None,
     concurrency: int = CONCURRENCY,
-    requests_per_second: float | None = None,
+    catalog_requests_per_second: float | None = None,
     window_millis: int = WINDOW_MILLIS,
 ) -> AsyncIterator[native.TableFile]:
     """Yield a table-file record for every file the metastore reaches.
@@ -73,7 +73,7 @@ async def walk(
     → ``file.list.list``) is sequential, so this is the only parallelism there
     is. ``lake`` defaults to one over ``workspace``.
 
-    ``requests_per_second`` overrides the workspace's catalog pace — the level
+    ``catalog_requests_per_second`` overrides the workspace's catalog pace — the level
     listings and the per-table ``credentials`` calls — one bucket per workspace,
     since that is the scope the endpoint limits. Leave it ``None`` for the
     workspace's own pace (15 unless the ``Config`` sets it); ``0`` turns pacing
@@ -93,10 +93,10 @@ async def walk(
         raise ValueError("concurrency must be at least 1")
     if window_millis <= 0:
         raise ValueError("window_millis must be positive")
-    if requests_per_second is not None:
-        if not math.isfinite(requests_per_second) or requests_per_second < 0.0:
-            raise ValueError("requests_per_second must be a finite, non-negative rate")
-        workspace = workspace.with_requests_per_second(requests_per_second)
+    if catalog_requests_per_second is not None:
+        if not math.isfinite(catalog_requests_per_second) or catalog_requests_per_second < 0.0:
+            raise ValueError("catalog_requests_per_second must be a finite, non-negative rate")
+        workspace = workspace.with_catalog_requests_per_second(catalog_requests_per_second)
     if lake is None:
         lake = native.Lake(workspace)
 

@@ -817,7 +817,7 @@ fn table_ls_multiplexes_its_refs() {
         SCHEMA_REFS.as_bytes(),
         &[
             ("PQB_ENDPOINT", address.as_str()),
-            ("PQB_REQUESTS_PER_SECOND", "0"),
+            ("PQB_CATALOG_REQUESTS_PER_SECOND", "0"),
         ],
     );
     assert!(
@@ -840,7 +840,7 @@ fn table_ls_paces_its_catalog_requests() {
         SCHEMA_REFS.as_bytes(),
         &[
             ("PQB_ENDPOINT", address.as_str()),
-            ("PQB_REQUESTS_PER_SECOND", "5"),
+            ("PQB_CATALOG_REQUESTS_PER_SECOND", "5"),
         ],
     );
     assert!(

@@ -31,4 +31,4 @@ pub mod v1;
 pub mod viz;
 
 pub use capability::{Lake, Workspace};
-pub use config::{Combine, Config, Dialect, Layer, DEFAULT_REQUESTS_PER_SECOND};
+pub use config::{Combine, Config, Dialect, Layer, DEFAULT_CATALOG_REQUESTS_PER_SECOND};

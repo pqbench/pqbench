@@ -117,7 +117,7 @@ The walk's config resolves from three layers, least to most specific:
 environment, then the command line. A profile names an endpoint, a bearer, a
 dialect, and a catalog pace, so one workspace can carry `[unity]` and
 `[iceberg]` profiles; pick one with `--profile` (`PQB_PROFILE`), then override
-`--endpoint` / `--token` / `--table-format` / `--requests-per-second` for one run.
+`--endpoint` / `--token` / `--table-format` for one run.
 `pqbench setup` prints the resolved config for the shell to eval:
 
 | Variable | Role |
@@ -125,7 +125,7 @@ dialect, and a catalog pace, so one workspace can carry `[unity]` and
 | `PQB_ENDPOINT` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
 | `PQB_TOKEN` | Bearer PAT (`dapi-…`) or OAuth token; list API only |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
-| `PQB_REQUESTS_PER_SECOND` | Catalog requests per second, one bucket per run: 15 by default, `0` disables |
+| `PQB_CATALOG_REQUESTS_PER_SECOND` | Catalog requests per second, one bucket per run: 15 by default, `0` disables |
 
 The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
@@ -143,13 +143,13 @@ the command reads `/namespaces` under it. Unity is the default; no config
 probe runs.
 
 The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT` /
-`PQB_REQUESTS_PER_SECOND` carry the walk's context, and each level reads the
-parent's refs on standard input as they arrive — one `Catalog` line per
-catalog, then one `Schema` line per schema. Each level paces its own catalog
-requests, one bucket per run: 15 per second by default,
-`PQB_REQUESTS_PER_SECOND` / `--requests-per-second` changes it, and `0` turns
-pacing off. Storage reads are not paced — object storage has no such limit and
-retries on its own. `--fan-out` (64 on the listing levels, one per
+`PQB_CATALOG_REQUESTS_PER_SECOND` carry the walk's context, and each level
+reads the parent's refs on standard input as they arrive — one `Catalog` line
+per catalog, then one `Schema` line per schema. Each level paces its own
+catalog requests, one bucket per run: 15 per second by default,
+`PQB_CATALOG_REQUESTS_PER_SECOND` changes it, and `0` turns pacing off. Storage
+reads are not paced — object storage has no such limit and retries on its
+own. `--fan-out` (64 on the listing levels, one per
 core on `get table`) caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
@@ -166,9 +166,9 @@ stream — still fails the pipeline, and the shell can retry it at a lower rate:
 
 ```console
 set -o pipefail
-export PQB_REQUESTS_PER_SECOND=15
+export PQB_CATALOG_REQUESTS_PER_SECOND=15
 until pqbench list catalogs | pqbench list schemas; do
-    export PQB_REQUESTS_PER_SECOND=$((PQB_REQUESTS_PER_SECOND / 2))
+    export PQB_CATALOG_REQUESTS_PER_SECOND=$((PQB_CATALOG_REQUESTS_PER_SECOND / 2))
 done
 ```
 

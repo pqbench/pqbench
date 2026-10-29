@@ -10,7 +10,7 @@
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
 # SDK's own ceiling and is safe — decisions/0010-catalog-pacing.md). Every
-# catalog level paces its own requests at PQB_REQUESTS_PER_SECOND (15 by
+# catalog level paces its own requests at PQB_CATALOG_REQUESTS_PER_SECOND (15 by
 # default), so the pipeline needs no pacer stage: `list schemas` (one per
 # catalog), `list tables` (one per schema), and the table stages from
 # `credentials check` on (one catalog request per table, including
@@ -46,15 +46,15 @@
 # Usage:
 #
 #   scripts/dbx-walk.sh
-#   PQB_REQUESTS_PER_SECOND=5 scripts/dbx-walk.sh
+#   PQB_CATALOG_REQUESTS_PER_SECOND=5 scripts/dbx-walk.sh
 #
-# Tunables (environment): PQB, PQB_REQUESTS_PER_SECOND, PQB_WALK_RETRIES,
+# Tunables (environment): PQB, PQB_CATALOG_REQUESTS_PER_SECOND, PQB_WALK_RETRIES,
 # PQB_WALK_CATALOG, PQB_ENDPOINT, PQB_TOKEN, AWS_REGION.
 
 set -euo pipefail
 
 PQB="${PQB:-target/debug/pqbench}"
-RATE="${PQB_REQUESTS_PER_SECOND:-15}"
+RATE="${PQB_CATALOG_REQUESTS_PER_SECOND:-15}"
 RETRIES="${PQB_WALK_RETRIES:-3}"
 CATALOG="${PQB_WALK_CATALOG:-pqbench_ext}"
 REGION="${AWS_REGION:-us-east-2}"
@@ -150,7 +150,7 @@ main() {
         PQB_TOKEN="$(mint_token)"
     fi
     export PQB_ENDPOINT PQB_TOKEN AWS_REGION="$REGION"
-    export PQB_REQUESTS_PER_SECOND="$RATE"
+    export PQB_CATALOG_REQUESTS_PER_SECOND="$RATE"
 
     # A live walk shares the endpoint; retry at half the rate before giving up
     # (docs/cli.md: "pace the walk and retry it at a lower rate in the shell").
@@ -162,7 +162,7 @@ main() {
         fi
         attempt=$((attempt + 1))
         RATE=$((RATE / 2))
-        export PQB_REQUESTS_PER_SECOND="$RATE"
+        export PQB_CATALOG_REQUESTS_PER_SECOND="$RATE"
         echo "retrying the walk at rate $RATE" >&2
     done
 }

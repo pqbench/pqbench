@@ -54,9 +54,9 @@ Read it left to right:
 - `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
   live endpoint fans out one request per ref, so each level paces its own
   catalog calls at 15 requests per second by default
-  (`PQB_REQUESTS_PER_SECOND` / `--requests-per-second` changes it) — the schema
-  and table listings and the table stages (`credentials check`,
-  `credentials get`, `get table`) alike. The storage levels are not paced; the
+  (`PQB_CATALOG_REQUESTS_PER_SECOND` changes it) — the schema and table
+  listings and the table stages (`credentials check`, `credentials get`,
+  `get table`) alike. The storage levels are not paced; the
   retry-at-half-the-rate recipe is in the
   [CLI reference](https://pqbench.github.io/pqbench/cli/).
 - `credentials check` drops the tables you can't read outside compute — a view,

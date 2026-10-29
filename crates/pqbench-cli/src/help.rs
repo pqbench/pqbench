@@ -78,13 +78,13 @@ Auth (how to reach data):
     AWS_VIRTUAL_HOSTED_STYLE_REQUEST   false for path-style (MinIO, rustfs)
     AWS_SKIP_SIGNATURE    true for a public bucket
 
-  Catalog config  (PQB_ENDPOINT / PQB_TOKEN / PQB_REQUESTS_PER_SECOND)
+  Catalog config  (PQB_ENDPOINT / PQB_TOKEN / PQB_CATALOG_REQUESTS_PER_SECOND)
     endpoint + token   a Databricks workspace URL + PAT (dapi-…), or a
     Unity OSS / Iceberg REST URL. The token is a Bearer on the list API
     only. Only AWS_* is copied onto listed tables — a PAT is not an S3 key.
     pace          catalog requests per second, one bucket per run: 15 by
-                  default (--requests-per-second / PQB_REQUESTS_PER_SECOND),
-                  0 disables. Storage reads are not paced.
+                  default (PQB_CATALOG_REQUESTS_PER_SECOND), 0 disables.
+                  Storage reads are not paced.
 
   Databricks-governed tables
     The walk vends storage credentials: `credentials get` materializes the
@@ -423,7 +423,7 @@ SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
   endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
   token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
   format    --table-format | PQB_TABLE_FORMAT (unity default)
-  pace      --requests-per-second | PQB_REQUESTS_PER_SECOND (15/s; 0 disables)
+  pace      PQB_CATALOG_REQUESTS_PER_SECOND (15/s; 0 disables)
   region    --region   | AWS_REGION";
 
 pub const SETUP_AFTER: &str = "\
