@@ -235,6 +235,10 @@ message TableFile {
 
   // The path as the log records it, relative to the table's storage root.
   string path = 7;
+
+  // The write time the log records for the file, in milliseconds since the
+  // Unix epoch. Absent when the log records none (Iceberg records none).
+  optional int64 modification_time = 8;
 }
 
 // One commit of a table's log. The `{commit}` id segment is the log version, a

@@ -183,7 +183,7 @@ part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
 - `--last 1h|1d|1w` keeps the files the log dates in the window ending now.
 - `--partition 2026-10-28` keeps one UTC day.
 - One line per file, written as the walk produces it: the run holds one log
-  batch plus one file.
+  batch plus one file per table in flight (`--fan-out`).
 - Delta needs `--features delta`, Iceberg `iceberg`; add `-s3` to either for
   `s3://`.
 - Reads Table refs on standard input (a `get table` stream).

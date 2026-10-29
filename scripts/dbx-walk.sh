@@ -15,7 +15,7 @@
 # (one request per catalog), `list tables` (one per schema), and the table stages
 # from `credentials check` on (one catalog request per table, including
 # `credentials get`'s record read and `get table`'s). The storage levels
-# (`list partitions` down) read object storage, not the catalog, so they take no
+# (`list files` down) read object storage, not the catalog, so they take no
 # stage of their own.
 #
 # The catalog levels span the whole Unity Catalog; the table levels descend the
