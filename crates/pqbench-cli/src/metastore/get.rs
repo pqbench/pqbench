@@ -12,6 +12,6 @@ pub(crate) async fn run(
 ) -> Result<(), CliError> {
     let metastore = get::get(workspace).await?;
     let mut emit = Emitter::open();
-    emit.write(&metastore)?;
-    emit.finish()
+    emit.write(&metastore).await?;
+    emit.finish().await
 }

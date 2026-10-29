@@ -274,13 +274,13 @@ pub(crate) async fn drive<B: serde::Serialize>(rows: Records<'_, B>) -> Result<(
     let mut dropped = 0;
     while let Some(row) = rows.next().await {
         match row {
-            Ok(row) => emit.write(&row)?,
+            Ok(row) => emit.write(&row).await?,
             Err(error) => {
                 crate::error::report(&error);
                 dropped += 1;
             }
         }
     }
-    emit.finish()?;
+    emit.finish().await?;
     crate::error::fail_when_dropped(dropped)
 }

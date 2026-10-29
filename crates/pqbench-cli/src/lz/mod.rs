@@ -21,7 +21,8 @@ pub(crate) async fn run(args: &BenchArgs) -> Result<(), CliError> {
         emit.write(&crate::render::SweepRow {
             name: format!("{blob}/codecs/{}-{}", row.codec, row.level),
             row: row.clone(),
-        })?;
+        })
+        .await?;
     }
-    emit.finish()
+    emit.finish().await
 }
