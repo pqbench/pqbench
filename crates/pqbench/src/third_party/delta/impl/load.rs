@@ -564,48 +564,36 @@ async fn active_files(
     Ok((active, finish_partition_masses(totals)))
 }
 
-/// Visit the snapshot's active files one at a time, without collecting them,
-/// and return the version they are active at.
-///
-/// The caller that groups the files (the physical partition view) inserts each
-/// as it arrives, so no complete file list is held.
+/// Stream the snapshot's active files, newest first, without collecting them.
 ///
 /// The read is the lazy snapshot's own scan, not a `DeltaTable`: the table
 /// materializes the snapshot through `EagerSnapshot`, which replays every add
 /// action into resident record batches, so the set would be resident once in
-/// delta and again in the caller's groups. The lazy scan also materializes each
-/// file's `numRecords` from its stats JSON, so a log whose stats are not JSON
-/// fails here where [`load`] (the materialized path) omits them.
-pub(super) async fn visit_active_files(
+/// delta and again in the caller. The lazy scan also materializes each file's
+/// `numRecords` from its stats JSON, so a log whose stats are not JSON fails
+/// here where [`load`] (the materialized path) omits them.
+///
+/// The stream owns the snapshot and the store it reads from: `file_views`
+/// borrows the snapshot, so the generator is the one thing that can hold both.
+/// Each file is dropped as soon as the caller asks for the next.
+pub(super) async fn stream_active_files(
     lake: &Lake,
     request: &LoadRequest,
-    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
-) -> Result<u64, Error> {
+) -> Result<crate::table::FileStream<'static>, Error> {
     let store = open_store(lake, request)?;
     let snapshot = Snapshot::try_new(store.as_ref(), request.snapshot_version)
         .await
         .map_err(delta_error)?;
-    visit_snapshot_files(&store, &snapshot, request.file_stats, visit).await?;
-    Ok(snapshot.version())
-}
-
-/// Visit a lazy snapshot's active files: `Snapshot::file_views` streams the
-/// kernel scan one batch at a time, so nothing materializes the set.
-async fn visit_snapshot_files(
-    store: &LogStoreRef,
-    snapshot: &Snapshot,
-    file_stats: bool,
-    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
-) -> Result<(), Error> {
-    let table_url = store.root_url();
-    let root = local_table_root(table_url)?;
-    let mut files = snapshot.file_views(store.as_ref(), None);
-    while let Some(file) = files.try_next().await.map_err(delta_error)? {
-        if !visit(data_file(&root, table_url, &file, file_stats)?) {
-            break;
+    let table_url = store.root_url().clone();
+    let root = local_table_root(&table_url)?;
+    let file_stats = request.file_stats;
+    Ok(async_stream::try_stream! {
+        let mut files = snapshot.file_views(store.as_ref(), None);
+        while let Some(file) = files.try_next().await.map_err(delta_error)? {
+            yield data_file(&root, &table_url, &file, file_stats)?;
         }
     }
-    Ok(())
+    .boxed())
 }
 
 /// The table's local filesystem root, when it is a `file://` table.

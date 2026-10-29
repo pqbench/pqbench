@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use apache_avro::{Schema, Writer};
+use futures_util::TryStreamExt;
 use pqbench::table::{self, LoadRequest};
 use pqbench::third_party::parquet::{default_metadata_parser, MetadataParser};
 use pqbench::v1::TableFormat;
@@ -335,13 +336,12 @@ async fn file_list_walks_the_active_files() {
         uri: Some(fixture.metadata.to_string_lossy().into_owned()),
         ..pqbench::v1::Table::default()
     };
-    let mut files = Vec::new();
-    pqbench::file::list::visit(common::lake(), &table, None, &mut |file| {
-        files.push(file);
-        true
-    })
-    .await
-    .unwrap();
+    let files: Vec<_> = pqbench::file::list::list(common::lake(), &table, None)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
     let mut uris: Vec<_> = files.iter().map(|file| file.uri().unwrap()).collect();
     uris.sort();
     let mut expected = vec![

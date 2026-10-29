@@ -1,10 +1,10 @@
 //! `list files`: a table's active files.
 
 use clap::Args;
-use futures_util::StreamExt;
+use futures_util::{future, StreamExt, TryStreamExt};
 use pqbench::v1;
 
-use crate::emit::Emitter;
+use crate::source::drive;
 use crate::time::WindowArgs;
 use crate::{parse, CliError};
 
@@ -25,50 +25,27 @@ pub(crate) struct ListArgs {
 /// Reads Table refs on standard input, resolves each one's snapshot, and writes
 /// its active files as they arrive — the files active now, not the ones some
 /// commit added. Each file carries the table's lease, so `bytemass` reads it
-/// with no catalog call. Files are written as they are produced, so the run
-/// holds one log batch plus one file, however large the table.
+/// with no catalog call. A table is walked to its end before the next one
+/// starts, and a file is written as it is produced, so the run holds one log
+/// batch plus one file, however large the table.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
-    let mut parents = parse::parents::<v1::Table>("list files").await?;
+    let parents = parse::parents::<v1::Table>("list files").await?;
     let window = args.window.window();
     let min = args.min_file_size;
-    let mut emit = Emitter::open();
-    let mut dropped = 0;
-    let mut failure = None;
-    while let Some(table) = parents.next().await {
-        let table = match table {
-            Ok(table) => table,
-            Err(error) => {
-                crate::error::report(&error);
-                dropped += 1;
-                continue;
-            }
-        };
-        let walked = pqbench::file::list::visit(lake, &table, window, &mut |file| {
-            if !meets_min_file_size(&file, min) {
-                return true;
-            }
-            match emit.write(&file) {
-                Ok(()) => true,
-                Err(error) => {
-                    failure = Some(error);
-                    false
-                }
-            }
+    let rows = parents
+        .then(move |table| async move {
+            let table = table?;
+            let reference = table.name.clone();
+            let files = pqbench::file::list::list(lake, &table, window)
+                .await
+                .map_err(|error| crate::error::context(&reference, error))?;
+            // Each table's own failures stay attributed to it, mid-walk too.
+            Ok::<_, CliError>(files.map_err(move |error| crate::error::context(&reference, error)))
         })
-        .await;
-        match walked {
-            Ok(_) => {}
-            Err(error) => {
-                crate::error::report(&error.into());
-                dropped += 1;
-            }
-        }
-        if let Some(error) = failure.take() {
-            return Err(error);
-        }
-    }
-    emit.finish()?;
-    crate::error::fail_when_dropped(dropped)
+        .try_flatten()
+        .try_filter(move |file| future::ready(meets_min_file_size(file, min)))
+        .boxed_local();
+    drive(rows).await
 }
 
 /// Whether a file's logged size clears `--min-file-size`. A file whose log

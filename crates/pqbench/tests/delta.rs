@@ -821,15 +821,13 @@ async fn file_list_walks_the_snapshots_active_files() {
         uri: Some(fixture.path().to_string_lossy().to_string()),
         ..Default::default()
     };
-    let mut files = Vec::new();
-    let version = pqbench::file::list::visit(common::lake(), &table, None, &mut |file| {
-        files.push(file);
-        true
-    })
-    .await
-    .unwrap();
+    let files: Vec<_> = pqbench::file::list::list(common::lake(), &table, None)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
 
-    assert_eq!(version, 1);
     let mut paths: Vec<_> = files.iter().map(|file| file.path.as_str()).collect();
     paths.sort();
     assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
@@ -865,13 +863,12 @@ async fn file_list_keeps_only_the_files_a_window_dates() {
         first_time: u64::try_from(written).unwrap(),
         last_time: u64::try_from(written).unwrap() + 1,
     };
-    let mut files = Vec::new();
-    pqbench::file::list::visit(common::lake(), &table, Some(window), &mut |file| {
-        files.push(file);
-        true
-    })
-    .await
-    .unwrap();
+    let files: Vec<_> = pqbench::file::list::list(common::lake(), &table, Some(window))
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
 
     // The other files' `modificationTime` is 0, outside the window.
     let paths: Vec<_> = files.iter().map(|file| file.path.as_str()).collect();

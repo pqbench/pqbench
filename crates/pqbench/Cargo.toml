@@ -14,10 +14,10 @@ default = []
 # reqwest signs a HEAD to read `x-amz-storage-class`, which object_store drops.
 aws = ["dep:object_store", "object_store/aws", "dep:async-trait"]
 # Delta snapshot resolution requires Rust 1.94.1 or newer.
-delta = ["dep:deltalake", "dep:futures"]
+delta = ["dep:deltalake", "dep:futures", "dep:async-stream"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
 # Iceberg snapshot planning reads metadata JSON and Avro manifests.
-iceberg = ["dep:apache-avro"]
+iceberg = ["dep:apache-avro", "dep:async-stream"]
 iceberg-s3 = ["iceberg", "aws"]
 
 [dependencies]
@@ -42,6 +42,9 @@ serde_json = "1.0.151"
 deltalake = { version = "1.0", default-features = false, features = ["rustls"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+# A stream that owns the reader it borrows: the loaders below build one
+# generator instead of a self-referential struct or a forwarding channel.
+async-stream = { version = "0.3", optional = true }
 pqbench-resource = { path = "../pqbench-resource" }
 url = "2"
 # Must match delta-rs's ObjectStore trait version: stores cross that internal

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt, TryStreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
@@ -511,78 +511,102 @@ async fn active_files(
     options: &[(String, String)],
 ) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
     let mut files = Vec::new();
-    let deletes = visit_data_files(lake, table_location, manifest_list, options, &mut |file| {
-        files.push(file);
-        true
-    })
-    .await?;
+    let mut deletes = Vec::new();
+    let mut entries = active_entries(
+        lake.clone(),
+        table_location.to_owned(),
+        manifest_list.to_owned(),
+        options.to_vec(),
+    )
+    .boxed();
+    while let Some(entry) = entries.try_next().await? {
+        match entry {
+            Entry::Data(file) => files.push(file),
+            Entry::Delete(path) => deletes.push(path),
+        }
+    }
     Ok((files, deletes))
 }
 
-/// Visit the active data files one at a time, without collecting them, and
-/// return the delete files the manifests name.
-async fn visit_data_files(
-    lake: &Lake,
-    table_location: &str,
-    manifest_list: &str,
-    options: &[(String, String)],
-    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
-) -> Result<Vec<String>, Error> {
-    let root = table_root(table_location)?;
-    let bytes = read_location(lake, manifest_list, options).await?;
-    let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
-    let mut deletes = Vec::new();
-    for manifest in manifests {
-        let bytes = read_location(lake, &manifest.manifest_path, options).await?;
-        let entries: Vec<ManifestEntry> = read_avro(&bytes, "manifest").map_err(Error::Avro)?;
-        for entry in entries {
-            if entry.status == STATUS_DELETED {
-                continue;
-            }
-            let content = if manifest.content == MANIFEST_DELETES && entry.data_file.content == 0 {
-                1
-            } else {
-                entry.data_file.content
-            };
-            if content != CONTENT_DATA {
-                deletes.push(entry.data_file.file_path);
-                continue;
-            }
-            if !visit(data_file(&root, entry)?) {
-                return Ok(deletes);
+/// One entry the active manifests name.
+///
+/// The walk holds one entry at a time, so the data variant's size is the
+/// generator's state, not a per-file cost; a `Box` would add an allocation to
+/// every file to save a few hundred bytes of stack.
+#[allow(clippy::large_enum_variant)]
+enum Entry {
+    /// A data file to measure.
+    Data(v1::TableFile),
+    /// A delete file's path: named in the log, never measured.
+    Delete(String),
+}
+
+/// Stream the active manifests' entries, without collecting them.
+///
+/// The stream owns the lake handle and the metadata location, and each manifest
+/// is read when the walk reaches it, so a table holds one manifest's entries at
+/// a time however many manifests its snapshot names.
+fn active_entries(
+    lake: Lake,
+    table_location: String,
+    manifest_list: String,
+    options: Vec<(String, String)>,
+) -> impl Stream<Item = Result<Entry, Error>> + Send + 'static {
+    async_stream::try_stream! {
+        let root = table_root(&table_location)?;
+        let bytes = read_location(&lake, &manifest_list, &options).await?;
+        let manifests: Vec<ManifestFile> =
+            read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
+        for manifest in manifests {
+            let bytes = read_location(&lake, &manifest.manifest_path, &options).await?;
+            let entries: Vec<ManifestEntry> =
+                read_avro(&bytes, "manifest").map_err(Error::Avro)?;
+            for entry in entries {
+                if entry.status == STATUS_DELETED {
+                    continue;
+                }
+                let content =
+                    if manifest.content == MANIFEST_DELETES && entry.data_file.content == 0 {
+                        1
+                    } else {
+                        entry.data_file.content
+                    };
+                if content != CONTENT_DATA {
+                    yield Entry::Delete(entry.data_file.file_path);
+                    continue;
+                }
+                yield Entry::Data(data_file(&root, entry)?);
             }
         }
     }
-    Ok(deletes)
 }
 
-/// Visit the selected snapshot's active files one at a time and return its
-/// version (the snapshot id).
-pub(super) async fn visit_active_files(
+/// Stream the selected snapshot's active files, without collecting them.
+///
+/// Iceberg records no per-file time, so a caller's window can only drop what
+/// arrives; the walk is the snapshot's manifests either way.
+pub(super) async fn stream_active_files(
     lake: &Lake,
     request: &LoadRequest,
-    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
-) -> Result<u64, Error> {
+) -> Result<crate::table::FileStream<'static>, Error> {
     let options = env_options(&request.env);
     let metadata = read_metadata(lake, &request.uri, &options).await?;
+    let location = metadata.location.clone();
     let requested = request.snapshot_version.map(create_i64).transpose()?;
-    let selected = select_snapshot(&metadata, requested)?;
-    let snapshot_version = selected
-        .as_ref()
-        .map(|snapshot| create_u64(snapshot.snapshot_id))
-        .transpose()?
-        .unwrap_or(0);
-    if let Some(snapshot) = selected {
-        visit_data_files(
-            lake,
-            &metadata.location,
-            &snapshot.manifest_list,
-            &options,
-            visit,
-        )
-        .await?;
-    }
-    Ok(snapshot_version)
+    let Some(snapshot) = select_snapshot(&metadata, requested)? else {
+        return Ok(futures_util::stream::empty().boxed());
+    };
+    let manifest_list = snapshot.manifest_list.clone();
+    Ok(
+        active_entries(lake.clone(), location, manifest_list, options)
+            .try_filter_map(|entry| async move {
+                Ok(match entry {
+                    Entry::Data(file) => Some(file),
+                    Entry::Delete(_) => None,
+                })
+            })
+            .boxed(),
+    )
 }
 
 /// One active manifest entry as a `v1::TableFile`, checking it is Parquet.

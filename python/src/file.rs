@@ -22,32 +22,13 @@ fn file_list(
     let record = pqbench::v1::Table {
         name: table,
         uri: Some(uri),
-        credentials: credentials.clone(),
+        credentials,
         ..pqbench::v1::Table::default()
     };
     let window = crate::requests::window(partition_millis, last_millis)?;
     stream_listing(
         py,
-        async move {
-            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-            let producer = sender.clone();
-            tokio::spawn(async move {
-                let mut producer = producer;
-                let walked = pqbench::file::list::visit(
-                    &lake,
-                    &record,
-                    window,
-                    &mut |file| producer.send(Ok(file)).is_ok(),
-                )
-                .await;
-                if let Err(error) = walked {
-                    let _ = sender.send(Err(error.to_string()));
-                }
-            });
-            Ok(futures::stream::unfold(receiver, |mut receiver| async move {
-                receiver.recv().await.map(|item| (item, receiver))
-            }))
-        },
+        async move { pqbench::file::list::list(&lake, &record, window).await },
         TableFile::attach,
     )
 }
