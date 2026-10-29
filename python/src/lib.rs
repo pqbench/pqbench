@@ -30,7 +30,6 @@ mod file;
 mod handles;
 mod marshal;
 mod metastore;
-mod partition;
 mod prelude;
 mod ratelimit;
 mod records;
@@ -82,8 +81,7 @@ fn native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     catalog::register(py, module)?;
     schema::register(py, module)?;
     table::register(py, module)?;
-    partition::register(py, module)?;
-    file::register(py, module)?;
     bytemass::register(py, module)?;
+    file::register(py, module)?;
     Ok(())
 }

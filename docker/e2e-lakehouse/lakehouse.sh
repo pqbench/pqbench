@@ -220,8 +220,7 @@ check_unity() {
                 jq -c '{table_id, operation: "READ"}')" |
         jq -r '.aws_temp_credentials | [.access_key_id, .secret_access_key, .session_token] | @tsv')
     walk_env "" "" "$vended_key" "$vended_secret" "$vended_token"
-    measurement=$(printf '{"name":"catalogs/local/schemas/local/tables/events","uri":"%s"}\n' "$table_location" | "$pqbench_bin" list partitions |
-        "$pqbench_bin" list files |
+    measurement=$(printf '{"name":"catalogs/local/schemas/local/tables/events","uri":"%s"}\n' "$table_location" | "$pqbench_bin" list files |
         "$pqbench_bin" bytemass) || {
         echo "check failed: the table pipe produced no measurement" >&2
         exit 1
@@ -233,7 +232,6 @@ check_unity() {
     walk_env "$unity_catalog" "" "$VENDED_ACCESS_KEY_ID" "$VENDED_SECRET_ACCESS_KEY" "$VENDED_SESSION_TOKEN"
     measurement=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
         "$pqbench_bin" get table |
-        "$pqbench_bin" list partitions |
         "$pqbench_bin" list files |
         "$pqbench_bin" bytemass) || {
         echo "check failed: the lake pipe produced no measurement" >&2
@@ -319,7 +317,6 @@ check_iceberg() {
     walk_env "$iceberg_rest/v1" "iceberg" "test" "test"
     measurement=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
         "$pqbench_bin" get table |
-        "$pqbench_bin" list partitions |
         "$pqbench_bin" list files |
         "$pqbench_bin" bytemass) || {
         echo "check failed: the Iceberg lake pipe produced no measurement" >&2

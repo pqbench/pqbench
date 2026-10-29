@@ -1,7 +1,7 @@
-//! The file command: the files a partition's commits added.
+//! The file command: a table's active files.
 //!
-//! [`list::list`] reads the table's log for the named commits' `add` actions and
-//! streams the files they name, one `TableFile` each. The CLI owns the document
+//! [`list::list`] streams one snapshot's active files, so a caller that writes
+//! each file as it arrives holds one file at a time. The CLI owns the document
 //! it becomes.
 
 pub mod list;

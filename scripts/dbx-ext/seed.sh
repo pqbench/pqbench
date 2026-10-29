@@ -25,7 +25,7 @@
 # it — what the issue-#58 walk exercises:
 #
 #       list tables | credentials check | credentials get
-#         | get table | list partitions | list files | bytemass
+#         | get table | list files | bytemass
 #
 # Copy set (source -> fixture), sized to fit the workspace's storage budget:
 #

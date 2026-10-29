@@ -47,3 +47,17 @@ pub async fn stream_files(
 ) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
     super::r#impl::stream_files(lake, request).await
 }
+
+/// Stream the requested snapshot's active files, newest first.
+///
+/// The read is the kernel scan, a record batch at a time, over a lazy snapshot:
+/// no `EagerSnapshot` is built, so the active set is never resident.
+///
+/// # Errors
+/// As [`load`]; an error raised after the first file is a stream item.
+pub async fn stream_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    super::r#impl::stream_active_files(lake, request).await
+}

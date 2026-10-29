@@ -10,8 +10,7 @@ that command and links back. This file is the durable copy.
 | --- | --- |
 | Name a file for measurement | `pqbench table-file FILE` |
 | On-disk bytes per column | `pqbench bytemass` (records on stdin) |
-| List a table's natural partitions | `pqbench list partitions` (Table refs on stdin) |
-| List a partition's files | `pqbench list files` (partitions on stdin) |
+| List a table's active files | `pqbench list files` (Table refs on stdin) |
 | Read the endpoint's metastore record | `pqbench get metastore` (`PQB_ENDPOINT`) |
 | List the catalogs at a catalog endpoint | `pqbench list catalogs` (`PQB_ENDPOINT`) |
 | Read one catalog's record | `pqbench get catalog` (Catalog refs on stdin) |
@@ -49,7 +48,6 @@ The usual walk:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list partitions \
 >   | pqbench list files \
 >   | pqbench bytemass \
 >   | pqbench viz -o /tmp/report
@@ -67,16 +65,15 @@ pqbench never writes them into the process environment itself.
 | `Metastore` | `get metastore` | humans / scripts  |
 | `Catalog` | `list catalogs`, `get catalog` | `get catalog`, `list schemas`, humans / scripts  |
 | `Schema` | `list schemas`, `get schema` | `get schema`, `list tables` |
-| `Table` | `list tables`, `get table`, `credentials get` | `get table`, `list partitions`, `credentials get` |
-| `Partition` | `list partitions` | `list files`, humans / scripts  |
+| `Table` | `list tables`, `get table`, `credentials get` | `get table`, `list files`, `credentials get` |
 | `TableFile` | `list files`, `table-file` | `bytemass`, humans / scripts  |
 | `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts  |
 | `pqbench.profile-column` | `profile` | humans / scripts  |
 | `pqbench.skill` | `skill` (list) | an agent |
 
 A resource's `name` is its identity: the collection segment (`catalogs`,
-`schemas`, `tables`, `partitions`, `files`) names the type, so no record carries
-a `kind` or a version of its own — the API version is the package's.
+`schemas`, `tables`, `files`) names the type, so no record carries a `kind` or a
+version of its own — the API version is the package's.
 
 ## Flags that repeat
 
@@ -148,7 +145,8 @@ The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
 input as they arrive — one `Catalog` line per catalog, then one
 `Schema` line per schema. Each ref's request starts as its record is
-read; `--fan-out` (64 on the listing levels, one per core on `get table`)
+read; `--fan-out` (64 on the listing levels and `list files`, one per core on
+`get table`)
 caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
@@ -232,8 +230,8 @@ storage location whose Delta log is read with `without_files()`, and the
 catalog's declared columns and properties are merged over the log's; Iceberg
 REST `loadTable` carries the metadata inline, so the Iceberg path runs no
 storage read at all. The Delta read is O(1) in files, so a walk can descend to
-every table before deciding which files to measure. `list partitions` lists a table's
-partitions and `list files` its files.
+every table before deciding which files to measure. `list files` lists the
+table's active files.
 
 The table read knows nothing about credentials: it reads with the lease it is
 given — the table's own `credentials` and the process environment the storage
@@ -282,29 +280,25 @@ $ echo '"dbx_samples.nyctaxi"' |
     pqbench credentials check | pqbench credentials get
 ```
 
-`list partitions` reads each ref's Delta / Iceberg log — never the data files — and
-groups the table's commits into **natural partitions** by commit time (Delta
-`commitInfo.timestamp`; Iceberg the snapshot time): one `Partition`
-per epoch-aligned, half-open UTC window, carrying the commits it holds.
-`--every` sets the width (`1h`, `1d`, `1w`); a commit the log does not date is
-omitted, so a window never claims a commit it cannot place. `--last` (`1h`,
-`1d`, `1w`) bounds the read to commits within that window of the newest one,
-and only windows the horizon covers whole are emitted. A partition is a
-lens on the files, not a thing the table stores — see `docs/partition.md`.
-`list files` then re-reads only the window's commits and streams the files they
-added — the lease rides on every file, and that stream is what `bytemass`
-measures.
+`list files` reads each ref's Delta / Iceberg log — never the data files — and
+writes the snapshot's active files, one `TableFile` per line: the files the
+table holds now, so one a later commit removed is absent. It resolves the
+snapshot (Delta: the checkpoint and the commits after it), streams the add
+actions one row at a time, and names each file as `{table}/files/{path}` with
+the table's lease, so `bytemass` reads it with no catalog call. Nothing is
+collected: a table of any size costs one decoded batch plus one file, and
+`--fan-out` (64 by default) is how many tables are walked at once.
+
+`--last 1d` (or `1w`) keeps the files whose logged modification time falls in
+the window ending now; `--partition 2026-10-28` keeps one UTC day. The filter
+runs as each file arrives, so a daily run reads the day's writes without holding
+what the table already held. Neither flag filters the *commit*: it is the file's
+own time the log records, not the version that added it. Iceberg records no
+per-file time, so a window over an Iceberg table is an error rather than an
+empty listing.
 
 ```console no-run
-$ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ echo '"dbx_samples.nyctaxi"' |
-    pqbench list tables |
-    pqbench credentials check |
-    pqbench credentials get |
-    pqbench list partitions
-name                  first_time     last_time  commits
---------------------  -----------  ------------  -------
-…                     …            …                   1
+$ cat table.ndjson | pqbench list files --last 1d | pqbench bytemass
 ```
 
 ```console no-run
@@ -314,13 +308,13 @@ name                           format  snapshot_version  columns  uri
 catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/unity/events
 ```
 
-List a table's partitions from a table record; a terminal prints them:
+List a table's active files from a table record; a terminal prints them:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
-name                           first_time      last_time  commits
---------------------------  -------------  -------------  -------
-catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench format
+path                                                                 size_bytes
+-------------------------------------------------------------------  ----------
+part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
 ```
 
 List the catalogs at the endpoint:

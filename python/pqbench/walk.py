@@ -2,8 +2,7 @@
 
 The verbs compose by hand — the pipeline the CLI pipes together,
 ``catalog.list.list | schema.list.list | table.list.list | credentials.check.check |
-credentials.get.get | table.get.get | partition.list.list |
-file.list.list`` — but a hand-written ``for`` loop awaits one table at a time,
+credentials.get.get | table.get.get | file.list.list`` — but a hand-written ``for`` loop awaits one table at a time,
 and on a real endpoint that is the difference between minutes and seconds.
 This helper is that composition with the independence handed to ``asyncio``:
 the catalog levels fan out, one task descends each table under a bounded
@@ -38,9 +37,6 @@ CONCURRENCY = 32
 REQUESTS_PER_SECOND = 15.0
 """Unity Catalog requests per second per endpoint: the library's own default."""
 
-WINDOW_MILLIS = 86_400_000
-"""The natural-window width the CLI's ``--every 1d`` names: one UTC day."""
-
 _LevelRecord = TypeVar("_LevelRecord", bound=native.Record)
 """A record a level listing returns: `Catalog`, `Schema` or `Table`."""
 
@@ -58,7 +54,7 @@ async def walk(
     catalog: str | None = None,
     concurrency: int = CONCURRENCY,
     requests_per_second: float = REQUESTS_PER_SECOND,
-    window_millis: int = WINDOW_MILLIS,
+    last_millis: int | None = None,
 ) -> AsyncIterator[native.TableFile]:
     """Yield a table-file record for every file the metastore reaches.
 
@@ -72,9 +68,9 @@ async def walk(
 
     ``concurrency`` bounds the tables in flight, and with them the requests in
     flight; each table's chain (``credentials.check.check`` →
-    ``credentials.get.get`` → ``table.get.get`` → ``partition.list.list``
-    → ``file.list.list``) is sequential, so this is the only parallelism there
-    is. ``lake`` defaults to one over ``workspace``.
+    ``credentials.get.get`` → ``table.get.get`` → ``file.list.list``) is
+    sequential, so this is the only parallelism there is. ``lake`` defaults to
+    one over ``workspace``.
 
     ``requests_per_second`` paces the Unity Catalog calls — the level listings
     and the per-table ``credentials`` calls — one bucket per endpoint, since
@@ -93,8 +89,8 @@ async def walk(
     """
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
-    if window_millis <= 0:
-        raise ValueError("window_millis must be positive")
+    if last_millis is not None and last_millis <= 0:
+        raise ValueError("last_millis must be positive")
     if not math.isfinite(requests_per_second) or requests_per_second < 0.0:
         raise ValueError("requests_per_second must be a finite, non-negative rate")
     if lake is None:
@@ -142,17 +138,10 @@ async def walk(
                 uri = info.get("uri")
                 if not uri:
                     return
-                async for partition in native.partition.list.list(
-                    lake, info["name"], uri, info.get("credentials"), window_millis
+                async for file in native.file.list.list(
+                    lake, info["name"], uri, info.get("credentials"), None, last_millis
                 ):
-                    async for file in native.file.list.list(
-                        lake,
-                        info["name"],
-                        partition["uri"],
-                        partition.get("credentials"),
-                        partition["commit_versions"],
-                    ):
-                        await queue.put(file)
+                    await queue.put(file)
             except Exception as error:  # noqa: BLE001 - a table we may not read
                 skipped += 1
                 _log.debug("skipped %s: %s", ref["name"], error)

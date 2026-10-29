@@ -14,8 +14,8 @@ tidyings; this page covers structure.
 ## Commands
 
 The walk's resource commands (`metastore`, `catalog`, `schema`, `table`,
-`partition`, `file`, `credentials`) are folders — one per resource, with a
-subcommand folder per verb. The measurement commands (`bytemass`,
+`file`, `credentials`) are folders — one per resource, with a subcommand folder
+per verb. The measurement commands (`bytemass`,
 `compression`, `lz`) keep an `api.rs` and split the implementation across named
 modules; the rest (`profile`, `diff`, `skill`, `ratelimit`, `viz`) are single
 modules or small folders.
@@ -49,9 +49,9 @@ Rules:
 ## Resource hierarchy
 
 Commands mirror the resource hierarchy of the data model — metastore, catalog,
-schema, table, partition, file. Each level's `list` module lists that level's
-resources (the parent rides the argument, or parent refs on standard input);
-`get` reads one resource.
+schema, table, file. Each level's `list` module lists that level's resources
+(the parent rides the argument, or parent refs on standard input); `get` reads
+one resource.
 
 ## Interfaces
 

@@ -151,7 +151,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
 }
 
 #[test]
-fn list_files_rejects_a_malformed_partition_record() {
+fn list_files_rejects_a_malformed_table_record() {
     // A bad name is the record's contract: it is named and dropped, and the
     // level still exits non-zero.
     let output = pipe_env(
@@ -161,6 +161,6 @@ fn list_files_rejects_a_malformed_partition_record() {
     );
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("a partition record needs a"), "{stderr}");
+    assert!(stderr.contains("a table record needs a"), "{stderr}");
     assert!(!stderr.contains("could not be read"), "{stderr}");
 }

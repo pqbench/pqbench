@@ -29,7 +29,6 @@ records by `name`, and `sort`, `head`, or `awk` sample by name:
 ```console run delta json
 # one file: keep only the part-* records
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list partitions \
 >   | pqbench list files \
 >   | jq -c 'select(.name | contains("/files/part-"))' \
 >   | pqbench bytemass \
@@ -38,7 +37,6 @@ $ cat docker/e2e-lakehouse/table.ndjson \
 
 # first N by name: sort the file records, cap them, then measure
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list partitions \
 >   | pqbench list files \
 >   | sort | head -10 \
 >   | pqbench bytemass \
@@ -47,7 +45,6 @@ $ cat docker/e2e-lakehouse/table.ndjson \
 
 # every Nth file
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list partitions \
 >   | pqbench list files \
 >   | awk 'NR % 2 == 1' \
 >   | pqbench bytemass \
@@ -59,20 +56,20 @@ The `list files` stream carries each file's `credentials` on the record, so
 the lease travels with it through `jq`, `sort`, and `head`: `bytemass` reads the
 file its `blob` names.
 
-## A table's partitions
+## A table's files
 
-`list partitions` groups a table's commits into epoch-aligned commit-time windows;
-`list files` re-reads each window's commits and names the files they added.
-The whole walk is three commands:
+`list files` resolves a table's snapshot and names its active files, one
+`TableFile` per line; `bytemass` reads each one's footer. The whole walk is two
+commands:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![one table viz page](images/pqbench-lake-treemap.gif)
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -93,7 +90,7 @@ $ echo '"CAT.SCHEMA"' | pqbench list tables |
     pqbench credentials check |
     pqbench credentials get |
     pqbench get table |
-    pqbench list partitions |
+    pqbench list files |
     pqbench list files |
     pqbench bytemass | pqbench format
 ```
@@ -124,16 +121,16 @@ url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 
 ## One Delta snapshot
 
-`pqbench list partitions` needs `--features delta` to read a log. The stream is
+`pqbench list files` needs `--features delta` to read a log. The stream is
 NDJSON for `list files` and `bytemass`; `format` renders it:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 ![pqbench table CLI walkthrough](images/pqbench-delta-bytemass.gif)
@@ -147,12 +144,12 @@ fixture stores data as `s3://lakehouse/...`, so measure it through the stand
 (`make lakehouse`), not just the feature:
 
 ```console no-run
-$ cat docker/e2e-lakehouse/iceberg.ndjson | pqbench list partitions > /tmp/iceberg.ndjson
+$ cat docker/e2e-lakehouse/iceberg.ndjson | pqbench list files > /tmp/iceberg.ndjson
 ```
 
 With the stand up, walk the Iceberg REST catalog (`PQB_ENDPOINT=…
 PQB_TABLE_FORMAT=iceberg`) and measure through it: `list tables | credentials
-check | credentials get | get table | list partitions | list files | bytemass`.
+check | credentials get | get table | list files | bytemass`.
 `docs/demos/pqbench-iceberg-session.sh` runs the REST pipe when the stand answers
 at `localhost:8181`.
 

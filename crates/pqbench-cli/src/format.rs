@@ -26,7 +26,6 @@ enum Class {
     Catalog,
     Schema,
     Table,
-    Partition,
     TableFile,
     Bytemass,
     Sweep,
@@ -101,8 +100,6 @@ fn classify(record: &Value) -> Option<Class> {
         return None;
     } else if v1::name::parse_table_file(name).is_some() {
         Class::TableFile
-    } else if v1::Partition::parse_name(name).is_some() {
-        Class::Partition
     } else if v1::Table::parse_name(name).is_some() {
         Class::Table
     } else if v1::Schema::parse_name(name).is_some() {
@@ -133,7 +130,6 @@ enum Section {
     Catalog(Vec<v1::Catalog>),
     Schema(Vec<v1::Schema>),
     Table(Vec<v1::Table>),
-    Partition(Vec<v1::Partition>),
     TableFile(Vec<v1::TableFile>),
     Bytemass(Vec<v1::Bytemass>),
     Sweep(Vec<render::SweepRow>),
@@ -149,7 +145,6 @@ impl Section {
             Class::Catalog => Self::Catalog(Vec::new()),
             Class::Schema => Self::Schema(Vec::new()),
             Class::Table => Self::Table(Vec::new()),
-            Class::Partition => Self::Partition(Vec::new()),
             Class::TableFile => Self::TableFile(Vec::new()),
             Class::Bytemass => Self::Bytemass(Vec::new()),
             Class::Sweep => Self::Sweep(Vec::new()),
@@ -166,7 +161,6 @@ impl Section {
             Self::Catalog(rows) => push_typed(rows, record),
             Self::Schema(rows) => push_typed(rows, record),
             Self::Table(rows) => push_typed(rows, record),
-            Self::Partition(rows) => push_typed(rows, record),
             Self::TableFile(rows) => push_typed(rows, record),
             Self::Bytemass(rows) => push_typed(rows, record),
             Self::Sweep(rows) => push_typed(rows, record),
@@ -191,7 +185,6 @@ impl Section {
             Self::Catalog(rows) => render::render(rows),
             Self::Schema(rows) => render::render(rows),
             Self::Table(rows) => render::render(rows),
-            Self::Partition(rows) => render::render(rows),
             Self::TableFile(rows) => render::render(rows),
             Self::Bytemass(rows) => render::render(rows),
             Self::Sweep(rows) => render::render(rows),

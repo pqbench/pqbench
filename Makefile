@@ -1,14 +1,15 @@
 # Standard Rust workspace developer/orchestration targets.
 # Overridable without modifying this file:
 #   CARGO          (default: cargo)
-#   CARGO_FEATURES (default: empty) feature selection, e.g. --all-features
+#   CARGO_FEATURES (default: --all-features) feature selection; override only to
+#                  reproduce a specific CI leg, e.g. CARGO_FEATURES=--features aws
 #   TEST_FLAGS     (default: empty) test-harness args after `--`, e.g. --include-ignored
 # Examples:
-#   make build CARGO_FEATURES="--features aws"
-#   make test  CARGO_FEATURES=--all-features TEST_FLAGS=--include-ignored
+#   make check
+#   make test TEST_FLAGS=--include-ignored
 
 CARGO ?= cargo
-CARGO_FEATURES ?=
+CARGO_FEATURES ?= --all-features
 TEST_FLAGS ?=
 PYTHON ?= python3
 # rust-code-analysis CLI and inputs; see the `code-analysis` target.
@@ -50,7 +51,7 @@ dbx-e2e:
 # at it to profile with `perf` (docs/performance.md).
 dbx-walk:
 	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/auth.md)"; exit 1; }
-	$(CARGO) build -p pqbench-cli --features delta-s3,iceberg-s3
+	$(CARGO) build -p pqbench-cli $(CARGO_FEATURES)
 	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" ./scripts/dbx-walk.sh
 
 lint:

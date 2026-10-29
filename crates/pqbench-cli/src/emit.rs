@@ -1,8 +1,12 @@
 //! Output: one NDJSON line per record on standard output.
 //!
-//! A pipe write awaits the event loop, so the stream is buffered: a row costs a
-//! copy into the buffer, and the buffer reaches the pipe when it fills and when
-//! the command finishes — which is where a slow consumer slows the producer.
+//! A record is serialized into one line and awaited into tokio's buffered
+//! stdout, so a write yields to the runtime rather than parking the thread the
+//! walk runs on. A consumer that stops reading applies backpressure at the
+//! await, and the requests already in flight behind it can still complete — or
+//! time out — on the same runtime. One record is resident at a time, and the
+//! buffer reaches the pipe when it fills and when the command finishes.
+//!
 //! Writes complete before the exit status is decided, so a partial run's output
 //! is never truncated by its own error.
 
@@ -31,13 +35,9 @@ impl Emitter {
         if self.closed {
             return Ok(());
         }
-        let mut line = serde_json::to_string(value)
-            .map_err(|error| format!("cannot serialize output: {error}"))?;
-        line.push('\n');
-        match self.pipe.write_all(line.as_bytes()).await {
+        match self.write_line(value).await {
             Ok(()) => Ok(()),
             Err(error) => {
-                let error: CliError = error.into();
                 if closed_pipe(&error) {
                     self.closed = true;
                     Ok(())
@@ -46,6 +46,15 @@ impl Emitter {
                 }
             }
         }
+    }
+
+    /// One record's line, written once it is serialized.
+    async fn write_line(&mut self, value: &impl Serialize) -> Result<(), CliError> {
+        let mut line = serde_json::to_string(value)
+            .map_err(|error| format!("cannot serialize output: {error}"))?;
+        line.push('\n');
+        self.pipe.write_all(line.as_bytes()).await?;
+        Ok(())
     }
 
     /// Flush what is buffered.

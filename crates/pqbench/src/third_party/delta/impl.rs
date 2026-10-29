@@ -61,3 +61,20 @@ pub(crate) async fn stream_files(
         ))
     }
 }
+
+pub(crate) async fn stream_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    #[cfg(feature = "delta")]
+    {
+        load::stream_active_files(lake, request).await
+    }
+    #[cfg(not(feature = "delta"))]
+    {
+        let _ = (lake, request);
+        Err(crate::table::Error::Invalid(
+            "delta tables require the `delta` feature (`delta-s3` for S3)".into(),
+        ))
+    }
+}

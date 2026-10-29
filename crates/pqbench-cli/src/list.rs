@@ -20,9 +20,7 @@ enum ListCollection {
     Schemas(crate::schema::list::ListArgs),
     /// List the tables in a schema (`CATALOG.SCHEMA`)
     Tables(crate::table::list::ListArgs),
-    /// List a table's natural partitions (`DIR`, or a `Table` stream on stdin)
-    Partitions(crate::partition::list::ListArgs),
-    /// List a partition's files (a `Partition` stream on stdin)
+    /// List a table's active files (Table refs on stdin)
     Files(crate::file::list::ListArgs),
 }
 
@@ -36,7 +34,6 @@ pub(crate) async fn run(
         ListCollection::Catalogs(args) => crate::catalog::list::run(workspace, args).await,
         ListCollection::Schemas(args) => crate::schema::list::run(workspace, args).await,
         ListCollection::Tables(args) => crate::table::list::run(workspace, args).await,
-        ListCollection::Partitions(args) => crate::partition::list::run(lake, args).await,
         ListCollection::Files(args) => crate::file::list::run(lake, args).await,
     }
 }
@@ -48,13 +45,12 @@ impl ListArgs {
             ListCollection::Catalogs(_) => "list catalogs",
             ListCollection::Schemas(_) => "list schemas",
             ListCollection::Tables(_) => "list tables",
-            ListCollection::Partitions(_) => "list partitions",
             ListCollection::Files(_) => "list files",
         }
     }
 
-    /// Whether the collection reads a catalog: the storage-only levels
-    /// (`list partitions`, `list files`) do not.
+    /// Whether the collection reads a catalog: the storage-only level
+    /// (`list files`) does not.
     pub(crate) fn requires_endpoint(&self) -> bool {
         matches!(
             self.collection,

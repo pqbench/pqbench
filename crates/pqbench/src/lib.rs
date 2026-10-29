@@ -17,7 +17,6 @@ pub mod file;
 pub mod http;
 pub mod lz;
 pub mod metastore;
-pub mod partition;
 pub mod profile;
 pub mod ratelimit;
 pub mod report;
@@ -27,6 +26,7 @@ pub mod stats;
 pub mod table;
 mod text;
 pub mod third_party;
+pub mod time;
 pub mod v1;
 pub mod viz;
 

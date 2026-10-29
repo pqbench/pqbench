@@ -167,9 +167,37 @@ analogy, convention, or precedent:
   documents an NDJSON line (`{"kind":"pqbench`) also fails — the docs show the
   human table; a block whose example is *about* the machine output opts in with
   ` ```console run json ` (the `json` word is not a cargo feature).
-- Features: pass `CARGO_FEATURES` to any target (quote values with a space),
-  e.g. `make check CARGO_FEATURES=--all-features`,
-  `make test CARGO_FEATURES="--features aws"`.
+- Features: everything builds with `--all-features` — the Makefile default, so
+  `make check` and the pre-commit hook use it without any flag. Do not pass a
+  subset while editing: cargo keys artifacts by feature set, so one `--features
+  delta` or `--features iceberg` call compiles a second copy of the shared graph
+  (deltalake, arrow, the AWS SDK) and everything downstream of it, and the next
+  default-feature call compiles a third. Override `CARGO_FEATURES` only to
+  reproduce a specific CI leg.
+- `cargo check --all-features` is the edit loop: no codegen, no link, the same
+  artifacts. Save `make check` for the end of a change, not after each edit.
+- The edit loop is incremental and cheap: `incremental = true` on
+  `[profile.dev]` (the `test` profile inherits it) makes a one-line edit to
+  `pqbench` a 1-second `cargo check --all-features -p pqbench`. A build is slow
+  only when it is not incremental — a new profile, a new feature set, a new
+  target dir, or a fresh worktree — and a profile is part of every artifact's
+  fingerprint, so changing one rebuilds all 236 crates of the graph.
+- `CARGO_BUILD_JOBS` matters only for those full rebuilds; pass 6 for them
+  (compilation leaves ten of twelve cores idle at 2 on this 14 GB machine).
+  What spikes memory is the *link* phase of `cargo test`, which allocates
+  gigabytes per binary; `split-debuginfo = "unpacked"` in `[profile.dev]` cuts
+  each binary from ~490 MB to ~250 MB and the link cost with it.
+- `sccache` is installed at `~/.local/bin/sccache`; `.cargo/config.toml` routes
+  rustc through `.cargo/scripts/rustc-wrapper.sh`, which uses it when it is on
+  `PATH`. Prepend `export PATH="$HOME/.local/bin:$PATH"` to cargo and make
+  calls: it turns a repeat compile with the same flags into cache hits (8 s for
+  a crate set into a fresh target dir). It does not help across a profile,
+  feature-set or check/clippy change.
+- Export one `CARGO_TARGET_DIR` shared by every worktree before building;
+  never `cargo clean` it. A per-worktree target recompiles the ~70 AWS SDK and
+  ~130 deltalake artifacts it already has. If a build says `Blocking waiting for
+  file lock on build directory`, another session owns it: wait, do not take a
+  private target dir.
 - CI is two workflows. `.github/workflows/ci.yml` is the lightweight gate: fmt,
   aipnaming, `make check-docs`, isolation, and lfs. The heavy workflow,
   `.github/workflows/ci-heavy.yml`, runs one clippy over `--all-features` and a

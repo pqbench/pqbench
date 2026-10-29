@@ -6,7 +6,7 @@
 #
 #   list catalogs | ratelimit --rate 15 | list schemas | ratelimit --rate 15
 #     | list tables | ratelimit --rate 15 | credentials check | credentials get
-#     | get table | list partitions | list files | bytemass
+#     | get table | list files | bytemass
 #
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
@@ -15,7 +15,7 @@
 # (one request per catalog), `list tables` (one per schema), and the table stages
 # from `credentials check` on (one catalog request per table, including
 # `credentials get`'s record read and `get table`'s). The storage levels
-# (`list partitions` down) read object storage, not the catalog, so they take no
+# (`list files` down) read object storage, not the catalog, so they take no
 # stage of their own.
 #
 # The catalog levels span the whole Unity Catalog; the table levels descend the
@@ -85,14 +85,13 @@ walk() {
         "$PQB" credentials check | tee "$dir/checked" |
         "$PQB" credentials get | tee "$dir/vended" |
         "$PQB" get table | tee "$dir/tables" |
-        "$PQB" list partitions | tee "$dir/partitions" |
         "$PQB" list files | tee "$dir/files" |
         "$PQB" bytemass >"$dir/bytemass"
     # `walk` runs in a condition, where the shell ignores `set -e`; return the
     # walk's status so the retry in `main` sees a failed walk.
     status=$?
     [ "$status" -eq 0 ] || return "$status"
-    for name in catalogs schemas refs readable checked vended tables partitions files bytemass; do
+    for name in catalogs schemas refs readable checked vended tables files bytemass; do
         printf '  %-12s %8s records\n' "$name" "$(wc -l <"$dir/$name")"
     done
 }

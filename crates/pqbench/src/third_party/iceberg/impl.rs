@@ -63,3 +63,20 @@ pub(crate) async fn stream_files(
         ))
     }
 }
+
+pub(crate) async fn stream_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    #[cfg(feature = "iceberg")]
+    {
+        load::stream_active_files(lake, request).await
+    }
+    #[cfg(not(feature = "iceberg"))]
+    {
+        let _ = (lake, request);
+        Err(crate::table::Error::Invalid(
+            "iceberg tables require the `iceberg` feature (`iceberg-s3` for S3)".into(),
+        ))
+    }
+}

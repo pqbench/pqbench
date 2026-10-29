@@ -3,19 +3,18 @@
 
 /// One-line summary for `pqbench -h`.
 pub const ROOT_ABOUT: &str =
-    "Measure Parquet storage and codec speed; pipe refs → list partitions → list files → bytemass";
+    "Measure Parquet storage and codec speed; pipe refs → list files → bytemass";
 
 /// Full summary for `pqbench --help`.
 pub const ROOT_LONG_ABOUT: &str = "\
 pqbench measures how Parquet files spend bytes (bytemass), how well codecs
-compress them (lz, compression), what a Delta or Iceberg table's partitions
-and files hold (list partitions, list files), and what a decoded row sample
-holds (profile).
+compress them (lz, compression), what a Delta or Iceberg table's files hold
+(list files), and what a decoded row sample holds (profile).
 Commands compose on pipes: each writes a resource the next command reads.
 
   get           → Metastore / Catalog / Schema / Table
                   one resource of the walk
-  list          → Catalog / Schema / Table / Partition / TableFile
+  list          → Catalog / Schema / Table / TableFile
                   a collection of the walk
   credentials   → Table          check + vend read credentials
   bytemass      → Blob + Bytemass      footer byte masses (one line per column)
@@ -36,11 +35,11 @@ Guide: docs/cli.md";
 pub const ROOT_AFTER: &str = "\
 Examples:
   pqbench table-file data.parquet | pqbench bytemass
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
   pqbench list catalogs | pqbench list schemas | pqbench list tables
   pqbench list catalogs | pqbench list schemas | pqbench list tables \\
     | pqbench credentials check | pqbench credentials get | pqbench get table \\
-    | pqbench list partitions | pqbench list files | pqbench bytemass
+    | pqbench list files | pqbench bytemass
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
@@ -52,7 +51,6 @@ Documents:
   Catalog                the endpoint's catalogs (list catalogs) / one record (get catalog)
   Schema                 a catalog's schemas (list schemas) / one record (get schema)
   Table                  a schema's tables (list tables) / one record (get table, credentials get)
-  Partition              a table's natural partitions (list partitions)
   TableFile              one table file (list files, table-file)
   Blob                   one file's footer facts (bytemass)
   Bytemass               one column's byte mass (bytemass)
@@ -123,11 +121,11 @@ format` renders the columns as a table; pipe the stream to `viz`.";
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
   pqbench table-file data.parquet | pqbench bytemass
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o report
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o report
 
 See also:
-  pqbench list --help      list the partitions whose files this command measures
+  pqbench list --help      list the files this command measures
   pqbench viz --help       collect the stream into a static HTML page
   pqbench --help           auth, documents, format skills
   docs/cli.md";
@@ -189,9 +187,8 @@ List a collection of the walk, by name:
               Schema line each
   tables      the tables in a schema (Schema refs on standard input), one Table
               line each — the record `get table` enriches
-  partitions  a table's natural partitions (Table refs on standard input): its
-              commits grouped into epoch-aligned, half-open UTC windows
-  files       a partition's files — the ones its commits added
+  files       a table's active files (Table refs on standard input), one
+              TableFile line each
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
 PQB_TABLE_FORMAT=iceberg the schema and table levels speak Iceberg REST
@@ -200,23 +197,19 @@ instead: the endpoint then names the catalog base ({root}/v1 or
 Unity fills a table's storage location in the listing; Iceberg leaves it to
 `get table`.
 
-`list partitions` reads the Delta / Iceberg log — never the data files — and
-groups the commits by commit time (Delta commitInfo.timestamp; Iceberg the
-snapshot time); --every sets the window width (1h, 1d, 1w; default 1d), --last
-bounds the read to the newest commits, and a commit the log does not date is
-omitted, so a window never claims a commit it cannot place. A partition is a
-lens on the files, not a thing the table stores —
-see docs/partition.md. `list files` re-reads the window's commits and names the
-files they added; each file carries the partition's credentials, and that
-stream is what `bytemass` measures. --min-file-size drops files whose logged
-size is below SIZE (bytes, or a number with a unit: kB/MB/GB/TB or
-KiB/MiB/GiB/TiB), so a walk can measure only the big files.
+`list files` resolves a snapshot and writes its active files, one TableFile per
+line, each with the table's lease — that stream is what `bytemass` measures. The
+files are the snapshot's own set, so a file a later commit removed is absent;
+nothing is collected, so a table of any size costs one log batch plus one file.
+--last/--partition keep
+only the files the log dates in a window (e.g. 1d, 1w, or one UTC day), so a
+daily run reads the day's writes without walking what the table already held.
 
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
 
   pqbench list catalogs | pqbench list schemas | pqbench list tables |
-  pqbench get table | pqbench list partitions | pqbench list files | pqbench bytemass
+  pqbench get table | pqbench list files | pqbench bytemass
 
 Detection: _delta_log is Delta (wins UniForm). Iceberg is
 metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json path.
@@ -230,14 +223,14 @@ Examples:
   pqbench list catalogs | pqbench list schemas | pqbench list tables
   echo '\"dbx_samples\"' | pqbench list schemas
   echo '\"dbx_samples.nyctaxi\"' | pqbench list tables
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files --min-file-size 100MB | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench bytemass
 
 See also:
   pqbench get --help       read one resource
   pqbench bytemass --help  measure the files listed here
   pqbench --help           catalog auth, PQB_* config
-  docs/cli.md  docs/partition.md";
+  docs/cli.md";
 
 pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
 
@@ -320,7 +313,7 @@ treemap of bytes per value. Does not measure files. `-o PREFIX` is required.";
 pub const VIZ_AFTER: &str = "\
 Examples:
   pqbench table-file data.parquet | pqbench bytemass | pqbench viz -o report
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o report
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o report
   xdg-open report.html
 
 See also:

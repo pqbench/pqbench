@@ -1,9 +1,9 @@
-//! `file::list`: the files a partition's commits added.
+//! `file::list`: the active files of one table.
 //!
-//! [`api::list`] is the public surface. It reads the table's log for the named
-//! commits' `add` actions and returns plain data; the CLI owns the document.
+//! [`api::list`] is the public surface: it resolves the snapshot and returns
+//! its active files as a stream. Nothing is collected, so a million-file table
+//! costs one log batch plus one file.
 
 pub mod api;
-mod r#impl;
 
 pub use api::{list, Error, FileStream};

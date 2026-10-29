@@ -6,7 +6,7 @@ pub(crate) use std::collections::BTreeMap;
 pub(crate) use std::future::Future;
 pub(crate) use std::sync::Arc;
 
-pub(crate) use futures::{Stream, StreamExt, TryStreamExt};
+pub(crate) use futures::{Stream, StreamExt};
 pub(crate) use pqbench::bytemass::BytemassRequest as LibBytemassRequest;
 pub(crate) use pqbench::{
     Config as LibConfig, Dialect as LibDialect, Lake as LibLake, Layer as LibLayer,

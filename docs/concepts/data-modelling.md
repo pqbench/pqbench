@@ -60,7 +60,7 @@ A resource has at most one canonical parent, and a `List` must not require two
 | `Catalog` | `Metastore` |
 | `Schema` | `Catalog` |
 | `Table` | `Schema` |
-| `Partition`, `TableFile`, `Commit` | `Table` |
+| `TableFile`, `Commit` | `Table` |
 | `Column` | `Blob` |
 | `Bytemass`, `ColumnProfile` | `Column` |
 
@@ -70,9 +70,9 @@ parent.
 
 Two consequences:
 
-- A `TableFile`'s parent is the **table**, not the partition. A partition is a
-  lens over the files a snapshot already lists, not an owner; its files are a
-  filtered list on the table.
+- A `TableFile`'s parent is the **table**. Partition values ride on the file
+  (its `partition_values` map), so a partition is a filter over the table's
+  files, not a resource of its own.
 - An analysis's parent is the **column**. A coarser scope is an aggregate, not a
   second parent: a file-level read uses the `-` wildcard id (AIP-159).
 
@@ -120,7 +120,7 @@ Two consequences:
   and there is no generator to read them. The AIP *shape* (names, patterns,
   field names) still applies.
 - Credentials ride beside the resource that needs them — a `Table`, a
-  `Partition`, a `TableFile` — as the resource's own `credentials` field, which
+  `TableFile` — as the resource's own `credentials` field, which
   the stage that read it sets, never inside the backend's document, so a
   pipeline stays in band. They are treated as non-sensitive for now; a later
   pass moves them off the wire.

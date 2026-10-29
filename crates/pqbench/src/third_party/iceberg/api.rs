@@ -49,3 +49,17 @@ pub async fn stream_files(
 ) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
     super::r#impl::stream_files(lake, request).await
 }
+
+/// Stream the selected snapshot's active files, without collecting them.
+///
+/// Each manifest is read and consumed on its own, so the walk holds one
+/// manifest's entries rather than the table's files.
+///
+/// # Errors
+/// As [`load`]; an error raised after the first file is a stream item.
+pub async fn stream_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    super::r#impl::stream_active_files(lake, request).await
+}

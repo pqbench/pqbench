@@ -329,21 +329,17 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
 }
 
 #[tokio::test]
-async fn file_ls_names_the_files_a_snapshot_added() {
+async fn file_list_walks_the_active_files() {
     let fixture = Fixture::new();
-    let partition = pqbench::v1::Partition {
-        name: pqbench::v1::name::partition_name(
-            "catalogs/local/schemas/local/tables/events",
-            "2026-01-01",
-        ),
+    let table = pqbench::v1::Table {
+        name: "catalogs/local/schemas/local/tables/events".to_string(),
         uri: Some(fixture.metadata.to_string_lossy().into_owned()),
-        commit_versions: vec![1],
-        ..pqbench::v1::Partition::default()
+        ..pqbench::v1::Table::default()
     };
-    let files = pqbench::file::list::list(common::lake(), &partition)
+    let files: Vec<_> = pqbench::file::list::list(common::lake(), &table, None)
         .await
         .unwrap()
-        .try_collect::<Vec<_>>()
+        .try_collect()
         .await
         .unwrap();
     let mut uris: Vec<_> = files.iter().map(|file| file.uri().unwrap()).collect();

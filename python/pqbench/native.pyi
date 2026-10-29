@@ -31,7 +31,7 @@ with static methods. The access path and the signature are exact; only the
 runtime type differs (a module object, not a class).
 
 The surface is the walk's own pipeline and the measurement that consumes it —
-metastore, catalog, schema, table, credentials, partition, file, bytemass — and
+metastore, catalog, schema, table, credentials, bytemass — and
 stops at :class:`bytemass`: the commands downstream of a byte-mass stream
 (``viz``, ``diff``, ``profile``), the standalone codec
 benchmarks (``lz``, ``compression``) and ``skill`` are separate tools, and are
@@ -196,17 +196,6 @@ class Table(Record):
     partition_count: int | None
     credentials: Credentials | None
 
-class Partition(Record):
-    """A natural partition: a half-open commit-time window."""
-
-    name: str
-    start_time: int | None
-    end_time: int | None
-    commit_versions: list[int]
-    commit_info: list[dict[str, Any]]
-    uri: str | None
-    credentials: dict[str, Any] | None
-
 class TableFile(Record):
     """One data file the current snapshot treats as active."""
 
@@ -214,6 +203,7 @@ class TableFile(Record):
     blob: str | None
     path: str
     size_bytes: int | None
+    modification_time: int | None
     partition_values: dict[str, str | None]
     stats: dict[str, Any] | None
     credentials: Credentials | None
@@ -245,8 +235,8 @@ class Bytemass(Record):
 class Credentials(Record):
     """A vended storage lease: the ``AWS_*`` options a read takes.
 
-    ``table.get.get``, ``partition.list.list`` and ``file.list.list`` take one
-    back as their ``credentials`` — the record ``credentials.get.get`` returns.
+    ``table.get.get`` takes one back as its ``credentials`` — the record
+    ``credentials.get.get`` returns.
     """
 
     access_key_id: str | None
@@ -326,29 +316,11 @@ class table:
         @staticmethod
         async def list(workspace: Workspace, name: str) -> list[Table]: ...
 
-class partition:
-    """``pqbench.native.partition``: a table's natural partitions."""
-
-    class list:
-        """``pqbench.native.partition.list``: list a table's partitions."""
-
-        @staticmethod
-        def list(
-            lake: Lake,
-            table: str,
-            uri: str,
-            credentials: Credentials | dict[str, Any] | None,
-            window_millis: int,
-            last_millis: int | None = None,
-        ) -> AsyncIterator[Partition]:
-            """Stream the table's partitions, widest window first."""
-            ...
-
 class file:
-    """``pqbench.native.file``: the files of one partition."""
+    """``pqbench.native.file``: a table's active files."""
 
     class list:
-        """``pqbench.native.file.list``: list a partition's files."""
+        """``pqbench.native.file.list``: stream a table's active files."""
 
         @staticmethod
         def list(
@@ -356,9 +328,14 @@ class file:
             table: str,
             uri: str,
             credentials: Credentials | dict[str, Any] | None,
-            versions: Sequence[int],
+            partition_millis: int | None = None,
+            last_millis: int | None = None,
         ) -> AsyncIterator[TableFile]:
-            """Stream the files the given log versions added, named under the table."""
+            """Stream the files active at the table's head, in log scan order.
+
+            ``partition_millis`` is the first millisecond of one UTC day;
+            ``last_millis`` is a lookback window ending now. Pass one, not both.
+            """
             ...
 
 class credentials:

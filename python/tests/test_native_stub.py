@@ -34,7 +34,6 @@ _PARQUET = (
     / "small_reddit_none.parquet"
 )
 _TABLE = _ROOT / "docker" / "e2e-lakehouse" / "table"
-_DAY_MILLIS = 86_400_000
 _TABLE_NAME = f"catalogs/local/schemas/local/tables/{_TABLE.name}"
 
 _StubNode = typing.Union[ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.AnnAssign]
@@ -231,24 +230,18 @@ class StubFieldTest(unittest.IsolatedAsyncioTestCase):
         # field the model emits and the stub forgets is invisible to a caller.
         workspace = pqbench.Workspace(pqbench.Config("http://127.0.0.1:1"))
         lake = pqbench.Lake(workspace)
-        partitions = [
-            partition
-            async for partition in native.partition.list.list(
-                lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
-            )
-        ]
-        self.assertTrue(partitions)
         files = [
             file
             async for file in native.file.list.list(
-                lake, _TABLE_NAME, partitions[0]["uri"], {}, partitions[0]["commit_versions"]
+                lake, _TABLE_NAME, str(_TABLE), {}, None, None
             )
         ]
+        self.assertTrue(files)
         rows = await native.bytemass.bytemass(
             lake, native.BytemassRequest(inputs=[str(_PARQUET)])
         )
         stub = _stub_surface()
-        for record in (*partitions, *files, *rows):
+        for record in (*files, *rows):
             declared = _fields(typing.cast(ast.ClassDef, stub[type(record).__name__]))
             self.assertTrue(declared, type(record).__name__)
             self.assertLessEqual(set(record.asdict()), declared, type(record).__name__)

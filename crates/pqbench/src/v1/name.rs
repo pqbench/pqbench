@@ -31,18 +31,6 @@ pub fn table(catalog: &str, schema: &str, table: &str) -> String {
     format!("{}/tables/{}", self::schema(catalog, schema), encode(table))
 }
 
-/// `…/tables/{table}/partitions/{partition}`.
-#[must_use]
-pub fn partition(catalog: &str, schema: &str, table: &str, partition: &str) -> String {
-    self::partition_name(&self::table(catalog, schema, table), partition)
-}
-
-/// `{table}/partitions/{partition}` — a partition under a known table name.
-#[must_use]
-pub fn partition_name(table: &str, partition: &str) -> String {
-    format!("{table}/partitions/{}", encode(partition))
-}
-
 /// `…/tables/{table}/files/{file}`.
 #[must_use]
 pub fn table_file(catalog: &str, schema: &str, table: &str, file: &str) -> String {
@@ -285,7 +273,7 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v1::{Catalog, Partition, Schema, Table};
+    use crate::v1::{Catalog, Schema, Table};
 
     #[test]
     fn names_round_trip_through_their_parsers() {
@@ -303,15 +291,6 @@ mod tests {
                 "dbx_samples".to_string(),
                 "nyctaxi".to_string(),
                 "trips".to_string()
-            ))
-        );
-        assert_eq!(
-            Partition::parse_name(&partition("c", "s", "t", "1")),
-            Some((
-                "c".to_string(),
-                "s".to_string(),
-                "t".to_string(),
-                "1".to_string()
             ))
         );
     }
@@ -428,20 +407,6 @@ mod tests {
             Some(("a".to_string(), "b.c".to_string(), "d".to_string()))
         );
         assert_eq!(Table::parse_name("a.b"), None);
-    }
-
-    #[test]
-    fn a_dotted_partition_parses() {
-        assert_eq!(
-            Partition::parse_name("a.b.c.2026-01-01"),
-            Some((
-                "a".to_string(),
-                "b".to_string(),
-                "c".to_string(),
-                "2026-01-01".to_string()
-            ))
-        );
-        assert_eq!(Partition::parse_name("a.b.c"), None);
     }
 
     #[test]

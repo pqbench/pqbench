@@ -145,7 +145,6 @@ record_class!(
     Catalog,
     Schema,
     Table,
-    Partition,
     TableFile,
     Bytemass,
     Credentials,
@@ -203,7 +202,6 @@ pub(crate) fn register(root: &Bound<'_, PyModule>) -> PyResult<()> {
     root.add_class::<Catalog>()?;
     root.add_class::<Schema>()?;
     root.add_class::<Table>()?;
-    root.add_class::<Partition>()?;
     root.add_class::<TableFile>()?;
     root.add_class::<Bytemass>()?;
     root.add_class::<Credentials>()?;

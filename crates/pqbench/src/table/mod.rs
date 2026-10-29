@@ -373,6 +373,28 @@ pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error
     }
 }
 
+/// Stream the requested snapshot's active files, without collecting them.
+///
+/// This is the active set [`load`] returns in [`TableInfo::files`], handed over
+/// as it arrives instead of kept, so a caller that writes each file as it comes
+/// holds one file rather than the table's. The stream owns the snapshot it
+/// reads, so it borrows nothing from the caller and nothing grows with the
+/// table's size.
+///
+/// # Errors
+/// As [`detect`], plus format-specific load failures. A failure raised after
+/// the first file arrives as a stream item.
+pub async fn stream_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<FileStream<'static>, Error> {
+    let format = detect(lake, &request.uri, &request.env).await?;
+    match format {
+        v1::TableFormat::Delta => delta::stream_active_files(lake, request).await,
+        v1::TableFormat::Iceberg => iceberg::stream_active_files(lake, request).await,
+    }
+}
+
 /// Stream a table's commits, newest first, without collecting them.
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller and

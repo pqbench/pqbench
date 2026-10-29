@@ -9,7 +9,6 @@ $ pqbench table-file examples/quickstart.parquet \
 >   | pqbench bytemass \
 >   | pqbench viz -o /tmp/report
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list partitions \
 >   | pqbench list files \
 >   | pqbench bytemass \
 >   | pqbench viz -o /tmp/report

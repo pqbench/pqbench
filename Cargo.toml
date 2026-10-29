@@ -44,6 +44,11 @@ pyicheck = { version = "0.0.8", path = "crates/pyicheck" }
 opt-level = 0
 debug = 1
 incremental = true
+# Leave DWARF in `.dwo` files next to the object, not inside the binary: a test
+# binary that links the whole graph is hundreds of megabytes of debug info, and
+# every link of it is a multi-gigabyte operation. Backtraces and `gdb` still
+# find the line tables; the executable does not carry them.
+split-debuginfo = "unpacked"
 
 # The profile that 'dist' will build with
 [profile.dist]

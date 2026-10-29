@@ -107,7 +107,7 @@ async fn load_reads_a_void_column() {
     assert_eq!(columns, [("id", Some("long")), ("note", Some("void"))]);
 }
 
-/// `list partitions` streams the log for commit times: each commit arrives with
+/// The commit stream reads the log for commit times: each commit arrives with
 /// its version, its time and the `commitInfo` the log stored, and no action, so
 /// nothing grows with a commit's file list. A commit the log does not date is
 /// not visited.
@@ -234,7 +234,7 @@ async fn file_stream_reads_a_log_without_a_snapshot() {
 }
 
 /// A request that names no commits reads the log's own listing, as
-/// `list partitions` names them.
+/// The commit stream names them.
 #[tokio::test]
 async fn file_stream_reads_every_commit_when_none_are_named() {
     let fixture = Fixture::new();
@@ -807,4 +807,74 @@ async fn checkpoint_preserves_active_files_without_json_history() {
     let mut paths: Vec<_> = info.files.iter().map(|file| file.path.clone()).collect();
     paths.sort();
     assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
+}
+
+#[tokio::test]
+async fn file_list_walks_the_snapshots_active_files() {
+    let fixture = Fixture::new();
+    fixture.checkpoint().await;
+    // The prefix exists only in the checkpoint now: the walk must come from the
+    // resolved snapshot, not from replaying JSON commits.
+    std::fs::remove_file(fixture.path().join("_delta_log/00000000000000000000.json")).unwrap();
+    let table = pqbench::v1::Table {
+        name: pqbench::v1::name::local_table(&fixture.path().to_string_lossy()),
+        uri: Some(fixture.path().to_string_lossy().to_string()),
+        ..Default::default()
+    };
+    let files: Vec<_> = pqbench::file::list::list(common::lake(), &table, None)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+
+    let mut paths: Vec<_> = files.iter().map(|file| file.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
+    let file = files
+        .iter()
+        .find(|file| file.path == "part=a/added.parquet")
+        .unwrap();
+    assert_eq!(
+        file.name,
+        pqbench::v1::name::table_file_name(&table.name, "part=a/added.parquet")
+    );
+    assert!(file.size_bytes.unwrap() > 0);
+    assert!(files.iter().all(|file| file.credentials.is_none()));
+}
+
+/// A window keeps only the files the log dates inside it, and each file carries
+/// the time it matched on.
+#[tokio::test]
+async fn file_list_keeps_only_the_files_a_window_dates() {
+    let fixture = Fixture::new();
+    let written = 1_760_000_000_000i64;
+    write_parquet(&fixture.path().join("part=a/dated.parquet"), 3);
+    let mut dated = fixture.add("part=a/dated.parquet", "a", 3);
+    dated["add"]["modificationTime"] = json!(written);
+    fixture.commit(2, &[dated]);
+
+    let table = pqbench::v1::Table {
+        name: pqbench::v1::name::local_table(&fixture.path().to_string_lossy()),
+        uri: Some(fixture.path().to_string_lossy().to_string()),
+        ..Default::default()
+    };
+    let window = pqbench::time::TimeWindow {
+        first_time: u64::try_from(written).unwrap(),
+        last_time: u64::try_from(written).unwrap() + 1,
+    };
+    let files: Vec<_> = pqbench::file::list::list(common::lake(), &table, Some(window))
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+
+    // The other files' `modificationTime` is 0, outside the window.
+    let paths: Vec<_> = files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, ["part=a/dated.parquet"]);
+    assert_eq!(
+        files[0].modification_time,
+        Some(u64::try_from(written).unwrap())
+    );
 }
