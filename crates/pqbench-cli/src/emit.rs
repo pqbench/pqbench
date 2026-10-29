@@ -50,10 +50,10 @@ impl Emitter {
 
     /// One record's line, written once it is serialized.
     async fn write_line(&mut self, value: &impl Serialize) -> Result<(), CliError> {
-        let line = serde_json::to_string(value)
+        let mut line = serde_json::to_string(value)
             .map_err(|error| format!("cannot serialize output: {error}"))?;
+        line.push('\n');
         self.pipe.write_all(line.as_bytes()).await?;
-        self.pipe.write_all(b"\n").await?;
         Ok(())
     }
 
