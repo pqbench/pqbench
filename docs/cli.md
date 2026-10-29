@@ -145,7 +145,8 @@ The metadata levels pipe: `PQB_ENDPOINT` / `PQB_TOKEN` / `PQB_TABLE_FORMAT`
 carry the walk's context, and each level reads the parent's refs on standard
 input as they arrive — one `Catalog` line per catalog, then one
 `Schema` line per schema. Each ref's request starts as its record is
-read; `--fan-out` (64 on the listing levels, one per core on `get table`)
+read; `--fan-out` (64 on the listing levels and `list files`, one per core on
+`get table`)
 caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
@@ -285,7 +286,8 @@ table holds now, so one a later commit removed is absent. It resolves the
 snapshot (Delta: the checkpoint and the commits after it), streams the add
 actions one row at a time, and names each file as `{table}/files/{path}` with
 the table's lease, so `bytemass` reads it with no catalog call. Nothing is
-collected: a table of any size costs one decoded batch plus one file.
+collected: a table of any size costs one decoded batch plus one file, and
+`--fan-out` (64 by default) is how many tables are walked at once.
 
 `--last 1d` (or `1w`) keeps the files whose logged modification time falls in
 the window ending now; `--partition 2026-10-28` keeps one UTC day. The filter

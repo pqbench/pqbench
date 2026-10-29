@@ -26,16 +26,21 @@ fn pipe(args: &[&str], stdin: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
-/// The table record a local Delta path names, under `local.local`.
-fn table_record(path: &str) -> String {
+/// The resource name a local Delta path gets under `local.local`.
+fn table_name(path: &str) -> String {
     let table = std::path::Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
         .expect("a fixture path has a final segment");
+    format!("catalogs/local/schemas/local/tables/{table}")
+}
+
+/// The table record a local Delta path names, under `local.local`.
+fn table_record(path: &str) -> String {
     format!(
         "{}\n",
         json!({
-            "name": format!("catalogs/local/schemas/local/tables/{table}"),
+            "name": table_name(path),
             "uri": path,
         })
     )
@@ -139,6 +144,42 @@ fn file_ls_lists_the_snapshots_active_files() {
     let blob = records[0]["blob"].as_str().unwrap();
     assert!(blob.starts_with("blobs/file/"), "{blob}");
     assert!(blob.ends_with("data.parquet"), "{blob}");
+}
+
+/// Every table on the stream is walked, and each file is named under its own
+/// table whichever walk finishes first.
+#[test]
+fn file_ls_walks_every_table_on_the_stream() {
+    let first = delta_fixture(&[("a.parquet", 0)]);
+    let second = delta_fixture(&[("b.parquet", 0)]);
+    let stdin = format!(
+        "{}{}",
+        table_record(first.path.to_str().unwrap()),
+        table_record(second.path.to_str().unwrap())
+    );
+    let files = pipe(&["list", "files"], &stdin);
+    assert!(
+        files.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&files.stderr)
+    );
+    let mut names: Vec<String> = ndjson_records(&files.stdout)
+        .iter()
+        .map(|record| record["name"].as_str().unwrap().to_owned())
+        .collect();
+    names.sort();
+    let mut expected = [
+        format!(
+            "{}/files/a.parquet",
+            table_name(first.path.to_str().unwrap())
+        ),
+        format!(
+            "{}/files/b.parquet",
+            table_name(second.path.to_str().unwrap())
+        ),
+    ];
+    expected.sort();
+    assert_eq!(names, expected);
 }
 
 /// `--last` and `--partition` keep only the files the log dates in the window,

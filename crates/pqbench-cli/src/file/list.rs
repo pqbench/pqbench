@@ -4,13 +4,16 @@ use clap::Args;
 use futures_util::{future, StreamExt, TryStreamExt};
 use pqbench::v1;
 
-use crate::source::drive;
+use crate::source::{drive, flat_map};
 use crate::time::WindowArgs;
 use crate::{parse, CliError};
 
 /// Arguments for `list files`.
 #[derive(Args)]
 pub(crate) struct ListArgs {
+    /// tables in flight at once
+    #[arg(long, default_value_t = 64)]
+    fan_out: usize,
     /// read only files the log dates in a window
     #[command(flatten)]
     window: WindowArgs,
@@ -25,26 +28,27 @@ pub(crate) struct ListArgs {
 /// Reads Table refs on standard input, resolves each one's snapshot, and writes
 /// its active files as they arrive — the files active now, not the ones some
 /// commit added. Each file carries the table's lease, so `bytemass` reads it
-/// with no catalog call. A table is walked to its end before the next one
-/// starts, and a file is written as it is produced, so the run holds one log
-/// batch plus one file, however large the table.
+/// with no catalog call. Tables are walked `--fan-out` at a time and a file is
+/// written as it is produced, so the run holds one log batch plus one file per
+/// table in flight, however large the tables are.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("list files").await?;
     let window = args.window.window();
     let min = args.min_file_size;
-    let rows = parents
-        .then(move |table| async move {
-            let table = table?;
+    let lake = lake.clone();
+    let rows = flat_map(parents, args.fan_out, move |table: v1::Table| {
+        let lake = lake.clone();
+        async move {
             let reference = table.name.clone();
-            let files = pqbench::file::list::list(lake, &table, window)
+            let files = pqbench::file::list::list(&lake, &table, window)
                 .await
                 .map_err(|error| crate::error::context(&reference, error))?;
             // Each table's own failures stay attributed to it, mid-walk too.
-            Ok::<_, CliError>(files.map_err(move |error| crate::error::context(&reference, error)))
-        })
-        .try_flatten()
-        .try_filter(move |file| future::ready(meets_min_file_size(file, min)))
-        .boxed_local();
+            Ok(files.map_err(move |error| crate::error::context(&reference, error)))
+        }
+    })
+    .try_filter(move |file| future::ready(meets_min_file_size(file, min)))
+    .boxed_local();
     drive(rows).await
 }
 
