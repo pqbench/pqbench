@@ -43,12 +43,14 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         }
         _ => (Vec::new(), Vec::new()),
     };
-    let mut log = if request.require_files {
+    let mut log = if request.require_files && request.log {
         ancestry_log(&metadata, selected, &v1::name::local_table(&request.uri))?
     } else {
         Vec::new()
     };
-    attach_actions(&mut log, snapshot_version, &files, &deletes);
+    if request.log {
+        attach_actions(&mut log, snapshot_version, &files, &deletes);
+    }
     let mut info = TableInfo::new(
         v1::TableFormat::Iceberg,
         request.uri.clone(),
@@ -508,10 +510,27 @@ async fn active_files(
     manifest_list: &str,
     options: &[(String, String)],
 ) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
+    let mut files = Vec::new();
+    let deletes = visit_data_files(lake, table_location, manifest_list, options, &mut |file| {
+        files.push(file);
+        true
+    })
+    .await?;
+    Ok((files, deletes))
+}
+
+/// Visit the active data files one at a time, without collecting them, and
+/// return the delete files the manifests name.
+async fn visit_data_files(
+    lake: &Lake,
+    table_location: &str,
+    manifest_list: &str,
+    options: &[(String, String)],
+    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
+) -> Result<Vec<String>, Error> {
     let root = table_root(table_location)?;
     let bytes = read_location(lake, manifest_list, options).await?;
     let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
-    let mut files = Vec::new();
     let mut deletes = Vec::new();
     for manifest in manifests {
         let bytes = read_location(lake, &manifest.manifest_path, options).await?;
@@ -529,10 +548,41 @@ async fn active_files(
                 deletes.push(entry.data_file.file_path);
                 continue;
             }
-            files.push(data_file(&root, entry)?);
+            if !visit(data_file(&root, entry)?) {
+                return Ok(deletes);
+            }
         }
     }
-    Ok((files, deletes))
+    Ok(deletes)
+}
+
+/// Visit the selected snapshot's active files one at a time and return its
+/// version (the snapshot id).
+pub(super) async fn visit_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
+) -> Result<u64, Error> {
+    let options = env_options(&request.env);
+    let metadata = read_metadata(lake, &request.uri, &options).await?;
+    let requested = request.snapshot_version.map(create_i64).transpose()?;
+    let selected = select_snapshot(&metadata, requested)?;
+    let snapshot_version = selected
+        .as_ref()
+        .map(|snapshot| create_u64(snapshot.snapshot_id))
+        .transpose()?
+        .unwrap_or(0);
+    if let Some(snapshot) = selected {
+        visit_data_files(
+            lake,
+            &metadata.location,
+            &snapshot.manifest_list,
+            &options,
+            visit,
+        )
+        .await?;
+    }
+    Ok(snapshot_version)
 }
 
 /// One active manifest entry as a `v1::TableFile`, checking it is Parquet.

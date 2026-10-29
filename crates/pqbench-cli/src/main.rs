@@ -22,7 +22,6 @@ mod list;
 mod lz;
 mod metastore;
 mod parse;
-mod partition;
 mod profile;
 mod ratelimit;
 mod render;
@@ -34,6 +33,7 @@ mod source;
 mod stdin;
 mod table;
 mod table_file;
+mod time;
 mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
@@ -215,8 +215,7 @@ impl Command {
     }
 
     /// Whether the command needs `PQB_ENDPOINT`. The catalog levels read a
-    /// catalog; a storage-only command (`list partitions`, `list files`,
-    /// `bytemass`, …) does not.
+    /// catalog; a storage-only command (`list files`, `bytemass`, …) does not.
     fn requires_endpoint(&self) -> bool {
         match self {
             Command::Get(_) | Command::Credentials(_) => true,

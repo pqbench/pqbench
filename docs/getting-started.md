@@ -3,8 +3,8 @@
 pqbench measures **how a Parquet file spends bytes** and how well codecs
 compress it. It reads the footer, not the pages, so it is fast on files of any
 size. Every command writes a versioned JSON document, so commands compose on
-pipes: `list partitions` lists a table's partitions, `list files` their files,
-`bytemass` measures them, `viz` draws the result.
+pipes: `list files` names a table's active files, `bytemass` measures them,
+`viz` draws the result.
 
 This page is a guided first run. It uses the committed
 [`examples/quickstart.parquet`](../examples/quickstart.parquet) smoke sample and
@@ -57,12 +57,11 @@ examples/quickstart.parquet  year    integer       8      0    8
 
 ## The metadata walk
 
-A *table* is one snapshot's log and active files; a *partition* is a lens on
-those files. The walk lists a table's partitions, then their files, then
-measures them:
+A *table* is one snapshot's log and active files. The walk lists a table's
+active files, then measures them:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3

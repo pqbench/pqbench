@@ -284,6 +284,10 @@ pub struct LoadRequest {
     /// commits says the log's own file actions are what the caller wants, so
     /// the snapshot's active files are not replayed.
     pub commit_versions: Option<BTreeSet<u64>>,
+    /// When false, omit the commit history from the record; the snapshot's
+    /// active files are still read. The physical partition view needs the
+    /// files but not the log, and retaining the log would cost O(#commits).
+    pub log: bool,
 }
 
 impl LoadRequest {
@@ -301,6 +305,7 @@ impl LoadRequest {
             file_stats: true,
             require_files: true,
             commit_versions: None,
+            log: true,
         }
     }
 
@@ -328,6 +333,16 @@ impl LoadRequest {
     #[must_use]
     pub fn with_commits(mut self, versions: impl IntoIterator<Item = u64>) -> Self {
         self.commit_versions = Some(versions.into_iter().collect());
+        self
+    }
+
+    /// Read the snapshot's files without its commit history. The physical
+    /// partition view groups active files, so a log retained in the record
+    /// would only cost memory.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn without_log(mut self) -> Self {
+        self.log = false;
         self
     }
 }
@@ -370,6 +385,30 @@ pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error
     match format {
         v1::TableFormat::Delta => delta::load(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
+    }
+}
+
+/// Visit the requested snapshot's active files one at a time, without
+/// collecting them, and return the snapshot version they are active at.
+///
+/// This is the active set [`load`] returns in [`TableInfo::files`], handed over
+/// as it arrives instead of kept: a caller that groups the files (the physical
+/// partition view) inserts each into its group, so the set exists once, in the
+/// groups, rather than once in a `Vec` and again in the groups. The callback is
+/// synchronous, so a file is consumed before the next is read.
+///
+/// # Errors
+/// As [`detect`], plus format-specific load failures; an error raised after the
+/// first file aborts the walk at that point.
+pub async fn visit_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
+) -> Result<u64, Error> {
+    let format = detect(lake, &request.uri, &request.env).await?;
+    match format {
+        v1::TableFormat::Delta => delta::visit_active_files(lake, request, visit).await,
+        v1::TableFormat::Iceberg => iceberg::visit_active_files(lake, request, visit).await,
     }
 }
 

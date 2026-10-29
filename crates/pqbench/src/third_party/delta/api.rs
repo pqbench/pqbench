@@ -47,3 +47,19 @@ pub async fn stream_files(
 ) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
     super::r#impl::stream_files(lake, request).await
 }
+
+/// Visit the requested snapshot's active files one at a time, without
+/// collecting them, and return the version they are active at.
+///
+/// The walk is the kernel scan, a record batch at a time, over a lazy snapshot:
+/// no `EagerSnapshot` is built, so the active set is never resident.
+///
+/// # Errors
+/// As [`load`]; an error raised after the first file aborts the walk there.
+pub async fn visit_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+    visit: &mut (dyn FnMut(crate::v1::TableFile) -> bool + Send),
+) -> Result<u64, crate::table::Error> {
+    super::r#impl::visit_active_files(lake, request, visit).await
+}

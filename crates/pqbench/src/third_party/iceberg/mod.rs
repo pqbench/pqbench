@@ -7,4 +7,4 @@
 pub mod api;
 mod r#impl;
 
-pub use api::{load, stream_commits, stream_files};
+pub use api::{load, stream_commits, stream_files, visit_active_files};

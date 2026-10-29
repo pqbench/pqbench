@@ -1,32 +1,29 @@
-//! `file::list`: the files a partition's commits added.
+//! `file::list`: a table's active files, one at a time.
 //!
-//! [`list`] is the only public function. It returns plain data; the CLI owns
-//! the document it becomes.
+//! [`visit`] is the only public function. It returns the version the files are
+//! active at; the caller owns what each file becomes.
 
 use std::fmt;
 
-use futures_util::stream::{BoxStream, StreamExt};
-use futures_util::TryStreamExt;
-
+use crate::time::TimeWindow;
 use crate::v1;
-use crate::v1::{Partition, TableFile};
 use crate::Lake;
 
-/// Errors listing a partition's files.
+/// Errors walking a table's active files.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
+    /// The table is not complete.
+    Invalid(String),
     /// The table loader failed.
     Table(crate::table::Error),
-    /// The partition is not complete.
-    Invalid(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Table(_) => write!(f, "the table loader failed"),
             Error::Invalid(message) => write!(f, "{message}"),
+            Error::Table(_) => write!(f, "the table loader failed"),
         }
     }
 }
@@ -40,58 +37,38 @@ impl std::error::Error for Error {
     }
 }
 
-/// A partition's files, in log order, from [`list`].
-pub type FileStream<'a> = BoxStream<'a, Result<TableFile, Error>>;
-
-/// The files the partition's commits added, in log order.
+/// Visit a table's active files, newest write first in the log's own order.
 ///
-/// The partition names its table, storage root, commits, and lease, so the
-/// records are complete: each is `{table}/files/{path}` with the partition's
-/// credentials, and `bytemass` reads it without a catalog call.
+/// The snapshot is resolved first — for Delta the log, its checkpoint, and the
+/// commits after it — so the files are the ones active now, not the ones some
+/// commit added. Files a later commit removed are absent.
 ///
-/// A commit's `add` actions name the files it wrote; a file a later commit
-/// removes is still named, so the result is the **added in the window** set,
-/// not the table's active files. The size is left zero: the log's `add` size
-/// is only a cross-check, and `bytemass` reads the true size from the footer.
+/// `window` keeps only the files whose log records a modification time inside
+/// it; the test runs before a file reaches the callback, so a daily run holds
+/// the day's files rather than the table's. A file whose log records no time
+/// cannot be shown to be in the window, so it is dropped.
 ///
-/// Files are yielded as each commit is read, so a reader writes the first
-/// window's files while the rest of the log is still being read.
+/// Each file is named as `{table}/files/{path}` and carries the table's lease,
+/// so a reader of the emitted record needs no catalog call. `visit` returns
+/// whether to continue; `false` ends the walk at that file.
 ///
 /// # Errors
-/// Fails when the partition names no table or storage root, or the table
-/// cannot be loaded; an error raised after the first file arrives as a stream
-/// item.
-pub async fn list(lake: &Lake, partition: &Partition) -> Result<FileStream<'static>, Error> {
-    let (catalog, schema, table, _) = Partition::parse_name(&partition.name).ok_or_else(|| {
-        Error::Invalid(
-            "a partition record needs a `/tables/{table}/partitions/{partition}` name".into(),
-        )
+/// Fails when the table names no storage root or cannot be loaded. The version
+/// the callback saw is returned on success.
+pub async fn visit(
+    lake: &Lake,
+    table: &v1::Table,
+    window: Option<TimeWindow>,
+    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
+) -> Result<u64, Error> {
+    let uri = table.uri.as_deref().ok_or_else(|| {
+        Error::Invalid("a table record has no storage path; run `pqbench get table` first".into())
     })?;
-    let uri = partition
-        .uri
-        .as_deref()
-        .ok_or_else(|| Error::Invalid("a partition record needs a table storage root".into()))?;
-    let env = partition
+    let env = table
         .credentials
         .as_ref()
         .map(v1::Credentials::to_env)
         .unwrap_or_default();
-    let lease = partition
-        .credentials
-        .clone()
-        .filter(|lease| !lease.is_empty());
-    let files = super::r#impl::list(
-        lake,
-        &v1::name::table(&catalog, &schema, &table),
-        uri,
-        &env,
-        &partition.commit_versions,
-    )
-    .await?;
-    Ok(files
-        .map_ok(move |mut file| {
-            file.credentials = lease.clone();
-            file
-        })
-        .boxed())
+    let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
+    super::r#impl::visit(lake, &table.name, uri, &env, lease, window, visit).await
 }

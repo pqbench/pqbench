@@ -7,6 +7,6 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn usage() {
-    // usage, from line 47
-    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format", 48, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
+    // usage, from line 46
+    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format", 47, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
 }

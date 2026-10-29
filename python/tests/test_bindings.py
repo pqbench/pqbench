@@ -3,7 +3,7 @@
 ``pqbench.native`` mirrors the ``pqbench`` library — every command is the
 function of the same path — while ``pqbench`` is the ergonomic surface over it
 (the client handles, and ``walk``). The walk verbs are awaitable and
-``partition.list.list`` is an async iterator, so the tests are async
+``file.list.list`` is an async iterator, so the tests are async
 (``IsolatedAsyncioTestCase`` gives each one a running loop).
 """
 
@@ -24,7 +24,6 @@ _PARQUET = (
     / "small_reddit_none.parquet"
 )
 _TABLE = _ROOT / "docker" / "e2e-lakehouse" / "table"
-_DAY_MILLIS = 86_400_000
 # The resource name `v1::name::local_table(str(_TABLE))` builds for the fixture.
 _TABLE_NAME = f"catalogs/local/schemas/local/tables/{_TABLE.name}"
 
@@ -44,7 +43,6 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
             "schema.list.list",
             "table.get.get",
             "table.list.list",
-            "partition.list.list",
             "file.list.list",
             "credentials.check.check",
             "credentials.get.get",
@@ -118,34 +116,12 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(limit.delay("schema"), 0.0)
         self.assertGreater(limit.delay("catalog"), 0.0)
 
-    async def test_list_partitions_groups_the_log(self) -> None:
-        lake = pqbench.Lake(_workspace())
-        partitions = [
-            partition
-            async for partition in pqbench.native.partition.list.list(
-                lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
-            )
-        ]
-        self.assertGreaterEqual(len(partitions), 1)
-        self.assertTrue(
-            partitions[0]["name"].startswith(f"{_TABLE_NAME}/partitions/"),
-            partitions[0]["name"],
-        )
-        self.assertEqual(partitions[0]["commit_versions"], [0])
-        self.assertIn("commit_info", partitions[0])
-
     async def test_list_files_names_the_paths(self) -> None:
         lake = pqbench.Lake(_workspace())
-        partition = [
-            partition
-            async for partition in pqbench.native.partition.list.list(
-                lake, _TABLE_NAME, str(_TABLE), {}, _DAY_MILLIS
-            )
-        ][0]
         files = [
             file
             async for file in pqbench.native.file.list.list(
-                lake, _TABLE_NAME, partition["uri"], {}, partition["commit_versions"]
+                lake, _TABLE_NAME, str(_TABLE), {}, None, None
             )
         ]
         self.assertEqual(len(files), 1)
@@ -165,8 +141,8 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
     async def test_missing_input_fails(self) -> None:
         lake = pqbench.Lake(_workspace())
         with self.assertRaises(RuntimeError):
-            async for _ in pqbench.native.partition.list.list(
-                lake, "local", "/nonexistent/pqbench-table", {}, _DAY_MILLIS
+            async for _ in pqbench.native.file.list.list(
+                lake, "local", "/nonexistent/pqbench-table", {}, None, None
             ):
                 pass
 

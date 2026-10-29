@@ -49,13 +49,17 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     if !request.require_files {
         return Ok(info);
     }
-    info.log = read_log(
-        &store,
-        &request.uri,
-        Some(meta.version),
-        request.commit_versions.as_ref(),
-    )
-    .await?;
+    info.log = if request.log {
+        read_log(
+            &store,
+            &request.uri,
+            Some(meta.version),
+            request.commit_versions.as_ref(),
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     // A caller that names the commits wants the files the log itself names; the
     // snapshot's active-file replay is redundant then (and O(files)).
     if request.commit_versions.is_none() {
@@ -548,16 +552,7 @@ async fn active_files(
     table: &DeltaTable,
     request: &LoadRequest,
 ) -> Result<(Vec<v1::TableFile>, Vec<PartitionMass>), Error> {
-    let root = if table.table_url().scheme() == "file" {
-        Some(
-            table
-                .table_url()
-                .to_file_path()
-                .map_err(|()| Error::Invalid("invalid local table URI".into()))?,
-        )
-    } else {
-        None
-    };
+    let root = local_table_root(table.table_url())?;
     let mut files = table.get_active_add_actions_by_partitions(&[]);
     let mut active = vec![];
     let mut totals = std::collections::BTreeMap::new();
@@ -567,6 +562,61 @@ async fn active_files(
         active.push(table_file);
     }
     Ok((active, finish_partition_masses(totals)))
+}
+
+/// Visit the snapshot's active files one at a time, without collecting them,
+/// and return the version they are active at.
+///
+/// The caller that groups the files (the physical partition view) inserts each
+/// as it arrives, so no complete file list is held.
+///
+/// The read is the lazy snapshot's own scan, not a `DeltaTable`: the table
+/// materializes the snapshot through `EagerSnapshot`, which replays every add
+/// action into resident record batches, so the set would be resident once in
+/// delta and again in the caller's groups. The lazy scan also materializes each
+/// file's `numRecords` from its stats JSON, so a log whose stats are not JSON
+/// fails here where [`load`] (the materialized path) omits them.
+pub(super) async fn visit_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
+) -> Result<u64, Error> {
+    let store = open_store(lake, request)?;
+    let snapshot = Snapshot::try_new(store.as_ref(), request.snapshot_version)
+        .await
+        .map_err(delta_error)?;
+    visit_snapshot_files(&store, &snapshot, request.file_stats, visit).await?;
+    Ok(snapshot.version())
+}
+
+/// Visit a lazy snapshot's active files: `Snapshot::file_views` streams the
+/// kernel scan one batch at a time, so nothing materializes the set.
+async fn visit_snapshot_files(
+    store: &LogStoreRef,
+    snapshot: &Snapshot,
+    file_stats: bool,
+    visit: &mut (dyn FnMut(v1::TableFile) -> bool + Send),
+) -> Result<(), Error> {
+    let table_url = store.root_url();
+    let root = local_table_root(table_url)?;
+    let mut files = snapshot.file_views(store.as_ref(), None);
+    while let Some(file) = files.try_next().await.map_err(delta_error)? {
+        if !visit(data_file(&root, table_url, &file, file_stats)?) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// The table's local filesystem root, when it is a `file://` table.
+fn local_table_root(table_url: &Url) -> Result<Option<PathBuf>, Error> {
+    if table_url.scheme() != "file" {
+        return Ok(None);
+    }
+    let path = table_url
+        .to_file_path()
+        .map_err(|()| Error::Invalid("invalid local table URI".into()))?;
+    Ok(Some(path))
 }
 
 /// One add action as a [`v1::TableFile`], resolving its storage path and, unless
@@ -598,6 +648,7 @@ fn data_file(
         blob: Some(v1::name::blob_name(&uri)),
         path: relative,
         size_bytes: Some(size),
+        modification_time: u64::try_from(file.modification_time()).ok(),
         partition_values: partition_values(file),
         stats,
         ..v1::TableFile::default()

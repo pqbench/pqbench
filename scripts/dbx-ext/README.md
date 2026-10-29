@@ -7,7 +7,7 @@ runs end to end —
 ```console no-run
 $ echo '"CAT.SCHEMA"' | pqbench list tables | pqbench credentials check \
     | pqbench credentials get | pqbench get table \
-    | pqbench list partitions | pqbench list files | pqbench bytemass
+    | pqbench list files | pqbench bytemass
 ```
 
 Two layers, because CloudFormation cannot create Unity Catalog objects:

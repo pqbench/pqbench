@@ -26,9 +26,9 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &DiffArgs) -> Result<(), Cli
     let deltas = diff::compare(&left, &right, args.depth)?;
     let mut emit = Emitter::open();
     for delta in &deltas {
-        emit.write(delta).await?;
+        emit.write(delta)?;
     }
-    emit.finish().await
+    emit.finish()
 }
 
 async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<v1::Bytemass>, CliError> {

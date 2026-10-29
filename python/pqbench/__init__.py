@@ -17,7 +17,7 @@ own pipeline and the measurement that consumes it, and they stop at
 library's records, as classes — a field reads the same three ways:
 ``record["path"]``, ``record.path``, ``record.asdict()``; the commands whose entry
 point is async — the walk verbs, ``bytemass`` — return awaitables, and the
-collections the library streams — ``partition.list.list`` and ``file.list.list`` —
+collections the library streams — ``file.list.list`` —
 are async iterators.
 
 This package is the ergonomic surface over them: the client handles every

@@ -80,7 +80,7 @@ export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 
 jq -cn --arg uri "$(jq -r .storage_location <<< "$TABLE")" \
     '{name:"catalogs/local/schemas/local/tables/events", uri:$uri}' |
-  "$BIN" list partitions |
+  "$BIN" list files |
   "$BIN" list files |
   "$BIN" bytemass
 ```
@@ -97,7 +97,7 @@ columns: 2
 
 `make lakehouse` runs exactly this walk as its last step, then lists the same
 table with `list tables` (with `PQB_ENDPOINT` naming the catalog) and walks it
-through `get table | list partitions | list files | bytemass` again, so the
+through `get table | list files | bytemass` again, so the
 catalog-listing path is seen to work too.
 
 Iceberg REST does not vend credentials. `list tables` lists namespaces and
@@ -117,16 +117,16 @@ export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 echo '{"name":"catalogs/pqbench/schemas/demo"}' |
   "$BIN" list tables |
   "$BIN" get table |
-  "$BIN" list partitions | "$BIN" list files | "$BIN" bytemass
+  "$BIN" list files | "$BIN" list files | "$BIN" bytemass
 ```
 
 `make lakehouse` runs the Unity table walk, the Unity catalog walk, and this
-Iceberg walk. Stop after `pqbench list partitions` and pipe to `jq .` to read the
+Iceberg walk. Stop after `pqbench list files` and pipe to `jq .` to read the
 partition document itself.
 
 A table-file record names one blob; `pqbench table-file PATH` writes one, and
 `list files` writes one per file the walk names. `pqbench bytemass` measures
-them, and a table's files come from the walk, `pqbench list partitions |
+them, and a table's files come from the walk, `pqbench list files |
 pqbench list files`. The walk's context is the environment: `PQB_ENDPOINT`,
 `PQB_TOKEN`, `PQB_TABLE_FORMAT` for the catalog, and `AWS_*` for storage.
 pqbench keeps no catalog dependency. A producer whose catalog vends expiring
@@ -152,7 +152,7 @@ role and return a policy-scoped session.
 
 Databricks Unity Catalog vends genuine STS sessions and its CLI has a command for
 that, so the shape survives the move off the stand. The vending response's `url`
-is the table's storage path, which `pqbench list partitions` reads — it walks the log
+is the table's storage path, which `pqbench list files` reads — it walks the log
 itself, so nothing has to enumerate files:
 
 ```bash
@@ -169,7 +169,7 @@ export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION=us-e
 
 jq -cn --arg uri "$(jq -r .url /tmp/pqbench-vend.json)" \
     '{name:"catalogs/local/schemas/local/tables/events", uri:$uri}' |
-  pqbench list partitions |
+  pqbench list files |
   pqbench list files |
   pqbench bytemass
 ```

@@ -1,4 +1,4 @@
-//! `file`: list a partition's files, streamed.
+//! `file`: a table's active files, streamed.
 
 use crate::handles::Lake;
 use crate::marshal::stream_listing;
@@ -7,30 +7,45 @@ use crate::records::TableFile;
 
 #[pyfunction]
 #[pyo3(name = "list")]
+#[pyo3(signature = (lake, table, uri, credentials, partition_millis=None, last_millis=None))]
 fn file_list(
     py: Python<'_>,
     lake: PyRef<'_, Lake>,
     table: String,
     uri: String,
     credentials: Option<Bound<'_, PyAny>>,
-    versions: Vec<u64>,
+    partition_millis: Option<i64>,
+    last_millis: Option<i64>,
 ) -> PyResult<Py<PyAny>> {
     let lake = lake.0.clone();
     let credentials = crate::requests::credentials(credentials)?;
-    let partition = pqbench::v1::Partition {
-        name: pqbench::v1::name::partition_name(&table, "0"),
+    let record = pqbench::v1::Table {
+        name: table,
         uri: Some(uri),
-        commit_versions: versions,
         credentials: credentials.clone(),
-        ..pqbench::v1::Partition::default()
+        ..pqbench::v1::Table::default()
     };
+    let window = crate::requests::window(partition_millis, last_millis)?;
     stream_listing(
         py,
         async move {
-            let found = pqbench::file::list::list(&lake, &partition).await?;
-            Ok(found.map_ok(move |mut file| {
-                file.credentials = credentials.clone();
-                file
+            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+            let producer = sender.clone();
+            tokio::spawn(async move {
+                let mut producer = producer;
+                let walked = pqbench::file::list::visit(
+                    &lake,
+                    &record,
+                    window,
+                    &mut |file| producer.send(Ok(file)).is_ok(),
+                )
+                .await;
+                if let Err(error) = walked {
+                    let _ = sender.send(Err(error.to_string()));
+                }
+            });
+            Ok(futures::stream::unfold(receiver, |mut receiver| async move {
+                receiver.recv().await.map(|item| (item, receiver))
             }))
         },
         TableFile::attach,

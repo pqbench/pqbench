@@ -101,24 +101,6 @@ fn format_name(format: Option<v1::TableFormat>) -> &'static str {
     }
 }
 
-impl Row for v1::Partition {
-    const HEADER: &'static [&'static str] = &["name", "first_time", "last_time", "commits"];
-    const ALIGN: &[Align] = &[Align::Left, Align::Right, Align::Right, Align::Right];
-
-    fn cells(&self) -> Vec<String> {
-        vec![
-            self.name.clone(),
-            self.start_time
-                .map(|time| time.to_string())
-                .unwrap_or_default(),
-            self.end_time
-                .map(|time| time.to_string())
-                .unwrap_or_default(),
-            self.commit_versions.len().to_string(),
-        ]
-    }
-}
-
 impl Row for v1::TableFile {
     const HEADER: &'static [&'static str] = &["path", "size_bytes"];
     const ALIGN: &[Align] = &[Align::Left, Align::Right];

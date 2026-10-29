@@ -1,5 +1,5 @@
 #!/bin/sh
-# One still of `list partitions | list files | bytemass | viz`. This is not a lake click-through.
+# One still of `list files | bytemass | viz`. This is not a lake click-through.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -21,7 +21,7 @@ test -x "$bin" || cargo build -p pqbench-cli --features delta
 html=.docker-data/pqbench-table.html
 frames=.docker-data/table-frames
 mkdir -p "$frames" .docker-data
-cat docker/e2e-lakehouse/table.ndjson | "$bin" list partitions |
+cat docker/e2e-lakehouse/table.ndjson | "$bin" list files |
     "$bin" list files |
     "$bin" bytemass |
     "$bin" viz -o .docker-data/pqbench-table

@@ -13,7 +13,6 @@ fn visualize_a_bytemass_stream() {
   | pqbench bytemass \
   | pqbench viz -o /tmp/report"#, 8, None);
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
-  | pqbench list partitions \
   | pqbench list files \
   | pqbench bytemass \
   | pqbench viz -o /tmp/report"#, 11, None);

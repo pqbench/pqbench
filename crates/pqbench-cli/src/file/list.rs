@@ -1,50 +1,74 @@
-//! `list files`: the files each partition's commits added.
+//! `list files`: a table's active files.
 
 use clap::Args;
 use futures_util::StreamExt;
 use pqbench::v1;
 
-use crate::source;
-use crate::CliError;
+use crate::emit::Emitter;
+use crate::time::WindowArgs;
+use crate::{parse, CliError};
 
 /// Arguments for `list files`.
 #[derive(Args)]
 pub(crate) struct ListArgs {
-    /// partitions in flight at once
-    #[arg(long, default_value_t = 64)]
-    fan_out: usize,
+    /// read only files the log dates in a window
+    #[command(flatten)]
+    window: WindowArgs,
     /// drop files whose logged size is below SIZE: bytes, or a number with a
     /// unit (kB/MB/GB/TB, KiB/MiB/GiB/TiB); e.g. 100MB
     #[arg(long, value_parser = parse_file_size, value_name = "SIZE")]
     min_file_size: Option<u64>,
 }
 
-/// List the files each partition's commits added: `list partitions | list files`.
+/// List a table's active files: `get table | list files [--last 1d] | bytemass`.
 ///
-/// Reads a partition stream, re-reads each table's log, and emits the files the
-/// window's commits named — the **added in window** set, so a file a later
-/// commit removes is still named. Each file is a [`v1::TableFile`] naming its
-/// blob and carrying the partition's lease, so the storage stage reads it
-/// without a catalog call.
+/// Reads Table refs on standard input, resolves each one's snapshot, and writes
+/// its active files as they arrive — the files active now, not the ones some
+/// commit added. Each file carries the table's lease, so `bytemass` reads it
+/// with no catalog call. Files are written as they are produced, so the run
+/// holds one log batch plus one file, however large the table.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), CliError> {
-    let parents = crate::parse::parents::<v1::Partition>("list files").await?;
-    let lake = lake.clone();
+    let mut parents = parse::parents::<v1::Table>("list files").await?;
+    let window = args.window.window();
     let min = args.min_file_size;
-    let rows = source::flat_map(parents, args.fan_out, move |partition: v1::Partition| {
-        let lake = lake.clone();
-        async move {
-            let files = pqbench::file::list::list(&lake, &partition)
-                .await
-                .map_err(CliError::from)?;
-            Ok(files.filter_map(move |file| async move {
-                match file {
-                    Ok(file) => meets_min_file_size(&file, min).then_some(Ok(file)),
-                    Err(error) => Some(Err(error)),
+    let mut emit = Emitter::open();
+    let mut dropped = 0;
+    let mut failure = None;
+    while let Some(table) = parents.next().await {
+        let table = match table {
+            Ok(table) => table,
+            Err(error) => {
+                crate::error::report(&error);
+                dropped += 1;
+                continue;
+            }
+        };
+        let walked = pqbench::file::list::visit(lake, &table, window, &mut |file| {
+            if !meets_min_file_size(&file, min) {
+                return true;
+            }
+            match emit.write(&file) {
+                Ok(()) => true,
+                Err(error) => {
+                    failure = Some(error);
+                    false
                 }
-            }))
+            }
+        })
+        .await;
+        match walked {
+            Ok(_) => {}
+            Err(error) => {
+                crate::error::report(&error.into());
+                dropped += 1;
+            }
         }
-    });
-    source::drive(rows).await
+        if let Some(error) = failure.take() {
+            return Err(error);
+        }
+    }
+    emit.finish()?;
+    crate::error::fail_when_dropped(dropped)
 }
 
 /// Whether a file's logged size clears `--min-file-size`. A file whose log

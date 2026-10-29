@@ -46,14 +46,13 @@
 // Credentials are a value a document carries beside the resource's own data
 // (AIP-147 concerns storage; the messages below model the value). The vended
 // lease `credentials get` mints rides as the resource's own `credentials`
-// field, set by the stage that read it — a `Table` (the read that follows), a
-// `Partition` (the read that follows), a `TableFile` (the blob read) — so a
-// pipeline stays in-band. It is treated as non-sensitive for now; a later pass
-// moves it off the wire.
+// field, set by the stage that read it — a `Table` (the read that follows) or a
+// `TableFile` (the blob read) — so a pipeline stays in-band. It is treated as
+// non-sensitive for now; a later pass moves it off the wire.
 //
 // A table a catalog did not name — one read by storage path — is still a
 // resource: it takes the `local` catalog and schema (`catalogs/local/schemas/
-// local/tables/{id}`), so every partition and file has a canonical name.
+// local/tables/{id}`), so every file has a canonical name.
 //
 // A blob is storage-rooted: `blobs/{service}/{locator}` (the service is
 // `s3`, `file`, …; the locator URL-encoded), so a bare object or a local path
@@ -190,32 +189,6 @@ message DeclaredColumn {
   bool nullable = 3;
 
   int64 position = 4;
-}
-
-// A natural partition: a half-open commit-time window (AIP-145).
-message Partition {
-  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}
-  string name = 1;
-
-  // Inclusive start of the window, milliseconds since the Unix epoch.
-  int64 start_time = 2;
-
-  // Exclusive end of the window, milliseconds since the Unix epoch.
-  int64 end_time = 3;
-
-  repeated int64 commit_versions = 4;
-
-  // The table's storage root, denormalized so the files stage reads the log
-  // without a catalog call.
-  string uri = 5;
-
-  // The table's vended credentials, when the caller holds them.
-  Credentials credentials = 6;
-
-  // The commits' `commitInfo` actions, index-aligned with `commit_versions`:
-  // the operation, its parameters and metrics, and the writer's identity, as
-  // the log stores them. Empty when no commit in the window has one.
-  repeated google.protobuf.Value commit_info = 7;
 }
 
 // A storage blob: the bytes a data file lives in — a local file or an S3

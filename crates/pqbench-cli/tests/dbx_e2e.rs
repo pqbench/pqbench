@@ -982,73 +982,6 @@ fn credentials_get_vends_the_external_fixture() {
     assert_eq!(tables, 39);
 }
 
-/// The whole walk on the external fixture: `list tables` → `credentials check`
-/// → `credentials get` → `list partitions` groups each table's commits into natural
-/// commit-time windows (at least one partition per table).
-#[test]
-#[ignore = "network: reads the live Databricks endpoint"]
-fn partition_ls_groups_the_external_fixture() {
-    let Some(host) = dbx_host() else {
-        eprintln!("skipping: DBX_HOST is not set");
-        return;
-    };
-    let Some(token) = any_token(&host) else {
-        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
-        return;
-    };
-    let region = std::env::var("DBX_AWS_REGION")
-        .ok()
-        .filter(|region| !region.is_empty())
-        .unwrap_or_else(|| "us-east-2".to_string());
-    let endpoint = unity_endpoint(&host);
-    let env = [
-        ("PQB_ENDPOINT", endpoint.as_str()),
-        ("PQB_TOKEN", token.as_str()),
-        ("AWS_REGION", region.as_str()),
-    ];
-
-    let mut partitions = 0;
-    for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"] {
-        let fqn = format!("pqbench_ext.{schema}");
-        let listed = pipe_env(&["list", "tables"], schema_ref(&fqn).as_bytes(), &env);
-        assert!(
-            listed.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&listed.stderr)
-        );
-        let checked = pipe_env(&["credentials", "check"], &listed.stdout, &env);
-        assert!(
-            checked.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&checked.stderr)
-        );
-        let vended = pipe_env(&["credentials", "get"], &checked.stdout, &env);
-        assert!(
-            vended.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&vended.stderr)
-        );
-        let grouped = pipe_env(&["list", "partitions"], &vended.stdout, &env);
-        assert!(
-            grouped.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&grouped.stderr)
-        );
-        for record in ndjson(&grouped.stdout) {
-            assert_eq!(resource(&record), "partitions");
-            let first = record["start_time"].as_u64().unwrap();
-            let last = record["end_time"].as_u64().unwrap();
-            assert!(last > first, "{record:?}");
-            assert!(
-                !record["commit_versions"].as_array().unwrap().is_empty(),
-                "{record:?}"
-            );
-            partitions += 1;
-        }
-    }
-    assert_eq!(partitions, 39);
-}
-
 /// Run one walk stage and time it; used by the perf target.
 fn timed_stage(
     env: &[(&str, &str)],
@@ -1068,10 +1001,8 @@ fn timed_stage(
 
 /// The whole issue-#58 walk on a copied schema, all the way to `bytemass`:
 /// `list tables` → `credentials check` → `credentials get` → `get table` →
-/// `list partitions` → `list files` → `bytemass`, each stage fed the previous
-/// stage's NDJSON. This is the tail the file-level commands exist for; the
-/// other fixture tests stop at `list partitions`. Set `DBX_WALK_SCHEMA` to walk
-/// another schema (default `pqbench_ext.tpch_sf1`).
+/// `list files` → `bytemass`, each stage fed the previous stage's NDJSON. Set
+/// `DBX_WALK_SCHEMA` to walk another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
 fn external_fixture_walks_to_bytemass() {
@@ -1102,23 +1033,17 @@ fn external_fixture_walks_to_bytemass() {
     let (checked, _) = timed_stage(&env, &["credentials", "check"], &listed);
     let (vended, _) = timed_stage(&env, &["credentials", "get"], &checked);
     let (info, _) = timed_stage(&env, &["get", "table"], &vended);
-    let (partitions, _) = timed_stage(&env, &["list", "partitions"], &info);
-    let (files, _) = timed_stage(&env, &["list", "files"], &partitions);
+    let (files, _) = timed_stage(&env, &["list", "files"], &info);
     let (measured, _) = timed_stage(&env, &["bytemass"], &files);
 
-    // The walk narrows: tables → partitions → files → columns.
+    // The walk narrows: tables → files → columns.
     let tables = ndjson(&info).len();
-    let partition_count = ndjson(&partitions).len();
     let file_count = ndjson(&files).len();
     let records = ndjson(&measured);
     assert!(tables > 0, "{schema}: no tables");
     assert!(
-        partition_count >= tables,
-        "{schema}: {partition_count} partitions < {tables} tables"
-    );
-    assert!(
-        file_count >= partition_count,
-        "{schema}: {file_count} files < {partition_count} partitions"
+        file_count >= tables,
+        "{schema}: {file_count} files < {tables} tables"
     );
     assert!(
         records.iter().any(|record| record["name"]
@@ -1133,7 +1058,7 @@ fn external_fixture_walks_to_bytemass() {
         "{schema}: no Bytemass record"
     );
     println!(
-        "walk {schema}: {tables} tables, {partition_count} partitions, {file_count} files, {} bytemass records",
+        "walk {schema}: {tables} tables, {file_count} files, {} bytemass records",
         records.len()
     );
 }

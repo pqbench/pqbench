@@ -34,8 +34,7 @@ pub(crate) async fn run(args: &CompressionArgs) -> Result<(), CliError> {
         emit.write(&crate::render::SweepRow {
             name: format!("{blob}/compression/{}-{}", row.codec, row.level),
             row: row.clone(),
-        })
-        .await?;
+        })?;
     }
     for row in &report.columns {
         emit.write(&crate::render::ColumnSweepRow {
@@ -44,8 +43,7 @@ pub(crate) async fn run(args: &CompressionArgs) -> Result<(), CliError> {
                 row.codec, row.level, row.column
             ),
             row: row.clone(),
-        })
-        .await?;
+        })?;
     }
-    emit.finish().await
+    emit.finish()
 }

@@ -49,3 +49,19 @@ pub async fn stream_files(
 ) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
     super::r#impl::stream_files(lake, request).await
 }
+
+/// Visit the selected snapshot's active files one at a time, without
+/// collecting them, and return its version (the snapshot id).
+///
+/// Each manifest is read and consumed on its own, so the walk holds one
+/// manifest's entries rather than the table's files.
+///
+/// # Errors
+/// As [`load`]; an error raised after the first file aborts the walk there.
+pub async fn visit_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+    visit: &mut (dyn FnMut(crate::v1::TableFile) -> bool + Send),
+) -> Result<u64, crate::table::Error> {
+    super::r#impl::visit_active_files(lake, request, visit).await
+}

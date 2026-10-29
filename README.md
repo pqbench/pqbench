@@ -46,7 +46,6 @@ $ pqbench list catalogs \
     | pqbench credentials check \
     | pqbench credentials get \
     | pqbench get table \
-    | pqbench list partitions \
     | pqbench list files \
     | pqbench bytemass \
     | pqbench viz -o /tmp/report
@@ -63,9 +62,9 @@ Read it left to right:
   a system catalog, Databricks default storage — and prints the reason;
   `credentials get` vends a short-lived lease onto each remaining ref.
 - `get table` enriches each ref with its format and snapshot; the Delta log is
-  read with `without_files()`, so the read is O(1) in files. `list partitions`
-  groups a table's commits into commit-time windows, and `list files` names the
-  files those commits added.
+  read with `without_files()`, so the read is O(1) in files. `list files` then
+  resolves each snapshot and writes its active files, one `TableFile` per line,
+  carrying the table's lease.
 - `bytemass` reads each file's footer and prints the on-disk bytes per column,
   the table in [bytemass](#bytemass). In a pipe it streams
   `Blob` and `Bytemass` NDJSON instead; `pqbench viz` draws that stream as a
@@ -169,32 +168,32 @@ c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/demo/).
 
-### list partitions
+### list files
 
-List a table's natural partitions — its commits grouped into epoch-aligned
-commit-time windows.
+List a table's active files — the files its snapshot holds now.
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench format
-name                           first_time      last_time  commits
---------------------------  -------------  -------------  -------
-catalogs/local/schemas/local/tables/table/partitions/1789862400000  1789862400000  1789948800000        1
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench format
+path                                                                 size_bytes
+-------------------------------------------------------------------  ----------
+part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
 ```
 
-- Reads each table's Delta / Iceberg log, never the data files.
-- `--every 1h|1d|1w` sets the window width (default `1d`).
-- `--last 1h|1d|1w` bounds the read to the newest commits; only whole windows
-  are emitted.
+- Reads each table's Delta / Iceberg log and checkpoint, never the data files.
+- `--last 1h|1d|1w` keeps the files the log dates in the window ending now.
+- `--partition 2026-10-28` keeps one UTC day.
+- One line per file, written as the walk produces it: the run holds one log
+  batch plus one file.
 - Delta needs `--features delta`, Iceberg `iceberg`; add `-s3` to either for
   `s3://`.
-- A pipe streams `Partition` NDJSON; feed it to `list files`.
+- Reads Table refs on standard input (a `get table` stream).
 
 ### list files
 
-List the files a partition's commits added — the input to `bytemass`.
+List a table's active files — the input to `bytemass`.
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -219,7 +218,7 @@ step.
 
 ```console run delta
 $ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.
@@ -236,12 +235,12 @@ that command.
 - [Distribution](https://pqbench.github.io/pqbench/distribution/) — install the binary, targets, and how releases are cut
 - [CLI reference](https://pqbench.github.io/pqbench/cli/) — the command table, documents, flags, and auth
 - [Visual demos](https://pqbench.github.io/pqbench/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
-- [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list partitions | list files | bytemass`, limitations
-- [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list partitions | list files | bytemass`, limitations
+- [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list files | bytemass`, limitations
+- [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list files | bytemass`, limitations
 - [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqbench viz`, a static HTML treemap
 - [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel: the commands, and the walk
 - [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
-  naming tables for `pqbench list partitions`, over rustfs S3
+  naming tables for `pqbench list files`, over rustfs S3
 
 ## Python
 

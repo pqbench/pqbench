@@ -20,7 +20,6 @@ $ pqbench list catalogs \
     | pqbench credentials check \
     | pqbench credentials get \
     | pqbench get table \
-    | pqbench list partitions \
     | pqbench list files \
     | pqbench bytemass
 ```

@@ -22,13 +22,13 @@ fn measure_one_file_2() {
 #[rustfmt::skip]
 #[test]
 fn the_metadata_walk() {
-    // the_metadata_walk, from line 64
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list partitions | pqbench list files | pqbench bytemass | pqbench format", 65, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    // the_metadata_walk, from line 63
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format", 64, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn draw_the_result() {
-    // draw_the_result, from line 81
-    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 82, None);
+    // draw_the_result, from line 80
+    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 81, None);
 }

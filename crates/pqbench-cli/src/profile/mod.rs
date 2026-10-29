@@ -44,9 +44,8 @@ pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
                 name: format!("{blob}/columns/{}/profile", column.column),
                 id: input.clone(),
                 profile: column.clone(),
-            })
-            .await?;
+            })?;
         }
     }
-    emit.finish().await
+    emit.finish()
 }

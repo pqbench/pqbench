@@ -21,6 +21,11 @@ pub struct TableFile {
     /// The size the log claims, in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
+    /// When the log says the file was created, milliseconds since the Unix
+    /// epoch. Delta records it on every `add`; Iceberg's manifests carry no
+    /// per-file time, so it is absent there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modification_time: Option<u64>,
     /// Partition values from the log; a value is `None` for a null partition.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub partition_values: BTreeMap<String, Option<String>>,
