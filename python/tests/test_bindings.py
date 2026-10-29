@@ -90,7 +90,7 @@ class BindingsTest(unittest.IsolatedAsyncioTestCase):
             async for _ in pqbench.walk(workspace, concurrency=0):
                 pass
         with self.assertRaises(ValueError):
-            async for _ in pqbench.walk(workspace, window_millis=0):
+            async for _ in pqbench.walk(workspace, last_millis=0):
                 pass
         for rate in (-1.0, float("nan"), float("inf")):
             with self.assertRaises(ValueError):
