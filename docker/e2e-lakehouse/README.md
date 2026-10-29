@@ -117,7 +117,7 @@ export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 echo '{"name":"catalogs/pqbench/schemas/demo"}' |
   "$BIN" list tables |
   "$BIN" get table |
-  "$BIN" list files | "$BIN" list files | "$BIN" bytemass
+  "$BIN" list files | "$BIN" bytemass
 ```
 
 `make lakehouse` runs the Unity table walk, the Unity catalog walk, and this

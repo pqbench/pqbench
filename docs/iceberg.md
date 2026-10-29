@@ -2,8 +2,8 @@
 
 The `pqbench` library contains an optional Iceberg table module that detects an
 Iceberg table, loads its metadata JSON and Avro manifests, and names the active
-Parquet files. Measurement is a separate step: `pqbench list files | pqbench
-list files` emits the files, and `pqbench bytemass` reads them. Iceberg
+Parquet files. Measurement is a separate step: `pqbench list files` emits the
+files, and `pqbench bytemass` reads them. Iceberg
 dependencies are feature-gated and remain out of the default dependency graph.
 
 ```mermaid
@@ -31,6 +31,8 @@ module that names the `object_store` crate is `pqbench::object_store`.
 
 List the current snapshot's active files. `format` prints them as a table; a
 pipe writes the full `TableFile` document. The URI may be a table root or the metadata JSON itself.
+Iceberg records no per-file time, so `--last` and `--partition` are rejected here
+rather than silently selecting nothing.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 only the metadata JSON is read, so the load reports the snapshot id, schema,

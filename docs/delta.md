@@ -100,20 +100,17 @@ file's own logged time as it arrives. Memory also includes the largest
 individual commit;
 human table output buffers rows to align columns. The commit reads take their
 versions from the log's own listing, so no version is probed and nothing below
-retention is asked for — a `--last` horizon stops the reads earlier — and each
+retention is asked for, and each
 commit is read as a header prefix, not whole
 (1 KB, then 4 KB, whole only as a last resort), so a commit's add-list is neither
 read nor retained. Reads run a window wide (`available_parallelism * 4`), so
 memory is flat in the log's length rather than growing with every commit's
 header. The library API retains the log and files it reads.
 
-`list files` reads the same window's commits for a different reason: their `add`
-actions name the files the window wrote. That read is whole commits — the adds
-are the bulk of a commit — but it resolves nothing else: no listing, no
-`_last_checkpoint`, no checkpoint, and no active-file replay, so it needs no
-protocol or metadata to name a commit's files. Each file is streamed as its
-commit is read, and the files a version the log no longer holds contributed are
-simply absent.
+`list files` reads the snapshot, not a window's commits: the checkpoint and the
+commits after it are scanned as add actions, and the window is applied to each
+file's own logged time as it arrives. A file a later commit removed is absent,
+and nothing below the checkpoint is read.
 
 ## Limitations
 
