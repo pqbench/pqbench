@@ -23,6 +23,14 @@ fn root_help_covers_auth_documents_and_format_skills() {
 }
 
 #[test]
+fn help_shows_the_short_names() {
+    let stdout = help(&["--help"]);
+    for alias in ["fmt", "ls", "rl"] {
+        assert!(stdout.contains(&format!("[alias: {alias}]")), "{stdout}");
+    }
+}
+
+#[test]
 fn get_help_stays_local_and_points_at_neighbors() {
     let stdout = help(&["get", "--help"]);
     assert!(stdout.contains("Delta"), "{stdout}");

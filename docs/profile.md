@@ -1,4 +1,4 @@
-# pqbench profile
+# pqb profile
 
 Per-column facts from a decoded row sample. Unlike
 [bytemass](cli.md) — which reads the Parquet footer only and never decodes
@@ -7,7 +7,7 @@ data — `profile` reads row values and decodes them.
 ## Usage
 
 ```console run
-$ pqbench profile examples/quickstart.parquet | pqbench format
+$ pqb profile examples/quickstart.parquet | pqb fmt
 id                           column  kind     values  nulls  ndv
 ---------------------------  ------  -------  ------  -----  ---
 examples/quickstart.parquet  id      integer       8      0    8
@@ -17,7 +17,7 @@ examples/quickstart.parquet  year    integer       8      0    8
 The stream is the explicit machine output, useful for the next command:
 
 ```console run json
-$ pqbench profile examples/quickstart.parquet --rows all | head -1 | jq -c '{column, physical_kind, ndv}'
+$ pqb profile examples/quickstart.parquet --rows all | head -1 | jq -c '{column, physical_kind, ndv}'
 {"column":"id","physical_kind":"integer","ndv":8}
 ```
 

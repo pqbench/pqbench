@@ -2,8 +2,8 @@
 
 The `pqbench` library contains an optional Iceberg table module that detects an
 Iceberg table, loads its metadata JSON and Avro manifests, and names the active
-Parquet files. Measurement is a separate step: `pqbench list files` emits the
-files, and `pqbench bytemass` reads them. Iceberg
+Parquet files. Measurement is a separate step: `pqb ls files` emits the
+files, and `pqb bytemass` reads them. Iceberg
 dependencies are feature-gated and remain out of the default dependency graph.
 
 ```mermaid
@@ -21,7 +21,7 @@ flowchart TD
     pqbench_cli --> bytemass
 ```
 
-`pqbench list files` names the format before it reads anything. Iceberg is
+`pqb ls files` names the format before it reads anything. Iceberg is
 recognized from `metadata/version-hint.text`, `metadata/*.metadata.json`, or a
 `.metadata.json` path. The loader reads that metadata and the snapshot's Avro
 manifests. Delete files are named in the log and omitted from `files`. The only
@@ -36,17 +36,17 @@ rather than silently selecting nothing.
 
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 only the metadata JSON is read, so the load reports the snapshot id, schema,
-partition columns, and properties at O(1) in files. (`pqbench get table`
+partition columns, and properties at O(1) in files. (`pqb get table`
 reads the same metadata inline from the REST `loadTable` response instead.)
 
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
 it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
-stand up, `cat docker/e2e-lakehouse/iceberg.ndjson | pqbench list files |
-pqbench bytemass | pqbench format` prints the same column
+stand up, `cat docker/e2e-lakehouse/iceberg.ndjson | pqb ls files |
+pqb bytemass | pqb fmt` prints the same column
 table as a bare parquet:
 
 ```console run
-$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
@@ -80,8 +80,8 @@ third-party storage types.
 
 ## Report
 
-`pqbench list files` resolves the selected snapshot and names its active data
-files. Delete files appear in the snapshot's actions. `pqbench bytemass` then
+`pqb ls files` resolves the selected snapshot and names its active data
+files. Delete files appear in the snapshot's actions. `pqb bytemass` then
 reports
 physical storage of those files: file bytes, physical Parquet rows, compressed
 and uncompressed column bytes, codecs, and compressed bytes per row.

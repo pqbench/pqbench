@@ -17,6 +17,10 @@ RCA ?= rust-code-analysis-cli
 CODE_ANALYSIS_PATHS ?= crates
 LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 
+# Run recipes under bash so `time` can use TIMEFORMAT (the default /bin/sh has
+# no portable millisecond format). Each timed target prints `<name>: N s`.
+SHELL := /bin/bash
+
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check isolation lfs-check check-python sync-docs \
@@ -25,16 +29,16 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 all: fmt build test lint
 
 fmt:
-	$(CARGO) fmt --all
+	@TIMEFORMAT='fmt: %3R s'; time $(CARGO) fmt --all
 
 fmt-check:
-	$(CARGO) fmt --all -- --check
+	@TIMEFORMAT='fmt-check: %3R s'; time $(CARGO) fmt --all -- --check
 
 build:
-	$(CARGO) build --workspace $(CARGO_FEATURES)
+	@TIMEFORMAT='build: %3R s'; time $(CARGO) build --workspace $(CARGO_FEATURES)
 
 test:
-	$(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
+	@TIMEFORMAT='test: %3R s'; time $(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
 
 # The live Databricks metastore e2e; needs the service principal credentials.
 # The S3 features are on so the walk's storage reads actually run (under the
@@ -55,7 +59,7 @@ dbx-walk:
 	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" ./scripts/dbx-walk.sh
 
 lint:
-	$(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
+	@TIMEFORMAT='lint: %3R s'; time $(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
 
 cache-stats:
 	@if command -v sccache >/dev/null 2>&1; then \
@@ -66,7 +70,7 @@ cache-stats:
 
 # Verify the committed open-dataset parquet samples in data/samples/ (Git LFS).
 samples:
-	./scripts/check_samples.sh
+	@TIMEFORMAT='samples: %3R s'; time ./scripts/check_samples.sh
 
 # Local Unity Catalog and Iceberg REST, ready to query: see
 # docker/e2e-lakehouse/README.md.
@@ -96,14 +100,14 @@ check: fmt-check check-docs check-version check-pyi lint isolation lfs-check tes
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
 ISOLATION_FLAGS ?=
 isolation:
-	./scripts/check_isolation.sh $(ISOLATION_FLAGS)
+	@TIMEFORMAT='isolation: %3R s'; time ./scripts/check_isolation.sh $(ISOLATION_FLAGS)
 
 # Every file under an LFS filter must be committed as a pointer, not a raw git
 # blob. A raw blob checks out (the smudge filter only warns) but never reaches
 # the LFS server, so it is invisible until a fresh clone. git-lfs is a
 # contributor prerequisite; see CONTRIBUTING.md.
 lfs-check:
-	git lfs fsck
+	@TIMEFORMAT='lfs-check: %3R s'; time git lfs fsck
 
 # The wheel's version, and the one definition of it: python/ is its own
 # workspace root, so python/Cargo.toml cannot inherit [workspace.package].
@@ -111,10 +115,10 @@ lfs-check:
 VERSION = $(shell ./scripts/version.sh)
 
 sync-version:
-	./scripts/version.sh sync
+	@TIMEFORMAT='sync-version: %3R s'; time ./scripts/version.sh sync
 
 check-version:
-	./scripts/version.sh check
+	@TIMEFORMAT='check-version: %3R s'; time ./scripts/version.sh check
 
 # python/ is its own crate (not a workspace member); share the repo target
 # dir so it does not grow python/target. Local to python/.venv for PEP 668.
@@ -132,16 +136,16 @@ check-python:
 # library models, and fails when they disagree. The wheel is committed, so this
 # never needs to build PyO3 — only the checker's tree-sitter grammars.
 check-pyi:
-	$(CARGO) run -q -p pyicheck-cli
+	@TIMEFORMAT='check-pyi: %3R s'; time $(CARGO) run -q -p pyicheck-cli
 
 # Turn the documented `pqbench ...` commands into Rust integration tests under
 # crates/pqbench-cli/tests/gen_*.rs. Committed, so `make test` runs them like any
 # other test; `make check-docs` fails if they are out of date with the Markdown.
 DOCS ?= README.md docs/ skills/
 sync-docs:
-	$(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
+	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
 check-docs:
-	$(CARGO) run -q -p docscheck-cli -- check $(DOCS)
+	@TIMEFORMAT='check-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- check $(DOCS)
 
 # Software metrics (rust-code-analysis) over the source tree; prints the CLI's
 # own metrics tree. Needs `rust-code-analysis-cli` on PATH — CI pins the

@@ -36,7 +36,7 @@ make build          # or: cargo build --release
 an aligned table; on a pipe, NDJSON.
 
 ```console run
-$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
@@ -48,7 +48,7 @@ values, entropy, runs). It reads values, so it is the complement of `bytemass`,
 which reads only the footer.
 
 ```console run
-$ pqbench profile examples/quickstart.parquet | pqbench format
+$ pqb profile examples/quickstart.parquet | pqb fmt
 id                           column  kind     values  nulls  ndv
 ---------------------------  ------  -------  ------  -----  ---
 examples/quickstart.parquet  id      integer       8      0    8
@@ -61,7 +61,7 @@ A *table* is one snapshot's log and active files. The walk lists a table's
 active files, then measures them:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -78,7 +78,7 @@ names itself. See [delta.md](delta.md) and [iceberg.md](iceberg.md).
 build step:
 
 ```console run
-$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`; open it in a browser. See [viz.md](viz.md).

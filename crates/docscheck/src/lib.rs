@@ -29,7 +29,7 @@
 //! (`# docscheck: env: KEY=VALUE`).
 //!
 //! The generated tests live in `crates/pqbench-cli/tests/gen_*.rs` and call a
-//! committed `gen_support.rs` that resolves `pqbench` to the built binary, so
+//! committed `gen_support.rs` that resolves `pqbench`/`pqb` to the built binary, so
 //! `cargo test` runs them like any other integration test.
 
 pub mod console;

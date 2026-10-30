@@ -25,8 +25,9 @@ curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-c
 ```
 
 The installer verifies the download against the release checksums and puts
-`pqbench` in `~/.cargo/bin`. To pin a version, build from source, or read about
-the release process, see [Distribution](https://pqbench.github.io/pqbench/distribution/).
+`pqbench` in `~/.cargo/bin`, with `pqb` as a symlink to it. To pin a version,
+build from source, or read about the release process, see
+[Distribution](https://pqbench.github.io/pqbench/distribution/).
 
 ## The walk, end to end
 
@@ -37,27 +38,25 @@ so the walk is one bash pipeline.
 ```console no-run
 $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
-$ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list tables \
-    | pqbench ratelimit --rate 15 \
-    | pqbench credentials check \
-    | pqbench credentials get \
-    | pqbench get table \
-    | pqbench list files \
-    | pqbench bytemass \
-    | pqbench viz -o /tmp/report
+$ pqb ls catalogs | pqb rl \
+    | pqb ls schemas | pqb rl \
+    | pqb ls tables | pqb rl \
+    | pqb credentials check \
+    | pqb credentials get \
+    | pqb get table \
+    | pqb ls files \
+    | pqb bytemass \
+    | pqb viz -o /tmp/report
 ```
 
 Read it left to right:
 
 - `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
-  live endpoint fans out one request per ref, so `ratelimit` paces each level at
-  15 refs/s — the schema and table listings and the table stages (`credentials
-  check`, `credentials get`, `get table`) alike; the retry-at-half-the-rate
-  recipe is in the [CLI reference](https://pqbench.github.io/pqbench/cli/).
+  live endpoint fans out one request per ref, so `rl` paces each level at
+  15 refs/s by default — the schema and table listings and the table stages
+  (`credentials check`, `credentials get`, `get table`) alike; the
+  retry-at-half-the-rate recipe is in the
+  [CLI reference](https://pqbench.github.io/pqbench/cli/).
 - `credentials check` drops the tables you can't read outside compute — a view,
   a system catalog, Databricks default storage — and prints the reason;
   `credentials get` vends a short-lived lease onto each remaining ref.
@@ -67,7 +66,7 @@ Read it left to right:
   carrying the table's lease.
 - `bytemass` reads each file's footer and prints the on-disk bytes per column,
   the table in [bytemass](#bytemass). In a pipe it streams
-  `Blob` and `Bytemass` NDJSON instead; `pqbench viz` draws that stream as a
+  `Blob` and `Bytemass` NDJSON instead; `pqb viz` draws that stream as a
   treemap.
 
 The same walk runs offline against the local Delta and Iceberg stand,
@@ -82,7 +81,7 @@ verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
 2.1 MB Reddit comments sample, three of seven columns are 99.7% of the bytes:
 
 ```console run
-$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb fmt
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -111,7 +110,7 @@ every wired codec (zstd, lz4, gzip, snappy); `-c codec@level` (repeatable)
 picks one config:
 
 ```console run
-$ pqbench lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 | pqbench format
+$ pqb lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 | pqb fmt
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 gzip        1            ±44             ±226   0.85
@@ -128,7 +127,7 @@ The same sweep over a parquet file's encoded pages. The input must be
 NONE-compressed; `--per-column` adds a report per column.
 
 ```console run
-$ pqbench compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqbench format
+$ pqb compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqb fmt
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 zstd        1           ±458            ±1722   0.56
@@ -145,7 +144,7 @@ Per-column byte masses — the on-disk bytes each column takes, with its
 value count, its chunks summed over the file's row groups.
 
 ```console run
-$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench format
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb fmt
 column                 codec         encodings         bytes  values
 ---------------------  ------------  ----------------  -----  ------
 c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
@@ -173,7 +172,7 @@ see [Visual demos](https://pqbench.github.io/pqbench/demo/).
 List a table's active files — the files its snapshot holds now.
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt
 path                                                                 size_bytes
 -------------------------------------------------------------------  ----------
 part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
@@ -193,7 +192,7 @@ part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
 List a table's active files — the input to `bytemass`.
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -208,7 +207,7 @@ A producer names a file with `table-file`; `AWS_*` in the environment (or a
 vended lease on the file record) supplies storage access:
 
 ```console no-run
-$ pqbench table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqbench bytemass | pqbench format
+$ pqb table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqb bytemass | pqb fmt
 ```
 
 ### viz
@@ -217,8 +216,8 @@ Collect a bytemass stream into a static HTML treemap — no server, no build
 step.
 
 ```console run delta
-$ pqbench table-file data/samples/delta_byte_array.parquet | pqbench bytemass | pqbench viz -o /tmp/report
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.
@@ -227,7 +226,7 @@ The page lands at `/tmp/report.html`. Open it in a browser.
 
 Start with [Getting started](https://pqbench.github.io/pqbench/getting-started/). The
 [documentation index](https://pqbench.github.io/pqbench/) maps every page by kind.
-`pqbench --help` is the command guide; `pqbench <command> --help` is local to
+`pqb --help` is the command guide; `pqb <command> --help` is local to
 that command.
 
 - [Getting started](https://pqbench.github.io/pqbench/getting-started/) — install, first measurement, the metadata walk
@@ -237,10 +236,10 @@ that command.
 - [Visual demos](https://pqbench.github.io/pqbench/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
 - [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list files | bytemass`, limitations
 - [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list files | bytemass`, limitations
-- [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqbench viz`, a static HTML treemap
+- [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqb viz`, a static HTML treemap
 - [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel: the commands, and the walk
 - [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
-  naming tables for `pqbench list files`, over rustfs S3
+  naming tables for `pqb ls files`, over rustfs S3
 
 ## Python
 

@@ -87,11 +87,12 @@ enum Command {
         after_long_help = help::GET_AFTER
     )]
     Get(get::GetArgs),
-    #[command(about = "Render an NDJSON stream as tables")]
+    #[command(visible_alias = "fmt", about = "Render an NDJSON stream as tables")]
     Format(format::FormatArgs),
     #[command(about = "Name storage paths as table-file records")]
     TableFile(table_file::TableFileArgs),
     #[command(
+        visible_alias = "ls",
         about = help::LIST_ABOUT,
         long_about = help::LIST_LONG_ABOUT,
         after_help = help::LIST_AFTER,
@@ -107,6 +108,7 @@ enum Command {
     Credentials(credentials::CredentialsArgs),
     #[command(
         name = "ratelimit",
+        visible_alias = "rl",
         about = help::RATELIMIT_ABOUT,
         long_about = help::RATELIMIT_LONG_ABOUT,
         after_help = help::RATELIMIT_AFTER,

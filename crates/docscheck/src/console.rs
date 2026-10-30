@@ -11,11 +11,14 @@ use crate::model::Block;
 /// list, or `xargs`.
 const COMMAND_SEPARATORS: &[&str] = &["|", "||", "&&", ";", "xargs"];
 
-/// Whether a block body invokes the `pqbench` binary as a command.
+/// The binary names the docs use: the long one and the installer's alias.
+const BINARY_NAMES: &[&str] = &["pqbench", "pqb"];
+
+/// Whether a block body invokes the `pqbench` (or `pqb`) binary as a command.
 ///
-/// The `pqbench` token must sit in command position — at the start of a line
-/// (after optional `NAME=value` assignments), or after a shell separator or
-/// `xargs`. That keeps prose and data that merely mention the name out: a JSON
+/// The token must sit in command position — at the start of a line (after
+/// optional `NAME=value` assignments), or after a shell separator or `xargs`.
+/// That keeps prose and data that merely mention the name out: a JSON
 /// `"kind":"pqbench.bytemass"` field, `import pqbench`, and
 /// `cargo install pqbench-cli` are not commands.
 pub fn invokes_pqbench(body: &str) -> bool {
@@ -31,7 +34,9 @@ fn line_invokes_pqbench(line: &str) -> bool {
     let mut command_position = true;
     let mut previous = "";
     for token in line.split_whitespace() {
-        if token == "pqbench" && (command_position || COMMAND_SEPARATORS.contains(&previous)) {
+        if BINARY_NAMES.contains(&token)
+            && (command_position || COMMAND_SEPARATORS.contains(&previous))
+        {
             return true;
         }
         if command_position && !is_assignment(token) {
@@ -57,7 +62,7 @@ fn is_assignment(token: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-/// Blocks that invoke `pqbench` but whose fence is not `console`.
+/// Blocks that invoke `pqbench`/`pqb` but whose fence is not `console`.
 pub fn untested_pqbench_blocks(blocks: &[Block]) -> Vec<&Block> {
     blocks
         .iter()

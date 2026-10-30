@@ -13,14 +13,14 @@ Facts come from the CLI. This skill proposes recipes from them. Load the full
 text anytime with:
 
 ```console run json
-$ pqbench skill
+$ pqb skill
 {"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}
 ```
 
 ```console run
-$ pqbench skill parquet-advisor | head -1
+$ pqb skill parquet-advisor | head -1
 ---
-$ pqbench skill parquet-advisor recipes | head -1
+$ pqb skill parquet-advisor recipes | head -1
 # Recipes: write path, DDL, compression levels
 ```
 
@@ -28,9 +28,9 @@ $ pqbench skill parquet-advisor recipes | head -1
 
 | Layer | Command | Returns | Cost |
 | --- | --- | --- | --- |
-| L0 footer | `pqbench table-file FILE | pqbench bytemass` | per column: compressed/uncompressed bytes, codec, encodings, dictionary, value count, null fraction, first/last value, bytes per value, compression ratio | cheap (footer only) |
-| Table files | `cat TABLE.ndjson \| pqbench list files` | the table's active files (path, blob, size) | cheap (log only) |
-| L1 columns | `pqbench profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
+| L0 footer | `pqb table-file FILE | pqb bytemass` | per column: compressed/uncompressed bytes, codec, encodings, dictionary, value count, null fraction, first/last value, bytes per value, compression ratio | cheap (footer only) |
+| Table files | `cat TABLE.ndjson \| pqb ls files` | the table's active files (path, blob, size) | cheap (log only) |
+| L1 columns | `pqb profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
 
 Not in the CLI (do not invent measurements): ALP encoding, a built-in
 recommender, page-min/max overlap, JSON-explode rewrites, pairwise/locality
@@ -42,13 +42,13 @@ unverified).
 
 ## Workflow
 
-1. **Where are the bytes?** `pqbench table-file FILE | pqbench bytemass`. Rank columns by
+1. **Where are the bytes?** `pqb table-file FILE | pqb bytemass`. Rank columns by
    `compressed_bytes`. Do not tune a 0.2% column before the 70% column.
-2. **Column facts.** `pqbench profile data.parquet --rows first:8192`.
+2. **Column facts.** `pqb profile data.parquet --rows first:8192`.
    Pass the same local file, or a file `list files` named from a table.
 3. **Hypotheses** from the facts (see the table below).
 4. **Recipes** from the hypotheses: write/ingest settings, table DDL,
-   compression level. See [recipes.md](recipes.md) (`pqbench skill
+   compression level. See [recipes.md](recipes.md) (`pqb skill
    parquet-advisor recipes`).
 
 Bound the search: `--rows first:8192`, at most four sort columns.
@@ -92,7 +92,7 @@ production-shaped data.
 ## Compression levels (short)
 
 Default: `zstd@3`. Then compare `zstd@1`, `zstd@7`, `snappy` if write CPU
-matters. Full pros/cons: `pqbench skill parquet-advisor recipes`.
+matters. Full pros/cons: `pqb skill parquet-advisor recipes`.
 
 | Choice | Use when | Cost |
 | --- | --- | --- |

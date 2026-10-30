@@ -1,43 +1,41 @@
 # pqbench CLI
 
-Command guide for humans and agents. `pqbench --help` is the long page
-(auth, documents, format skills). `pqbench <command> --help` is local to
+Command guide for humans and agents. `pqb --help` is the long page
+(auth, documents, format skills). `pqb <command> --help` is local to
 that command and links back. This file is the durable copy.
 
 ## What to run
 
 | Goal | Command |
 | --- | --- |
-| Name a file for measurement | `pqbench table-file FILE` |
-| On-disk bytes per column | `pqbench bytemass` (records on stdin) |
-| List a table's active files | `pqbench list files` (Table refs on stdin) |
-| Read the endpoint's metastore record | `pqbench get metastore` (`PQB_ENDPOINT`) |
-| List the catalogs at a catalog endpoint | `pqbench list catalogs` (`PQB_ENDPOINT`) |
-| Read one catalog's record | `pqbench get catalog` (Catalog refs on stdin) |
-| List the schemas in a catalog | `pqbench list schemas` (Catalog refs on stdin) |
-| Read one schema's record | `pqbench get schema` (Schema refs on stdin) |
-| List the tables in a schema | `pqbench list tables` (Schema refs on stdin) |
-| Read one table's record | `pqbench get table` (Table refs on stdin) |
-| Render a stream as tables | `pqbench format` (NDJSON on stdin) |
-| Check + vend read credentials (refs) | `pqbench credentials check` / `pqbench credentials get` (refs on stdin) |
-| Pace a ref stream to N records/s | `pqbench ratelimit [--rate N]` |
-| Visualize a bytemass stream | `pqbench bytemass … \| pqbench viz -o report` |
-| Codec speed on raw bytes | `pqbench lz FILE -c zstd@3` |
-| Codec speed on Parquet pages | `pqbench compression FILE` (NONE-compressed only) |
-| Column facts from row values | `pqbench profile FILE` |
-| Agent skill (write / DDL / codec recipes) | `pqbench skill parquet-advisor` |
+| Name a file for measurement | `pqb table-file FILE` |
+| On-disk bytes per column | `pqb bytemass` (records on stdin) |
+| List a table's active files | `pqb ls files` (Table refs on stdin) |
+| Read the endpoint's metastore record | `pqb get metastore` (`PQB_ENDPOINT`) |
+| List the catalogs at a catalog endpoint | `pqb ls catalogs` (`PQB_ENDPOINT`) |
+| Read one catalog's record | `pqb get catalog` (Catalog refs on stdin) |
+| List the schemas in a catalog | `pqb ls schemas` (Catalog refs on stdin) |
+| Read one schema's record | `pqb get schema` (Schema refs on stdin) |
+| List the tables in a schema | `pqb ls tables` (Schema refs on stdin) |
+| Read one table's record | `pqb get table` (Table refs on stdin) |
+| Render a stream as tables | `pqb fmt` (NDJSON on stdin) |
+| Check + vend read credentials (refs) | `pqb credentials check` / `pqb credentials get` (refs on stdin) |
+| Pace a ref stream to N records/s | `pqb rl [--rate N]` (15/s default) |
+| Visualize a bytemass stream | `pqb bytemass … \| pqb viz -o report` |
+| Codec speed on raw bytes | `pqb lz FILE -c zstd@3` |
+| Codec speed on Parquet pages | `pqb compression FILE` (NONE-compressed only) |
+| Column facts from row values | `pqb profile FILE` |
+| Agent skill (write / DDL / codec recipes) | `pqb skill parquet-advisor` |
 
 The walk reads with two verbs: `get` reads one resource of the walk, `list`
 lists one of its collections. Each level reads its parent's refs on standard
 input, so the walk is a pipe:
 
 ```console no-run
-$ pqbench list catalogs \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list schemas \
-    | pqbench ratelimit --rate 15 \
-    | pqbench list tables
-$ echo '"dbx_samples.nyctaxi.trips"' | pqbench get table
+$ pqb ls catalogs | pqb rl \
+    | pqb ls schemas | pqb rl \
+    | pqb ls tables
+$ echo '"dbx_samples.nyctaxi.trips"' | pqb get table
 ```
 
 A level reads standard input only when it is a stream — a pipeline's pipe, or a
@@ -48,12 +46,12 @@ The usual walk:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list files \
->   | pqbench bytemass \
->   | pqbench viz -o /tmp/report
+>   | pqb ls files \
+>   | pqb bytemass \
+>   | pqb viz -o /tmp/report
 ```
 
-Standard output is NDJSON. `pqbench format` renders it as aligned tables: one
+Standard output is NDJSON. `pqb fmt` renders it as aligned tables: one
 section per record type, with only the curated columns shown. Credentials travel on the refs (`AWS_*`) —
 `credentials get` writes the vended keys onto the refs it passes on, and
 pqbench never writes them into the process environment itself.
@@ -105,7 +103,7 @@ reads the default AWS provider chain, then applies the table's `credentials`.
 Process env (instance role, SSO, shared credentials):
 
 ```console no-run
-AWS_PROFILE=analytics pqbench table-file s3://bucket/table/part-0.parquet | pqbench bytemass
+AWS_PROFILE=analytics pqb table-file s3://bucket/table/part-0.parquet | pqb bytemass
 ```
 
 ### Catalog config (Unity / Databricks / Iceberg REST)
@@ -118,7 +116,7 @@ environment, then the command line. A profile names an endpoint, a bearer, and
 a dialect, so one workspace can carry `[unity]` and `[iceberg]` profiles; pick
 one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
 `--table-format` for one run. Everything else is a per-invocation flag.
-`pqbench setup` prints the resolved config for the shell to eval:
+`pqb setup` prints the resolved config for the shell to eval:
 
 | Variable | Role |
 | --- | --- |
@@ -151,7 +149,7 @@ caps the requests in flight — it is a limit,
 not a batch: up to that many run at once on one thread, and rows are written as
 requests finish, not in ref order. Reading is demand-driven: a slow endpoint or
 a slow downstream pipe stops the reads, so the level above backpressures
-instead of buffering. A `pqbench ratelimit` stage
+instead of buffering. A `pqb rl` stage
 paces the refs between two levels at a target rate — records pass through
 unchanged, one bucket per resource type, nothing dropped. A ref whose read
 fails — a timeout, a dropped connection, an endpoint answer such as a 429, or
@@ -159,7 +157,7 @@ a storage fault — is dropped by the level: it names the ref and the cause on
 standard error, finishes the stream, and exits non-zero with the count, so one
 bad ref does not truncate a walk. The drop is only the read: a ref that does not
 name a resource, a record whose fields are wrong, or an output failure still
-fails the level. `ratelimit` keeps the endpoint from answering
+fails the level. `rl` keeps the endpoint from answering
 429 in the first place; a level that fails outright — the root `list catalogs`,
 a malformed stream — still fails the pipeline, and the shell can retry it at a
 lower rate:
@@ -167,7 +165,7 @@ lower rate:
 ```console
 set -o pipefail
 rate=15
-until pqbench list catalogs | pqbench ratelimit --rate "$rate" | pqbench list schemas; do
+until pqb ls catalogs | pqb rl --rate "$rate" | pqb ls schemas; do
     rate=$((rate / 2))
 done
 ```
@@ -178,7 +176,7 @@ as the `list` it reads from, so you can insert it into a walk or skip it; `tee` 
 
 ```console no-run
 $ PQB_ENDPOINT=https://example.cloud.databricks.com PQB_TOKEN=dapi-… \
-    pqbench list catalogs | pqbench list schemas
+    pqb ls catalogs | pqb ls schemas
 name                                   comment  uri
 -------------------------------------  -------  ----------------------
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse
@@ -204,16 +202,16 @@ the same lease:
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
 $ echo '"dbx_samples.nyctaxi"' |
-    pqbench list tables |
-    pqbench credentials check |
-    pqbench credentials get |
-    pqbench get table
+    pqb ls tables |
+    pqb credentials check |
+    pqb credentials get |
+    pqb get table
 ```
 
-`pqbench setup` prints that environment for the shell to evaluate:
+`pqb setup` prints that environment for the shell to evaluate:
 
 ```console no-run
-$ eval "$(pqbench setup)"
+$ eval "$(pqb setup)"
 ```
 
 It resolves the endpoint and token the way the Databricks SDKs do — the flag,
@@ -276,8 +274,8 @@ cannot serve passes through with its own credentials.
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
 $ echo '"dbx_samples.nyctaxi"' |
-    pqbench list tables |
-    pqbench credentials check | pqbench credentials get
+    pqb ls tables |
+    pqb credentials check | pqb credentials get
 ```
 
 `list files` reads each ref's Delta / Iceberg log — never the data files — and
@@ -298,11 +296,11 @@ per-file time, so a window over an Iceberg table is an error rather than an
 empty listing.
 
 ```console no-run
-$ cat table.ndjson | pqbench list files --last 1d | pqbench bytemass
+$ cat table.ndjson | pqb ls files --last 1d | pqb bytemass
 ```
 
 ```console no-run
-$ echo '{"name":"pqbench.demo.events"}' | PQB_ENDPOINT=… pqbench get table
+$ echo '{"name":"pqbench.demo.events"}' | PQB_ENDPOINT=… pqb get table
 name                           format  snapshot_version  columns  uri
 -----------------------------  ------  ----------------  -------  ----------------------
 catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/unity/events
@@ -311,7 +309,7 @@ catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/un
 List a table's active files from a table record; a terminal prints them:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt
 path                                                                 size_bytes
 -------------------------------------------------------------------  ----------
 part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
@@ -320,7 +318,7 @@ part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
 List the catalogs at the endpoint:
 
 ```console no-run
-$ pqbench list catalogs
+$ pqb ls catalogs
 name                  catalog_type
 --------------------  -----------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
@@ -330,7 +328,7 @@ catalogs/samples      CATALOG_TYPE_SYSTEM
 Read one catalog's record:
 
 ```console no-run
-$ echo '"dbx_samples"' | pqbench get catalog
+$ echo '"dbx_samples"' | pqb get catalog
 name                  catalog_type
 --------------------  --------------------
 catalogs/dbx_samples  CATALOG_TYPE_MANAGED
@@ -339,7 +337,7 @@ catalogs/dbx_samples  CATALOG_TYPE_MANAGED
 List the schemas in a catalog:
 
 ```console no-run
-$ echo '"dbx_samples"' | pqbench list schemas
+$ echo '"dbx_samples"' | pqb ls schemas
 name                                   comment  uri
 -------------------------------------  -------  ----------------------
 catalogs/dbx_samples/schemas/bakehouse  …        s3://lakehouse/bakehouse

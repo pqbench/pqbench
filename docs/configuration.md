@@ -51,11 +51,11 @@ The environment overrides the selected profile:
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | a lower-priority fallback for the endpoint and bearer |
 | `AWS_*` | object-store region and credentials, read by the storage client |
 
-`pqbench setup` prints the resolved endpoint, bearer, and dialect for the shell
+`pqb setup` prints the resolved endpoint, bearer, and dialect for the shell
 to evaluate:
 
 ```console no-run
-$ eval "$(pqbench setup --profile iceberg)"
+$ eval "$(pqb setup --profile iceberg)"
 ```
 
 ## Flags
@@ -78,7 +78,7 @@ The catalog levels read a profile; a single command can still override the
 endpoint or bearer for one run:
 
 ```console no-run
-$ echo '"dbx_samples.nyctaxi"' | pqbench --profile unity list tables
-$ echo '"dbx_samples.nyctaxi.trips"' | pqbench --profile iceberg get table
-$ pqbench list catalogs --endpoint https://dbc-abc123.cloud.databricks.com --token dapi-…
+$ echo '"dbx_samples.nyctaxi"' | pqb --profile unity list tables
+$ echo '"dbx_samples.nyctaxi.trips"' | pqb --profile iceberg get table
+$ pqb ls catalogs --endpoint https://dbc-abc123.cloud.databricks.com --token dapi-…
 ```

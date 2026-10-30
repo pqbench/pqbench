@@ -8,17 +8,17 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn what_to_run() {
-    // what_to_run, from line 49
+    // what_to_run, from line 47
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
-  | pqbench list files \
-  | pqbench bytemass \
-  | pqbench viz -o /tmp/report"#, 50, None);
+  | pqb ls files \
+  | pqb bytemass \
+  | pqb viz -o /tmp/report"#, 48, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn catalog_config_unity_databricks_iceberg_rest() {
-    // catalog_config_unity_databricks_iceberg_rest, from line 313
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench format", 314, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
+    // catalog_config_unity_databricks_iceberg_rest, from line 311
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt", 312, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
 }
