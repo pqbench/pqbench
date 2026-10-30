@@ -8,7 +8,7 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 9
-    support::run("pqb profile examples/quickstart.parquet | pqb format", 10, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
+    support::run("pqb profile examples/quickstart.parquet | pqb fmt", 10, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
 }
 
 #[rustfmt::skip]

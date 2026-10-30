@@ -20,5 +20,5 @@ fn what_to_run() {
 #[test]
 fn catalog_config_unity_databricks_iceberg_rest() {
     // catalog_config_unity_databricks_iceberg_rest, from line 311
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb format", 312, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt", 312, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
 }

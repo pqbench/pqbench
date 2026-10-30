@@ -4,7 +4,7 @@ pqbench measures Parquet footers. A file is one input. A table is a snapshot
 of files. The pipe is the same in every case:
 
 ```console run
-$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb format
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
@@ -13,7 +13,7 @@ $ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/re
 ```
 
 Standard output is NDJSON (`Partition`, `TableFile`, `Blob`, `Bytemass`);
-`pqb format` renders a table. `pqb viz` collects the bytemass stream into
+`pqb fmt` renders a table. `pqb viz` collects the bytemass stream into
 a static HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under
@@ -69,7 +69,7 @@ $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz 
 ![one table viz page](images/pqbench-lake-treemap.gif)
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -92,18 +92,18 @@ $ echo '"CAT.SCHEMA"' | pqb ls tables |
     pqb get table |
     pqb ls files |
     pqb ls files |
-    pqb bytemass | pqb format
+    pqb bytemass | pqb fmt
 ```
 
 Every stage of a pipe writes NDJSON for the next stage; the last one prints the
-table (`| pqb format`). The local stand (`make lakehouse`) exports
+table (`| pqb fmt`). The local stand (`make lakehouse`) exports
 `PQB_ENDPOINT` and `AWS_*` for the walk. See
 [docker/e2e-lakehouse/README.md](../docker/e2e-lakehouse/README.md).
 
 ## One Parquet file
 
 ```console run
-$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb format
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb fmt
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -125,7 +125,7 @@ url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 NDJSON for `list files` and `bytemass`; `format` renders it:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3

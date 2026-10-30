@@ -7,7 +7,7 @@ data — `profile` reads row values and decodes them.
 ## Usage
 
 ```console run
-$ pqb profile examples/quickstart.parquet | pqb format
+$ pqb profile examples/quickstart.parquet | pqb fmt
 id                           column  kind     values  nulls  ndv
 ---------------------------  ------  -------  ------  -----  ---
 examples/quickstart.parquet  id      integer       8      0    8

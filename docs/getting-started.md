@@ -36,7 +36,7 @@ make build          # or: cargo build --release
 an aligned table; on a pipe, NDJSON.
 
 ```console run
-$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb format
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
@@ -48,7 +48,7 @@ values, entropy, runs). It reads values, so it is the complement of `bytemass`,
 which reads only the footer.
 
 ```console run
-$ pqb profile examples/quickstart.parquet | pqb format
+$ pqb profile examples/quickstart.parquet | pqb fmt
 id                           column  kind     values  nulls  ndv
 ---------------------------  ------  -------  ------  -----  ---
 examples/quickstart.parquet  id      integer       8      0    8
@@ -61,7 +61,7 @@ A *table* is one snapshot's log and active files. The walk lists a table's
 active files, then measures them:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3

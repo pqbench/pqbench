@@ -4,7 +4,7 @@
 lz4). One input may be `-` for stdin. Differences are right minus left.
 
 ```console
-$ pqb diff before.parquet after.parquet | pqb format
+$ pqb diff before.parquet after.parquet | pqb fmt
 $ pqb diff before.ndjson after.ndjson --depth 2
 ```
 
@@ -22,5 +22,5 @@ data or schema; compare the same logical data before interpreting a reduction
 as a saving.
 
 The command rejects incomplete streams, duplicate columns, non-`Bytemass`
-records, and arithmetic overflow. Output is NDJSON; `pqb format` renders resources, and a delta (which has no
+records, and arithmetic overflow. Output is NDJSON; `pqb fmt` renders resources, and a delta (which has no
 name) is JSON-only.

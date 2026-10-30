@@ -22,7 +22,7 @@ A 2.1 MB Reddit sample. Before tuning anything, find the columns that own the
 bytes — `bytemass` reads only the footer, so it answers in milliseconds:
 
 ```console run
-$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb format
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb fmt
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -41,7 +41,7 @@ Three columns — `url_encoded` (907 KB), `text` (744 KB), `username_encoded`
 `profile` decodes a row sample to explain *why*:
 
 ```console run
-$ pqb profile crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb format
+$ pqb profile crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb fmt
 id                                                           column            kind    values  nulls   ndv
 -----------------------------------------------------------  ----------------  ------  ------  -----  ----
 crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet  text              string    3000      0  2753
@@ -70,7 +70,7 @@ The sample is stored **uncompressed**, so the codec is the first lever. Sweep
 the codecs over the file's encoded pages:
 
 ```console run
-$ pqb compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqb format
+$ pqb compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqb fmt
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 zstd        1           ±458            ±1722   0.56
@@ -113,7 +113,7 @@ compare two layouts.
 A real table with a non-default encoding reads the same way:
 
 ```console run
-$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb format
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb fmt
 column                 codec         encodings         bytes  values
 ---------------------  ------------  ----------------  -----  ------
 c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000

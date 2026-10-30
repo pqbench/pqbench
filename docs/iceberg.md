@@ -42,11 +42,11 @@ reads the same metadata inline from the REST `loadTable` response instead.)
 The committed Iceberg fixture stores data as `s3://lakehouse/...`, so measuring
 it needs the stand (`make lakehouse`), not just the `iceberg` feature. With the
 stand up, `cat docker/e2e-lakehouse/iceberg.ndjson | pqb ls files |
-pqb bytemass | pqb format` prints the same column
+pqb bytemass | pqb fmt` prints the same column
 table as a bare parquet:
 
 ```console run
-$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb format
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8

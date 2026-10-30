@@ -31,7 +31,7 @@ List the table's active files, then measure them. A terminal prints the files as
 a table:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt
 path                                                                 size_bytes
 -------------------------------------------------------------------  ----------
 part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
@@ -72,7 +72,7 @@ NDJSON, and `>` captures it:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files > /tmp/partition.ndjson
-$ pqb bytemass < /tmp/partition.ndjson | pqb format
+$ pqb bytemass < /tmp/partition.ndjson | pqb fmt
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3

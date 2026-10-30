@@ -18,7 +18,7 @@ that command and links back. This file is the durable copy.
 | Read one schema's record | `pqb get schema` (Schema refs on stdin) |
 | List the tables in a schema | `pqb ls tables` (Schema refs on stdin) |
 | Read one table's record | `pqb get table` (Table refs on stdin) |
-| Render a stream as tables | `pqb format` (NDJSON on stdin) |
+| Render a stream as tables | `pqb fmt` (NDJSON on stdin) |
 | Check + vend read credentials (refs) | `pqb credentials check` / `pqb credentials get` (refs on stdin) |
 | Pace a ref stream to N records/s | `pqb rl [--rate N]` (15/s default) |
 | Visualize a bytemass stream | `pqb bytemass … \| pqb viz -o report` |
@@ -51,7 +51,7 @@ $ cat docker/e2e-lakehouse/table.ndjson \
 >   | pqb viz -o /tmp/report
 ```
 
-Standard output is NDJSON. `pqb format` renders it as aligned tables: one
+Standard output is NDJSON. `pqb fmt` renders it as aligned tables: one
 section per record type, with only the curated columns shown. Credentials travel on the refs (`AWS_*`) —
 `credentials get` writes the vended keys onto the refs it passes on, and
 pqbench never writes them into the process environment itself.
@@ -309,7 +309,7 @@ catalogs/pqbench/schemas/demo/tables/events  delta  0       2  s3://lakehouse/un
 List a table's active files from a table record; a terminal prints them:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt
 path                                                                 size_bytes
 -------------------------------------------------------------------  ----------
 part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796

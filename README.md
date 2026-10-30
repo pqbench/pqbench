@@ -81,7 +81,7 @@ verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
 2.1 MB Reddit comments sample, three of seven columns are 99.7% of the bytes:
 
 ```console run
-$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb format
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb fmt
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -110,7 +110,7 @@ every wired codec (zstd, lz4, gzip, snappy); `-c codec@level` (repeatable)
 picks one config:
 
 ```console run
-$ pqb lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 | pqb format
+$ pqb lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 | pqb fmt
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 gzip        1            ±44             ±226   0.85
@@ -127,7 +127,7 @@ The same sweep over a parquet file's encoded pages. The input must be
 NONE-compressed; `--per-column` adds a report per column.
 
 ```console run
-$ pqb compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqb format
+$ pqb compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqb fmt
 codec   level  compress MB/s  decompress MB/s  ratio
 ------  -----  -------------  ---------------  -----
 zstd        1           ±458            ±1722   0.56
@@ -144,7 +144,7 @@ Per-column byte masses — the on-disk bytes each column takes, with its
 value count, its chunks summed over the file's row groups.
 
 ```console run
-$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb format
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb fmt
 column                 codec         encodings         bytes  values
 ---------------------  ------------  ----------------  -----  ------
 c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
@@ -172,7 +172,7 @@ see [Visual demos](https://pqbench.github.io/pqbench/demo/).
 List a table's active files — the files its snapshot holds now.
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt
 path                                                                 size_bytes
 -------------------------------------------------------------------  ----------
 part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
@@ -192,7 +192,7 @@ part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
 List a table's active files — the input to `bytemass`.
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -207,7 +207,7 @@ A producer names a file with `table-file`; `AWS_*` in the environment (or a
 vended lease on the file record) supplies storage access:
 
 ```console no-run
-$ pqb table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqb bytemass | pqb format
+$ pqb table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqb bytemass | pqb fmt
 ```
 
 ### viz
