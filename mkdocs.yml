@@ -132,6 +132,5 @@ nav:
       - Python bindings: python.md
   - Concepts:
       - concepts/index.md
-      - What is a partition?: partition.md
       - Architecture: architecture.md
   - Contributing: contributing.md
