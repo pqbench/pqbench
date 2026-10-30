@@ -124,7 +124,7 @@ mod tests {
         let skill = skill("parquet-advisor").unwrap();
         assert!(skill.description.contains("recipes"));
         let body = document("parquet-advisor", "").unwrap();
-        assert!(body.contains("pqbench bytemass"));
+        assert!(body.contains("pqb bytemass"));
         assert!(body.contains("Table DDL"));
         let recipes = document("parquet-advisor", "recipes").unwrap();
         assert!(recipes.contains("zstd@3"));

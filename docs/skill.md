@@ -1,21 +1,21 @@
 # Agent skills
 
-`pqbench skill` prints a skill that is compiled into the binary. An
+`pqb skill` prints a skill that is compiled into the binary. An
 agent loads it the same way it loads `--help`: run the command, read
 the markdown.
 
-`pqbench skill` with no argument lists the bundled skills as JSON lines (this
+`pqb skill` with no argument lists the bundled skills as JSON lines (this
 is the command's explicit machine output). A named skill prints raw markdown:
 
 ```console run json
-$ pqbench skill
+$ pqb skill
 {"kind":"pqbench.skill","version":1,"name":"parquet-advisor","description":"Turns pqbench facts into write-path, table DDL, and compression-level recipes","documents":["parquet-advisor","recipes"]}
 ```
 
 ```console run
-$ pqbench skill parquet-advisor | head -1
+$ pqb skill parquet-advisor | head -1
 ---
-$ pqbench skill parquet-advisor recipes | head -1
+$ pqb skill parquet-advisor recipes | head -1
 # Recipes: write path, DDL, compression levels
 ```
 

@@ -92,6 +92,7 @@ enum Command {
     #[command(about = "Name storage paths as table-file records")]
     TableFile(table_file::TableFileArgs),
     #[command(
+        visible_alias = "ls",
         about = help::LIST_ABOUT,
         long_about = help::LIST_LONG_ABOUT,
         after_help = help::LIST_AFTER,

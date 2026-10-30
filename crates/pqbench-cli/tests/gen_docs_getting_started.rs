@@ -8,14 +8,14 @@ mod support;
 #[test]
 fn measure_one_file() {
     // measure_one_file, from line 38
-    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format", 39, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
+    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb format", 39, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn measure_one_file_2() {
     // measure_one_file_2, from line 50
-    support::run("pqbench profile examples/quickstart.parquet | pqbench format", 51, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
+    support::run("pqb profile examples/quickstart.parquet | pqb format", 51, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
 }
 
 #[cfg(feature = "delta")]
@@ -23,12 +23,12 @@ fn measure_one_file_2() {
 #[test]
 fn the_metadata_walk() {
     // the_metadata_walk, from line 63
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format", 64, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb format", 64, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn draw_the_result() {
     // draw_the_result, from line 80
-    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report", 81, None);
+    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report", 81, None);
 }

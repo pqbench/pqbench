@@ -4,8 +4,9 @@
 // transcript command and, when the docs show output, the expected stdout.
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 /// The repository root, three levels above `crates/pqbench-cli`.
 fn root() -> PathBuf {
@@ -16,13 +17,34 @@ fn root() -> PathBuf {
         .expect("repository root")
 }
 
+/// Put `pqb`, the short name the docs use, in a per-process directory.
+/// The release installer creates it beside the binary; a cargo build does not,
+/// and the target directory may still hold a stale one from another branch.
+fn install_alias(binary: &Path) -> PathBuf {
+    static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| {
+            let directory =
+                std::env::temp_dir().join(format!("pqbench-docs-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).expect("alias directory");
+            let alias = directory.join(if cfg!(windows) { "pqb.exe" } else { "pqb" });
+            let _ = std::fs::remove_file(&alias);
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(binary, &alias).expect("pqb symlink");
+            #[cfg(windows)]
+            std::fs::hard_link(binary, &alias).expect("pqb hardlink");
+            directory
+        })
+        .clone()
+}
+
 /// Run one documented command and assert it succeeds.
 ///
 /// The command runs through `sh -c` with the working directory at the
 /// repository root, so the paths the docs use resolve. `CARGO_BIN_EXE_pqbench`
 /// is the directory holding the built binary; prepending it to `PATH` means a
-/// documented `pqbench ...` line runs the build under test rather than any
-/// installed copy, and a pipe or `xargs` finds it too.
+/// documented `pqbench ...` (or `pqb ...`) line runs the build under test
+/// rather than any installed copy, and a pipe or `xargs` finds it too.
 ///
 /// `line` is the source line of the command, used in the failure message.
 ///
@@ -33,9 +55,10 @@ fn root() -> PathBuf {
 pub fn run(command: &str, line: usize, expected: Option<&[&str]>) {
     let binary = PathBuf::from(env!("CARGO_BIN_EXE_pqbench"));
     let binary_directory = binary.parent().expect("binary has a parent");
+    let alias_directory = install_alias(&binary);
 
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![binary_directory.to_path_buf()];
+    let mut paths = vec![alias_directory, binary_directory.to_path_buf()];
     paths.extend(std::env::split_paths(&path));
     let path = std::env::join_paths(paths).expect("a valid PATH");
 

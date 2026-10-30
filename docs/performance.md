@@ -11,16 +11,13 @@ request (see the Perf box in the template).
 Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
-$ pqb list catalogs \
-    | pqb rl \
-    | pqb list schemas \
-    | pqb rl \
-    | pqb list tables \
-    | pqb rl \
+$ pqb ls catalogs | pqb rl \
+    | pqb ls schemas | pqb rl \
+    | pqb ls tables | pqb rl \
     | pqb credentials check \
     | pqb credentials get \
     | pqb get table \
-    | pqb list files \
+    | pqb ls files \
     | pqb bytemass
 ```
 
@@ -32,11 +29,11 @@ catalog".
 
 ## Point it at a target
 
-`pqbench setup` prints the walk's environment for the shell to evaluate
+`pqb setup` prints the walk's environment for the shell to evaluate
 (`PQB_ENDPOINT` / `PQB_TOKEN`, and `AWS_REGION` for external storage):
 
 ```console no-run
-$ eval "$(pqbench setup --endpoint <url> --token <token> --region us-east-2)"
+$ eval "$(pqb setup --endpoint <url> --token <token> --region us-east-2)"
 ```
 
 `make dbx-walk` drives the live Databricks workspace and its external

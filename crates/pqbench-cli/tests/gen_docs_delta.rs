@@ -9,7 +9,7 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 33
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench format", 34, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb format", 34, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
 }
 
 #[cfg(feature = "delta")]
@@ -17,6 +17,6 @@ fn usage() {
 #[test]
 fn document() {
     // document, from line 73
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqbench list files > /tmp/partition.ndjson", 74, None);
-    support::run("pqbench bytemass < /tmp/partition.ndjson | pqbench format", 75, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files > /tmp/partition.ndjson", 74, None);
+    support::run("pqb bytemass < /tmp/partition.ndjson | pqb format", 75, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
 }

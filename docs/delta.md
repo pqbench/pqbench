@@ -2,8 +2,8 @@
 
 The `pqbench` library contains an optional Delta Lake table module that detects
 a Delta table, reads its transaction log, and names the active Parquet files.
-Measurement is a separate step: `pqbench list files`
-emits the files, and `pqbench bytemass` reads them. Delta dependencies are
+Measurement is a separate step: `pqb ls files`
+emits the files, and `pqb bytemass` reads them. Delta dependencies are
 feature-gated and remain out of the default dependency graph.
 
 ```mermaid
@@ -18,7 +18,7 @@ flowchart TD
     pqbench_cli --> bytemass
 ```
 
-`pqbench list files` names the format before it reads anything. `_delta_log` is
+`pqb ls files` names the format before it reads anything. `_delta_log` is
 Delta and wins UniForm; Iceberg has its own loader. The Delta module uses
 delta-rs to select a table snapshot and walks its active files.
 It does not measure footers. The only module that names the `object_store` crate
@@ -31,7 +31,7 @@ List the table's active files, then measure them. A terminal prints the files as
 a table:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb format
 path                                                                 size_bytes
 -------------------------------------------------------------------  ----------
 part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
@@ -57,7 +57,7 @@ S3 support is compiled behind the `aws` feature inside `pqbench::object_store`
 not compiled in fails at runtime with a message naming the missing feature.
 Adding another scheme is one arm in the factory plus one feature. The `delta`
 feature flag gates the loader; its private `delta_helpers` module is the only
-code that names the `deltalake` crate and is plain async. `pqbench list files`
+code that names the `deltalake` crate and is plain async. `pqb ls files`
 drives a load on a current-thread runtime, so delta-rs selects its own executor
 instead of borrowing the caller's.
 
@@ -71,8 +71,8 @@ each file as its line arrives and compares its size to the log. `--last` and
 NDJSON, and `>` captures it:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files > /tmp/partition.ndjson
-$ pqbench bytemass < /tmp/partition.ndjson | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files > /tmp/partition.ndjson
+$ pqb bytemass < /tmp/partition.ndjson | pqb format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -89,7 +89,7 @@ buffer rather than per row, since a row's own write is a copy.
 A metadata-only caller asks for the header with `LoadRequest::without_files()`:
 the read resolves a plain delta-rs snapshot, which reads the log's actions but
 never replays its files, so the load reports the snapshot version, schema,
-partition columns, and properties at O(1) in files. `pqbench get table` is that
+partition columns, and properties at O(1) in files. `pqb get table` is that
 caller.
 
 Resolving a snapshot's *active files* uses delta-rs's lazy kernel snapshot and

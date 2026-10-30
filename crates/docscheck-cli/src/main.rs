@@ -59,8 +59,8 @@ resolves `pqbench` to the binary under test. A `# docscheck: cd: PATH` or
 `# docscheck: env: KEY=VALUE` line on its own body line sets the directory or
 environment.
 
-Two gates run on every document. A `pqbench` example outside a `console` fence
-is an error, so a command example cannot silently go untested. And a transcript
+Two gates run on every document. A `pqbench`/`pqb` example outside a `console`
+fence is an error, so a command example cannot silently go untested. And a transcript
 must document the human table, not NDJSON: a `{"kind":"pqbench` output line is an
 error unless the fence opts in with `json` (```console run json```).
 
@@ -165,10 +165,10 @@ fn run_sync(args: Args, check_only: bool) -> ExitCode {
     }
 }
 
-/// Fail when a `pqbench` example is not in a `console` block.
+/// Fail when a `pqbench`/`pqb` example is not in a `console` block.
 ///
 /// A command example only becomes a test inside a `console` fence, so a
-/// `pqbench` example written as `sh` or a bare fence would silently go
+/// `pqbench`/`pqb` example written as `sh` or a bare fence would silently go
 /// untested. Report every offender with its file and line.
 fn reject_untested_pqbench_blocks(files: &[PathBuf]) -> Result<(), String> {
     let mut parser = MarkdownParser::new();
@@ -179,7 +179,7 @@ fn reject_untested_pqbench_blocks(files: &[PathBuf]) -> Result<(), String> {
         let blocks = parser.parse(&source);
         for block in docscheck::untested_pqbench_blocks(&blocks) {
             problems.push(format!(
-                "{}:{}: `pqbench` example in a `{}` block; use a ```console fence",
+                "{}:{}: `pqbench`/`pqb` example in a `{}` block; use a ```console fence",
                 path.display(),
                 block.line,
                 block.language().unwrap_or("bare"),

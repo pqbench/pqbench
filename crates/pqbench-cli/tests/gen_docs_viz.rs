@@ -9,11 +9,11 @@ mod support;
 #[test]
 fn visualize_a_bytemass_stream() {
     // visualize_a_bytemass_stream, from line 7
-    support::run(r#"pqbench table-file examples/quickstart.parquet \
-  | pqbench bytemass \
-  | pqbench viz -o /tmp/report"#, 8, None);
+    support::run(r#"pqb table-file examples/quickstart.parquet \
+  | pqb bytemass \
+  | pqb viz -o /tmp/report"#, 8, None);
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
-  | pqbench list files \
-  | pqbench bytemass \
-  | pqbench viz -o /tmp/report"#, 11, None);
+  | pqb ls files \
+  | pqb bytemass \
+  | pqb viz -o /tmp/report"#, 11, None);
 }

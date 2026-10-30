@@ -8,12 +8,12 @@ mod support;
 #[test]
 fn usage() {
     // usage, from line 9
-    support::run("pqbench profile examples/quickstart.parquet | pqbench format", 10, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
+    support::run("pqb profile examples/quickstart.parquet | pqb format", 10, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn usage_2() {
     // usage_2, from line 19
-    support::run("pqbench profile examples/quickstart.parquet --rows all | head -1 | jq -c '{column, physical_kind, ndv}'", 20, Some(&[r#"{"column":"id","physical_kind":"integer","ndv":8}"#]));
+    support::run("pqb profile examples/quickstart.parquet --rows all | head -1 | jq -c '{column, physical_kind, ndv}'", 20, Some(&[r#"{"column":"id","physical_kind":"integer","ndv":8}"#]));
 }

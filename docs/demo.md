@@ -4,16 +4,16 @@ pqbench measures Parquet footers. A file is one input. A table is a snapshot
 of files. The pipe is the same in every case:
 
 ```console run
-$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb format
 column  codec         encodings                 bytes  values
 ------  ------------  ------------------------  -----  ------
 id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
 year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
-$ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench viz -o /tmp/report
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 Standard output is NDJSON (`Partition`, `TableFile`, `Blob`, `Bytemass`);
-`pqbench format` renders a table. `pqbench viz` collects the bytemass stream into
+`pqb format` renders a table. `pqb viz` collects the bytemass stream into
 a static HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under
@@ -29,25 +29,25 @@ records by `name`, and `sort`, `head`, or `awk` sample by name:
 ```console run delta json
 # one file: keep only the part-* records
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list files \
+>   | pqb ls files \
 >   | jq -c 'select(.name | contains("/files/part-"))' \
->   | pqbench bytemass \
+>   | pqb bytemass \
 >   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # first N by name: sort the file records, cap them, then measure
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list files \
+>   | pqb ls files \
 >   | sort | head -10 \
->   | pqbench bytemass \
+>   | pqb bytemass \
 >   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # every Nth file
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqbench list files \
+>   | pqb ls files \
 >   | awk 'NR % 2 == 1' \
->   | pqbench bytemass \
+>   | pqb bytemass \
 >   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 ```
@@ -63,13 +63,13 @@ file its `blob` names.
 commands:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 ![one table viz page](images/pqbench-lake-treemap.gif)
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
@@ -86,24 +86,24 @@ its files:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
-$ echo '"CAT.SCHEMA"' | pqbench list tables |
-    pqbench credentials check |
-    pqbench credentials get |
-    pqbench get table |
-    pqbench list files |
-    pqbench list files |
-    pqbench bytemass | pqbench format
+$ echo '"CAT.SCHEMA"' | pqb ls tables |
+    pqb credentials check |
+    pqb credentials get |
+    pqb get table |
+    pqb ls files |
+    pqb ls files |
+    pqb bytemass | pqb format
 ```
 
 Every stage of a pipe writes NDJSON for the next stage; the last one prints the
-table (`| pqbench format`). The local stand (`make lakehouse`) exports
+table (`| pqb format`). The local stand (`make lakehouse`) exports
 `PQB_ENDPOINT` and `AWS_*` for the walk. See
 [docker/e2e-lakehouse/README.md](../docker/e2e-lakehouse/README.md).
 
 ## One Parquet file
 
 ```console run
-$ pqbench table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqbench bytemass | pqbench format
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb format
 column            codec         encodings                  bytes  values
 ----------------  ------------  ------------------------  ------  ------
 text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
@@ -121,16 +121,16 @@ url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 
 ## One Delta snapshot
 
-`pqbench list files` needs `--features delta` to read a log. The stream is
+`pqb ls files` needs `--features delta` to read a log. The stream is
 NDJSON for `list files` and `bytemass`; `format` renders it:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench format
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb format
 column  codec   encodings                 bytes  values
 ------  ------  ------------------------  -----  ------
 id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-$ cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 ![pqbench table CLI walkthrough](images/pqbench-delta-bytemass.gif)
@@ -144,7 +144,7 @@ fixture stores data as `s3://lakehouse/...`, so measure it through the stand
 (`make lakehouse`), not just the feature:
 
 ```console no-run
-$ cat docker/e2e-lakehouse/iceberg.ndjson | pqbench list files > /tmp/iceberg.ndjson
+$ cat docker/e2e-lakehouse/iceberg.ndjson | pqb ls files > /tmp/iceberg.ndjson
 ```
 
 With the stand up, walk the Iceberg REST catalog (`PQB_ENDPOINT=…

@@ -1,12 +1,12 @@
 # Recipes: write path, DDL, compression levels
 
 Companion to `parquet-advisor`. Print with
-`pqbench skill parquet-advisor recipes`.
+`pqb skill parquet-advisor recipes`.
 
 ## Compression levels (pros and cons)
 
 Verify by sweeping the levels in the writer and comparing each output with
-`pqbench bytemass` (bytes and bytes per value), on production-shaped data.
+`pqb bytemass` (bytes and bytes per value), on production-shaped data.
 
 ### zstd
 
