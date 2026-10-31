@@ -438,22 +438,6 @@ pub async fn stream_files(
     })
 }
 
-/// Sum log sizes and `numRecords` by partition value.
-///
-/// `num_records` and `bytes_per_row` are set only when every file in the
-/// partition has add statistics. A zero record count leaves `bytes_per_row`
-/// unset.
-///
-/// # Errors
-/// Fails when a partition's record count overflows `u64`.
-pub fn partition_masses(files: &[v1::TableFile]) -> Result<Vec<PartitionMass>, Error> {
-    let mut groups = BTreeMap::new();
-    for file in files {
-        add_partition_total(&mut groups, file)?;
-    }
-    Ok(finish_partition_masses(groups))
-}
-
 pub(crate) fn add_partition_total(
     groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
     file: &v1::TableFile,
