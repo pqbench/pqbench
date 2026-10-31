@@ -16,6 +16,7 @@ Commands compose on pipes: each writes a resource the next command reads.
                   one resource of the walk
   list          → Catalog / Schema / Table / TableFile
                   a collection of the walk
+  sample        → TableFile           keep a rate of them, by size
   credentials   → Table          check + vend read credentials
   bytemass      → Blob + Bytemass      footer byte masses (one line per column)
   viz           → PREFIX.html          collect the stream into a static treemap
@@ -23,7 +24,7 @@ Commands compose on pipes: each writes a resource the next command reads.
   format        → tables               render a stream (NDJSON on stdin)
 
 The walk reads with two verbs: `get` reads one resource, `list` lists a
-collection.
+collection; `sample` reduces one.
 
 Standard output is NDJSON; `pqbench format` renders it as tables.
 Subcommand help is local (`pqbench get --help`).
@@ -51,7 +52,7 @@ Documents:
   Catalog                the endpoint's catalogs (list catalogs) / one record (get catalog)
   Schema                 a catalog's schemas (list schemas) / one record (get schema)
   Table                  a schema's tables (list tables) / one record (get table, credentials get)
-  TableFile              one table file (list files, table-file)
+  TableFile              one table file (list files, sample files, table-file)
   Blob                   one file's footer facts (bytemass)
   Bytemass               one column's byte mass (bytemass)
   pqbench.profile-column one column's profile (profile | format)
@@ -229,6 +230,36 @@ Examples:
 See also:
   pqbench get --help       read one resource
   pqbench bytemass --help  measure the files listed here
+  pqbench --help           catalog auth, PQB_* config
+  docs/cli.md";
+
+pub const SAMPLE_ABOUT: &str = "Keep a rate of a table's files, by size";
+
+pub const SAMPLE_LONG_ABOUT: &str = "\
+Keep a sample of a table's files: read table-file records on standard input and
+write the kept ones, each with `sample_rate` set to the probability it was kept
+with.
+
+A file is kept with probability rate x size / 256 MiB, capped at one, drawn
+from a hash of its name, so the same record always makes the same decision. A
+256 MiB file is kept at --rate (1/100 keeps about one in a hundred), a 1 GiB
+file four times as often, and --rate 1 keeps every file. The probability is the
+record's weight: a sum over kept records divides each term by `sample_rate`.
+
+Nothing is read: `list files` already carries the log's sizes, so the stage
+streams and never holds the table. A record with no positive size is an error,
+not a silent drop. The coverage line (files and bytes kept) prints on standard
+error.";
+
+pub const SAMPLE_AFTER: &str = "\
+Examples:
+  cat table.ndjson | pqbench sample files --rate 1/100 | pqbench bytemass
+  cat table.ndjson | pqbench sample files --rate 1/10 | pqbench bytemass | pqbench viz -o report
+  pqbench table-file data.parquet | pqbench sample files --rate 1 | pqbench bytemass
+
+See also:
+  pqbench list --help      the stream this command samples
+  pqbench bytemass --help  measure the kept files
   pqbench --help           catalog auth, PQB_* config
   docs/cli.md";
 

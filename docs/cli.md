@@ -64,7 +64,7 @@ pqbench never writes them into the process environment itself.
 | `Catalog` | `list catalogs`, `get catalog` | `get catalog`, `list schemas`, humans / scripts  |
 | `Schema` | `list schemas`, `get schema` | `get schema`, `list tables` |
 | `Table` | `list tables`, `get table`, `credentials get` | `get table`, `list files`, `credentials get` |
-| `TableFile` | `list files`, `table-file` | `bytemass`, humans / scripts  |
+| `TableFile` | `list files`, `sample files`, `table-file` | `sample files`, `bytemass`, humans / scripts  |
 | `Blob` / `Bytemass` | `bytemass` | `viz`, `diff`, humans / scripts  |
 | `pqbench.profile-column` | `profile` | humans / scripts  |
 | `pqbench.skill` | `skill` (list) | an agent |
@@ -413,13 +413,33 @@ bytes, the codec, the encodings, whether a dictionary page is present, the
 value and null counts, and the first and last values from the statistics. No
 data page is decoded, so it works on any Parquet file, compressed or not.
 
-## Selecting files
+## Sampling files
 
-There is no built-in file filter: `list files` streams every file the
-window's commits added, and `bytemass` measures each, so which files to measure
-is a shell job on the stream (`jq`, `sort`, `head`, `xargs`) — see
-[demo.md](demo.md). `bytemass` reads its files in flight (`--fan-out`, 128 by
-default), so the per-file footer round trips overlap instead of adding up.
+`sample files` keeps a rate of the stream, by size, so a table's footers can be
+measured without reading every file:
+
+```console no-run
+$ cat table.ndjson | pqb list files | pqb sample files --rate 1/100 | pqb bytemass
+```
+
+A file is kept with probability `rate × size / 256 MiB`, capped at one, drawn
+from a hash of its name: the same record always makes the same decision. A
+256 MiB file is kept at `--rate` (the default keeps about one in a hundred), a
+1 GiB file four times as often, and `--rate 1` keeps every file. The decision
+needs only the record's name and size, which the log already carries, so the
+stage streams and never holds the table.
+
+Each kept `TableFile` records the probability it was kept with as
+`sample_rate`; `bytemass` copies it onto the `Blob` and every `Bytemass`, so a
+sum over the stream divides each term by it. A sum over the kept records alone
+is the sample, not the table — the coverage line on standard error says how
+many files and bytes it holds. A record with no positive size is an error, not
+a silent drop.
+
+Filtering by path or partition is still a shell job on the `list files` stream
+(`jq`, `sort`, `head`, `xargs`) — see [demo.md](demo.md). `bytemass` reads its
+files in flight (`--fan-out`, 128 by default), so the per-file footer round
+trips overlap instead of adding up.
 
 `bytemass` measures the table-file records it is given; it does not expand
 patterns or list a prefix. A pattern belongs to the producer: `list files`

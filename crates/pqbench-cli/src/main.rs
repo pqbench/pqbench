@@ -26,6 +26,7 @@ mod profile;
 mod ratelimit;
 mod render;
 mod rows;
+mod sample;
 mod schema;
 mod setup;
 mod skill;
@@ -99,6 +100,13 @@ enum Command {
         after_long_help = help::LIST_AFTER
     )]
     List(list::ListArgs),
+    #[command(
+        about = help::SAMPLE_ABOUT,
+        long_about = help::SAMPLE_LONG_ABOUT,
+        after_help = help::SAMPLE_AFTER,
+        after_long_help = help::SAMPLE_AFTER
+    )]
+    Sample(sample::SampleArgs),
     #[command(
         about = help::CREDENTIALS_ABOUT,
         long_about = help::CREDENTIALS_LONG_ABOUT,
@@ -186,6 +194,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Format(args) => format::run(&args).await,
         Command::TableFile(args) => table_file::run(&args).await,
         Command::List(args) => list::run(&workspace, &lake, &args).await,
+        Command::Sample(args) => sample::run(&args).await,
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
@@ -207,6 +216,7 @@ impl Command {
             Command::Format(_) => "format",
             Command::TableFile(_) => "table-file",
             Command::List(args) => args.name(),
+            Command::Sample(args) => args.name(),
             Command::Credentials(_) => "credentials",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
