@@ -140,11 +140,12 @@ PQB_WHEEL_PROFILE ?= dev
 check-python:
 	test -d python/.venv || $(PYTHON) -m venv python/.venv
 	python/.venv/bin/python -m pip install -q maturin
+	rm -f python/dist/*.whl
 	CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" \
 		python/.venv/bin/maturin build --profile $(PQB_WHEEL_PROFILE) --out python/dist
 	python/.venv/bin/python -m pip install -q --force-reinstall python/dist/*.whl
 	python/.venv/bin/pqbench --help > /dev/null
-	python/.venv/bin/pqbench table-file examples/quickstart.parquet \
+	set -o pipefail; python/.venv/bin/pqbench table-file examples/quickstart.parquet \
 		| python/.venv/bin/pqbench bytemass > /dev/null
 
 # Turn the documented `pqbench ...` commands into Rust integration tests under
@@ -163,4 +164,8 @@ code-analysis:
 	$(RCA) --metrics -p $(CODE_ANALYSIS_PATHS)
 
 clean:
+	@if [ -n "$(MAIN_CHECKOUT)" ] && [ "$(MAIN_CHECKOUT)" != "$(CURDIR)" ]; then \
+		echo "clean: refusing to wipe the shared target dir $(CARGO_TARGET_DIR) from a worktree" >&2; \
+		exit 1; \
+	fi
 	$(CARGO) clean

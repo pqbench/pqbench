@@ -29,8 +29,13 @@ Documentation = "https://pqbench.github.io/pqbench/python/"
 # no Python version matrix.
 bindings = "bin"
 manifest-path = "crates/pqbench-cli/Cargo.toml"
-module-name = "pqbench"
 strip = true
+# The git sdist would otherwise carry `.cargo/scripts/rustc-wrapper.sh` at mode
+# 0644 while `.cargo/config.toml` names it as `rustc-wrapper`, so `pip install
+# --no-binary` fails with EACCES. Drop the build config (and the sample data and
+# docs, which a source build does not need); `skills/` stays, because
+# `skill.rs` includes it.
+exclude = [".cargo/**", "data/**", "docs/**"]
 # A published wheel cannot be rebuilt by its user, so it carries every storage
 # backend, like the binary release (`dist-workspace.toml`).
 features = ["delta-s3", "iceberg-s3"]

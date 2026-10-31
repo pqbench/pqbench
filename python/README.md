@@ -19,9 +19,8 @@ into the environment's `bin/`.
 From a checkout:
 
 ```console no-run
-$ cargo build --release -p pqbench-cli --all-features
 $ python -m pip install maturin
-$ (cd crates/pqbench-cli && maturin build --release --out ../../python/dist)
+$ maturin build --release --out python/dist
 $ python -m pip install python/dist/*.whl
 ```
 
@@ -104,5 +103,4 @@ $ pqbench list catalogs | pqbench format
 ```
 
 The records are versioned NDJSON; the schema is the `v1` model of each
-document. Parquet parts embed the same schema, so a reader needs no external
-definition.
+document.

@@ -25,11 +25,8 @@
 # `-O3`), snappy (CXXFLAGS) and zlib (the system library) did not.
 #
 # CFLAGS stays narrow on purpose: unlike CXXFLAGS it reaches *every* C crate, not
-# just snappy. `-fPIE` in particular breaks a cdylib link — aws-lc-sys is linked
-# into the Python wheel, which needs `-fPIC` ("relocation R_X86_64_PC32 cannot be
-# used against symbol 'stderr'") — and `-ffast-math`/`-fstrict-aliasing` are a
-# gamble on dependencies the project does not own. `-O3 -DNDEBUG` is all zstd
-# needs.
+# just snappy, and `-ffast-math`/`-fstrict-aliasing` are a gamble on dependencies
+# the project does not own. `-O3 -DNDEBUG` is all zstd needs.
 [build]
 # Use sccache when installed and invoke rustc directly otherwise. This keeps
 # fresh clones and CI working without mandatory machine-level configuration.
