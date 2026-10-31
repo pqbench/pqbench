@@ -38,22 +38,7 @@ pub(crate) async fn run(args: &FilesArgs) -> Result<(), CliError> {
     let rows: Records<'_, v1::TableFile> = parents
         .filter_map(move |record| {
             let counted = Rc::clone(&counted);
-            async move {
-                let mut file = match record {
-                    Ok(file) => file,
-                    Err(error) => return Some(Err(error)),
-                };
-                counted.borrow_mut().observe(&file);
-                match pqbench::file::sample::select(&file, rate) {
-                    Ok(Some(sample_rate)) => {
-                        file.sample_rate = Some(sample_rate);
-                        counted.borrow_mut().keep(&file);
-                        Some(Ok(file))
-                    }
-                    Ok(None) => None,
-                    Err(error) => Some(Err(error.into())),
-                }
-            }
+            async move { keep(record, rate, &counted) }
         })
         .boxed_local();
     let outcome = drive(rows).await;
@@ -62,6 +47,29 @@ pub(crate) async fn run(args: &FilesArgs) -> Result<(), CliError> {
         eprintln!("{}", summary.line());
     }
     outcome
+}
+
+/// Keep one record or drop it: the stage's whole decision, one record at a
+/// time.
+fn keep(
+    record: Result<v1::TableFile, CliError>,
+    rate: f64,
+    summary: &RefCell<Summary>,
+) -> Option<Result<v1::TableFile, CliError>> {
+    let mut file = match record {
+        Ok(file) => file,
+        Err(error) => return Some(Err(error)),
+    };
+    summary.borrow_mut().observe(&file);
+    match pqbench::file::sample::select(&file, rate) {
+        Ok(Some(sample_rate)) => {
+            file.sample_rate = Some(sample_rate);
+            summary.borrow_mut().keep(&file);
+            Some(Ok(file))
+        }
+        Ok(None) => None,
+        Err(error) => Some(Err(error.into())),
+    }
 }
 
 /// Parse `--rate`: a fraction (`1/100`) or a decimal (`0.01`).
@@ -126,14 +134,14 @@ impl Summary {
             "sampled {} of {} files, {} of {} ({percent:.1}%)",
             self.kept,
             self.files,
-            size(self.kept_bytes),
-            size(self.bytes)
+            human_bytes(self.kept_bytes),
+            human_bytes(self.bytes)
         )
     }
 }
 
 /// A byte count in the largest unit that keeps it above one.
-fn size(bytes: u64) -> String {
+fn human_bytes(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
     const GIB: f64 = MIB * 1024.0;
