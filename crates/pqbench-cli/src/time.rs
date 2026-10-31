@@ -20,8 +20,8 @@ pub(crate) struct WindowArgs {
         conflicts_with = "last"
     )]
     partition: Option<u64>,
-    /// read only files the log dates in the last WINDOW, ending now: e.g. 1d,
-    /// 1w
+    /// read only files the log dates in the last WINDOW, ending now: e.g. 1m,
+    /// 1h, 1d, 1w
     #[arg(long, value_parser = parse_last, value_name = "WINDOW")]
     last: Option<u64>,
 }

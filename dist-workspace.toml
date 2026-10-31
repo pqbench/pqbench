@@ -1,9 +1,9 @@
 [workspace]
 members = ["cargo:."]
 
-# Config for 'dist'. The workspace ships a single binary; `aipnaming-cli` and
-# `docscheck-cli` opt out with `[package.metadata.dist] dist = false` in their
-# own manifests.
+# Config for 'dist'. The workspace ships a single binary; `aipnaming-cli`,
+# `docscheck-cli`, and `docsgen` opt out with `[package.metadata.dist]
+# dist = false` in their own manifests.
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.33.0"

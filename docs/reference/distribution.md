@@ -74,7 +74,7 @@ https://github.com/pqbench/pqbench/releases/download/v0.0.1/pqbench-cli-x86_64-u
 ```
 
 Linux binaries are built on `ubuntu-22.04`, so they run on glibc 2.35 or newer
-(Ubuntu 22.04, Debian 12, RHEL 9 and up).
+(Ubuntu 22.04, Debian 12, RHEL 10 and up).
 
 Each archive also carries a Sigstore-backed build-provenance attestation
 (`github-attestations`), so a download can be checked against the workflow that
@@ -90,7 +90,7 @@ Every target is built `--all-features`: `aws`, `delta`, and `iceberg` are
 enabled, so `s3://` inputs and Delta/Iceberg tables work out of the box. A
 downloaded binary cannot be rebuilt by its user, so a partial build that fails
 at runtime on remote input is not worth shipping. The cost is size — roughly
-49 MiB on disk and 19 MiB for the download (x86_64), dominated by delta-rs and
+about 63 MiB on disk and 11 MiB for the download (x86_64), dominated by delta-rs and
 the AWS SDK. The feature sets are additive, so the intermediate combinations
 (`aws` or `delta` alone) are subsets of `--all-features` and are not separate
 artifacts.
@@ -103,7 +103,7 @@ export `CXXFLAGS` with `-march=native` for that build.
 
 ## Releasing
 
-Configuration lives in [`dist-workspace.toml`](../dist-workspace.toml), and the
+Configuration lives in [`dist-workspace.toml`](../../dist-workspace.toml), and the
 workflow (`.github/workflows/release.yml`) is generated from it — change the
 config and run `cargo dist generate`, never the workflow by hand.
 

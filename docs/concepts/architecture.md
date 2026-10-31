@@ -1,7 +1,7 @@
 # Architecture
 
 The rules that keep pqbench's commands decoupled, third-party code isolated,
-and the dependency tree small. [`AGENTS.md`](../AGENTS.md) covers naming and
+and the dependency tree small. [`AGENTS.md`](../../AGENTS.md) covers naming and
 tidyings; this page covers structure.
 
 ## Layers
@@ -15,10 +15,11 @@ tidyings; this page covers structure.
 
 The walk's resource commands (`metastore`, `catalog`, `schema`, `table`,
 `file`, `credentials`) are folders — one per resource, with a subcommand folder
-per verb. The measurement commands (`bytemass`,
-`compression`, `lz`) keep an `api.rs` and split the implementation across named
-modules; the rest (`profile`, `diff`, `skill`, `ratelimit`, `viz`) are single
-modules or small folders.
+per verb. The measurement commands (`bytemass`, `compression`, `lz`) keep an
+`api.rs` and split the implementation across named modules; `profile`, `diff`,
+`skill`, and `ratelimit` are single modules, and `viz` is a small folder. The
+shared support (`report`, `stats`, `time`, `config`, `dialect`, `http`,
+`capability`, `codecs`) sits at the crate root.
 
 ```text
 crates/pqbench/src/
@@ -30,8 +31,8 @@ crates/pqbench/src/
     <crate>/impl/<module>.rs
 ```
 
-- `api.rs` — exactly one public function: the command's entry point. It is the
-  whole public surface.
+- `api.rs` — the command's public entry point and the few helpers a caller
+  needs. It is the whole public surface.
 - `impl.rs` — the internals, private and free to change.
 
 Rules:
@@ -55,7 +56,7 @@ one resource.
 
 ## Interfaces
 
-- The public surface is one function per command, and the less surface the
+- The public surface is the command's entry point, and the less surface the
   better.
 - Inputs are plain values the caller has. Configuration, pagination, and
   dialect state belong to the implementation, never to the signature.
@@ -87,7 +88,8 @@ one resource.
 ## Serialization
 
 - The documents commands exchange are the CLI's communication language: the
-  resource types live in `pqbench::v1`, and the CLI renders them.
+  resource types live in `pqbench::v1` (the profile record is
+  `pqbench::profile::ColumnProfile`), and the CLI renders them.
 - Library commands take and return those resources; presentation stays in the
   CLI.
 - The CLI parses an input document, calls one command function, and formats the

@@ -48,6 +48,8 @@ The environment overrides the selected profile:
 | `PQB_ENDPOINT` | workspace URL, Unity OSS, or Iceberg REST base |
 | `PQB_TOKEN` | bearer PAT (`dapi-…`) or OAuth token; list API only |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg` |
+| `PQB_RATE` | default records per second for `ratelimit` (`15`; `0` disables pacing) |
+| `PQB_TABLE_FAN_OUT` | tables in flight for `get table` (default: the core count) |
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | a lower-priority fallback for the endpoint and bearer |
 | `AWS_*` | object-store region and credentials, read by the storage client |
 
@@ -68,9 +70,10 @@ subcommand:
 - `--token TOKEN`
 - `--table-format unity|iceberg`
 
-Everything else is a per-invocation switch on its own command — `--every`,
-`--last`, `--fan-out`, `--rate` — and is not read
-from the run-control file.
+Everything else is a per-invocation switch on its own command — `--last`,
+`--partition`, `--fan-out`, `--rate`, `--depth`, `--samples`, `--rows`,
+`--top`, `--per-column`, `--output` — and is not read from the run-control
+file. See the [CLI reference](cli.md) for each command's flags.
 
 ## Example
 

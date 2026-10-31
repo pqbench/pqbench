@@ -23,14 +23,14 @@ Commands compose on pipes: each writes a resource the next command reads.
   skill         → markdown             bundled agent recipes (write / DDL / codec)
   format        → tables               render a stream (NDJSON on stdin)
 
-The walk reads with three verbs: `get` reads one resource, `list` lists a
-collection, `sample` reduces one.
+The walk reads with two verbs: `get` reads one resource, `list` lists a
+collection; `sample` reduces one.
 
 Standard output is NDJSON; `pqbench format` renders it as tables.
 Subcommand help is local (`pqbench get --help`).
 Auth, documents, and format skills are here.
 
-Guide: docs/cli.md";
+Guide: docs/reference/cli.md";
 
 /// Extensive after-text for `pqbench --help` only.
 pub const ROOT_AFTER: &str = "\
@@ -55,7 +55,7 @@ Documents:
   TableFile              one table file (list files, sample files, table-file)
   Blob                   one file's footer facts (bytemass)
   Bytemass               one column's byte mass (bytemass)
-  pqbench.profile-column one column's profile (profile | format)
+  ColumnProfile          one column's profile (profile | format)
   pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
@@ -101,8 +101,8 @@ Format skills (read these when the input is Parquet or a table):
   Iceberg REST catalog     https://iceberg.apache.org/docs/latest/rest-catalog-spec/
   Unity / Databricks list  https://docs.databricks.com/api/workspace/tables/list
   AWS default credentials  https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html
-  pqbench command guide    docs/cli.md
-  pqbench table docs       docs/delta.md  docs/iceberg.md  docs/viz.md";
+  pqbench command guide    docs/reference/cli.md
+  pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/viz.md";
 
 pub const BYTEMASS_ABOUT: &str = "Per-column on-disk bytes from Parquet footers (no page decode)";
 
@@ -129,7 +129,7 @@ See also:
   pqbench list --help      list the files this command measures
   pqbench viz --help       collect the stream into a static HTML page
   pqbench --help           auth, documents, format skills
-  docs/cli.md";
+  docs/reference/cli.md";
 
 pub const GET_ABOUT: &str = "Read one resource of the walk";
 
@@ -138,10 +138,10 @@ Read one resource of the walk, by type:
 
   metastore  the endpoint's record (name, uid, cloud, region), one line
   catalog    one catalog's record (name, catalog_type, comment, owner)
-  schema     one schema's record (name, comment, uri, properties), from a
-             Catalog ref
-  table      one table's record (format, snapshot, columns, partition columns,
-             format properties), from a Schema ref
+  schema     one schema's record (name, uid, display_name, comment, uri,
+             properties), from a Schema ref
+  table      one table's record (format, snapshot_version, declared_columns,
+             partition_columns, properties), from a Table ref
 
 The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
 PQB_TABLE_FORMAT; a `get` reads a catalog, so it needs an endpoint. `get`
@@ -176,7 +176,7 @@ See also:
   pqbench list --help      the walk's collections
   pqbench bytemass --help  measure the files the walk names
   pqbench --help           auth (AWS_*, catalog token), documents, format skills
-  docs/cli.md  docs/delta.md  docs/iceberg.md";
+  docs/reference/cli.md  docs/guides/delta.md  docs/guides/iceberg.md";
 
 pub const LIST_ABOUT: &str = "List a collection of the walk";
 
@@ -203,7 +203,7 @@ line, each with the table's lease — that stream is what `bytemass` measures. T
 files are the snapshot's own set, so a file a later commit removed is absent;
 nothing is collected, so a table of any size costs one log batch plus one file.
 --last/--partition keep
-only the files the log dates in a window (e.g. 1d, 1w, or one UTC day), so a
+only the files the log dates in a window (e.g. 1m, 1h, 1d, 1w, or one UTC day), so a
 daily run reads the day's writes without walking what the table already held.
 
 Every level reads its parent's refs on standard input and writes one resource
@@ -231,7 +231,7 @@ See also:
   pqbench get --help       read one resource
   pqbench bytemass --help  measure the files listed here
   pqbench --help           catalog auth, PQB_* config
-  docs/cli.md";
+  docs/reference/cli.md";
 
 pub const SAMPLE_ABOUT: &str = "Keep a rate of a table's files, by size";
 
@@ -263,7 +263,7 @@ See also:
   pqbench list files --help  the stream this command samples
   pqbench bytemass --help    measure the kept files
   pqbench --help             catalog auth, PQB_* config
-  docs/cli.md";
+  docs/reference/cli.md";
 
 pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
 
@@ -310,7 +310,7 @@ Examples:
 See also:
   pqbench list --help  the tables in a schema
   pqbench --help          catalog auth, PQB_* config
-  docs/cli.md";
+  docs/reference/cli.md";
 
 pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
 
@@ -334,7 +334,7 @@ Examples:
 See also:
   pqbench list --help     the walk's collections
   pqbench get --help      read one resource of it
-  docs/cli.md";
+  docs/reference/cli.md";
 
 pub const VIZ_ABOUT: &str = "Collect a bytemass stream into a static HTML treemap";
 
@@ -352,7 +352,7 @@ Examples:
 See also:
   pqbench bytemass --help  produce the stream this command collects
   pqbench --help           documents
-  docs/viz.md  docs/cli.md";
+  docs/reference/viz.md  docs/reference/cli.md";
 
 pub const LZ_ABOUT: &str = "Codec sweep over raw file bytes (lzbench-style)";
 
@@ -371,7 +371,7 @@ Examples:
 See also:
   pqbench compression --help  same sweep over Parquet pages (NONE input)
   pqbench --help
-  docs/cli.md";
+  docs/reference/cli.md";
 
 pub const COMPRESSION_ABOUT: &str =
     "Codec sweep over encoded Parquet pages (NONE-compressed input only)";
@@ -392,7 +392,7 @@ See also:
   pqbench lz --help        raw-byte sweep (any file)
   pqbench bytemass --help  on-disk bytes without a codec sweep
   pqbench --help
-  docs/cli.md";
+  docs/reference/cli.md";
 
 pub const PROFILE_ABOUT: &str =
     "Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)";
@@ -421,7 +421,7 @@ See also:
   pqbench bytemass --help  footer byte masses without decoding rows
   pqbench compression --help  codec sweep over encoded pages
   pqbench --help
-  docs/profile.md  docs/cli.md";
+  docs/reference/profile.md  docs/reference/cli.md";
 
 pub const SKILL_ABOUT: &str = "Print a bundled agent skill (write / DDL / compression recipes)";
 
@@ -450,7 +450,7 @@ Examples:
 See also:
   pqbench profile --help     cheap column facts
   pqbench --help             documents
-  docs/skill.md  docs/cli.md";
+  docs/reference/skill.md  docs/reference/cli.md";
 
 pub const SETUP_ABOUT: &str = "Print the walk's environment as shell exports to eval";
 
@@ -482,4 +482,4 @@ See also:
   pqbench credentials --help  check and vend read credentials
   pqbench get --help          read a listed table's record
   pqbench --help              auth, PQB_* config
-  docs/cli.md";
+  docs/reference/cli.md";

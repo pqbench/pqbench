@@ -14,45 +14,45 @@ fn showcases() {
 #[rustfmt::skip]
 #[test]
 fn lz() {
-    // lz, from line 112
-    support::run("pqb lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 | pqb fmt", 113, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "gzip        1            ±44             ±226   0.85", "zstd        1           ±915            ±1391   0.85", "lz4         1          ±2176            ±5180   0.98", "snappy      1          ±1608            ±1981   0.99"]));
+    // lz, from line 113
+    support::run("pqb lz data/samples/squad.parquet --samples 1 --warmup-iterations 0 | pqb fmt", 114, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "gzip        1            ±44             ±226   0.85", "zstd        1           ±915            ±1391   0.85", "lz4         1          ±2176            ±5180   0.98", "snappy      1          ±1608            ±1981   0.99"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn compression() {
-    // compression, from line 129
-    support::run("pqb compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqb fmt", 130, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "zstd        1           ±458            ±1722   0.56", "gzip        1            ±68             ±270   0.58", "lz4         1           ±897            ±8476   0.81", "snappy      1           ±912            ±2101   0.81"]));
+    // compression, from line 130
+    support::run("pqb compression crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet --samples 1 --warmup-iterations 0 | pqb fmt", 131, Some(&["codec   level  compress MB/s  decompress MB/s  ratio", "------  -----  -------------  ---------------  -----", "zstd        1           ±458            ±1722   0.56", "gzip        1            ±68             ±270   0.58", "lz4         1           ±897            ±8476   0.81", "snappy      1           ±912            ±2101   0.81"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn bytemass() {
-    // bytemass, from line 146
-    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb fmt", 147, Some(&["column                 codec         encodings         bytes  values", "---------------------  ------------  ----------------  -----  ------", "c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000"]));
+    // bytemass, from line 147
+    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb fmt", 148, Some(&["column                 codec         encodings         bytes  values", "---------------------  ------------  ----------------  -----  ------", "c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000", "c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000", "c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000", "c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000", "c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000", "c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000", "c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000", "c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000", "c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn list_files() {
-    // list_files, from line 174
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt", 175, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
+    // list_files, from line 175
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt", 176, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn list_files_2() {
-    // list_files_2, from line 194
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 195, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    // list_files_2, from line 193
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 194, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn viz() {
-    // viz, from line 218
-    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb viz -o /tmp/report", 219, None);
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report", 220, None);
+    // viz, from line 214
+    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb viz -o /tmp/report", 215, None);
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report", 216, None);
 }

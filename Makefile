@@ -63,7 +63,7 @@ test:
 # The S3 features are on so the walk's storage reads actually run (under the
 # vended keys; Databricks default storage refuses externally issued sessions).
 dbx-e2e:
-	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/auth.md)"; exit 1; }
+	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/guides/auth.md)"; exit 1; }
 	$(CARGO) test -p pqbench-cli --features delta-s3,iceberg-s3 --test dbx_e2e -- --ignored --nocapture
 
 # The live walk (scripts/dbx-walk.sh): one pass over the whole-Unity-Catalog
@@ -71,9 +71,9 @@ dbx-e2e:
 # service principal's client secret, or a ready PQB_ENDPOINT/PQB_TOKEN. The
 # `dbx-walk` CI job runs it as a live smoke test. A debug binary is enough — the
 # walk is paced, not compute-bound — so no `--release`; build one and point PQB
-# at it to profile with `perf` (docs/performance.md).
+# at it to profile with `perf` (docs/guides/performance.md).
 dbx-walk:
-	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/auth.md)"; exit 1; }
+	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/guides/auth.md)"; exit 1; }
 	$(CARGO) build -p pqbench-cli $(CARGO_FEATURES)
 	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" ./scripts/dbx-walk.sh
 
@@ -148,14 +148,18 @@ check-python:
 	set -o pipefail; python/.venv/bin/pqbench table-file examples/quickstart.parquet \
 		| python/.venv/bin/pqbench bytemass > /dev/null
 
-# Turn the documented `pqbench ...` commands into Rust integration tests under
-# crates/pqbench-cli/tests/gen_*.rs. Committed, so `make test` runs them like any
-# other test; `make check-docs` fails if they are out of date with the Markdown.
+# Two generated artifacts, both committed:
+# - `crates/pqbench-cli/tests/gen_*.rs`, from the documented `pqbench ...`
+#   commands; `make test` runs them like any other integration test.
+# - `docs/reference/cli.md`, from the clap tree via `crates/docsgen`.
+# `make check-docs` fails if either is out of date with its source.
 DOCS ?= README.md docs/ skills/
 sync-docs:
 	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
+	$(CARGO) run -q -p docsgen -- write docs/reference/cli.md
 check-docs:
 	@TIMEFORMAT='check-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- check $(DOCS)
+	$(CARGO) run -q -p docsgen -- check docs/reference/cli.md
 
 # Software metrics (rust-code-analysis) over the source tree; prints the CLI's
 # own metrics tree. Needs `rust-code-analysis-cli` on PATH — CI pins the

@@ -22,7 +22,7 @@
 //! `DBX_HOST` or the credentials are not set, each test skips, so
 //! `--include-ignored` legs without secrets stay green.
 //!
-//! Setup: `docs/auth.md`.
+//! Setup: `docs/guides/auth.md`.
 
 use std::io::Write;
 use std::process::{Command, Stdio};

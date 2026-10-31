@@ -38,17 +38,17 @@ response, such as `Credentials` or `ReadEligibility`.
   column path, or a number. Ids are not user-specified, so AIP-122 asks only
   that the format be documented here — its RFC-1034 character-set advice comes
   from the DNS spec and does not apply.
-- A resource exposes only three identification fields: `name`, `{resource}_id`
-  (the id segment, output only), and `uid` (UUID4, output only). No `id`, no
-  self-link, no tuple (AIP-122/148).
+- A resource's identity is `name`; where the endpoint reports them, `uid`
+  (UUID4) and `display_name` are output only. No `id`, no self-link, no tuple
+  (AIP-122/148).
 - A dotted FQN (`dbx_samples.nyctaxi.trips`) is a **lookup alias**, input only.
   It is never a field and never appears in a document: the CLI translates it to
   the path form, and every returned document carries the canonical name. The CLI
   tells the two apart by the first segment — a known collection identifier is
   canonical, a dotted tuple is an alias.
 - A table no catalog named — one read by storage path — still gets a canonical
-  name: it takes the `local` catalog and schema, so every partition and file
-  under it has one too.
+  name: it takes the `local` catalog and schema, so every file under it has one
+  too.
 
 ## One canonical parent
 
@@ -85,7 +85,9 @@ Two consequences:
   a prefixed enum value, and an `int64`; the Rust type has a plain variant, an
   unsigned quantity, and `serde` spells the wire form back.
 - A quantity that cannot be negative is unsigned. A count is `_count`, never
-  `num_` (AIP-141). Units are spelled out — `size_bytes`, not `size`.
+  `num_` (AIP-141). The profile's `num_values` is the one documented exception
+  (`aipnaming: allow(aip-141/count-suffix)`). Units are spelled out —
+  `size_bytes`, not `size`.
 - An instant is `_time`, integer milliseconds since the Unix epoch on the wire —
   the unit the logs already store, so a record passes it through, rather than
   AIP-142's RFC-3339 string. A span is `_duration`. A half-open window is
@@ -108,11 +110,13 @@ Two consequences:
   {"name":"catalogs/dbx_samples/schemas/nyctaxi","comment":"NYC taxi data"}
   ```
 
-- There is **no envelope**: no `kind`, no per-document `version`. A stage reads
-  exactly one resource type, identified by the name's collection segment, and a
-  genuinely mixed stream is a `oneof` — never a tag on a resource.
+- No **resource** carries an envelope: no `kind`, no per-document `version`. A
+  stage reads exactly one resource type, identified by the name's collection
+  segment, and a genuinely mixed stream is a `oneof` — never a tag on a
+  resource. The `skill` listing is the one CLI document that keeps a `kind` and
+  `version`.
 - The API version is the package's (`pqbench.v1`), not a segment of a name. A
-  name is self-describing by its collection segment, and no document carries a
+  name is self-describing by its collection segment, and no resource carries a
   version of its own.
 - AIP's field annotations are deliberately absent. The documents are native
   Rust, so the type system carries what the annotations would describe — an
@@ -127,8 +131,9 @@ Two consequences:
 - A table references a blob through the `TableFile` association, not as its
   parent (AIP-124).
 
-The field-by-field contract is [`v1.proto`](v1.proto); this page is the rules
-that keep it coherent.
+The resource contract is [`v1.proto`](v1.proto); the CLI-only documents are
+described in [Documents](../reference/documents.md). This page is the rules that
+keep the model coherent.
 
 ## Where the model stops
 
@@ -147,8 +152,8 @@ coupling point:
 
 1. Pick the kind. Addressable and listed? Resource. Carried inside one? Value
    type. A method's body? Document.
-2. A resource: `name` first, one canonical parent, only the three
-   identification fields.
+2. A resource: `name` first, one canonical parent, and only the standard
+   identification fields (`name`, `uid`, `display_name`).
 3. A value type or document: no `name`, no parent, no identity.
 4. Absence is `Option`; no sentinel; Rust wins over the proto idiom.
 5. A type with no producer yet is the design target. It stays in the model, and

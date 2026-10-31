@@ -21,7 +21,7 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/pqbench/pqbench"
 Repository = "https://github.com/pqbench/pqbench"
-Documentation = "https://pqbench.github.io/pqbench/python/"
+Documentation = "https://pqbench.github.io/pqbench/reference/python/"
 
 [tool.maturin]
 # The wheel carries the `pqbench` binary in `.data/scripts/`, not a Python

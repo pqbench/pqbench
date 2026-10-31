@@ -1,4 +1,4 @@
-# Visualize a bytemass stream
+# Visualization
 
 `bytemass` measures Parquet footers and writes NDJSON. `pqb viz` collects
 those records into a static HTML page. Measurement and presentation are separate
@@ -9,7 +9,7 @@ $ pqb table-file examples/quickstart.parquet \
 >   | pqb bytemass \
 >   | pqb viz -o /tmp/report
 $ cat docker/e2e-lakehouse/table.ndjson \
->   | pqb ls files \
+>   | pqb list files \
 >   | pqb bytemass \
 >   | pqb viz -o /tmp/report
 ```

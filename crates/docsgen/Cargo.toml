@@ -1,0 +1,23 @@
+[package]
+name = "docsgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Generate the CLI reference from the pqbench clap tree."
+
+[[bin]]
+name = "docsgen"
+path = "src/main.rs"
+
+[dependencies]
+clap = "4"
+clap-markdown = "0.1.5"
+# The command definitions only; the docs generator never runs a command.
+pqbench-cli = { path = "../pqbench-cli", default-features = false }
+
+# Not distributed: a development tool, not a shipped binary.
+[package.metadata.dist]
+dist = false

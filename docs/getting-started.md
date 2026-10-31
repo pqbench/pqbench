@@ -2,14 +2,14 @@
 
 pqbench measures **how a Parquet file spends bytes** and how well codecs
 compress it. It reads the footer, not the pages, so it is fast on files of any
-size. Every command writes a versioned JSON document, so commands compose on
+size. Every command writes a typed `pqbench.v1` document, so commands compose on
 pipes: `list files` names a table's active files, `bytemass` measures them,
 `viz` draws the result.
 
 This page is a guided first run. It uses the committed
 [`examples/quickstart.parquet`](../examples/quickstart.parquet) smoke sample and
 the lakehouse fixtures under `docker/e2e-lakehouse/`. For an exhaustive command
-reference, read [cli.md](cli.md).
+reference, read [CLI reference](reference/cli.md).
 
 ## Install
 
@@ -20,7 +20,7 @@ curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-c
 ```
 
 Supported targets and the release process are in
-[Distribution](distribution.md).
+[Distribution](reference/distribution.md).
 
 To build from source instead:
 
@@ -70,7 +70,7 @@ label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 
 Reading a Delta or Iceberg log needs its cargo feature (`delta` / `iceberg`;
 `delta-s3` / `iceberg-s3` for `s3://`). A missing feature fails at runtime and
-names itself. See [delta.md](delta.md) and [iceberg.md](iceberg.md).
+names itself. See [Delta tables](guides/delta.md) and [Iceberg tables](guides/iceberg.md).
 
 ## Draw the result
 
@@ -81,15 +81,16 @@ build step:
 $ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report
 ```
 
-The page lands at `/tmp/report.html`; open it in a browser. See [viz.md](viz.md).
+The page lands at `/tmp/report.html`; open it in a browser. See [viz](reference/cli.md#pqbench-viz).
 
 ## Where to go next
 
-- **Commands** — [cli.md](cli.md) has the task-oriented table, documents, and
-  auth for `s3://` and catalogs.
-- **Real jobs on real data** — [showcases.md](showcases.md) triages a file's
+- **Commands** — the [CLI reference](reference/cli.md) documents every command;
+  [Documents](reference/documents.md) and [Authentication](reference/authentication.md)
+  are separate pages.
+- **Real jobs on real data** — [Showcases](guides/showcases.md) triages a file's
   bytes, picks a codec, and verifies a layout change, on public datasets.
-- **More walkthroughs** — [demo.md](demo.md) has Parquet, Delta, Iceberg, and
+- **More walkthroughs** — [Visual demos](guides/demo.md) has Parquet, Delta, Iceberg, and
   catalog pipes with real output.
-- **Tune a layout** — [profile.md](profile.md) reports what is in a sample;
-  [viz.md](viz.md) shows where an existing table's bytes go.
+- **Tune a layout** — [profile](reference/cli.md#pqbench-profile) reports what is in a sample;
+  [viz](reference/cli.md#pqbench-viz) shows where an existing table's bytes go.

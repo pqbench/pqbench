@@ -1,20 +1,26 @@
 # Reference
 
-The details, in the order you reach for them: the command table, then the
-configuration, the install methods, and the per-command pages.
+The details, in the order you reach for them: the generated command reference,
+then the documents, the configuration, the install methods, and the Python
+wheel.
 
-- [CLI](../cli.md) — the task-oriented command table, the document kinds that
-  travel between commands, repeated flags, and auth for `s3://` and catalogs.
-- [Configuration](../configuration.md) — the `~/.pqbenchrc` profiles, the
+- [CLI](cli.md) — every command, its usage, arguments, options, and defaults.
+  Generated from the clap command tree; do not edit by hand.
+- [Documents](documents.md) — the records the commands exchange, and which
+  command produces and consumes each one.
+- [Profile](profile.md) — the per-column facts `profile` decodes from a row
+  sample.
+- [Diff](diff.md) — comparing two files or saved bytemass streams.
+- [Visualization](viz.md) — collecting a bytemass stream into a static HTML
+  treemap.
+- [Agent skills](skill.md) — the skills bundled into the binary.
+- [Authentication](authentication.md) — object storage, catalog config, and
+  Databricks-governed tables.
+- [Configuration](configuration.md) — the `~/.pqbenchrc` profiles, the
   environment, and their precedence.
-- [Distribution](../distribution.md) — install the released binary, the
-  supported targets, and how releases are cut.
-- [`profile`](../profile.md) — per-column facts from a decoded row sample.
-- [`diff`](../diff.md) — compare two Parquet files or saved bytemass streams,
-  column by column.
-- [`viz`](../viz.md) — collect a bytemass stream into a static HTML treemap.
-- [Agent skills](../skill.md) — the skills compiled into `pqbench skill`.
-- [Python](../python.md) — the binary wheel, and how to read its files.
+- [Distribution](distribution.md) — install the released binary, the supported
+  targets, and how releases are cut.
+- [Python](python.md) — the binary wheel, and how to read its files.
 
 `pqbench --help` is the long page; `pqbench <command> --help` is local to that
 command. This section is the durable copy.

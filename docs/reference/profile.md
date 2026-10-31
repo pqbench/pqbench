@@ -1,8 +1,8 @@
-# pqb profile
+# Profile
 
 Per-column facts from a decoded row sample. Unlike
-[bytemass](cli.md) — which reads the Parquet footer only and never decodes
-data — `profile` reads row values and decodes them.
+[bytemass](cli.md#pqbench-bytemass) — which reads the Parquet footer only and
+never decodes data — `profile` reads row values and decodes them.
 
 ## Usage
 
@@ -30,14 +30,18 @@ rows are decoded, and a profile is computed per selected column.
 | `--rows METHOD` | `all` or `first:N` with `N >= 1`. Default: `first:8192`. |
 | `--top N` | How many top values to keep per column. Default: 8. |
 
-A pipe streams one `pqbench.profile-column` line per column.
+A pipe streams one `ColumnProfile` line per column. The resource name is
+`blobs/{service}/{locator}/columns/{column}/profile`; see
+[Documents](documents.md) for the resource model.
 
 ## Fields
 
-Each `pqbench.profile-column` line carries the input path as `id` and:
+Each `ColumnProfile` line carries the CLI's `id` (the input path) and:
 
 | Field | Meaning |
 | --- | --- |
+| `name` | Resource name: `blobs/{service}/{locator}/columns/{column}/profile`. |
+| `id` | The input path, added by the CLI wrapper. |
 | `column` | Column name. |
 | `physical_kind` | Inferred from the decoded values: `empty`, `boolean`, `integer`, `number`, or `string`. |
 | `num_values` | Sampled cells for this column (including nulls). |
@@ -54,5 +58,5 @@ Each `pqbench.profile-column` line carries the input path as `id` and:
 ## Document
 
 ```json
-{"kind":"pqbench.profile-column","id":"data.parquet","column":"text", "...": "..."}
+{"name":"blobs/file/examples%2Fquickstart.parquet/columns/id/profile","id":"examples/quickstart.parquet","column":"id","physical_kind":"integer","num_values":8,"null_count":0,"null_fraction":0.0,"ndv":8,"ndv_ratio":1.0,"entropy":3.0,"top_values":[{"value":"0","count":1}],"min_value":"0","max_value":"7","length_mean":1.0,"length_p50":1,"length_p90":1,"length_max":1,"adjacent_equal_fraction":0.0,"run_length_mean":1.0,"run_length_max":1,"monotonic":"INCREASING"}
 ```
