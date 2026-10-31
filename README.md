@@ -244,7 +244,8 @@ that command.
 [`python/`](https://pqbench.github.io/pqbench/reference/python/) ships the same binary as
 a Python wheel: `pip install pqbench` puts `pqbench` on your `PATH`. There is
 no Python extension and no importable module — the CLI is the interface, and
-the files it writes are the data.
+the files it writes are the data. For streaming pipelines, see the
+[Python orchestration guide](https://pqbench.github.io/pqbench/guides/python/).
 
 ```console no-run
 $ pip install pqbench

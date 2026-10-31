@@ -1,8 +1,8 @@
 # Python examples
 
 Two scripts that measure Parquet files through `pqbench` and parse the records
-as they arrive. They are the runnable examples behind the Python orchestration
-guide.
+as they arrive. They are the runnable examples behind the
+[Python orchestration guide](../../docs/guides/python.md).
 
 - [`measure_files.py`](measure_files.py) uses only the standard library. It
   starts `pqbench table-file` and `pqbench bytemass` with `Popen`, connects
@@ -40,5 +40,6 @@ and `--pqbench` (default `$PQB`, then `pqbench`).
 
 `subprocess.run` runs one command to completion and returns its output, so a
 four-stage walk becomes four barriers. `Popen` lets the stages run at once and
-passes bytes through the kernel pipe. The Python orchestration guide compares
-the drivers.
+passes bytes through the kernel pipe. The
+[Python orchestration guide](../../docs/guides/python.md#which-pattern)
+shows the patterns.
