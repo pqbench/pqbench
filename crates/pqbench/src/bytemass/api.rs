@@ -49,8 +49,9 @@ pub async fn bytemass(lake: &Lake, request: &BytemassRequest) -> Result<Vec<v1::
 /// Measure the file a table-file record names.
 ///
 /// The record's blob is its storage location, its credentials are the lease
-/// the read uses, and its size (when nonzero) is the log's claim, checked
-/// against the footer.
+/// the read uses, its size (when nonzero) is the log's claim, checked against
+/// the footer, and its `sample_rate` (when the record was sampled) is copied
+/// onto the blob and every column, so a sum over the stream can weight them.
 ///
 /// # Errors
 /// Fails when the record names no blob, the blob name is invalid, the file
@@ -81,8 +82,17 @@ pub async fn measure(lake: &Lake, file: &v1::TableFile) -> Result<MeasuredFile, 
             )));
         }
     }
+    if let Some(rate) = file.sample_rate {
+        if !(rate > 0.0 && rate <= 1.0) {
+            return Err(Error::Invalid(format!(
+                "a table file's sample rate must be in (0, 1], not {rate}"
+            )));
+        }
+    }
+    measured.blob.sample_rate = file.sample_rate;
     for column in &mut measured.columns {
         column.table = Some(table.clone());
+        column.sample_rate = file.sample_rate;
     }
     Ok(measured)
 }

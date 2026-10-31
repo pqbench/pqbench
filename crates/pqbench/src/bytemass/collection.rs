@@ -46,6 +46,7 @@ fn measured_file(uri: &str, stat: &ObjectStat, mass: FileMass) -> MeasuredFile {
         storage_class: stat.storage_class.clone(),
         row_group_count: Some(mass.row_group_count as u64),
         column_count: Some(columns.len() as u64),
+        ..v1::Blob::default()
     };
     MeasuredFile { blob, columns }
 }

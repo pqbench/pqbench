@@ -209,6 +209,10 @@ message Blob {
   int64 row_group_count = 4;
 
   int64 column_count = 5;
+
+  // The probability the table file naming this blob was kept with. Absent
+  // means unsampled.
+  optional double sample_rate = 6;
 }
 
 // A table's reference to one `Blob`: a row of the table's log (the Delta
@@ -239,6 +243,10 @@ message TableFile {
   // The write time the log records for the file, in milliseconds since the
   // Unix epoch. Absent when the log records none (Iceberg records none).
   optional int64 modification_time = 8;
+
+  // The probability a `sample files` stage kept this record with; its inverse
+  // is the weight a sum over the stream applies. Absent means unsampled.
+  optional double sample_rate = 9;
 }
 
 // One commit of a table's log. The `{commit}` id segment is the log version, a
@@ -302,6 +310,10 @@ message Bytemass {
 
   // The table whose file was measured, when measured through a table file.
   string table = 15;
+
+  // The probability the table file this column came from was kept with.
+  // Absent means unsampled.
+  optional double sample_rate = 16;
 }
 
 // A codec sweep of a column.
