@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "pqbench"
 dynamic = ["version"]
 description = "One binary for Parquet optimization: the pqbench CLI as a Python wheel."
-readme = "../../python/README.md"
+readme = "python/README.md"
 requires-python = ">=3.9"
 license = "MIT OR Apache-2.0"
 authors = [{ name = "pqbench contributors" }]
@@ -28,9 +28,12 @@ Documentation = "https://pqbench.github.io/pqbench/python/"
 # extension: pip installs it on PATH (the ruff/uv pattern). No PyO3, no ABI,
 # no Python version matrix.
 bindings = "bin"
+manifest-path = "crates/pqbench-cli/Cargo.toml"
+module-name = "pqbench"
+strip = true
 # A published wheel cannot be rebuilt by its user, so it carries every storage
 # backend, like the binary release (`dist-workspace.toml`).
 features = ["delta-s3", "iceberg-s3"]
-# The sdist must carry the whole workspace: this crate depends on `../pqbench`
+# The sdist must carry the whole workspace: the crate depends on `../pqbench`
 # by path, which a cargo-only sdist would omit.
 sdist-generator = "git"

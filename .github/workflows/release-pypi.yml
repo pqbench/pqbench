@@ -21,7 +21,7 @@
 # only what is missing.
 #
 # The wheel is built with every storage backend (`[tool.maturin] features` in
-# crates/pqbench-cli/pyproject.toml), so `pip install pqbench` reads `s3://` and
+# the root pyproject.toml), so `pip install pqbench` reads `s3://` and
 # Delta/Iceberg tables; a wheel cannot be rebuilt by its user. It carries the
 # binary in `.data/scripts/` (`bindings = "bin"`), not a Python extension.
 #
@@ -86,8 +86,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          working-directory: crates/pqbench-cli
-          args: --release --out ../../python/dist
+          args: --release --out python/dist
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.target }}
@@ -102,8 +101,7 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          working-directory: crates/pqbench-cli
-          args: --out ../../python/dist
+          args: --out python/dist
       - uses: actions/upload-artifact@v4
         with:
           name: sdist

@@ -130,15 +130,18 @@ lfs-check:
 
 # The wheel is data-only: maturin packages the `pqbench` binary from
 # crates/pqbench-cli in the wheel's `.data/scripts/` (bindings = "bin"), so pip
-# installs it on PATH. No PyO3, no libpython, no ABI. The wheel carries every
-# storage backend, so this compiles the delta feature; hence it is not part of
-# `check`. Local to python/.venv for PEP 668.
+# installs it on PATH. No PyO3, no libpython, no ABI. This builds the debug
+# profile: the check validates packaging (bin bindings, scripts dir, install,
+# smoke), and the release build is the one the release workflow ships. Set
+# PQB_WHEEL_PROFILE=release to validate the shipped profile locally. Local to
+# python/.venv for PEP 668.
+PQB_WHEEL_PROFILE ?= dev
+
 check-python:
 	test -d python/.venv || $(PYTHON) -m venv python/.venv
 	python/.venv/bin/python -m pip install -q maturin
-	cd crates/pqbench-cli && \
-		CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" \
-		../../python/.venv/bin/maturin build --release --out ../../python/dist
+	CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" \
+		python/.venv/bin/maturin build --profile $(PQB_WHEEL_PROFILE) --out python/dist
 	python/.venv/bin/python -m pip install -q --force-reinstall python/dist/*.whl
 	python/.venv/bin/pqbench --help > /dev/null
 	python/.venv/bin/pqbench table-file examples/quickstart.parquet \
