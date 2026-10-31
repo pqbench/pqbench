@@ -5,21 +5,16 @@ members = [
     "crates/aipnaming-cli",
     "crates/docscheck",
     "crates/docscheck-cli",
-    "crates/pyicheck",
-    "crates/pyicheck-cli",
     "crates/pqbench",
     "crates/pqbench-derive",
     "crates/pqbench-resource",
     "crates/pqbench-cli",
 ]
-exclude = ["python"]
 default-members = [
     "crates/aipnaming",
     "crates/aipnaming-cli",
     "crates/docscheck",
     "crates/docscheck-cli",
-    "crates/pyicheck",
-    "crates/pyicheck-cli",
     "crates/pqbench",
     "crates/pqbench-derive",
     "crates/pqbench-resource",
@@ -38,7 +33,6 @@ repository = "https://github.com/pqbench/pqbench"
 aipnaming = { version = "0.0.9", path = "crates/aipnaming" }
 docscheck = { version = "0.0.9", path = "crates/docscheck" }
 pqbench = { version = "0.0.9", path = "crates/pqbench" }
-pyicheck = { version = "0.0.9", path = "crates/pyicheck" }
 
 [profile.dev]
 opt-level = 0

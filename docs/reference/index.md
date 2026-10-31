@@ -14,7 +14,7 @@ configuration, the install methods, and the per-command pages.
   column by column.
 - [`viz`](../viz.md) — collect a bytemass stream into a static HTML treemap.
 - [Agent skills](../skill.md) — the skills compiled into `pqbench skill`.
-- [Python bindings](../python.md) — the PyO3 wheel and its in-process API.
+- [Python](../python.md) — the binary wheel, and how to read its files.
 
 `pqbench --help` is the long page; `pqbench <command> --help` is local to that
 command. This section is the durable copy.

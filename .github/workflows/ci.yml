@@ -74,29 +74,6 @@ jobs:
           # The gate: exit non-zero if any finding remains.
           ./target/release/aipnaming crates/ > /dev/null
 
-  # The PyO3 stub is hand-written, so it can drift from the bindings it mirrors.
-  # `pyicheck` reads both (plus the library models) and fails on any
-  # disagreement, rendering findings inline on the diff and a summary.
-  pyicheck:
-    name: pyicheck
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: pyicheck
-      - name: Build the checker
-        run: cargo build --release -p pyicheck-cli
-      - name: Check the stub
-        run: |
-          # Findings land inline on the PR diff.
-          ./target/release/pyicheck --output-format github
-          # The gate: exit non-zero when the stub disagrees with the bindings.
-          ./target/release/pyicheck > /dev/null
-
   # The documented `pqbench ...` commands are generated into
   # `crates/pqbench-cli/tests/gen_*.rs` and run by `make test` like any other
   # integration test. This job only checks the generated files match the
@@ -284,7 +261,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [fmt, aipnaming, pyicheck, docs, isolation, lfs]
+    needs: [fmt, aipnaming, docs, isolation, lfs]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a required job did not succeed

@@ -1,4 +1,4 @@
-# Publish the PyO3 wheel in python/ to PyPI.
+# Publish the data-only wheel (the `pqbench` binary) to PyPI.
 #
 # Its own dispatch, deliberately. The binary release and the wheel are two
 # targets with different client rules, and PyPI can only name a workflow file:
@@ -14,16 +14,16 @@
 #
 # https://docs.pypi.org/trusted-publishers/
 #
-# The version is the workspace's. `scripts/version.sh sync` writes
-# `[workspace.package] version` from `Cargo.toml` into `python/Cargo.toml`
-# before maturin reads it, so the wheel carries the version the binaries were
-# released under — the same script `make check-version` runs. PyPI versions are
+# The version is the workspace's: the wheel is built from `crates/pqbench-cli`,
+# which inherits `[workspace.package] version`, so maturin reads it directly and
+# the wheel cannot ship a version the binaries did not. PyPI versions are
 # immutable, hence `skip-existing`: a re-run after a partial failure uploads
 # only what is missing.
 #
 # The wheel is built with every storage backend (`[tool.maturin] features` in
-# pyproject.toml), so `pip install pqbench` reads `s3://` and Delta/Iceberg
-# tables; a wheel cannot be rebuilt by its user.
+# crates/pqbench-cli/pyproject.toml), so `pip install pqbench` reads `s3://` and
+# Delta/Iceberg tables; a wheel cannot be rebuilt by its user. It carries the
+# binary in `.data/scripts/` (`bindings = "bin"`), not a Python extension.
 #
 # Linux wheels keep the portable codec baseline (no -march=native), build
 # in manylinux2014 — glibc 2.17, the floor the archives use — and pin aarch64 to
@@ -78,9 +78,6 @@ jobs:
             macosx_deployment_target: "11.0"
     steps:
       - uses: actions/checkout@v6
-      - name: Take the wheel version from the workspace manifest
-        shell: bash
-        run: sh scripts/version.sh sync
       - uses: PyO3/maturin-action@v1
         env:
           CXXFLAGS: ${{ matrix.cxxflags }}
@@ -89,8 +86,8 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux || 'auto' }}
-          working-directory: python
-          args: --release --out dist
+          working-directory: crates/pqbench-cli
+          args: --release --out ../../python/dist
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.target }}
@@ -102,14 +99,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Take the wheel version from the workspace manifest
-        shell: bash
-        run: sh scripts/version.sh sync
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          working-directory: python
-          args: --out dist
+          working-directory: crates/pqbench-cli
+          args: --out ../../python/dist
       - uses: actions/upload-artifact@v4
         with:
           name: sdist

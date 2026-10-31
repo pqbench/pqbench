@@ -8,7 +8,7 @@ fixtures). Clone, build, and try the bundled sample:
 ```sh
 git clone https://github.com/pqbench/pqbench.git
 cd pqbench
-make check   # fmt-check + check-docs + check-version + clippy -D warnings + isolation + lfs-check + test
+make check   # fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
 cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
 ```
 
@@ -38,13 +38,13 @@ Keep behavior changes separate from tidyings.
 
 ```
 make fmt
-make check        # = fmt-check + check-docs + check-version + clippy -D warnings + isolation + lfs-check + test
+make check        # = fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
 ```
 
 - `make check` is the gate and runs automatically in the pre-commit hook.
-- `make check-python` builds the PyO3 extension with maturin and runs its
-  tests. It is separate from the gate because it compiles the delta feature.
-  CI runs it on every pull request.
+- `make check-python` builds the data-only wheel with maturin and smoke-tests
+  the installed binary. It is separate from the gate because it compiles every
+  storage backend. CI runs it on every pull request.
 - **Documented commands are tests.** The `console` blocks in `README.md`,
   `docs/`, and `skills/` are generated into `crates/pqbench-cli/tests/gen_*.rs`
   by `docscheck` and run by `make test`. A block runs only when its fence

@@ -20,11 +20,17 @@ version, choosing the install path, …). The alias comes from
 `[dist.bin-aliases]` and is created by the installer; the archive and `cargo
 install` carry only `pqbench`.
 
-The same release publishes the Python bindings to PyPI, at the same version:
+The same release publishes the same binary as a Python wheel, at the same
+version:
 
 ```sh
 pip install pqbench
 ```
+
+The wheel is data-only: maturin packages the `pqbench` binary in the wheel's
+`.data/scripts/` directory, and pip installs it into the environment's `bin/`.
+There is no Python extension and no importable module — the CLI is the
+interface, and the files it writes are the data. See [Python](python.md).
 
 To build from source instead — no registry, always current:
 
@@ -103,13 +109,13 @@ config and run `cargo dist generate`, never the workflow by hand.
 
 Releases are cut by hand, not on every merge. Three steps.
 
-**1. Bump the version** in `[workspace.package]` in `Cargo.toml`, carry it into
-the wheel's manifest, commit, and merge it — the release tag must equal this
-version:
+**1. Bump the version** in `[workspace.package]` in `Cargo.toml`, commit, and
+merge it — the release tag must equal this version. The wheel is built from
+`crates/pqbench-cli`, which inherits that version, so there is no second
+manifest to update:
 
 ```sh
 # Cargo.toml: version = "0.0.2"
-make sync-version
 git commit -am "release: 0.0.2"
 ```
 
@@ -145,11 +151,9 @@ own trigger. It builds the wheels and the sdist and uploads them under trusted
 publishing: no token is stored.
 
 The version is the workspace's, so the two dispatches cannot ship different
-versions. `python/` is its own workspace root and cannot inherit
-`[workspace.package]`; `scripts/version.sh` is the one definition of the value —
-`make sync-version` writes it, `make check-version` (part of `make check`) fails
-when the two disagree, and the wheel jobs run the same script before maturin
-reads the manifest.
+versions. The wheel is built from `crates/pqbench-cli`, which inherits
+`[workspace.package] version`; maturin reads that version, so there is no
+separate manifest to sync.
 
 ## Source consumers
 
