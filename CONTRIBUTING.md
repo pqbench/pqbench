@@ -2,7 +2,8 @@
 
 ## Getting started
 
-Requires Rust 1.91.1+ and [git-lfs](https://git-lfs.com) (for the LFS test
+Requires Rust 1.94.1+ (the `--all-features` build; the default feature set's
+declared minimum is 1.91.1) and [git-lfs](https://git-lfs.com) (for the LFS test
 fixtures). Clone, build, and try the bundled sample:
 
 ```sh
@@ -52,11 +53,11 @@ make check        # = fmt-check + check-docs + clippy -D warnings + isolation + 
   expected output:
   ````md
   ```console run
-  $ pqbench bytemass examples/quickstart.parquet --format table
-  column  type   codec         encodings                 bytes  values
-  ------  -----  ------------  ------------------------  -----  ------
-  id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
-  files: 1
+  $ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
+  column  codec         encodings                 bytes  values
+  ------  ------------  ------------------------  -----  ------
+  id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+  year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
   ```
   ````
   The output is matched token by token; a documented token that starts with `±`
@@ -143,20 +144,56 @@ directional and conflicts with idiomatic Rust, **Rust casing wins**.
 `make check` also runs the `aipnaming` linter's tests; when editing its word
 data or rules, see `crates/aipnaming/README.md`.
 
-## 5. Update AGENTS.md
+## 5. Documentation
+
+The documentation follows [Diátaxis](https://diataxis.fr/): tutorials teach,
+how-to guides solve a task, reference states the facts, and explanation gives
+the background. The site's sections are the four forms:
+
+- **Getting started** — the tutorial: install, first measurement, first treemap.
+- **Guides** — task-oriented walkthroughs (showcases, demos, Delta, Iceberg,
+  Databricks authentication, performance).
+- **Reference** — the generated CLI reference, the document shapes,
+  authentication, configuration, distribution, and the Python wheel.
+- **Concepts** — the data model and the architecture.
+
+The CLI reference is **generated from the clap command tree** with
+`clap-markdown` by the `docsgen` tool (`crates/docsgen`); do not edit
+`docs/reference/cli.md` by hand. `make sync-docs`
+writes it, and `make check-docs` fails when it is stale. The prose it renders
+comes from the doc comments and `crates/pqbench-cli/src/help.rs`, so change the
+help text there and regenerate.
+
+Style sources:
+
+- [Diátaxis](https://diataxis.fr/) — the four forms and their boundaries.
+- [Google developer documentation style
+  guide](https://developers.google.com/style) — voice, tense, code samples,
+  headings, and inclusive language.
+- [Microsoft Writing Style
+  Guide](https://learn.microsoft.com/style-guide/welcome/) — plain language and
+  bias-free wording.
+- [Write the Docs](https://www.writethedocs.org/guide/) — docs as code, and
+  documentation in the development workflow.
+- [The Good Docs Project](https://thegooddocsproject.dev/) — templates and
+  content patterns.
+- Jared Bhatti et al., *Docs for Developers: An Engineer's Field Guide to
+  Technical Writing* (Apress, 2021) — the developer-advocate workflow.
+
+## 6. Update AGENTS.md
 
 `AGENTS.md` is the source of truth for agents. If you change the gate, the loop,
 or a convention, update `AGENTS.md` so the next agent follows it. Also record
 every file you edit in your reply as a plain path reference (see AGENTS.md
 *Reporting edits*).
 
-## 6. Commit
+## 7. Commit
 
 - **Commit only when the user asks.**
 - Each tidy is its own commit; keep behavior changes separate.
 - The pre-commit hook runs `make check`, so the gate must be green.
 
-## 7. Contributions & licensing
+## 8. Contributions & licensing
 
 - **License:** `MIT OR Apache-2.0` (dual). See `LICENSE-MIT` and `LICENSE-APACHE`.
 - **Inbound = outbound:** by contributing, your work is licensed to the project
@@ -173,4 +210,5 @@ every file you edit in your reply as a plain path reference (see AGENTS.md
 - **No ad-hoc workarounds** — if the environment is wrong, fix it (the flatpak
   SDK toolchain / its manifest), don't PATH-hack, bundle broken artifacts, or
   hardcode paths.
-- **README / docs** — follow developer-advocate best practices.
+- **README / docs** — follow the [Documentation](#5-documentation) section:
+  Diátaxis, the generated CLI reference, and the style sources.

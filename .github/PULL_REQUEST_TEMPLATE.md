@@ -31,9 +31,9 @@ is missing or stale.
   are inline `aipnaming: allow(...)` with a reason.
 - [x] **Perf** — `perf stat` (+ `perf record` for the hot path) on the command;
   wall time and bytes read for remote; obvious latency flagged, numbers
-  recorded in `docs/performance-audit.md`.
-- [x] **Docs** — `docs/cli.md` (+ `docs/delta.md` / `docs/iceberg.md` / stand
-  README as needed).
+  recorded in `docs/guides/performance.md`.
+- [x] **Docs** — the page for the change (`docs/guides/…`, `docs/concepts/…`, or
+  the generated `docs/reference/cli.md`); `make check-docs` clean.
 
 <!--
 The certification line is per commit: after the last push, re-run the checks

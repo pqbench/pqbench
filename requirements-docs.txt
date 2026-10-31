@@ -8,4 +8,5 @@
 # Pinned so a rebuild is the one CI verified.
 mkdocs-material==9.7.7
 mkdocs==1.6.1
+mkdocs-redirects==1.2.2
 pymdown-extensions==12.3

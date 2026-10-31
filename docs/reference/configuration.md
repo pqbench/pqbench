@@ -68,9 +68,10 @@ subcommand:
 - `--token TOKEN`
 - `--table-format unity|iceberg`
 
-Everything else is a per-invocation switch on its own command — `--every`,
-`--last`, `--fan-out`, `--rate` — and is not read
-from the run-control file.
+Everything else is a per-invocation switch on its own command — `--last`,
+`--partition`, `--fan-out`, `--rate`, `--depth`, `--samples`, `--rows`,
+`--top`, `--per-column`, `--output` — and is not read from the run-control
+file. See the [CLI reference](cli.md) for each command's flags.
 
 ## Example
 

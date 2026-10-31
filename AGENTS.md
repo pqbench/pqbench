@@ -155,7 +155,9 @@ analogy, convention, or precedent:
   `CARGO_BUILD_JOBS` defaults to 2 because the test binaries link several GB
   each; raise it only when the machine has the memory. When the gate already
   passed, `git commit --no-verify` is acceptable.
-- Docs: the `console` transcripts in the Markdown are generated into
+- Docs: the CLI reference is generated from the clap tree with `clap-markdown`;
+  `make sync-docs` writes `docs/reference/cli.md`, and `check-docs` fails when
+  it is stale. The `console` transcripts in the Markdown are generated into
   `crates/pqbench-cli/tests/gen_*.rs` and run by `make test`. Edit a doc block,
   run `make sync-docs`; `check-docs` (part of `make check`, hence the pre-commit
   hook) fails when the generated files are stale. A block runs only when its
@@ -216,7 +218,10 @@ analogy, convention, or precedent:
 
 - `crates/pqbench/` — the library (bench, bytemass, codecs, compression,
   experiment, profile, skill, lz, parquet, report, stats, viz)
-- `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
+- `crates/pqbench-cli/` — the `pqbench` command definitions and dispatch (a
+  library), plus the thin binary
+- `crates/docsgen/` — generates `docs/reference/cli.md` from the clap tree; a
+  development tool, not a shipped binary
 - `crates/aipnaming/`, `crates/aipnaming-cli/` — the AIP naming linter and its
   `aipnaming` binary
 - `crates/docscheck/`, `crates/docscheck-cli/` — generate Rust tests from the
@@ -228,8 +233,8 @@ analogy, convention, or precedent:
   data-only wheel. `make check-python` builds and smoke-tests it
 - `skills/` — agent skills compiled into `pqbench skill`
 - `scripts/` — build / sample / smoke-test helpers
-- `docs/` — user documentation (`cli.md`, `profile.md`,
-  `skill.md`, `viz.md`)
+- `docs/` — user documentation: `reference/cli.md` (generated from clap),
+  `reference/`, `guides/`, `concepts/`
 - `Makefile` + pre-commit hook — the gate
 
 ## References

@@ -95,12 +95,12 @@ Python pipeline.
 ## Documents
 
 Each stage writes the documents the CLI reference defines
-([CLI reference](https://pqbench.github.io/pqbench/cli/)). To inspect a stream
+([CLI reference](https://pqbench.github.io/pqbench/reference/cli/)). To inspect a stream
 as tables while building a pipeline:
 
 ```console no-run
 $ pqbench list catalogs | pqbench format
 ```
 
-The records are versioned NDJSON; the schema is the `v1` model of each
-document.
+The records are typed NDJSON; the schema is the `pqbench.v1` model of each
+resource, and the command reference describes the CLI-only documents.

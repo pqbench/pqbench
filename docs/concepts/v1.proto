@@ -1,5 +1,6 @@
-// Status: the wire contract. The implemented model is
-// `crates/pqbench/src/v1/`, and the modelling rules are
+// Status: the wire contract. The implemented resources are in
+// `crates/pqbench/src/v1/`; the profile record is in
+// `crates/pqbench/src/profile.rs`. The modelling rules are
 // `docs/concepts/data-modelling.md`; where this contract differs from them, they
 // win.
 //
@@ -329,15 +330,38 @@ message CompressionReport {
   double decompress_megabytes_per_second = 6;
 }
 
-// A decoded-sample profile of a column.
+// A decoded-sample profile of a column. `profile` emits this record from
+// `pqbench::profile::ColumnProfile`; the fields below are the wire contract.
 message ColumnProfile {
-  // Format: …/columns/{column}/profile
+  // Format: blobs/{service}/{locator}/columns/{column}/profile
   string name = 1;
 
-  int64 null_count = 2;
-  int64 distinct_count = 3;
-  double entropy_bits = 4;
-  repeated string top_values = 5;
+  string column = 2;
+  string physical_kind = 3;
+  // The one `num_` exception: the wire name is fixed (AIP-141).
+  int64 num_values = 4;
+  int64 null_count = 5;
+  double null_fraction = 6;
+  int64 ndv = 7;
+  double ndv_ratio = 8;
+  double entropy = 9;
+  repeated ValueCount top_values = 10;
+  string min_value = 11;
+  string max_value = 12;
+  double length_mean = 13;
+  int64 length_p50 = 14;
+  int64 length_p90 = 15;
+  int64 length_max = 16;
+  double adjacent_equal_fraction = 17;
+  double run_length_mean = 18;
+  int64 run_length_max = 19;
+  string monotonic = 20;
+}
+
+// One frequent value in a column profile.
+message ValueCount {
+  string value = 1;
+  int64 count = 2;
 }
 
 // ---------------------------------------------------------------------------

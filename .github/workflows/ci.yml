@@ -77,10 +77,12 @@ jobs:
           # The gate: exit non-zero if any finding remains.
           ./target/release/aipnaming crates/ > /dev/null
 
-  # The documented `pqbench ...` commands are generated into
-  # `crates/pqbench-cli/tests/gen_*.rs` and run by `make test` like any other
-  # integration test. This job only checks the generated files match the
-  # Markdown: edit a doc block and forget to `make sync-docs`, and it fails.
+  # Two generated artifacts must match their sources:
+  # - `crates/pqbench-cli/tests/gen_*.rs`, from the documented `pqbench ...`
+  #   commands; `make test` runs them like any other integration test.
+  # - `docs/reference/cli.md`, from the clap tree via `crates/docsgen`.
+  # This job only checks both are current: edit a doc block or a command and
+  # forget to `make sync-docs`, and it fails.
   docs:
     name: docs
     runs-on: ubuntu-24.04

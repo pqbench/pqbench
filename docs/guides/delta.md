@@ -8,10 +8,11 @@ feature-gated and remain out of the default dependency graph.
 
 ```mermaid
 flowchart TD
-    delta_log[Delta transaction log] --> delta[pqbench::table::delta]
-    delta --> document[TableFile documents]
+    delta_log[Delta transaction log] --> delta[pqbench::third_party::delta]
+    delta --> table[pqbench::table]
+    table --> document[TableFile documents]
     document --> bytemass[pqbench::bytemass]
-    bytemass --> isolation[pqbench::object_store]
+    bytemass --> isolation[pqbench::third_party::object_store]
     isolation --> object_store[object_store crate]
     bytemass --> parquet[Parquet file footers]
     pqbench_cli[pqbench-cli] --> delta
@@ -22,7 +23,7 @@ flowchart TD
 Delta and wins UniForm; Iceberg has its own loader. The Delta module uses
 delta-rs to select a table snapshot and walks its active files.
 It does not measure footers. The only module that names the `object_store` crate
-is `pqbench::object_store`, which adapts it to the small `ObjectReader`
+is `pqbench::third_party::object_store`, which adapts it to the small `ObjectReader`
 interface (`stat` + `read_range`) the rest of the crate uses.
 
 ## Usage
@@ -41,7 +42,7 @@ Build with the feature when you run from source: name the table on stdin, e.g.
 `echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' | cargo run -p pqbench-cli --features delta -- list files`, or run
 the same command in a container.
 
-Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
+Remote tables are resolved with `delta-s3` (which enables `aws`). Storage.
 A table's vended credentials travel as its `credentials` value (`AWS_*` keys);
 they are not written into the process environment. The cargo command is
 `echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/table"}' | cargo run -p pqbench-cli --features delta-s3 -- list files`.
@@ -52,12 +53,13 @@ a table record. `list files` reads the log, and the credentials travel to
 
 ## Backends
 
-S3 support is compiled behind the `aws` feature inside `pqbench::object_store`
-(the only module that names the `object_store` crate). A URI whose backend is
+S3 support is compiled behind the `aws` feature inside
+`pqbench::third_party::object_store` (the only module that names the
+`object_store` crate). A URI whose backend is
 not compiled in fails at runtime with a message naming the missing feature.
 Adding another scheme is one arm in the factory plus one feature. The `delta`
-feature flag gates the loader; its private `delta_helpers` module is the only
-code that names the `deltalake` crate and is plain async. `pqb ls files`
+feature flag gates the loader; `third_party/delta/impl` is the only code that
+names the `deltalake` crate and is plain async. `pqb ls files`
 drives a load on a current-thread runtime, so delta-rs selects its own executor
 instead of borrowing the caller's.
 
@@ -117,7 +119,7 @@ and nothing below the checkpoint is read.
 Data paths must stay inside the table root (no URIs, no `..`). A missing
 `delta` feature fails at runtime and names the feature. Iceberg is detected
 from `metadata/version-hint.text` or `metadata/*.metadata.json` and has its own
-loader ([docs/iceberg.md](iceberg.md)).
+loader ([Iceberg tables](iceberg.md)).
 
 ## Dependencies
 

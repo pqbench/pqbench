@@ -29,12 +29,12 @@
 #
 # A live run shares the endpoint and can be throttled or hit a transient
 # transport error, so `main` retries the walk at half the rate (the pattern
-# `docs/cli.md` gives: "pace the walk and retry it at a lower rate in the
+# `docs/reference/cli.md` gives: "pace the walk and retry it at a lower rate in the
 # shell") before it fails.
 #
 # One pass, with `tee` after each level, so every level's record count is
 # visible (the "jobs are limited by the number of tables" claim). Profile it
-# with `perf` by hand — `docs/performance.md` has the recipe.
+# with `perf` by hand — `docs/guides/performance.md` has the recipe.
 #
 # Auth: either PQB_ENDPOINT / PQB_TOKEN, or DBX_HOST plus a bearer source — the
 # GitHub Actions OIDC token (`id-token: write`; set DATABRICKS_CLIENT_ID and
@@ -70,7 +70,7 @@ keep_readable_catalog() {
         'select((.name | startswith("catalogs/\($catalog)/")) and (.name | contains("/tables/")))'
 }
 
-# The walk, as `docs/performance.md` writes it: one pipeline, every level
+# The walk, as `docs/guides/performance.md` writes it: one pipeline, every level
 # streaming refs to the next, `tee`d so each level's records can be counted.
 walk() {
     local dir="$WORK/walk" name status
@@ -154,7 +154,7 @@ main() {
     export PQB_ENDPOINT PQB_TOKEN AWS_REGION="$REGION"
 
     # A live walk shares the endpoint; retry at half the rate before giving up
-    # (docs/cli.md: "pace the walk and retry it at a lower rate in the shell").
+    # (docs/reference/cli.md: "pace the walk and retry it at a lower rate in the shell").
     local attempt=1
     until walk; do
         if [ "$attempt" -ge "$RETRIES" ] || [ "$RATE" -le 1 ]; then

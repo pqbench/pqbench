@@ -8,7 +8,7 @@ the numbers the tool printed.
 The first three run on the committed Reddit comments sample
 (`crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet`, 3000 rows, 7
 columns). The last two use larger public datasets committed under
-`data/samples/` (Git LFS). All five blocks run in the gate; after a clone that
+`data/samples/` (Git LFS). All six blocks run in the gate; after a clone that
 skipped LFS, fetch and verify the samples first:
 
 ```console no-run
@@ -133,9 +133,9 @@ The footer reports the encoding the writer actually used, and
 
 ## Where to go next
 
-- **Every command** — [CLI reference](cli.md) has the task table, documents, and
-  auth for `s3://` and catalogs.
+- **Every command** — the [CLI reference](../reference/cli.md) documents every
+  command, its flags, and its output.
 - **The same pipe over Delta, Iceberg, and a catalog** — [Visual demos](demo.md).
 - **Recipes from the facts** — `pqb skill parquet-advisor`
-  ([Agent skills](skill.md)) turns a `bytemass` or `profile` result into a
+  ([Agent skills](../reference/cli.md#pqbench-skill)) turns a `bytemass` or `profile` result into a
   write-path or DDL change.

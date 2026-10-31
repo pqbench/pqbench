@@ -12,12 +12,13 @@ year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
 $ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report
 ```
 
-Standard output is NDJSON (`Partition`, `TableFile`, `Blob`, `Bytemass`);
+Standard output is NDJSON (`Metastore`, `Catalog`, `Schema`, `Table`,
+`TableFile`, `Blob`, `Bytemass`);
 `pqb fmt` renders a table. `pqb viz` collects the bytemass stream into
 a static HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under
-[`docker/e2e-lakehouse/`](../docker/e2e-lakehouse) and the small Parquet
+[`docker/e2e-lakehouse/`](../../docker/e2e-lakehouse) and the small Parquet
 fixture in the test suite. Catalog pipes need `make lakehouse`.
 
 ## Selecting files with Unix tools
@@ -66,7 +67,7 @@ commands:
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
 ```
 
-![one table viz page](images/pqbench-lake-treemap.gif)
+![one table viz page](../images/pqbench-lake-treemap.gif)
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
@@ -91,14 +92,13 @@ $ echo '"CAT.SCHEMA"' | pqb ls tables |
     pqb credentials get |
     pqb get table |
     pqb ls files |
-    pqb ls files |
     pqb bytemass | pqb fmt
 ```
 
 Every stage of a pipe writes NDJSON for the next stage; the last one prints the
 table (`| pqb fmt`). The local stand (`make lakehouse`) exports
 `PQB_ENDPOINT` and `AWS_*` for the walk. See
-[docker/e2e-lakehouse/README.md](../docker/e2e-lakehouse/README.md).
+[docker/e2e-lakehouse/README.md](../../docker/e2e-lakehouse/README.md).
 
 ## One Parquet file
 
@@ -115,9 +115,9 @@ username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
 url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 ```
 
-![pqbench CLI walkthrough](images/pqbench-bytemass.gif)
+![pqbench CLI walkthrough](../images/pqbench-bytemass.gif)
 
-![byte-mass treemap](images/pqbench-bytemass.png)
+![byte-mass treemap](../images/pqbench-bytemass.png)
 
 ## One Delta snapshot
 
@@ -133,9 +133,9 @@ label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
 ```
 
-![pqbench table CLI walkthrough](images/pqbench-delta-bytemass.gif)
+![pqbench table CLI walkthrough](../images/pqbench-delta-bytemass.gif)
 
-![Delta byte-mass treemap](images/pqbench-delta-bytemass.png)
+![Delta byte-mass treemap](../images/pqbench-delta-bytemass.png)
 
 ## One Iceberg snapshot
 

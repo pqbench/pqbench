@@ -12,7 +12,7 @@ Measure how well each codec compresses a Parquet file and how many on-disk
 bytes each column costs. Byte masses come from the footer and the table
 metadata, not the data pages, so they are fast on files of any size.
 
-Commands compose on pipes — each writes a versioned JSON document the next
+Commands compose on pipes — each writes a typed `pqbench.v1` document the next
 reads — so the whole job is one pipeline. The [walk](#the-walk-end-to-end) goes
 from a catalog's tables to the bytes each column costs.
 
@@ -27,7 +27,7 @@ curl -LsSf https://github.com/pqbench/pqbench/releases/latest/download/pqbench-c
 The installer verifies the download against the release checksums and puts
 `pqbench` in `~/.cargo/bin`, with `pqb` as a symlink to it. To pin a version,
 build from source, or read about the release process, see
-[Distribution](https://pqbench.github.io/pqbench/distribution/).
+[Distribution](https://pqbench.github.io/pqbench/reference/distribution/).
 
 ## The walk, end to end
 
@@ -56,7 +56,7 @@ Read it left to right:
   15 refs/s by default — the schema and table listings and the table stages
   (`credentials check`, `credentials get`, `get table`) alike; the
   retry-at-half-the-rate recipe is in the
-  [CLI reference](https://pqbench.github.io/pqbench/cli/).
+  [CLI reference](https://pqbench.github.io/pqbench/reference/cli/).
 - `credentials check` drops the tables you can't read outside compute — a view,
   a system catalog, Databricks default storage — and prints the reason;
   `credentials get` vends a short-lived lease onto each remaining ref.
@@ -71,11 +71,11 @@ Read it left to right:
 
 The same walk runs offline against the local Delta and Iceberg stand,
 `make lakehouse`. [Getting started](https://pqbench.github.io/pqbench/getting-started/) takes one Parquet
-file to a treemap, and the [CLI reference](https://pqbench.github.io/pqbench/cli/) documents every command.
+file to a treemap, and the [CLI reference](https://pqbench.github.io/pqbench/reference/cli/) documents every command.
 
 ## Showcases
 
-[Showcases](https://pqbench.github.io/pqbench/showcases/) runs the commands as
+[Showcases](https://pqbench.github.io/pqbench/guides/showcases/) runs the commands as
 jobs on real public data — triage which columns own the file, choose a codec,
 verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
 2.1 MB Reddit comments sample, three of seven columns are 99.7% of the bytes:
@@ -94,14 +94,15 @@ url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
 ```
 
 `profile` explains it and `compression` picks the codec. The
-[Showcases](https://pqbench.github.io/pqbench/showcases/) page walks them end to
+[Showcases](https://pqbench.github.io/pqbench/guides/showcases/) page walks them end to
 end.
 
 ## Commands
 
 The core measurements. The walk's [`get` and `list`](#the-walk-end-to-end) come
-first; the [CLI reference](https://pqbench.github.io/pqbench/cli/) covers `profile`, `diff`,
-`skill`, `credentials`, `ratelimit`, and `setup`.
+first; the [CLI reference](https://pqbench.github.io/pqbench/reference/cli/) covers
+every command, and [Documents](https://pqbench.github.io/pqbench/reference/documents/)
+maps the records they exchange.
 
 ### lz
 
@@ -165,7 +166,7 @@ c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
   `Bytemass` per column.
 
 Filtering which files to measure is a shell job on the `list files` stream —
-see [Visual demos](https://pqbench.github.io/pqbench/demo/).
+see [Visual demos](https://pqbench.github.io/pqbench/guides/demo/).
 
 ### list files
 
@@ -179,7 +180,7 @@ part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
 ```
 
 - Reads each table's Delta / Iceberg log and checkpoint, never the data files.
-- `--last 1h|1d|1w` keeps the files the log dates in the window ending now.
+- `--last 1m|1h|1d|1w` keeps the files the log dates in the window ending now.
 - `--partition 2026-10-28` keeps one UTC day.
 - One line per file, written as the walk produces it: the run holds one log
   batch plus one file per table in flight (`--fan-out`).
@@ -187,9 +188,7 @@ part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796
   `s3://`.
 - Reads Table refs on standard input (a `get table` stream).
 
-### list files
-
-List a table's active files — the input to `bytemass`.
+The files are the input to `bytemass`:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
@@ -199,10 +198,7 @@ id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
 label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 ```
 
-- `list files` re-reads the window's commits and emits the files they
-  **added** — a file a later commit removes is still named.
-- The lease rides on every file, so a short-lived lease travels to `bytemass`.
-
+The lease rides on every file, so a short-lived lease travels to `bytemass`.
 A producer names a file with `table-file`; `AWS_*` in the environment (or a
 vended lease on the file record) supplies storage access:
 
@@ -230,20 +226,22 @@ Start with [Getting started](https://pqbench.github.io/pqbench/getting-started/)
 that command.
 
 - [Getting started](https://pqbench.github.io/pqbench/getting-started/) — install, first measurement, the metadata walk
-- [Showcases](https://pqbench.github.io/pqbench/showcases/) — real jobs on real data: triage the bytes, pick a codec, verify a layout change
-- [Distribution](https://pqbench.github.io/pqbench/distribution/) — install the binary, targets, and how releases are cut
-- [CLI reference](https://pqbench.github.io/pqbench/cli/) — the command table, documents, flags, and auth
-- [Visual demos](https://pqbench.github.io/pqbench/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
-- [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list files | bytemass`, limitations
-- [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list files | bytemass`, limitations
-- [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqb viz`, a static HTML treemap
-- [Python](https://pqbench.github.io/pqbench/python/) — install the binary wheel; run the CLI, read the files
+- [Showcases](https://pqbench.github.io/pqbench/guides/showcases/) — real jobs on real data: triage the bytes, pick a codec, verify a layout change
+- [Distribution](https://pqbench.github.io/pqbench/reference/distribution/) — install the binary, targets, and how releases are cut
+- [CLI reference](https://pqbench.github.io/pqbench/reference/cli/) — every command, generated from the clap tree
+- [Documents](https://pqbench.github.io/pqbench/reference/documents/) — the records the commands exchange
+- [Authentication](https://pqbench.github.io/pqbench/reference/authentication/) — object storage, catalog config, and governed tables
+- [Visual demos](https://pqbench.github.io/pqbench/guides/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
+- [Delta tables](https://pqbench.github.io/pqbench/guides/delta/) — log load, `list files | bytemass`, limitations
+- [Iceberg tables](https://pqbench.github.io/pqbench/guides/iceberg/) — metadata load, `list files | bytemass`, limitations
+- [Visualization](https://pqbench.github.io/pqbench/reference/cli/#pqbench-viz) — `pqb viz`, a static HTML treemap
+- [Python](https://pqbench.github.io/pqbench/reference/python/) — install the binary wheel; run the CLI, read the files
 - [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
   naming tables for `pqb ls files`, over rustfs S3
 
 ## Python
 
-[`python/`](https://pqbench.github.io/pqbench/python/) ships the same binary as
+[`python/`](https://pqbench.github.io/pqbench/reference/python/) ships the same binary as
 a Python wheel: `pip install pqbench` puts `pqbench` on your `PATH`. There is
 no Python extension and no importable module — the CLI is the interface, and
 the files it writes are the data.

@@ -3,7 +3,7 @@
 # The pages are the repository's own Markdown under `docs/`, so the site cannot
 # drift from what `make check` gates: `docscheck` reads the same files and turns
 # their `console run` blocks into tests. The home page (`docs/index.md`) is the
-# root README and `python.md` / `contributing.md` are `python/README.md` /
+# root README and `reference/python.md` / `contributing.md` are `python/README.md` /
 # `CONTRIBUTING.md`, pulled in with `pymdownx.snippets` rather than copied, so
 # every document has one source.
 #
@@ -81,6 +81,26 @@ validation:
 
 plugins:
   - search
+  # Keep the old page URLs working after the docs restructure. A redirect is a
+  # generated page at the old path, so an external link still lands on the
+  # moved content.
+  - redirects:
+      redirect_maps:
+        "cli.md": "reference/cli.md"
+        "profile.md": "reference/cli.md"
+        "diff.md": "reference/cli.md"
+        "viz.md": "reference/cli.md"
+        "skill.md": "reference/cli.md"
+        "delta.md": "guides/delta.md"
+        "iceberg.md": "guides/iceberg.md"
+        "demo.md": "guides/demo.md"
+        "showcases.md": "guides/showcases.md"
+        "auth.md": "guides/auth.md"
+        "performance.md": "guides/performance.md"
+        "architecture.md": "concepts/architecture.md"
+        "configuration.md": "reference/configuration.md"
+        "distribution.md": "reference/distribution.md"
+        "python.md": "reference/python.md"
 
 markdown_extensions:
   - admonition
@@ -114,23 +134,22 @@ nav:
   - Getting started: getting-started.md
   - Guides:
       - guides/index.md
-      - Showcases: showcases.md
-      - Visual demos: demo.md
-      - Delta tables: delta.md
-      - Iceberg tables: iceberg.md
-      - Databricks authentication: auth.md
-      - Performance: performance.md
+      - Showcases: guides/showcases.md
+      - Visual demos: guides/demo.md
+      - Delta tables: guides/delta.md
+      - Iceberg tables: guides/iceberg.md
+      - Databricks authentication: guides/auth.md
+      - Performance: guides/performance.md
   - Reference:
       - reference/index.md
-      - CLI: cli.md
-      - Configuration: configuration.md
-      - Distribution: distribution.md
-      - profile: profile.md
-      - diff: diff.md
-      - viz: viz.md
-      - Agent skills: skill.md
-      - Python: python.md
+      - CLI: reference/cli.md
+      - Documents: reference/documents.md
+      - Authentication: reference/authentication.md
+      - Configuration: reference/configuration.md
+      - Distribution: reference/distribution.md
+      - Python: reference/python.md
   - Concepts:
       - concepts/index.md
-      - Architecture: architecture.md
+      - Data modelling: concepts/data-modelling.md
+      - Architecture: concepts/architecture.md
   - Contributing: contributing.md
