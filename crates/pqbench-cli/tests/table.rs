@@ -226,16 +226,25 @@ fn bytemass_reads_a_table_file_from_stdin() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("blobs/"), "{stdout}");
-    assert!(stdout.contains("columns/url_encoded/bytemass"), "{stdout}");
+    assert!(stdout.contains("columns/url_encoded"), "{stdout}");
 }
 
 #[test]
-fn bytemass_rejects_a_size_mismatch_on_a_table_file() {
-    let document = table_file(LOCAL_TABLE, parquet_fixture(), Some(1));
-    let output = pipe(&["bytemass"], &document.to_string());
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("size differs from log"), "{stderr}");
+fn list_columns_reads_a_table_file_from_stdin() {
+    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
+    let document = table_file(LOCAL_TABLE, parquet_fixture(), Some(size));
+    let output = pipe(&["list", "columns"], &document.to_string());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("columns/url_encoded"), "{stdout}");
+    assert!(
+        stdout.contains(r#""table":"catalogs/local/schemas/local/tables/t""#),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -267,10 +276,10 @@ fn bytemass_measures_mixed_table_ids() {
         .filter(|record| {
             record["name"]
                 .as_str()
-                .is_some_and(|name| pqbench::v1::name::parse_bytemass(name).is_some())
+                .is_some_and(|name| pqbench::v1::Column::parse_name(name).is_some())
         })
         .count();
-    // One Blob and seven Bytemass records per table file, for both ids.
+    // One Blob and seven Column records per table file, for both ids.
     assert_eq!(blobs, 2, "{records:?}");
     assert_eq!(columns, 14, "{records:?}");
 }

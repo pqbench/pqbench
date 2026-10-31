@@ -1054,11 +1054,11 @@ fn external_fixture_walks_to_bytemass() {
     assert!(
         records.iter().any(|record| record["name"]
             .as_str()
-            .is_some_and(|name| pqbench::v1::name::parse_bytemass(name).is_some())),
-        "{schema}: no Bytemass record"
+            .is_some_and(|name| pqbench::v1::Column::parse_name(name).is_some())),
+        "{schema}: no Column record"
     );
     println!(
-        "walk {schema}: {tables} tables, {file_count} files, {} bytemass records",
+        "walk {schema}: {tables} tables, {file_count} files, {} column records",
         records.len()
     );
 }

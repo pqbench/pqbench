@@ -42,7 +42,6 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         meta.partition_columns,
         Vec::new(),
         Vec::new(),
-        request.env.clone(),
     );
     info.columns = meta.columns;
     info.delta_properties = meta.properties;
@@ -111,10 +110,10 @@ fn local_root(path: &Path) -> Result<PathBuf, Error> {
 fn open_store(lake: &Lake, request: &LoadRequest) -> Result<LogStoreRef, Error> {
     let url = table_url(request)?;
     let mut builder = DeltaTableBuilder::from_url(url.clone()).map_err(delta_error)?;
-    if !request.env.is_empty() {
-        builder = builder.with_storage_options(request.env.clone().into_iter().collect());
+    if !lake.options().is_empty() {
+        builder = builder.with_storage_options(lake.options().iter().cloned().collect());
     }
-    if let Some(store) = shared_store(lake, &url, request)? {
+    if let Some(store) = shared_store(lake, &url)? {
         builder = builder.with_storage_backend(store, url);
     }
     builder.build_storage().map_err(delta_error)
@@ -123,24 +122,19 @@ fn open_store(lake: &Lake, request: &LoadRequest) -> Result<LogStoreRef, Error> 
 /// The store on the one shared HTTP client, for delta-rs to reuse instead of
 /// building a fresh client per table (each build re-parses the platform CA
 /// bundle). Only S3 reaches the S3 backend; other schemes build their own.
-fn shared_store(
-    lake: &Lake,
-    url: &Url,
-    request: &LoadRequest,
-) -> Result<Option<Arc<dyn deltalake::ObjectStore>>, Error> {
+fn shared_store(lake: &Lake, url: &Url) -> Result<Option<Arc<dyn deltalake::ObjectStore>>, Error> {
     #[cfg(feature = "aws")]
     {
         if matches!(url.scheme(), "s3" | "s3a") {
-            let options: Vec<(String, String)> = request.env.clone().into_iter().collect();
             let store = lake
                 .stores()
-                .root_store(url, &options)
+                .root_store(url, lake.options())
                 .map_err(|error| Error::Storage(Box::new(error)))?;
             return Ok(Some(store));
         }
     }
     #[cfg(not(feature = "aws"))]
-    let _ = (lake, url, request);
+    let _ = (lake, url);
     Ok(None)
 }
 

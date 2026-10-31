@@ -38,7 +38,7 @@ fn files_from_the_wild() {
     // files_from_the_wild, from line 95
     support::run(r#"pqb table-file data/samples/squad.parquet \
     | pqb bytemass \
-    | jq -r 'select(.name | endswith("/bytemass")) | [(.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), .compressed_bytes] | @tsv' \
+    | jq -r 'select(.mass) | [(.name | capture("/columns/(?<c>[^/]+)$").c), .mass.compressed_bytes] | @tsv' \
     | sort -k2 -nr"#, 96, Some(&["context                             8490172", "question                            3027096", "answers.text.list.item              1515148", "id                                   709562", "answers.answer_start.list.item       304136", "title                                 18488"]));
 }
 

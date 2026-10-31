@@ -22,7 +22,7 @@ from collections.abc import Iterator
 
 
 def stream(pqbench: str, paths: list[str], fan_out: int) -> Iterator[dict]:
-    """Yield the Blob and Bytemass records of `paths` as they arrive."""
+    """Yield the Blob and Column records of `paths` as they arrive."""
     names = subprocess.Popen(
         [pqbench, "table-file", *paths],
         stdout=subprocess.PIPE,
@@ -64,18 +64,19 @@ def summarize(records: Iterator[dict]) -> tuple[int, int, int, int, int]:
     first_column: dict[str, str] = {}
 
     for record in records:
-        if "row_group_count" in record:  # Blob: one per file
-            files += 1
-            file_bytes += record.get("size_bytes", 0)
-        elif "compressed_bytes" in record:  # Bytemass: one per column
+        name = record.get("name", "")
+        if "/columns/" in name:  # Column: one per column
+            mass = record.get("mass") or {}
             column_chunks += 1
-            column_bytes += record.get("compressed_bytes", 0)
-            blob, _, column = record.get("name", "").rpartition("/columns/")
-            column = column.removesuffix("/bytemass")
-            # A row group's value_count + null_count is the file's row count;
+            column_bytes += mass.get("compressed_bytes", 0)
+            blob, _, column = name.rpartition("/columns/")
+            # A column's value_count + null_count is the file's row count;
             # count it once per file, from the first column.
             if first_column.setdefault(blob, column) == column:
-                rows += record.get("value_count", 0) + record.get("null_count", 0)
+                rows += mass.get("value_count", 0) + mass.get("null_count", 0)
+        else:  # Blob: one per file
+            files += 1
+            file_bytes += record.get("size_bytes", 0)
 
     return files, rows, column_chunks, file_bytes, column_bytes
 

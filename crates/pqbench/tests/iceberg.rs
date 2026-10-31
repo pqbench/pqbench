@@ -16,7 +16,7 @@ use support::write_parquet;
 use url::Url;
 
 fn load_request(uri: impl Into<String>, version: Option<u64>) -> LoadRequest {
-    LoadRequest::new(uri, version, Default::default())
+    LoadRequest::new(uri, version)
 }
 
 #[derive(Serialize)]
@@ -232,23 +232,15 @@ fn dir_uri(path: &Path) -> String {
 async fn detect_names_iceberg_from_hint_metadata_json_and_table_root() {
     let fixture = Fixture::new();
     assert_eq!(
-        table::detect(
-            common::lake(),
-            &fixture.root.to_string_lossy(),
-            &Default::default()
-        )
-        .await
-        .unwrap(),
+        table::detect(common::lake(), &fixture.root.to_string_lossy())
+            .await
+            .unwrap(),
         TableFormat::Iceberg
     );
     assert_eq!(
-        table::detect(
-            common::lake(),
-            &fixture.metadata.to_string_lossy(),
-            &Default::default()
-        )
-        .await
-        .unwrap(),
+        table::detect(common::lake(), &fixture.metadata.to_string_lossy())
+            .await
+            .unwrap(),
         TableFormat::Iceberg
     );
 }
@@ -275,13 +267,9 @@ async fn detect_prefers_delta_when_a_uniform_table_has_both_markers() {
     let fixture = Fixture::new();
     fs::create_dir(fixture.root.join("_delta_log")).unwrap();
     assert_eq!(
-        table::detect(
-            common::lake(),
-            &fixture.root.to_string_lossy(),
-            &Default::default()
-        )
-        .await
-        .unwrap(),
+        table::detect(common::lake(), &fixture.root.to_string_lossy())
+            .await
+            .unwrap(),
         TableFormat::Delta
     );
 }
@@ -380,27 +368,16 @@ async fn load_then_bytemass_matches_footer_totals() {
     )
     .await
     .unwrap();
-    let files = pqbench::bytemass::measure_files(
-        common::lake(),
-        &pqbench::bytemass::BytemassRequest {
-            inputs: info.files.iter().map(|file| file.uri().unwrap()).collect(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(files.len(), 2);
-    let measured_values: u64 = files
-        .iter()
-        .flat_map(|file| &file.columns)
-        .map(|column| column.value_count.unwrap_or(0))
-        .sum();
+    let mut measured_values = 0;
+    let mut measured_bytes = 0;
+    for file in &info.files {
+        for column in common::columns(&file.uri().unwrap()).await {
+            let mass = column.mass.as_ref().expect("a measured column");
+            measured_values += mass.value_count.unwrap_or(0);
+            measured_bytes += mass.compressed_bytes.unwrap_or(0);
+        }
+    }
     assert_eq!(measured_values, 8);
-    let measured_bytes: u64 = files
-        .iter()
-        .flat_map(|file| &file.columns)
-        .map(|column| column.compressed_bytes.unwrap_or(0))
-        .sum();
     let mut expected_bytes = 0;
     for relative in ["data/first.parquet", "data/second.parquet"] {
         let mass = default_metadata_parser()

@@ -95,7 +95,7 @@ stream is already a per-column total:
 ```console run
 $ pqb table-file data/samples/squad.parquet \
 >     | pqb bytemass \
->     | jq -r 'select(.name | endswith("/bytemass")) | [(.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), .compressed_bytes] | @tsv' \
+>     | jq -r 'select(.mass) | [(.name | capture("/columns/(?<c>[^/]+)$").c), .mass.compressed_bytes] | @tsv' \
 >     | sort -k2 -nr
 context                             8490172
 question                            3027096

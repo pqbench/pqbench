@@ -66,7 +66,7 @@ fn viz_collects_a_bytemass_stream_into_html() {
 #[test]
 fn viz_places_a_fileless_measurement_under_the_local_table() {
     let blob = pqbench::v1::name::blob_name("/tmp/part-0.parquet");
-    let column = pqbench::v1::name::bytemass(&blob, "id");
+    let column = format!("{blob}/columns/id");
     let file = serde_json::json!({
         "name": blob,
         "size_bytes": 40,
@@ -76,12 +76,14 @@ fn viz_places_a_fileless_measurement_under_the_local_table() {
     });
     let row = serde_json::json!({
         "name": column,
-        "compressed_bytes": 8,
-        "uncompressed_bytes": 16,
-        "codec": "ZSTD",
-        "encodings": ["PLAIN"],
-        "value_count": 10,
-        "null_count": 0,
+        "mass": {
+            "compressed_bytes": 8,
+            "uncompressed_bytes": 16,
+            "codec": "ZSTD",
+            "encodings": ["PLAIN"],
+            "value_count": 10,
+            "null_count": 0,
+        },
     });
     let document = format!("{file}\n{row}\n");
     let directory = tempfile::tempdir().unwrap();
@@ -107,7 +109,7 @@ fn viz_places_a_fileless_measurement_under_the_local_table() {
 #[test]
 fn viz_embeds_the_ratio_uncompressed_over_compressed() {
     let blob = pqbench::v1::name::blob_name("/tmp/part-0.parquet");
-    let column = pqbench::v1::name::bytemass(&blob, "id");
+    let column = format!("{blob}/columns/id");
     let file = serde_json::json!({
         "name": blob,
         "size_bytes": 40,
@@ -116,9 +118,11 @@ fn viz_embeds_the_ratio_uncompressed_over_compressed() {
     });
     let row = serde_json::json!({
         "name": column,
-        "compressed_bytes": 8,
-        "uncompressed_bytes": 20,
-        "value_count": 10,
+        "mass": {
+            "compressed_bytes": 8,
+            "uncompressed_bytes": 20,
+            "value_count": 10,
+        },
     });
     let document = format!("{file}\n{row}\n");
     let directory = tempfile::tempdir().unwrap();

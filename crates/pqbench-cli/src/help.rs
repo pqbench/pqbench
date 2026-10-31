@@ -14,11 +14,11 @@ Commands compose on pipes: each writes a resource the next command reads.
 
   get           → Metastore / Catalog / Schema / Table
                   one resource of the walk
-  list          → Catalog / Schema / Table / TableFile
+  list          → Catalog / Schema / Table / TableFile / Column
                   a collection of the walk
   sample        → TableFile           keep a rate of them, by size
   credentials   → Table          check + vend read credentials
-  bytemass      → Blob + Bytemass      footer byte masses (one line per column)
+  bytemass      → Blob + Column        footer byte masses (alias for list columns)
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
   format        → tables               render a stream (NDJSON on stdin)
@@ -53,8 +53,8 @@ Documents:
   Schema                 a catalog's schemas (list schemas) / one record (get schema)
   Table                  a schema's tables (list tables) / one record (get table, credentials get)
   TableFile              one table file (list files, sample files, table-file)
-  Blob                   one file's footer facts (bytemass)
-  Bytemass               one column's byte mass (bytemass)
+  Blob                   one file's storage facts (list columns)
+  Column                 one file column and its byte mass (list columns)
   ColumnProfile          one column's profile (profile | format)
   pqbench.skill          name + description (pqbench skill with no args)
 
@@ -104,7 +104,8 @@ Format skills (read these when the input is Parquet or a table):
   pqbench command guide    docs/reference/cli.md
   pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/viz.md";
 
-pub const BYTEMASS_ABOUT: &str = "Per-column on-disk bytes from Parquet footers (no page decode)";
+pub const BYTEMASS_ABOUT: &str =
+    "Per-column on-disk bytes from Parquet footers (alias for `list columns`)";
 
 pub const BYTEMASS_LONG_ABOUT: &str = "\
 Read Parquet footers only and report the on-disk bytes of each column, its
@@ -116,8 +117,9 @@ names a table's files; `table-file PATH` names one path. A glob is a shell
 job on that list, not a bytemass feature. A table-file record carries the
 file's blob and, when vended, its lease.
 
-One `Blob` per file and one `Bytemass` per column, as NDJSON. `pqbench
-format` renders the columns as a table; pipe the stream to `viz`.";
+One `Blob` per file and one `Column` per column, with its byte mass nested,
+as NDJSON. `pqbench format` renders the columns as a table; pipe the stream to
+`viz`. `pqbench bytemass` is an alias for `pqbench list columns`.";
 
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
@@ -190,6 +192,8 @@ List a collection of the walk, by name:
               line each — the record `get table` enriches
   files       a table's active files (Table refs on standard input), one
               TableFile line each
+  columns     a file's columns and their byte masses (TableFile refs on
+              standard input), one Column line each
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
 PQB_TABLE_FORMAT=iceberg the schema and table levels speak Iceberg REST
@@ -199,8 +203,9 @@ Unity fills a table's storage location in the listing; Iceberg leaves it to
 `get table`.
 
 `list files` resolves a snapshot and writes its active files, one TableFile per
-line, each with the table's lease — that stream is what `bytemass` measures. The
-files are the snapshot's own set, so a file a later commit removed is absent;
+line, each with the table's lease — that stream is what `list columns` measures;
+`bytemass` is an alias for that level. The files are the snapshot's own set, so
+a file a later commit removed is absent;
 nothing is collected, so a table of any size costs one log batch plus one file.
 --last/--partition keep
 only the files the log dates in a window (e.g. 1m, 1h, 1d, 1w, or one UTC day), so a
@@ -210,7 +215,7 @@ Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
 
   pqbench list catalogs | pqbench list schemas | pqbench list tables |
-  pqbench get table | pqbench list files | pqbench bytemass
+  pqbench get table | pqbench list files | pqbench list columns
 
 Detection: _delta_log is Delta (wins UniForm). Iceberg is
 metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json path.
@@ -224,12 +229,12 @@ Examples:
   pqbench list catalogs | pqbench list schemas | pqbench list tables
   echo '\"dbx_samples\"' | pqbench list schemas
   echo '\"dbx_samples.nyctaxi\"' | pqbench list tables
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench bytemass
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench list columns
 
 See also:
-  pqbench get --help       read one resource
-  pqbench bytemass --help  measure the files listed here
+  pqbench get --help          read one resource
+  pqbench bytemass --help     alias for `list columns`
   pqbench --help           catalog auth, PQB_* config
   docs/reference/cli.md";
 

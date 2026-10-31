@@ -35,6 +35,7 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &ListArgs) -> Result<(), Cli
         let lake = lake.clone();
         async move {
             let reference = table.name.clone();
+            let lake = lake.with_lease(table.credentials.as_ref());
             let files = pqbench::file::list::list(&lake, &table, window)
                 .await
                 .map_err(|error| crate::error::context(&reference, error))?;

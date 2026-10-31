@@ -1,15 +1,14 @@
-//! `bytemass`: read a Parquet footer and emit per-column byte masses.
+//! `list columns`: read a Parquet footer and emit per-column byte masses.
 
 use clap::Args;
 use futures_util::stream;
-use pqbench::bytemass;
-use pqbench::v1;
+use pqbench::{blob, bytemass, v1};
 
 use crate::parse;
 use crate::source::{drive, flat_map};
 use crate::CliError;
 
-/// Arguments for `bytemass`.
+/// Arguments for `list columns`.
 #[derive(Args)]
 pub(crate) struct BytemassArgs {
     /// files in flight at once
@@ -17,16 +16,47 @@ pub(crate) struct BytemassArgs {
     fan_out: usize,
 }
 
-/// Measure each table file as its record arrives.
+/// List each table file's columns as its record arrives.
 pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(), CliError> {
-    let parents = parse::parents::<v1::TableFile>("bytemass").await?;
+    let parents = parse::parents::<v1::TableFile>("list columns").await?;
     let lake = lake.clone();
     let rows = flat_map(parents, args.fan_out, move |file: v1::TableFile| {
         let lake = lake.clone();
         async move {
-            let measured = bytemass::measure(&lake, &file).await?;
+            let name = file
+                .blob
+                .as_deref()
+                .ok_or_else(|| "a table-file record needs a blob to read".to_string())?;
+            let lake = lake.with_lease(file.credentials.as_ref());
+            let mut blob = blob::get(&lake, name).await?;
+            let mut columns = bytemass::list_columns(&lake, name).await?;
+            blob.row_group_count = Some(
+                columns
+                    .first()
+                    .and_then(|column| column.row_group_count)
+                    .unwrap_or(0),
+            );
+            blob.column_count = Some(columns.len() as u64);
+            if let Some(rate) = file.sample_rate {
+                if !(rate > 0.0 && rate <= 1.0) {
+                    return Err(format!(
+                        "a table file's sample rate must be in (0, 1], not {rate}"
+                    )
+                    .into());
+                }
+            }
+            blob.sample_rate = file.sample_rate;
+            let table = v1::name::parse_table_file(&file.name)
+                .map(|(table, _)| table)
+                .ok_or_else(|| {
+                    "a table-file record needs a catalogs/…/tables/… name".to_string()
+                })?;
+            for column in &mut columns {
+                column.table = Some(table.clone());
+                column.sample_rate = file.sample_rate;
+            }
             Ok(stream::iter(
-                measured_rows(measured).into_iter().map(Ok::<_, CliError>),
+                rows(blob, columns).into_iter().map(Ok::<_, CliError>),
             ))
         }
     });
@@ -38,13 +68,17 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(),
 #[serde(untagged)]
 enum Out {
     Blob(v1::Blob),
-    Column(v1::Bytemass),
+    Column(Box<v1::Column>),
 }
 
 /// The records one measured file writes, in order.
-fn measured_rows(measured: bytemass::MeasuredFile) -> Vec<Out> {
-    let mut rows = Vec::with_capacity(1 + measured.columns.len());
-    rows.push(Out::Blob(measured.blob));
-    rows.extend(measured.columns.into_iter().map(Out::Column));
+fn rows(blob: v1::Blob, columns: Vec<v1::Column>) -> Vec<Out> {
+    let mut rows = Vec::with_capacity(1 + columns.len());
+    rows.push(Out::Blob(blob));
+    rows.extend(
+        columns
+            .into_iter()
+            .map(|column| Out::Column(Box::new(column))),
+    );
     rows
 }

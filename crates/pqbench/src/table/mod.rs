@@ -187,9 +187,6 @@ pub struct TableInfo {
     /// for a Delta snapshot with no active files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub partitions: Vec<PartitionMass>,
-    /// Storage options from the producer. A pipe to `bytemass` reuses them.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub env: BTreeMap<String, String>,
 }
 
 impl TableInfo {
@@ -202,7 +199,6 @@ impl TableInfo {
         partition_columns: Vec<String>,
         log: Vec<v1::Commit>,
         files: Vec<v1::TableFile>,
-        env: BTreeMap<String, String>,
     ) -> Self {
         Self {
             file_selection: None,
@@ -217,7 +213,6 @@ impl TableInfo {
             log,
             files,
             partitions: Vec::new(),
-            env,
         }
     }
 }
@@ -272,8 +267,6 @@ pub struct LoadRequest {
     pub uri: String,
     /// Snapshot version; `None` selects the latest.
     pub snapshot_version: Option<u64>,
-    /// Storage options (`AWS_*` names), copied onto the record.
-    pub env: BTreeMap<String, String>,
     /// When false, omit first/last/null maps (keep `record_count` / `bytes_per_row`).
     pub file_stats: bool,
     /// When false, read only the snapshot metadata: no commit log, no active
@@ -287,17 +280,12 @@ pub struct LoadRequest {
 }
 
 impl LoadRequest {
-    /// Build a load request. `env` is passed to the storage backend.
+    /// Build a load request.
     #[must_use]
-    pub fn new(
-        uri: impl Into<String>,
-        snapshot_version: Option<u64>,
-        env: BTreeMap<String, String>,
-    ) -> Self {
+    pub fn new(uri: impl Into<String>, snapshot_version: Option<u64>) -> Self {
         Self {
             uri: uri.into(),
             snapshot_version,
-            env,
             file_stats: true,
             require_files: true,
             commit_versions: None,
@@ -342,15 +330,11 @@ impl LoadRequest {
 /// Fails when the location cannot be opened, a remote probe fails for a reason
 /// other than a missing marker, or no supported format is present.
 #[must_use = "detecting a format has no effect unless the result is used"]
-pub async fn detect(
-    lake: &Lake,
-    uri: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<v1::TableFormat, Error> {
+pub async fn detect(lake: &Lake, uri: &str) -> Result<v1::TableFormat, Error> {
     if is_local(uri) {
         local_format(&local_path(uri)?)?.ok_or_else(|| unrecognized(uri))
     } else {
-        remote_format(lake, uri, env)
+        remote_format(lake, uri)
             .await?
             .ok_or_else(|| unrecognized(uri))
     }
@@ -366,7 +350,7 @@ pub async fn detect(
 /// feature (`delta-s3` for S3). Iceberg needs `iceberg` (`iceberg-s3` for S3).
 #[must_use = "loading a table has no effect unless the result is used"]
 pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
-    let format = detect(lake, &request.uri, &request.env).await?;
+    let format = detect(lake, &request.uri).await?;
     match format {
         v1::TableFormat::Delta => delta::load(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
@@ -388,7 +372,7 @@ pub async fn stream_active_files(
     lake: &Lake,
     request: &LoadRequest,
 ) -> Result<FileStream<'static>, Error> {
-    let format = detect(lake, &request.uri, &request.env).await?;
+    let format = detect(lake, &request.uri).await?;
     match format {
         v1::TableFormat::Delta => delta::stream_active_files(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::stream_active_files(lake, request).await,
@@ -408,7 +392,7 @@ pub async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
 ) -> Result<CommitStream<'static>, Error> {
-    let format = detect(lake, &request.uri, &request.env).await?;
+    let format = detect(lake, &request.uri).await?;
     match format {
         v1::TableFormat::Delta => delta::stream_commits(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::stream_commits(lake, request).await,
@@ -431,7 +415,7 @@ pub async fn stream_files(
     lake: &Lake,
     request: &LoadRequest,
 ) -> Result<FileStream<'static>, Error> {
-    let format = detect(lake, &request.uri, &request.env).await?;
+    let format = detect(lake, &request.uri).await?;
     Ok(match format {
         v1::TableFormat::Delta => delta::stream_files(lake, request).await?.boxed(),
         v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await?.boxed(),
@@ -529,7 +513,6 @@ pub(crate) fn local_format(path: &Path) -> Result<Option<v1::TableFormat>, Error
 pub(crate) async fn remote_format(
     lake: &Lake,
     uri: &str,
-    env: &BTreeMap<String, String>,
 ) -> Result<Option<v1::TableFormat>, Error> {
     if uri
         .rsplit(['/', '\\'])
@@ -538,30 +521,20 @@ pub(crate) async fn remote_format(
     {
         return Ok(Some(v1::TableFormat::Iceberg));
     }
-    let options: Vec<(String, String)> = env
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    if probe(lake, uri, "_delta_log/_last_checkpoint", &options).await?
-        || probe(lake, uri, "_delta_log/00000000000000000000.json", &options).await?
+    if probe(lake, uri, "_delta_log/_last_checkpoint").await?
+        || probe(lake, uri, "_delta_log/00000000000000000000.json").await?
     {
         return Ok(Some(v1::TableFormat::Delta));
     }
-    if probe(lake, uri, "metadata/version-hint.text", &options).await? {
+    if probe(lake, uri, "metadata/version-hint.text").await? {
         return Ok(Some(v1::TableFormat::Iceberg));
     }
     Ok(None)
 }
 
-async fn probe(
-    lake: &Lake,
-    uri: &str,
-    relative: &str,
-    options: &[(String, String)],
-) -> Result<bool, Error> {
+async fn probe(lake: &Lake, uri: &str, relative: &str) -> Result<bool, Error> {
     let child = join_uri(uri, relative)?;
-    let reader =
-        object_store::open(lake, &child, options).map_err(|e| Error::Storage(Box::new(e)))?;
+    let reader = object_store::open(lake, &child).map_err(|e| Error::Storage(Box::new(e)))?;
     reader
         .exists()
         .await

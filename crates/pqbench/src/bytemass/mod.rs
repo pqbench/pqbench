@@ -1,17 +1,17 @@
-//! `bytemass`: the per-column byte masses of a parquet file.
+//! `bytemass`: the per-column byte masses of a Parquet file.
 //!
-//! The command is one function: [`bytemass`] takes a [`BytemassRequest`] and
-//! returns the measured columns, a `Vec<v1::Bytemass>` with one record per
-//! column. The CLI streams those records; `pqbench viz` collects them.
+//! [`list_columns`] lists one blob's columns, each carrying its
+//! [`v1::Bytemass`](crate::v1::Bytemass) when the footer was measured. The CLI
+//! streams those records; `pqbench viz` folds them.
 //!
 //! Each file's footer is read once and its column chunks are folded over the
-//! file's row groups into one [`v1::Bytemass`] per column.
+//! file's row groups into one mass per column.
 
 mod api;
 mod collection;
 mod remote;
 
-pub use api::{bytemass, measure, measure_file, measure_files, BytemassRequest, MeasuredFile};
+pub use api::list_columns;
 
 use std::fmt;
 
@@ -19,8 +19,8 @@ use std::fmt;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// No inputs were given.
-    NoInputs,
+    /// The name was not a blob name.
+    Name(String),
     /// A measured object was not a valid Parquet file.
     Invalid(String),
     /// The object store failed.
@@ -32,7 +32,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::NoInputs => write!(f, "no inputs"),
+            Error::Name(message) => write!(f, "{message}"),
             Error::Invalid(message) => write!(f, "{message}"),
             Error::Storage(_) => write!(f, "object storage failed"),
             Error::Parquet(_) => write!(f, "the parquet layer failed"),
@@ -45,7 +45,7 @@ impl std::error::Error for Error {
         match self {
             Error::Storage(error) => Some(error),
             Error::Parquet(error) => Some(error),
-            Error::NoInputs | Error::Invalid(_) => None,
+            Error::Name(_) | Error::Invalid(_) => None,
         }
     }
 }

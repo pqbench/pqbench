@@ -11,7 +11,7 @@ use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
 
 fn load_request(uri: impl Into<String>, version: Option<u64>) -> LoadRequest {
-    LoadRequest::new(uri, version, Default::default())
+    LoadRequest::new(uri, version)
 }
 
 #[tokio::test]
@@ -33,21 +33,12 @@ async fn load_emits_every_json_commit_and_only_active_files() {
     let mut paths: Vec<_> = info.files.iter().map(|file| file.path.as_str()).collect();
     paths.sort_unstable();
     assert_eq!(paths, ["part=a/added.parquet", "part=b/kept.parquet"]);
-    let files = pqbench::bytemass::measure_files(
-        common::lake(),
-        &pqbench::bytemass::BytemassRequest {
-            inputs: info.files.iter().map(|file| file.uri().unwrap()).collect(),
-            env: info.env.clone(),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(files.len(), 2);
-    let row_count: u64 = files
-        .iter()
-        .flat_map(|file| &file.columns)
-        .map(|column| column.value_count.unwrap_or(0))
-        .sum();
+    let mut row_count = 0;
+    for file in &info.files {
+        for column in common::columns(&file.uri().unwrap()).await {
+            row_count += column.mass.and_then(|mass| mass.value_count).unwrap_or(0);
+        }
+    }
     assert_eq!(row_count, 14);
 }
 
@@ -329,31 +320,19 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     assert_eq!(part_a.bytes_per_row, stats.bytes_per_row);
     assert_eq!(Some(part_a.size), added.size_bytes);
 
-    let files = pqbench::bytemass::measure_files(
-        common::lake(),
-        &pqbench::bytemass::BytemassRequest {
-            inputs: latest
-                .files
-                .iter()
-                .map(|file| file.uri().unwrap())
-                .collect(),
-            env: latest.env.clone(),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(files.len(), 2);
     let mut measured_bytes = 0;
     let mut measured_uncompressed = 0;
     let mut measured_values = 0;
-    for file in &files {
-        assert_eq!(file.columns.len(), 1);
-        let (_, column) =
-            pqbench::v1::name::parse_bytemass(&file.columns[0].name).expect("a bytemass name");
+    for file in &latest.files {
+        let columns = common::columns(&file.uri().unwrap()).await;
+        assert_eq!(columns.len(), 1);
+        let (_, _, column) =
+            pqbench::v1::Column::parse_name(&columns[0].name).expect("a column name");
         assert_eq!(column, "id");
-        measured_bytes += file.columns[0].compressed_bytes.unwrap_or(0);
-        measured_uncompressed += file.columns[0].uncompressed_bytes.unwrap_or(0);
-        measured_values += file.columns[0].value_count.unwrap_or(0);
+        let mass = columns[0].mass.as_ref().expect("a measured column");
+        measured_bytes += mass.compressed_bytes.unwrap_or(0);
+        measured_uncompressed += mass.uncompressed_bytes.unwrap_or(0);
+        measured_values += mass.value_count.unwrap_or(0);
     }
     assert_eq!(measured_values, 14);
     let mut bytes = 0;
@@ -410,24 +389,12 @@ async fn load_ignores_tombstoned_and_untracked_files() {
         .files
         .iter()
         .all(|file| file.path != "part=a/old file.parquet"));
-    let files = pqbench::bytemass::measure_files(
-        common::lake(),
-        &pqbench::bytemass::BytemassRequest {
-            inputs: latest
-                .files
-                .iter()
-                .map(|file| file.uri().unwrap())
-                .collect(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let row_count: u64 = files
-        .iter()
-        .flat_map(|file| &file.columns)
-        .map(|column| column.value_count.unwrap_or(0))
-        .sum();
+    let mut row_count = 0;
+    for file in &latest.files {
+        for column in common::columns(&file.uri().unwrap()).await {
+            row_count += column.mass.and_then(|mass| mass.value_count).unwrap_or(0);
+        }
+    }
     assert_eq!(row_count, 14);
     let previous = table::load(
         common::lake(),
@@ -497,14 +464,7 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
         .find(|file| file.path == "part=a/added.parquet")
         .unwrap();
     assert_eq!(added.size_bytes, Some(expected));
-    let rows = pqbench::bytemass::bytemass(
-        common::lake(),
-        &pqbench::bytemass::BytemassRequest {
-            inputs: vec![added.uri().unwrap()],
-            ..Default::default()
-        },
-    )
-    .await;
+    let rows = common::try_columns(&added.uri().unwrap()).await;
     assert!(rows.is_err(), "changed file should not measure");
     std::fs::remove_file(path).unwrap();
     let info = table::load(
@@ -518,16 +478,10 @@ async fn load_records_log_size_and_bytemass_sees_a_changed_file() {
         .iter()
         .find(|file| file.path == "part=a/added.parquet")
         .unwrap();
-    let error = pqbench::bytemass::bytemass(
-        common::lake(),
-        &pqbench::bytemass::BytemassRequest {
-            inputs: vec![added.uri().unwrap()],
-            ..Default::default()
-        },
-    )
-    .await
-    .err()
-    .unwrap();
+    let error = common::try_columns(&added.uri().unwrap())
+        .await
+        .err()
+        .unwrap();
     let mut message = error.to_string();
     let mut source = std::error::Error::source(&error);
     while let Some(error) = source {
@@ -622,20 +576,6 @@ async fn load_rejects_external_data_paths() {
     .unwrap()
     .to_string();
     assert!(error.contains("only relative data paths"), "{error}");
-}
-
-#[tokio::test]
-async fn load_copies_env_onto_the_document() {
-    let fixture = Fixture::new();
-    let mut env = std::collections::BTreeMap::new();
-    env.insert("AWS_REGION".into(), "us-east-1".into());
-    let info = table::load(
-        common::lake(),
-        &LoadRequest::new(fixture.path().to_string_lossy(), None, env.clone()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(info.env, env);
 }
 
 #[tokio::test]

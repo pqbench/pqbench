@@ -22,6 +22,8 @@ enum ListCollection {
     Tables(crate::table::list::ListArgs),
     /// List a table's active files (Table refs on stdin)
     Files(crate::file::list::ListArgs),
+    /// List a file's columns and their byte masses (Table-file refs on stdin)
+    Columns(crate::bytemass::BytemassArgs),
 }
 
 /// List a collection: the walk's list verb.
@@ -35,6 +37,7 @@ pub(crate) async fn run(
         ListCollection::Schemas(args) => crate::schema::list::run(workspace, args).await,
         ListCollection::Tables(args) => crate::table::list::run(workspace, args).await,
         ListCollection::Files(args) => crate::file::list::run(lake, args).await,
+        ListCollection::Columns(args) => crate::bytemass::run(lake, args).await,
     }
 }
 
@@ -46,6 +49,7 @@ impl ListArgs {
             ListCollection::Schemas(_) => "list schemas",
             ListCollection::Tables(_) => "list tables",
             ListCollection::Files(_) => "list files",
+            ListCollection::Columns(_) => "list columns",
         }
     }
 

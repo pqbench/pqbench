@@ -55,8 +55,8 @@ pub struct ColumnDelta {
 /// # Errors
 /// Rejects depth zero, duplicate columns, non-`Bytemass` names, or overflow.
 pub fn compare(
-    left: &[v1::Bytemass],
-    right: &[v1::Bytemass],
+    left: &[v1::Column],
+    right: &[v1::Column],
     depth: Option<usize>,
 ) -> Result<Vec<ColumnDelta>, Error> {
     if depth == Some(0) {
@@ -96,27 +96,28 @@ pub fn compare(
 }
 
 /// Sum bytes and values per rolled-up column path.
-fn summarize(rows: &[v1::Bytemass], depth: Option<usize>) -> Result<(Totals, Totals), Error> {
+fn summarize(rows: &[v1::Column], depth: Option<usize>) -> Result<(Totals, Totals), Error> {
     let mut names = BTreeSet::new();
     let mut bytes = Totals::new();
     let mut values = Totals::new();
     for row in rows {
-        let (_, column) = v1::name::parse_bytemass(&row.name)
-            .ok_or_else(|| Error::Invalid(format!("not a bytemass name: {}", row.name)))?;
+        let (_, _, column) = v1::Column::parse_name(&row.name)
+            .ok_or_else(|| Error::Invalid(format!("not a column name: {}", row.name)))?;
         if !names.insert(row.name.clone()) {
-            return Err(Error::Invalid(format!("duplicate bytemass: {}", row.name)));
+            return Err(Error::Invalid(format!("duplicate column: {}", row.name)));
         }
         let path = depth.map_or_else(
             || column.clone(),
             |depth| column.split('.').take(depth).collect::<Vec<_>>().join("."),
         );
+        let mass = row.mass.as_ref();
         let total = bytes.entry(path.clone()).or_default();
         *total = total
-            .checked_add(row.compressed_bytes.unwrap_or(0))
+            .checked_add(mass.and_then(|mass| mass.compressed_bytes).unwrap_or(0))
             .ok_or(Error::Overflow)?;
         let total = values.entry(path).or_default();
         *total = total
-            .checked_add(row.value_count.unwrap_or(0))
+            .checked_add(mass.and_then(|mass| mass.value_count).unwrap_or(0))
             .ok_or(Error::Overflow)?;
     }
     Ok((bytes, values))

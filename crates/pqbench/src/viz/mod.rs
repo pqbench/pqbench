@@ -171,7 +171,7 @@ pub struct ColumnNode {
 /// Fails when there are no columns or the HTML page cannot be written.
 pub fn write_report(
     prefix: &Path,
-    columns: &[v1::Bytemass],
+    columns: &[v1::Column],
     blobs: &[v1::Blob],
 ) -> Result<(), Error> {
     let report = fold(columns, blobs);
@@ -244,31 +244,37 @@ struct TableBytes {
 }
 
 /// Group the columns by their table and fold the totals up the hierarchy.
-fn fold(columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> Report {
+fn fold(columns: &[v1::Column], blobs: &[v1::Blob]) -> Report {
     let facts: BTreeMap<&str, &v1::Blob> = blobs
         .iter()
         .map(|blob| (blob.name.as_str(), blob))
         .collect();
     let mut tables: BTreeMap<(String, String, String), TableBytes> = BTreeMap::new();
     for column in columns {
-        let Some((blob, path)) = v1::name::parse_bytemass(&column.name) else {
+        let Some((service, locator, path)) = v1::Column::parse_name(&column.name) else {
             continue;
         };
+        let blob = v1::name::blob(&service, &locator);
         let Some(table) = resolve_table(column, &blob) else {
             continue;
         };
         let Some((catalog, schema, name)) = v1::Table::parse_name(&table) else {
             continue;
         };
-        let bytes = column.compressed_bytes.unwrap_or(0);
-        let values = column.value_count.unwrap_or(0);
+        let mass = column.mass.as_ref();
+        let bytes = mass.and_then(|mass| mass.compressed_bytes).unwrap_or(0);
+        let values = mass.and_then(|mass| mass.value_count).unwrap_or(0);
         let table = tables.entry((catalog, schema, name)).or_default();
         table.compressed_bytes += bytes;
-        table.uncompressed.add(column.uncompressed_bytes);
+        table
+            .uncompressed
+            .add(mass.and_then(|mass| mass.uncompressed_bytes));
         table.blobs.insert(blob);
         let total = table.columns.entry(path).or_default();
         total.compressed_bytes += bytes;
-        total.uncompressed.add(column.uncompressed_bytes);
+        total
+            .uncompressed
+            .add(mass.and_then(|mass| mass.uncompressed_bytes));
         total.value_count += values;
     }
 
@@ -427,7 +433,7 @@ fn sum_costs(costs: impl Iterator<Item = Option<CostEstimate>>) -> Option<CostEs
 
 /// The table a measurement names: the table-file's table, or the local table a
 /// bare path takes (the data model gives a path-read table `local.local`).
-fn resolve_table(column: &v1::Bytemass, blob: &str) -> Option<String> {
+fn resolve_table(column: &v1::Column, blob: &str) -> Option<String> {
     column.table.clone().or_else(|| {
         let uri = v1::name::blob_uri(blob)?;
         Some(v1::name::local_table(&uri))
@@ -524,13 +530,17 @@ mod tests {
         }
     }
 
-    fn column(file: &v1::Blob, table: Option<&str>, column: &str, bytes: u64) -> v1::Bytemass {
-        v1::Bytemass {
-            name: name::bytemass(&file.name, column),
+    fn column(file: &v1::Blob, table: Option<&str>, column: &str, bytes: u64) -> v1::Column {
+        let (service, locator) = name::parse_blob(&file.name).expect("a blob name");
+        v1::Column {
+            name: name::column(&service, &locator, column),
             table: table.map(str::to_string),
-            compressed_bytes: Some(bytes),
-            value_count: Some(10),
-            ..v1::Bytemass::default()
+            mass: Some(v1::Bytemass {
+                compressed_bytes: Some(bytes),
+                value_count: Some(10),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
         }
     }
 
@@ -540,11 +550,14 @@ mod tests {
         path: &str,
         compressed_bytes: u64,
         uncompressed_bytes: u64,
-    ) -> v1::Bytemass {
-        v1::Bytemass {
-            uncompressed_bytes: Some(uncompressed_bytes),
-            ..column(file, table, path, compressed_bytes)
-        }
+    ) -> v1::Column {
+        let mut column = column(file, table, path, compressed_bytes);
+        column
+            .mass
+            .as_mut()
+            .expect("the helper sets a mass")
+            .uncompressed_bytes = Some(uncompressed_bytes);
+        column
     }
 
     #[test]

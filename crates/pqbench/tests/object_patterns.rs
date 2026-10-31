@@ -18,6 +18,6 @@ fn key_patterns_keep_path_boundaries_and_literal_prefixes() {
 #[tokio::test]
 async fn exact_uris_and_percent_escaped_wildcards_never_list() {
     for uri in ["s3://bucket/path.parquet", "s3://bucket/literal%2A.parquet"] {
-        assert_eq!(expand_glob(common::lake(), uri, &[]).await.unwrap(), [uri]);
+        assert_eq!(expand_glob(common::lake(), uri).await.unwrap(), [uri]);
     }
 }

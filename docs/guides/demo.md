@@ -34,7 +34,7 @@ $ cat docker/e2e-lakehouse/table.ndjson \
 >   | pqb ls files \
 >   | jq -c 'select(.name | contains("/files/part-"))' \
 >   | pqb bytemass \
->   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
+>   | jq -c 'select(.mass) | {column: (.name | capture("/columns/(?<c>[^/]+)$").c), compressed_bytes: .mass.compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # first N by name: sort the file records, cap them, then measure
@@ -42,7 +42,7 @@ $ cat docker/e2e-lakehouse/table.ndjson \
 >   | pqb ls files \
 >   | sort | head -10 \
 >   | pqb bytemass \
->   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
+>   | jq -c 'select(.mass) | {column: (.name | capture("/columns/(?<c>[^/]+)$").c), compressed_bytes: .mass.compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 
 # every Nth file
@@ -50,7 +50,7 @@ $ cat docker/e2e-lakehouse/table.ndjson \
 >   | pqb ls files \
 >   | awk 'NR % 2 == 1' \
 >   | pqb bytemass \
->   | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1
+>   | jq -c 'select(.mass) | {column: (.name | capture("/columns/(?<c>[^/]+)$").c), compressed_bytes: .mass.compressed_bytes}' | tail -1
 {"column":"label","compressed_bytes":72}
 ```
 

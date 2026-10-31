@@ -29,7 +29,8 @@ pub(crate) async fn run(
     let parents = parse::parents::<v1::Table>("get table").await?;
     drive(map(parents, args.fan_out, |table: v1::Table| async move {
         let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
-        let mut record = pqbench::table::get::get(workspace, lake, &table).await;
+        let lake = lake.with_lease(lease.as_ref());
+        let mut record = pqbench::table::get::get(workspace, &lake, &table).await;
         if let Ok(record) = &mut record {
             record.credentials = lease;
         }

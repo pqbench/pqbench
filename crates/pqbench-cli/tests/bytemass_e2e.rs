@@ -21,7 +21,7 @@ fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
 /// The column a `…/columns/{column}/bytemass` name measures, decoded from the
 /// name's `columns` segment.
 fn column_name(record: &serde_json::Value) -> Option<String> {
-    pqbench::v1::name::parse_bytemass(record["name"].as_str()?).map(|(_, column)| column)
+    pqbench::v1::Column::parse_name(record["name"].as_str()?).map(|(_, _, column)| column)
 }
 
 /// Whether the record's `name` is a `Blob`.
@@ -73,8 +73,14 @@ fn bytemass_streams_column_rows() {
         .iter()
         .filter(|record| column_name(record).is_some())
     {
-        assert!(record["compressed_bytes"].as_u64().unwrap() > 0, "{record}");
-        assert!(record["value_count"].as_u64().unwrap() > 0, "{record}");
+        assert!(
+            record["mass"]["compressed_bytes"].as_u64().unwrap() > 0,
+            "{record}"
+        );
+        assert!(
+            record["mass"]["value_count"].as_u64().unwrap() > 0,
+            "{record}"
+        );
     }
 
     let last = records.last().unwrap();
@@ -114,10 +120,10 @@ fn bytemass_rows_include_footer_facts() {
     assert!(!rows.is_empty());
     assert!(rows
         .iter()
-        .all(|row| !row["encodings"].as_array().unwrap().is_empty()));
+        .all(|row| !row["mass"]["encodings"].as_array().unwrap().is_empty()));
     assert!(rows
         .iter()
-        .all(|row| row["value_count"].as_u64().unwrap() > 0));
+        .all(|row| row["mass"]["value_count"].as_u64().unwrap() > 0));
 }
 
 /// End-to-end: a reader that closes early ends the stream, not the command.

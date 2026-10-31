@@ -55,7 +55,8 @@ impl std::error::Error for Error {
 /// cannot be shown to be in the window, so it is dropped.
 ///
 /// Each file is named as `{table}/files/{path}` and carries the table's lease,
-/// so a reader of the emitted record needs no catalog call.
+/// so a reader of the emitted record needs no catalog call. The caller scopes
+/// `lake` with that lease (`Lake::with_lease`).
 ///
 /// # Errors
 /// Fails when the table names no storage root or cannot be loaded. A failure
@@ -68,18 +69,13 @@ pub async fn list(
     let uri = table.uri.as_deref().ok_or_else(|| {
         Error::Invalid("a table record has no storage path; run `pqbench get table` first".into())
     })?;
-    let env = table
-        .credentials
-        .as_ref()
-        .map(v1::Credentials::to_env)
-        .unwrap_or_default();
     let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
     let name = table.name.clone();
     // Iceberg records no per-file time, so a window over it can only drop
     // everything: say so rather than return an empty listing that looks like an
     // empty table.
     if window.is_some() {
-        let format = crate::table::detect(lake, uri, &env)
+        let format = crate::table::detect(lake, uri)
             .await
             .map_err(Error::Table)?;
         if format == v1::TableFormat::Iceberg {
@@ -90,7 +86,7 @@ pub async fn list(
     }
     // The files are the snapshot's own active set; the reader walks the
     // snapshot and never builds the commit record.
-    let request = crate::table::LoadRequest::new(uri.to_string(), table.snapshot_version, env);
+    let request = crate::table::LoadRequest::new(uri.to_string(), table.snapshot_version);
     let files = crate::table::stream_active_files(lake, &request)
         .await
         .map_err(Error::Table)?;

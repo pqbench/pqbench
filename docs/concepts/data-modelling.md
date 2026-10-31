@@ -28,8 +28,8 @@ response, such as `Credentials` or `ReadEligibility`.
 
 - A resource's first field is `name`, the full resource name (AIP-122).
 - The collection segment identifies the type: `…/tables/{table}` is a `Table`,
-  `…/blobs/{service}/{locator}` is a `Blob`, `…/columns/{column}/bytemass` is a
-  `Bytemass`. A reader never needs a tag to know what a line is.
+  `…/blobs/{service}/{locator}` is a `Blob`, `…/columns/{column}` is a
+  `Column`. A reader never needs a tag to know what a line is.
 - Names are relative (AIP-122) and are pqbench's own identifiers, not the
   backend's URL. The dialect maps a name to Unity's or Iceberg's REST endpoint,
   so no document carries a transport detail.
@@ -62,11 +62,12 @@ A resource has at most one canonical parent, and a `List` must not require two
 | `Table` | `Schema` |
 | `TableFile`, `Commit` | `Table` |
 | `Column` | `Blob` |
-| `Bytemass`, `ColumnProfile` | `Column` |
+| `ColumnProfile` | `Column` |
 
 `Blob` is the exception: it is storage-rooted (`blobs/{service}/{locator}`), so
 a bare object or a local path names a resource like any other, and it has no
-parent.
+parent. `Bytemass` is a value on `Column`, not a resource: one footer read
+produces a column's mass with the column, so it has no name of its own.
 
 Two consequences:
 

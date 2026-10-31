@@ -1,102 +1,120 @@
-//! Measure Parquet files into per-column byte masses.
+//! Read a blob's footer and fold its column chunks into per-column masses.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{read_file_masses, ColumnMass, FileMass};
 use crate::v1;
 use crate::Lake;
 
-use super::api::MeasuredFile;
 use super::remote;
 use super::Error;
 
-/// Expand the inputs, measure each file's footer, and fold its column chunks
-/// into one [`v1::Bytemass`] per column.
-pub(super) async fn measure_files(
-    lake: &Lake,
-    inputs: &[String],
-    env: &BTreeMap<String, String>,
-) -> Result<Vec<MeasuredFile>, Error> {
-    let mut files = Vec::new();
-    for uri in inputs {
-        files.push(measure_file(lake, uri, env).await?);
-    }
-    Ok(files)
+/// List the blob's columns, each with its byte mass.
+pub(super) async fn list_columns(lake: &Lake, name: &str) -> Result<Vec<v1::Column>, Error> {
+    let uri = v1::name::blob_uri(name)
+        .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
+    let mass = read_input(lake, &uri).await?;
+    columns(name, mass)
 }
 
-/// Measure one file: its footer read once, its chunks folded per column.
-pub(super) async fn measure_file(
-    lake: &Lake,
-    uri: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<MeasuredFile, Error> {
-    let (stat, mass) = read_input(lake, uri, env).await?;
-    Ok(measured_file(uri, &stat, mass))
+/// The running fold of one column's chunks.
+struct Fold {
+    mass: v1::Bytemass,
+    chunks: usize,
+    codec: Option<String>,
+    codec_mixed: bool,
 }
 
-/// Name a file's masses: its `Blob`, and each column's `Bytemass` under it.
-fn measured_file(uri: &str, stat: &ObjectStat, mass: FileMass) -> MeasuredFile {
-    let blob_name = v1::name::blob_name(uri);
-    let columns = fold(&blob_name, mass.columns);
-    let blob = v1::Blob {
-        name: blob_name,
-        size_bytes: Some(stat.size_bytes),
-        storage_class: stat.storage_class.clone(),
-        row_group_count: Some(mass.row_group_count as u64),
-        column_count: Some(columns.len() as u64),
-        ..v1::Blob::default()
-    };
-    MeasuredFile { blob, columns }
-}
-
-/// Fold one `ColumnMass` per chunk into one `Bytemass` per column.
-fn fold(blob_name: &str, chunks: Vec<ColumnMass>) -> Vec<v1::Bytemass> {
-    let mut at: BTreeMap<String, usize> = BTreeMap::new();
-    let mut columns: Vec<v1::Bytemass> = Vec::new();
-    for chunk in chunks {
-        let index = *at.entry(chunk.column.clone()).or_insert_with(|| {
-            columns.push(v1::Bytemass {
-                name: v1::name::bytemass(blob_name, &chunk.column),
+impl Fold {
+    fn new() -> Self {
+        Self {
+            mass: v1::Bytemass {
+                null_count: Some(0),
                 ..v1::Bytemass::default()
-            });
-            columns.len() - 1
-        });
-        let column = &mut columns[index];
-        column.compressed_bytes = add(column.compressed_bytes, chunk.compressed_bytes);
-        column.uncompressed_bytes = add(column.uncompressed_bytes, chunk.uncompressed_bytes);
-        column.value_count = add(column.value_count, chunk.num_values);
-        column.codec.get_or_insert(chunk.codec);
-        column.dictionary |= chunk.dictionary;
+            },
+            chunks: 0,
+            codec: None,
+            codec_mixed: false,
+        }
+    }
+
+    /// Fold one chunk into the column.
+    fn add(&mut self, chunk: ColumnMass) {
+        self.chunks += 1;
+        let mass = &mut self.mass;
+        mass.compressed_bytes = add(mass.compressed_bytes, chunk.compressed_bytes);
+        mass.uncompressed_bytes = add(mass.uncompressed_bytes, chunk.uncompressed_bytes);
+        mass.value_count = add(mass.value_count, chunk.num_values);
+        match &self.codec {
+            None => self.codec = Some(chunk.codec),
+            Some(codec) if *codec != chunk.codec => self.codec_mixed = true,
+            Some(_) => {}
+        }
+        mass.dictionary |= chunk.dictionary;
         for encoding in chunk.encodings {
-            if !column.encodings.contains(&encoding) {
-                column.encodings.push(encoding);
+            if !mass.encodings.contains(&encoding) {
+                mass.encodings.push(encoding);
             }
         }
-        if let Some(count) = chunk.null_count {
-            column.null_count = add(column.null_count, count);
-        }
-        if let Some(count) = chunk.distinct_count {
-            column.distinct_count = add(column.distinct_count, count);
-        }
-        if column.first_value.is_none() {
-            column.first_value = chunk.min_value;
-        }
-        if chunk.max_value.is_some() {
-            column.last_value = chunk.max_value;
+        // A group with no statistics makes the file total unknown, not smaller.
+        mass.null_count = match (mass.null_count, chunk.null_count) {
+            (_, None) => None,
+            (Some(total), Some(count)) => total.checked_add(count),
+            (None, Some(_)) => None,
+        };
+        // First/last and distinct are file facts only when there is one chunk:
+        // summing distinct counts double-counts values, and the first/last
+        // chunk is not the file's min/max unless the data is ordered.
+        if self.chunks == 1 {
+            mass.distinct_count = chunk.distinct_count;
+            mass.first_value = chunk.min_value;
+            mass.last_value = chunk.max_value;
+        } else {
+            mass.distinct_count = None;
+            mass.first_value = None;
+            mass.last_value = None;
         }
     }
-    for column in &mut columns {
-        column.bytes_per_value = ratio(column.compressed_bytes, column.value_count);
-        column.compression_ratio = ratio(column.uncompressed_bytes, column.compressed_bytes);
-        column.null_fraction = ratio(column.null_count, column.value_count);
+
+    /// The folded mass, with the ratios and the single codec resolved.
+    fn finish(mut self) -> v1::Bytemass {
+        self.mass.codec = (!self.codec_mixed).then_some(self.codec).flatten();
+        self.mass.bytes_per_value = ratio(self.mass.compressed_bytes, self.mass.value_count);
+        self.mass.compression_ratio =
+            ratio(self.mass.uncompressed_bytes, self.mass.compressed_bytes);
+        self.mass.null_fraction = ratio(self.mass.null_count, self.mass.value_count);
+        self.mass
     }
-    columns
+}
+
+/// Fold one `ColumnMass` per chunk into one [`v1::Column`] per leaf column.
+fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
+    let (service, locator) = v1::name::parse_blob(blob_name)
+        .ok_or_else(|| Error::Name(format!("{blob_name} is not a blobs/… name")))?;
+    let mut at: BTreeMap<String, usize> = BTreeMap::new();
+    let mut columns: Vec<v1::Column> = Vec::new();
+    let mut folds: Vec<Fold> = Vec::new();
+    for chunk in mass.columns {
+        let index = *at.entry(chunk.column.clone()).or_insert_with(|| {
+            columns.push(v1::Column {
+                name: v1::name::column(&service, &locator, &chunk.column),
+                row_group_count: Some(mass.row_group_count as u64),
+                ..v1::Column::default()
+            });
+            folds.push(Fold::new());
+            columns.len() - 1
+        });
+        folds[index].add(chunk);
+    }
+    for (column, fold) in columns.iter_mut().zip(folds) {
+        column.mass = Some(fold.finish());
+    }
+    Ok(columns)
 }
 
 fn add(total: Option<u64>, part: u64) -> Option<u64> {
-    Some(total.unwrap_or(0) + part)
+    total.unwrap_or(0).checked_add(part)
 }
 
 /// `numerator / denominator`, when the denominator is non-zero.
@@ -105,24 +123,9 @@ fn ratio(numerator: Option<u64>, denominator: Option<u64>) -> Option<f64> {
     (denominator > 0).then(|| numerator.unwrap_or(0) as f64 / denominator as f64)
 }
 
-async fn read_input(
-    lake: &Lake,
-    input: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<(ObjectStat, FileMass), Error> {
-    if input.contains("://") {
-        return remote::read_remote(
-            lake,
-            input,
-            env.iter().map(|(key, value)| (key.clone(), value.clone())),
-        )
-        .await;
+async fn read_input(lake: &Lake, uri: &str) -> Result<FileMass, Error> {
+    if uri.contains("://") {
+        return remote::read_remote(lake, uri).await;
     }
-    let mass = read_file_masses(Path::new(input))?;
-    let stat = ObjectStat {
-        size_bytes: mass.size_bytes,
-        identity: None,
-        storage_class: None,
-    };
-    Ok((stat, mass))
+    Ok(read_file_masses(Path::new(uri))?)
 }

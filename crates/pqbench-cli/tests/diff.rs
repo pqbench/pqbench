@@ -54,5 +54,5 @@ fn file_and_saved_stream_comparisons_agree() {
         .output()
         .unwrap();
     assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("bytemass stream"));
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("column stream"));
 }
