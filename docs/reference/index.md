@@ -20,7 +20,8 @@ wheel.
   environment, and their precedence.
 - [Distribution](distribution.md) — install the released binary, the supported
   targets, and how releases are cut.
-- [Python](python.md) — the binary wheel, and how to read its files.
+- [Python](python.md) — the binary wheel, and how to read its files. For
+  orchestration patterns, see the [Python guide](../guides/python.md).
 
 `pqbench --help` is the long page; `pqbench <command> --help` is local to that
 command. This section is the durable copy.

@@ -19,6 +19,8 @@ each command see the [Reference](../reference/cli.md).
   grant metadata access, and mint the OAuth M2M bearer.
 - [Performance](performance.md) — measure the metadata walk with `perf stat`
   and `perf record`, and read the result.
+- [Python orchestration](python.md) — drive the CLI from Python with bash
+  `-c`, a `Popen` chain, or plumbum, without giving up streaming.
 
 New to pqbench? Start with [Getting started](../getting-started.md) instead: it
 goes from install to a first treemap.

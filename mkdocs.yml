@@ -140,6 +140,7 @@ nav:
       - Iceberg tables: guides/iceberg.md
       - Databricks authentication: guides/auth.md
       - Performance: guides/performance.md
+      - Python orchestration: guides/python.md
   - Reference:
       - reference/index.md
       - CLI: reference/cli.md

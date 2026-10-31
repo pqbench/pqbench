@@ -28,55 +28,54 @@ $ python -m pip install python/dist/*.whl
 
 Python runs the CLI and reads what it wrote. Nothing else.
 
+The shortest version lets bash own the pipe:
+
 ```python
-import os
 import subprocess
 
-def run(script: str) -> None:
-    subprocess.run(
-        ["bash", "-o", "pipefail", "-c", script],
-        check=True,
-        env=dict(os.environ),   # PQB_ENDPOINT / PQB_TOKEN live here, not argv
-    )
-
-run("""
-    set -euo pipefail
-    pqbench list catalogs \
-      | pqbench ratelimit --rate 15 \
-      | pqbench list schemas \
-      | pqbench list tables \
-      | pqbench credentials check \
-      | pqbench credentials get \
-      | pqbench get table \
-      | pqbench list files \
-      | zstd -3 -T1 > .files.jsonl.zst
-    mv .files.jsonl.zst files.jsonl.zst
-""")
+subprocess.run(
+    [
+        "bash",
+        "-o",
+        "pipefail",
+        "-c",
+        "pqbench table-file examples/quickstart.parquet "
+        "| pqbench bytemass > bytemass.ndjson",
+    ],
+    check=True,
+)
 ```
 
 `pipefail` is what makes the pipeline fail when an earlier stage does: without
-it, `zstd` sees EOF from a dead producer, compresses an empty or truncated
-stream, and exits 0. The hidden temp name plus `mv` keeps a reader from seeing a
-partial part; it is required only when something reads the directory while the
-pipeline runs.
+it, `bytemass` sees EOF from a dead producer, writes a partial stream, and exits
+0. The child inherits the environment; keep `PQB_ENDPOINT` / `PQB_TOKEN` there,
+not in argv.
 
-Then read the artifact with whatever engine you already use:
+`subprocess.run` is one command at a time. When you want the records in Python
+as they arrive, use `subprocess.Popen` or a pipeline library such as
+[plumbum](https://plumbum.readthedocs.io/). The
+[Python orchestration guide](https://pqbench.github.io/pqbench/guides/python/)
+walks through all three patterns and the trade-offs; the repository ships
+runnable versions under
+[`examples/python/`](https://github.com/pqbench/pqbench/tree/main/examples/python).
 
-```python
-import polars as pl
-
-files = pl.scan_ndjson("files.jsonl.zst")
-```
-
-```python
-files = spark.read.json("files.jsonl.zst")
-```
+Then read the measurement stream. It mixes one `Blob` per file with one
+`Bytemass` per column, so filter on the fields you need:
 
 ```python
-import duckdb
+import json
 
-duckdb.sql("select * from read_json_auto('files.jsonl.zst')")
+with open("bytemass.ndjson") as stream:
+    for line in stream:
+        record = json.loads(line)
+        if "compressed_bytes" in record:  # a column measurement
+            print(record["name"], record["compressed_bytes"])
 ```
+
+The file-list artifact (`pqbench list files`) is uniform and reads directly
+with polars, DuckDB, or Spark; the
+[Python orchestration guide](https://pqbench.github.io/pqbench/guides/python/)
+shows those.
 
 ## What the wheel is not
 
