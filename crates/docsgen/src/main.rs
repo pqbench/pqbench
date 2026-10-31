@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let current = std::fs::read_to_string(&path)?;
             if current != reference {
                 eprintln!("{} is stale; run `make sync-docs`", path.display());
+                report_first_difference(&current, &reference);
                 std::process::exit(1);
             }
         }
@@ -34,6 +35,32 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 fn render() -> String {
     let options = MarkdownOptions::new().title("CLI reference".to_string());
     clap_markdown::help_markdown_custom::<pqbench_cli::Cli>(&options)
+}
+
+/// Point at the first line that differs, so a stale-reference failure says
+/// what changed instead of only that something did.
+fn report_first_difference(current: &str, reference: &str) {
+    let current_lines: Vec<&str> = current.lines().collect();
+    let reference_lines: Vec<&str> = reference.lines().collect();
+    for (index, (current_line, reference_line)) in
+        current_lines.iter().zip(&reference_lines).enumerate()
+    {
+        if current_line != reference_line {
+            eprintln!("first difference at line {}:", index + 1);
+            eprintln!("  committed: {current_line:?}");
+            eprintln!("  generated: {reference_line:?}");
+            return;
+        }
+    }
+    match current_lines.len().cmp(&reference_lines.len()) {
+        std::cmp::Ordering::Less => {
+            eprintln!("generated has extra line {}", current_lines.len() + 1);
+        }
+        std::cmp::Ordering::Greater => {
+            eprintln!("committed has extra line {}", reference_lines.len() + 1);
+        }
+        std::cmp::Ordering::Equal => eprintln!("files differ only in trailing whitespace"),
+    }
 }
 
 /// The committed reference, relative to the repository root.
