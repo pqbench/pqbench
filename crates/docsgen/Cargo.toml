@@ -13,6 +13,7 @@ name = "docsgen"
 path = "src/main.rs"
 
 [dependencies]
+clap = "4"
 clap-markdown = "0.1.5"
 # The command definitions only; the docs generator never runs a command.
 pqbench-cli = { path = "../pqbench-cli", default-features = false }

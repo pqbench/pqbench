@@ -396,7 +396,7 @@ Read one table's record (`CATALOG.SCHEMA.TABLE`)
 
 * `--fan-out <FAN_OUT>` — tables in flight at once (default: cores) [env: PQB_TABLE_FAN_OUT]
 
-  Default value: `12`
+  Default value: `cores`
 
 
 

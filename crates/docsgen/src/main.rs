@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use clap::CommandFactory;
 use clap_markdown::MarkdownOptions;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -34,7 +35,23 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 fn render() -> String {
     let options = MarkdownOptions::new().title("CLI reference".to_string());
-    clap_markdown::help_markdown_custom::<pqbench_cli::Cli>(&options)
+    let command = normalize_defaults(pqbench_cli::Cli::command(), None);
+    clap_markdown::help_markdown_command_custom(&command, &options)
+}
+
+/// Keep the reference independent of the machine that generated it.
+///
+/// `get table --fan-out` defaults to the machine's core count, so rendering the
+/// command tree directly would put `12` on one machine and `4` on another. The
+/// help text already says "cores"; render that instead of the number.
+fn normalize_defaults(command: clap::Command, parent: Option<&str>) -> clap::Command {
+    let name = command.get_name().to_owned();
+    let command = if parent == Some("get") && name == "table" {
+        command.mut_arg("fan_out", |arg| arg.default_value("cores"))
+    } else {
+        command
+    };
+    command.mut_subcommands(|sub| normalize_defaults(sub, Some(&name)))
 }
 
 /// Point at the first line that differs, so a stale-reference failure says
