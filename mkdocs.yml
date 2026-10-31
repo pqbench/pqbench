@@ -87,10 +87,10 @@ plugins:
   - redirects:
       redirect_maps:
         "cli.md": "reference/cli.md"
-        "profile.md": "reference/cli.md"
-        "diff.md": "reference/cli.md"
-        "viz.md": "reference/cli.md"
-        "skill.md": "reference/cli.md"
+        "profile.md": "reference/profile.md"
+        "diff.md": "reference/diff.md"
+        "viz.md": "reference/viz.md"
+        "skill.md": "reference/skill.md"
         "delta.md": "guides/delta.md"
         "iceberg.md": "guides/iceberg.md"
         "demo.md": "guides/demo.md"
@@ -144,6 +144,10 @@ nav:
       - reference/index.md
       - CLI: reference/cli.md
       - Documents: reference/documents.md
+      - Profile: reference/profile.md
+      - Diff: reference/diff.md
+      - Visualization: reference/viz.md
+      - Agent skills: reference/skill.md
       - Authentication: reference/authentication.md
       - Configuration: reference/configuration.md
       - Distribution: reference/distribution.md

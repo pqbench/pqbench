@@ -1,3 +1,4 @@
 *.parquet filter=lfs diff=lfs merge=lfs -text
 # Tiny committed smoke sample; keep it a plain git blob (no git-lfs needed).
 examples/quickstart.parquet -filter -diff -merge
+docs/reference/cli.md text eol=lf

@@ -31,7 +31,7 @@ is missing or stale.
   are inline `aipnaming: allow(...)` with a reason.
 - [x] **Perf** — `perf stat` (+ `perf record` for the hot path) on the command;
   wall time and bytes read for remote; obvious latency flagged, numbers
-  recorded in `docs/guides/performance.md`.
+  recorded in the pull request.
 - [x] **Docs** — the page for the change (`docs/guides/…`, `docs/concepts/…`, or
   the generated `docs/reference/cli.md`); `make check-docs` clean.
 

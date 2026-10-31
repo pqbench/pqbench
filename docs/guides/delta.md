@@ -42,7 +42,8 @@ Build with the feature when you run from source: name the table on stdin, e.g.
 `echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' | cargo run -p pqbench-cli --features delta -- list files`, or run
 the same command in a container.
 
-Remote tables are resolved with `delta-s3` (which enables `aws`). Storage.
+Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
+access comes from the table ref or the process environment.
 A table's vended credentials travel as its `credentials` value (`AWS_*` keys);
 they are not written into the process environment. The cargo command is
 `echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/table"}' | cargo run -p pqbench-cli --features delta-s3 -- list files`.

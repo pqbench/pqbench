@@ -18,7 +18,10 @@ schema.
 | `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass` |
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `viz`, `diff` |
 | `Bytemass` | `blobs/{service}/{locator}/columns/{column}/bytemass` | [`bytemass`](cli.md#pqbench-bytemass) | `viz`, `diff` |
-| `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](cli.md#pqbench-profile) | humans / scripts |
+| `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |
+
+`profile` adds the CLI's `id` (the input path) to each `ColumnProfile` row;
+see [Profile](profile.md).
 
 A resource's `name` is its identity. The collection segment (`catalogs`,
 `schemas`, `tables`, `files`, `blobs`, `columns`) names the type, so no resource
@@ -35,8 +38,8 @@ Some commands emit a document that is not a resource: it has no addressable
 | --- | --- | --- |
 | `ReportRow` | [`lz`](cli.md#pqbench-lz), [`compression`](cli.md#pqbench-compression) | `name`, `codec`, `level`, `compress_estimate`, `decompress_estimate`, `compressed_bytes`, `uncompressed_bytes`, `ratio` |
 | `ColumnRow` | [`compression --per-column`](cli.md#pqbench-compression) | `ReportRow` fields plus `column` |
-| `ColumnDelta` | [`diff`](cli.md#pqbench-diff) | `column`, `left_bytes`, `right_bytes`, `delta_bytes`, `change_percent`, `left_values`, `right_values`, `left_bytes_per_value`, `right_bytes_per_value` |
-| `Skill` | [`skill`](cli.md#pqbench-skill) (no arguments) | `kind: "pqbench.skill"`, `version`, `name`, `description`, `documents` |
+| `ColumnDelta` | [`diff`](diff.md) | `column`, `left_bytes`, `right_bytes`, `delta_bytes`, `change_percent`, `left_values`, `right_values`, `left_bytes_per_value`, `right_bytes_per_value` |
+| `Skill` | [`skill`](skill.md) (no arguments) | `kind: "pqbench.skill"`, `version`, `name`, `description`, `documents` |
 
 `ColumnDelta` has no `name`, so `pqb fmt` cannot place it in a table; pipe it to
 `jq` or read the JSON. `Skill` is the one document that keeps an explicit

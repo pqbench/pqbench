@@ -1,9 +1,11 @@
 # Build the pqbench documentation site and publish it to GitHub Pages.
 #
 # The site is the repository's own Markdown under `docs/`, rendered by MkDocs
-# Material; `mkdocs build --strict` fails on a broken internal link or a page
-# missing from the nav, so the build is the docs gate. Sources outside `docs/`
-# that a page includes (`python/README.md`, `CONTRIBUTING.md`) are watched too.
+# Material; `mkdocs build --strict` fails on a page missing from the nav or a
+# broken anchor, so the build is the docs gate. Links to repository files
+# outside `docs/` are ignored by `mkdocs.yml`; PR CI also builds the site.
+# Sources outside `docs/` that a page includes (`python/README.md`,
+# `CONTRIBUTING.md`) are watched too.
 #
 # One-time setup: in the repository's Settings, set Pages -> Build and
 # deployment -> Source to "GitHub Actions".

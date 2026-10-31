@@ -102,7 +102,7 @@ Format skills (read these when the input is Parquet or a table):
   Unity / Databricks list  https://docs.databricks.com/api/workspace/tables/list
   AWS default credentials  https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html
   pqbench command guide    docs/reference/cli.md
-  pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/cli.md#pqbench-viz";
+  pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/viz.md";
 
 pub const BYTEMASS_ABOUT: &str = "Per-column on-disk bytes from Parquet footers (no page decode)";
 
@@ -352,7 +352,7 @@ Examples:
 See also:
   pqbench bytemass --help  produce the stream this command collects
   pqbench --help           documents
-  docs/reference/cli.md#pqbench-viz  docs/reference/cli.md";
+  docs/reference/viz.md  docs/reference/cli.md";
 
 pub const LZ_ABOUT: &str = "Codec sweep over raw file bytes (lzbench-style)";
 
@@ -421,7 +421,7 @@ See also:
   pqbench bytemass --help  footer byte masses without decoding rows
   pqbench compression --help  codec sweep over encoded pages
   pqbench --help
-  docs/reference/cli.md#pqbench-profile  docs/reference/cli.md";
+  docs/reference/profile.md  docs/reference/cli.md";
 
 pub const SKILL_ABOUT: &str = "Print a bundled agent skill (write / DDL / compression recipes)";
 
@@ -450,7 +450,7 @@ Examples:
 See also:
   pqbench profile --help     cheap column facts
   pqbench --help             documents
-  docs/reference/cli.md#pqbench-skill  docs/reference/cli.md";
+  docs/reference/skill.md  docs/reference/cli.md";
 
 pub const SETUP_ABOUT: &str = "Print the walk's environment as shell exports to eval";
 

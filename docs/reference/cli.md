@@ -39,6 +39,7 @@ compress them (lz, compression), what a Delta or Iceberg table's files hold
 (list files), and what a decoded row sample holds (profile).
 Commands compose on pipes: each writes a resource the next command reads.
 
+```text
   get           → Metastore / Catalog / Schema / Table
                   one resource of the walk
   list          → Catalog / Schema / Table / TableFile
@@ -49,6 +50,7 @@ Commands compose on pipes: each writes a resource the next command reads.
   viz           → PREFIX.html          collect the stream into a static treemap
   skill         → markdown             bundled agent recipes (write / DDL / codec)
   format        → tables               render a stream (NDJSON on stdin)
+```
 
 The walk reads with two verbs: `get` reads one resource, `list` lists a
 collection; `sample` reduces one.
@@ -61,6 +63,7 @@ Guide: docs/reference/cli.md
 
 **Usage:** `pqbench [OPTIONS] <COMMAND>`
 
+```console no-run
 Examples:
   pqbench table-file data.parquet | pqbench bytemass
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
@@ -84,10 +87,12 @@ Documents:
   Bytemass               one column's byte mass (bytemass)
   ColumnProfile          one column's profile (profile | format)
   pqbench.skill          name + description (pqbench skill with no args)
+```
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
 for s3://. A missing feature fails at runtime and names itself.
 
+```console no-run
 Auth (how to reach data):
   Local paths need no credentials.
 
@@ -129,7 +134,8 @@ Format skills (read these when the input is Parquet or a table):
   Unity / Databricks list  https://docs.databricks.com/api/workspace/tables/list
   AWS default credentials  https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html
   pqbench command guide    docs/reference/cli.md
-  pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/cli.md#pqbench-viz
+  pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/viz.md
+```
 
 ###### **Subcommands:**
 
@@ -164,6 +170,7 @@ Compare compressed column bytes from Parquet files or bytemass streams
 
 **Usage:** `pqbench diff [OPTIONS] <LEFT> <RIGHT>`
 
+
 ###### **Arguments:**
 
 * `<LEFT>`
@@ -185,6 +192,7 @@ renders it as a table.
 
 **Usage:** `pqbench lz [OPTIONS] <FILE>`
 
+```console no-run
 Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench lz file.bin | pqbench format
@@ -193,6 +201,7 @@ See also:
   pqbench compression --help  same sweep over Parquet pages (NONE input)
   pqbench --help
   docs/reference/cli.md
+```
 
 ###### **Arguments:**
 
@@ -225,6 +234,7 @@ then per-column rows); `pqbench format` renders it as a table.
 
 **Usage:** `pqbench compression [OPTIONS] <FILE>`
 
+```console no-run
 Examples:
   pqbench compression data.parquet
   pqbench compression data.parquet --per-column
@@ -235,6 +245,7 @@ See also:
   pqbench bytemass --help  on-disk bytes without a codec sweep
   pqbench --help
   docs/reference/cli.md
+```
 
 ###### **Arguments:**
 
@@ -275,6 +286,7 @@ format` renders the columns as a table; pipe the stream to `viz`.
 
 **Usage:** `pqbench bytemass [OPTIONS]`
 
+```console no-run
 Examples:
   pqbench table-file data.parquet | pqbench bytemass
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
@@ -285,6 +297,7 @@ See also:
   pqbench viz --help       collect the stream into a static HTML page
   pqbench --help           auth, documents, format skills
   docs/reference/cli.md
+```
 
 ###### **Options:**
 
@@ -298,12 +311,14 @@ See also:
 
 Read one resource of the walk, by type:
 
+```text
   metastore  the endpoint's record (name, uid, cloud, region), one line
   catalog    one catalog's record (name, catalog_type, comment, owner)
   schema     one schema's record (name, uid, display_name, comment, uri,
              properties), from a Schema ref
   table      one table's record (format, snapshot_version, declared_columns,
              partition_columns, properties), from a Table ref
+```
 
 The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
 PQB_TABLE_FORMAT; a `get` reads a catalog, so it needs an endpoint. `get`
@@ -328,6 +343,7 @@ The stream is NDJSON.
 
 **Usage:** `pqbench get <COMMAND>`
 
+```console no-run
 Examples:
   pqbench get metastore
   pqbench list catalogs | pqbench get catalog
@@ -340,6 +356,7 @@ See also:
   pqbench bytemass --help  measure the files the walk names
   pqbench --help           auth (AWS_*, catalog token), documents, format skills
   docs/reference/cli.md  docs/guides/delta.md  docs/guides/iceberg.md
+```
 
 ###### **Subcommands:**
 
@@ -357,12 +374,12 @@ Read the endpoint's metastore record
 **Usage:** `pqbench get metastore`
 
 
-
 ## `pqbench get catalog`
 
 Read one catalog's record
 
 **Usage:** `pqbench get catalog [OPTIONS]`
+
 
 ###### **Options:**
 
@@ -378,6 +395,7 @@ Read one schema's record (`CATALOG.SCHEMA`)
 
 **Usage:** `pqbench get schema [OPTIONS]`
 
+
 ###### **Options:**
 
 * `--fan-out <FAN_OUT>` — requests in flight at once
@@ -392,11 +410,12 @@ Read one table's record (`CATALOG.SCHEMA.TABLE`)
 
 **Usage:** `pqbench get table [OPTIONS]`
 
+
 ###### **Options:**
 
 * `--fan-out <FAN_OUT>` — tables in flight at once (default: cores) [env: PQB_TABLE_FAN_OUT]
 
-  Default value: `cores`
+  Default value: `the number of cores`
 
 
 
@@ -408,13 +427,12 @@ Render an NDJSON stream as tables
 
 **Command Alias:** `fmt`
 
-
-
 ## `pqbench table-file`
 
 Name storage paths as table-file records
 
 **Usage:** `pqbench table-file <PATHS>...`
+
 
 ###### **Arguments:**
 
@@ -426,6 +444,7 @@ Name storage paths as table-file records
 
 List a collection of the walk, by name:
 
+```text
   catalogs    the catalogs at the endpoint, one Catalog line each
   schemas     the schemas in a catalog (Catalog refs on standard input), one
               Schema line each
@@ -433,6 +452,7 @@ List a collection of the walk, by name:
               line each — the record `get table` enriches
   files       a table's active files (Table refs on standard input), one
               TableFile line each
+```
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
 PQB_TABLE_FORMAT=iceberg the schema and table levels speak Iceberg REST
@@ -452,8 +472,10 @@ daily run reads the day's writes without walking what the table already held.
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
 
+```console no-run
   pqbench list catalogs | pqbench list schemas | pqbench list tables |
   pqbench get table | pqbench list files | pqbench bytemass
+```
 
 Detection: _delta_log is Delta (wins UniForm). Iceberg is
 metadata/version-hint.text, metadata/*.metadata.json, or a .metadata.json path.
@@ -465,6 +487,7 @@ The stream is NDJSON.
 
 **Command Alias:** `ls`
 
+```console no-run
 Examples:
   pqbench list catalogs
   pqbench list catalogs | pqbench list schemas | pqbench list tables
@@ -478,6 +501,7 @@ See also:
   pqbench bytemass --help  measure the files listed here
   pqbench --help           catalog auth, PQB_* config
   docs/reference/cli.md
+```
 
 ###### **Subcommands:**
 
@@ -495,12 +519,12 @@ List the catalogs at the endpoint
 **Usage:** `pqbench list catalogs`
 
 
-
 ## `pqbench list schemas`
 
 List the schemas in a catalog (`CATALOG`)
 
 **Usage:** `pqbench list schemas [OPTIONS]`
+
 
 ###### **Options:**
 
@@ -516,6 +540,7 @@ List the tables in a schema (`CATALOG.SCHEMA`)
 
 **Usage:** `pqbench list tables [OPTIONS]`
 
+
 ###### **Options:**
 
 * `--fan-out <FAN_OUT>` — schemas in flight at once
@@ -530,13 +555,14 @@ List a table's active files (Table refs on stdin)
 
 **Usage:** `pqbench list files [OPTIONS]`
 
+
 ###### **Options:**
 
 * `--fan-out <FAN_OUT>` — tables in flight at once
 
   Default value: `64`
 * `--partition <DATE>` — read only files the log dates in one UTC day: an ISO date, YYYY-MM-DD; e.g. 2026-10-28
-* `--last <WINDOW>` — read only files the log dates in the last WINDOW, ending now: e.g. 1d, 1w
+* `--last <WINDOW>` — read only files the log dates in the last WINDOW, ending now: e.g. 1m, 1h, 1d, 1w
 
 
 
@@ -562,6 +588,7 @@ standard error.
 
 **Usage:** `pqbench sample <COMMAND>`
 
+```console no-run
 Examples:
   cat table.ndjson | pqbench list files | pqbench sample files --rate 1/100 | pqbench bytemass
   cat table.ndjson | pqbench list files | pqbench sample files --rate 1/10 | pqbench bytemass
@@ -571,6 +598,7 @@ See also:
   pqbench bytemass --help    measure the kept files
   pqbench --help             catalog auth, PQB_* config
   docs/reference/cli.md
+```
 
 ###### **Subcommands:**
 
@@ -583,6 +611,7 @@ See also:
 Keep a rate of a table's files, by size
 
 **Usage:** `pqbench sample files [OPTIONS]`
+
 
 ###### **Options:**
 
@@ -598,6 +627,7 @@ Check and vend read credentials for table-refs. The endpoint, token, dialect,
 and object-store options come from the environment: PQB_ENDPOINT / PQB_TOKEN /
 PQB_TABLE_FORMAT and AWS_*.
 
+```text
   check  the walk's single filter: each Table on
          standard input is checked against the catalog. A `system` catalog
          ref, a view (the catalog reports no location), and a table on
@@ -621,11 +651,13 @@ PQB_TABLE_FORMAT and AWS_*.
          it returns, for the next storage read; a catalog that does not serve
          it falls back to the delegated loadTable, and a table the catalog
          cannot serve via Iceberg passes through with its own env.
+```
 
 The stream is NDJSON.
 
 **Usage:** `pqbench credentials <COMMAND>`
 
+```console no-run
 Examples:
   export PQB_ENDPOINT=… PQB_TOKEN=…
   echo '{"name":"catalogs/dbx_samples/schemas/nyctaxi"}' | pqbench list tables | pqbench credentials check | pqbench credentials get
@@ -635,6 +667,7 @@ See also:
   pqbench list --help  the tables in a schema
   pqbench --help          catalog auth, PQB_* config
   docs/reference/cli.md
+```
 
 ###### **Subcommands:**
 
@@ -649,6 +682,7 @@ Put vended read credentials on each table-ref
 
 **Usage:** `pqbench credentials get [OPTIONS]`
 
+
 ###### **Options:**
 
 * `--fan-out <FAN_OUT>` — requests in flight at once
@@ -662,6 +696,7 @@ Put vended read credentials on each table-ref
 Check each table-ref is readable outside Databricks compute
 
 **Usage:** `pqbench credentials check [OPTIONS]`
+
 
 ###### **Options:**
 
@@ -678,8 +713,10 @@ record kind observes at most --rate records per second (15 by default; 0
 turns pacing off). Nothing is dropped. One bucket per kind, so catalogs,
 schemas, and table refs pace independently — the walk's per-endpoint pace.
 
+```console no-run
   list catalogs | pqbench ratelimit | list schemas
   list schemas | pqbench ratelimit --rate 5 | list tables
+```
 
 A consumer that issues one request per record as it arrives sees the same
 rate. A 429 fails the level; retry it at a lower --rate.
@@ -688,6 +725,7 @@ rate. A 429 fails the level; retry it at a lower --rate.
 
 **Command Alias:** `rl`
 
+```console no-run
 Examples:
   pqbench list catalogs | pqbench ratelimit | pqbench list schemas
   pqbench list schemas | pqbench ratelimit --rate 5 | pqbench list tables
@@ -696,6 +734,7 @@ See also:
   pqbench list --help     the walk's collections
   pqbench get --help      read one resource of it
   docs/reference/cli.md
+```
 
 ###### **Options:**
 
@@ -722,6 +761,7 @@ One record per column, as NDJSON.
 
 **Usage:** `pqbench profile [OPTIONS] [INPUTS]...`
 
+```console no-run
 Examples:
   pqbench profile data.parquet
   pqbench profile data.parquet --columns 'text' --top 5
@@ -731,7 +771,8 @@ See also:
   pqbench bytemass --help  footer byte masses without decoding rows
   pqbench compression --help  codec sweep over encoded pages
   pqbench --help
-  docs/reference/cli.md#pqbench-profile  docs/reference/cli.md
+  docs/reference/profile.md  docs/reference/cli.md
+```
 
 ###### **Arguments:**
 
@@ -754,10 +795,12 @@ See also:
 Print an agent skill that is compiled into this binary: this is a
 document, like `--help`.
 
+```console no-run
   pqbench skill                       list skills as pqbench.skill lines
   pqbench skill parquet-advisor       the advisor workflow
   pqbench skill parquet-advisor recipes
                                       write-path, table DDL, codec levels
+```
 
 The advisor turns bytemass / profile facts into recipes
 (ingest settings, Iceberg/Delta/Spark/DuckDB DDL, compression level
@@ -765,6 +808,7 @@ with pros and cons). It does not measure files.
 
 **Usage:** `pqbench skill [NAMES]...`
 
+```console no-run
 Examples:
   pqbench skill
   pqbench skill parquet-advisor
@@ -776,7 +820,8 @@ Examples:
 See also:
   pqbench profile --help     cheap column facts
   pqbench --help             documents
-  docs/reference/cli.md#pqbench-skill  docs/reference/cli.md
+  docs/reference/skill.md  docs/reference/cli.md
+```
 
 ###### **Arguments:**
 
@@ -792,6 +837,7 @@ treemap of bytes per value. Does not measure files. `-o PREFIX` is required.
 
 **Usage:** `pqbench viz [OPTIONS] [INPUT]`
 
+```console no-run
 Examples:
   pqbench table-file data.parquet | pqbench bytemass | pqbench viz -o report
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o report
@@ -800,7 +846,8 @@ Examples:
 See also:
   pqbench bytemass --help  produce the stream this command collects
   pqbench --help           documents
-  docs/reference/cli.md#pqbench-viz  docs/reference/cli.md
+  docs/reference/viz.md  docs/reference/cli.md
+```
 
 ###### **Arguments:**
 
@@ -817,7 +864,9 @@ See also:
 Print the environment the metadata walk needs, as shell `export` lines, for
 the caller to evaluate:
 
+```text
   eval "$(pqbench setup)"
+```
 
 The endpoint and token resolve the way the Databricks SDKs do: the flag, then
 PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A notebook
@@ -826,13 +875,16 @@ DATABRICKS_* from it first. AWS_REGION comes from the flag or AWS_REGION (a
 vended lease carries no region); AWS_EC2_METADATA_DISABLED=true keeps the AWS
 SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
 
+```text
   endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
   token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
   format    --table-format | PQB_TABLE_FORMAT (unity default)
   region    --region   | AWS_REGION
+```
 
 **Usage:** `pqbench setup [OPTIONS]`
 
+```console no-run
 Examples:
   eval "$(pqbench setup --endpoint https://… --token dapi-… --region us-east-1)"
   DATABRICKS_HOST=https://… DATABRICKS_TOKEN=dapi-… eval "$(pqbench setup)"
@@ -843,6 +895,7 @@ See also:
   pqbench get --help          read a listed table's record
   pqbench --help              auth, PQB_* config
   docs/reference/cli.md
+```
 
 ###### **Options:**
 

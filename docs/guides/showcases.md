@@ -5,7 +5,7 @@ showcase below is a job you might actually run — find the columns that own the
 bytes, choose a codec, verify a layout change, read a file from the wild — with
 the numbers the tool printed.
 
-The first three run on the committed Reddit comments sample
+The first four run on the committed Reddit comments sample
 (`crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet`, 3000 rows, 7
 columns). The last two use larger public datasets committed under
 `data/samples/` (Git LFS). All six blocks run in the gate; after a clone that
