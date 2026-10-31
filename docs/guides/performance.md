@@ -1,10 +1,9 @@
 # Performance
 
-How to measure the metadata walk of
-[issue #58](https://github.com/pqbench/pqbench/issues/58) — the
-process-partitioned structure where the shell is the scheduler and each command
-resolves one level. This page is the recipe; the numbers belong in the pull
-request (see the Perf box in the template).
+How to measure the metadata walk — the process-partitioned structure where the
+shell is the scheduler and each command resolves one level. This page is the
+recipe; the numbers belong in the pull request (see the Perf box in the
+template).
 
 ## The structure
 

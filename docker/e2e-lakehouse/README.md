@@ -81,18 +81,14 @@ export AWS_ALLOW_HTTP=true AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
 jq -cn --arg uri "$(jq -r .storage_location <<< "$TABLE")" \
     '{name:"catalogs/local/schemas/local/tables/events", uri:$uri}' |
   "$BIN" list files |
-  "$BIN" list files |
   "$BIN" bytemass
 ```
 
 ```text
-column  type        codec   encodings                 bytes  values
-------  ----------  ------  ------------------------  -----  ------
-id      INT64       SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   BYTE_ARRAY  SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
-files: 1
-rows: 3
-columns: 2
+column  codec   encodings                 bytes  values
+------  ------  ------------------------  -----  ------
+id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
+label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
 ```
 
 `make lakehouse` runs exactly this walk as its last step, then lists the same
@@ -122,13 +118,13 @@ echo '{"name":"catalogs/pqbench/schemas/demo"}' |
 
 `make lakehouse` runs the Unity table walk, the Unity catalog walk, and this
 Iceberg walk. Stop after `pqbench list files` and pipe to `jq .` to read the
-partition document itself.
+`TableFile` records themselves.
 
 A table-file record names one blob; `pqbench table-file PATH` writes one, and
 `list files` writes one per file the walk names. `pqbench bytemass` measures
-them, and a table's files come from the walk, `pqbench list files |
-pqbench list files`. The walk's context is the environment: `PQB_ENDPOINT`,
-`PQB_TOKEN`, `PQB_TABLE_FORMAT` for the catalog, and `AWS_*` for storage.
+them, and a table's files come from the walk, `pqbench list files`. The walk's
+context is the environment: `PQB_ENDPOINT`, `PQB_TOKEN`, `PQB_TABLE_FORMAT` for
+the catalog, and `AWS_*` for storage.
 pqbench keeps no catalog dependency. A producer whose catalog vends expiring
 credentials puts them on the record's `credentials` instead, which travels to
 `bytemass`; only `AWS_*` names are accepted there, and anything else is a
@@ -169,7 +165,6 @@ export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION=us-e
 
 jq -cn --arg uri "$(jq -r .url /tmp/pqbench-vend.json)" \
     '{name:"catalogs/local/schemas/local/tables/events", uri:$uri}' |
-  pqbench list files |
   pqbench list files |
   pqbench bytemass
 ```

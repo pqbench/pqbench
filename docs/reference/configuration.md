@@ -46,7 +46,7 @@ The environment overrides the selected profile:
 | --- | --- |
 | `PQB_PROFILE` | the `~/.pqbenchrc` profile to run under |
 | `PQB_ENDPOINT` | workspace URL, Unity OSS, or Iceberg REST base |
-| `PQB_TOKEN` | bearer PAT (`dapi-…`) or OAuth token; list API only |
+| `PQB_TOKEN` | bearer PAT (`dapi-…`) or OAuth token; catalog API only |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg` |
 | `PQB_RATE` | default records per second for `ratelimit` (`15`; `0` disables pacing) |
 | `PQB_TABLE_FAN_OUT` | tables in flight for `get table` (default: the core count) |

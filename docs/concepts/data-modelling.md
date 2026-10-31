@@ -126,8 +126,7 @@ Two consequences:
 - Credentials ride beside the resource that needs them — a `Table`, a
   `TableFile` — as the resource's own `credentials` field, which
   the stage that read it sets, never inside the backend's document, so a
-  pipeline stays in band. They are treated as non-sensitive for now; a later
-  pass moves them off the wire.
+  pipeline stays in band. They are treated as non-sensitive on the wire.
 - A table references a blob through the `TableFile` association, not as its
   parent (AIP-124).
 

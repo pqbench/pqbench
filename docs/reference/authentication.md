@@ -42,11 +42,11 @@ one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
 | --- | --- |
 | `PQB_PROFILE` | the `~/.pqbenchrc` profile to run under |
 | `PQB_ENDPOINT` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
-| `PQB_TOKEN` | Bearer PAT (`dapi-…`) or OAuth token; list API only |
+| `PQB_TOKEN` | Bearer PAT (`dapi-…`) or OAuth token; catalog API only |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | a lower-priority fallback for the endpoint and bearer |
 
-The token is a Bearer on the **list** API only. Only `AWS_*` is copied onto
+The token is a Bearer on the **catalog** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
 
 `get metastore` reads the same endpoint and reports its metastore record
