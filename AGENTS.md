@@ -145,12 +145,16 @@ analogy, convention, or precedent:
 
 - Format: `make fmt`
 - Gate (pre-commit): `make check` = `fmt-check` + `check-docs` +
-  `check-version` + `clippy -D warnings` + `isolation` + `lfs-check` + `test`.
-  `make check-python` builds the PyO3 wheel and runs its tests; CI runs it,
-  the local gate does not (it compiles libpython and every storage backend).
-  `check-version` holds `python/Cargo.toml` to `[workspace.package] version`
-  (`make sync-version` writes it): python/ is its own workspace root and cannot
-  inherit it.
+  `clippy -D warnings` + `isolation` + `lfs-check` + `test`.
+  `make check-python` builds the data-only wheel from `crates/pqbench-cli`
+  with maturin and smoke-tests the installed binary; CI runs it, the local gate
+  does not (it compiles every storage backend).
+- **Worktrees share the main checkout's `target/`.** The Makefile derives it
+  from `git rev-parse --git-common-dir`, so a linked worktree reuses the cached
+  artifacts instead of recompiling the tree for the pre-commit gate.
+  `CARGO_BUILD_JOBS` defaults to 2 because the test binaries link several GB
+  each; raise it only when the machine has the memory. When the gate already
+  passed, `git commit --no-verify` is acceptable.
 - Docs: the `console` transcripts in the Markdown are generated into
   `crates/pqbench-cli/tests/gen_*.rs` and run by `make test`. Edit a doc block,
   run `make sync-docs`; `check-docs` (part of `make check`, hence the pre-commit
@@ -215,15 +219,13 @@ analogy, convention, or precedent:
 - `crates/pqbench-cli/` — the `pqbench` binary (thin wrapper over the library)
 - `crates/aipnaming/`, `crates/aipnaming-cli/` — the AIP naming linter and its
   `aipnaming` binary
-- `crates/pyicheck/`, `crates/pyicheck-cli/` — check the PyO3 stub against the
-  bindings; `make check-pyi` runs it (part of `make check`)
 - `crates/docscheck/`, `crates/docscheck-cli/` — generate Rust tests from the
   runnable Markdown blocks; `docscheck sync` writes `tests/gen_*.rs`
 - `crates/pqbench-cli/tests/gen_*.rs` — generated documentation tests (do not
   edit by hand; `make sync-docs`)
-- `python/` — PyO3 wheel (`pqbench-py`); one function per CLI command. Not a
-  workspace member (maturin builds the wheel from `python/`). `make check-python` builds
-  and tests it
+- `python/` — the wheel's README and build output; maturin packages the
+  `pqbench` binary from `crates/pqbench-cli` (`bindings = "bin"`) as a
+  data-only wheel. `make check-python` builds and smoke-tests it
 - `skills/` — agent skills compiled into `pqbench skill`
 - `scripts/` — build / sample / smoke-test helpers
 - `docs/` — user documentation (`cli.md`, `profile.md`,

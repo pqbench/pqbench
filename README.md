@@ -237,31 +237,33 @@ that command.
 - [Delta tables](https://pqbench.github.io/pqbench/delta/) — log load, `list files | bytemass`, limitations
 - [Iceberg tables](https://pqbench.github.io/pqbench/iceberg/) — metadata load, `list files | bytemass`, limitations
 - [Visualization](https://pqbench.github.io/pqbench/viz/) — `pqb viz`, a static HTML treemap
-- [Python bindings](https://pqbench.github.io/pqbench/python/) — install the wheel: the commands, and the walk
+- [Python](https://pqbench.github.io/pqbench/python/) — install the binary wheel; run the CLI, read the files
 - [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
   naming tables for `pqb ls files`, over rustfs S3
 
 ## Python
 
-[`python/`](https://pqbench.github.io/pqbench/python/) is a PyO3 wheel. The
-commands are functions under `pqbench.native`, one per library path; `pqbench`
-carries the client handles they take and `walk`, the whole-metastore walk:
+[`python/`](https://pqbench.github.io/pqbench/python/) ships the same binary as
+a Python wheel: `pip install pqbench` puts `pqbench` on your `PATH`. There is
+no Python extension and no importable module — the CLI is the interface, and
+the files it writes are the data.
+
+```console no-run
+$ pip install pqbench
+$ pqbench list files < table.ndjson | zstd -3 > files.jsonl.zst
+```
 
 ```python
-import pqbench
-import pqbench.native
+import polars as pl
 
-workspace = pqbench.Workspace(pqbench.Config(endpoint, token))
-
-async for file in pqbench.walk(workspace):
-    print(file["uri"])
+files = pl.scan_ndjson("files.jsonl.zst")
 ```
 
 ## Contributing
 
 PRs welcome. The gate is `make check` (`fmt-check` + `check-docs` +
-`check-version` + `clippy -D warnings` + `isolation` + `lfs-check` + `test`).
-The PyO3 wheel is `make check-python`. The runnable commands on this
+`clippy -D warnings` + `isolation` + `lfs-check` + `test`).
+The Python wheel is `make check-python`. The runnable commands on this
 page are generated into tests by `docscheck` (`make sync-docs`); see
 [CONTRIBUTING.md](https://pqbench.github.io/pqbench/contributing/) for the loop, style, and naming rules.
 

@@ -12,6 +12,25 @@ CARGO ?= cargo
 CARGO_FEATURES ?= --all-features
 TEST_FLAGS ?=
 PYTHON ?= python3
+
+# Share one target dir across linked worktrees. The pre-commit hook runs
+# `make check`, and a fresh worktree would otherwise recompile the whole tree
+# (and link the multi-GB test binaries) into its own target/ — the memory spike
+# that gets OOM-killed. `--git-common-dir` is the main checkout's .git in both
+# the main checkout and a linked worktree, so its parent is the target to
+# share. An explicit CARGO_TARGET_DIR from the environment wins.
+GIT_COMMON_DIR := $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+MAIN_CHECKOUT := $(patsubst %/.git,%,$(GIT_COMMON_DIR))
+CARGO_TARGET_DIR ?= $(if $(MAIN_CHECKOUT),$(MAIN_CHECKOUT)/target)
+ifneq ($(CARGO_TARGET_DIR),)
+export CARGO_TARGET_DIR
+endif
+
+# Cap parallel rustc/link jobs by default: the test binaries link several GB
+# each, and a full rebuild at one job per core exhausts a 16 GB machine. Raise
+# it (`CARGO_BUILD_JOBS=8 make check`) when the memory is there; CI sets its own.
+CARGO_BUILD_JOBS ?= 2
+export CARGO_BUILD_JOBS
 # rust-code-analysis CLI and inputs; see the `code-analysis` target.
 RCA ?= rust-code-analysis-cli
 CODE_ANALYSIS_PATHS ?= crates
@@ -24,7 +43,7 @@ SHELL := /bin/bash
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check isolation lfs-check check-python sync-docs \
-	check-docs check-version check-pyi sync-version code-analysis clean
+	check-docs code-analysis clean
 
 all: fmt build test lint
 
@@ -94,7 +113,7 @@ lakehouse-seed-unity: lakehouse-up
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
-check: fmt-check check-docs check-version check-pyi lint isolation lfs-check test
+check: fmt-check check-docs lint isolation lfs-check test
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
@@ -109,34 +128,25 @@ isolation:
 lfs-check:
 	@TIMEFORMAT='lfs-check: %3R s'; time git lfs fsck
 
-# The wheel's version, and the one definition of it: python/ is its own
-# workspace root, so python/Cargo.toml cannot inherit [workspace.package].
-# `check-version` is part of `check`, so drift fails on the pull request.
-VERSION = $(shell ./scripts/version.sh)
+# The wheel is data-only: maturin packages the `pqbench` binary from
+# crates/pqbench-cli in the wheel's `.data/scripts/` (bindings = "bin"), so pip
+# installs it on PATH. No PyO3, no libpython, no ABI. This builds the debug
+# profile: the check validates packaging (bin bindings, scripts dir, install,
+# smoke), and the release build is the one the release workflow ships. Set
+# PQB_WHEEL_PROFILE=release to validate the shipped profile locally. Local to
+# python/.venv for PEP 668.
+PQB_WHEEL_PROFILE ?= dev
 
-sync-version:
-	@TIMEFORMAT='sync-version: %3R s'; time ./scripts/version.sh sync
-
-check-version:
-	@TIMEFORMAT='check-version: %3R s'; time ./scripts/version.sh check
-
-# python/ is its own crate (not a workspace member); share the repo target
-# dir so it does not grow python/target. Local to python/.venv for PEP 668.
-# Its lock is committed, as the workspace's is.
 check-python:
-	$(CARGO) fmt --manifest-path python/Cargo.toml -- --check
-	CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" $(CARGO) clippy --manifest-path python/Cargo.toml --all-targets -- -D warnings
 	test -d python/.venv || $(PYTHON) -m venv python/.venv
 	python/.venv/bin/python -m pip install -q maturin
-	. python/.venv/bin/activate && CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" maturin develop --manifest-path python/Cargo.toml
-	python/.venv/bin/python -m unittest discover -s python/tests
-
-# The wheel's stub is hand-written, so it can drift from the bindings it
-# mirrors; `pyicheck` reads python/src, python/pqbench/native.pyi, and the
-# library models, and fails when they disagree. The wheel is committed, so this
-# never needs to build PyO3 — only the checker's tree-sitter grammars.
-check-pyi:
-	@TIMEFORMAT='check-pyi: %3R s'; time $(CARGO) run -q -p pyicheck-cli
+	rm -f python/dist/*.whl
+	CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" \
+		python/.venv/bin/maturin build --profile $(PQB_WHEEL_PROFILE) --out python/dist
+	python/.venv/bin/python -m pip install -q --force-reinstall python/dist/*.whl
+	python/.venv/bin/pqbench --help > /dev/null
+	set -o pipefail; python/.venv/bin/pqbench table-file examples/quickstart.parquet \
+		| python/.venv/bin/pqbench bytemass > /dev/null
 
 # Turn the documented `pqbench ...` commands into Rust integration tests under
 # crates/pqbench-cli/tests/gen_*.rs. Committed, so `make test` runs them like any
@@ -154,4 +164,8 @@ code-analysis:
 	$(RCA) --metrics -p $(CODE_ANALYSIS_PATHS)
 
 clean:
+	@if [ -n "$(MAIN_CHECKOUT)" ] && [ "$(MAIN_CHECKOUT)" != "$(CURDIR)" ]; then \
+		echo "clean: refusing to wipe the shared target dir $(CARGO_TARGET_DIR) from a worktree" >&2; \
+		exit 1; \
+	fi
 	$(CARGO) clean

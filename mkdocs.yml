@@ -129,7 +129,7 @@ nav:
       - diff: diff.md
       - viz: viz.md
       - Agent skills: skill.md
-      - Python bindings: python.md
+      - Python: python.md
   - Concepts:
       - concepts/index.md
       - Architecture: architecture.md

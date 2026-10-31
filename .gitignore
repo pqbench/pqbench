@@ -36,11 +36,9 @@ decisions/
 # Agent skills / tooling config (not part of the library/CLI)
 /.opencode
 
-# Python package build (python/ is its own crate, not a workspace member)
+# Python wheel build (maturin packages the binary from crates/pqbench-cli)
 __pycache__/
 *.py[cod]
 *.egg-info/
 /python/dist/
 /python/.venv/
-/python/target/
-/python/pqbench/*.so

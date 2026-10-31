@@ -1,0 +1,44 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "pqbench"
+dynamic = ["version"]
+description = "One binary for Parquet optimization: the pqbench CLI as a Python wheel."
+readme = "python/README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "pqbench contributors" }]
+keywords = ["parquet", "compression", "benchmark"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+[project.urls]
+Homepage = "https://github.com/pqbench/pqbench"
+Repository = "https://github.com/pqbench/pqbench"
+Documentation = "https://pqbench.github.io/pqbench/python/"
+
+[tool.maturin]
+# The wheel carries the `pqbench` binary in `.data/scripts/`, not a Python
+# extension: pip installs it on PATH (the ruff/uv pattern). No PyO3, no ABI,
+# no Python version matrix.
+bindings = "bin"
+manifest-path = "crates/pqbench-cli/Cargo.toml"
+strip = true
+# The git sdist would otherwise carry `.cargo/scripts/rustc-wrapper.sh` at mode
+# 0644 while `.cargo/config.toml` names it as `rustc-wrapper`, so `pip install
+# --no-binary` fails with EACCES. Drop the build config (and the sample data and
+# docs, which a source build does not need); `skills/` stays, because
+# `skill.rs` includes it.
+exclude = [".cargo/**", "data/**", "docs/**"]
+# A published wheel cannot be rebuilt by its user, so it carries every storage
+# backend, like the binary release (`dist-workspace.toml`).
+features = ["delta-s3", "iceberg-s3"]
+# The sdist must carry the whole workspace: the crate depends on `../pqbench`
+# by path, which a cargo-only sdist would omit.
+sdist-generator = "git"
