@@ -74,25 +74,17 @@ fn keep(
 
 /// Parse `--rate`: a fraction (`1/100`) or a decimal (`0.01`).
 fn parse_rate(text: &str) -> Result<f64, String> {
+    let bad = || format!("bad rate `{text}`; expected `1/100` or `0.01`");
     let value = match text.split_once('/') {
         Some((numerator, denominator)) => {
-            let numerator: f64 = numerator
-                .trim()
-                .parse()
-                .map_err(|_| format!("bad rate `{text}`; expected `1/100` or `0.01`"))?;
-            let denominator: f64 = denominator
-                .trim()
-                .parse()
-                .map_err(|_| format!("bad rate `{text}`; expected `1/100` or `0.01`"))?;
+            let numerator: f64 = numerator.trim().parse().map_err(|_| bad())?;
+            let denominator: f64 = denominator.trim().parse().map_err(|_| bad())?;
             if denominator == 0.0 {
                 return Err(format!("bad rate `{text}`; the denominator is zero"));
             }
             numerator / denominator
         }
-        None => text
-            .trim()
-            .parse()
-            .map_err(|_| format!("bad rate `{text}`; expected `1/100` or `0.01`"))?,
+        None => text.trim().parse().map_err(|_| bad())?,
     };
     if value > 0.0 && value <= 1.0 {
         Ok(value)
