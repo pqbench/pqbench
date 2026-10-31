@@ -19,7 +19,8 @@ a static HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under
 [`docker/e2e-lakehouse/`](../../docker/e2e-lakehouse) and the small Parquet
-fixture in the test suite. Catalog pipes need `make lakehouse`.
+fixture in the test suite. The catalog example reads `PQB_ENDPOINT` and
+`PQB_TOKEN`; `make lakehouse` provides a local stand that exports them.
 
 ## Selecting files with Unix tools
 

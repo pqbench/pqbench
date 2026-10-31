@@ -50,7 +50,7 @@ they are not written into the process environment. The cargo command is
 
 A producer can supply the table URI and vended credentials as
 a table record. `list files` reads the log, and the credentials travel to
-`list files` and `bytemass`:
+`list files` and `bytemass`.
 
 ## Backends
 

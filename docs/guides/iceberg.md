@@ -53,7 +53,7 @@ id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
 year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
 ```
 
-Two invocations from the `iceberg` cargo feature:
+Two invocations under the `iceberg` cargo feature:
 
 ```sh
 echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' \
