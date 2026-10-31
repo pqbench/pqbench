@@ -15,6 +15,9 @@ use crate::v1;
 /// target most Delta tables are compacted to.
 pub const REFERENCE_BYTES: u64 = 256 * 1024 * 1024;
 
+/// The largest integer an `f64` holds exactly: the hash's 53 bits scale by it.
+const HASH_UNITS: f64 = 9_007_199_254_740_992.0;
+
 /// The probability at which a file of `size_bytes` is kept at `rate`.
 ///
 /// `rate` is the probability at [`REFERENCE_BYTES`]; larger files are more
@@ -54,12 +57,12 @@ pub fn select(file: &v1::TableFile, rate: f64) -> Result<Option<f64>, Error> {
     if drawn <= 0.0 {
         return Err(Error::Underflow(rate));
     }
-    let probability = match file.sample_rate {
+    let inclusion = match file.sample_rate {
         Some(previous) if previous > 0.0 && previous <= 1.0 => previous.min(drawn),
         Some(previous) => return Err(Error::Sampled(previous)),
         None => drawn,
     };
-    Ok((hash_unit(&file.name) < probability).then_some(probability))
+    Ok((hash_unit(&file.name) < inclusion).then_some(inclusion))
 }
 
 /// A value in `[0, 1)` from a name: FNV-1a, then the Murmur3 finalizer so
@@ -76,7 +79,7 @@ fn hash_unit(name: &str) -> f64 {
     hash ^= hash >> 33;
     hash = hash.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
     hash ^= hash >> 33;
-    (hash >> 11) as f64 / (1_u64 << 53) as f64
+    (hash >> 11) as f64 / HASH_UNITS
 }
 
 /// Errors sampling a table's files.
