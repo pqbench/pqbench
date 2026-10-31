@@ -430,11 +430,17 @@ needs only the record's name and size, which the log already carries, so the
 stage streams and never holds the table.
 
 Each kept `TableFile` records the probability it was kept with as
-`sample_rate`; `bytemass` copies it onto the `Blob` and every `Bytemass`, so a
-sum over the stream divides each term by it. A sum over the kept records alone
-is the sample, not the table — the coverage line on standard error says how
-many files and bytes it holds. A record with no positive size is an error, not
-a silent drop.
+`sample_rate`; `bytemass` copies it onto the `Blob` and every `Bytemass`. Scale
+only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
+`uncompressed_bytes`, `value_count`, `null_count`, `row_group_count` — and
+recompute the ratios (`bytes_per_value`, `compression_ratio`, `null_fraction`)
+from the weighted sums; `distinct_count` is not additive. A sum over the kept
+records alone is the sample, not the table — the coverage line on standard
+error says how many files and bytes it holds. A record that already carries a
+`sample_rate` composes with the smaller of the two probabilities, since both
+threshold the same hash. `viz` does not apply the weight yet, so a sampled
+stream's page is a sample, not the table. A record with no positive size is an
+error, not a silent drop.
 
 Filtering by path or partition is still a shell job on the `list files` stream
 (`jq`, `sort`, `head`, `xargs`) — see [demo.md](demo.md). `bytemass` reads its

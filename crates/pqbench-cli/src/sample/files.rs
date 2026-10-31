@@ -106,13 +106,13 @@ impl Summary {
     /// Count one record read.
     fn observe(&mut self, file: &v1::TableFile) {
         self.files += 1;
-        self.bytes += file.size_bytes.unwrap_or(0);
+        self.bytes = self.bytes.saturating_add(file.size_bytes.unwrap_or(0));
     }
 
     /// Count one record kept.
     fn keep(&mut self, file: &v1::TableFile) {
         self.kept += 1;
-        self.kept_bytes += file.size_bytes.unwrap_or(0);
+        self.kept_bytes = self.kept_bytes.saturating_add(file.size_bytes.unwrap_or(0));
     }
 
     /// The coverage line, on standard error.

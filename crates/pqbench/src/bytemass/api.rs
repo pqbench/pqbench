@@ -82,6 +82,13 @@ pub async fn measure(lake: &Lake, file: &v1::TableFile) -> Result<MeasuredFile, 
             )));
         }
     }
+    if let Some(rate) = file.sample_rate {
+        if !(rate > 0.0 && rate <= 1.0) {
+            return Err(Error::Invalid(format!(
+                "a table file's sample rate must be in (0, 1], not {rate}"
+            )));
+        }
+    }
     measured.blob.sample_rate = file.sample_rate;
     for column in &mut measured.columns {
         column.table = Some(table.clone());

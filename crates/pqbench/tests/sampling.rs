@@ -1,5 +1,5 @@
 use pqbench::file::sample;
-use pqbench::v1::TableFile;
+use pqbench::v1::{Blob, Bytemass, TableFile};
 
 fn table_file(name: &str, size_bytes: u64) -> TableFile {
     TableFile {
@@ -78,7 +78,7 @@ fn the_same_record_always_makes_the_same_decision() {
 
 #[test]
 fn every_kept_record_carries_its_probability() {
-    let expected = sample::inclusion_probability(64 * 1024 * 1024, 0.5);
+    let expected = 0.5 * (64.0 * 1024.0 * 1024.0) / sample::REFERENCE_BYTES as f64;
     let probabilities: Vec<f64> = (0..1_000)
         .filter_map(|index| {
             let file = table_file(&format!("files/{index}"), 64 * 1024 * 1024);
@@ -101,7 +101,78 @@ fn a_file_without_a_positive_size_is_an_error() {
 
 #[test]
 fn a_rate_outside_the_range_is_an_error() {
-    for rate in [0.0, -0.1, 1.1] {
+    for rate in [0.0, -0.1, 1.1, f64::NAN] {
         assert!(sample::select(&table_file("files/x", 1), rate).is_err());
     }
+}
+
+#[test]
+fn an_already_sampled_record_composes_with_the_smaller_rate() {
+    let names: Vec<String> = (0..1_000).map(|index| format!("files/{index}")).collect();
+    let kept = |previous: Option<f64>, rate: f64| -> Vec<(String, f64)> {
+        names
+            .iter()
+            .filter_map(|name| {
+                let mut file = table_file(name, sample::REFERENCE_BYTES);
+                file.sample_rate = previous;
+                sample::select(&file, rate)
+                    .ok()
+                    .flatten()
+                    .map(|probability| (name.clone(), probability))
+            })
+            .collect()
+    };
+    let half = kept(None, 0.5);
+    assert_eq!(kept(Some(0.5), 1.0), half);
+    assert_eq!(kept(Some(1.0), 0.5), half);
+    let tenth = kept(None, 0.1);
+    assert_eq!(kept(Some(0.5), 0.1), tenth);
+    assert!(tenth.len() < half.len());
+}
+
+#[test]
+fn an_invalid_stored_rate_is_an_error() {
+    for previous in [0.0, -0.1, 1.1, f64::NAN] {
+        let mut file = table_file("files/x", sample::REFERENCE_BYTES);
+        file.sample_rate = Some(previous);
+        assert!(sample::select(&file, 1.0).is_err(), "{previous}");
+    }
+}
+
+#[test]
+fn a_rate_that_underflows_is_an_error() {
+    assert!(sample::select(&table_file("files/x", 256), 1e-320).is_err());
+}
+
+#[test]
+fn the_wire_omits_an_absent_rate() {
+    let file = table_file("files/x", 1);
+    assert!(!serde_json::to_string(&file)
+        .unwrap()
+        .contains("sample_rate"));
+    let mut sampled = file;
+    sampled.sample_rate = Some(0.25);
+    let json = serde_json::to_string(&sampled).unwrap();
+    assert!(json.contains("\"sample_rate\":0.25"), "{json}");
+    let back: TableFile = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.sample_rate, Some(0.25));
+    let back: TableFile = serde_json::from_str(r#"{"name":"files/x","size_bytes":1}"#).unwrap();
+    assert_eq!(back.sample_rate, None);
+}
+
+#[test]
+fn measurements_omit_an_absent_rate() {
+    assert!(!serde_json::to_string(&Blob::default())
+        .unwrap()
+        .contains("sample_rate"));
+    assert!(!serde_json::to_string(&Bytemass::default())
+        .unwrap()
+        .contains("sample_rate"));
+    let blob = Blob {
+        sample_rate: Some(0.5),
+        ..Blob::default()
+    };
+    assert!(serde_json::to_string(&blob)
+        .unwrap()
+        .contains("\"sample_rate\":0.5"));
 }

@@ -15,17 +15,16 @@ use crate::v1;
 /// target most Delta tables are compacted to.
 pub const REFERENCE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// The inclusion probability for a file of `size_bytes` at `rate`.
+/// The probability at which a file of `size_bytes` is kept at `rate`.
 ///
 /// `rate` is the probability at [`REFERENCE_BYTES`]; larger files are more
-/// likely, and `rate = 1` keeps everything.
-#[must_use]
-pub fn inclusion_probability(size_bytes: u64, rate: f64) -> f64 {
+/// likely, and `rate = 1` keeps everything. The caller validates `rate`: it
+/// must be finite and in `(0, 1]`.
+fn probability(size_bytes: u64, rate: f64) -> f64 {
     if rate >= 1.0 {
         return 1.0;
     }
-    let scaled = rate * size_bytes as f64 / REFERENCE_BYTES as f64;
-    scaled.min(1.0)
+    (rate * size_bytes as f64 / REFERENCE_BYTES as f64).min(1.0)
 }
 
 /// Keep one table file at `rate`, returning the probability it was kept with.
@@ -33,9 +32,16 @@ pub fn inclusion_probability(size_bytes: u64, rate: f64) -> f64 {
 /// The decision hashes the record's name, so the same record always makes the
 /// same one. `None` when the file is dropped.
 ///
+/// A record that already carries a `sample_rate` — an earlier `sample files`
+/// stage — composes with this one by keeping the smaller probability: both
+/// stages threshold the same hash of the name, so nested thresholds make the
+/// effective probability the minimum.
+///
 /// # Errors
-/// Fails when `rate` is outside `(0, 1]`, or when the record has no positive
-/// `size_bytes`: a sample by size cannot place a file it cannot size.
+/// Fails when `rate` is outside `(0, 1]`, when the record's own `sample_rate`
+/// is outside it, when `rate` underflows to zero for the file's size, or when
+/// the record has no positive `size_bytes`: a sample by size cannot place a
+/// file it cannot size.
 pub fn select(file: &v1::TableFile, rate: f64) -> Result<Option<f64>, Error> {
     if !(rate > 0.0 && rate <= 1.0) {
         return Err(Error::Rate(rate));
@@ -44,7 +50,15 @@ pub fn select(file: &v1::TableFile, rate: f64) -> Result<Option<f64>, Error> {
         .size_bytes
         .filter(|size_bytes| *size_bytes > 0)
         .ok_or_else(|| Error::UnknownSize(file.name.clone()))?;
-    let probability = inclusion_probability(size_bytes, rate);
+    let drawn = probability(size_bytes, rate);
+    if drawn <= 0.0 {
+        return Err(Error::Underflow(rate));
+    }
+    let probability = match file.sample_rate {
+        Some(previous) if previous > 0.0 && previous <= 1.0 => previous.min(drawn),
+        Some(previous) => return Err(Error::Sampled(previous)),
+        None => drawn,
+    };
     Ok((hash_unit(&file.name) < probability).then_some(probability))
 }
 
@@ -71,6 +85,10 @@ fn hash_unit(name: &str) -> f64 {
 pub enum Error {
     /// The rate is outside `(0, 1]`.
     Rate(f64),
+    /// A record already carries a `sample_rate` outside `(0, 1]`.
+    Sampled(f64),
+    /// The rate underflows to zero for this file's size.
+    Underflow(f64),
     /// A record names no positive size.
     UnknownSize(String),
 }
@@ -79,9 +97,17 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Rate(rate) => write!(f, "sample rate must be in (0, 1], not {rate}"),
-            Self::UnknownSize(name) => {
-                write!(f, "sampling needs a positive file size: {name} has none")
+            Self::Sampled(rate) => {
+                write!(f, "the record's sample_rate must be in (0, 1], not {rate}")
             }
+            Self::Underflow(rate) => write!(
+                f,
+                "sample rate {rate} rounds to zero at this file size; no file can be kept"
+            ),
+            Self::UnknownSize(name) => write!(
+                f,
+                "sampling needs a positive file size: {name} has no positive size"
+            ),
         }
     }
 }

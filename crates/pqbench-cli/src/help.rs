@@ -23,8 +23,8 @@ Commands compose on pipes: each writes a resource the next command reads.
   skill         → markdown             bundled agent recipes (write / DDL / codec)
   format        → tables               render a stream (NDJSON on stdin)
 
-The walk reads with two verbs: `get` reads one resource, `list` lists a
-collection; `sample` reduces one.
+The walk reads with three verbs: `get` reads one resource, `list` lists a
+collection, `sample` reduces one.
 
 Standard output is NDJSON; `pqbench format` renders it as tables.
 Subcommand help is local (`pqbench get --help`).
@@ -243,24 +243,26 @@ with.
 A file is kept with probability rate x size / 256 MiB, capped at one, drawn
 from a hash of its name, so the same record always makes the same decision. A
 256 MiB file is kept at --rate (1/100 keeps about one in a hundred), a 1 GiB
-file four times as often, and --rate 1 keeps every file. The probability is the
-record's weight: a sum over kept records divides each term by `sample_rate`.
+file four times as often while below the cap, and --rate 1 keeps every file
+that has a size. The probability sets the record's weight, its inverse: a sum
+over kept records divides each term by `sample_rate`. A record that already
+carries a `sample_rate` composes with the smaller of the two probabilities,
+because both threshold the same hash.
 
-Nothing is read: `list files` already carries the log's sizes, so the stage
-streams and never holds the table. A record with no positive size is an error,
-not a silent drop. The coverage line (files and bytes kept) prints on standard
-error.";
+No storage object is read: `list files` already carries the log's sizes, so the
+stage streams and never holds the table. A record with no positive size is an
+error, not a silent drop. The coverage line (files and bytes kept) prints on
+standard error.";
 
 pub const SAMPLE_AFTER: &str = "\
 Examples:
-  cat table.ndjson | pqbench sample files --rate 1/100 | pqbench bytemass
-  cat table.ndjson | pqbench sample files --rate 1/10 | pqbench bytemass | pqbench viz -o report
-  pqbench table-file data.parquet | pqbench sample files --rate 1 | pqbench bytemass
+  cat table.ndjson | pqbench list files | pqbench sample files --rate 1/100 | pqbench bytemass
+  cat table.ndjson | pqbench list files | pqbench sample files --rate 1/10 | pqbench bytemass
 
 See also:
-  pqbench list --help      the stream this command samples
-  pqbench bytemass --help  measure the kept files
-  pqbench --help           catalog auth, PQB_* config
+  pqbench list files --help  the stream this command samples
+  pqbench bytemass --help    measure the kept files
+  pqbench --help             catalog auth, PQB_* config
   docs/cli.md";
 
 pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
