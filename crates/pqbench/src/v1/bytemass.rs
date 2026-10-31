@@ -55,4 +55,9 @@ pub struct Bytemass {
     /// [`Self::null_count`] divided by [`Self::value_count`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub null_fraction: Option<f64>,
+    /// The probability the table file this column came from was kept with,
+    /// when a `sample files` stage chose it. Absent means unsampled, weight
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
 }

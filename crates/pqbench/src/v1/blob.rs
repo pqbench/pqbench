@@ -22,6 +22,10 @@ pub struct Blob {
     /// Leaf columns in the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_count: Option<u64>,
+    /// The probability the table file naming this blob was kept with, when a
+    /// `sample files` stage chose it. Absent means unsampled, weight one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
 }
 
 #[cfg(test)]

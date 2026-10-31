@@ -37,6 +37,11 @@ pub struct TableFile {
     /// the log read used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
+    /// The probability a `sample files` stage kept this record with: its
+    /// inverse is the weight a sum over the stream must apply. Absent means
+    /// the record was not sampled and weighs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
 }
 
 impl TableFile {
