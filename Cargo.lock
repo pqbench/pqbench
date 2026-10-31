@@ -1597,7 +1597,6 @@ dependencies = [
 name = "docscheck"
 version = "0.0.9"
 dependencies = [
- "tempfile",
  "tree-sitter",
  "tree-sitter-md",
 ]
@@ -1608,7 +1607,6 @@ version = "0.0.9"
 dependencies = [
  "clap",
  "docscheck",
- "serde_json",
  "tempfile",
 ]
 
@@ -2832,12 +2830,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parquet-format-safe"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1131c54b167dd4e4799ce762e1ab01549ebb94d5bdd13e6ec1b467491c378e1f"
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2925,7 +2917,6 @@ dependencies = [
  "lz4",
  "object_store",
  "parquet",
- "parquet-format-safe",
  "pqbench-resource",
  "reqwest 0.12.28",
  "serde",

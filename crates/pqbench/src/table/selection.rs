@@ -14,13 +14,6 @@ pub struct FileSelection {
     pub sample: String,
 }
 impl FileSelection {
-    /// Whether this selection leaves the input unchanged.
-    pub fn unrestricted(&self) -> bool {
-        self.include.is_empty()
-            && self.exclude.is_empty()
-            && self.partitions.is_empty()
-            && matches!(self.sample.as_str(), "" | "all")
-    }
     /// Select active files using metadata only, in deterministic path order.
     ///
     /// Median sampling chooses files nearest the lower median byte size,
