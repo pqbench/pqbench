@@ -149,6 +149,12 @@ analogy, convention, or precedent:
   `make check-python` builds the data-only wheel from `crates/pqbench-cli`
   with maturin and smoke-tests the installed binary; CI runs it, the local gate
   does not (it compiles every storage backend).
+- **Worktrees share the main checkout's `target/`.** The Makefile derives it
+  from `git rev-parse --git-common-dir`, so a linked worktree reuses the cached
+  artifacts instead of recompiling the tree for the pre-commit gate.
+  `CARGO_BUILD_JOBS` defaults to 2 because the test binaries link several GB
+  each; raise it only when the machine has the memory. When the gate already
+  passed, `git commit --no-verify` is acceptable.
 - Docs: the `console` transcripts in the Markdown are generated into
   `crates/pqbench-cli/tests/gen_*.rs` and run by `make test`. Edit a doc block,
   run `make sync-docs`; `check-docs` (part of `make check`, hence the pre-commit

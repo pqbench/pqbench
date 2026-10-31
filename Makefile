@@ -12,6 +12,25 @@ CARGO ?= cargo
 CARGO_FEATURES ?= --all-features
 TEST_FLAGS ?=
 PYTHON ?= python3
+
+# Share one target dir across linked worktrees. The pre-commit hook runs
+# `make check`, and a fresh worktree would otherwise recompile the whole tree
+# (and link the multi-GB test binaries) into its own target/ — the memory spike
+# that gets OOM-killed. `--git-common-dir` is the main checkout's .git in both
+# the main checkout and a linked worktree, so its parent is the target to
+# share. An explicit CARGO_TARGET_DIR from the environment wins.
+GIT_COMMON_DIR := $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+MAIN_CHECKOUT := $(patsubst %/.git,%,$(GIT_COMMON_DIR))
+CARGO_TARGET_DIR ?= $(if $(MAIN_CHECKOUT),$(MAIN_CHECKOUT)/target)
+ifneq ($(CARGO_TARGET_DIR),)
+export CARGO_TARGET_DIR
+endif
+
+# Cap parallel rustc/link jobs by default: the test binaries link several GB
+# each, and a full rebuild at one job per core exhausts a 16 GB machine. Raise
+# it (`CARGO_BUILD_JOBS=8 make check`) when the memory is there; CI sets its own.
+CARGO_BUILD_JOBS ?= 2
+export CARGO_BUILD_JOBS
 # rust-code-analysis CLI and inputs; see the `code-analysis` target.
 RCA ?= rust-code-analysis-cli
 CODE_ANALYSIS_PATHS ?= crates
