@@ -214,25 +214,16 @@ impl Row for mass::ColumnMass {
                 .unwrap_or_default(),
             self.file_count.to_string(),
             self.storage_classes.join(","),
-            cost_text(&self.storage_costs),
+            cost_text(self),
         ]
     }
 }
 
-/// A row's monthly cost, as the page shows it: a range over its tiers.
-fn cost_text(tiers: &[mass::StorageTierCost]) -> String {
-    let Some(first) = tiers
-        .iter()
-        .map(|tier| tier.cost_per_month)
-        .reduce(f64::min)
-    else {
+/// A row's monthly cost, as the page shows it: classes add, sub-tiers range.
+fn cost_text(row: &mass::ColumnMass) -> String {
+    let Some((first, last)) = row.cost_range() else {
         return String::new();
     };
-    let last = tiers
-        .iter()
-        .map(|tier| tier.cost_per_month)
-        .reduce(f64::max)
-        .unwrap_or(first);
     let (first, last) = (dollars(first), dollars(last));
     if first == last {
         first

@@ -24,7 +24,7 @@ are summed over the files that measured it. Equal totals do not prove equal
 data or schema; compare the same logical data before interpreting a reduction
 as a saving.
 
-The command rejects incomplete streams, duplicate columns, non-`Bytemass`
+The command rejects incomplete streams, duplicate columns, non-`Column`
 records, and arithmetic overflow. Output is NDJSON; `pqb fmt` renders resources,
 and a delta (which has no `name`) is JSON-only. See
 [Documents](documents.md) for the `ColumnDelta` shape.

@@ -16,7 +16,7 @@ schema.
 | `Schema` | `catalogs/{catalog}/schemas/{schema}` | [`list schemas`](cli.md#pqbench-list-schemas), [`get schema`](cli.md#pqbench-get-schema) | `get schema`, `list tables` |
 | `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table), [`credentials get`](cli.md#pqbench-credentials) | `get table`, `list files`, `credentials get` |
 | `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass` |
-| `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns` |
+| `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |
 
@@ -72,9 +72,9 @@ needs only the record's name and size, which the log already carries, so the
 stage streams and never holds the table.
 
 Each kept `TableFile` records the probability it was kept with as
-`sample_rate`; `bytemass` copies it onto the `Blob` and every `Bytemass`, and
-copies the file's `size_bytes` and `storage_class` onto every `Column` so a
-column prices its own storage. Scale
+`sample_rate`; `bytemass` copies it, with the file's `size_bytes` and
+`storage_class`, onto every `Column` (the `Blob` carries it too), so a column
+prices its own storage. Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
 `uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
 `null_count`, `row_group_count` — and recompute the ratios (`bytes_per_value`,

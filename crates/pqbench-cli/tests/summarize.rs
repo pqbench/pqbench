@@ -78,8 +78,20 @@ fn summarize_columns_writes_one_row_per_table_column() {
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let text = String::from_utf8(measured.stdout.clone()).unwrap();
+    let expected: std::collections::BTreeSet<(String, String)> = text
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|record| record.get("mass").is_some())
+        .map(|record| {
+            let name = record["name"].as_str().unwrap();
+            let column = name.rsplit_once("/columns/").unwrap().1.to_string();
+            (record["table"].as_str().unwrap().to_string(), column)
+        })
+        .collect();
+
     let rows = read_rows(&output);
-    assert!(!rows.is_empty());
+    assert_eq!(rows.len(), expected.len(), "one row per table column");
     for row in &rows {
         assert!(row["table"].as_str().unwrap().starts_with("catalogs/"));
         assert!(row["column"].is_string(), "{row}");
@@ -168,4 +180,38 @@ fn summarize_columns_rejects_a_sample_rate_outside_the_unit_interval() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("sample_rate"), "{stderr}");
+}
+
+#[test]
+fn list_columns_carries_the_file_size() {
+    let measured = common::measured(parquet_fixture());
+    assert!(measured.status.success());
+    let text = String::from_utf8(measured.stdout.clone()).unwrap();
+    let columns: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|record: &serde_json::Value| record.get("mass").is_some())
+        .collect();
+    assert!(!columns.is_empty());
+    for column in &columns {
+        assert!(column["size_bytes"].as_u64().unwrap_or(0) > 0, "{column}");
+    }
+}
+
+#[test]
+fn summarize_columns_rejects_a_column_measured_twice_in_one_file() {
+    let document = measured_column(
+        "s3",
+        "lake/orders/part-0.parquet",
+        "catalogs/shop/schemas/sales/tables/orders",
+        1.0,
+        8,
+    );
+    let output = pipe(
+        &["summarize", "columns"],
+        format!("{document}{document}").as_bytes(),
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("twice"), "{stderr}");
 }

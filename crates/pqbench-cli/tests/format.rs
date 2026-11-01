@@ -128,6 +128,8 @@ fn mass_rows_render_as_a_column_mass_table() {
         "\n",
         r#"{"table":"catalogs/shop/schemas/sales/tables/orders","column":"note","compressed_bytes":2,"value_count":10,"bytes_per_value":0.2,"file_count":1}"#,
         "\n",
+        r#"{"table":"catalogs/shop/schemas/sales/tables/orders","column":"total","compressed_bytes":4,"value_count":10,"bytes_per_value":0.4,"file_count":2,"storage_classes":["STANDARD","GLACIER"],"storage_costs":[{"storage_class":"STANDARD","dollars_per_gibibyte_per_month":0.023,"cost_per_month":0.01},{"storage_class":"GLACIER","dollars_per_gibibyte_per_month":0.0036,"cost_per_month":0.02}]}"#,
+        "\n",
         r#"{"column":"id","left_bytes":8,"right_bytes":4}"#,
         "\n",
     );
@@ -135,6 +137,7 @@ fn mass_rows_render_as_a_column_mass_table() {
     assert!(stdout.contains("bytes/value"), "{stdout}");
     assert!(stdout.contains("sales.orders"), "{stdout}");
     assert!(stdout.contains("$0.0045"), "{stdout}");
+    assert!(stdout.contains("$0.030"), "classes add: {stdout}");
     assert!(
         !stdout.contains("left_bytes"),
         "a nameless delta is not table data: {stdout}"

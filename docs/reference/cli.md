@@ -878,7 +878,7 @@ Estimate each table column's mass from a bytemass stream
 
 ###### **Arguments:**
 
-* `<INPUT>` — bytemass NDJSON stream; reads standard input when omitted
+* `<INPUT>` — bytemass NDJSON stream, or `-` for standard input
 
 
 

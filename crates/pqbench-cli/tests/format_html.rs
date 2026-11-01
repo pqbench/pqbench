@@ -165,3 +165,72 @@ fn format_html_rejects_a_table_file() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("summarize columns"), "{stderr}");
 }
+
+#[test]
+fn format_html_adds_classes_and_ranges_access_sub_tiers() {
+    let document = format!(
+        "{}\n",
+        serde_json::json!({
+            "table": "catalogs/shop/schemas/sales/tables/orders",
+            "column": "id",
+            "compressed_bytes": 8,
+            "value_count": 10,
+            "bytes_per_value": 0.8,
+            "file_count": 2,
+            "storage_classes": ["STANDARD", "INTELLIGENT_TIERING"],
+            "storage_costs": [
+                {"storage_class": "STANDARD", "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 0.01},
+                {"storage_class": "INTELLIGENT_TIERING", "access_tier": "FREQUENT_ACCESS", "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 0.02},
+                {"storage_class": "INTELLIGENT_TIERING", "access_tier": "DEEP_ARCHIVE_ACCESS", "dollars_per_gibibyte_per_month": 0.00099, "cost_per_month": 0.005}
+            ]
+        })
+    );
+    let output = pipe(&["format", "--html"], document.as_bytes());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = String::from_utf8(output.stdout).unwrap();
+    let report = report(&html);
+    let cost = &report["catalogs"][0]["schemas"][0]["tables"][0]["storage_cost_per_month"];
+    assert!(
+        (cost["first"].as_f64().unwrap() - 0.015).abs() < 1e-12,
+        "{cost}"
+    );
+    assert!(
+        (cost["last"].as_f64().unwrap() - 0.03).abs() < 1e-12,
+        "{cost}"
+    );
+}
+
+#[test]
+fn format_html_leaves_a_row_unpriced_when_a_class_is_missing() {
+    let document = format!(
+        "{}\n",
+        serde_json::json!({
+            "table": "catalogs/shop/schemas/sales/tables/orders",
+            "column": "id",
+            "compressed_bytes": 8,
+            "value_count": 10,
+            "bytes_per_value": 0.8,
+            "file_count": 2,
+            "storage_classes": ["STANDARD", "GLACIER"],
+            "storage_costs": [{
+                "storage_class": "STANDARD",
+                "dollars_per_gibibyte_per_month": 0.023,
+                "cost_per_month": 0.01
+            }]
+        })
+    );
+    let output = pipe(&["format", "--html"], document.as_bytes());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = String::from_utf8(output.stdout).unwrap();
+    let report = report(&html);
+    let cost = &report["catalogs"][0]["schemas"][0]["tables"][0]["storage_cost_per_month"];
+    assert!(cost.is_null(), "{cost}");
+}

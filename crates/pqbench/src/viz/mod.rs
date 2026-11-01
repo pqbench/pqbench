@@ -1,7 +1,7 @@
 //! Draw a `summarize columns` document as a catalog → schema → table → column
 //! treemap.
 //!
-//! `summarize columns` folds the bytemass stream into one document row per
+//! `summarize columns` folds the measured columns into one document row per
 //! table column, already weighted to the table. This module does not aggregate:
 //! it groups the rows by the table their name carries, folds the totals up the
 //! catalog hierarchy, and draws one level at a time in a static page.
@@ -162,8 +162,8 @@ pub struct ColumnNode {
     /// column reported both. A value above 1 means the bytes did compress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_ratio: Option<f64>,
-    /// The table's monthly storage cost, apportioned by
-    /// [`Self::compressed_bytes`].
+    /// The row's monthly storage cost: its classes add, a class's access
+    /// sub-tiers range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_cost_per_month: Option<CostEstimate>,
 }
@@ -264,20 +264,10 @@ impl Costs {
     }
 }
 
-/// The first and last of a row's tier costs, when it is priced.
-fn cost_estimate(tiers: &[mass::StorageTierCost]) -> Option<CostEstimate> {
-    if tiers.is_empty() {
-        return None;
-    }
-    let first = tiers
-        .iter()
-        .map(|tier| tier.cost_per_month)
-        .fold(f64::INFINITY, f64::min);
-    let last = tiers
-        .iter()
-        .map(|tier| tier.cost_per_month)
-        .fold(f64::NEG_INFINITY, f64::max);
-    Some(CostEstimate { first, last })
+/// A row's monthly cost, when every class it names is priced.
+fn cost_estimate(row: &mass::ColumnMass) -> Option<CostEstimate> {
+    row.cost_range()
+        .map(|(first, last)| CostEstimate { first, last })
 }
 
 /// What one table's rows add up to while the report is built.
@@ -317,13 +307,13 @@ fn fold(rows: &[ColumnMass]) -> Report {
             continue;
         };
         let table = tables.entry((catalog, schema, name)).or_default();
-        table.compressed_bytes += row.compressed_bytes;
+        table.compressed_bytes = table.compressed_bytes.saturating_add(row.compressed_bytes);
         table
             .uncompressed
             .add(row.uncompressed_bytes.map(|bytes| bytes as f64));
         table.file_count = table.file_count.max(row.file_count);
         table.classes.extend(row.storage_classes.iter().cloned());
-        let cost = cost_estimate(&row.storage_costs);
+        let cost = cost_estimate(row);
         table.cost.add(cost);
         table.columns.push(ColumnNode {
             column: row.column.clone(),
@@ -354,11 +344,15 @@ fn fold(rows: &[ColumnMass]) -> Report {
             file_count: table.file_count,
         };
         let catalog_rows = catalogs.entry(catalog.clone()).or_default();
-        catalog_rows.compressed_bytes += compressed_bytes;
+        catalog_rows.compressed_bytes = catalog_rows
+            .compressed_bytes
+            .saturating_add(compressed_bytes);
         catalog_rows.uncompressed.add(uncompressed_bytes);
         catalog_rows.cost.add(node.storage_cost_per_month);
         let schema_rows = catalog_rows.schemas.entry(schema).or_default();
-        schema_rows.compressed_bytes += compressed_bytes;
+        schema_rows.compressed_bytes = schema_rows
+            .compressed_bytes
+            .saturating_add(compressed_bytes);
         schema_rows.uncompressed.add(uncompressed_bytes);
         schema_rows.cost.add(node.storage_cost_per_month);
         schema_rows.tables.push(node);
@@ -407,7 +401,7 @@ fn title(report: &Report) -> String {
                 .map(move |table| (catalog, schema, table))
         });
     match (tables.next(), tables.next()) {
-        (None, _) => "bytemass".into(),
+        (None, _) => "summary".into(),
         (Some((catalog, schema, table)), None) => format!(
             "{}.{}.{}",
             catalog.display_name, schema.display_name, table.display_name

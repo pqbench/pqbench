@@ -16,12 +16,13 @@ use crate::CliError;
 /// Arguments for `summarize columns`.
 #[derive(Args)]
 pub(crate) struct ColumnsArgs {
-    /// bytemass NDJSON stream; reads standard input when omitted
+    /// bytemass NDJSON stream, or `-` for standard input
     input: Option<String>,
 }
 
 pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
     let input = match &args.input {
+        Some(value) if value == "-" => Input::Stdin,
         Some(value) => Input::File(Path::new(value)),
         None if is_stream() => Input::Stdin,
         None => return Err("summarize columns needs a bytemass stream on standard input".into()),

@@ -18,9 +18,9 @@ $ pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize 
 ```
 
 Standard output is NDJSON (`Metastore`, `Catalog`, `Schema`, `Table`,
-`TableFile`, `Blob`, `Bytemass`, `ColumnMass`);
-`pqb fmt` renders a table. `pqb summarize columns` folds the bytemass stream
-into one estimate per table column, and `pqb format --html` draws those rows as a static
+`TableFile`, `Blob`, `Column`, `ColumnMass`);
+`pqb fmt` renders a table. `pqb summarize columns` folds the `list columns`
+stream into one estimate per table column, and `pqb format --html` draws those rows as a static
 HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under

@@ -50,12 +50,14 @@ pub struct ColumnMass {
     /// Estimated values in the column (including nulls).
     pub value_count: u64,
     /// [`Self::compressed_bytes`] divided by [`Self::value_count`].
+    #[serde(default)]
     pub bytes_per_value: f64,
     /// Uncompressed bytes over compressed bytes, when every measurement
     /// reported both. Above 1 means the bytes did compress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_ratio: Option<f64>,
     /// Estimated distinct files that measured the column.
+    #[serde(default)]
     pub file_count: u64,
     /// The distinct storage classes behind those files, when known.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -70,12 +72,37 @@ pub struct ColumnMass {
 
 impl ColumnMass {
     /// The row a document value carries, recognized by its shape: a table name,
-    /// a column path, and the measured bytes. A value without those is not a
-    /// summarized column.
+    /// a column path, the measured bytes, and the values. A value without those
+    /// is not a summarized column.
     pub fn from_document(value: &serde_json::Value) -> Option<Self> {
         let row: Self = Self::deserialize(value).ok()?;
         crate::v1::Table::parse_name(&row.table)?;
         (!row.column.is_empty()).then_some(row)
+    }
+
+    /// The monthly cost as a `(first, last)` range, when every storage class in
+    /// [`Self::storage_classes`] has a price. Classes add; a class's access
+    /// sub-tiers range.
+    pub fn cost_range(&self) -> Option<(f64, f64)> {
+        if self.storage_classes.is_empty() {
+            return None;
+        }
+        let mut first = 0.0;
+        let mut last = 0.0;
+        for class in &self.storage_classes {
+            let mut prices = self
+                .storage_costs
+                .iter()
+                .filter(|tier| &tier.storage_class == class)
+                .map(|tier| tier.cost_per_month);
+            let low = prices.next()?;
+            let (low, high) = prices.fold((low, low), |(low, high), price| {
+                (low.min(price), high.max(price))
+            });
+            first += low;
+            last += high;
+        }
+        Some((first, last))
     }
 }
 
@@ -98,6 +125,13 @@ pub enum Error {
         /// Which total overflowed.
         field: &'static str,
     },
+    /// The stream measured one column in one file twice.
+    Duplicate {
+        /// The column name.
+        column: String,
+        /// The blob name.
+        blob: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -111,6 +145,9 @@ impl fmt::Display for Error {
                 "a column names `{table}`, not a catalogs/…/schemas/…/tables/… name"
             ),
             Error::Overflow { field } => write!(f, "the weighted {field} overflowed u64"),
+            Error::Duplicate { column, blob } => {
+                write!(f, "`{column}` was measured twice in `{blob}`")
+            }
         }
     }
 }
@@ -121,8 +158,9 @@ impl std::error::Error for Error {}
 /// table and then by column.
 ///
 /// The stream is folded as it arrives: the accumulator keeps one entry per
-/// table column, never the records themselves. Each column carries the size and
-/// storage class of the file it was measured in, so the fold prices storage
+/// table column, never the records themselves. Each column must carry its
+/// `table`, and the size and storage class of the file it was measured in
+/// (`list columns` through `bytemass` sets them), so the fold prices storage
 /// without a separate file record.
 ///
 /// # Errors
@@ -174,7 +212,7 @@ impl<E: std::error::Error + 'static> std::error::Error for SummarizeError<E> {
 /// A summary being folded, one column at a time.
 ///
 /// The fold keeps one accumulator per table column, never the input records, so
-/// its memory is bounded by the distinct columns and files rather than by the
+/// its memory is bounded by the distinct (column, file) pairs rather than by the
 /// stream's length.
 #[derive(Default)]
 pub struct ColumnSummary {
@@ -224,6 +262,12 @@ impl ColumnSummary {
             weight,
         });
         let total = table.columns.entry(path).or_default();
+        if total.blobs.contains_key(&blob) {
+            return Err(Error::Duplicate {
+                column: column.name.clone(),
+                blob,
+            });
+        }
         total.compressed_bytes += bytes;
         total.uncompressed.add(uncompressed);
         total.value_count += values;
@@ -247,20 +291,25 @@ impl ColumnSummary {
         for (name, table) in self.tables {
             let costs = table_class_costs(&table.blobs)?;
             for (column, mass) in table.columns {
+                let compressed_bytes = round(mass.compressed_bytes, "compressed_bytes")?;
+                let value_count = round(mass.value_count, "value_count")?;
+                let uncompressed_bytes = (!mass.uncompressed.incomplete)
+                    .then(|| round(mass.uncompressed.bytes, "uncompressed_bytes"))
+                    .transpose()?;
                 rows.push(ColumnMass {
                     table: name.clone(),
                     column,
-                    compressed_bytes: round(mass.compressed_bytes, "compressed_bytes")?,
-                    uncompressed_bytes: (!mass.uncompressed.incomplete)
-                        .then(|| round(mass.uncompressed.bytes, "uncompressed_bytes"))
-                        .transpose()?,
-                    value_count: round(mass.value_count, "value_count")?,
-                    bytes_per_value: if mass.value_count > 0.0 {
-                        mass.compressed_bytes / mass.value_count
+                    compressed_bytes,
+                    uncompressed_bytes,
+                    value_count,
+                    bytes_per_value: if value_count > 0 {
+                        compressed_bytes as f64 / value_count as f64
                     } else {
                         0.0
                     },
-                    compression_ratio: mass.uncompressed.ratio(mass.compressed_bytes),
+                    compression_ratio: uncompressed_bytes.and_then(|bytes| {
+                        (compressed_bytes > 0).then(|| bytes as f64 / compressed_bytes as f64)
+                    }),
                     file_count: round(count_files(&mass.blobs)?, "file_count")?,
                     storage_classes: mass.class_bytes.keys().cloned().collect(),
                     storage_costs: column_costs(&mass.class_bytes, &table.class_bytes, &costs),
@@ -340,21 +389,6 @@ impl Uncompressed {
             None => self.incomplete = true,
         }
     }
-
-    /// The ratio when every measurement reported its bytes.
-    fn ratio(&self, compressed_bytes: f64) -> Option<f64> {
-        if self.incomplete {
-            return None;
-        }
-        ratio(Some(self.bytes), compressed_bytes)
-    }
-}
-
-/// Uncompressed over compressed, when both are known and compressed is not
-/// zero.
-fn ratio(uncompressed_bytes: Option<f64>, compressed_bytes: f64) -> Option<f64> {
-    let uncompressed = uncompressed_bytes?;
-    (compressed_bytes > 0.0).then(|| uncompressed / compressed_bytes)
 }
 
 /// What one column adds up to while a table is folded, weighted to the table.
@@ -402,6 +436,9 @@ struct ClassFiles {
 
 /// The monthly cost of each class's files, by class. A class is absent when a
 /// file of that class is not a priced S3 object (no size, unknown class).
+///
+/// Prices are the us-east-1 list prices, first tier: no volume discount, no
+/// request or retrieval charge.
 fn table_class_costs(
     blobs: &BTreeMap<String, FileFacts>,
 ) -> Result<BTreeMap<String, Vec<StorageTierCost>>, Error> {
@@ -458,7 +495,9 @@ fn table_class_costs(
 }
 
 /// A column's share of each class's cost, by the column's bytes in that class.
-/// Each map holds compressed bytes per storage class.
+/// Each map holds compressed bytes per storage class. This is an estimate: it
+/// ignores which files each column spans, so schema evolution between files
+/// makes the split approximate (the table total is still right).
 fn column_costs(
     column: &BTreeMap<String, f64>,
     table: &BTreeMap<String, f64>,
@@ -530,7 +569,7 @@ fn storage_prices(storage_class: &str) -> Option<&'static [(Option<&'static str>
         ],
         "STANDARD_IA" => &[(None, 0.0125)],
         "ONEZONE_IA" => &[(None, 0.01)],
-        "EXPRESS_ONEZONE" => &[(None, 0.016)],
+        "EXPRESS_ONEZONE" => &[(None, 0.11)],
         "GLACIER_IR" => &[(None, 0.004)],
         "GLACIER" => &[(None, 0.0036)],
         "DEEP_ARCHIVE" => &[(None, 0.00099)],

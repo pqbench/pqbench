@@ -65,14 +65,15 @@ The page opens one level at a time:
 
 Every level's cell shows its compression ratio, uncompressed bytes over
 compressed bytes (7.5×, not the compressed fraction the codec benchmarks
-report), summed over the rows below it. The table cell counts the files behind
-it; the files themselves are not drawn, because one table can carry thousands.
+report), summed over the rows below it. The table cell counts the files of its
+widest column; a row cannot carry the table's distinct file count, and the files
+themselves are not drawn, because one table can carry thousands.
 
 Click a cell to descend; the breadcrumb walks back up, and the hash keeps the
 level, so a link can point at one. When a row carries a storage class, each
 cell shows the estimated monthly S3 storage cost next to its bytes: an absent
-class on S3 is STANDARD, Intelligent-Tiering is a range over its access
-sub-tiers, and local files are not priced. No build step, no npm, no local
+class on S3 is STANDARD, a row's classes add, Intelligent-Tiering is a range
+over its access sub-tiers, and local files are not priced. No build step, no npm, no local
 server.
 
 ## Whole metastore

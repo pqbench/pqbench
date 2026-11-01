@@ -75,7 +75,7 @@ names itself. See [Delta tables](guides/delta.md) and [Iceberg tables](guides/ic
 
 ## Draw the result
 
-`summarize columns` folds the bytemass stream into one estimate per table
+`summarize columns` folds the `list columns` stream into one estimate per table
 column, and `format --html` draws those rows as a static HTML treemap. No server, no
 build step:
 

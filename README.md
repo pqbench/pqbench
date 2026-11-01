@@ -67,7 +67,7 @@ Read it left to right:
   carrying the table's lease.
 - `bytemass` reads each file's footer and prints the on-disk bytes per column,
   the table in [bytemass](#bytemass). In a pipe it streams
-  `Blob` and `Bytemass` NDJSON instead; `pqb summarize columns` estimates each
+  `Blob` and `Column` NDJSON instead; `pqb summarize columns` estimates each
   table column's mass and `pqb format --html` draws that as a treemap.
 
 The same walk runs offline against the local Delta and Iceberg stand,
@@ -164,7 +164,7 @@ c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511        
 - Reads `TableFile` records on stdin: `table-file PATH` names one path or URI,
   and `list files` names a table's files.
 - `s3://` needs the `aws` feature; a pipe streams one `Blob` per file and one
-  `Bytemass` per column.
+  `Column` per column.
 
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/guides/demo/).

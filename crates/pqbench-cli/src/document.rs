@@ -155,7 +155,7 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         Some(name) => Err(invalid_name(name)),
         None => match mass::ColumnMass::from_document(&value) {
             Some(row) => Ok(Record::Mass(row)),
-            None => Err("a document record needs a name".into()),
+            None => Err("a document record needs a name or a summarized column".into()),
         },
     }
 }
@@ -212,6 +212,8 @@ pub(crate) fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_name(name: &str) -> CliError {
-    format!("unsupported document name `{name}`; expected a table-file, a blob, or a bytemass")
-        .into()
+    format!(
+        "unsupported document name `{name}`; expected a table-file, a blob, a column, or a summarized column"
+    )
+    .into()
 }

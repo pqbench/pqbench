@@ -1001,7 +1001,8 @@ fn timed_stage(
 
 /// The whole issue-#58 walk on a copied schema, all the way to a treemap:
 /// `list tables` → `credentials check` → `credentials get` → `get table` →
-/// `list files` → `list columns` → `summarize columns` → `viz`, each stage fed the
+/// `list files` → `list columns` → `summarize columns` → `format --html`, each
+/// stage fed the
 /// previous stage's NDJSON. Set
 /// `DBX_WALK_SCHEMA` to walk another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
