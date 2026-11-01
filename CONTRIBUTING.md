@@ -43,6 +43,13 @@ make check        # = fmt-check + check-docs + clippy -D warnings + isolation + 
 ```
 
 - `make check` is the gate and runs automatically in the pre-commit hook.
+- `make check-fast` is the iteration gate: fmt-check + check-docs + `cargo
+  check --all-targets`, with no codegen or links. The full `make check` is for
+  before pushing. Heavy cargo runs are serialized by `make` (one lock across
+  profiles and worktrees) and capped by `[build] jobs`; do not run a second
+  build in parallel. A bare `cargo` in a worktree should go through `make cargo
+  CMD="…"`; `make link-target` points the worktree's `target/` at the shared
+  one.
 - `make check-python` builds the data-only wheel with maturin and smoke-tests
   the installed binary. It is separate from the gate because it compiles every
   storage backend. CI runs it on every pull request.

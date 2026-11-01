@@ -28,6 +28,10 @@
 # just snappy, and `-ffast-math`/`-fstrict-aliasing` are a gamble on dependencies
 # the project does not own. `-O3 -DNDEBUG` is all zstd needs.
 [build]
+# Cap parallel rustc/link jobs for every cargo invocation, not only `make`:
+# the all-features test binaries link at multi-GB RSS each, and one job per
+# core exhausts a 14 GB machine. An explicit CARGO_BUILD_JOBS (CI sets 4) wins.
+jobs = 2
 # Use sccache when installed and invoke rustc directly otherwise. This keeps
 # fresh clones and CI working without mandatory machine-level configuration.
 # The shim is POSIX, so a Windows build must unset it — cargo cannot execute the
