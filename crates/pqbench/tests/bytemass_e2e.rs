@@ -80,7 +80,7 @@ async fn a_pattern_is_not_expanded() {
 }
 
 #[tokio::test]
-async fn viz_draws_measured_columns() {
+async fn viz_draws_summarized_columns() {
     let path = fixture("small_snappy.parquet");
     let blob_name = v1::name::blob_name(&path);
     let blob = pqbench::blob::get(common::lake(), &blob_name)
@@ -90,10 +90,11 @@ async fn viz_draws_measured_columns() {
     for column in &mut columns {
         column.table = Some(v1::name::local_table(&path));
     }
+    let rows = pqbench::mass::summarize_columns(&columns, &[blob]).unwrap();
 
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
-    pqbench::viz::write_report(&prefix, &columns, &[blob]).unwrap();
+    pqbench::viz::write_report(&prefix, &rows).unwrap();
     let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
     assert!(html.starts_with("<!DOCTYPE html>"));
     assert!(html.contains("d3-hierarchy@3"));

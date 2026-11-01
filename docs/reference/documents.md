@@ -16,8 +16,8 @@ schema.
 | `Schema` | `catalogs/{catalog}/schemas/{schema}` | [`list schemas`](cli.md#pqbench-list-schemas), [`get schema`](cli.md#pqbench-get-schema) | `get schema`, `list tables` |
 | `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table), [`credentials get`](cli.md#pqbench-credentials) | `get table`, `list files`, `credentials get` |
 | `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass` |
-| `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `viz`, `summarize columns` |
-| `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `viz`, `summarize columns`, `diff` |
+| `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns` |
+| `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |
 
 `profile` adds the CLI's `id` (the input path) to each `ColumnProfile` row;
@@ -44,9 +44,9 @@ Some commands emit a document that is not a resource: it has no addressable
 | `Skill` | [`skill`](skill.md) (no arguments) | `kind: "pqbench.skill"`, `version`, `name`, `description`, `documents` |
 
 `ColumnDelta` and `ColumnMass` have no `name`, so `pqb fmt` cannot place them
-in a table; pipe them to `jq` or read the JSON. `Skill` is the one document
-that keeps an explicit `kind` and `version`: it is a listing, not a resource
-stream.
+in a table; pipe them to `jq` (or `viz`, for `ColumnMass`) or read the JSON.
+`Skill` is the one document that keeps an explicit `kind` and `version`: it is
+a listing, not a resource stream.
 
 ## Sampling
 
@@ -82,9 +82,8 @@ error says how many files and bytes it holds. A record that already carries a
 `sample_rate` composes with the smaller of the two probabilities, since both
 threshold the same hash. `summarize columns` applies the weight, so a sampled
 stream's rows estimate the table: the bytes, value counts, file count, and
-monthly cost are each scaled by the inverse of the rate. `viz` does not apply
-it, so a sampled stream's page remains the sample. A record with no positive
-size is an error, not a silent drop.
+monthly cost are each scaled by the inverse of the rate. A record with no
+positive size is an error, not a silent drop.
 
 Filtering by path or partition is still a shell job on the `list files` stream
 (`jq`, `sort`, `head`, `xargs`) — see [Visual demos](../guides/demo.md).

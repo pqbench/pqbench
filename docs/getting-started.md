@@ -4,7 +4,8 @@ pqbench measures **how a Parquet file spends bytes** and how well codecs
 compress it. It reads the footer, not the pages, so it is fast on files of any
 size. Every command writes a typed `pqbench.v1` document, so commands compose on
 pipes: `list files` names a table's active files, `bytemass` measures them,
-`viz` draws the result.
+`summarize columns` folds the measurements into one estimate per table column,
+and `viz` draws the result.
 
 This page is a guided first run. It uses the committed
 [`examples/quickstart.parquet`](../examples/quickstart.parquet) smoke sample and
@@ -74,11 +75,12 @@ names itself. See [Delta tables](guides/delta.md) and [Iceberg tables](guides/ic
 
 ## Draw the result
 
-`viz` collects a bytemass stream into a static HTML treemap. No server, no
+`summarize columns` folds the bytemass stream into one estimate per table
+column, and `viz` draws those rows as a static HTML treemap. No server, no
 build step:
 
 ```console run
-$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`; open it in a browser. See [viz](reference/cli.md#pqbench-viz).

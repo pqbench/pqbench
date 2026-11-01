@@ -8,12 +8,14 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn visualization() {
-    // visualization, from line 7
+    // visualization, from line 8
     support::run(r#"pqb table-file examples/quickstart.parquet \
   | pqb bytemass \
-  | pqb viz -o /tmp/report"#, 8, None);
+  | pqb summarize columns \
+  | pqb viz -o /tmp/report"#, 9, None);
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
   | pqb list files \
   | pqb bytemass \
-  | pqb viz -o /tmp/report"#, 11, None);
+  | pqb summarize columns \
+  | pqb viz -o /tmp/report"#, 13, None);
 }

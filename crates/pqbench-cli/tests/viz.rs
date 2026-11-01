@@ -26,6 +26,29 @@ fn pipe(args: &[&str], stdin: &[u8]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn reported(measured: &std::process::Output) -> std::process::Output {
+    pipe(&["summarize", "columns"], &measured.stdout)
+}
+
+fn row(table: &str, column: &str, bytes: u64, uncompressed: u64, values: u64) -> serde_json::Value {
+    serde_json::json!({
+        "table": table,
+        "column": column,
+        "compressed_bytes": bytes,
+        "uncompressed_bytes": uncompressed,
+        "value_count": values,
+        "bytes_per_value": bytes as f64 / values as f64,
+        "compression_ratio": uncompressed as f64 / bytes as f64,
+        "file_count": 1,
+        "storage_classes": ["STANDARD"],
+        "storage_costs": [{
+            "storage_class": "STANDARD",
+            "dollars_per_gibibyte_per_month": 0.023,
+            "cost_per_month": 0.000001,
+        }],
+    })
+}
+
 fn report(html: &str) -> serde_json::Value {
     let start = html
         .find("const REPORT = ")
@@ -36,19 +59,25 @@ fn report(html: &str) -> serde_json::Value {
 }
 
 #[test]
-fn viz_collects_a_bytemass_stream_into_html() {
+fn viz_draws_a_summarized_stream_into_html() {
     let measured = common::measured(parquet_fixture());
     assert!(
         measured.status.success(),
         "stderr: {}",
         String::from_utf8_lossy(&measured.stderr)
     );
+    let summarized = reported(&measured);
+    assert!(
+        summarized.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&summarized.stderr)
+    );
 
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
     let output = pipe(
         &["viz", "--output", prefix.to_str().unwrap()],
-        &measured.stdout,
+        &summarized.stdout,
     );
     assert!(
         output.status.success(),
@@ -64,28 +93,17 @@ fn viz_collects_a_bytemass_stream_into_html() {
 }
 
 #[test]
-fn viz_places_a_fileless_measurement_under_the_local_table() {
-    let blob = pqbench::v1::name::blob_name("/tmp/part-0.parquet");
-    let column = format!("{blob}/columns/id");
-    let file = serde_json::json!({
-        "name": blob,
-        "size_bytes": 40,
-        "storage_class": "STANDARD",
-        "row_group_count": 1,
-        "column_count": 1,
-    });
-    let row = serde_json::json!({
-        "name": column,
-        "mass": {
-            "compressed_bytes": 8,
-            "uncompressed_bytes": 16,
-            "codec": "ZSTD",
-            "encodings": ["PLAIN"],
-            "value_count": 10,
-            "null_count": 0,
-        },
-    });
-    let document = format!("{file}\n{row}\n");
+fn viz_places_a_fileless_row_under_the_local_table() {
+    let document = format!(
+        "{}\n",
+        row(
+            "catalogs/local/schemas/local/tables/part-0.parquet",
+            "id",
+            8,
+            16,
+            10
+        )
+    );
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
     let output = pipe(
@@ -103,28 +121,21 @@ fn viz_places_a_fileless_measurement_under_the_local_table() {
         html.contains("\"display_name\":\"part-0.parquet\""),
         "{html}"
     );
-    assert!(html.contains("\"file_count\":1"), "{html}");
 }
 
 #[test]
-fn viz_embeds_the_ratio_uncompressed_over_compressed() {
-    let blob = pqbench::v1::name::blob_name("/tmp/part-0.parquet");
-    let column = format!("{blob}/columns/id");
-    let file = serde_json::json!({
-        "name": blob,
-        "size_bytes": 40,
-        "row_group_count": 1,
-        "column_count": 1,
-    });
-    let row = serde_json::json!({
-        "name": column,
-        "mass": {
-            "compressed_bytes": 8,
-            "uncompressed_bytes": 20,
-            "value_count": 10,
-        },
-    });
-    let document = format!("{file}\n{row}\n");
+fn viz_sums_the_rows_of_a_table() {
+    let document = format!(
+        "{}\n{}\n",
+        row("catalogs/shop/schemas/sales/tables/orders", "id", 8, 20, 10),
+        row(
+            "catalogs/shop/schemas/sales/tables/orders",
+            "note",
+            2,
+            5,
+            10
+        ),
+    );
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
     let output = pipe(
@@ -142,33 +153,34 @@ fn viz_embeds_the_ratio_uncompressed_over_compressed() {
     let catalog = &report["catalogs"][0];
     let schema = &catalog["schemas"][0];
     let table = &schema["tables"][0];
-    let column = &table["columns"][0];
-    assert_eq!(catalog["compression_ratio"], 2.5);
-    assert_eq!(schema["compression_ratio"], 2.5);
+    assert_eq!(table["compressed_bytes"], 10);
     assert_eq!(table["compression_ratio"], 2.5);
-    assert_eq!(column["compression_ratio"], 2.5);
-    assert_eq!(column["bytes_per_value"], 0.8);
+    assert_eq!(table["file_count"], 1);
+    assert_eq!(table["columns"][0]["column"], "id");
+    assert_eq!(table["columns"][0]["bytes_per_value"], 0.8);
+    assert_eq!(catalog["compressed_bytes"], 10);
+    assert_eq!(schema["compressed_bytes"], 10);
 }
 
 #[test]
-fn viz_rejects_a_table_file() {
-    let document = r#"{"name":"catalogs/local/schemas/local/tables/t/files/p","blob":"blobs/file/%2Ftmp%2Ft"}"#;
+fn viz_rejects_a_bytemass_stream() {
+    let measured = common::measured(parquet_fixture());
+    assert!(measured.status.success());
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
-    let output = pipe(
-        &["viz", "-o", prefix.to_str().unwrap()],
-        document.as_bytes(),
-    );
+    let output = pipe(&["viz", "-o", prefix.to_str().unwrap()], &measured.stdout);
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("pqbench bytemass"), "{stderr}");
+    assert!(stderr.contains("summarize columns"), "{stderr}");
 }
 
 #[test]
 fn viz_requires_output() {
     let measured = common::measured(parquet_fixture());
     assert!(measured.status.success());
-    let output = pipe(&["viz"], &measured.stdout);
+    let summarized = reported(&measured);
+    assert!(summarized.status.success());
+    let output = pipe(&["viz"], &summarized.stdout);
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("--output"), "{stderr}");

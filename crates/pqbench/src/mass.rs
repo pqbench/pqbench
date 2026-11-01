@@ -63,6 +63,17 @@ pub struct ColumnMass {
     pub storage_costs: Vec<StorageTierCost>,
 }
 
+impl ColumnMass {
+    /// The row a document value carries, recognized by its shape: a table name,
+    /// a column path, and the measured bytes. A value without those is not a
+    /// summarized column.
+    pub fn from_document(value: &serde_json::Value) -> Option<Self> {
+        let row: Self = serde_json::from_value(value.clone()).ok()?;
+        crate::v1::Table::parse_name(&row.table)?;
+        (!row.column.is_empty()).then_some(row)
+    }
+}
+
 /// Errors summarizing a column stream.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -701,5 +712,26 @@ mod tests {
         file.sample_rate = Some(1e-320);
         let error = summarize_columns(&[], &[file]).unwrap_err().to_string();
         assert!(error.contains("overflow"), "{error}");
+    }
+
+    #[test]
+    fn reads_a_row_only_when_it_carries_the_measured_fields() {
+        let minimal = serde_json::json!({
+            "table": TABLE,
+            "column": "id",
+        });
+        assert_eq!(ColumnMass::from_document(&minimal), None);
+
+        let row = ColumnMass {
+            table: TABLE.into(),
+            column: "id".into(),
+            compressed_bytes: 4,
+            value_count: 1,
+            bytes_per_value: 4.0,
+            file_count: 1,
+            ..ColumnMass::default()
+        };
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(ColumnMass::from_document(&value), Some(row));
     }
 }

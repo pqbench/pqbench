@@ -46,6 +46,9 @@ async fn collect(input: &str) -> Result<(Vec<v1::Column>, Vec<v1::Blob>), CliErr
                 )
                 .into());
             }
+            Record::Mass(_) => {
+                return Err("summarize columns reads a bytemass stream, not a summary".into());
+            }
         }
     }
     if columns.is_empty() {

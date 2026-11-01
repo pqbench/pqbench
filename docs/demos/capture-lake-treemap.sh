@@ -1,5 +1,6 @@
 #!/bin/sh
-# One still of `list files | bytemass | viz`. This is not a lake click-through.
+# One still of `list files | bytemass | summarize columns | viz`. This is not a
+# lake click-through.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -24,6 +25,7 @@ mkdir -p "$frames" .docker-data
 cat docker/e2e-lakehouse/table.ndjson | "$bin" list files |
     "$bin" list files |
     "$bin" bytemass |
+    "$bin" summarize columns |
     "$bin" viz -o .docker-data/pqbench-table
 
 "$chrome" --headless=new --disable-gpu --hide-scrollbars \

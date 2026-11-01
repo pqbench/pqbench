@@ -7,28 +7,28 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn measure_one_file() {
-    // measure_one_file, from line 38
-    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt", 39, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
+    // measure_one_file, from line 39
+    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt", 40, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn measure_one_file_2() {
-    // measure_one_file_2, from line 50
-    support::run("pqb profile examples/quickstart.parquet | pqb fmt", 51, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
+    // measure_one_file_2, from line 51
+    support::run("pqb profile examples/quickstart.parquet | pqb fmt", 52, Some(&["id                           column  kind     values  nulls  ndv", "---------------------------  ------  -------  ------  -----  ---", "examples/quickstart.parquet  id      integer       8      0    8", "examples/quickstart.parquet  year    integer       8      0    8"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn the_metadata_walk() {
-    // the_metadata_walk, from line 63
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 64, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
+    // the_metadata_walk, from line 64
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 65, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
 }
 
 #[rustfmt::skip]
 #[test]
 fn draw_the_result() {
-    // draw_the_result, from line 80
-    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report", 81, None);
+    // draw_the_result, from line 82
+    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report", 83, None);
 }
