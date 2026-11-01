@@ -7,6 +7,8 @@
 //! `--format`). A summarized column row names no resource, so it is the one
 //! record recognized by its shape instead.
 
+use std::path::Path;
+
 use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines, Stdin};
 
@@ -28,26 +30,50 @@ pub(crate) enum Record {
     Mass(mass::ColumnMass),
 }
 
-/// The records of a document, one at a time: `-` streams standard input, a path
-/// is read whole (documents are metadata, not data). Each value is classified
-/// as it arrives, so a command is a filter over the stream and never buffers
-/// its input.
-pub(crate) async fn records(
-    input: &str,
-) -> Result<BoxStream<'static, Result<Record, CliError>>, CliError> {
-    if input == "-" {
-        if !is_stream() {
-            return Err("standard input is not a stream; pass a file or pipe a document in".into());
-        }
-        Ok(stdin_records().boxed())
-    } else {
-        let bytes = tokio::fs::read(input).await?;
-        let bytes = if bytes.starts_with(&LZ4_MAGIC) {
-            decode_lz4(&bytes)?
+/// Where a command's document comes from.
+#[derive(Clone, Copy)]
+pub(crate) enum Input<'a> {
+    /// Standard input, read one value at a time.
+    Stdin,
+    /// A path, read whole: documents are metadata, not data.
+    File(&'a Path),
+}
+
+impl<'a> Input<'a> {
+    /// The command line's input: `-` is standard input, anything else a path.
+    pub(crate) fn parse(input: &'a str) -> Self {
+        if input == "-" {
+            Self::Stdin
         } else {
-            bytes
-        };
-        Ok(stream::iter(file_records(bytes)).boxed())
+            Self::File(Path::new(input))
+        }
+    }
+}
+
+/// The records of a document, one at a time. Each value is classified as it
+/// arrives, so a command is a filter over the stream and never buffers its
+/// input.
+pub(crate) async fn records(
+    input: Input<'_>,
+) -> Result<BoxStream<'static, Result<Record, CliError>>, CliError> {
+    match input {
+        Input::Stdin => {
+            if !is_stream() {
+                return Err(
+                    "standard input is not a stream; pass a file or pipe a document in".into(),
+                );
+            }
+            Ok(stdin_records().boxed())
+        }
+        Input::File(path) => {
+            let bytes = tokio::fs::read(path).await?;
+            let bytes = if bytes.starts_with(&LZ4_MAGIC) {
+                decode_lz4(&bytes)?
+            } else {
+                bytes
+            };
+            Ok(stream::iter(file_records(bytes)).boxed())
+        }
     }
 }
 
@@ -170,11 +196,8 @@ fn decode_lz4(bytes: &[u8]) -> Result<Vec<u8>, CliError> {
     Ok(decoded)
 }
 
-/// Whether a path is `-`, JSON (`{`), or an lz4 frame.
-pub(crate) async fn is_document(path: &str) -> bool {
-    if path == "-" {
-        return true;
-    }
+/// Whether a path is JSON (`{`) or an lz4 frame.
+pub(crate) async fn is_document(path: &Path) -> bool {
     let Ok(mut file) = tokio::fs::File::open(path).await else {
         return false;
     };

@@ -4,7 +4,7 @@ use clap::Args;
 use futures_util::StreamExt;
 use pqbench::v1;
 
-use crate::document::{self, Record};
+use crate::document::{self, Input, Record};
 use crate::emit::Emitter;
 use crate::stdin::is_stream;
 use crate::CliError;
@@ -18,9 +18,9 @@ pub(crate) struct ColumnsArgs {
 
 pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
     let input = match &args.input {
-        None if is_stream() => "-",
+        Some(value) => Input::parse(value),
+        None if is_stream() => Input::Stdin,
         None => return Err("summarize columns needs a bytemass stream on standard input".into()),
-        Some(value) => value.as_str(),
     };
     let (columns, blobs) = collect(input).await?;
     let rows = pqbench::mass::summarize_columns(&columns, &blobs)?;
@@ -31,7 +31,7 @@ pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
     out.finish().await
 }
 
-async fn collect(input: &str) -> Result<(Vec<v1::Column>, Vec<v1::Blob>), CliError> {
+async fn collect(input: Input<'_>) -> Result<(Vec<v1::Column>, Vec<v1::Blob>), CliError> {
     let mut columns = Vec::new();
     let mut blobs = Vec::new();
     let mut records = document::records(input).await?;

@@ -1,6 +1,6 @@
 //! `diff`: compare two bytemass streams.
 
-use crate::document::{self, Record};
+use crate::document::{self, Input, Record};
 use crate::emit::Emitter;
 use crate::CliError;
 use clap::Args;
@@ -32,12 +32,15 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &DiffArgs) -> Result<(), Cli
 }
 
 async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<v1::Column>, CliError> {
-    if input != "-" && !document::is_document(input).await {
-        let blob = v1::name::blob_name(input);
-        return Ok(bytemass::list_columns(lake, &blob).await?);
+    let source = Input::parse(input);
+    if let Input::File(path) = source {
+        if !document::is_document(path).await {
+            let blob = v1::name::blob_name(input);
+            return Ok(bytemass::list_columns(lake, &blob).await?);
+        }
     }
     let mut columns = Vec::new();
-    let mut records = document::records(input).await?;
+    let mut records = document::records(source).await?;
     while let Some(record) = records.next().await {
         match record? {
             Record::Column(column) => columns.push(column),

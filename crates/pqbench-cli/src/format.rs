@@ -17,7 +17,7 @@ use pqbench::v1;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::document::{self, Record};
+use crate::document::{self, Input, Record};
 use crate::render::{self, Row};
 use crate::CliError;
 
@@ -55,7 +55,7 @@ pub(crate) async fn run(args: &FormatArgs) -> Result<(), CliError> {
 /// The `--html` page: only the `summarize columns` rows are supported.
 async fn html() -> Result<(), CliError> {
     let mut rows = Vec::new();
-    let mut records = document::records("-").await?;
+    let mut records = document::records(Input::Stdin).await?;
     while let Some(record) = records.next().await {
         match record? {
             Record::Mass(row) => rows.push(row),
