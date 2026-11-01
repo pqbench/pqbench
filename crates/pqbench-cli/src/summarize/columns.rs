@@ -4,7 +4,8 @@ use std::path::Path;
 
 use clap::Args;
 use futures_util::StreamExt;
-use pqbench::v1;
+
+use pqbench::mass;
 
 use crate::document::{self, Input, Record};
 use crate::emit::Emitter;
@@ -24,8 +25,18 @@ pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
         None if is_stream() => Input::Stdin,
         None => return Err("summarize columns needs a bytemass stream on standard input".into()),
     };
-    let (columns, blobs) = collect(input).await?;
-    let rows = pqbench::mass::summarize_columns(&columns, &blobs)?;
+    let records = document::records(input).await?;
+    let measurements = records.map(measurement);
+    let rows = pqbench::mass::summarize_columns(measurements)
+        .await
+        .map_err(|error| match error {
+            mass::SummarizeError::Stream(error) => error,
+            mass::SummarizeError::Summary(error) => error.into(),
+            other => format!("summarize columns failed: {other}").into(),
+        })?;
+    if rows.is_empty() {
+        return Err("bytemass stream has no columns".into());
+    }
     let mut out = Emitter::open();
     for row in &rows {
         out.write(row).await?;
@@ -33,28 +44,20 @@ pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
     out.finish().await
 }
 
-async fn collect(input: Input<'_>) -> Result<(Vec<v1::Column>, Vec<v1::Blob>), CliError> {
-    let mut columns = Vec::new();
-    let mut blobs = Vec::new();
-    let mut records = document::records(input).await?;
-    while let Some(record) = records.next().await {
-        match record? {
-            Record::Blob(blob) => blobs.push(blob),
-            Record::Column(column) => columns.push(column),
-            Record::File(file) => {
-                return Err(format!(
-                    "summarize columns reads a `list columns` stream, not `{}`; measure with `pqbench list columns` first",
-                    file.name
-                )
-                .into());
-            }
-            Record::Mass(_) => {
-                return Err("summarize columns reads a bytemass stream, not a summary".into());
-            }
+/// One measurement the fold takes, or why the record is not one.
+fn measurement(record: Result<Record, CliError>) -> Result<mass::Measurement, CliError> {
+    Ok(match record? {
+        Record::Blob(blob) => mass::Measurement::Blob(blob),
+        Record::Column(column) => mass::Measurement::Column(Box::new(column)),
+        Record::File(file) => {
+            return Err(format!(
+                "summarize columns reads a `list columns` stream, not `{}`; measure with `pqbench list columns` first",
+                file.name
+            )
+            .into());
         }
-    }
-    if columns.is_empty() {
-        return Err("bytemass stream has no columns".into());
-    }
-    Ok((columns, blobs))
+        Record::Mass(_) => {
+            return Err("summarize columns reads a bytemass stream, not a summary".into());
+        }
+    })
 }

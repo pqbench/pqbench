@@ -90,7 +90,12 @@ async fn viz_draws_summarized_columns() {
     for column in &mut columns {
         column.table = Some(v1::name::local_table(&path));
     }
-    let rows = pqbench::mass::summarize_columns(&columns, &[blob]).unwrap();
+    let mut summary = pqbench::mass::ColumnSummary::new();
+    summary.add_blob(&blob).unwrap();
+    for column in &columns {
+        summary.add_column(column).unwrap();
+    }
+    let rows = summary.into_rows().unwrap();
 
     let directory = tempfile::tempdir().unwrap();
     let prefix = directory.path().join("report");
