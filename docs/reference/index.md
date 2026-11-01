@@ -11,8 +11,8 @@ wheel.
 - [Profile](profile.md) — the per-column facts `profile` decodes from a row
   sample.
 - [Diff](diff.md) — comparing two files or saved bytemass streams.
-- [Visualization](viz.md) — folding a bytemass stream into `ColumnMass` rows
-  and drawing them as a static HTML treemap.
+- [Format](format.md) — rendering a stream as tables, and `ColumnMass` rows as
+  a static HTML treemap (`--html`).
 - [Agent skills](skill.md) — the skills bundled into the binary.
 - [Authentication](authentication.md) — object storage, catalog config, and
   Databricks-governed tables.

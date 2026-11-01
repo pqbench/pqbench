@@ -9,7 +9,7 @@ mod support;
 fn visual_demos() {
     // visual_demos, from line 6
     support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt", 7, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
-    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report", 12, None);
+    support::run("pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 12, None);
 }
 
 #[cfg(feature = "delta")]
@@ -39,7 +39,7 @@ fn selecting_files_with_unix_tools() {
 #[test]
 fn a_table_s_files() {
     // a_table_s_files, from line 68
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report", 69, None);
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 69, None);
 }
 
 #[cfg(feature = "delta")]
@@ -63,5 +63,5 @@ fn one_parquet_file() {
 fn one_delta_snapshot() {
     // one_delta_snapshot, from line 129
     support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 130, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report", 135, None);
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 135, None);
 }

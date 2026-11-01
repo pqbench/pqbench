@@ -5,7 +5,7 @@ compress it. It reads the footer, not the pages, so it is fast on files of any
 size. Every command writes a typed `pqbench.v1` document, so commands compose on
 pipes: `list files` names a table's active files, `bytemass` measures them,
 `summarize columns` folds the measurements into one estimate per table column,
-and `viz` draws the result.
+and `format --html` draws the result.
 
 This page is a guided first run. It uses the committed
 [`examples/quickstart.parquet`](../examples/quickstart.parquet) smoke sample and
@@ -76,14 +76,14 @@ names itself. See [Delta tables](guides/delta.md) and [Iceberg tables](guides/ic
 ## Draw the result
 
 `summarize columns` folds the bytemass stream into one estimate per table
-column, and `viz` draws those rows as a static HTML treemap. No server, no
+column, and `format --html` draws those rows as a static HTML treemap. No server, no
 build step:
 
 ```console run
-$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 
-The page lands at `/tmp/report.html`; open it in a browser. See [viz](reference/cli.md#pqbench-viz).
+The page lands at `/tmp/report.html`; open it in a browser. See [format](reference/format.md).
 
 ## Where to go next
 
@@ -95,4 +95,4 @@ The page lands at `/tmp/report.html`; open it in a browser. See [viz](reference/
 - **More walkthroughs** — [Visual demos](guides/demo.md) has Parquet, Delta, Iceberg, and
   catalog pipes with real output.
 - **Tune a layout** — [profile](reference/cli.md#pqbench-profile) reports what is in a sample;
-  [viz](reference/cli.md#pqbench-viz) shows where an existing table's bytes go.
+  [format --html](reference/format.md) shows where an existing table's bytes go.

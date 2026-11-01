@@ -9,13 +9,13 @@ column  type   codec         encoding  bytes  dict bytes  bytes/row  values
 ------  -----  ------------  --------  -----  ----------  ---------  ------
 id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
 year    INT32  UNCOMPRESSED  dict         68          46       8.50       8
-$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 
 Standard output is NDJSON (`Metastore`, `Catalog`, `Schema`, `Table`,
 `TableFile`, `Blob`, `Bytemass`, `ColumnMass`);
 `pqb fmt` renders a table. `pqb summarize columns` folds the bytemass stream
-into one estimate per table column, and `pqb viz` draws those rows as a static
+into one estimate per table column, and `pqb format --html` draws those rows as a static
 HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under
@@ -66,10 +66,10 @@ file its `blob` names.
 commands:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 
-![one table viz page](../images/pqbench-lake-treemap.gif)
+![one table format --html page](../images/pqbench-lake-treemap.gif)
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
@@ -132,7 +132,7 @@ column  type        codec   encoding  bytes  dict bytes  bytes/row  values
 ------  ----------  ------  --------  -----  ----------  ---------  ------
 id      INT64       SNAPPY  dict         66          37      22.00       3
 label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 
 ![pqbench table CLI walkthrough](../images/pqbench-delta-bytemass.gif)
@@ -167,5 +167,5 @@ That builds `pqbench` with `--features delta` (honoring `CARGO_TARGET_DIR`)
 and records the Parquet and Delta sessions against committed fixtures.
 The Iceberg REST pipe is not recorded here; it needs `make lakehouse`.
 
-The table treemap GIF is one still of the viz page. Recapture it with
+The table treemap GIF is one still of the format --html page. Recapture it with
 `docs/demos/capture-lake-treemap.sh` (Chrome + `ffmpeg`).

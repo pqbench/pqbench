@@ -48,14 +48,14 @@ fn get_help_stays_local_and_points_at_neighbors() {
 }
 
 #[test]
-fn bytemass_help_points_at_list_summarize_and_viz() {
+fn bytemass_help_points_at_list_summarize_and_format() {
     let stdout = help(&["bytemass", "--help"]);
     assert!(stdout.contains("pqbench list --help"), "{stdout}");
     assert!(
         stdout.contains("pqbench summarize columns --help"),
         "{stdout}"
     );
-    assert!(stdout.contains("pqbench viz --help"), "{stdout}");
+    assert!(stdout.contains("pqbench format --help"), "{stdout}");
     assert!(stdout.contains("pqbench --help"), "{stdout}");
     assert!(!stdout.contains("parquet.apache.org"), "{stdout}");
 }

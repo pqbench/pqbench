@@ -1,5 +1,5 @@
 #!/bin/sh
-# One still of `list files | bytemass | summarize columns | viz`. This is not a
+# One still of `list files | list columns | summarize columns | format --html`. This is not a
 # lake click-through.
 set -eu
 
@@ -24,9 +24,9 @@ frames=.docker-data/table-frames
 mkdir -p "$frames" .docker-data
 cat docker/e2e-lakehouse/table.ndjson | "$bin" list files |
     "$bin" list files |
-    "$bin" bytemass |
+    "$bin" list columns |
     "$bin" summarize columns |
-    "$bin" viz -o .docker-data/pqbench-table
+    "$bin" format --html > .docker-data/pqbench-table.html
 
 "$chrome" --headless=new --disable-gpu --hide-scrollbars \
     --screenshot="$frames/frame-0.png" --window-size=1440,900 \

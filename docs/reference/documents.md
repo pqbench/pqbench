@@ -44,7 +44,7 @@ Some commands emit a document that is not a resource: it has no addressable
 | `Skill` | [`skill`](skill.md) (no arguments) | `kind: "pqbench.skill"`, `version`, `name`, `description`, `documents` |
 
 `ColumnDelta` and `ColumnMass` have no `name`, so `pqb fmt` cannot place them
-in a table; pipe them to `jq` (or `viz`, for `ColumnMass`) or read the JSON.
+in a table; pipe them to `jq` (or `format --html`, for `ColumnMass`) or read the JSON.
 `Skill` is the one document that keeps an explicit `kind` and `version`: it is
 a listing, not a resource stream.
 
@@ -82,8 +82,9 @@ error says how many files and bytes it holds. A record that already carries a
 `sample_rate` composes with the smaller of the two probabilities, since both
 threshold the same hash. `summarize columns` applies the weight, so a sampled
 stream's rows estimate the table: the bytes, value counts, file count, and
-monthly cost are each scaled by the inverse of the rate. A record with no
-positive size is an error, not a silent drop.
+monthly cost are each scaled by the inverse of the rate, and `format --html`
+draws those estimates. A record with no positive size is an error, not a
+silent drop.
 
 Filtering by path or partition is still a shell job on the `list files` stream
 (`jq`, `sort`, `head`, `xargs`) — see [Visual demos](../guides/demo.md).

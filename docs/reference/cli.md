@@ -32,7 +32,6 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench summarize`↴](#pqbench-summarize)
 * [`pqbench summarize columns`↴](#pqbench-summarize-columns)
 * [`pqbench skill`↴](#pqbench-skill)
-* [`pqbench viz`↴](#pqbench-viz)
 * [`pqbench setup`↴](#pqbench-setup)
 
 ## `pqbench`
@@ -51,9 +50,8 @@ Commands compose on pipes: each writes a resource the next command reads.
   credentials   → Table          check + vend read credentials
   bytemass      → Blob + Column        footer byte masses (alias for list columns)
   summarize     → ColumnMass           estimate each column's mass (summarize columns)
-  viz           → PREFIX.html          draw a summarize columns document
   skill         → markdown             bundled agent recipes (write / DDL / codec)
-  format        → tables               render a stream (NDJSON on stdin)
+  format        → tables / HTML        render a stream (--html for the treemap)
 ```
 
 The walk reads with two verbs: `get` reads one resource, `list` lists a
@@ -139,7 +137,7 @@ Format skills (read these when the input is Parquet or a table):
   Unity / Databricks list  https://docs.databricks.com/api/workspace/tables/list
   AWS default credentials  https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html
   pqbench command guide    docs/reference/cli.md
-  pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/viz.md
+  pqbench table docs       docs/guides/delta.md  docs/guides/iceberg.md  docs/reference/format.md
 ```
 
 ###### **Subcommands:**
@@ -149,16 +147,15 @@ Format skills (read these when the input is Parquet or a table):
 * `compression` — Codec sweep over encoded Parquet pages (NONE-compressed input only)
 * `bytemass` — Per-column on-disk bytes from Parquet footers (alias for `list columns`)
 * `get` — Read one resource of the walk
-* `format` — Render an NDJSON stream as tables
+* `format` — Render a stream as tables, or a summarize columns stream as HTML
 * `table-file` — Name storage paths as table-file records
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
 * `credentials` — Check and vend read credentials for table-refs
 * `ratelimit` — Pace an NDJSON ref stream to a records-per-second rate
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
-* `summarize` — Estimate each table column's mass from a bytemass stream
+* `summarize` — Estimate each table column's mass from a list columns stream
 * `skill` — Print a bundled agent skill (write / DDL / compression recipes)
-* `viz` — Draw a summarize columns document as a static HTML treemap
 * `setup` — Print the walk's environment as shell exports to eval
 
 ###### **Options:**
@@ -290,8 +287,8 @@ file's blob and, when vended, its lease.
 One `Blob` per file and one `Column` per column, with its byte mass nested,
 as NDJSON. `pqbench format` renders the columns as a table; `pqbench summarize
 columns` folds the stream into one estimate per table column, and `pqbench
-viz` draws those rows. `pqbench bytemass` is an alias for `pqbench list
-columns`.
+format --html` draws those rows. `pqbench bytemass` is an alias for `pqbench
+list columns`.
 
 **Usage:** `pqbench bytemass [OPTIONS]`
 
@@ -299,12 +296,12 @@ columns`.
 Examples:
   pqbench table-file data.parquet | pqbench bytemass
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench format --html > report.html
 
 See also:
   pqbench list --help               list the files this command measures
   pqbench summarize columns --help  fold the stream into per-column estimates
-  pqbench viz --help                draw those rows as a treemap
+  pqbench format --help             draw those rows as a treemap
   pqbench --help           auth, documents, format skills
   docs/reference/cli.md
 ```
@@ -431,11 +428,30 @@ Read one table's record (`CATALOG.SCHEMA.TABLE`)
 
 ## `pqbench format`
 
-Render an NDJSON stream as tables
+Read NDJSON on standard input. Tables are the default, one table per record
+kind; a record the curated type cannot hold still renders from its keys.
+`--html` reads a `summarize columns` stream and writes the static treemap page
+to standard output. No other input is supported for `--html`.
 
-**Usage:** `pqbench format`
+**Usage:** `pqbench format [OPTIONS]`
 
 **Command Alias:** `fmt`
+
+```console no-run
+Examples:
+  pqbench list catalogs | pqbench format
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format --html > report.html
+
+See also:
+  pqbench summarize columns --help  produce the stream --html draws
+  docs/reference/format.md  docs/reference/cli.md
+```
+
+###### **Options:**
+
+* `--html` — write an HTML treemap for a summarize columns stream
+
+
 
 ## `pqbench table-file`
 
@@ -828,8 +844,8 @@ the distinct file count and storage classes, and the monthly S3 storage cost
 
 Each additive field is divided by the record's `sample_rate`, so a
 `sample files` stream estimates the table, not the sample. A row has no name:
-it is a command document, not a resource. `pqbench viz` draws the rows as a
-static HTML treemap.
+it is a command document, not a resource. `pqbench format --html` draws the
+rows as a static HTML treemap.
 
 **Usage:** `pqbench summarize <COMMAND>`
 
@@ -837,11 +853,11 @@ static HTML treemap.
 Examples:
   pqbench table-file data.parquet | pqbench list columns | pqbench summarize columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns
-  pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
+  pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format --html > report.html
 
 See also:
   pqbench list columns --help     produce the stream this command reduces
-  pqbench viz --help              draw them as a treemap
+  pqbench format --help           draw them as a treemap
   docs/reference/cli.md
 ```
 
@@ -900,37 +916,6 @@ See also:
 ###### **Arguments:**
 
 * `<NAMES>` — skill name, or `name document` (`parquet-advisor recipes`)
-
-
-
-## `pqbench viz`
-
-Read a `summarize columns` document and write `PREFIX.html`. The page embeds
-the rows and loads the d3 modules it uses from a CDN, drawing one treemap of
-bytes per value. Does not measure or aggregate: run `pqbench summarize columns`
-first. `-o PREFIX` is required.
-
-**Usage:** `pqbench viz [OPTIONS] [INPUT]`
-
-```console no-run
-Examples:
-  pqbench table-file data.parquet | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
-  xdg-open report.html
-
-See also:
-  pqbench summarize columns --help  produce the stream this command draws
-  pqbench --help                    documents
-  docs/reference/cli.md
-```
-
-###### **Arguments:**
-
-* `<INPUT>` — summarize columns NDJSON stream, or `-` for standard input
-
-###### **Options:**
-
-* `-o`, `--output <PREFIX>` — write `PREFIX.html` (required)
 
 
 

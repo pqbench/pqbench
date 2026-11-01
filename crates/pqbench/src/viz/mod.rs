@@ -168,17 +168,25 @@ pub struct ColumnNode {
     pub storage_cost_per_month: Option<CostEstimate>,
 }
 
+/// Render the rows `summarize columns` produced as the HTML page.
+///
+/// # Errors
+/// Fails when there are no rows or the page cannot be encoded.
+pub fn render_rows(rows: &[ColumnMass]) -> Result<String, Error> {
+    let report = fold(rows);
+    if report.catalogs.is_empty() {
+        return Err(Error::Empty);
+    }
+    render_html(&report, &title(&report))
+}
+
 /// Write `path.html` from the rows `summarize columns` produced.
 ///
 /// # Errors
 /// Fails when there are no rows or the HTML page cannot be written.
 pub fn write_report(prefix: &Path, rows: &[ColumnMass]) -> Result<(), Error> {
-    let report = fold(rows);
-    if report.catalogs.is_empty() {
-        return Err(Error::Empty);
-    }
+    let html = render_rows(rows)?;
     let html_path = prefix.with_extension("html");
-    let html = render_html(&report, &title(&report))?;
     std::fs::write(&html_path, html).map_err(|error| Error::Write {
         path: html_path.display().to_string(),
         source: error,

@@ -51,10 +51,10 @@ fn list_files_2() {
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
-fn viz() {
-    // viz, from line 224
-    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb viz -o /tmp/report", 225, None);
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb viz -o /tmp/report", 226, None);
+fn format_html() {
+    // format_html, from line 224
+    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 225, None);
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 226, None);
 }
 
 #[cfg(feature = "delta")]

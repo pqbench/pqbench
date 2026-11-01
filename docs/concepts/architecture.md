@@ -17,8 +17,8 @@ The walk's resource commands (`metastore`, `catalog`, `schema`, `table`,
 `file`, `credentials`) are folders — one per resource, with a subcommand folder
 per verb. The measurement commands (`bytemass`, `compression`, `lz`) keep an
 `api.rs` and split the implementation across named modules; `profile`, `diff`,
-`skill`, and `ratelimit` are single modules, and `summarize` and `viz` are small
-folders. The shared support (`report`, `mass`, `stats`, `time`, `config`,
+`skill`, and `ratelimit` are single modules, and `summarize` is a small folder;
+the library's `viz` renders the HTML page. The shared support (`report`, `mass`, `stats`, `time`, `config`,
 `dialect`, `http`, `capability`, `codecs`) sits at the crate root.
 
 ```text
