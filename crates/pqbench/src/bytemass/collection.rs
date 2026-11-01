@@ -50,7 +50,6 @@ fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
     Ok(columns)
 }
 
-/// Measure one column from its chunks.
 fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
     let compressed_bytes = chunks.iter().map(|chunk| chunk.compressed_bytes).sum();
     let uncompressed_bytes = chunks.iter().map(|chunk| chunk.uncompressed_bytes).sum();
@@ -105,20 +104,30 @@ fn uniform_codec(chunks: &[ColumnMass]) -> Option<String> {
 fn union<'a>(sets: impl IntoIterator<Item = &'a [String]>) -> Vec<String> {
     let mut encodings = Vec::new();
     for set in sets {
-        for encoding in set {
-            if !encodings.contains(encoding) {
-                encodings.push(encoding.clone());
-            }
-        }
+        add_encodings(&mut encodings, set);
     }
     encodings
 }
 
 /// The union of encoding sets, when every chunk reports one.
 fn known_union<'a>(sets: impl IntoIterator<Item = Option<&'a [String]>>) -> Option<Vec<String>> {
-    let sets: Vec<&[String]> = sets.into_iter().collect::<Option<Vec<_>>>()?;
-    let encodings = union(sets);
+    let mut encodings = Vec::new();
+    for set in sets {
+        add_encodings(&mut encodings, set?);
+    }
     (!encodings.is_empty()).then_some(encodings)
+}
+
+/// Add the encodings a set does not already hold.
+///
+/// The sets are tiny and their first-seen order is visible, so a `Vec` is
+/// simpler than a `BTreeSet` here.
+fn add_encodings(encodings: &mut Vec<String>, set: &[String]) {
+    for encoding in set {
+        if !encodings.contains(encoding) {
+            encodings.push(encoding.clone());
+        }
+    }
 }
 
 /// The sum of parts, when every part is known and at least one exists.
@@ -136,9 +145,10 @@ fn known_sum(parts: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
 /// distinct counts double-counts values, and the first/last chunk is not the
 /// file's bounds unless the data is ordered.
 fn single_chunk_facts(chunks: &[ColumnMass]) -> (Option<u64>, Option<String>, Option<String>) {
-    let Some(chunk) = chunks.first().filter(|_| chunks.len() == 1) else {
+    if chunks.len() != 1 {
         return (None, None, None);
-    };
+    }
+    let chunk = &chunks[0];
     (
         chunk.distinct_count,
         chunk.min_value.clone(),
