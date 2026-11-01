@@ -1,7 +1,7 @@
 #![cfg(feature = "delta")]
 
-mod common;
-mod support;
+use crate::common;
+use crate::support;
 
 use futures_util::TryStreamExt;
 use pqbench::table::{self, LoadRequest};

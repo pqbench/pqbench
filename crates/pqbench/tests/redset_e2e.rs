@@ -10,7 +10,7 @@
 
 use pqbench::v1;
 
-mod common;
+use crate::common;
 
 const REDSET_SAMPLE_0_001: &str = "s3://redshift-downloads/redset/serverless/sample_0.001.parquet";
 

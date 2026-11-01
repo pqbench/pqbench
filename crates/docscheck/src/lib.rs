@@ -28,9 +28,10 @@
 //! working directory (`# docscheck: cd: PATH`) or the environment
 //! (`# docscheck: env: KEY=VALUE`).
 //!
-//! The generated tests live in `crates/pqbench-cli/tests/gen_*.rs` and call a
-//! committed `gen_support.rs` that resolves `pqbench`/`pqb` to the built binary, so
-//! `cargo test` runs them like any other integration test.
+//! The generated tests live in `crates/pqbench-cli/tests/gen_*.rs`, are wired
+//! into the single `tests/it.rs` target by the generated `gen_all.rs`, and call
+//! a committed `gen_support.rs` that resolves `pqbench`/`pqb` to the built
+//! binary, so `cargo test` runs them like any other integration test.
 
 pub mod console;
 pub mod generate;

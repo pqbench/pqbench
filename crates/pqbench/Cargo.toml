@@ -7,6 +7,13 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "A benchmarking library for Parquet files (in-memory read/write throughput, compression ratio)."
+# One integration-test target (`tests/it.rs`) instead of one per file: each
+# file as its own target links the whole dependency graph again.
+autotests = false
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
 
 [features]
 default = []

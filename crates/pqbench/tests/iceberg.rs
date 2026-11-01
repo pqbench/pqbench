@@ -1,7 +1,7 @@
 #![cfg(feature = "iceberg")]
 
-mod common;
-mod support;
+use crate::common;
+use crate::support;
 
 use std::fs;
 use std::path::Path;

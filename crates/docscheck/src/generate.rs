@@ -2,9 +2,9 @@
 //!
 //! One runnable block becomes one `#[test]`; the test's body runs the block's
 //! commands through a shared `support` module that resolves `pqbench` to the
-//! built binary. The generated file is a normal integration test in
-//! `crates/pqbench-cli/tests/gen/`, so `cargo test` runs it with no special
-//! tooling.
+//! built binary. The generated file is a module of the `tests/it.rs`
+//! integration target (listed in the generated `gen_all.rs`), so `cargo test`
+//! runs it with no special tooling.
 //!
 //! Naming: a test is named after its nearest heading, and duplicate or empty
 //! headings fall back to a stable suffix so the generated code always compiles.
@@ -40,7 +40,7 @@ pub fn generate(source_name: &str, blocks: &[Block]) -> String {
     out.push_str(source_name);
     out.push_str(".\n");
     out.push_str("// Do not edit by hand: edit the Markdown and re-run the sync.\n\n");
-    out.push_str("#[path = \"gen_support.rs\"]\nmod support;\n\n");
+    out.push_str("use crate::support;\n\n");
     if tests.is_empty() {
         out.push_str("// No runnable blocks in this document.\n");
     }

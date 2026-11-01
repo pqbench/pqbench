@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 // `small_reddit_none.parquet` is a 3000-row NONE-compressed subset of the
 // MIT-licensed reddit_dataset_90 (goldentraversy07/reddit_dataset_90).
