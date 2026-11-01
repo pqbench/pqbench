@@ -189,8 +189,9 @@ jobs:
           DBX_SAMPLES_SP_CLIENT_SECRET: ${{ secrets.DBX_SAMPLES_SP_CLIENT_SECRET }}
         run: make dbx-e2e
 
-  # The live walk (scripts/dbx-walk.sh, `make dbx-walk`): one pass from
-  # `list catalogs` to the `format --html` page, over the whole Unity Catalog.
+  # The live walk (scripts/dbx-walk.sh, `make dbx-walk`): the whole Unity
+  # Catalog from `list catalogs` to the `format --html` page, then the same
+  # catalog through Iceberg REST; the two summaries must agree.
   # It authenticates with the GitHub Actions OIDC token (workload identity
   # federation) — no stored secret — and falls back to the service principal's
   # client secret. It profiles nothing: a hosted runner has no PMU, so

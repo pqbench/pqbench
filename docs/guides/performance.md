@@ -41,8 +41,9 @@ $ eval "$(pqb setup --endpoint <url> --token <token> --region us-east-2)"
 fixture: `pqbench_ext`, whose external Delta tables on customer S3 are the
 synthetic `events`/`sales`/`reference` plus real sample data copied server-side
 from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-walk.sh` runs the whole
-walk once, prints each level's record count, and ends with the treemap page (the
-`dbx-walk` CI job); `make dbx-e2e` runs the live correctness e2e, and
+walk through Unity Catalog and again through Iceberg REST, prints each level's
+record count, checks that both summaries agree, and ends with the treemap page
+(the `dbx-walk` CI job); `make dbx-e2e` runs the live correctness e2e, and
 `make lakehouse` drives the compose stand for the file-level commands.
 
 The walk's catalog levels span the whole Unity Catalog; the table levels
@@ -54,7 +55,7 @@ fan-outs with `rl` and retries the walk at a lower rate on failure.
 
 ## Run perf
 
-`scripts/dbx-walk.sh` runs the walk once and prints each level's record count;
+`scripts/dbx-walk.sh` runs both dialects and prints each level's record count;
 it profiles nothing, and `make dbx-walk` builds it debug. To measure, build an
 optimized binary and put the walk under `perf` by hand — `perf stat` for the
 cost of a run, `perf record` for the hot symbols. Use the events the issue

@@ -78,9 +78,12 @@ server.
 
 ## Whole metastore
 
-`make dbx-walk` runs the walk once against the live workspace and ends here. The
+`make dbx-walk` runs the walk twice against the live workspace and ends here:
+once through Unity Catalog, once through Iceberg REST for the same catalog. The
 catalog levels cover every catalog; the table levels cover the one catalog the
 principal may read outside compute (`PQB_WALK_CATALOG`, default `pqbench_ext`).
+Both passes must fold to the same rows, and the script fails when the two
+summaries differ.
 
 ```console no-run
 $ pqb list catalogs | pqb ratelimit --rate 15 \
@@ -103,5 +106,5 @@ The other catalogs stop before storage: `samples` refuses `EXTERNAL USE SCHEMA`
 to the walk's principal, `dbx_samples` is Databricks default storage, and
 `workspace` and `system` are views and system tables. The `dbx-walk` CI job runs
 the walk on every push and on non-draft pull requests from this repository; set
-`PQB_WALK_PAGE` to keep the page, which otherwise stays in the script's temp
-directory.
+`PQB_WALK_PAGE` and `PQB_WALK_ICEBERG_PAGE` to keep the two pages, which
+otherwise stay in the script's temp directory.
