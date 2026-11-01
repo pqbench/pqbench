@@ -145,18 +145,21 @@ jobs:
   # Software metrics of the source tree, from a pinned rust-code-analysis
   # release binary (no workspace dependency, on purpose — see AGENTS.md). On a
   # pull request it analyzes only the changed Rust files, head and base side by
-  # side: per-function annotations land on the diff, a sticky comment carries
-  # the base→head deltas, and the raw per-file diff goes to the log. On a push
-  # it rolls the whole tree up for the job summary. Report-only: not part of
-  # the required `CI` gate, and not run by `make check`.
+  # side: advisory notices land on functions that are new or worsened over the
+  # complexity ceiling, a sticky comment lists those findings, and the raw
+  # per-file diff goes to the log. On a push it rolls the whole tree up for the
+  # job summary. Report-only: not part of the required `CI` gate, and not run
+  # by `make check`.
   code-analysis:
     name: Code analysis
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      pull-requests: write   # the sticky delta comment
+      pull-requests: write   # the sticky findings comment
     steps:
       - uses: actions/checkout@v6
+      - name: Test the reporter
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Install rust-code-analysis-cli
         run: |
           # The release archive, fetched over TLS and verified by checksum.
@@ -225,24 +228,18 @@ jobs:
                 functions: (map(.metrics.nom.functions) | add),
                 cyclomatic_total: (map(.metrics.cyclomatic.sum) | add),
                 cyclomatic_max: (map(.metrics.cyclomatic.max) | max),
-                cognitive_total: (map(.metrics.cognitive.sum) | add),
-                mi_average: ((map(.metrics.mi.mi_visual_studio) | add) / length | . * 10 | round / 10)
+                cognitive_total: (map(.metrics.cognitive.sum) | add)
               }'
               echo '```'
-              # The PR's aggregate MI — the mean over the files both revisions
-              # have, with its base→head delta. Absent on a push (no base).
-              if [ -n "$base_metrics" ]; then
-                echo
-                python3 scripts/code_analysis.py aggregate \
-                  "$head_metrics" "$base_metrics"
-              fi
             else
               echo "_No Rust files changed._"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Every PR gets a sticky comment — the base→head deltas, or a plain
-          # note when nothing Rust changed — so the job is never invisible.
+          echo "base_metrics=$base_metrics" >> "$GITHUB_OUTPUT"
+
+          # Every PR gets a sticky comment — the new findings, or a plain note
+          # when nothing is new — so the job is never invisible.
           if [ "${{ github.event_name }}" = pull_request ]; then
             python3 scripts/code_analysis.py comment "$head_metrics" \
               "$base_metrics" "${{ github.base_ref }}" > "$RUNNER_TEMP/comment.md"
@@ -254,7 +251,9 @@ jobs:
           fi
       - name: Annotate the changed files
         if: steps.measure.outputs.changed == 'true'
-        run: python3 scripts/code_analysis.py annotate "$RUNNER_TEMP/head-metrics"
+        run: |
+          python3 scripts/code_analysis.py annotate "$RUNNER_TEMP/head-metrics" \
+            "${{ steps.measure.outputs.base_metrics }}"
       - name: Comment on the pull request
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v3

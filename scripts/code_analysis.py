@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""Report rust-code-analysis metrics on a pull request.
+"""Report cyclomatic complexity on a pull request.
 
-Three views over the per-file JSON the CLI writes:
+Two views over the per-file JSON the CLI writes:
 
     rust-code-analysis-cli --metrics -O json --pr -o METRICS_DIR -p PATH…
 
-  annotate METRICS_DIR
-      Print GitHub `::warning file=…,line=…::…` workflow commands for every
-      function over the complexity ceiling or under the maintainability floor.
-      Tests and generated files are measured but not gated.
+  annotate HEAD_DIR [BASE_DIR]
+      Print GitHub ``::notice`` workflow commands for functions that are new or
+      whose own cyclomatic complexity rose above the ceiling. With no BASE_DIR,
+      report every function over the ceiling.
 
-  comment HEAD_DIR [BASE_DIR]
-      Print a Markdown table of per-file metrics — with base→head deltas when a
-      BASE_DIR is given — and the pull request's aggregate maintainability
-      index, for a sticky pull-request comment.
+  comment HEAD_DIR BASE_DIR LABEL
+      Print the sticky pull-request comment: the new or worsened functions over
+      the ceiling in the changed files. Tests and generated files are excluded.
 
-  aggregate HEAD_DIR [BASE_DIR]
-      Print the aggregate maintainability index line alone, for the job summary.
-
-The ceilings are data, kept in one place: a function is flagged above
-``CYCLOMATIC_CEILING`` or below ``MAINTAINABILITY_FLOOR``. Report-only: the
+The function's own cyclomatic complexity is ``cyclomatic.max``, not the space's
+``cyclomatic.sum``: the sum folds nested closures into the enclosing function,
+so the table and the annotation would report different numbers for the same
+function. This is a review prompt, not a gate: extracting a helper lowers a
+function's maximum without reducing the total complexity. Report-only: the
 script never fails on a metric's value.
 """
 
@@ -28,7 +27,7 @@ import sys
 from pathlib import Path
 
 CYCLOMATIC_CEILING = 15
-MAINTAINABILITY_FLOOR = 20
+MAX_FINDINGS = 10
 
 
 def documents(metrics_dir):
@@ -58,21 +57,44 @@ def metric(space, group, key):
 
 
 def functions(doc):
-    """Every function space of a file, however deeply nested."""
-    pending = list(doc.get("spaces") or [])
-    while pending:
-        space = pending.pop()
-        pending.extend(space.get("spaces") or [])
-        if space.get("kind") == "function":
-            yield space
+    """Every named function of a file, with its enclosing type as a prefix.
+
+    A closure is a function space too, but ``<anonymous>`` is not a unit a
+    reviewer can point at, so closures are not reported separately. Nested
+    named items (a ``fn`` inside a body) are rare and are left out.
+    """
+    found = []
+
+    def walk(space, prefix):
+        kind = space.get("kind")
+        name = space.get("name") or ""
+        if kind == "function":
+            if name and name != "<anonymous>":
+                found.append(
+                    {
+                        "name": f"{prefix}::{name}" if prefix else name,
+                        "line": space.get("start_line") or 1,
+                        "complexity": metric(space, "cyclomatic", "max"),
+                    }
+                )
+            return
+        if kind in ("impl", "trait", "mod") and name:
+            namespace = f"{prefix}::{name}" if prefix else name
+        else:
+            namespace = prefix
+        for child in space.get("spaces") or []:
+            walk(child, namespace)
+
+    for space in doc.get("spaces") or []:
+        walk(space, "")
+    return found
 
 
 def gated(path):
-    """Whether a path's functions count against the gate.
+    """Whether a path's functions are reported.
 
     Tests and generated sources (the docscheck ``gen_*.rs`` transcripts) are
-    measured — they appear in the summary and the comment — but their
-    complexity is not a signal worth annotating a reviewer about.
+    measured with the changed files but are not a signal for a reviewer.
     """
     parts = path.split("/")
     name = parts[-1]
@@ -84,160 +106,158 @@ def escaped(text):
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def annotate(metrics_dir):
-    """Annotations for functions over complexity, files under maintainability."""
-    for doc in documents(metrics_dir):
-        if not gated(doc["name"]):
+def take_function(candidates, name):
+    """Remove and return the first function named ``name``, or None."""
+    for index, function in enumerate(candidates):
+        if function["name"] == name:
+            return candidates.pop(index)
+    return None
+
+
+def findings(head, base, differential):
+    """Functions over the ceiling that are new or worse than the base.
+
+    ``head`` and ``base`` are documents keyed by source path. With no base
+    revision (``differential`` false), every function over the ceiling is a
+    finding; with one, an unchanged function is not.
+    """
+    found = []
+    for path, doc in sorted(head.items()):
+        if not gated(path):
             continue
-        # The maintainability index is file-level: it falls with size and
-        # structure, while a single function's index is almost always high.
-        maintainability = metric(doc, "mi", "mi_visual_studio")
-        if maintainability < MAINTAINABILITY_FLOOR:
-            print(
-                f"::warning file={doc['name']},line=1,"
-                f"title=Low maintainability index::"
-                f"file maintainability index {maintainability:.0f} "
-                f"(floor {MAINTAINABILITY_FLOOR}, Visual Studio scale)"
-            )
+        base_functions = functions(base[path]) if path in base else []
         for function in functions(doc):
-            complexity = metric(function, "cyclomatic", "sum")
-            if complexity > CYCLOMATIC_CEILING:
-                name = function.get("name") or "<anonymous>"
-                line = function.get("start_line") or 1
-                print(
-                    f"::warning file={doc['name']},line={line},"
-                    f"title=High cyclomatic complexity::"
-                    f"{escaped(name)} is cyclomatic complexity {complexity:.0f} "
-                    f"(ceiling {CYCLOMATIC_CEILING})"
-                )
-
-
-def file_metrics(doc):
-    """A file's rollup: SLOC, worst function's cyclomatic, maintainability."""
-    return (
-        metric(doc, "loc", "sloc"),
-        metric(doc, "cyclomatic", "max"),
-        metric(doc, "mi", "mi_visual_studio"),
+            if function["complexity"] <= CYCLOMATIC_CEILING:
+                continue
+            before = None
+            if differential:
+                match = take_function(base_functions, function["name"])
+                before = match["complexity"] if match else None
+                if before is not None and function["complexity"] <= before:
+                    continue
+            found.append(
+                {
+                    "path": path,
+                    "name": function["name"],
+                    "line": function["line"],
+                    "before": before,
+                    "after": function["complexity"],
+                }
+            )
+    found.sort(
+        key=lambda finding: (
+            -(finding["after"] - (finding["before"] or 0.0)),
+            finding["path"],
+            finding["line"],
+        )
     )
+    return found
 
 
-def count_cell(head, base, worse_up=False):
-    """An integer metric with its head→base delta; regressions in bold."""
-    if head is None:
-        return "—"
-    if base is None:
-        return f"{head:.0f} (new)"
-    delta = head - base
-    if round(delta) == 0:
-        return f"{head:.0f}"
-    cell = f"{head:.0f} ({delta:+.0f})"
-    return f"**{cell}**" if worse_up and delta > 0 else cell
-
-
-def index_cell(head, base, always=False):
-    """The maintainability index with its delta; a drop is bold.
-
-    A delta that rounds to zero is dropped — a file that did not move says
-    nothing — unless ``always`` is set, for the aggregate that states a flat
-    result as ``0.0`` rather than blank.
-    """
-    if head is None:
-        return "—"
-    if base is None:
-        return f"{head:.1f} (new)"
-    delta = head - base
-    if round(delta, 1) == 0:
-        return f"{head:.1f} (0.0)" if always else f"{head:.1f}"
-    cell = f"{head:.1f} ({delta:+.1f})"
-    return f"**{cell}**" if delta < 0 else cell
-
-
-def mean_mi(docs):
-    """The mean file maintainability index, or None when there are no files."""
-    indices = [metric(doc, "mi", "mi_visual_studio") for doc in docs]
-    return sum(indices) / len(indices) if indices else None
-
-
-def aggregate_line(head, base):
-    """The pull request's aggregate MI, or None when nothing is comparable.
-
-    MI is per file and falls with size, so the mean over the changed files is
-    the one number that answers "did this PR move maintainability?". A file only
-    one revision has — added or deleted — has no counterpart to compare, so the
-    mean is over the files present in both.
-    """
-    shared = sorted(name for name in head if name in base)
-    if not shared:
-        return None
-    head_mean = mean_mi([head[name] for name in shared])
-    base_mean = mean_mi([base[name] for name in shared])
-    noun = "file" if len(shared) == 1 else "files"
-    return (
-        f"Aggregate MI over the {len(shared)} {noun} in both revisions: "
-        f"{index_cell(head_mean, base_mean, always=True)}"
-    )
-
-
-def aggregate(head_dir, base_dir):
-    """Print the aggregate MI line alone, for the job summary."""
+def annotate(head_dir, base_dir):
+    """Advisory notices for new or worsened functions over the ceiling."""
+    differential = bool(base_dir)
     head = documents_by_name(head_dir)
-    base = documents_by_name(base_dir) if base_dir else {}
-    line = aggregate_line(head, base)
-    if line:
-        print(line)
+    base = documents_by_name(base_dir) if differential else {}
+    for finding in findings(head, base, differential):
+        name = finding["name"]
+        line = finding["line"]
+        after = finding["after"]
+        if not differential:
+            title = "Function over complexity ceiling"
+            change = f"is cyclomatic complexity {after:.0f} (ceiling {CYCLOMATIC_CEILING})"
+        elif finding["before"] is None:
+            title = "New function over complexity ceiling"
+            change = f"is new at cyclomatic complexity {after:.0f} (ceiling {CYCLOMATIC_CEILING})"
+        else:
+            before = finding["before"]
+            title = "Cyclomatic complexity increased"
+            change = (
+                f"rose {before:.0f} → {after:.0f} (+{after - before:.0f}) "
+                f"(ceiling {CYCLOMATIC_CEILING})"
+            )
+        print(
+            f"::notice file={finding['path']},line={line},"
+            f"title={title}::{escaped(name)} {change}"
+        )
+
+
+def complexity_cell(finding):
+    """A finding's base→head complexity, or ``new`` when there is no base."""
+    after = finding["after"]
+    if finding["before"] is None:
+        return f"{after:.0f} (new)"
+    before = finding["before"]
+    return f"{before:.0f} → {after:.0f} (+{after - before:.0f})"
 
 
 def comment(head_dir, base_dir, label):
-    """A Markdown delta table for a sticky pull-request comment."""
+    """A Markdown list of new findings for a sticky pull-request comment."""
+    differential = bool(base_dir)
     head = documents_by_name(head_dir)
-    base = documents_by_name(base_dir) if base_dir else {}
-    names = sorted(set(head) | set(base))
+    base = documents_by_name(base_dir) if differential else {}
+    names = set(head) | set(base)
 
-    print("### Code analysis")
+    print("### Complexity prompt")
     print()
     if not names:
         print("_No Rust files changed._")
         return
-    print(f"{len(names)} changed Rust file(s), against `{label}`:")
+
+    found = findings(head, base, differential)
+    if not found:
+        if differential:
+            print(
+                f"_No new functions over cyclomatic "
+                f"{CYCLOMATIC_CEILING}._"
+            )
+        else:
+            print(f"_No functions over cyclomatic {CYCLOMATIC_CEILING}._")
+        return
+
+    count = len(found)
+    noun = "finding" if count == 1 else "findings"
+    if differential:
+        print(f"{count} new {noun} on changed Rust functions, against `{label}`:")
+    else:
+        print(f"{count} {noun} over cyclomatic {CYCLOMATIC_CEILING}:")
     print()
-    print("| File | SLOC | Cyclomatic (max) | MI |")
-    print("| --- | ---: | ---: | ---: |")
-    for name in names:
-        h = file_metrics(head[name]) if name in head else (None, None, None)
-        b = file_metrics(base[name]) if name in base else (None, None, None)
+    print("| Function | File | Cyclomatic |")
+    print("| --- | --- | --- |")
+    for finding in found[:MAX_FINDINGS]:
         print(
-            f"| `{name}` "
-            f"| {count_cell(h[0], b[0])} "
-            f"| {count_cell(h[1], b[1], worse_up=True)} "
-            f"| {index_cell(h[2], b[2])} |"
+            f"| `{finding['name']}` "
+            f"| `{finding['path']}:{finding['line']}` "
+            f"| {complexity_cell(finding)} |"
+        )
+    if count > MAX_FINDINGS:
+        print()
+        print(
+            f"…and {count - MAX_FINDINGS} more; see the code-analysis job log."
         )
     print()
-    line = aggregate_line(head, base)
-    if line:
-        print(line)
-        print()
-    print(
-        f"Regressions in **bold**. Functions above cyclomatic "
-        f"{CYCLOMATIC_CEILING} and files below maintainability index "
-        f"{MAINTAINABILITY_FLOOR} are annotated on the diff."
-    )
+    if differential:
+        print(
+            "Only new or worsened functions in changed files are listed. This "
+            "is a review prompt, not a gate: extracting a helper lowers the "
+            "maximum without reducing total complexity. Tests and generated "
+            "sources are excluded."
+        )
+    else:
+        print("Tests and generated sources are excluded.")
 
 
 def main():
-    if len(sys.argv) == 3 and sys.argv[1] == "annotate":
-        annotate(sys.argv[2])
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "annotate":
+        base_dir = sys.argv[3] if len(sys.argv) == 4 else ""
+        annotate(sys.argv[2], base_dir or None)
         return
     if len(sys.argv) == 5 and sys.argv[1] == "comment":
         comment(sys.argv[2], sys.argv[3] or None, sys.argv[4])
         return
-    if len(sys.argv) in (3, 4) and sys.argv[1] == "aggregate":
-        base_dir = sys.argv[3] if len(sys.argv) == 4 else None
-        aggregate(sys.argv[2], base_dir)
-        return
     sys.exit(
-        "usage: code_analysis.py annotate METRICS_DIR\n"
-        "       code_analysis.py comment HEAD_DIR BASE_DIR BASE_LABEL\n"
-        "       code_analysis.py aggregate HEAD_DIR [BASE_DIR]"
+        "usage: code_analysis.py annotate HEAD_DIR [BASE_DIR]\n"
+        "       code_analysis.py comment HEAD_DIR BASE_DIR BASE_LABEL"
     )
 
 
