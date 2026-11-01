@@ -5,7 +5,8 @@
 //! model's identity (AIP-122) — so a `catalogs/…/schemas/…` line is a `Schema`
 //! and takes its columns from [`crate::render`]. A record the curated type
 //! cannot hold, or whose name has no columns yet, still renders from its own
-//! keys; a record with no name at all (a `diff` delta) is not table data.
+//! keys; a nameless record with no curated shape (a `diff` delta) is not table
+//! data, while a summarized column row is recognized by its shape.
 
 use clap::Args;
 use pqbench::v1;
@@ -31,6 +32,7 @@ enum Class {
     Sweep,
     CompressionColumn,
     Profile,
+    Mass,
     /// A record with no curated columns, grouped by its key set.
     Other(String),
 }
@@ -83,7 +85,9 @@ fn section(sections: &mut Vec<(Class, Section)>, class: Class) -> &mut Section {
 
 /// A record's class: the resource its `name` names, else the row kind.
 fn classify(record: &Value) -> Option<Class> {
-    let name = record.get("name")?.as_str()?;
+    let Some(name) = record.get("name").and_then(Value::as_str) else {
+        return pqbench::mass::ColumnMass::from_document(record).map(|_| Class::Mass);
+    };
     Some(if v1::Column::parse_name(name).is_some() {
         Class::Column
     } else if name.contains("/codecs/") {
@@ -135,6 +139,7 @@ enum Section {
     Sweep(Vec<render::SweepRow>),
     CompressionColumn(Vec<render::ColumnSweepRow>),
     Profile(Vec<render::ProfileRow>),
+    Mass(Vec<pqbench::mass::ColumnMass>),
     Other(Vec<Value>),
 }
 
@@ -150,6 +155,7 @@ impl Section {
             Class::Sweep => Self::Sweep(Vec::new()),
             Class::CompressionColumn => Self::CompressionColumn(Vec::new()),
             Class::Profile => Self::Profile(Vec::new()),
+            Class::Mass => Self::Mass(Vec::new()),
             Class::Other(_) => Self::Other(Vec::new()),
         }
     }
@@ -166,6 +172,7 @@ impl Section {
             Self::Sweep(rows) => push_typed(rows, record),
             Self::CompressionColumn(rows) => push_typed(rows, record),
             Self::Profile(rows) => push_typed(rows, record),
+            Self::Mass(rows) => push_typed(rows, record),
             Self::Other(rows) => {
                 rows.push(record);
                 None
@@ -190,6 +197,7 @@ impl Section {
             Self::Sweep(rows) => render::render(rows),
             Self::CompressionColumn(rows) => render::render(rows),
             Self::Profile(rows) => render::render(rows),
+            Self::Mass(rows) => render::render(rows),
             Self::Other(rows) => render::render_values(rows),
         }
     }

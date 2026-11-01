@@ -999,13 +999,14 @@ fn timed_stage(
     (output.stdout, elapsed)
 }
 
-/// The whole issue-#58 walk on a copied schema, all the way to `bytemass`:
+/// The whole issue-#58 walk on a copied schema, all the way to a treemap:
 /// `list tables` → `credentials check` → `credentials get` → `get table` →
-/// `list files` → `bytemass`, each stage fed the previous stage's NDJSON. Set
+/// `list files` → `bytemass` → `summarize columns` → `viz`, each stage fed the
+/// previous stage's NDJSON. Set
 /// `DBX_WALK_SCHEMA` to walk another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn external_fixture_walks_to_bytemass() {
+fn external_fixture_walks_to_a_treemap() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1057,9 +1058,44 @@ fn external_fixture_walks_to_bytemass() {
             .is_some_and(|name| pqbench::v1::Column::parse_name(name).is_some())),
         "{schema}: no Column record"
     );
+
+    let (summarized, _) = timed_stage(&env, &["summarize", "columns"], &measured);
+    let rows = ndjson(&summarized);
+    assert!(!rows.is_empty(), "{schema}: no ColumnMass row");
+    assert!(
+        rows.iter().all(|row| row["table"]
+            .as_str()
+            .is_some_and(|table| pqbench::v1::Table::parse_name(table).is_some())),
+        "{schema}: a ColumnMass row names no table"
+    );
+    assert!(
+        rows.iter().any(|row| row["compressed_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0)),
+        "{schema}: no measured bytes"
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let prefix = directory.path().join("report");
+    let rendered = pipe_env(&["viz", "-o", prefix.to_str().unwrap()], &summarized, &env);
+    assert!(
+        rendered.status.success(),
+        "viz stderr: {}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
+    assert!(html.starts_with("<!DOCTYPE html>"), "{schema}: no page");
+    assert!(html.contains("d3-hierarchy@3"), "{schema}: no treemap");
+    let schema_id = schema.rsplit('.').next().unwrap_or_default();
+    assert!(
+        html.contains(&format!("\"display_name\":\"{schema_id}\"")),
+        "{schema}: the page names no schema"
+    );
+
     println!(
-        "walk {schema}: {tables} tables, {file_count} files, {} column records",
-        records.len()
+        "walk {schema}: {tables} tables, {file_count} files, {} column records, {} rows",
+        records.len(),
+        rows.len()
     );
 }
 

@@ -46,6 +46,7 @@ $ pqb ls catalogs | pqb rl \
     | pqb get table \
     | pqb ls files \
     | pqb bytemass \
+    | pqb summarize columns \
     | pqb viz -o /tmp/report
 ```
 
@@ -66,8 +67,8 @@ Read it left to right:
   carrying the table's lease.
 - `bytemass` reads each file's footer and prints the on-disk bytes per column,
   the table in [bytemass](#bytemass). In a pipe it streams
-  `Blob` and `Bytemass` NDJSON instead; `pqb viz` draws that stream as a
-  treemap.
+  `Blob` and `Bytemass` NDJSON instead; `pqb summarize columns` estimates each
+  table column's mass and `pqb viz` draws that as a treemap.
 
 The same walk runs offline against the local Delta and Iceberg stand,
 `make lakehouse`. [Getting started](https://pqbench.github.io/pqbench/getting-started/) takes one Parquet
@@ -206,14 +207,23 @@ vended lease on the file record) supplies storage access:
 $ pqb table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqb bytemass | pqb fmt
 ```
 
+### summarize columns
+
+Fold the bytemass stream into one `ColumnMass` row per table column: weighted
+bytes, values, file count, storage classes, and the monthly S3 cost.
+
+```console no-run
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb summarize columns | pqb fmt
+```
+
 ### viz
 
-Collect a bytemass stream into a static HTML treemap — no server, no build
-step.
+Draw a `summarize columns` document as a static HTML treemap — no server, no
+build step.
 
 ```console run delta
-$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb viz -o /tmp/report
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.

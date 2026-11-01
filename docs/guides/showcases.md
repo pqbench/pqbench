@@ -61,7 +61,7 @@ free. Optimize the three big columns; leave the rest alone.
 The same stream draws a treemap, with no server and no build step:
 
 ```console run
-$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb viz -o /tmp/reddit
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/reddit
 ```
 
 ## Which codec

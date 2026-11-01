@@ -1,11 +1,11 @@
-//! `viz`: collect a bytemass stream into a static treemap page.
+//! `viz`: draw a `summarize columns` document as a static treemap page.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
 use futures_util::StreamExt;
-use pqbench::v1;
+use pqbench::mass::ColumnMass;
 use pqbench::viz;
 
 use crate::document::{self, Record};
@@ -15,7 +15,7 @@ use crate::CliError;
 /// Arguments for `viz`.
 #[derive(Args)]
 pub(crate) struct VizArgs {
-    /// bytemass NDJSON stream, or `-` for standard input
+    /// summarize columns NDJSON stream, or `-` for standard input
     input: Option<String>,
     /// write `PREFIX.html` (required)
     #[arg(short = 'o', long = "output", value_name = "PREFIX")]
@@ -25,42 +25,46 @@ pub(crate) struct VizArgs {
 pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
     let input = match &args.input {
         None if is_stream() => "-",
-        None => return Err("viz needs a bytemass stream on standard input".into()),
+        None => return Err("viz needs a summarize columns stream on standard input".into()),
         Some(value) => value.as_str(),
     };
     let prefix = match &args.output {
         Some(path) => prefix(path),
         None => return Err("viz writes an html page; pass --output".into()),
     };
-    let (columns, blobs) = collect(input).await?;
-    viz::write_report(&prefix, &columns, &blobs)?;
+    let rows = collect(input).await?;
+    viz::write_report(&prefix, &rows)?;
     if std::io::stdout().is_terminal() {
-        print!("{}", summary(&prefix, &columns, &blobs));
+        print!("{}", summary(&prefix, &rows));
     }
     Ok(())
 }
 
-async fn collect(input: &str) -> Result<(Vec<v1::Column>, Vec<v1::Blob>), CliError> {
-    let mut columns = Vec::new();
-    let mut blobs = Vec::new();
+async fn collect(input: &str) -> Result<Vec<ColumnMass>, CliError> {
+    let mut rows = Vec::new();
     let mut records = document::records(input).await?;
     while let Some(record) = records.next().await {
         match record? {
-            Record::Blob(blob) => blobs.push(blob),
-            Record::Column(column) => columns.push(column),
+            Record::Mass(row) => rows.push(row),
+            Record::Blob(_) | Record::Column(_) => {
+                return Err(
+                    "viz reads a summarize columns stream; run `pqbench summarize columns` first"
+                        .into(),
+                );
+            }
             Record::File(file) => {
                 return Err(format!(
-                    "viz reads a pqbench.bytemass stream, not `{}`; measure with `pqbench bytemass` first",
+                    "viz reads a summarize columns stream, not `{}`; pipe through `pqbench bytemass` and `pqbench summarize columns` first",
                     file.name
                 )
                 .into());
             }
         }
     }
-    if columns.is_empty() {
-        return Err("bytemass stream has no columns".into());
+    if rows.is_empty() {
+        return Err("summarize columns stream has no rows".into());
     }
-    Ok((columns, blobs))
+    Ok(rows)
 }
 
 fn prefix(path: &Path) -> PathBuf {
@@ -70,11 +74,10 @@ fn prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn summary(prefix: &Path, columns: &[v1::Column], blobs: &[v1::Blob]) -> String {
+fn summary(prefix: &Path, rows: &[ColumnMass]) -> String {
     format!(
-        "files: {}\ncolumns: {}\noutput: {}\n",
-        blobs.len(),
-        columns.len(),
+        "rows: {}\noutput: {}\n",
+        rows.len(),
         prefix.with_extension("html").display()
     )
 }

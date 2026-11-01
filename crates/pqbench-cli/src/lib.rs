@@ -32,6 +32,7 @@ mod setup;
 mod skill;
 mod source;
 mod stdin;
+mod summarize;
 mod table;
 mod table_file;
 mod time;
@@ -131,6 +132,13 @@ enum Command {
     )]
     Profile(profile::ProfileArgs),
     #[command(
+        about = help::SUMMARIZE_ABOUT,
+        long_about = help::SUMMARIZE_LONG_ABOUT,
+        after_help = help::SUMMARIZE_AFTER,
+        after_long_help = help::SUMMARIZE_AFTER
+    )]
+    Summarize(summarize::SummarizeArgs),
+    #[command(
         about = help::SKILL_ABOUT,
         long_about = help::SKILL_LONG_ABOUT,
         after_help = help::SKILL_AFTER,
@@ -199,6 +207,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
+        Command::Summarize(args) => summarize::run(&args).await,
         Command::Skill(args) => skill::run(&args),
         Command::Viz(args) => viz::run(&args).await,
         Command::Setup(args) => setup::run(&workspace, &args),
@@ -221,6 +230,7 @@ impl Command {
             Command::Credentials(_) => "credentials",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
+            Command::Summarize(args) => args.name(),
             Command::Skill(_) => "skill",
             Command::Viz(_) => "viz",
             Command::Setup(_) => "setup",

@@ -3,7 +3,7 @@
 
 /// One-line summary for `pqbench -h`.
 pub const ROOT_ABOUT: &str =
-    "Measure Parquet storage and codec speed; pipe refs → list files → bytemass";
+    "Measure Parquet storage and codec speed; pipe refs → list files → bytemass → summarize";
 
 /// Full summary for `pqbench --help`.
 pub const ROOT_LONG_ABOUT: &str = "\
@@ -19,12 +19,13 @@ Commands compose on pipes: each writes a resource the next command reads.
   sample        → TableFile           keep a rate of them, by size
   credentials   → Table          check + vend read credentials
   bytemass      → Blob + Column        footer byte masses (alias for list columns)
-  viz           → PREFIX.html          collect the stream into a static treemap
+  summarize     → ColumnMass           estimate each column's mass (summarize columns)
+  viz           → PREFIX.html          draw a summarize columns document
   skill         → markdown             bundled agent recipes (write / DDL / codec)
   format        → tables               render a stream (NDJSON on stdin)
 
 The walk reads with two verbs: `get` reads one resource, `list` lists a
-collection; `sample` reduces one.
+collection; `sample` and `summarize` reduce one.
 
 Standard output is NDJSON; `pqbench format` renders it as tables.
 Subcommand help is local (`pqbench get --help`).
@@ -55,6 +56,7 @@ Documents:
   TableFile              one table file (list files, sample files, table-file)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
+  ColumnMass             one table column's estimated mass (summarize columns)
   ColumnProfile          one column's profile (profile | format)
   pqbench.skill          name + description (pqbench skill with no args)
 
@@ -118,18 +120,21 @@ job on that list, not a bytemass feature. A table-file record carries the
 file's blob and, when vended, its lease.
 
 One `Blob` per file and one `Column` per column, with its byte mass nested,
-as NDJSON. `pqbench format` renders the columns as a table; pipe the stream to
-`viz`. `pqbench bytemass` is an alias for `pqbench list columns`.";
+as NDJSON. `pqbench format` renders the columns as a table; `pqbench summarize
+columns` folds the stream into one estimate per table column, and `pqbench
+viz` draws those rows. `pqbench bytemass` is an alias for `pqbench list
+columns`.";
 
 pub const BYTEMASS_AFTER: &str = "\
 Examples:
   pqbench table-file data.parquet | pqbench bytemass
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o report
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
 
 See also:
-  pqbench list --help      list the files this command measures
-  pqbench viz --help       collect the stream into a static HTML page
+  pqbench list --help               list the files this command measures
+  pqbench summarize columns --help  fold the stream into per-column estimates
+  pqbench viz --help                draw those rows as a treemap
   pqbench --help           auth, documents, format skills
   docs/reference/cli.md";
 
@@ -341,23 +346,49 @@ See also:
   pqbench get --help      read one resource of it
   docs/reference/cli.md";
 
-pub const VIZ_ABOUT: &str = "Collect a bytemass stream into a static HTML treemap";
+pub const SUMMARIZE_ABOUT: &str = "Estimate each table column's mass from a bytemass stream";
+
+pub const SUMMARIZE_LONG_ABOUT: &str = "\
+Read a bytemass stream and write one `ColumnMass` row per table column: the
+weighted bytes, values, and bytes per value over the files that measured it,
+the distinct file count and storage classes, and the monthly S3 storage cost
+(one candidate per class, and one per access sub-tier for Intelligent-Tiering).
+
+Each additive field is divided by the record's `sample_rate`, so a
+`sample files` stream estimates the table, not the sample. A row has no name:
+it is a command document, not a resource. `pqbench format` renders the rows as
+a table.";
+
+pub const SUMMARIZE_AFTER: &str = "\
+Examples:
+  pqbench table-file data.parquet | pqbench bytemass | pqbench summarize columns
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns
+  pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
+
+See also:
+  pqbench bytemass --help         produce the stream this command reduces
+  pqbench format --help           render the rows as a table
+  pqbench viz --help              draw them as a treemap
+  docs/reference/cli.md";
+
+pub const VIZ_ABOUT: &str = "Draw a summarize columns document as a static HTML treemap";
 
 pub const VIZ_LONG_ABOUT: &str = "\
-Read a bytemass stream and write `PREFIX.html`. The page embeds the measured
-columns and blobs and loads the d3 modules it uses from a CDN, drawing one
-treemap of bytes per value. Does not measure files. `-o PREFIX` is required.";
+Read a `summarize columns` document and write `PREFIX.html`. The page embeds
+the rows and loads the d3 modules it uses from a CDN, drawing one treemap of
+bytes per value. Does not measure or aggregate: run `pqbench summarize columns`
+first. `-o PREFIX` is required.";
 
 pub const VIZ_AFTER: &str = "\
 Examples:
-  pqbench table-file data.parquet | pqbench bytemass | pqbench viz -o report
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench viz -o report
+  pqbench table-file data.parquet | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
   xdg-open report.html
 
 See also:
-  pqbench bytemass --help  produce the stream this command collects
-  pqbench --help           documents
-  docs/reference/viz.md  docs/reference/cli.md";
+  pqbench summarize columns --help  produce the stream this command draws
+  pqbench --help                    documents
+  docs/reference/cli.md";
 
 pub const LZ_ABOUT: &str = "Codec sweep over raw file bytes (lzbench-style)";
 

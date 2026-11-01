@@ -2,7 +2,8 @@
 //!
 //! [`list_columns`] lists one blob's columns, each carrying its
 //! [`v1::Bytemass`](crate::v1::Bytemass) when the footer was measured. The CLI
-//! streams those records; `pqbench viz` folds them.
+//! streams those records; `pqbench summarize columns` folds them and `pqbench
+//! viz` draws the rows.
 //!
 //! Each file's footer is read once and its column chunks are folded over the
 //! file's row groups into one mass per column.

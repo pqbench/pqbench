@@ -222,7 +222,7 @@ analogy, convention, or precedent:
 ## Repo layout
 
 - `crates/pqbench/` — the library (bench, bytemass, codecs, compression,
-  experiment, profile, skill, lz, parquet, report, stats, viz)
+  experiment, mass, profile, skill, lz, parquet, report, stats, viz)
 - `crates/pqbench-cli/` — the `pqbench` command definitions and dispatch (a
   library), plus the thin binary
 - `crates/docsgen/` — generates `docs/reference/cli.md` from the clap tree; a
