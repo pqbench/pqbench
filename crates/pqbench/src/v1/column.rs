@@ -22,6 +22,12 @@ pub struct Column {
     /// The physical type of the leaf column.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physical_data_type: Option<String>,
+    /// The leaf column's maximum definition level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_definition_level: Option<u16>,
+    /// The leaf column's maximum repetition level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_repetition_level: Option<u16>,
     /// Row groups the column spans.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_group_count: Option<u64>,

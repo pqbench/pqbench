@@ -10,9 +10,9 @@
 //!
 //! ```console run
 //! $ pqbench bytemass examples/quickstart.parquet --format table
-//! column  type   codec         encodings                 bytes  values
-//! ------  -----  ------------  ------------------------  -----  ------
-//! id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+//! column  type   codec         encoding  bytes  dict bytes  bytes/row  values
+//! ------  -----  ------------  --------  -----  ----------  ---------  ------
+//! id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
 //! files: 1
 //! ```
 
@@ -43,9 +43,9 @@ A `console` transcript is generated only when its info string carries `run`:
 
     ```console run
     $ pqbench bytemass examples/quickstart.parquet --format table
-    column  type   codec         encodings                 bytes  values
-    ------  -----  ------------  ------------------------  -----  ------
-    id      INT64  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
+    column  type   codec         encoding  bytes  dict bytes  bytes/row  values
+    ------  -----  ------------  --------  -----  ----------  ---------  ------
+    id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
     files: 1
     ```
 

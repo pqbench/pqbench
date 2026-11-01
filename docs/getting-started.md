@@ -37,10 +37,10 @@ an aligned table; on a pipe, NDJSON.
 
 ```console run
 $ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
-column  codec         encodings                 bytes  values
-------  ------------  ------------------------  -----  ------
-id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
-year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+column  type   codec         encoding  bytes  dict bytes  bytes/row  values
+------  -----  ------------  --------  -----  ----------  ---------  ------
+id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
+year    INT32  UNCOMPRESSED  dict         68          46       8.50       8
 ```
 
 `profile` decodes a row sample and reports per-column facts (nulls, distinct
@@ -62,10 +62,10 @@ active files, then measures them:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
-column  codec   encodings                 bytes  values
-------  ------  ------------------------  -----  ------
-id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+column  type        codec   encoding  bytes  dict bytes  bytes/row  values
+------  ----------  ------  --------  -----  ----------  ---------  ------
+id      INT64       SNAPPY  dict         66          37      22.00       3
+label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
 ```
 
 Reading a Delta or Iceberg log needs its cargo feature (`delta` / `iceberg`;

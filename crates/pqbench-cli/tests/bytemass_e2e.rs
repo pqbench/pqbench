@@ -121,6 +121,15 @@ fn bytemass_rows_include_footer_facts() {
     assert!(rows
         .iter()
         .all(|row| !row["mass"]["encodings"].as_array().unwrap().is_empty()));
+    assert!(rows.iter().all(|row| row["mass"]["data_encodings"]
+        .as_array()
+        .is_some_and(|encodings| !encodings.is_empty())));
+    assert!(rows
+        .iter()
+        .all(|row| row["mass"]["dictionary_bytes"].as_u64().unwrap() > 0));
+    assert!(rows
+        .iter()
+        .all(|row| row["mass"]["bytes_per_row"].as_f64().unwrap() > 0.0));
     assert!(rows
         .iter()
         .all(|row| row["mass"]["value_count"].as_u64().unwrap() > 0));

@@ -499,14 +499,32 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
         row_count += u64::try_from(row_group.num_rows()).unwrap_or(0);
         for meta in row_group.columns() {
             let stats = meta.statistics();
+            let descriptor = meta.column_descr();
+            let dictionary_page_offset = meta.dictionary_page_offset();
+            let data_page_offset = meta.data_page_offset();
+            let dictionary_bytes = dictionary_page_offset
+                .filter(|offset| data_page_offset > *offset)
+                .and_then(|offset| u64::try_from(data_page_offset - offset).ok());
             columns.push(ColumnMass {
                 column: meta.column_path().string(),
+                physical_data_type: descriptor.physical_type().to_string(),
+                max_definition_level: u16::try_from(descriptor.max_def_level()).unwrap_or(0),
+                max_repetition_level: u16::try_from(descriptor.max_rep_level()).unwrap_or(0),
                 compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
                 uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
                 codec: meta.compression().to_string(),
                 encodings: meta.encodings().map(|e| e.to_string()).collect(),
+                data_encodings: meta.page_encoding_stats_mask().map(|mask| {
+                    mask.encodings()
+                        .map(|encoding| encoding.to_string())
+                        .collect()
+                }),
                 num_values: u64::try_from(meta.num_values()).unwrap_or(0),
-                dictionary: meta.dictionary_page_offset().is_some(),
+                dictionary: dictionary_page_offset.is_some(),
+                dictionary_bytes,
+                unencoded_bytes: meta
+                    .unencoded_byte_array_data_bytes()
+                    .and_then(|bytes| u64::try_from(bytes).ok()),
                 null_count: stats.and_then(Statistics::null_count_opt),
                 distinct_count: stats.and_then(Statistics::distinct_count_opt),
                 min_value: stats.and_then(|value| stat_text(value, true)),

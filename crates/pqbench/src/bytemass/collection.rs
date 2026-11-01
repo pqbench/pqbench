@@ -18,103 +18,142 @@ pub(super) async fn list_columns(lake: &Lake, name: &str) -> Result<Vec<v1::Colu
     columns(name, mass)
 }
 
-/// The running fold of one column's chunks.
-struct Fold {
-    mass: v1::Bytemass,
-    chunks: usize,
-    codec: Option<String>,
-    codec_mixed: bool,
-}
-
-impl Fold {
-    fn new() -> Self {
-        Self {
-            mass: v1::Bytemass {
-                null_count: Some(0),
-                ..v1::Bytemass::default()
-            },
-            chunks: 0,
-            codec: None,
-            codec_mixed: false,
-        }
-    }
-
-    /// Fold one chunk into the column.
-    fn add(&mut self, chunk: ColumnMass) {
-        self.chunks += 1;
-        let mass = &mut self.mass;
-        mass.compressed_bytes = add(mass.compressed_bytes, chunk.compressed_bytes);
-        mass.uncompressed_bytes = add(mass.uncompressed_bytes, chunk.uncompressed_bytes);
-        mass.value_count = add(mass.value_count, chunk.num_values);
-        match &self.codec {
-            None => self.codec = Some(chunk.codec),
-            Some(codec) if *codec != chunk.codec => self.codec_mixed = true,
-            Some(_) => {}
-        }
-        mass.dictionary |= chunk.dictionary;
-        for encoding in chunk.encodings {
-            if !mass.encodings.contains(&encoding) {
-                mass.encodings.push(encoding);
-            }
-        }
-        // A group with no statistics makes the file total unknown, not smaller.
-        mass.null_count = match (mass.null_count, chunk.null_count) {
-            (_, None) => None,
-            (Some(total), Some(count)) => total.checked_add(count),
-            (None, Some(_)) => None,
-        };
-        // First/last and distinct are file facts only when there is one chunk:
-        // summing distinct counts double-counts values, and the first/last
-        // chunk is not the file's min/max unless the data is ordered.
-        if self.chunks == 1 {
-            mass.distinct_count = chunk.distinct_count;
-            mass.first_value = chunk.min_value;
-            mass.last_value = chunk.max_value;
-        } else {
-            mass.distinct_count = None;
-            mass.first_value = None;
-            mass.last_value = None;
-        }
-    }
-
-    /// The folded mass, with the ratios and the single codec resolved.
-    fn finish(mut self) -> v1::Bytemass {
-        self.mass.codec = (!self.codec_mixed).then_some(self.codec).flatten();
-        self.mass.bytes_per_value = ratio(self.mass.compressed_bytes, self.mass.value_count);
-        self.mass.compression_ratio =
-            ratio(self.mass.uncompressed_bytes, self.mass.compressed_bytes);
-        self.mass.null_fraction = ratio(self.mass.null_count, self.mass.value_count);
-        self.mass
-    }
-}
-
 /// Fold one `ColumnMass` per chunk into one [`v1::Column`] per leaf column.
 fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
     let (service, locator) = v1::name::parse_blob(blob_name)
         .ok_or_else(|| Error::Name(format!("{blob_name} is not a blobs/… name")))?;
+    let row_count = mass.row_count;
+    let row_group_count = mass.row_group_count as u64;
     let mut at: BTreeMap<String, usize> = BTreeMap::new();
     let mut columns: Vec<v1::Column> = Vec::new();
-    let mut folds: Vec<Fold> = Vec::new();
+    let mut chunks: Vec<Vec<ColumnMass>> = Vec::new();
     for chunk in mass.columns {
         let index = *at.entry(chunk.column.clone()).or_insert_with(|| {
+            let position = columns.len() as u64;
             columns.push(v1::Column {
                 name: v1::name::column(&service, &locator, &chunk.column),
-                row_group_count: Some(mass.row_group_count as u64),
+                position: Some(position),
+                physical_data_type: Some(chunk.physical_data_type.clone()),
+                max_definition_level: Some(chunk.max_definition_level),
+                max_repetition_level: Some(chunk.max_repetition_level),
+                row_group_count: Some(row_group_count),
                 ..v1::Column::default()
             });
-            folds.push(Fold::new());
+            chunks.push(Vec::new());
             columns.len() - 1
         });
-        folds[index].add(chunk);
+        chunks[index].push(chunk);
     }
-    for (column, fold) in columns.iter_mut().zip(folds) {
-        column.mass = Some(fold.finish());
+    for (column, chunks) in columns.iter_mut().zip(chunks) {
+        column.mass = Some(measure(&chunks, row_count));
     }
     Ok(columns)
 }
 
-fn add(total: Option<u64>, part: u64) -> Option<u64> {
-    total.unwrap_or(0).checked_add(part)
+fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
+    let compressed_bytes = chunks.iter().map(|chunk| chunk.compressed_bytes).sum();
+    let uncompressed_bytes = chunks.iter().map(|chunk| chunk.uncompressed_bytes).sum();
+    let value_count = chunks.iter().map(|chunk| chunk.num_values).sum();
+    let dictionary = chunks.iter().any(|chunk| chunk.dictionary);
+    let encodings = union(chunks.iter().map(|chunk| chunk.encodings.as_slice()));
+    let data_encodings = known_union(chunks.iter().map(|chunk| chunk.data_encodings.as_deref()));
+    let null_count = known_sum(chunks.iter().map(|chunk| chunk.null_count));
+    let dictionary_bytes = known_sum(
+        chunks
+            .iter()
+            .filter(|chunk| chunk.dictionary)
+            .map(|chunk| chunk.dictionary_bytes),
+    );
+    let unencoded_bytes = known_sum(chunks.iter().map(|chunk| chunk.unencoded_bytes));
+    let (distinct_count, first_value, last_value) = single_chunk_facts(chunks);
+
+    let mut mass = v1::Bytemass {
+        compressed_bytes: Some(compressed_bytes),
+        uncompressed_bytes: Some(uncompressed_bytes),
+        codec: uniform_codec(chunks),
+        encodings,
+        data_encodings,
+        dictionary,
+        dictionary_bytes,
+        unencoded_bytes,
+        value_count: Some(value_count),
+        null_count,
+        distinct_count,
+        first_value,
+        last_value,
+        ..v1::Bytemass::default()
+    };
+    mass.bytes_per_value = ratio(mass.compressed_bytes, mass.value_count);
+    mass.bytes_per_row = ratio(mass.compressed_bytes, Some(row_count));
+    mass.compression_ratio = ratio(mass.uncompressed_bytes, mass.compressed_bytes);
+    mass.null_fraction = ratio(mass.null_count, mass.value_count);
+    mass.dictionary_fraction = ratio(mass.dictionary_bytes, mass.compressed_bytes);
+    mass
+}
+
+/// The codec, when every chunk reports the same one.
+fn uniform_codec(chunks: &[ColumnMass]) -> Option<String> {
+    let first = chunks.first()?;
+    chunks
+        .iter()
+        .all(|chunk| chunk.codec == first.codec)
+        .then(|| first.codec.clone())
+}
+
+/// The union of encoding sets, in first-seen order.
+fn union<'a>(sets: impl IntoIterator<Item = &'a [String]>) -> Vec<String> {
+    let mut encodings = Vec::new();
+    for set in sets {
+        add_encodings(&mut encodings, set);
+    }
+    encodings
+}
+
+/// The union of encoding sets, when every chunk reports one.
+fn known_union<'a>(sets: impl IntoIterator<Item = Option<&'a [String]>>) -> Option<Vec<String>> {
+    let mut encodings = Vec::new();
+    for set in sets {
+        add_encodings(&mut encodings, set?);
+    }
+    (!encodings.is_empty()).then_some(encodings)
+}
+
+/// Add the encodings a set does not already hold.
+///
+/// The sets are tiny and their first-seen order is visible, so a `Vec` is
+/// simpler than a `BTreeSet` here.
+fn add_encodings(encodings: &mut Vec<String>, set: &[String]) {
+    for encoding in set {
+        if !encodings.contains(encoding) {
+            encodings.push(encoding.clone());
+        }
+    }
+}
+
+/// The sum of parts, when every part is known and at least one exists.
+fn known_sum(parts: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
+    let mut total: u64 = 0;
+    let mut seen = false;
+    for part in parts {
+        total = total.checked_add(part?)?;
+        seen = true;
+    }
+    seen.then_some(total)
+}
+
+/// Distinct, first, and last are file facts only with one chunk: summing
+/// distinct counts double-counts values, and the first/last chunk is not the
+/// file's bounds unless the data is ordered.
+fn single_chunk_facts(chunks: &[ColumnMass]) -> (Option<u64>, Option<String>, Option<String>) {
+    if chunks.len() != 1 {
+        return (None, None, None);
+    }
+    let chunk = &chunks[0];
+    (
+        chunk.distinct_count,
+        chunk.min_value.clone(),
+        chunk.max_value.clone(),
+    )
 }
 
 /// `numerator / denominator`, when the denominator is non-zero.

@@ -8,7 +8,7 @@ mod support;
 #[test]
 fn measure_one_file() {
     // measure_one_file, from line 38
-    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt", 39, Some(&["column  codec         encodings                 bytes  values", "------  ------------  ------------------------  -----  ------", "id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8", "year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8"]));
+    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt", 39, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
 }
 
 #[rustfmt::skip]
@@ -23,7 +23,7 @@ fn measure_one_file_2() {
 #[test]
 fn the_metadata_walk() {
     // the_metadata_walk, from line 63
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 64, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 64, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
 }
 
 #[rustfmt::skip]
