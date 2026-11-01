@@ -56,3 +56,11 @@ fn viz() {
     support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb viz -o /tmp/report", 215, None);
     support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report", 216, None);
 }
+
+#[cfg(feature = "delta")]
+#[rustfmt::skip]
+#[test]
+fn python() {
+    // python, from line 254
+    support::run("pqbench list files < docker/e2e-lakehouse/table.ndjson | zstd -3 > /tmp/files.jsonl.zst", 255, None);
+}

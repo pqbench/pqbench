@@ -153,7 +153,7 @@ check-python:
 #   commands; `make test` runs them like any other integration test.
 # - `docs/reference/cli.md`, from the clap tree via `crates/docsgen`.
 # `make check-docs` fails if either is out of date with its source.
-DOCS ?= README.md docs/ skills/
+DOCS ?= README.md docs/ skills/ examples/
 sync-docs:
 	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
 	$(CARGO) run -q -p docsgen -- write docs/reference/cli.md

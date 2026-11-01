@@ -241,8 +241,12 @@ The measurement stream (`bytemass`) mixes one `Blob` per file with one
 `Column` per column, its byte mass nested under `mass`. Parse it as it arrives,
 or render it with `pqbench format`:
 
-```console no-run
+```console run
 $ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format
+column  type   codec         encoding  bytes  dict bytes  bytes/row  values
+------  -----  ------------  --------  -----  ----------  ---------  ------
+id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
+year    INT32  UNCOMPRESSED  dict         68          46       8.50       8
 ```
 
 ## Pitfalls

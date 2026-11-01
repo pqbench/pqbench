@@ -13,7 +13,7 @@ as they arrive. They are the runnable examples behind the
 
 ## Run
 
-```console no-run
+```console run
 $ python3 examples/python/measure_files.py examples/quickstart.parquet
 files,rows,column_chunks,file_bytes,column_bytes
 1,8,2,541,170

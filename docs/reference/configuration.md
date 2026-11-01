@@ -36,7 +36,9 @@ The file holds a bearer, so keep it readable only by its owner:
 $ chmod 600 ~/.pqbenchrc
 ```
 
-Set `PQB_CONFIG_FILE` to read a different file.
+Set `PQB_CONFIG_FILE` to read a different file. The repository's
+`examples/pqbenchrc` is a committed copy of the file above with a placeholder
+bearer, so the layering can be tried without a workspace.
 
 ## Environment
 
@@ -53,11 +55,20 @@ The environment overrides the selected profile:
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | a lower-priority fallback for the endpoint and bearer |
 | `AWS_*` | object-store region and credentials, read by the storage client |
 
-`pqb setup` prints the resolved endpoint, bearer, and dialect for the shell
-to evaluate:
+`pqb setup` prints the resolved endpoint, bearer, and dialect for the shell to
+evaluate. A later layer wins, so the environment can override the profile:
 
-```console no-run
-$ eval "$(pqb setup --profile iceberg)"
+```console run
+$ PQB_CONFIG_FILE=examples/pqbenchrc pqb setup --profile iceberg
+export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'
+export PQB_TOKEN='dapi-example'
+export PQB_TABLE_FORMAT='iceberg'
+export AWS_EC2_METADATA_DISABLED='true'
+$ PQB_CONFIG_FILE=examples/pqbenchrc PQB_TABLE_FORMAT=unity pqb setup --profile iceberg
+export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'
+export PQB_TOKEN='dapi-example'
+export PQB_TABLE_FORMAT='unity'
+export AWS_EC2_METADATA_DISABLED='true'
 ```
 
 ## Flags
