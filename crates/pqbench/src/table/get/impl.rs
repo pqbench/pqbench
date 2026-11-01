@@ -26,13 +26,12 @@ pub(crate) async fn get(
     lake: &Lake,
     name: &str,
     uri: Option<&str>,
-    env: &BTreeMap<String, String>,
 ) -> Result<Table, Error> {
     let (catalog, schema, table) = Table::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/tables/… name")))?;
     let info = match workspace.config().dialect {
-        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri, env).await,
-        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table, env).await,
+        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri).await,
+        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table).await,
     }?;
     Ok(info.resource(&catalog, &schema, &table))
 }
@@ -66,7 +65,6 @@ async fn unity_record(
     schema: &str,
     table: &str,
     hint: Option<&str>,
-    env: &BTreeMap<String, String>,
 ) -> Result<TableInfo, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let url = format!(
@@ -74,7 +72,7 @@ async fn unity_record(
         dialect::api_root(workspace.config().endpoint.as_str()),
         dialect::encode(&name)
     );
-    let (record, mut info) = load_record(workspace, lake, &name, &url, hint, env).await?;
+    let (record, mut info) = load_record(workspace, lake, &name, &url, hint).await?;
     info.name = name;
     Ok(merge_catalog(info, record))
 }
@@ -90,7 +88,6 @@ async fn load_record(
     name: &str,
     url: &str,
     hint: Option<&str>,
-    env: &BTreeMap<String, String>,
 ) -> Result<(UnityRecord, TableInfo), Error> {
     match hint.filter(|location| !location.is_empty()) {
         Some(location) => {
@@ -101,13 +98,13 @@ async fn load_record(
             );
             let (record, info) = futures_util::future::try_join(
                 async { catalog.await.map_err(Error::Http) },
-                load_metadata(lake, name, location, env),
+                load_metadata(lake, name, location),
             )
             .await?;
             let catalog_location = catalog_location(&record, name)?;
             let info = match catalog_location == location {
                 true => info,
-                false => load_metadata(lake, name, &catalog_location, env).await?,
+                false => load_metadata(lake, name, &catalog_location).await?,
             };
             Ok((record, info))
         }
@@ -117,7 +114,7 @@ async fn load_record(
                     .await
                     .map_err(Error::Http)?;
             let location = catalog_location(&record, name)?;
-            let info = load_metadata(lake, name, &location, env).await?;
+            let info = load_metadata(lake, name, &location).await?;
             Ok((record, info))
         }
     }
@@ -162,13 +159,8 @@ fn catalog_location(record: &UnityRecord, name: &str) -> Result<String, Error> {
 
 /// The table's metadata at `location`, without files, naming the table and the
 /// location on failure.
-async fn load_metadata(
-    lake: &Lake,
-    name: &str,
-    location: &str,
-    env: &BTreeMap<String, String>,
-) -> Result<TableInfo, Error> {
-    let request = LoadRequest::new(location.to_string(), None, env.clone()).without_files();
+async fn load_metadata(lake: &Lake, name: &str, location: &str) -> Result<TableInfo, Error> {
+    let request = LoadRequest::new(location.to_string(), None).without_files();
     table::load(lake, &request)
         .await
         .map_err(|source| Error::Metadata {
@@ -239,7 +231,6 @@ async fn iceberg_record(
     catalog: &str,
     schema: &str,
     table: &str,
-    env: &BTreeMap<String, String>,
 ) -> Result<TableInfo, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     let url = format!(
@@ -277,7 +268,6 @@ async fn iceberg_record(
         partition_columns,
         Vec::new(),
         Vec::new(),
-        env.clone(),
     );
     info.name = name;
     info.columns = columns;

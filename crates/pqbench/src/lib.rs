@@ -4,6 +4,7 @@
 extern crate self as pqbench;
 
 pub mod bench;
+pub mod blob;
 pub mod bytemass;
 mod capability;
 pub mod catalog;

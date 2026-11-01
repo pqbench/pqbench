@@ -70,21 +70,15 @@ impl std::error::Error for Error {
 /// metadata is read without files (`without_files()` for Delta, the metadata
 /// JSON only for Iceberg), so the cost is O(1) in files.
 ///
-/// `table` carries the name, the location the ref already says, and the lease:
-/// the storage read starts alongside the catalog call, and the catalog's own
-/// location stays authoritative. The record's credentials are not copied onto
-/// the answer; the caller that holds the lease sets them.
+/// `table` carries the name and the location the ref already says, so the
+/// storage read starts alongside the catalog call and the catalog's own
+/// location stays authoritative. The caller scopes `lake` with the table's
+/// lease (`Lake::with_lease`); the credentials are not copied onto the answer.
 ///
 /// # Errors
 /// Fails when the name is not a table name, the endpoint cannot be reached,
 /// answers with an unexpected status, or the table's metadata cannot be read.
 pub async fn get(workspace: &Workspace, lake: &Lake, table: &Table) -> Result<Table, Error> {
-    let env = table
-        .credentials
-        .as_ref()
-        .filter(|lease| !lease.is_empty())
-        .map(crate::v1::Credentials::to_env)
-        .unwrap_or_default();
     let uri = table.uri.as_deref().filter(|uri| !uri.is_empty());
-    super::r#impl::get(workspace, lake, &table.name, uri, &env).await
+    super::r#impl::get(workspace, lake, &table.name, uri).await
 }

@@ -19,8 +19,8 @@
 // There is no envelope: no `kind`, no per-document `version`. A stage reads
 // exactly one resource type, and the `name`'s collection segment identifies it
 // (`…/tables/{t}` is a `Table`, `…/blobs/{service}/{locator}` is a `Blob`,
-// `…/bytemass` is a `Bytemass`). A stream is one type; a genuinely mixed input
-// is a `oneof`, never a tag on a resource.
+// `…/columns/{column}` is a `Column`). A stream is one type; a genuinely mixed
+// input is a `oneof`, never a tag on a resource.
 //
 // The API version is the package's (`pqbench.v1`), not a segment of the `name`;
 // a name is self-describing by its collection segment, and no document carries
@@ -284,15 +284,22 @@ message Column {
   string physical_data_type = 4;
 
   int64 row_group_count = 5;
+
+  // The table whose file was measured, when measured through a table file.
+  string table = 6;
+
+  // The column's byte mass, when the footer was measured.
+  Bytemass mass = 7;
+
+  // The probability the table file naming this column was kept with, when a
+  // `sample files` stage chose it. Absent means unsampled, weight one.
+  optional double sample_rate = 8;
 }
 
-// A column's byte mass (the footer's `ColumnMetaData`), aggregated by column:
-// one per column, over its column chunks. The per-chunk breakdown is not this
-// resource; a `ChunkBytemass` would carry it.
+// A column's byte mass (the footer's `ColumnMetaData`), folded over the column's
+// chunks. A value on `Column`, not a resource; the per-chunk breakdown is not
+// carried.
 message Bytemass {
-  // Format: blobs/{service}/{locator}/columns/{column}/bytemass
-  string name = 1;
-
   int64 compressed_bytes = 2;
   int64 uncompressed_bytes = 3;
   string codec = 4;
@@ -308,13 +315,6 @@ message Bytemass {
   double bytes_per_value = 12;
   double compression_ratio = 13;
   double null_fraction = 14;
-
-  // The table whose file was measured, when measured through a table file.
-  string table = 15;
-
-  // The probability the table file this column came from was kept with.
-  // Absent means unsampled.
-  optional double sample_rate = 16;
 }
 
 // A codec sweep of a column.

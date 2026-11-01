@@ -40,14 +40,14 @@ pub(crate) async fn run(args: &VizArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn collect(input: &str) -> Result<(Vec<v1::Bytemass>, Vec<v1::Blob>), CliError> {
+async fn collect(input: &str) -> Result<(Vec<v1::Column>, Vec<v1::Blob>), CliError> {
     let mut columns = Vec::new();
     let mut blobs = Vec::new();
     let mut records = document::records(input).await?;
     while let Some(record) = records.next().await {
         match record? {
             Record::Blob(blob) => blobs.push(blob),
-            Record::Bytemass(column) => columns.push(column),
+            Record::Column(column) => columns.push(column),
             Record::File(file) => {
                 return Err(format!(
                     "viz reads a pqbench.bytemass stream, not `{}`; measure with `pqbench bytemass` first",
@@ -70,7 +70,7 @@ fn prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn summary(prefix: &Path, columns: &[v1::Bytemass], blobs: &[v1::Blob]) -> String {
+fn summary(prefix: &Path, columns: &[v1::Column], blobs: &[v1::Blob]) -> String {
     format!(
         "files: {}\ncolumns: {}\noutput: {}\n",
         blobs.len(),

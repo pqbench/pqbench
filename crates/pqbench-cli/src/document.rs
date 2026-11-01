@@ -20,8 +20,8 @@ pub(crate) enum Record {
     File(v1::TableFile),
     /// One measured file's facts.
     Blob(v1::Blob),
-    /// One measured column's byte mass.
-    Bytemass(v1::Bytemass),
+    /// One file column and its byte mass.
+    Column(v1::Column),
 }
 
 /// The records of a document, one at a time: `-` streams standard input, a path
@@ -123,8 +123,8 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         .and_then(|name| name.as_str())
         .map(str::to_owned);
     match name.as_deref() {
-        Some(name) if v1::name::parse_bytemass(name).is_some() => {
-            Ok(Record::Bytemass(from_value(value)?))
+        Some(name) if v1::Column::parse_name(name).is_some() => {
+            Ok(Record::Column(from_value(value)?))
         }
         Some(name) if v1::name::parse_blob(name).is_some() => Ok(Record::Blob(from_value(value)?)),
         Some(name) if v1::name::parse_table_file(name).is_some() => {

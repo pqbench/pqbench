@@ -27,7 +27,7 @@ enum Class {
     Schema,
     Table,
     TableFile,
-    Bytemass,
+    Column,
     Sweep,
     CompressionColumn,
     Profile,
@@ -84,8 +84,8 @@ fn section(sections: &mut Vec<(Class, Section)>, class: Class) -> &mut Section {
 /// A record's class: the resource its `name` names, else the row kind.
 fn classify(record: &Value) -> Option<Class> {
     let name = record.get("name")?.as_str()?;
-    Some(if v1::name::parse_bytemass(name).is_some() {
-        Class::Bytemass
+    Some(if v1::Column::parse_name(name).is_some() {
+        Class::Column
     } else if name.contains("/codecs/") {
         Class::Sweep
     } else if name.ends_with("/profile") {
@@ -131,7 +131,7 @@ enum Section {
     Schema(Vec<v1::Schema>),
     Table(Vec<v1::Table>),
     TableFile(Vec<v1::TableFile>),
-    Bytemass(Vec<v1::Bytemass>),
+    Column(Vec<v1::Column>),
     Sweep(Vec<render::SweepRow>),
     CompressionColumn(Vec<render::ColumnSweepRow>),
     Profile(Vec<render::ProfileRow>),
@@ -146,7 +146,7 @@ impl Section {
             Class::Schema => Self::Schema(Vec::new()),
             Class::Table => Self::Table(Vec::new()),
             Class::TableFile => Self::TableFile(Vec::new()),
-            Class::Bytemass => Self::Bytemass(Vec::new()),
+            Class::Column => Self::Column(Vec::new()),
             Class::Sweep => Self::Sweep(Vec::new()),
             Class::CompressionColumn => Self::CompressionColumn(Vec::new()),
             Class::Profile => Self::Profile(Vec::new()),
@@ -162,7 +162,7 @@ impl Section {
             Self::Schema(rows) => push_typed(rows, record),
             Self::Table(rows) => push_typed(rows, record),
             Self::TableFile(rows) => push_typed(rows, record),
-            Self::Bytemass(rows) => push_typed(rows, record),
+            Self::Column(rows) => push_typed(rows, record),
             Self::Sweep(rows) => push_typed(rows, record),
             Self::CompressionColumn(rows) => push_typed(rows, record),
             Self::Profile(rows) => push_typed(rows, record),
@@ -186,7 +186,7 @@ impl Section {
             Self::Schema(rows) => render::render(rows),
             Self::Table(rows) => render::render(rows),
             Self::TableFile(rows) => render::render(rows),
-            Self::Bytemass(rows) => render::render(rows),
+            Self::Column(rows) => render::render(rows),
             Self::Sweep(rows) => render::render(rows),
             Self::CompressionColumn(rows) => render::render(rows),
             Self::Profile(rows) => render::render(rows),

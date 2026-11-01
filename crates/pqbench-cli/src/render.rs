@@ -118,7 +118,7 @@ impl Row for v1::TableFile {
     }
 }
 
-impl Row for v1::Bytemass {
+impl Row for v1::Column {
     const HEADER: &'static [&'static str] = &["column", "codec", "encodings", "bytes", "values"];
     const ALIGN: &[Align] = &[
         Align::Left,
@@ -129,15 +129,21 @@ impl Row for v1::Bytemass {
     ];
 
     fn cells(&self) -> Vec<String> {
-        let name = v1::name::parse_bytemass(&self.name)
-            .map(|(_, column)| column)
+        let name = v1::Column::parse_name(&self.name)
+            .map(|(_, _, column)| column)
             .unwrap_or_else(|| self.name.clone());
+        let mass = self.mass.as_ref();
         vec![
             name,
-            self.codec.clone().unwrap_or_default(),
-            self.encodings.join(","),
-            self.compressed_bytes.unwrap_or(0).to_string(),
-            self.value_count.unwrap_or(0).to_string(),
+            mass.and_then(|mass| mass.codec.clone()).unwrap_or_default(),
+            mass.map(|mass| mass.encodings.join(","))
+                .unwrap_or_default(),
+            mass.and_then(|mass| mass.compressed_bytes)
+                .unwrap_or(0)
+                .to_string(),
+            mass.and_then(|mass| mass.value_count)
+                .unwrap_or(0)
+                .to_string(),
         ]
     }
 }

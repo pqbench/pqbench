@@ -164,14 +164,14 @@ seed_iceberg() {
 }
 
 # The README's shape: rows, file count, and column names from the bytemass
-# stream — one `Blob` per file and one `Bytemass` per column, identified by the
+# stream — one `Blob` per file and one `Column` per column, identified by the
 # collection segment of the `name` (AIP-122), with no `kind`.
 measurement_shape() {
     jq -rs '
-        ([.[] | select(.name | endswith("/bytemass"))]) as $columns
+        ([.[] | select(.name | contains("/columns/"))]) as $columns
         | ([.[] | select(.name | test("^blobs/[^/]+/[^/]+$"))] | length) as $files
-        | ($columns | map(.value_count) | first) as $rows
-        | ($columns | map(.name | capture("/columns/(?<c>[^/]+)/bytemass$").c) | sort) as $names
+        | ($columns | map(.mass.value_count) | first) as $rows
+        | ($columns | map(.name | capture("/columns/(?<c>[^/]+)$").c) | sort) as $names
         | "\($rows) rows, \($files) file(s), columns [\($names | join(", "))]"'
 }
 

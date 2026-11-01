@@ -31,24 +31,18 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &DiffArgs) -> Result<(), Cli
     emit.finish().await
 }
 
-async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<v1::Bytemass>, CliError> {
+async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<v1::Column>, CliError> {
     if input != "-" && !document::is_document(input).await {
-        return Ok(bytemass::bytemass(
-            lake,
-            &bytemass::BytemassRequest {
-                inputs: vec![input.to_owned()],
-                ..Default::default()
-            },
-        )
-        .await?);
+        let blob = v1::name::blob_name(input);
+        return Ok(bytemass::list_columns(lake, &blob).await?);
     }
     let mut columns = Vec::new();
     let mut records = document::records(input).await?;
     while let Some(record) = records.next().await {
         match record? {
-            Record::Bytemass(column) => columns.push(column),
+            Record::Column(column) => columns.push(column),
             Record::Blob(_) => {}
-            _ => return Err("diff requires a bytemass stream or a Parquet file".into()),
+            _ => return Err("diff requires a column stream or a Parquet file".into()),
         }
     }
     Ok(columns)

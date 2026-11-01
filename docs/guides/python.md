@@ -24,7 +24,7 @@ files,rows,column_chunks,file_bytes,column_bytes
 ```
 
 `file_bytes` is the size of the Parquet files; `column_bytes` is the sum of the
-column chunks `bytemass` measured.
+byte masses `list columns` measured.
 
 ```python
 import subprocess
@@ -238,8 +238,8 @@ duckdb.sql("select * from read_json_auto('files.jsonl.zst')")
 ```
 
 The measurement stream (`bytemass`) mixes one `Blob` per file with one
-`Bytemass` per column. Parse it as it arrives, or render it with
-`pqbench format`:
+`Column` per column, its byte mass nested under `mass`. Parse it as it arrives,
+or render it with `pqbench format`:
 
 ```console no-run
 $ pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format

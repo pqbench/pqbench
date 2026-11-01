@@ -8,7 +8,6 @@
 //!
 //! Ignored by default because it reads a public S3 object; run with `make e2e`.
 
-use pqbench::bytemass::{measure_files, BytemassRequest};
 use pqbench::v1;
 
 mod common;
@@ -19,24 +18,25 @@ const REDSET_SAMPLE_0_001: &str = "s3://redshift-downloads/redset/serverless/sam
 #[ignore = "network: reads a public object from s3://redshift-downloads"]
 async fn measures_the_redset_sample_anonymously() {
     std::env::set_var("AWS_SKIP_SIGNATURE", "true");
-    let request = BytemassRequest {
-        inputs: vec![REDSET_SAMPLE_0_001.to_string()],
-        ..Default::default()
-    };
-    let files = measure_files(common::lake(), &request).await.unwrap();
+    let blob = v1::name::blob_name(REDSET_SAMPLE_0_001);
+    let columns = pqbench::bytemass::list_columns(common::lake(), &blob)
+        .await
+        .unwrap();
 
-    assert_eq!(files.len(), 1);
-    let file = &files[0];
-    assert_eq!(file.blob.name, v1::name::blob_name(REDSET_SAMPLE_0_001));
-    assert!(!file.columns.is_empty());
-    let row_count: u64 = file
-        .columns
+    assert!(!columns.is_empty());
+    let row_count: u64 = columns
         .iter()
-        .map(|column| column.value_count.unwrap_or(0))
+        .map(|column| {
+            column
+                .mass
+                .as_ref()
+                .and_then(|mass| mass.value_count)
+                .unwrap_or(0)
+        })
         .sum();
     assert!(row_count > 0);
-    for column in &file.columns {
-        let (blob, _) = v1::name::parse_bytemass(&column.name).expect("a bytemass name");
-        assert_eq!(blob, file.blob.name);
+    for column in &columns {
+        let (service, locator, _) = v1::Column::parse_name(&column.name).expect("a column name");
+        assert_eq!(v1::name::blob(&service, &locator), blob);
     }
 }

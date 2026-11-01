@@ -21,17 +21,17 @@ fn selecting_files_with_unix_tools() {
   | pqb ls files \
   | jq -c 'select(.name | contains("/files/part-"))' \
   | pqb bytemass \
-  | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1"#, 33, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
+  | jq -c 'select(.mass) | {column: (.name | capture("/columns/(?<c>[^/]+)$").c), compressed_bytes: .mass.compressed_bytes}' | tail -1"#, 33, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
   | pqb ls files \
   | sort | head -10 \
   | pqb bytemass \
-  | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1"#, 41, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
+  | jq -c 'select(.mass) | {column: (.name | capture("/columns/(?<c>[^/]+)$").c), compressed_bytes: .mass.compressed_bytes}' | tail -1"#, 41, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
   | pqb ls files \
   | awk 'NR % 2 == 1' \
   | pqb bytemass \
-  | jq -c 'select(.name | endswith("/bytemass")) | {column: (.name | capture("/columns/(?<c>[^/]+)/bytemass$").c), compressed_bytes}' | tail -1"#, 49, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
+  | jq -c 'select(.mass) | {column: (.name | capture("/columns/(?<c>[^/]+)$").c), compressed_bytes: .mass.compressed_bytes}' | tail -1"#, 49, Some(&[r#"{"column":"label","compressed_bytes":72}"#]));
 }
 
 #[cfg(feature = "delta")]

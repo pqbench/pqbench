@@ -28,8 +28,7 @@ use crate::Lake;
 /// Fails for invalid metadata, missing snapshots, non-Parquet data files, or
 /// data paths outside the table location.
 pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
-    let options = env_options(&request.env);
-    let metadata = read_metadata(lake, &request.uri, &options).await?;
+    let metadata = read_metadata(lake, &request.uri).await?;
     let requested = request.snapshot_version.map(create_i64).transpose()?;
     let selected = select_snapshot(&metadata, requested)?;
     let snapshot_version = selected
@@ -39,7 +38,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         .unwrap_or(0);
     let (files, deletes) = match selected {
         Some(snapshot) if request.require_files => {
-            active_files(lake, &metadata.location, &snapshot.manifest_list, &options).await?
+            active_files(lake, &metadata.location, &snapshot.manifest_list).await?
         }
         _ => (Vec::new(), Vec::new()),
     };
@@ -56,7 +55,6 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
         partition_columns(&metadata),
         log,
         files,
-        request.env.clone(),
     );
     info.columns = columns(&metadata);
     info.iceberg_properties = metadata.properties.clone();
@@ -64,13 +62,9 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
 }
 
 /// Resolve, read, parse, and validate the table's metadata JSON.
-async fn read_metadata(
-    lake: &Lake,
-    uri: &str,
-    options: &[(String, String)],
-) -> Result<TableMetadata, Error> {
-    let metadata_location = resolve_metadata_location(lake, uri, options).await?;
-    let metadata_bytes = read_location(lake, &metadata_location, options).await?;
+async fn read_metadata(lake: &Lake, uri: &str) -> Result<TableMetadata, Error> {
+    let metadata_location = resolve_metadata_location(lake, uri).await?;
+    let metadata_bytes = read_location(lake, &metadata_location).await?;
     let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
     if metadata.format_version != 1 && metadata.format_version != 2 {
         return Err(Error::Invalid(format!(
@@ -294,9 +288,8 @@ pub(super) async fn stream_commits(
     lake: &Lake,
     request: &LoadRequest,
 ) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
-    let options = env_options(&request.env);
-    let metadata_location = resolve_metadata_location(lake, &request.uri, &options).await?;
-    let metadata_bytes = read_location(lake, &metadata_location, &options).await?;
+    let metadata_location = resolve_metadata_location(lake, &request.uri).await?;
+    let metadata_bytes = read_location(lake, &metadata_location).await?;
     let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
     if metadata.format_version != 1 && metadata.format_version != 2 {
         return Err(Error::Invalid(format!(
@@ -382,11 +375,7 @@ fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> 
     chain
 }
 
-async fn resolve_metadata_location(
-    lake: &Lake,
-    uri: &str,
-    options: &[(String, String)],
-) -> Result<String, Error> {
+async fn resolve_metadata_location(lake: &Lake, uri: &str) -> Result<String, Error> {
     if is_metadata_json(uri) {
         return Ok(uri.to_string());
     }
@@ -394,11 +383,11 @@ async fn resolve_metadata_location(
         return local_metadata(&local_path(uri)?);
     }
     let hint = join_uri(uri, "metadata/version-hint.text")?;
-    let bytes = read_location(lake, &hint, options).await?;
+    let bytes = read_location(lake, &hint).await?;
     let version = parse_hint_version(&String::from_utf8_lossy(&bytes))?;
     for name in hint_names(version) {
         let candidate = join_uri(uri, &format!("metadata/{name}"))?;
-        if object_exists(lake, &candidate, options).await? {
+        if object_exists(lake, &candidate).await? {
             return Ok(candidate);
         }
     }
@@ -506,7 +495,6 @@ async fn active_files(
     lake: &Lake,
     table_location: &str,
     manifest_list: &str,
-    options: &[(String, String)],
 ) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
     let mut files = Vec::new();
     let mut deletes = Vec::new();
@@ -514,7 +502,6 @@ async fn active_files(
         lake.clone(),
         table_location.to_owned(),
         manifest_list.to_owned(),
-        options.to_vec(),
     )
     .boxed();
     while let Some(entry) = entries.try_next().await? {
@@ -548,15 +535,14 @@ fn active_entries(
     lake: Lake,
     table_location: String,
     manifest_list: String,
-    options: Vec<(String, String)>,
 ) -> impl Stream<Item = Result<Entry, Error>> + Send + 'static {
     async_stream::try_stream! {
         let root = table_root(&table_location)?;
-        let bytes = read_location(&lake, &manifest_list, &options).await?;
+        let bytes = read_location(&lake, &manifest_list).await?;
         let manifests: Vec<ManifestFile> =
             read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
         for manifest in manifests {
-            let bytes = read_location(&lake, &manifest.manifest_path, &options).await?;
+            let bytes = read_location(&lake, &manifest.manifest_path).await?;
             let entries: Vec<ManifestEntry> =
                 read_avro(&bytes, "manifest").map_err(Error::Avro)?;
             for entry in entries {
@@ -587,24 +573,21 @@ pub(super) async fn stream_active_files(
     lake: &Lake,
     request: &LoadRequest,
 ) -> Result<crate::table::FileStream<'static>, Error> {
-    let options = env_options(&request.env);
-    let metadata = read_metadata(lake, &request.uri, &options).await?;
+    let metadata = read_metadata(lake, &request.uri).await?;
     let location = metadata.location.clone();
     let requested = request.snapshot_version.map(create_i64).transpose()?;
     let Some(snapshot) = select_snapshot(&metadata, requested)? else {
         return Ok(futures_util::stream::empty().boxed());
     };
     let manifest_list = snapshot.manifest_list.clone();
-    Ok(
-        active_entries(lake.clone(), location, manifest_list, options)
-            .try_filter_map(|entry| async move {
-                Ok(match entry {
-                    Entry::Data(file) => Some(file),
-                    Entry::Delete(_) => None,
-                })
+    Ok(active_entries(lake.clone(), location, manifest_list)
+        .try_filter_map(|entry| async move {
+            Ok(match entry {
+                Entry::Data(file) => Some(file),
+                Entry::Delete(_) => None,
             })
-            .boxed(),
-    )
+        })
+        .boxed())
 }
 
 /// One active manifest entry as a `v1::TableFile`, checking it is Parquet.
@@ -745,14 +728,9 @@ fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
     Ok(url.join(relative).map_err(Error::Uri)?.into())
 }
 
-async fn read_location(
-    lake: &Lake,
-    location: &str,
-    options: &[(String, String)],
-) -> Result<Vec<u8>, Error> {
+async fn read_location(lake: &Lake, location: &str) -> Result<Vec<u8>, Error> {
     if looks_like_uri(location) {
-        let reader =
-            object_store::open(lake, location, options).map_err(|e| Error::Storage(Box::new(e)))?;
+        let reader = object_store::open(lake, location).map_err(|e| Error::Storage(Box::new(e)))?;
         let stat = reader
             .stat()
             .await
@@ -769,23 +747,12 @@ async fn read_location(
     }
 }
 
-async fn object_exists(
-    lake: &Lake,
-    location: &str,
-    options: &[(String, String)],
-) -> Result<bool, Error> {
-    let reader =
-        object_store::open(lake, location, options).map_err(|e| Error::Storage(Box::new(e)))?;
+async fn object_exists(lake: &Lake, location: &str) -> Result<bool, Error> {
+    let reader = object_store::open(lake, location).map_err(|e| Error::Storage(Box::new(e)))?;
     reader
         .exists()
         .await
         .map_err(|e| Error::Storage(Box::new(e)))
-}
-
-fn env_options(env: &BTreeMap<String, String>) -> Vec<(String, String)> {
-    env.iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
 }
 
 fn is_metadata_json(uri: &str) -> bool {

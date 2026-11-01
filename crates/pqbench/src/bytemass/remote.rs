@@ -5,7 +5,6 @@
 //! whose backend is not compiled in fails at runtime through the reader.
 
 use crate::third_party::object_store;
-use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{read_footer_masses, FileMass};
 use crate::Lake;
 
@@ -13,20 +12,15 @@ use super::Error;
 
 const PARQUET_FOOTER_SIZE: u64 = 8;
 
-/// Read an individual Parquet object's size and byte masses from a URI.
+/// Read an individual Parquet object's byte masses from a URI.
 ///
 /// Only the trailer and serialized footer metadata are fetched, never data
-/// pages. `options` override process-environment backend defaults.
+/// pages.
 ///
 /// # Errors
 /// Fails for unsupported URIs, unreadable objects, or invalid Parquet footers.
-pub(super) async fn read_remote(
-    lake: &Lake,
-    uri: &str,
-    options: impl IntoIterator<Item = (String, String)>,
-) -> Result<(ObjectStat, FileMass), Error> {
-    let options: Vec<(String, String)> = options.into_iter().collect();
-    let reader = object_store::open(lake, uri, &options).map_err(storage_error)?;
+pub(super) async fn read_remote(lake: &Lake, uri: &str) -> Result<FileMass, Error> {
+    let reader = object_store::open(lake, uri).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
     let size = stat.size_bytes;
     if size < PARQUET_FOOTER_SIZE {
@@ -69,7 +63,7 @@ pub(super) async fn read_remote(
         )));
     }
     footer.extend_from_slice(&trailer);
-    Ok((stat, read_footer_masses(&footer, size)?))
+    Ok(read_footer_masses(&footer, size)?)
 }
 
 fn storage_error(error: object_store::Error) -> Error {

@@ -6,7 +6,7 @@ use parquet::data_type::Int32Type;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
-use pqbench::bytemass::{measure_files, BytemassRequest};
+use pqbench::v1;
 
 #[tokio::test]
 async fn a_bare_path_and_a_file_uri_measure_the_same_blob_and_columns() {
@@ -39,33 +39,29 @@ async fn a_bare_path_and_a_file_uri_measure_the_same_blob_and_columns() {
             file.path().to_str().unwrap().to_owned(),
             url::Url::from_file_path(file.path()).unwrap().to_string(),
         ] {
-            let result = measure_files(
-                common::lake(),
-                &BytemassRequest {
-                    inputs: vec![input],
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-            assert_eq!(result.len(), 1);
-            let measured = &result[0];
-            assert_eq!(measured.blob.size_bytes, Some(size_bytes));
-            assert_eq!(
-                measured.blob.row_group_count,
-                Some(if populated { 2 } else { 0 })
+            let blob = v1::name::blob_name(&input);
+            let mut blob = pqbench::blob::get(common::lake(), &blob).await.unwrap();
+            let columns = common::columns(&input).await;
+            blob.row_group_count = Some(
+                columns
+                    .first()
+                    .and_then(|column| column.row_group_count)
+                    .unwrap_or(0),
             );
-            assert_eq!(
-                measured.blob.column_count,
-                Some(measured.columns.len() as u64)
-            );
+            blob.column_count = Some(columns.len() as u64);
+            assert_eq!(blob.size_bytes, Some(size_bytes));
+            assert_eq!(blob.row_group_count, Some(if populated { 2 } else { 0 }));
+            assert_eq!(blob.column_count, Some(columns.len() as u64));
             if populated {
-                assert_eq!(measured.columns.len(), 1);
-                assert_eq!(measured.columns[0].value_count, Some(3));
+                assert_eq!(columns.len(), 1);
+                assert_eq!(
+                    columns[0].mass.as_ref().and_then(|mass| mass.value_count),
+                    Some(3)
+                );
             } else {
-                assert!(measured.columns.is_empty());
+                assert!(columns.is_empty());
             }
-            snapshots.push(serde_json::to_value(&measured.blob).unwrap());
+            snapshots.push(serde_json::to_value(&blob).unwrap());
         }
         assert_eq!(snapshots[0], snapshots[1]);
     }

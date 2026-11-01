@@ -20,20 +20,20 @@ summary. The HTML file embeds the measured columns; open it without a server.
 ```mermaid
 flowchart LR
     files[Parquet / table files] --> bytemass[pqb bytemass]
-    bytemass --> stream["Blob + Bytemass lines"]
+    bytemass --> stream["Blob + Column lines"]
     stream --> viz[pqb viz]
     viz --> html[report.html]
 ```
 
 ## Stream
 
-Each file is one `Blob` line and each column one `Bytemass` line. A column
+Each file is one `Blob` line and each column one `Column` line. A column
 measured through a table file names its table, so the page can place it in the
 catalog hierarchy:
 
 ```json
 {"name":"blobs/s3/table%2Fpart-0.parquet","size_bytes":1200,"row_group_count":1,"column_count":3}
-{"name":"blobs/s3/table%2Fpart-0.parquet/columns/text/bytemass","table":"catalogs/sales/schemas/orders/tables/orders","compressed_bytes":80,"uncompressed_bytes":240,"codec":"ZSTD","value_count":3000}
+{"name":"blobs/s3/table%2Fpart-0.parquet/columns/text","table":"catalogs/sales/schemas/orders/tables/orders","mass":{"compressed_bytes":80,"uncompressed_bytes":240,"codec":"ZSTD","value_count":3000}}
 ```
 
 The `name`'s collection segment says what each record is (AIP-122), so no line

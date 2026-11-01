@@ -1,21 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use super::Resource;
-
-/// A column's byte mass (the footer's `ColumnMetaData`), aggregated by column:
-/// one per column, over its column chunks.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
+/// A column's byte mass (the footer's `ColumnMetaData`), folded over the
+/// column's chunks. A value on [`Column`](super::Column), not a resource.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Bytemass {
-    /// `…/columns/{column}/bytemass`.
-    #[resource(name = "blobs/{service}/{locator}/columns/{column}/bytemass")]
-    pub name: String,
-    /// The table whose file was measured, when measured through a table file.
-    ///
-    /// The blob is storage-rooted, so a bare file names no table; a file read
-    /// as a [`TableFile`](super::TableFile) names the table it belongs to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub table: Option<String>,
     /// On-disk (compressed) bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compressed_bytes: Option<u64>,
@@ -55,9 +44,4 @@ pub struct Bytemass {
     /// [`Self::null_count`] divided by [`Self::value_count`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub null_fraction: Option<f64>,
-    /// The probability the table file this column came from was kept with,
-    /// when a `sample files` stage chose it. Absent means unsampled, weight
-    /// one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sample_rate: Option<f64>,
 }

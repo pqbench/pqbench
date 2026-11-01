@@ -2,13 +2,17 @@ use pqbench::diff::compare;
 use pqbench::v1;
 
 /// One measured column: `bytes` on-disk over `values` values, under `file`.
-fn mass(file: &str, column: &str, bytes: u64, values: u64) -> v1::Bytemass {
+fn mass(file: &str, column: &str, bytes: u64, values: u64) -> v1::Column {
     let blob = v1::name::blob_name(file);
-    v1::Bytemass {
-        name: v1::name::bytemass(&blob, column),
-        compressed_bytes: Some(bytes),
-        value_count: Some(values),
-        ..v1::Bytemass::default()
+    let (service, locator) = v1::name::parse_blob(&blob).expect("a blob name");
+    v1::Column {
+        name: v1::name::column(&service, &locator, column),
+        mass: Some(v1::Bytemass {
+            compressed_bytes: Some(bytes),
+            value_count: Some(values),
+            ..v1::Bytemass::default()
+        }),
+        ..v1::Column::default()
     }
 }
 
