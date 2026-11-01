@@ -64,7 +64,9 @@ fn expected_output_becomes_a_slice_of_lines() {
 
 #[test]
 fn a_command_with_quotes_uses_a_raw_string() {
-    let out = gen(&transcript("$ pqbench format --html > report.html && echo \"done\""));
+    let out = gen(&transcript(
+        "$ pqbench format --html > report.html && echo \"done\"",
+    ));
     assert!(out.contains("r#\""));
     assert!(out.contains("echo \"done\""));
 }
