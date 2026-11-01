@@ -31,6 +31,14 @@ endif
 # it (`CARGO_BUILD_JOBS=8 make check`) when the memory is there; CI sets its own.
 CARGO_BUILD_JOBS ?= 2
 export CARGO_BUILD_JOBS
+
+# Cargo locks only the profile dir (target/debug/.cargo-lock), so a debug gate
+# and a release build can link at the same time. Serialize every heavy
+# invocation on one lock in the shared git dir; `flock` is not present on every
+# platform (macOS), so run unlocked there rather than fail.
+FLOCK := $(shell command -v flock 2>/dev/null)
+CARGO_LOCK ?= $(if $(GIT_COMMON_DIR),$(GIT_COMMON_DIR)/pqbench-cargo.lock,/tmp/pqbench-cargo.lock)
+CARGO_LOCKED = $(if $(FLOCK),$(FLOCK) $(CARGO_LOCK),) $(CARGO)
 # rust-code-analysis CLI and inputs; see the `code-analysis` target.
 RCA ?= rust-code-analysis-cli
 CODE_ANALYSIS_PATHS ?= crates
@@ -40,9 +48,9 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 # no portable millisecond format). Each timed target prints `<name>: N s`.
 SHELL := /bin/bash
 
-.PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
+.PHONY: all fmt fmt-check build test lint cache-stats cargo link-target samples lakehouse dbx-e2e \
 	dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
-	lakehouse-seed-iceberg check isolation lfs-check check-python sync-docs \
+	lakehouse-seed-iceberg check check-fast isolation lfs-check check-python sync-docs \
 	check-docs code-analysis test-code-analysis clean
 
 all: fmt build test lint
@@ -54,17 +62,17 @@ fmt-check:
 	@TIMEFORMAT='fmt-check: %3R s'; time $(CARGO) fmt --all -- --check
 
 build:
-	@TIMEFORMAT='build: %3R s'; time $(CARGO) build --workspace $(CARGO_FEATURES)
+	@TIMEFORMAT='build: %3R s'; time $(CARGO_LOCKED) build --workspace $(CARGO_FEATURES)
 
 test:
-	@TIMEFORMAT='test: %3R s'; time $(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
+	@TIMEFORMAT='test: %3R s'; time $(CARGO_LOCKED) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
 
 # The live Databricks metastore e2e; needs the service principal credentials.
 # The S3 features are on so the walk's storage reads actually run (under the
 # vended keys; Databricks default storage refuses externally issued sessions).
 dbx-e2e:
 	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/guides/auth.md)"; exit 1; }
-	$(CARGO) test -p pqbench-cli --features delta-s3,iceberg-s3 --test dbx_e2e -- --ignored --nocapture
+	$(CARGO_LOCKED) test -p pqbench-cli --features delta-s3,iceberg-s3 --test dbx_e2e -- --ignored --nocapture
 
 # The live walk (scripts/dbx-walk.sh): one pass over the whole-Unity-Catalog
 # metadata walk, through `bytemass`. Needs DBX_HOST plus a bearer source — the
@@ -74,11 +82,11 @@ dbx-e2e:
 # at it to profile with `perf` (docs/guides/performance.md).
 dbx-walk:
 	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/guides/auth.md)"; exit 1; }
-	$(CARGO) build -p pqbench-cli $(CARGO_FEATURES)
+	$(CARGO_LOCKED) build -p pqbench-cli $(CARGO_FEATURES)
 	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" ./scripts/dbx-walk.sh
 
 lint:
-	@TIMEFORMAT='lint: %3R s'; time $(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
+	@TIMEFORMAT='lint: %3R s'; time $(CARGO_LOCKED) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
 
 cache-stats:
 	@if command -v sccache >/dev/null 2>&1; then \
@@ -86,6 +94,22 @@ cache-stats:
 	else \
 		echo "sccache is not installed; run: cargo install sccache"; \
 	fi
+
+# Run cargo through the shared target dir and the job cap:
+# make cargo CMD="check -p pqbench --all-features".
+cargo:
+	$(CARGO_LOCKED) $(CMD)
+
+# A linked worktree's bare `cargo` writes to ./target, not the shared root.
+# Point it at the main checkout so every command reuses one artifact tree.
+# Refuses to touch an existing target/ unless FORCE=1 (that deletes its cache).
+link-target:
+	@if [ -z "$(MAIN_CHECKOUT)" ]; then echo "not a git checkout" >&2; exit 1; fi; \
+	if [ "$(CURDIR)" = "$(MAIN_CHECKOUT)" ]; then echo "main checkout: nothing to do"; exit 0; fi; \
+	if [ -L target ]; then echo "target -> $$(readlink target)"; exit 0; fi; \
+	if [ -e target ] && [ "$(FORCE)" != 1 ]; then \
+		echo "target/ exists; rerun with FORCE=1 to replace it" >&2; exit 1; fi; \
+	rm -rf target && ln -s "$(CARGO_TARGET_DIR)" target && echo "target -> $(CARGO_TARGET_DIR)"
 
 # Verify the committed open-dataset parquet samples in data/samples/ (Git LFS).
 samples:
@@ -114,6 +138,11 @@ lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
 check: fmt-check check-docs lint isolation lfs-check test test-code-analysis
+
+# Fast gate for iteration: type-check every target (no codegen, no links).
+# Run the full `make check` once before pushing.
+check-fast: fmt-check check-docs
+	@TIMEFORMAT='check: %3R s'; time $(CARGO_LOCKED) check --workspace --all-targets $(CARGO_FEATURES)
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
@@ -155,11 +184,11 @@ check-python:
 # `make check-docs` fails if either is out of date with its source.
 DOCS ?= README.md docs/ skills/ examples/
 sync-docs:
-	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
-	$(CARGO) run -q -p docsgen -- write docs/reference/cli.md
+	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO_LOCKED) run -q -p docscheck-cli -- sync $(DOCS)
+	$(CARGO_LOCKED) run -q -p docsgen -- write docs/reference/cli.md
 check-docs:
-	@TIMEFORMAT='check-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- check $(DOCS)
-	$(CARGO) run -q -p docsgen -- check docs/reference/cli.md
+	@TIMEFORMAT='check-docs: %3R s'; time $(CARGO_LOCKED) run -q -p docscheck-cli -- check $(DOCS)
+	$(CARGO_LOCKED) run -q -p docsgen -- check docs/reference/cli.md
 
 # Software metrics (rust-code-analysis) over the source tree; prints the CLI's
 # own metrics tree. Needs `rust-code-analysis-cli` on PATH — CI pins the

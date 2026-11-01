@@ -27,6 +27,10 @@ The reply is the shortest text that carries the answer.
   small; prefer the default (gnu) target; reuse cached artifacts (shared
   `CARGO_TARGET_DIR`) and incremental builds; avoid heavy new dependencies
   (e.g. anything that drags in a full LLVM rebuild).
+- **Bounded builds.** The all-features test binaries link at multi-GB RSS
+  each: keep cargo's jobs capped, take the `flock` in `make`, and use
+  `make check-fast` (type-check, no links) while iterating. Parallel links
+  exhaust a 14 GB machine and take the editor down with them.
 - **Fast tests.** The test suite must stay fast (sub-second). Keep tests at
   unit level; no network, no external build steps. Every change must pass
   `make check`.
