@@ -9,7 +9,7 @@ fixtures). Clone, build, and try the bundled sample:
 ```sh
 git clone https://github.com/pqbench/pqbench.git
 cd pqbench
-make check   # fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
+make check   # fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test + test-code-analysis
 cargo run -p pqbench-cli -- bytemass examples/quickstart.parquet
 ```
 
@@ -39,7 +39,7 @@ Keep behavior changes separate from tidyings.
 
 ```
 make fmt
-make check        # = fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test
+make check        # = fmt-check + check-docs + clippy -D warnings + isolation + lfs-check + test + test-code-analysis
 ```
 
 - `make check` is the gate and runs automatically in the pre-commit hook.
@@ -87,10 +87,13 @@ make check        # = fmt-check + check-docs + clippy -D warnings + isolation + 
   and `CODE_ANALYSIS_PATHS` override the binary and inputs. It is
   **report-only** — not part of `make check`. On a PR, CI analyzes only the
   changed Rust files against the base revision: `scripts/code_analysis.py`
-  annotates functions over cyclomatic 15 and files under maintainability 20,
-  posts a sticky comment with the base→head deltas and the PR's aggregate
-  maintainability index, and logs the raw diff. On a push it rolls the whole
-  tree up for the job summary.
+  reports functions that are new or worsened over cyclomatic 15 as advisory
+  notices, posts a sticky comment with those findings and their base→head
+  deltas, and logs the raw diff. It measures a function's own complexity, not
+  the sum that folds in its closures, and excludes tests, generated sources,
+  and file-level metrics. This is a review prompt, not a gate: extracting a
+  helper lowers the maximum without reducing total complexity. On a push it
+  rolls the whole tree up for the job summary.
 - Tests are **blackbox** (observable behavior through the public API), unit
   level, sub-second, no network, no external build steps.
 - During implementation, prefer `cargo check` for fast feedback. The repository
@@ -141,8 +144,9 @@ directional and conflicts with idiomatic Rust, **Rust casing wins**.
 - Enums: prefer `UpperCamelCase` variants (idiomatic Rust), even though AIP-126
   says `UPPER_SNAKE_CASE` — that rule is directional.
 
-`make check` also runs the `aipnaming` linter's tests; when editing its word
-data or rules, see `crates/aipnaming/README.md`.
+`make check` also runs the `aipnaming` linter's tests and the code-analysis
+reporter's tests; when editing its word data or rules, see
+`crates/aipnaming/README.md`.
 
 ## 5. Documentation
 
