@@ -238,7 +238,8 @@ message TableFile {
   // The vended credentials to read `blob` with, when the caller holds them.
   Credentials credentials = 6;
 
-  // The path as the log records it, relative to the table's storage root.
+  // The path relative to the table's storage root, normalized to a
+  // `/`-separated path with percent escapes decoded.
   string path = 7;
 
   // The write time the log records for the file, in milliseconds since the

@@ -233,7 +233,7 @@ fn split(value: &str) -> Vec<&str> {
 }
 
 /// Percent-decode one path segment back to its id.
-fn decode(value: &str) -> String {
+pub(crate) fn decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;

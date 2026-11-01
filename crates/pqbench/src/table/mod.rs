@@ -123,8 +123,8 @@ pub type CommitStream<'a> = BoxStream<'a, Result<v1::Commit, Error>>;
 
 /// A table's data files, in log order, from [`stream_files`].
 ///
-/// Each file carries the path the log records; naming it under a table is the
-/// caller's, which knows the table's resource name.
+/// Each file carries its path relative to the table's storage root; naming it
+/// under a table is the caller's, which knows the table's resource name.
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
 pub type FileStream<'a> = BoxStream<'a, Result<v1::TableFile, Error>>;

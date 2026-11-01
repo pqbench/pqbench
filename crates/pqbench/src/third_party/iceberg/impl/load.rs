@@ -332,22 +332,12 @@ pub(super) async fn stream_files(
     let mut request = request.clone();
     request.require_files = true;
     let info = load(lake, &request).await?;
-    let root = request.uri.clone();
     let files = match request.commit_versions.as_ref() {
         Some(named) if !named.contains(&info.snapshot_version) => Vec::new(),
         _ => info.files,
     };
-    Ok(futures_util::stream::iter(files.into_iter().map(
-        move |file| {
-            let uri = crate::table::join_uri(&root, &file.path)?;
-            Ok(v1::TableFile {
-                blob: Some(v1::name::blob_name(&uri)),
-                path: file.path,
-                size_bytes: file.size_bytes,
-                ..v1::TableFile::default()
-            })
-        },
-    )))
+    // `data_file` already resolved each blob and normalized its relative path.
+    Ok(futures_util::stream::iter(files.into_iter().map(Ok)))
 }
 
 fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> Vec<&'a Snapshot> {
@@ -498,6 +488,7 @@ async fn active_files(
 ) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
     let mut files = Vec::new();
     let mut deletes = Vec::new();
+    let root = table_root(table_location)?;
     let mut entries = active_entries(
         lake.clone(),
         table_location.to_owned(),
@@ -507,7 +498,15 @@ async fn active_files(
     while let Some(entry) = entries.try_next().await? {
         match entry {
             Entry::Data(file) => files.push(file),
-            Entry::Delete(path) => deletes.push(path),
+            Entry::Delete(path) => {
+                // A delete outside the table keeps the manifest's raw path in
+                // the log; it is never read.
+                deletes.push(
+                    data_file_parts(&root, &path)
+                        .map(|(_, relative)| relative)
+                        .unwrap_or(path),
+                );
+            }
         }
     }
     Ok((files, deletes))
@@ -604,10 +603,10 @@ fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<v1::TableFile, Er
             entry.data_file.file_path
         ))
     })?;
-    let uri = resolve_data_file(root, &entry.data_file.file_path)?;
+    let (uri, relative) = data_file_parts(root, &entry.data_file.file_path)?;
     Ok(v1::TableFile {
         blob: Some(v1::name::blob_name(&uri)),
-        path: entry.data_file.file_path,
+        path: relative,
         size_bytes: Some(size),
         ..v1::TableFile::default()
     })
@@ -634,16 +633,62 @@ fn table_root(location: &str) -> Result<TableRoot, Error> {
     Ok(TableRoot::Local(PathBuf::from(location)))
 }
 
-fn resolve_data_file(root: &TableRoot, location: &str) -> Result<String, Error> {
+/// The data file's readable URI and its path relative to the table root.
+///
+/// Iceberg manifests may name a file either relative to the table location or
+/// by full URI; a `TableFile` records the relative form (as Delta does) and
+/// keeps the resolved URI only on its `Blob`.
+fn data_file_parts(root: &TableRoot, location: &str) -> Result<(String, String), Error> {
     match root {
-        TableRoot::Local(root) => local_uri(root, location),
-        TableRoot::Object(base) => object_input(base, location),
+        TableRoot::Local(root) => {
+            let path = local_data_path(root, location)?;
+            let relative = path.strip_prefix(root).map_err(|_| {
+                Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                ))
+            })?;
+            if !relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                )));
+            }
+            Ok((path.to_string_lossy().into_owned(), slash_path(relative)))
+        }
+        TableRoot::Object(base) => {
+            let uri = object_input(base, location)?;
+            let url = Url::parse(&uri).map_err(Error::Uri)?;
+            let relative = url.path().strip_prefix(base.path()).ok_or_else(|| {
+                Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                ))
+            })?;
+            let relative = crate::v1::name::decode(relative);
+            if relative.is_empty()
+                || !Path::new(&relative)
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                )));
+            }
+            Ok((url.to_string(), relative))
+        }
     }
 }
 
-fn local_uri(root: &Path, location: &str) -> Result<String, Error> {
-    let path = local_data_path(root, location)?;
-    Ok(path.to_string_lossy().into_owned())
+/// A relative filesystem path with `/` separators, the form a resource id uses.
+fn slash_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn local_data_path(root: &Path, location: &str) -> Result<PathBuf, Error> {
@@ -789,4 +834,42 @@ fn create_u64(value: i64) -> Result<u64, Error> {
 fn create_i64(value: u64) -> Result<i64, Error> {
     i64::try_from(value)
         .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is too large: {value}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_paths_are_relative_decoded_and_canonical() {
+        let root = TableRoot::Object(Url::parse("s3://bucket/table/").unwrap());
+        let (uri, path) = data_file_parts(&root, "s3://bucket/table/data/a%20b.parquet").unwrap();
+        assert_eq!(uri, "s3://bucket/table/data/a%20b.parquet");
+        assert_eq!(path, "data/a b.parquet");
+
+        let (uri, path) = data_file_parts(&root, "data/a%20b.parquet").unwrap();
+        assert_eq!(uri, "s3://bucket/table/data/a%20b.parquet");
+        assert_eq!(path, "data/a b.parquet");
+    }
+
+    #[test]
+    fn object_paths_outside_the_table_are_rejected() {
+        let root = TableRoot::Object(Url::parse("s3://bucket/table/").unwrap());
+        assert!(data_file_parts(&root, "s3://bucket/other/a.parquet").is_err());
+        assert!(data_file_parts(&root, "s3://other/table/a.parquet").is_err());
+    }
+
+    #[test]
+    fn local_paths_are_relative_to_the_table_root() {
+        let root = TableRoot::Local(PathBuf::from("/tmp/table"));
+        let (uri, path) = data_file_parts(&root, "data/a.parquet").unwrap();
+        assert_eq!(uri, "/tmp/table/data/a.parquet");
+        assert_eq!(path, "data/a.parquet");
+    }
+
+    #[test]
+    fn local_paths_outside_the_table_are_rejected() {
+        let root = TableRoot::Local(PathBuf::from("/tmp/table"));
+        assert!(data_file_parts(&root, "file:///tmp/other/a.parquet").is_err());
+    }
 }

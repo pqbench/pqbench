@@ -3,19 +3,36 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::third_party::object_store::api::ObjectStat;
 use crate::third_party::parquet::api::{read_file_masses, ColumnMass, FileMass};
 use crate::v1;
 use crate::Lake;
 
+use super::api::MeasuredFile;
 use super::remote;
 use super::Error;
 
 /// List the blob's columns, each with its byte mass.
 pub(super) async fn list_columns(lake: &Lake, name: &str) -> Result<Vec<v1::Column>, Error> {
+    Ok(measure_file(lake, name).await?.columns)
+}
+
+/// Measure the blob's storage facts and columns from one footer read.
+pub(super) async fn measure_file(lake: &Lake, name: &str) -> Result<MeasuredFile, Error> {
     let uri = v1::name::blob_uri(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
-    let mass = read_input(lake, &uri).await?;
-    columns(name, mass)
+    let (stat, mass) = read_input(lake, &uri).await?;
+    let row_group_count = mass.row_group_count as u64;
+    let columns = columns(name, mass)?;
+    let blob = v1::Blob {
+        name: name.to_string(),
+        size_bytes: Some(stat.size_bytes),
+        storage_class: stat.storage_class,
+        row_group_count: Some(row_group_count),
+        column_count: Some(columns.len() as u64),
+        ..v1::Blob::default()
+    };
+    Ok(MeasuredFile { blob, columns })
 }
 
 /// Fold one `ColumnMass` per chunk into one [`v1::Column`] per leaf column.
@@ -162,9 +179,15 @@ fn ratio(numerator: Option<u64>, denominator: Option<u64>) -> Option<f64> {
     (denominator > 0).then(|| numerator.unwrap_or(0) as f64 / denominator as f64)
 }
 
-async fn read_input(lake: &Lake, uri: &str) -> Result<FileMass, Error> {
+async fn read_input(lake: &Lake, uri: &str) -> Result<(ObjectStat, FileMass), Error> {
     if uri.contains("://") {
         return remote::read_remote(lake, uri).await;
     }
-    Ok(read_file_masses(Path::new(uri))?)
+    let mass = read_file_masses(Path::new(uri))?;
+    let stat = ObjectStat {
+        size_bytes: mass.size_bytes,
+        identity: None,
+        storage_class: None,
+    };
+    Ok((stat, mass))
 }
