@@ -24,8 +24,9 @@ struct Fold {
     chunks: usize,
     codec: Option<String>,
     codec_mixed: bool,
-    unencoded_seen: bool,
-    unencoded_complete: bool,
+    data_encodings: KnownSet,
+    dictionary_bytes: KnownSum,
+    unencoded_bytes: KnownSum,
 }
 
 impl Fold {
@@ -33,15 +34,14 @@ impl Fold {
         Self {
             mass: v1::Bytemass {
                 null_count: Some(0),
-                data_encodings: Some(Vec::new()),
-                dictionary_bytes: Some(0),
                 ..v1::Bytemass::default()
             },
             chunks: 0,
             codec: None,
             codec_mixed: false,
-            unencoded_seen: false,
-            unencoded_complete: true,
+            data_encodings: KnownSet::new(),
+            dictionary_bytes: KnownSum::new(),
+            unencoded_bytes: KnownSum::new(),
         }
     }
 
@@ -58,38 +58,12 @@ impl Fold {
             Some(_) => {}
         }
         mass.dictionary |= chunk.dictionary;
-        for encoding in chunk.encodings {
-            if !mass.encodings.contains(&encoding) {
-                mass.encodings.push(encoding);
-            }
-        }
-        // The exact data-page encodings are known only when every chunk
-        // records them; one missing chunk makes the file total unknown.
-        mass.data_encodings = match (mass.data_encodings.take(), chunk.data_encodings) {
-            (Some(mut total), Some(encodings)) => {
-                for encoding in encodings {
-                    if !total.contains(&encoding) {
-                        total.push(encoding);
-                    }
-                }
-                Some(total)
-            }
-            _ => None,
-        };
+        merge_encodings(&mut mass.encodings, chunk.encodings);
+        self.data_encodings.add(chunk.data_encodings);
         if chunk.dictionary {
-            mass.dictionary_bytes = match (mass.dictionary_bytes, chunk.dictionary_bytes) {
-                (Some(total), Some(bytes)) => total.checked_add(bytes),
-                _ => None,
-            };
+            self.dictionary_bytes.add(chunk.dictionary_bytes);
         }
-        if let Some(bytes) = chunk.unencoded_bytes {
-            self.unencoded_seen = true;
-            if self.unencoded_complete {
-                mass.unencoded_bytes = add(mass.unencoded_bytes, bytes);
-            }
-        } else {
-            self.unencoded_complete = false;
-        }
+        self.unencoded_bytes.add(chunk.unencoded_bytes);
         // A group with no statistics makes the file total unknown, not smaller.
         mass.null_count = match (mass.null_count, chunk.null_count) {
             (_, None) => None,
@@ -113,15 +87,9 @@ impl Fold {
     /// The folded mass, with the ratios and the single codec resolved.
     fn finish(mut self, row_count: u64) -> v1::Bytemass {
         self.mass.codec = (!self.codec_mixed).then_some(self.codec).flatten();
-        if !self.mass.dictionary {
-            self.mass.dictionary_bytes = None;
-        }
-        if self.mass.data_encodings.as_ref().is_some_and(Vec::is_empty) {
-            self.mass.data_encodings = None;
-        }
-        if !self.unencoded_seen || !self.unencoded_complete {
-            self.mass.unencoded_bytes = None;
-        }
+        self.mass.data_encodings = self.data_encodings.finish();
+        self.mass.dictionary_bytes = self.dictionary_bytes.finish();
+        self.mass.unencoded_bytes = self.unencoded_bytes.finish();
         self.mass.bytes_per_value = ratio(self.mass.compressed_bytes, self.mass.value_count);
         self.mass.bytes_per_row = ratio(self.mass.compressed_bytes, Some(row_count));
         self.mass.compression_ratio =
@@ -130,6 +98,74 @@ impl Fold {
         self.mass.dictionary_fraction =
             ratio(self.mass.dictionary_bytes, self.mass.compressed_bytes);
         self.mass
+    }
+}
+
+/// A sum that is known only when every part is known.
+struct KnownSum {
+    total: Option<u64>,
+    seen: bool,
+    complete: bool,
+}
+
+impl KnownSum {
+    fn new() -> Self {
+        Self {
+            total: None,
+            seen: false,
+            complete: true,
+        }
+    }
+
+    fn add(&mut self, part: Option<u64>) {
+        let Some(part) = part else {
+            self.complete = false;
+            return;
+        };
+        self.seen = true;
+        if self.complete {
+            self.total = add(self.total, part);
+        }
+    }
+
+    fn finish(self) -> Option<u64> {
+        self.total.filter(|_| self.seen && self.complete)
+    }
+}
+
+/// A set that is known only when every chunk reports its values.
+struct KnownSet {
+    values: Option<Vec<String>>,
+}
+
+impl KnownSet {
+    fn new() -> Self {
+        Self {
+            values: Some(Vec::new()),
+        }
+    }
+
+    fn add(&mut self, values: Option<Vec<String>>) {
+        let Some(values) = values else {
+            self.values = None;
+            return;
+        };
+        if let Some(total) = &mut self.values {
+            merge_encodings(total, values);
+        }
+    }
+
+    fn finish(self) -> Option<Vec<String>> {
+        self.values.filter(|values| !values.is_empty())
+    }
+}
+
+/// Add encodings the set does not already hold.
+fn merge_encodings(total: &mut Vec<String>, encodings: Vec<String>) {
+    for encoding in encodings {
+        if !total.contains(&encoding) {
+            total.push(encoding);
+        }
     }
 }
 
