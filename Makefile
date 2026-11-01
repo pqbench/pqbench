@@ -43,7 +43,7 @@ SHELL := /bin/bash
 .PHONY: all fmt fmt-check build test lint cache-stats samples lakehouse dbx-e2e \
 	dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check isolation lfs-check check-python sync-docs \
-	check-docs code-analysis clean
+	check-docs code-analysis test-code-analysis clean
 
 all: fmt build test lint
 
@@ -113,7 +113,7 @@ lakehouse-seed-unity: lakehouse-up
 lakehouse-seed-iceberg: lakehouse-seed-s3
 	$(LAKEHOUSE) seed-iceberg
 
-check: fmt-check check-docs lint isolation lfs-check test
+check: fmt-check check-docs lint isolation lfs-check test test-code-analysis
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
@@ -166,6 +166,11 @@ check-docs:
 # release — or set RCA to a binary. Report-only: `make check` does not run it.
 code-analysis:
 	$(RCA) --metrics -p $(CODE_ANALYSIS_PATHS)
+
+# The reporter's tests do not need rust-code-analysis: they feed it the per-file
+# JSON documents the CLI writes.
+test-code-analysis:
+	@TIMEFORMAT='test-code-analysis: %3R s'; time $(PYTHON) -m unittest discover -s scripts -p 'test_*.py'
 
 clean:
 	@if [ -n "$(MAIN_CHECKOUT)" ] && [ "$(MAIN_CHECKOUT)" != "$(CURDIR)" ]; then \

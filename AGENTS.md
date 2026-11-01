@@ -145,7 +145,8 @@ analogy, convention, or precedent:
 
 - Format: `make fmt`
 - Gate (pre-commit): `make check` = `fmt-check` + `check-docs` +
-  `clippy -D warnings` + `isolation` + `lfs-check` + `test`.
+  `clippy -D warnings` + `isolation` + `lfs-check` + `test` +
+  `test-code-analysis`.
   `make check-python` builds the data-only wheel from `crates/pqbench-cli`
   with maturin and smoke-tests the installed binary; CI runs it, the local gate
   does not (it compiles every storage backend).
