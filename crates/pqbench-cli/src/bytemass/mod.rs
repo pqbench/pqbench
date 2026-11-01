@@ -54,6 +54,8 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(),
             for column in &mut columns {
                 column.table = Some(table.clone());
                 column.sample_rate = file.sample_rate;
+                column.size_bytes = blob.size_bytes;
+                column.storage_class = blob.storage_class.clone();
             }
             Ok(stream::iter(
                 rows(blob, columns).into_iter().map(Ok::<_, CliError>),

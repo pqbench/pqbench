@@ -32,10 +32,10 @@ mod setup;
 mod skill;
 mod source;
 mod stdin;
+mod summarize;
 mod table;
 mod table_file;
 mod time;
-mod viz;
 
 /// The CLI's single error channel: any error from the io, parquet, or codec
 /// layers, converted via `?`.
@@ -88,7 +88,13 @@ enum Command {
         after_long_help = help::GET_AFTER
     )]
     Get(get::GetArgs),
-    #[command(visible_alias = "fmt", about = "Render an NDJSON stream as tables")]
+    #[command(
+        visible_alias = "fmt",
+        about = help::FORMAT_ABOUT,
+        long_about = help::FORMAT_LONG_ABOUT,
+        after_help = help::FORMAT_AFTER,
+        after_long_help = help::FORMAT_AFTER
+    )]
     Format(format::FormatArgs),
     #[command(about = "Name storage paths as table-file records")]
     TableFile(table_file::TableFileArgs),
@@ -131,19 +137,19 @@ enum Command {
     )]
     Profile(profile::ProfileArgs),
     #[command(
+        about = help::SUMMARIZE_ABOUT,
+        long_about = help::SUMMARIZE_LONG_ABOUT,
+        after_help = help::SUMMARIZE_AFTER,
+        after_long_help = help::SUMMARIZE_AFTER
+    )]
+    Summarize(summarize::SummarizeArgs),
+    #[command(
         about = help::SKILL_ABOUT,
         long_about = help::SKILL_LONG_ABOUT,
         after_help = help::SKILL_AFTER,
         after_long_help = help::SKILL_AFTER
     )]
     Skill(skill::SkillArgs),
-    #[command(
-        about = help::VIZ_ABOUT,
-        long_about = help::VIZ_LONG_ABOUT,
-        after_help = help::VIZ_AFTER,
-        after_long_help = help::VIZ_AFTER
-    )]
-    Viz(viz::VizArgs),
     #[command(
         about = help::SETUP_ABOUT,
         long_about = help::SETUP_LONG_ABOUT,
@@ -199,8 +205,8 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Credentials(args) => credentials::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
+        Command::Summarize(args) => summarize::run(&args).await,
         Command::Skill(args) => skill::run(&args),
-        Command::Viz(args) => viz::run(&args).await,
         Command::Setup(args) => setup::run(&workspace, &args),
     }
 }
@@ -221,8 +227,8 @@ impl Command {
             Command::Credentials(_) => "credentials",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
+            Command::Summarize(args) => args.name(),
             Command::Skill(_) => "skill",
-            Command::Viz(_) => "viz",
             Command::Setup(_) => "setup",
         }
     }

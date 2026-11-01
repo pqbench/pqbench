@@ -4,11 +4,15 @@
 //! bytemass kinds are its own output. The `name`'s collection segment
 //! identifies each record (AIP-122), so no record carries a `kind`. A pipe
 //! writes NDJSON; a terminal prints an aligned table (override with
-//! `--format`).
+//! `--format`). A summarized column row names no resource, so it is the one
+//! record recognized by its shape instead.
+
+use std::path::Path;
 
 use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines, Stdin};
 
+use pqbench::mass;
 use pqbench::v1;
 
 use crate::stdin::is_stream;
@@ -18,32 +22,47 @@ use crate::CliError;
 pub(crate) enum Record {
     /// One table file: its blob and the lease to read it.
     File(v1::TableFile),
-    /// One measured file's facts.
-    Blob(v1::Blob),
+    /// One measured file's facts; structural, not a row.
+    Blob,
     /// One file column and its byte mass.
     Column(v1::Column),
+    /// One summarized table column: a document with no addressable name.
+    Mass(mass::ColumnMass),
 }
 
-/// The records of a document, one at a time: `-` streams standard input, a path
-/// is read whole (documents are metadata, not data). Each value is classified
-/// as it arrives, so a command is a filter over the stream and never buffers
-/// its input.
+/// Where a command's document comes from.
+#[derive(Clone, Copy)]
+pub(crate) enum Input<'a> {
+    /// Standard input, read one value at a time.
+    Stdin,
+    /// A path, read whole: documents are metadata, not data.
+    File(&'a Path),
+}
+
+/// The records of a document, one at a time. Each value is classified as it
+/// arrives, so a command is a filter over the stream and never buffers its
+/// input.
 pub(crate) async fn records(
-    input: &str,
+    input: Input<'_>,
 ) -> Result<BoxStream<'static, Result<Record, CliError>>, CliError> {
-    if input == "-" {
-        if !is_stream() {
-            return Err("standard input is not a stream; pass a file or pipe a document in".into());
+    match input {
+        Input::Stdin => {
+            if !is_stream() {
+                return Err(
+                    "standard input is not a stream; pass a file or pipe a document in".into(),
+                );
+            }
+            Ok(stdin_records().boxed())
         }
-        Ok(stdin_records().boxed())
-    } else {
-        let bytes = tokio::fs::read(input).await?;
-        let bytes = if bytes.starts_with(&LZ4_MAGIC) {
-            decode_lz4(&bytes)?
-        } else {
-            bytes
-        };
-        Ok(stream::iter(file_records(bytes)).boxed())
+        Input::File(path) => {
+            let bytes = tokio::fs::read(path).await?;
+            let bytes = if bytes.starts_with(&LZ4_MAGIC) {
+                decode_lz4(&bytes)?
+            } else {
+                bytes
+            };
+            Ok(stream::iter(file_records(bytes)).boxed())
+        }
     }
 }
 
@@ -126,12 +145,18 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         Some(name) if v1::Column::parse_name(name).is_some() => {
             Ok(Record::Column(from_value(value)?))
         }
-        Some(name) if v1::name::parse_blob(name).is_some() => Ok(Record::Blob(from_value(value)?)),
+        Some(name) if v1::name::parse_blob(name).is_some() => {
+            let _: v1::Blob = from_value(value)?;
+            Ok(Record::Blob)
+        }
         Some(name) if v1::name::parse_table_file(name).is_some() => {
             Ok(Record::File(parse_file(value)?))
         }
         Some(name) => Err(invalid_name(name)),
-        None => Err("a document record needs a name".into()),
+        None => match mass::ColumnMass::from_document(&value) {
+            Some(row) => Ok(Record::Mass(row)),
+            None => Err("a document record needs a name or a summarized column".into()),
+        },
     }
 }
 
@@ -158,11 +183,8 @@ fn decode_lz4(bytes: &[u8]) -> Result<Vec<u8>, CliError> {
     Ok(decoded)
 }
 
-/// Whether a path is `-`, JSON (`{`), or an lz4 frame.
-pub(crate) async fn is_document(path: &str) -> bool {
-    if path == "-" {
-        return true;
-    }
+/// Whether a path is JSON (`{`) or an lz4 frame.
+pub(crate) async fn is_document(path: &Path) -> bool {
     let Ok(mut file) = tokio::fs::File::open(path).await else {
         return false;
     };
@@ -190,6 +212,8 @@ pub(crate) fn invalid_json(error: serde_json::Error) -> CliError {
 }
 
 fn invalid_name(name: &str) -> CliError {
-    format!("unsupported document name `{name}`; expected a table-file, a blob, or a bytemass")
-        .into()
+    format!(
+        "unsupported document name `{name}`; expected a table-file, a blob, a column, or a summarized column"
+    )
+    .into()
 }

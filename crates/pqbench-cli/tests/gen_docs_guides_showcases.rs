@@ -22,7 +22,7 @@ fn where_the_bytes_go_2() {
 #[test]
 fn where_the_bytes_go_3() {
     // where_the_bytes_go_3, from line 63
-    support::run("pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb viz -o /tmp/reddit", 64, None);
+    support::run("pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/reddit.html", 64, None);
 }
 
 #[rustfmt::skip]

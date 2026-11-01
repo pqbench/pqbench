@@ -4,6 +4,7 @@
 //! trait is the CLI's, the types the library's) rather than in a per-command
 //! wrapper struct. `pqbench format` is the only caller.
 
+use pqbench::mass;
 use pqbench::v1;
 use serde_json::Value;
 
@@ -171,6 +172,76 @@ impl Row for v1::Column {
                 .unwrap_or(0)
                 .to_string(),
         ]
+    }
+}
+
+impl Row for mass::ColumnMass {
+    const HEADER: &'static [&'static str] = &[
+        "table",
+        "column",
+        "bytes",
+        "values",
+        "bytes/value",
+        "ratio",
+        "files",
+        "class",
+        "$/month",
+    ];
+    const ALIGN: &[Align] = &[
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let table = v1::Table::parse_name(&self.table)
+            .map(|(_, schema, table)| format!("{schema}.{table}"))
+            .unwrap_or_else(|| self.table.clone());
+        vec![
+            table,
+            self.column.clone(),
+            self.compressed_bytes.to_string(),
+            self.value_count.to_string(),
+            format!("{:.2}", self.bytes_per_value),
+            self.compression_ratio
+                .map(|ratio| format!("{ratio:.2}"))
+                .unwrap_or_default(),
+            self.file_count.to_string(),
+            self.storage_classes.join(","),
+            cost_text(self),
+        ]
+    }
+}
+
+/// A row's monthly cost, as the page shows it: classes add, sub-tiers range.
+fn cost_text(row: &mass::ColumnMass) -> String {
+    let Some((first, last)) = row.cost_range() else {
+        return String::new();
+    };
+    let (first, last) = (dollars(first), dollars(last));
+    if first == last {
+        first
+    } else {
+        format!("{first}–{last}")
+    }
+}
+
+/// A monthly cost in dollars, at the precision the page uses.
+fn dollars(value: f64) -> String {
+    if value >= 1000.0 {
+        format!("${:.1}k", value / 1000.0)
+    } else if value >= 1.0 {
+        format!("${value:.2}")
+    } else if value >= 0.01 {
+        format!("${value:.3}")
+    } else {
+        format!("${value:.4}")
     }
 }
 

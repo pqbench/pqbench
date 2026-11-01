@@ -538,6 +538,50 @@ fn table_get_reads_an_iceberg_rest_table() {
     assert!(record.get("delta_properties").is_none(), "{record:?}");
 }
 
+/// A table `loadTable` refuses as not Iceberg compatible falls back to the
+/// Unity record and the table's own log, so a Delta table walks under the
+/// Iceberg dialect too.
+#[cfg(feature = "delta")]
+#[test]
+fn table_get_falls_back_to_delta_when_load_table_declines() {
+    let dir = tempfile::tempdir().unwrap();
+    delta_table(dir.path());
+    let address = routes_owned(vec![
+        (
+            "/namespaces/nyctaxi/tables/trips",
+            400,
+            json!({"error": {
+                "message": "Table 'dbx_samples.nyctaxi.trips' is not an Iceberg \
+                            compatible table."
+            }})
+            .to_string(),
+        ),
+        (
+            "/tables/dbx_samples.nyctaxi.trips",
+            200,
+            unity_record(dir.path()),
+        ),
+    ]);
+    let endpoint = format!("{address}/iceberg-rest/v1/catalogs/dbx_samples");
+    let output = pipe_env(
+        &["get", "table"],
+        &parent("catalogs/dbx_samples/schemas/nyctaxi/tables/trips"),
+        &[
+            ("PQB_ENDPOINT", endpoint.as_str()),
+            ("PQB_TABLE_FORMAT", "iceberg"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson_records(&output.stdout);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["format"], "TABLE_FORMAT_DELTA");
+    assert_eq!(records[0]["uri"], dir.path().to_string_lossy().as_ref());
+}
+
 /// An Iceberg namespace with dots is one path segment, escaped as `%1F`.
 #[test]
 fn table_get_reads_an_iceberg_namespace_with_dots() {

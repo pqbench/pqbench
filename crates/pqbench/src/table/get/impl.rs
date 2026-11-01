@@ -6,9 +6,12 @@
 //! merged over the log's. Iceberg REST serves
 //! `{endpoint}/namespaces/{namespace}/tables/{table}` (`loadTable`), whose
 //! response carries the metadata JSON inline: columns, partition spec,
-//! snapshot, and properties are read from it, so no storage read runs. The
-//! URLs and the JSON shapes are this command's; the transport is the
-//! third-party facade.
+//! snapshot, and properties are read from it, so no storage read runs. Unity's
+//! Iceberg REST lists every table but serves only the Iceberg-compatible ones;
+//! a table it declines falls back to the Unity record and the storage loader,
+//! where detection names the table's own format (Delta wins UniForm). The URLs
+//! and the JSON shapes are this command's; the transport is the third-party
+//! facade.
 
 use std::collections::BTreeMap;
 
@@ -29,9 +32,24 @@ pub(crate) async fn get(
 ) -> Result<Table, Error> {
     let (catalog, schema, table) = Table::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/tables/… name")))?;
+    let endpoint = workspace.config().endpoint.as_str();
     let info = match workspace.config().dialect {
-        Dialect::Unity => unity_record(workspace, lake, &catalog, &schema, &table, uri).await,
-        Dialect::Iceberg => iceberg_record(workspace, &catalog, &schema, &table).await,
+        Dialect::Unity => {
+            let root = dialect::api_root(endpoint);
+            unity_record(workspace, lake, &root, &catalog, &schema, &table, uri).await
+        }
+        Dialect::Iceberg => match iceberg_record(workspace, &catalog, &schema, &table).await {
+            // Unity's Iceberg REST lists every table, but loadTable refuses a
+            // Delta one. Read it through the catalog record and its own log
+            // instead, as the Unity dialect would — UniForm Delta included.
+            Err(Error::Http(crate::http::Error::Status { status: 400, body }))
+                if body.contains("is not an Iceberg compatible table") =>
+            {
+                let root = dialect::unity_root(endpoint);
+                unity_record(workspace, lake, &root, &catalog, &schema, &table, uri).await
+            }
+            other => other,
+        },
     }?;
     Ok(info.resource(&catalog, &schema, &table))
 }
@@ -61,17 +79,14 @@ struct UnityColumn {
 async fn unity_record(
     workspace: &Workspace,
     lake: &Lake,
+    root: &str,
     catalog: &str,
     schema: &str,
     table: &str,
     hint: Option<&str>,
 ) -> Result<TableInfo, Error> {
     let name = format!("{catalog}.{schema}.{table}");
-    let url = format!(
-        "{}/tables/{}",
-        dialect::api_root(workspace.config().endpoint.as_str()),
-        dialect::encode(&name)
-    );
+    let url = format!("{root}/tables/{}", dialect::encode(&name));
     let (record, mut info) = load_record(workspace, lake, &name, &url, hint).await?;
     info.name = name;
     Ok(merge_catalog(info, record))

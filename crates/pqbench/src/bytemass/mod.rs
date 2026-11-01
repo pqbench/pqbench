@@ -1,8 +1,11 @@
 //! `bytemass`: the per-column byte masses of a Parquet file.
 //!
 //! [`list_columns`] lists one blob's columns, each carrying its
-//! [`v1::Bytemass`](crate::v1::Bytemass) when the footer was measured. The CLI
-//! streams those records; `pqbench viz` folds them.
+//! [`v1::Bytemass`](crate::v1::Bytemass) when the footer was measured. The
+//! columns carry no table, file size, storage class, or sample rate: the caller
+//! that measured them through a table file adds those. The CLI streams the
+//! records; `pqbench summarize columns` folds them and `pqbench format --html`
+//! draws the rows.
 //!
 //! Each file's footer is read once and its column chunks are folded over the
 //! file's row groups into one mass per column.

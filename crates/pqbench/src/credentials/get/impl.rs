@@ -17,8 +17,9 @@
 //! `X-Iceberg-Access-Delegation: vended-credentials`, where the longest prefix
 //! covering the table's location wins, and `config` may carry the keys. A
 //! table the catalog cannot serve via Iceberg (`is not an Iceberg compatible
-//! table`), an unknown table, and an unimplemented operation all pass through
-//! with no credentials.
+//! table`) falls back to the Unity vending route, so a Delta or UniForm table
+//! walks under either dialect; an unknown table and an unimplemented operation
+//! pass through with no credentials.
 //!
 //! The URLs and JSON shapes are this module's; the transport is the
 //! third-party facade.
@@ -70,7 +71,9 @@ pub(super) async fn vend_unity(
     table: &str,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
     let name = format!("{catalog}.{schema}.{table}");
-    let root = dialect::api_root(workspace.config().endpoint.as_str());
+    // Under the Iceberg dialect the endpoint names the Iceberg base; the
+    // Unity route is still the root it was built from.
+    let root = dialect::unity_root(workspace.config().endpoint.as_str());
     let record = table_record(workspace, &root, &name).await?;
     if !record.eligible() {
         return Ok(None);
@@ -138,6 +141,7 @@ struct AwsTempCredentials {
 /// UniForm Delta table) falls back to the delegated `loadTable`.
 pub(super) async fn vend_iceberg(
     workspace: &Workspace,
+    catalog: &str,
     schema: &str,
     table: &str,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
@@ -157,7 +161,7 @@ pub(super) async fn vend_iceberg(
             .map_err(|error| Error::Http(crate::http::Error::Body(error)))?;
         return Ok(credential_options(&loaded.storage_credentials));
     }
-    vend_iceberg_load(workspace, schema, table).await
+    vend_iceberg_load(workspace, catalog, schema, table).await
 }
 
 /// The delegated `loadTable` route: `X-Iceberg-Access-Delegation:
@@ -167,6 +171,7 @@ pub(super) async fn vend_iceberg(
 /// unimplemented operation all pass through with no credentials.
 async fn vend_iceberg_load(
     workspace: &Workspace,
+    catalog: &str,
     schema: &str,
     table: &str,
 ) -> Result<Option<BTreeMap<String, String>>, Error> {
@@ -189,7 +194,8 @@ async fn vend_iceberg_load(
     if response.status == 400
         && String::from_utf8_lossy(&response.bytes).contains("is not an Iceberg compatible table")
     {
-        return Ok(None);
+        // Not an Iceberg table: vend through the Unity route instead.
+        return vend_unity(workspace, catalog, schema, table).await;
     }
     if response.status != 200 {
         return Err(Error::Http(crate::http::Error::Status {

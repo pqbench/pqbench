@@ -1,23 +1,34 @@
-//! `format`: render a record stream as tables.
+//! `format`: render a record stream as tables, or a `summarize columns` stream
+//! as an HTML treemap.
 //!
 //! The walk is NDJSON end to end; this is the one command that turns a stream
 //! back into something a human reads. Records are typed by their `name` — the
 //! model's identity (AIP-122) — so a `catalogs/…/schemas/…` line is a `Schema`
-//! and takes its columns from [`crate::render`]. A record the curated type
-//! cannot hold, or whose name has no columns yet, still renders from its own
-//! keys; a record with no name at all (a `diff` delta) is not table data.
+//! and takes its columns from [`crate::render`]. A summarized column has no
+//! name, so its shape is what places it. A record the curated type cannot hold,
+//! or whose name has no columns yet, still renders from its own keys; a record
+//! with no name and no summarized columns (a `diff` delta) is not table data.
+//!
+//! `--html` reads `ColumnMass` rows and writes the treemap page to standard
+//! output instead.
 
 use clap::Args;
-use pqbench::v1;
+use futures_util::StreamExt;
+use pqbench::{mass, v1};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use crate::document::{self, Input, Record};
 use crate::render::{self, Row};
 use crate::CliError;
 
-/// Arguments for `format`: none — standard input to standard output.
+/// Arguments for `format`.
 #[derive(Args)]
-pub(crate) struct FormatArgs {}
+pub(crate) struct FormatArgs {
+    /// write an HTML treemap for a summarize columns stream
+    #[arg(long)]
+    html: bool,
+}
 
 /// What a record is, for grouping.
 #[derive(Clone, PartialEq, Eq)]
@@ -31,11 +42,49 @@ enum Class {
     Sweep,
     CompressionColumn,
     Profile,
+    /// A summarized table column: no name, recognized by its shape.
+    Mass,
     /// A record with no curated columns, grouped by its key set.
     Other(String),
 }
 
-pub(crate) async fn run(_args: &FormatArgs) -> Result<(), CliError> {
+pub(crate) async fn run(args: &FormatArgs) -> Result<(), CliError> {
+    if args.html {
+        return html().await;
+    }
+    tables().await
+}
+
+/// The `--html` page: only the `summarize columns` rows are supported.
+async fn html() -> Result<(), CliError> {
+    let mut rows = Vec::new();
+    let mut records = document::records(Input::Stdin).await?;
+    while let Some(record) = records.next().await {
+        match record? {
+            Record::Mass(row) => rows.push(row),
+            Record::Blob | Record::Column(_) => {
+                return Err(
+                    "format --html reads a summarize columns stream; run `pqbench summarize columns` first"
+                        .into(),
+                );
+            }
+            Record::File(file) => {
+                return Err(format!(
+                    "format --html reads a summarize columns stream, not `{}`; run `pqbench list columns` and `pqbench summarize columns` first",
+                    file.name
+                )
+                .into());
+            }
+        }
+    }
+    if rows.is_empty() {
+        return Err("summarize columns stream has no rows".into());
+    }
+    render::write(&pqbench::viz::render_rows(&rows)?).await
+}
+
+/// The default: one table per record kind.
+async fn tables() -> Result<(), CliError> {
     let mut sections: Vec<(Class, Section)> = Vec::new();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
@@ -81,9 +130,12 @@ fn section(sections: &mut Vec<(Class, Section)>, class: Class) -> &mut Section {
     &mut sections[at].1
 }
 
-/// A record's class: the resource its `name` names, else the row kind.
+/// A record's class: the resource its `name` names, the row kind, or the shape
+/// of a summarized column.
 fn classify(record: &Value) -> Option<Class> {
-    let name = record.get("name")?.as_str()?;
+    let Some(name) = record.get("name").and_then(Value::as_str) else {
+        return mass::ColumnMass::from_document(record).map(|_| Class::Mass);
+    };
     Some(if v1::Column::parse_name(name).is_some() {
         Class::Column
     } else if name.contains("/codecs/") {
@@ -135,6 +187,7 @@ enum Section {
     Sweep(Vec<render::SweepRow>),
     CompressionColumn(Vec<render::ColumnSweepRow>),
     Profile(Vec<render::ProfileRow>),
+    Mass(Vec<mass::ColumnMass>),
     Other(Vec<Value>),
 }
 
@@ -150,6 +203,7 @@ impl Section {
             Class::Sweep => Self::Sweep(Vec::new()),
             Class::CompressionColumn => Self::CompressionColumn(Vec::new()),
             Class::Profile => Self::Profile(Vec::new()),
+            Class::Mass => Self::Mass(Vec::new()),
             Class::Other(_) => Self::Other(Vec::new()),
         }
     }
@@ -166,6 +220,10 @@ impl Section {
             Self::Sweep(rows) => push_typed(rows, record),
             Self::CompressionColumn(rows) => push_typed(rows, record),
             Self::Profile(rows) => push_typed(rows, record),
+            Self::Mass(rows) => {
+                rows.extend(mass::ColumnMass::from_document(&record));
+                None
+            }
             Self::Other(rows) => {
                 rows.push(record);
                 None
@@ -190,6 +248,7 @@ impl Section {
             Self::Sweep(rows) => render::render(rows),
             Self::CompressionColumn(rows) => render::render(rows),
             Self::Profile(rows) => render::render(rows),
+            Self::Mass(rows) => render::render(rows),
             Self::Other(rows) => render::render_values(rows),
         }
     }

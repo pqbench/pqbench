@@ -189,14 +189,15 @@ jobs:
           DBX_SAMPLES_SP_CLIENT_SECRET: ${{ secrets.DBX_SAMPLES_SP_CLIENT_SECRET }}
         run: make dbx-e2e
 
-  # The live walk (scripts/dbx-walk.sh, `make dbx-walk`): one pass over the
-  # whole-Unity-Catalog metadata walk, through `bytemass`. It authenticates with
-  # the GitHub Actions OIDC token (workload identity federation) — no stored
-  # secret — and falls back to the service principal's client secret. It
-  # profiles nothing: a hosted runner has no PMU, so `perf stat` would report
-  # only wall clock. Required: the S3 adapter reclassifies a dropped pooled
-  # connection as retryable, so the walk is stable on the shared, rate-limited
-  # live endpoint. Skipped on fork PRs.
+  # The live walk (scripts/dbx-walk.sh, `make dbx-walk`): the whole Unity
+  # Catalog from `list catalogs` to the `format --html` page, then the same
+  # catalog through Iceberg REST; the two summaries must agree.
+  # It authenticates with the GitHub Actions OIDC token (workload identity
+  # federation) — no stored secret — and falls back to the service principal's
+  # client secret. It profiles nothing: a hosted runner has no PMU, so
+  # `perf stat` would report only wall clock. Required: the S3 adapter
+  # reclassifies a dropped pooled connection as retryable, so the walk is stable
+  # on the shared, rate-limited live endpoint. Skipped on fork PRs.
   dbx-walk:
     name: Databricks walk
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && (!github.event.pull_request.draft))

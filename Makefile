@@ -74,12 +74,12 @@ dbx-e2e:
 	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/guides/auth.md)"; exit 1; }
 	$(CARGO_LOCKED) test -p pqbench-cli --features delta-s3,iceberg-s3 --test dbx_e2e -- --ignored --nocapture
 
-# The live walk (scripts/dbx-walk.sh): one pass over the whole-Unity-Catalog
-# metadata walk, through `bytemass`. Needs DBX_HOST plus a bearer source — the
-# service principal's client secret, or a ready PQB_ENDPOINT/PQB_TOKEN. The
-# `dbx-walk` CI job runs it as a live smoke test. A debug binary is enough — the
-# walk is paced, not compute-bound — so no `--release`; build one and point PQB
-# at it to profile with `perf` (docs/guides/performance.md).
+# The live walk (scripts/dbx-walk.sh): one pass over the whole Unity Catalog,
+# from `list catalogs` to the `format --html` page. Needs DBX_HOST plus a bearer
+# source — the service principal's client secret, or a ready PQB_ENDPOINT /
+# PQB_TOKEN. The `dbx-walk` CI job runs it as a live smoke test. A debug binary
+# is enough — the walk is paced, not compute-bound — so no `--release`; build
+# one and point PQB at it to profile with `perf` (docs/guides/performance.md).
 dbx-walk:
 	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/guides/auth.md)"; exit 1; }
 	$(CARGO_LOCKED) build -p pqbench-cli $(CARGO_FEATURES)

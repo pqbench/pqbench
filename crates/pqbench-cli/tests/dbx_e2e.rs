@@ -7,7 +7,7 @@
 //!
 //! The external fixture (`pqbench_ext`, external Delta on customer S3 — see
 //! `scripts/dbx-ext/`) covers the rest of the walk:
-//! `external_fixture_walks_to_bytemass` runs the full pipeline. The
+//! `external_fixture_walks_to_a_treemap` runs the full pipeline. The
 //! whole-catalog walk lives in `scripts/dbx-walk.sh` (`make dbx-walk`).
 //!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
@@ -999,13 +999,15 @@ fn timed_stage(
     (output.stdout, elapsed)
 }
 
-/// The whole issue-#58 walk on a copied schema, all the way to `bytemass`:
+/// The whole issue-#58 walk on a copied schema, all the way to a treemap:
 /// `list tables` → `credentials check` → `credentials get` → `get table` →
-/// `list files` → `bytemass`, each stage fed the previous stage's NDJSON. Set
+/// `list files` → `list columns` → `summarize columns` → `format --html`, each
+/// stage fed the
+/// previous stage's NDJSON. Set
 /// `DBX_WALK_SCHEMA` to walk another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn external_fixture_walks_to_bytemass() {
+fn external_fixture_walks_to_a_treemap() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1034,7 +1036,7 @@ fn external_fixture_walks_to_bytemass() {
     let (vended, _) = timed_stage(&env, &["credentials", "get"], &checked);
     let (info, _) = timed_stage(&env, &["get", "table"], &vended);
     let (files, _) = timed_stage(&env, &["list", "files"], &info);
-    let (measured, _) = timed_stage(&env, &["bytemass"], &files);
+    let (measured, _) = timed_stage(&env, &["list", "columns"], &files);
 
     // The walk narrows: tables → files → columns.
     let tables = ndjson(&info).len();
@@ -1057,9 +1059,42 @@ fn external_fixture_walks_to_bytemass() {
             .is_some_and(|name| pqbench::v1::Column::parse_name(name).is_some())),
         "{schema}: no Column record"
     );
+
+    let (summarized, _) = timed_stage(&env, &["summarize", "columns"], &measured);
+    let rows = ndjson(&summarized);
+    assert!(!rows.is_empty(), "{schema}: no ColumnMass row");
+    assert!(
+        rows.iter().all(|row| row["table"]
+            .as_str()
+            .is_some_and(|table| pqbench::v1::Table::parse_name(table).is_some())),
+        "{schema}: a ColumnMass row names no table"
+    );
+    assert!(
+        rows.iter().any(|row| row["compressed_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0)),
+        "{schema}: no measured bytes"
+    );
+
+    let rendered = pipe_env(&["format", "--html"], &summarized, &env);
+    assert!(
+        rendered.status.success(),
+        "format --html stderr: {}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    let html = String::from_utf8(rendered.stdout).unwrap();
+    assert!(html.starts_with("<!DOCTYPE html>"), "{schema}: no page");
+    assert!(html.contains("d3-hierarchy@3"), "{schema}: no treemap");
+    let schema_id = schema.rsplit('.').next().unwrap_or_default();
+    assert!(
+        html.contains(&format!("\"display_name\":\"{schema_id}\"")),
+        "{schema}: the page names no schema"
+    );
+
     println!(
-        "walk {schema}: {tables} tables, {file_count} files, {} column records",
-        records.len()
+        "walk {schema}: {tables} tables, {file_count} files, {} column records, {} rows",
+        records.len(),
+        rows.len()
     );
 }
 

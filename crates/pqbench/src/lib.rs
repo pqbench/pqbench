@@ -17,6 +17,7 @@ pub mod diff;
 pub mod file;
 pub mod http;
 pub mod lz;
+pub mod mass;
 pub mod metastore;
 pub mod profile;
 pub mod ratelimit;

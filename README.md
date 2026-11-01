@@ -46,7 +46,8 @@ $ pqb ls catalogs | pqb rl \
     | pqb get table \
     | pqb ls files \
     | pqb bytemass \
-    | pqb viz -o /tmp/report
+    | pqb summarize columns \
+    | pqb format --html > /tmp/report.html
 ```
 
 Read it left to right:
@@ -66,8 +67,8 @@ Read it left to right:
   carrying the table's lease.
 - `bytemass` reads each file's footer and prints the on-disk bytes per column,
   the table in [bytemass](#bytemass). In a pipe it streams
-  `Blob` and `Bytemass` NDJSON instead; `pqb viz` draws that stream as a
-  treemap.
+  `Blob` and `Column` NDJSON instead; `pqb summarize columns` estimates each
+  table column's mass and `pqb format --html` draws that as a treemap.
 
 The same walk runs offline against the local Delta and Iceberg stand,
 `make lakehouse`. [Getting started](https://pqbench.github.io/pqbench/getting-started/) takes one Parquet
@@ -163,7 +164,7 @@ c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511        
 - Reads `TableFile` records on stdin: `table-file PATH` names one path or URI,
   and `list files` names a table's files.
 - `s3://` needs the `aws` feature; a pipe streams one `Blob` per file and one
-  `Bytemass` per column.
+  `Column` per column.
 
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/guides/demo/).
@@ -206,14 +207,35 @@ vended lease on the file record) supplies storage access:
 $ pqb table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqb bytemass | pqb fmt
 ```
 
-### viz
+### summarize columns
 
-Collect a bytemass stream into a static HTML treemap — no server, no build
-step.
+Fold the `list columns` stream into one `ColumnMass` row per table column: weighted
+bytes, values, file count, storage classes, and the monthly S3 cost.
+
+```console no-run
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns
+```
+
+### format --html
+
+Draw a `summarize columns` document as a static HTML treemap — no server, no
+build step.
 
 ```console run delta
-$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb viz -o /tmp/report
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb fmt
+table                           column                 bytes  values  bytes/value  ratio  files  class  $/month
+------------------------------  ---------------------  -----  ------  -----------  -----  -----  -----  -------
+local.delta_byte_array.parquet  c_birth_country         9599    1000         9.60   1.00      1
+local.delta_byte_array.parquet  c_customer_id           8248    1000         8.25   1.00      1
+local.delta_byte_array.parquet  c_email_address        27763    1000        27.76   1.00      1
+local.delta_byte_array.parquet  c_first_name            6595    1000         6.59   1.00      1
+local.delta_byte_array.parquet  c_last_name             6955    1000         6.96   1.00      1
+local.delta_byte_array.parquet  c_last_review_date      3511    1000         3.51   1.00      1
+local.delta_byte_array.parquet  c_login                   42    1000         0.04   1.00      1
+local.delta_byte_array.parquet  c_preferred_cust_flag   1220    1000         1.22   1.00      1
+local.delta_byte_array.parquet  c_salutation            3362    1000         3.36   1.00      1
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.
@@ -234,7 +256,7 @@ that command.
 - [Visual demos](https://pqbench.github.io/pqbench/guides/demo/) — Parquet, Delta, Iceberg, catalog walk, and Unix file selection
 - [Delta tables](https://pqbench.github.io/pqbench/guides/delta/) — log load, `list files | bytemass`, limitations
 - [Iceberg tables](https://pqbench.github.io/pqbench/guides/iceberg/) — metadata load, `list files | bytemass`, limitations
-- [Visualization](https://pqbench.github.io/pqbench/reference/cli/#pqbench-viz) — `pqb viz`, a static HTML treemap
+- [Format and HTML](https://pqbench.github.io/pqbench/reference/format/) — `pqb format`, tables and the static HTML treemap
 - [Python](https://pqbench.github.io/pqbench/reference/python/) — install the binary wheel; run the CLI, read the files
 - [Unity Catalog and Iceberg REST E2E](https://github.com/pqbench/pqbench/tree/main/docker/e2e-lakehouse) — catalogs
   naming tables for `pqb ls files`, over rustfs S3

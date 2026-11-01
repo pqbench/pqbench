@@ -297,6 +297,12 @@ message Column {
 
   int32 max_definition_level = 9;
   int32 max_repetition_level = 10;
+
+  // The size in bytes of the file this column was measured in, when known.
+  int64 size_bytes = 11;
+
+  // The storage class of the file this column was measured in, when known.
+  string storage_class = 12;
 }
 
 // A column's byte mass (the footer's `ColumnMetaData`), folded over the column's
