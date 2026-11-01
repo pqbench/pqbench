@@ -2,7 +2,7 @@
 
 use clap::Args;
 use futures_util::stream;
-use pqbench::{blob, bytemass, v1};
+use pqbench::{bytemass, v1};
 
 use crate::parse;
 use crate::source::{drive, flat_map};
@@ -28,15 +28,9 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &BytemassArgs) -> Result<(),
                 .as_deref()
                 .ok_or_else(|| "a table-file record needs a blob to read".to_string())?;
             let lake = lake.with_lease(file.credentials.as_ref());
-            let mut blob = blob::get(&lake, name).await?;
-            let mut columns = bytemass::list_columns(&lake, name).await?;
-            blob.row_group_count = Some(
-                columns
-                    .first()
-                    .and_then(|column| column.row_group_count)
-                    .unwrap_or(0),
-            );
-            blob.column_count = Some(columns.len() as u64);
+            let measured = bytemass::measure_file(&lake, name).await?;
+            let mut blob = measured.blob;
+            let mut columns = measured.columns;
             if let Some(rate) = file.sample_rate {
                 if !(rate > 0.0 && rate <= 1.0) {
                     return Err(format!(
