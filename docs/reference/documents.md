@@ -72,7 +72,9 @@ needs only the record's name and size, which the log already carries, so the
 stage streams and never holds the table.
 
 Each kept `TableFile` records the probability it was kept with as
-`sample_rate`; `bytemass` copies it onto the `Blob` and every `Bytemass`. Scale
+`sample_rate`; `bytemass` copies it onto the `Blob` and every `Bytemass`, and
+copies the file's `size_bytes` and `storage_class` onto every `Column` so a
+column prices its own storage. Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
 `uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
 `null_count`, `row_group_count` — and recompute the ratios (`bytes_per_value`,

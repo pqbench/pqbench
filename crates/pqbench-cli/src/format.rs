@@ -62,7 +62,7 @@ async fn html() -> Result<(), CliError> {
     while let Some(record) = records.next().await {
         match record? {
             Record::Mass(row) => rows.push(row),
-            Record::Blob(_) | Record::Column(_) => {
+            Record::Blob | Record::Column(_) => {
                 return Err(
                     "format --html reads a summarize columns stream; run `pqbench summarize columns` first"
                         .into(),

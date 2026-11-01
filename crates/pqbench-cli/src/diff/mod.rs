@@ -50,7 +50,7 @@ async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<v1::Column>, CliE
     while let Some(record) = records.next().await {
         match record? {
             Record::Column(column) => columns.push(column),
-            Record::Blob(_) => {}
+            Record::Blob => {}
             _ => return Err("diff requires a column stream or a Parquet file".into()),
         }
     }

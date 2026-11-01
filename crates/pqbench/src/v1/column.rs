@@ -38,4 +38,10 @@ pub struct Column {
     /// `sample files` stage chose it. Absent means unsampled, weight one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<f64>,
+    /// The size in bytes of the file this column was measured in, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// The storage class of the file this column was measured in, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_class: Option<String>,
 }

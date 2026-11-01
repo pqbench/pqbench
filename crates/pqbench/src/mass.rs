@@ -1,13 +1,14 @@
 //! Fold a bytemass stream into one row per table column.
 //!
 //! `list columns` measures files and writes `v1::Blob` and `v1::Column` lines.
-//! This module does not read Parquet: it folds those lines as they arrive,
-//! grouping the measured columns by their table and column path, weighting each
-//! measurement by the inverse of its `sample_rate`, and estimating the storage
-//! cost from the blobs' sizes. The rows are a command document (no addressable
-//! name), not a resource.
+//! Each `Column` carries the size and storage class of the file it was measured
+//! in, so this module folds the `Column` lines on their own: it does not read
+//! Parquet, it groups the measured columns by their table and column path,
+//! weights each by the inverse of its `sample_rate`, and estimates the storage
+//! cost from the file facts each column carries. The rows are a command
+//! document (no addressable name), not a resource.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 
 use futures_util::stream::{Stream, StreamExt};
@@ -116,40 +117,28 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// One record of a `list columns` measurement stream.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Measurement {
-    /// One measured file's facts.
-    Blob(v1::Blob),
-    /// One file column and its byte mass.
-    Column(Box<v1::Column>),
-}
-
-/// Fold a measurement stream into one row per table column, sorted by table and
-/// then by column.
+/// Fold a stream of measured columns into one row per table column, sorted by
+/// table and then by column.
 ///
 /// The stream is folded as it arrives: the accumulator keeps one entry per
-/// table column and each blob's facts, never the records themselves.
+/// table column, never the records themselves. Each column carries the size and
+/// storage class of the file it was measured in, so the fold prices storage
+/// without a separate file record.
 ///
 /// # Errors
-/// Fails when the stream yields an error, when a record carries a `sample_rate`
-/// outside `(0, 1]`, when a column names a table that is not canonical, or when
-/// a weighted total does not fit in `u64`.
-pub async fn summarize_columns<S, E>(measurements: S) -> Result<Vec<ColumnMass>, SummarizeError<E>>
+/// Fails when the stream yields an error, when a column carries a `sample_rate`
+/// outside `(0, 1]`, when it names a table that is not canonical, or when a
+/// weighted total does not fit in `u64`.
+pub async fn summarize_columns<S, E>(columns: S) -> Result<Vec<ColumnMass>, SummarizeError<E>>
 where
-    S: Stream<Item = Result<Measurement, E>>,
+    S: Stream<Item = Result<v1::Column, E>>,
 {
-    futures_util::pin_mut!(measurements);
+    futures_util::pin_mut!(columns);
     let mut summary = ColumnSummary::new();
-    while let Some(measurement) = measurements.next().await {
-        match measurement.map_err(SummarizeError::Stream)? {
-            Measurement::Blob(blob) => summary.add_blob(&blob).map_err(SummarizeError::Summary)?,
-            Measurement::Column(column) => {
-                summary
-                    .add_column(&column)
-                    .map_err(SummarizeError::Summary)?;
-            }
-        }
+    while let Some(column) = columns.next().await {
+        summary
+            .add_column(&column.map_err(SummarizeError::Stream)?)
+            .map_err(SummarizeError::Summary)?;
     }
     summary.into_rows().map_err(SummarizeError::Summary)
 }
@@ -182,38 +171,20 @@ impl<E: std::error::Error + 'static> std::error::Error for SummarizeError<E> {
     }
 }
 
-/// A summary being folded, one record at a time.
+/// A summary being folded, one column at a time.
 ///
-/// The fold keeps one accumulator per table column and the facts of each blob,
-/// never the input records, so its memory is bounded by the distinct columns
-/// and files rather than by the stream's length.
+/// The fold keeps one accumulator per table column, never the input records, so
+/// its memory is bounded by the distinct columns and files rather than by the
+/// stream's length.
 #[derive(Default)]
 pub struct ColumnSummary {
     tables: BTreeMap<String, TableBytes>,
-    facts: BTreeMap<String, BlobFacts>,
 }
 
 impl ColumnSummary {
     /// An empty summary.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Fold one measured file's facts.
-    ///
-    /// # Errors
-    /// Fails when the blob's `sample_rate` is outside `(0, 1]`.
-    pub fn add_blob(&mut self, blob: &v1::Blob) -> Result<(), Error> {
-        sample_weight(blob.sample_rate)?;
-        self.facts.insert(
-            blob.name.clone(),
-            BlobFacts {
-                size_bytes: blob.size_bytes,
-                storage_class: blob.storage_class.clone(),
-                sample_rate: blob.sample_rate,
-            },
-        );
-        Ok(())
     }
 
     /// Fold one measured column.
@@ -245,13 +216,24 @@ impl ColumnSummary {
             weight,
             "value_count",
         )?;
+        let class = column_class(column, &blob);
         let table = self.tables.entry(table).or_default();
-        table.blobs.insert(blob.clone());
+        table.blobs.entry(blob.clone()).or_insert(FileFacts {
+            size_bytes: column.size_bytes,
+            storage_class: column.storage_class.clone(),
+            weight,
+        });
         let total = table.columns.entry(path).or_default();
         total.compressed_bytes += bytes;
         total.uncompressed.add(uncompressed);
         total.value_count += values;
-        *total.blobs.entry(blob).or_default() += bytes;
+        let file = total.blobs.entry(blob).or_default();
+        file.bytes += bytes;
+        file.weight = weight;
+        if let Some(class) = class {
+            *total.class_bytes.entry(class.clone()).or_default() += bytes;
+            *table.class_bytes.entry(class).or_default() += bytes;
+        }
         Ok(())
     }
 
@@ -263,17 +245,8 @@ impl ColumnSummary {
         let capacity: usize = self.tables.values().map(|table| table.columns.len()).sum();
         let mut rows = Vec::with_capacity(capacity);
         for (name, table) in self.tables {
-            let costs = table_class_costs(&table.blobs, &self.facts)?;
-            let columns: Vec<(String, ColumnBytes, ClassBytes)> = table
-                .columns
-                .into_iter()
-                .map(|(column, mass)| {
-                    let classes = column_class_bytes(&mass.blobs, &self.facts);
-                    (column, mass, classes)
-                })
-                .collect();
-            let table_classes = summed_classes(&columns);
-            for (column, mass, classes) in columns {
+            let costs = table_class_costs(&table.blobs)?;
+            for (column, mass) in table.columns {
                 rows.push(ColumnMass {
                     table: name.clone(),
                     column,
@@ -288,9 +261,9 @@ impl ColumnSummary {
                         0.0
                     },
                     compression_ratio: mass.uncompressed.ratio(mass.compressed_bytes),
-                    file_count: round(count_files(&mass.blobs, &self.facts)?, "file_count")?,
-                    storage_classes: column_classes(&mass.blobs, &self.facts),
-                    storage_costs: column_costs(&classes, &table_classes, &costs),
+                    file_count: round(count_files(&mass.blobs)?, "file_count")?,
+                    storage_classes: mass.class_bytes.keys().cloned().collect(),
+                    storage_costs: column_costs(&mass.class_bytes, &table.class_bytes, &costs),
                 });
             }
         }
@@ -298,12 +271,20 @@ impl ColumnSummary {
     }
 }
 
-/// What a fold keeps of one blob: its size and class price its table, and its
-/// rate counts the files behind a column.
-struct BlobFacts {
+/// What a fold keeps of one file: its size and class price the table, and its
+/// weight counts the file behind a column.
+struct FileFacts {
     size_bytes: Option<u64>,
     storage_class: Option<String>,
-    sample_rate: Option<f64>,
+    weight: f64,
+}
+
+/// What one column read from one file: the column's bytes there, and the
+/// weight the file counts for.
+#[derive(Default)]
+struct MeasuredFile {
+    bytes: f64,
+    weight: f64,
 }
 
 /// The number of records one kept record stands for: the inverse of its
@@ -382,43 +363,35 @@ struct ColumnBytes {
     compressed_bytes: f64,
     uncompressed: Uncompressed,
     value_count: f64,
-    /// The compressed bytes each measured blob contributed.
-    blobs: BTreeMap<String, f64>,
+    /// What each measured file contributed.
+    blobs: BTreeMap<String, MeasuredFile>,
+    /// Compressed bytes per storage class.
+    class_bytes: BTreeMap<String, f64>,
 }
 
 /// What one table's columns add up to while the rows are built.
 #[derive(Default)]
 struct TableBytes {
     columns: BTreeMap<String, ColumnBytes>,
-    blobs: BTreeSet<String>,
+    /// The size, class, and weight of each file the table measured.
+    blobs: BTreeMap<String, FileFacts>,
+    /// Compressed bytes per storage class: the column cost denominator.
+    class_bytes: BTreeMap<String, f64>,
 }
 
-/// Compressed bytes per storage class.
-type ClassBytes = BTreeMap<String, f64>;
-
-/// A column's compressed bytes per storage class, from its blobs' classes.
-fn column_class_bytes(
-    blobs: &BTreeMap<String, f64>,
-    facts: &BTreeMap<String, BlobFacts>,
-) -> ClassBytes {
-    let mut classes = ClassBytes::new();
-    for (blob, bytes) in blobs {
-        if let Some(class) = blob_class(blob, facts) {
-            *classes.entry(class).or_default() += bytes;
-        }
+/// The storage class a column's file is priced in, when it is S3 object
+/// storage. A local path has no class, and S3 omits `STANDARD`.
+fn column_class(column: &v1::Column, blob: &str) -> Option<String> {
+    let (service, _) = v1::name::parse_blob(blob)?;
+    if !object_storage(&service) {
+        return None;
     }
-    classes
-}
-
-/// The sum of each column's bytes per class: a table's denominator.
-fn summed_classes(columns: &[(String, ColumnBytes, ClassBytes)]) -> ClassBytes {
-    let mut total = ClassBytes::new();
-    for (_, _, classes) in columns {
-        for (class, bytes) in classes {
-            *total.entry(class.clone()).or_default() += bytes;
-        }
-    }
-    total
+    Some(
+        column
+            .storage_class
+            .clone()
+            .unwrap_or_else(|| "STANDARD".to_string()),
+    )
 }
 
 /// The files of one storage class, and whether every one of them has a size.
@@ -430,11 +403,10 @@ struct ClassFiles {
 /// The monthly cost of each class's files, by class. A class is absent when a
 /// file of that class is not a priced S3 object (no size, unknown class).
 fn table_class_costs(
-    blobs: &BTreeSet<String>,
-    facts: &BTreeMap<String, BlobFacts>,
+    blobs: &BTreeMap<String, FileFacts>,
 ) -> Result<BTreeMap<String, Vec<StorageTierCost>>, Error> {
     let mut files: BTreeMap<String, ClassFiles> = BTreeMap::new();
-    for blob in blobs {
+    for (blob, facts) in blobs {
         let Some((service, _)) = v1::name::parse_blob(blob) else {
             continue;
         };
@@ -442,9 +414,6 @@ fn table_class_costs(
         if !object_storage(&service) {
             continue;
         }
-        let Some(facts) = facts.get(blob) else {
-            continue;
-        };
         // S3 omits the class of a STANDARD object; absent means STANDARD.
         let class = facts.storage_class.as_deref().unwrap_or("STANDARD");
         if storage_prices(class).is_none() {
@@ -456,8 +425,7 @@ fn table_class_costs(
         });
         match facts.size_bytes {
             Some(size) => {
-                let weight = sample_weight(facts.sample_rate)?;
-                total.gigabytes += weight * size as f64 / GIBIBYTE;
+                total.gigabytes += facts.weight * size as f64 / GIBIBYTE;
                 if !total.gigabytes.is_finite() {
                     return Err(Error::Overflow {
                         field: "size_bytes",
@@ -518,14 +486,10 @@ fn column_costs(
 
 /// The estimated number of distinct files behind a column: each measured file
 /// counts for the inverse of its `sample_rate`.
-fn count_files(
-    blobs: &BTreeMap<String, f64>,
-    facts: &BTreeMap<String, BlobFacts>,
-) -> Result<f64, Error> {
+fn count_files(blobs: &BTreeMap<String, MeasuredFile>) -> Result<f64, Error> {
     let mut count = 0.0;
-    for blob in blobs.keys() {
-        let sample_rate = facts.get(blob).and_then(|facts| facts.sample_rate);
-        count += sample_weight(sample_rate)?;
+    for file in blobs.values() {
+        count += file.weight;
     }
     if count.is_finite() {
         Ok(count)
@@ -534,38 +498,6 @@ fn count_files(
             field: "file_count",
         })
     }
-}
-
-/// The distinct storage classes behind a column's files, sorted. A path on
-/// disk has no class.
-fn column_classes(
-    blobs: &BTreeMap<String, f64>,
-    facts: &BTreeMap<String, BlobFacts>,
-) -> Vec<String> {
-    let mut classes = BTreeSet::new();
-    for blob in blobs.keys() {
-        if let Some(class) = blob_class(blob, facts) {
-            classes.insert(class);
-        }
-    }
-    classes.into_iter().collect()
-}
-
-/// A blob's storage class, when it is an object-storage file.
-fn blob_class(blob: &str, facts: &BTreeMap<String, BlobFacts>) -> Option<String> {
-    let (service, _) = v1::name::parse_blob(blob)?;
-    if !object_storage(&service) {
-        return None;
-    }
-    let facts = facts.get(blob)?;
-    // S3 omits the class of a STANDARD object; absent means STANDARD.
-    Some(
-        facts
-            .storage_class
-            .as_deref()
-            .unwrap_or("STANDARD")
-            .to_string(),
-    )
 }
 
 /// Whether a blob service is S3 object storage (the Hadoop-prefixed `s3a` too).
@@ -650,6 +582,8 @@ mod tests {
             name: name::column(&service, &locator, column),
             table: table.map(str::to_string),
             sample_rate: file.sample_rate,
+            size_bytes: file.size_bytes,
+            storage_class: file.storage_class.clone(),
             mass: Some(v1::Bytemass {
                 compressed_bytes: Some(bytes),
                 uncompressed_bytes: Some(bytes * 3),
@@ -662,12 +596,9 @@ mod tests {
 
     const TABLE: &str = "catalogs/tpch/schemas/sf1/tables/lineitem";
 
-    /// The slice form the tests use: the same fold, one record at a time.
-    fn summarize(columns: &[v1::Column], blobs: &[v1::Blob]) -> Result<Vec<ColumnMass>, Error> {
+    /// The slice form the tests use: the same fold, one column at a time.
+    fn summarize(columns: &[v1::Column]) -> Result<Vec<ColumnMass>, Error> {
         let mut summary = ColumnSummary::new();
-        for blob in blobs {
-            summary.add_blob(blob)?;
-        }
         for column in columns {
             summary.add_column(column)?;
         }
@@ -680,7 +611,7 @@ mod tests {
             sample_rate: Some(0.25),
             ..blob("s3://lake/lineitem/part-0.parquet")
         };
-        let rows = summarize(&[column(&file, Some(TABLE), "l_comment", 8, 10)], &[file]).unwrap();
+        let rows = summarize(&[column(&file, Some(TABLE), "l_comment", 8, 10)]).unwrap();
 
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
@@ -710,13 +641,10 @@ mod tests {
             sample_rate: Some(0.5),
             ..blob("s3://lake/lineitem/part-1.parquet")
         };
-        let rows = summarize(
-            &[
-                column(&first, Some(TABLE), "l_comment", 5, 10),
-                column(&second, Some(TABLE), "l_comment", 10, 10),
-            ],
-            &[first, second],
-        )
+        let rows = summarize(&[
+            column(&first, Some(TABLE), "l_comment", 5, 10),
+            column(&second, Some(TABLE), "l_comment", 10, 10),
+        ])
         .unwrap();
 
         let row = &rows[0];
@@ -730,7 +658,7 @@ mod tests {
         let mut file = blob("s3://lake/part-0.parquet");
         file.size_bytes = Some(GIBIBYTE as u64);
         file.storage_class = Some("INTELLIGENT_TIERING".into());
-        let rows = summarize(&[column(&file, Some(TABLE), "id", 4, 1)], &[file]).unwrap();
+        let rows = summarize(&[column(&file, Some(TABLE), "id", 4, 1)]).unwrap();
 
         let costs = &rows[0].storage_costs;
         assert_eq!(costs.len(), 5, "{costs:?}");
@@ -761,13 +689,10 @@ mod tests {
         glacier.size_bytes = Some(GIBIBYTE as u64);
         glacier.storage_class = Some("GLACIER".into());
 
-        let rows = summarize(
-            &[
-                column(&standard, Some(TABLE), "id", 10, 10),
-                column(&glacier, Some(TABLE), "note", 10, 10),
-            ],
-            &[standard, glacier],
-        )
+        let rows = summarize(&[
+            column(&standard, Some(TABLE), "id", 10, 10),
+            column(&glacier, Some(TABLE), "note", 10, 10),
+        ])
         .unwrap();
 
         let id = rows.iter().find(|row| row.column == "id").unwrap();
@@ -784,7 +709,7 @@ mod tests {
     fn prices_s3a_like_s3() {
         let mut file = blob("s3a://lake/part-0.parquet");
         file.size_bytes = Some(GIBIBYTE as u64);
-        let rows = summarize(&[column(&file, Some(TABLE), "id", 4, 1)], &[file]).unwrap();
+        let rows = summarize(&[column(&file, Some(TABLE), "id", 4, 1)]).unwrap();
 
         assert_eq!(rows[0].storage_classes, vec!["STANDARD".to_string()]);
         assert_eq!(rows[0].storage_costs.len(), 1);
@@ -799,13 +724,10 @@ mod tests {
         glacier.size_bytes = Some(GIBIBYTE as u64);
         glacier.storage_class = Some("GLACIER".into());
 
-        let rows = summarize(
-            &[
-                column(&without_size, Some(TABLE), "id", 10, 10),
-                column(&glacier, Some(TABLE), "note", 10, 10),
-            ],
-            &[without_size, glacier],
-        )
+        let rows = summarize(&[
+            column(&without_size, Some(TABLE), "id", 10, 10),
+            column(&glacier, Some(TABLE), "note", 10, 10),
+        ])
         .unwrap();
 
         let id = rows.iter().find(|row| row.column == "id").unwrap();
@@ -817,11 +739,7 @@ mod tests {
     #[test]
     fn leaves_a_local_file_unpriced() {
         let file = blob("/lake/local.parquet");
-        let rows = summarize(
-            &[column(&file, None, "id", 4, 1)],
-            std::slice::from_ref(&file),
-        )
-        .unwrap();
+        let rows = summarize(&[column(&file, None, "id", 4, 1)]).unwrap();
 
         assert_eq!(
             rows[0].table,
@@ -835,14 +753,16 @@ mod tests {
     fn rejects_a_sample_rate_outside_the_unit_interval() {
         let mut file = blob("/lake/part-0.parquet");
         file.sample_rate = Some(2.0);
-        let error = summarize(&[], &[file]).unwrap_err().to_string();
+        let error = summarize(&[column(&file, Some(TABLE), "id", 4, 1)])
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("sample_rate"), "{error}");
     }
 
     #[test]
     fn rejects_a_table_name_that_is_not_canonical() {
         let file = blob("/lake/part-0.parquet");
-        let error = summarize(&[column(&file, Some("orders"), "id", 4, 1)], &[file])
+        let error = summarize(&[column(&file, Some("orders"), "id", 4, 1)])
             .unwrap_err()
             .to_string();
         assert!(error.contains("orders"), "{error}");
@@ -854,7 +774,7 @@ mod tests {
         file.sample_rate = Some(1e-9);
         let mut column = column(&file, Some(TABLE), "id", u64::MAX / 4, 1);
         column.sample_rate = file.sample_rate;
-        let error = summarize(&[column], &[file]).unwrap_err().to_string();
+        let error = summarize(&[column]).unwrap_err().to_string();
         assert!(error.contains("overflow"), "{error}");
     }
 
@@ -862,7 +782,9 @@ mod tests {
     fn rejects_a_weight_that_is_not_finite() {
         let mut file = blob("s3://lake/part-0.parquet");
         file.sample_rate = Some(1e-320);
-        let error = summarize(&[], &[file]).unwrap_err().to_string();
+        let error = summarize(&[column(&file, Some(TABLE), "id", 4, 1)])
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("overflow"), "{error}");
     }
 
@@ -887,22 +809,13 @@ mod tests {
         assert_eq!(ColumnMass::from_document(&value), Some(row));
     }
     #[test]
-    fn folds_a_column_that_arrives_before_its_blob() {
+    fn prices_a_column_from_the_file_facts_it_carries() {
         let mut file = blob("s3://lake/lineitem/part-0.parquet");
         file.size_bytes = Some(GIBIBYTE as u64);
-        let column = column(&file, Some(TABLE), "l_comment", 8, 10);
+        let rows = summarize(&[column(&file, Some(TABLE), "l_comment", 8, 10)]).unwrap();
 
-        let mut measured_first = ColumnSummary::new();
-        measured_first.add_blob(&file).unwrap();
-        measured_first.add_column(&column).unwrap();
-        let mut column_first = ColumnSummary::new();
-        column_first.add_column(&column).unwrap();
-        column_first.add_blob(&file).unwrap();
-
-        let rows = measured_first.into_rows().unwrap();
-        assert_eq!(column_first.into_rows().unwrap(), rows);
         assert_eq!(rows[0].storage_classes, vec!["STANDARD".to_string()]);
-        assert!(!rows[0].storage_costs.is_empty(), "{:?}", rows[0]);
         assert_eq!(rows[0].file_count, 1);
+        assert!((rows[0].storage_costs[0].cost_per_month - 0.023).abs() < 1e-12);
     }
 }

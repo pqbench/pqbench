@@ -22,8 +22,8 @@ use crate::CliError;
 pub(crate) enum Record {
     /// One table file: its blob and the lease to read it.
     File(v1::TableFile),
-    /// One measured file's facts.
-    Blob(v1::Blob),
+    /// One measured file's facts; structural, not a row.
+    Blob,
     /// One file column and its byte mass.
     Column(v1::Column),
     /// One summarized table column: a document with no addressable name.
@@ -145,7 +145,10 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         Some(name) if v1::Column::parse_name(name).is_some() => {
             Ok(Record::Column(from_value(value)?))
         }
-        Some(name) if v1::name::parse_blob(name).is_some() => Ok(Record::Blob(from_value(value)?)),
+        Some(name) if v1::name::parse_blob(name).is_some() => {
+            let _: v1::Blob = from_value(value)?;
+            Ok(Record::Blob)
+        }
         Some(name) if v1::name::parse_table_file(name).is_some() => {
             Ok(Record::File(parse_file(value)?))
         }

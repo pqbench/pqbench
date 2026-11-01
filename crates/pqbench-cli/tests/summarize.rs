@@ -52,6 +52,8 @@ fn measured_column(
         "name": column,
         "table": table,
         "sample_rate": sample_rate,
+        "size_bytes": 40,
+        "storage_class": "STANDARD",
         "mass": {
             "compressed_bytes": compressed_bytes,
             "uncompressed_bytes": compressed_bytes * 2,

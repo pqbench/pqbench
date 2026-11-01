@@ -3,9 +3,10 @@
 use std::path::Path;
 
 use clap::Args;
-use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 
 use pqbench::mass;
+use pqbench::v1;
 
 use crate::document::{self, Input, Record};
 use crate::emit::Emitter;
@@ -25,9 +26,8 @@ pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
         None if is_stream() => Input::Stdin,
         None => return Err("summarize columns needs a bytemass stream on standard input".into()),
     };
-    let records = document::records(input).await?;
-    let measurements = records.map(measurement);
-    let rows = pqbench::mass::summarize_columns(measurements)
+    let columns = document::records(input).await?.try_filter_map(column);
+    let rows = pqbench::mass::summarize_columns(columns)
         .await
         .map_err(|error| match error {
             mass::SummarizeError::Stream(error) => error,
@@ -44,11 +44,11 @@ pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
     out.finish().await
 }
 
-/// One measurement the fold takes, or why the record is not one.
-fn measurement(record: Result<Record, CliError>) -> Result<mass::Measurement, CliError> {
-    Ok(match record? {
-        Record::Blob(blob) => mass::Measurement::Blob(blob),
-        Record::Column(column) => mass::Measurement::Column(Box::new(column)),
+/// The column rows of the stream; a blob is structural, not a measurement.
+async fn column(record: Record) -> Result<Option<v1::Column>, CliError> {
+    Ok(match record {
+        Record::Column(column) => Some(column),
+        Record::Blob => None,
         Record::File(file) => {
             return Err(format!(
                 "summarize columns reads a `list columns` stream, not `{}`; measure with `pqbench list columns` first",

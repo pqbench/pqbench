@@ -89,9 +89,10 @@ async fn viz_draws_summarized_columns() {
     let mut columns = measure(&path).await;
     for column in &mut columns {
         column.table = Some(v1::name::local_table(&path));
+        column.size_bytes = blob.size_bytes;
+        column.storage_class = blob.storage_class.clone();
     }
     let mut summary = pqbench::mass::ColumnSummary::new();
-    summary.add_blob(&blob).unwrap();
     for column in &columns {
         summary.add_column(column).unwrap();
     }
