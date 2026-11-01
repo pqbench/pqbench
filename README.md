@@ -249,13 +249,16 @@ the files it writes are the data. For streaming pipelines, see the
 
 ```console no-run
 $ pip install pqbench
-$ pqbench list files < table.ndjson | zstd -3 > files.jsonl.zst
+```
+
+```console run delta
+$ pqbench list files < docker/e2e-lakehouse/table.ndjson | zstd -3 > /tmp/files.jsonl.zst
 ```
 
 ```python
 import polars as pl
 
-files = pl.scan_ndjson("files.jsonl.zst")
+files = pl.scan_ndjson("/tmp/files.jsonl.zst")
 ```
 
 ## Contributing

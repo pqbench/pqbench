@@ -50,14 +50,20 @@ Some commands emit a document that is not a resource: it has no addressable
 `sample files` keeps a rate of the `TableFile` stream, by size, so a table's
 footers can be measured without reading every file:
 
-```console no-run
-$ cat table.ndjson | pqb list files | pqb sample files --rate 1/100 | pqb bytemass
+```console run delta
+$ cat docker/e2e-lakehouse/table.ndjson | pqb list files | pqb sample files --rate 1 2>/dev/null | pqb bytemass | pqb fmt
+column  type        codec   encoding  bytes  dict bytes  bytes/row  values
+------  ----------  ------  --------  -----  ----------  ---------  ------
+id      INT64       SNAPPY  dict         66          37      22.00       3
+label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
 ```
 
-A file is kept with probability `rate × size / 256 MiB`, capped at one, drawn
-from a hash of its name: the same record always makes the same decision. A
-256 MiB file is kept at `--rate` (the default keeps about one in a hundred), a
-1 GiB file four times as often, and `--rate 1` keeps every file. The decision
+`--rate 1` keeps every file; the stage's coverage line is on standard error, so
+the pipe above hides it to show the table. A file is kept with probability
+`rate × size / 256 MiB`, capped at one, drawn from a hash of its name: the
+same record always makes the same decision. A 256 MiB file is kept at
+`--rate` (the default keeps about one in a hundred), a 1 GiB file four times
+as often. The decision
 needs only the record's name and size, which the log already carries, so the
 stage streams and never holds the table.
 

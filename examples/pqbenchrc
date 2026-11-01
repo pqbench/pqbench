@@ -1,0 +1,19 @@
+# An example ~/.pqbenchrc: named profiles, the shape of ~/.databrickscfg.
+#
+# Every value here is a placeholder. Point PQB_CONFIG_FILE at this file to try
+# the layering without a live workspace:
+#
+#     PQB_CONFIG_FILE=examples/pqbenchrc pqb setup --profile iceberg
+#
+# A real file holds a bearer, so keep it readable only by its owner
+# (`chmod 600 ~/.pqbenchrc`).
+
+[DEFAULT]
+endpoint     = https://dbc-abc123.cloud.databricks.com
+token        = dapi-example
+table_format = unity
+
+[iceberg]
+endpoint     = https://dbc-abc123.cloud.databricks.com
+token        = dapi-example
+table_format = iceberg

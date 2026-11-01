@@ -10,3 +10,10 @@ fn measure_one_file() {
     // measure_one_file, from line 20
     support::run("python3 examples/python/measure_files.py examples/quickstart.parquet", 21, Some(&["files,rows,column_chunks,file_bytes,column_bytes", "1,8,2,541,170"]));
 }
+
+#[rustfmt::skip]
+#[test]
+fn read_the_stream() {
+    // read_the_stream, from line 244
+    support::run("pqbench table-file examples/quickstart.parquet | pqbench bytemass | pqbench format", 245, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
+}

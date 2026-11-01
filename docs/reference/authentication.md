@@ -126,10 +126,16 @@ $ echo '"dbx_samples.nyctaxi"' |
 >     pqb get table
 ```
 
-`pqb setup` prints that environment for the shell to evaluate:
+`pqb setup` prints that environment for the shell to evaluate. Point
+`PQB_CONFIG_FILE` at the committed [`examples/pqbenchrc`](../../examples/pqbenchrc)
+to see the output without a workspace:
 
-```console no-run
-$ eval "$(pqb setup)"
+```console run
+$ PQB_CONFIG_FILE=examples/pqbenchrc pqb setup
+export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'
+export PQB_TOKEN='dapi-example'
+export PQB_TABLE_FORMAT='unity'
+export AWS_EC2_METADATA_DISABLED='true'
 ```
 
 It resolves the endpoint and token the way the Databricks SDKs do — the flag,
