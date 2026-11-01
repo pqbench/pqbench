@@ -4,7 +4,6 @@
 //! trait is the CLI's, the types the library's) rather than in a per-command
 //! wrapper struct. `pqbench format` is the only caller.
 
-use pqbench::mass;
 use pqbench::v1;
 use serde_json::Value;
 
@@ -331,69 +330,6 @@ pub(crate) struct SweepRow {
     pub name: String,
     #[serde(flatten)]
     pub row: pqbench::report::ReportRow,
-}
-
-impl Row for mass::ColumnMass {
-    const HEADER: &'static [&'static str] = &[
-        "table",
-        "column",
-        "bytes",
-        "values",
-        "bytes/value",
-        "ratio",
-        "files",
-        "class",
-        "cost/month",
-    ];
-    const ALIGN: &[Align] = &[
-        Align::Left,
-        Align::Left,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-        Align::Right,
-        Align::Left,
-        Align::Right,
-    ];
-
-    fn cells(&self) -> Vec<String> {
-        let table = v1::Table::parse_name(&self.table)
-            .map(|(_, schema, table)| format!("{schema}.{table}"))
-            .unwrap_or_else(|| self.table.clone());
-        vec![
-            table,
-            self.column.clone(),
-            self.compressed_bytes.to_string(),
-            self.value_count.to_string(),
-            format!("{:.2}", self.bytes_per_value),
-            self.compression_ratio
-                .map(|ratio| format!("{ratio:.1}"))
-                .unwrap_or_default(),
-            self.file_count.to_string(),
-            self.storage_classes.join("+"),
-            cost_text(&self.storage_costs),
-        ]
-    }
-}
-
-/// A row's candidate costs: one value when they agree, else the first–last.
-fn cost_text(tiers: &[mass::StorageTierCost]) -> String {
-    let first = tiers
-        .iter()
-        .map(|tier| tier.cost_per_month)
-        .fold(f64::INFINITY, f64::min);
-    let last = tiers
-        .iter()
-        .map(|tier| tier.cost_per_month)
-        .fold(f64::NEG_INFINITY, f64::max);
-    if tiers.is_empty() {
-        String::new()
-    } else if first == last {
-        format!("{first:.6}")
-    } else {
-        format!("{first:.6}-{last:.6}")
-    }
 }
 
 impl Row for SweepRow {

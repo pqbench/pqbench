@@ -4,13 +4,11 @@
 //! bytemass kinds are its own output. The `name`'s collection segment
 //! identifies each record (AIP-122), so no record carries a `kind`. A pipe
 //! writes NDJSON; a terminal prints an aligned table (override with
-//! `--format`). A summarized column row names no resource, so it is the one
-//! record recognized by its shape instead.
+//! `--format`).
 
 use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines, Stdin};
 
-use pqbench::mass;
 use pqbench::v1;
 
 use crate::stdin::is_stream;
@@ -24,8 +22,6 @@ pub(crate) enum Record {
     Blob(v1::Blob),
     /// One file column and its byte mass.
     Column(v1::Column),
-    /// One summarized table column: a document with no addressable name.
-    Mass(mass::ColumnMass),
 }
 
 /// The records of a document, one at a time: `-` streams standard input, a path
@@ -135,16 +131,8 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             Ok(Record::File(parse_file(value)?))
         }
         Some(name) => Err(invalid_name(name)),
-        None => match mass_row(value) {
-            Some(row) => Ok(Record::Mass(row)),
-            None => Err("a document record needs a name".into()),
-        },
+        None => Err("a document record needs a name".into()),
     }
-}
-
-/// A summarized column row: no `name`, recognized by its shape.
-fn mass_row(value: serde_json::Value) -> Option<mass::ColumnMass> {
-    mass::ColumnMass::from_document(&value)
 }
 
 fn from_value<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Result<T, CliError> {

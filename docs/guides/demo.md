@@ -9,14 +9,13 @@ column  type   codec         encoding  bytes  dict bytes  bytes/row  values
 ------  -----  ------------  --------  -----  ----------  ---------  ------
 id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
 year    INT32  UNCOMPRESSED  dict         68          46       8.50       8
-$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 Standard output is NDJSON (`Metastore`, `Catalog`, `Schema`, `Table`,
-`TableFile`, `Blob`, `Bytemass`, `ColumnMass`);
-`pqb fmt` renders a table. `pqb summarize columns` folds the bytemass stream
-into one estimate per table column, and `pqb viz` draws those rows as a static
-HTML treemap.
+`TableFile`, `Blob`, `Bytemass`);
+`pqb fmt` renders a table. `pqb viz` collects the bytemass stream into
+a static HTML treemap.
 
 The walkthroughs use the committed lakehouse fixtures under
 [`docker/e2e-lakehouse/`](../../docker/e2e-lakehouse) and the small Parquet
@@ -66,7 +65,7 @@ file its `blob` names.
 commands:
 
 ```console run delta
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 ![one table viz page](../images/pqbench-lake-treemap.gif)
@@ -132,7 +131,7 @@ column  type        codec   encoding  bytes  dict bytes  bytes/row  values
 ------  ----------  ------  --------  -----  ----------  ---------  ------
 id      INT64       SNAPPY  dict         66          37      22.00       3
 label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb viz -o /tmp/report
 ```
 
 ![pqbench table CLI walkthrough](../images/pqbench-delta-bytemass.gif)

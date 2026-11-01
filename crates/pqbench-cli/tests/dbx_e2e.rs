@@ -7,7 +7,7 @@
 //!
 //! The external fixture (`pqbench_ext`, external Delta on customer S3 — see
 //! `scripts/dbx-ext/`) covers the rest of the walk:
-//! `external_fixture_walks_to_bytemass` runs the full pipeline. The
+//! `external_fixture_walks_to_summarized_rows` runs the full pipeline. The
 //! whole-catalog walk lives in `scripts/dbx-walk.sh` (`make dbx-walk`).
 //!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
@@ -999,14 +999,14 @@ fn timed_stage(
     (output.stdout, elapsed)
 }
 
-/// The whole issue-#58 walk on a copied schema, all the way to a treemap:
+/// The whole issue-#58 walk on a copied schema, all the way to summarized rows:
 /// `list tables` → `credentials check` → `credentials get` → `get table` →
-/// `list files` → `bytemass` → `summarize columns` → `viz`, each stage fed the
-/// previous stage's NDJSON. Set
+/// `list files` → `bytemass` → `summarize columns`, each stage fed the previous
+/// stage's NDJSON. Set
 /// `DBX_WALK_SCHEMA` to walk another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn external_fixture_walks_to_a_treemap() {
+fn external_fixture_walks_to_summarized_rows() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1073,23 +1073,6 @@ fn external_fixture_walks_to_a_treemap() {
             .as_u64()
             .is_some_and(|bytes| bytes > 0)),
         "{schema}: no measured bytes"
-    );
-
-    let directory = tempfile::tempdir().unwrap();
-    let prefix = directory.path().join("report");
-    let rendered = pipe_env(&["viz", "-o", prefix.to_str().unwrap()], &summarized, &env);
-    assert!(
-        rendered.status.success(),
-        "viz stderr: {}",
-        String::from_utf8_lossy(&rendered.stderr)
-    );
-    let html = std::fs::read_to_string(prefix.with_extension("html")).unwrap();
-    assert!(html.starts_with("<!DOCTYPE html>"), "{schema}: no page");
-    assert!(html.contains("d3-hierarchy@3"), "{schema}: no treemap");
-    let schema_id = schema.rsplit('.').next().unwrap_or_default();
-    assert!(
-        html.contains(&format!("\"display_name\":\"{schema_id}\"")),
-        "{schema}: the page names no schema"
     );
 
     println!(

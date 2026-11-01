@@ -145,34 +145,6 @@ fn summarize_columns_carries_every_intelligent_tiering_sub_tier() {
 }
 
 #[test]
-fn summarize_columns_formats_as_a_table() {
-    let document = measured_column(
-        "local",
-        "lake/part-0.parquet",
-        "catalogs/local/schemas/local/tables/part-0.parquet",
-        1.0,
-        8,
-    );
-    let summarized = pipe(&["summarize", "columns"], document.as_bytes());
-    assert!(
-        summarized.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&summarized.stderr)
-    );
-    let formatted = pipe(&["format"], &summarized.stdout);
-    assert!(
-        formatted.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&formatted.stderr)
-    );
-
-    let text = String::from_utf8(formatted.stdout).unwrap();
-    assert!(text.contains("column"), "{text}");
-    assert!(text.contains("bytes/value"), "{text}");
-    assert!(text.contains("cost/month"), "{text}");
-}
-
-#[test]
 fn summarize_columns_rejects_a_table_file() {
     let document = r#"{"name":"catalogs/local/schemas/local/tables/t/files/p","blob":"blobs/file/%2Ftmp%2Ft"}"#;
     let output = pipe(&["summarize", "columns"], document.as_bytes());

@@ -8,21 +8,12 @@ mod support;
 #[rustfmt::skip]
 #[test]
 fn visualization() {
-    // visualization, from line 8
+    // visualization, from line 7
     support::run(r#"pqb table-file examples/quickstart.parquet \
   | pqb bytemass \
-  | pqb summarize columns \
-  | pqb viz -o /tmp/report"#, 9, None);
+  | pqb viz -o /tmp/report"#, 8, None);
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
   | pqb list files \
   | pqb bytemass \
-  | pqb summarize columns \
-  | pqb viz -o /tmp/report"#, 13, None);
-}
-
-#[rustfmt::skip]
-#[test]
-fn visualization_2() {
-    // visualization_2, from line 23
-    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb summarize columns | pqb fmt", 24, Some(&["table                     column  bytes  values  bytes/value  ratio  files  class  cost/month", "------------------------  ------  -----  ------  -----------  -----  -----  -----  ----------", "local.quickstart.parquet  id        102       8        12.75    1.0      1", "local.quickstart.parquet  year       68       8         8.50    1.0      1"]));
+  | pqb viz -o /tmp/report"#, 11, None);
 }

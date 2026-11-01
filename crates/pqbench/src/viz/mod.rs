@@ -1,10 +1,9 @@
-//! Draw a `summarize columns` document as a catalog → schema → table → column
-//! treemap.
+//! Fold bytemass columns into a catalog → schema → table → column page.
 //!
-//! `summarize columns` folds the bytemass stream into one document row per
-//! table column, already weighted to the table. This module does not aggregate:
-//! it groups the rows by the table their name carries, folds the totals up the
-//! catalog hierarchy, and draws one level at a time in a static page.
+//! `bytemass` measures files and writes `v1::Blob` and `v1::Bytemass` lines.
+//! This module does not read Parquet. It groups the columns by the table their
+//! measurement names (or by the file, for a bare path), folds the totals up
+//! the catalog hierarchy, and draws one level at a time in a static page.
 
 mod html;
 
@@ -12,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
-use crate::mass::{self, ColumnMass};
 use crate::v1;
 
 pub use html::render_html;
@@ -21,9 +19,9 @@ pub use html::render_html;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// There were no rows to draw.
+    /// There were no columns to draw.
     Empty,
-    /// The rows could not be encoded into the page.
+    /// The columns could not be encoded into the page.
     Render(serde_json::Error),
     /// The page could not be written.
     Write {
@@ -37,8 +35,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Empty => write!(f, "html needs summarized columns"),
-            Error::Render(_) => write!(f, "cannot encode the rows"),
+            Error::Empty => write!(f, "html needs bytemass columns"),
+            Error::Render(_) => write!(f, "cannot encode the columns"),
             Error::Write { path, .. } => write!(f, "cannot write {path}"),
         }
     }
@@ -90,7 +88,7 @@ pub struct CatalogNode {
     /// Uncompressed bytes behind the node; kept to derive
     /// [`Self::compression_ratio`], not drawn.
     #[serde(skip)]
-    pub uncompressed_bytes: Option<f64>,
+    pub uncompressed_bytes: Option<u64>,
     /// The catalog's schemas, sorted by id.
     pub schemas: Vec<SchemaNode>,
 }
@@ -114,7 +112,7 @@ pub struct SchemaNode {
     /// Uncompressed bytes behind the node; kept to derive
     /// [`Self::compression_ratio`], not drawn.
     #[serde(skip)]
-    pub uncompressed_bytes: Option<f64>,
+    pub uncompressed_bytes: Option<u64>,
     /// The schema's tables, sorted by id.
     pub tables: Vec<TableNode>,
 }
@@ -142,8 +140,7 @@ pub struct TableNode {
     pub storage_classes: Vec<String>,
     /// The table's columns, sorted by path.
     pub columns: Vec<ColumnNode>,
-    /// Distinct measured files behind the columns; the largest per-column
-    /// count when they differ.
+    /// Distinct measured files behind the columns.
     pub file_count: u64,
 }
 
@@ -168,12 +165,16 @@ pub struct ColumnNode {
     pub storage_cost_per_month: Option<CostEstimate>,
 }
 
-/// Write `path.html` from the rows `summarize columns` produced.
+/// Write `path.html` from the measured columns and the blobs they came from.
 ///
 /// # Errors
-/// Fails when there are no rows or the HTML page cannot be written.
-pub fn write_report(prefix: &Path, rows: &[ColumnMass]) -> Result<(), Error> {
-    let report = fold(rows);
+/// Fails when there are no columns or the HTML page cannot be written.
+pub fn write_report(
+    prefix: &Path,
+    columns: &[v1::Column],
+    blobs: &[v1::Blob],
+) -> Result<(), Error> {
+    let report = fold(columns, blobs);
     if report.catalogs.is_empty() {
         return Err(Error::Empty);
     }
@@ -185,23 +186,23 @@ pub fn write_report(prefix: &Path, rows: &[ColumnMass]) -> Result<(), Error> {
     })
 }
 
-/// Uncompressed bytes behind a fold, and whether a row omitted them.
+/// Uncompressed bytes behind a fold, and whether a measurement omitted them.
 #[derive(Default)]
 struct Uncompressed {
-    bytes: f64,
+    bytes: u64,
     incomplete: bool,
 }
 
 impl Uncompressed {
-    fn add(&mut self, bytes: Option<f64>) {
+    fn add(&mut self, bytes: Option<u64>) {
         match bytes {
             Some(bytes) => self.bytes += bytes,
             None => self.incomplete = true,
         }
     }
 
-    /// The ratio when every row reported its bytes.
-    fn ratio(&self, compressed_bytes: f64) -> Option<f64> {
+    /// The ratio when every measurement reported its bytes.
+    fn ratio(&self, compressed_bytes: u64) -> Option<f64> {
         if self.incomplete {
             return None;
         }
@@ -211,179 +212,278 @@ impl Uncompressed {
 
 /// Uncompressed over compressed, when both are known and compressed is not
 /// zero.
-fn ratio(uncompressed_bytes: Option<f64>, compressed_bytes: f64) -> Option<f64> {
+fn ratio(uncompressed_bytes: Option<u64>, compressed_bytes: u64) -> Option<f64> {
     let uncompressed = uncompressed_bytes?;
-    (compressed_bytes > 0.0).then(|| uncompressed / compressed_bytes)
+    (compressed_bytes > 0).then(|| uncompressed as f64 / compressed_bytes as f64)
 }
 
-/// A sum of costs that stays `None` when any part is unpriced.
-#[derive(Debug, Clone, Copy)]
-struct Costs {
-    first: f64,
-    last: f64,
-    priced: bool,
-    any: bool,
+/// Add one measurement's uncompressed bytes, or poison the total when it does
+/// not report them.
+fn add_uncompressed(total: &mut Option<u64>, bytes: Option<u64>) {
+    *total = match (*total, bytes) {
+        (Some(total), Some(bytes)) => Some(total + bytes),
+        _ => None,
+    };
 }
 
-impl Default for Costs {
-    fn default() -> Self {
-        Self {
-            first: 0.0,
-            last: 0.0,
-            priced: true,
-            any: false,
-        }
-    }
+/// What one column adds up to while a table is folded.
+#[derive(Default)]
+struct ColumnBytes {
+    compressed_bytes: u64,
+    uncompressed: Uncompressed,
+    value_count: u64,
 }
 
-impl Costs {
-    fn add(&mut self, cost: Option<CostEstimate>) {
-        match cost {
-            Some(cost) => {
-                self.first += cost.first;
-                self.last += cost.last;
-                self.any = true;
-            }
-            None => self.priced = false,
-        }
-    }
-
-    fn total(self) -> Option<CostEstimate> {
-        (self.priced && self.any).then_some(CostEstimate {
-            first: self.first,
-            last: self.last,
-        })
-    }
+/// What one table's columns add up to while the report is built.
+#[derive(Default)]
+struct TableBytes {
+    compressed_bytes: u64,
+    uncompressed: Uncompressed,
+    columns: BTreeMap<String, ColumnBytes>,
+    blobs: BTreeSet<String>,
 }
 
-/// The first and last of a row's tier costs, when it is priced.
-fn cost_estimate(tiers: &[mass::StorageTierCost]) -> Option<CostEstimate> {
-    if tiers.is_empty() {
-        return None;
-    }
-    let first = tiers
+/// Group the columns by their table and fold the totals up the hierarchy.
+fn fold(columns: &[v1::Column], blobs: &[v1::Blob]) -> Report {
+    let facts: BTreeMap<&str, &v1::Blob> = blobs
         .iter()
-        .map(|tier| tier.cost_per_month)
-        .fold(f64::INFINITY, f64::min);
-    let last = tiers
-        .iter()
-        .map(|tier| tier.cost_per_month)
-        .fold(f64::NEG_INFINITY, f64::max);
-    Some(CostEstimate { first, last })
-}
-
-/// What one table's rows add up to while the report is built.
-#[derive(Default)]
-struct TableRows {
-    compressed_bytes: u64,
-    uncompressed: Uncompressed,
-    file_count: u64,
-    classes: BTreeSet<String>,
-    cost: Costs,
-    columns: Vec<ColumnNode>,
-}
-
-/// What one schema's tables add up to while the report is built.
-#[derive(Default)]
-struct SchemaRows {
-    compressed_bytes: u64,
-    uncompressed: Uncompressed,
-    cost: Costs,
-    tables: Vec<TableNode>,
-}
-
-/// What one catalog's schemas add up to while the report is built.
-#[derive(Default)]
-struct CatalogRows {
-    compressed_bytes: u64,
-    uncompressed: Uncompressed,
-    cost: Costs,
-    schemas: BTreeMap<String, SchemaRows>,
-}
-
-/// Group the rows by their table and fold the totals up the hierarchy.
-fn fold(rows: &[ColumnMass]) -> Report {
-    let mut tables: BTreeMap<(String, String, String), TableRows> = BTreeMap::new();
-    for row in rows {
-        let Some((catalog, schema, name)) = v1::Table::parse_name(&row.table) else {
+        .map(|blob| (blob.name.as_str(), blob))
+        .collect();
+    let mut tables: BTreeMap<(String, String, String), TableBytes> = BTreeMap::new();
+    for column in columns {
+        let Some((service, locator, path)) = v1::Column::parse_name(&column.name) else {
             continue;
         };
+        let blob = v1::name::blob(&service, &locator);
+        let Some(table) = resolve_table(column, &blob) else {
+            continue;
+        };
+        let Some((catalog, schema, name)) = v1::Table::parse_name(&table) else {
+            continue;
+        };
+        let mass = column.mass.as_ref();
+        let bytes = mass.and_then(|mass| mass.compressed_bytes).unwrap_or(0);
+        let values = mass.and_then(|mass| mass.value_count).unwrap_or(0);
         let table = tables.entry((catalog, schema, name)).or_default();
-        table.compressed_bytes += row.compressed_bytes;
+        table.compressed_bytes += bytes;
         table
             .uncompressed
-            .add(row.uncompressed_bytes.map(|bytes| bytes as f64));
-        table.file_count = table.file_count.max(row.file_count);
-        table.classes.extend(row.storage_classes.iter().cloned());
-        let cost = cost_estimate(&row.storage_costs);
-        table.cost.add(cost);
-        table.columns.push(ColumnNode {
-            column: row.column.clone(),
-            compressed_bytes: row.compressed_bytes,
-            value_count: row.value_count,
-            bytes_per_value: row.bytes_per_value,
-            compression_ratio: row.compression_ratio,
-            storage_cost_per_month: cost,
-        });
+            .add(mass.and_then(|mass| mass.uncompressed_bytes));
+        table.blobs.insert(blob);
+        let total = table.columns.entry(path).or_default();
+        total.compressed_bytes += bytes;
+        total
+            .uncompressed
+            .add(mass.and_then(|mass| mass.uncompressed_bytes));
+        total.value_count += values;
     }
 
-    let mut catalogs: BTreeMap<String, CatalogRows> = BTreeMap::new();
-    for ((catalog, schema, name), mut table) in tables {
-        table
+    let mut report = Report::default();
+    for ((catalog, schema, name), table) in tables {
+        let bytes = table.compressed_bytes;
+        let (storage_cost_per_month, storage_classes) = table_cost(&table.blobs, &facts);
+        let mut columns: Vec<ColumnNode> = table
             .columns
-            .sort_by(|left, right| left.column.cmp(&right.column));
-        let compressed_bytes = table.compressed_bytes;
+            .into_iter()
+            .map(|(column, total)| ColumnNode {
+                column,
+                compressed_bytes: total.compressed_bytes,
+                value_count: total.value_count,
+                bytes_per_value: if total.value_count == 0 {
+                    0.0
+                } else {
+                    total.compressed_bytes as f64 / total.value_count as f64
+                },
+                compression_ratio: total.uncompressed.ratio(total.compressed_bytes),
+                storage_cost_per_month: None,
+            })
+            .collect();
+        if let Some(cost) = storage_cost_per_month {
+            if bytes > 0 {
+                for column in &mut columns {
+                    let share = column.compressed_bytes as f64 / bytes as f64;
+                    column.storage_cost_per_month = Some(CostEstimate {
+                        first: cost.first * share,
+                        last: cost.last * share,
+                    });
+                }
+            }
+        }
         let uncompressed_bytes =
             (!table.uncompressed.incomplete).then_some(table.uncompressed.bytes);
         let node = TableNode {
             name: v1::name::table(&catalog, &schema, &name),
             display_name: name,
-            compressed_bytes,
-            compression_ratio: table.uncompressed.ratio(compressed_bytes as f64),
-            storage_cost_per_month: table.cost.total(),
-            storage_classes: table.classes.into_iter().collect(),
-            columns: table.columns,
-            file_count: table.file_count,
+            compressed_bytes: bytes,
+            compression_ratio: table.uncompressed.ratio(bytes),
+            storage_cost_per_month,
+            storage_classes,
+            columns,
+            file_count: table.blobs.len() as u64,
         };
-        let catalog_rows = catalogs.entry(catalog.clone()).or_default();
-        catalog_rows.compressed_bytes += compressed_bytes;
-        catalog_rows.uncompressed.add(uncompressed_bytes);
-        catalog_rows.cost.add(node.storage_cost_per_month);
-        let schema_rows = catalog_rows.schemas.entry(schema).or_default();
-        schema_rows.compressed_bytes += compressed_bytes;
-        schema_rows.uncompressed.add(uncompressed_bytes);
-        schema_rows.cost.add(node.storage_cost_per_month);
-        schema_rows.tables.push(node);
+        let catalog_node = ensure_catalog(&mut report, &catalog, uncompressed_bytes);
+        catalog_node.compressed_bytes += bytes;
+        let schema_node = ensure_schema(catalog_node, &schema, uncompressed_bytes);
+        schema_node.compressed_bytes += bytes;
+        schema_node.tables.push(node);
     }
-
-    let mut report = Report::default();
-    for (catalog, rows) in catalogs {
-        let uncompressed_bytes = (!rows.uncompressed.incomplete).then_some(rows.uncompressed.bytes);
-        let mut node = CatalogNode {
-            name: v1::name::catalog(&catalog),
-            display_name: catalog.clone(),
-            compressed_bytes: rows.compressed_bytes,
-            compression_ratio: ratio(uncompressed_bytes, rows.compressed_bytes as f64),
-            storage_cost_per_month: rows.cost.total(),
-            uncompressed_bytes,
-            schemas: Vec::with_capacity(rows.schemas.len()),
-        };
-        for (schema, rows) in rows.schemas {
-            let uncompressed_bytes =
-                (!rows.uncompressed.incomplete).then_some(rows.uncompressed.bytes);
-            node.schemas.push(SchemaNode {
-                name: v1::name::schema(&catalog, &schema),
-                display_name: schema,
-                compressed_bytes: rows.compressed_bytes,
-                compression_ratio: ratio(uncompressed_bytes, rows.compressed_bytes as f64),
-                storage_cost_per_month: rows.cost.total(),
-                uncompressed_bytes,
-                tables: rows.tables,
-            });
+    for catalog in &mut report.catalogs {
+        for schema in &mut catalog.schemas {
+            schema.compression_ratio = ratio(schema.uncompressed_bytes, schema.compressed_bytes);
+            schema.storage_cost_per_month = sum_costs(
+                schema
+                    .tables
+                    .iter()
+                    .map(|table| table.storage_cost_per_month),
+            );
         }
-        report.catalogs.push(node);
+        catalog.compression_ratio = ratio(catalog.uncompressed_bytes, catalog.compressed_bytes);
+        catalog.storage_cost_per_month = sum_costs(
+            catalog
+                .schemas
+                .iter()
+                .map(|schema| schema.storage_cost_per_month),
+        );
     }
     report
+}
+
+/// The monthly S3 list-price cost of a table's files, and the distinct classes
+/// behind them. `None` when a file is not a priced S3 object (a local file, an
+/// unknown class, or a blob the stream did not describe).
+fn table_cost(
+    blobs: &BTreeSet<String>,
+    facts: &BTreeMap<&str, &v1::Blob>,
+) -> (Option<CostEstimate>, Vec<String>) {
+    let mut first = 0.0;
+    let mut last = 0.0;
+    let mut priced = true;
+    let mut classes = BTreeSet::new();
+    for blob in blobs {
+        let Some((service, _)) = v1::name::parse_blob(blob) else {
+            priced = false;
+            continue;
+        };
+        // Only object storage has a monthly bill; a path on disk does not.
+        if service != "s3" {
+            priced = false;
+            continue;
+        }
+        let Some(facts) = facts.get(blob.as_str()) else {
+            priced = false;
+            continue;
+        };
+        let Some(size) = facts.size_bytes else {
+            priced = false;
+            continue;
+        };
+        // S3 omits the class of a STANDARD object; absent means STANDARD.
+        let class = facts.storage_class.as_deref().unwrap_or("STANDARD");
+        let Some((low, high)) = storage_price(class) else {
+            priced = false;
+            continue;
+        };
+        let gigabytes = size as f64 / GIBIBYTE;
+        first += gigabytes * low;
+        last += gigabytes * high;
+        classes.insert(class.to_string());
+    }
+    let cost = (priced && !blobs.is_empty()).then_some(CostEstimate { first, last });
+    (cost, classes.into_iter().collect())
+}
+
+/// Bytes in a gibibyte. The list prices are quoted per GB-month; this uses the
+/// binary gigabyte AWS bills against.
+const GIBIBYTE: f64 = 1_073_741_824.0;
+
+/// The S3 list price range per GiB-month (us-east-1) for a storage class.
+///
+/// Intelligent-Tiering bills by access sub-tier (Frequent Access down to Deep
+/// Archive Access), and HEAD reports only the class, not the sub-tier, so it
+/// is the one class with a range. The sub-tier is chosen by how often the
+/// object is read; the object monitoring fee is not included.
+fn storage_price(storage_class: &str) -> Option<(f64, f64)> {
+    Some(match storage_class {
+        "STANDARD" => (0.023, 0.023),
+        "REDUCED_REDUNDANCY" => (0.024, 0.024),
+        "INTELLIGENT_TIERING" => (0.00099, 0.023),
+        "STANDARD_IA" => (0.0125, 0.0125),
+        "ONEZONE_IA" => (0.01, 0.01),
+        "EXPRESS_ONEZONE" => (0.016, 0.016),
+        "GLACIER_IR" => (0.004, 0.004),
+        "GLACIER" => (0.0036, 0.0036),
+        "DEEP_ARCHIVE" => (0.00099, 0.00099),
+        _ => return None,
+    })
+}
+
+/// Add child costs; `None` when any child is unpriced.
+fn sum_costs(costs: impl Iterator<Item = Option<CostEstimate>>) -> Option<CostEstimate> {
+    let mut first = 0.0;
+    let mut last = 0.0;
+    let mut any = false;
+    for cost in costs {
+        let cost = cost?;
+        first += cost.first;
+        last += cost.last;
+        any = true;
+    }
+    any.then_some(CostEstimate { first, last })
+}
+
+/// The table a measurement names: the table-file's table, or the local table a
+/// bare path takes (the data model gives a path-read table `local.local`).
+fn resolve_table(column: &v1::Column, blob: &str) -> Option<String> {
+    column.table.clone().or_else(|| {
+        let uri = v1::name::blob_uri(blob)?;
+        Some(v1::name::local_table(&uri))
+    })
+}
+
+/// The catalog node, appending it when the fold reaches a new catalog.
+fn ensure_catalog<'a>(
+    report: &'a mut Report,
+    catalog: &str,
+    uncompressed_bytes: Option<u64>,
+) -> &'a mut CatalogNode {
+    let name = v1::name::catalog(catalog);
+    if report.catalogs.last().map(|node| node.name.as_str()) != Some(name.as_str()) {
+        report.catalogs.push(CatalogNode {
+            name,
+            display_name: catalog.to_string(),
+            uncompressed_bytes: Some(0),
+            ..CatalogNode::default()
+        });
+    }
+    let node = report
+        .catalogs
+        .last_mut()
+        .expect("a catalog was just pushed");
+    add_uncompressed(&mut node.uncompressed_bytes, uncompressed_bytes);
+    node
+}
+
+/// The schema node, appending it when the fold reaches a new schema.
+fn ensure_schema<'a>(
+    catalog: &'a mut CatalogNode,
+    schema: &str,
+    uncompressed_bytes: Option<u64>,
+) -> &'a mut SchemaNode {
+    let name = v1::name::schema(&catalog.display_name, schema);
+    if catalog.schemas.last().map(|node| node.name.as_str()) != Some(name.as_str()) {
+        catalog.schemas.push(SchemaNode {
+            name,
+            display_name: schema.to_string(),
+            uncompressed_bytes: Some(0),
+            ..SchemaNode::default()
+        });
+    }
+    let node = catalog
+        .schemas
+        .last_mut()
+        .expect("a schema was just pushed");
+    add_uncompressed(&mut node.uncompressed_bytes, uncompressed_bytes);
+    node
 }
 
 /// The page title: one table's dotted name, or how many tables were measured.
@@ -419,48 +519,88 @@ fn title(report: &Report) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mass::StorageTierCost;
+    use crate::v1::name;
 
-    fn row(table: &str, column: &str, bytes: u64, values: u64) -> ColumnMass {
-        ColumnMass {
-            table: table.to_string(),
-            column: column.to_string(),
-            compressed_bytes: bytes,
-            uncompressed_bytes: Some(bytes * 3),
-            value_count: values,
-            bytes_per_value: if values == 0 {
-                0.0
-            } else {
-                bytes as f64 / values as f64
-            },
-            compression_ratio: Some(3.0),
-            file_count: 1,
-            storage_classes: vec!["STANDARD".into()],
-            storage_costs: vec![StorageTierCost {
-                storage_class: "STANDARD".into(),
-                access_tier: None,
-                dollars_per_gibibyte_per_month: 0.023,
-                cost_per_month: 2.0,
-            }],
+    fn blob(uri: &str) -> v1::Blob {
+        v1::Blob {
+            name: name::blob_name(uri),
+            size_bytes: Some(40),
+            storage_class: Some("STANDARD".into()),
+            ..v1::Blob::default()
         }
     }
 
+    fn column(file: &v1::Blob, table: Option<&str>, column: &str, bytes: u64) -> v1::Column {
+        let (service, locator) = name::parse_blob(&file.name).expect("a blob name");
+        v1::Column {
+            name: name::column(&service, &locator, column),
+            table: table.map(str::to_string),
+            mass: Some(v1::Bytemass {
+                compressed_bytes: Some(bytes),
+                value_count: Some(10),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
+        }
+    }
+
+    fn measured(
+        file: &v1::Blob,
+        table: Option<&str>,
+        path: &str,
+        compressed_bytes: u64,
+        uncompressed_bytes: u64,
+    ) -> v1::Column {
+        let mut column = column(file, table, path, compressed_bytes);
+        column
+            .mass
+            .as_mut()
+            .expect("the helper sets a mass")
+            .uncompressed_bytes = Some(uncompressed_bytes);
+        column
+    }
+
     #[test]
-    fn folds_rows_up_the_catalog_hierarchy() {
-        let report = fold(&[
-            row("catalogs/shop/schemas/sales/tables/orders", "id", 30, 10),
-            row("catalogs/shop/schemas/sales/tables/orders", "note", 70, 10),
-            row("catalogs/shop/schemas/web/tables/clicks", "id", 25, 10),
-        ]);
+    fn folds_columns_up_the_catalog_hierarchy() {
+        let sales = blob("/lake/sales/part-0.parquet");
+        let web = blob("/lake/web/part-0.parquet");
+        let columns = vec![
+            column(
+                &sales,
+                Some("catalogs/shop/schemas/sales/tables/orders"),
+                "id",
+                30,
+            ),
+            column(
+                &sales,
+                Some("catalogs/shop/schemas/sales/tables/orders"),
+                "note",
+                70,
+            ),
+            column(
+                &web,
+                Some("catalogs/shop/schemas/web/tables/clicks"),
+                "id",
+                25,
+            ),
+            column(
+                &web,
+                Some("catalogs/shop/schemas/web/tables/visits"),
+                "id",
+                5,
+            ),
+        ];
+        let report = fold(&columns, &[sales, web]);
 
         assert_eq!(report.catalogs.len(), 1);
         let catalog = &report.catalogs[0];
         assert_eq!(catalog.display_name, "shop");
-        assert_eq!(catalog.compressed_bytes, 125);
+        assert_eq!(catalog.compressed_bytes, 130);
         assert_eq!(catalog.schemas.len(), 2);
         assert_eq!(catalog.schemas[0].display_name, "sales");
         assert_eq!(catalog.schemas[0].compressed_bytes, 100);
-        assert_eq!(catalog.schemas[1].compressed_bytes, 25);
+        assert_eq!(catalog.schemas[1].display_name, "web");
+        assert_eq!(catalog.schemas[1].compressed_bytes, 30);
 
         let orders = &catalog.schemas[0].tables[0];
         assert_eq!(orders.display_name, "orders");
@@ -468,68 +608,163 @@ mod tests {
         assert_eq!(orders.columns.len(), 2);
         assert_eq!(orders.columns[0].column, "id");
         assert_eq!(orders.columns[1].bytes_per_value, 7.0);
-        assert_eq!(title(&report), "2 tables");
+        assert_eq!(orders.file_count, 1);
     }
 
     #[test]
-    fn sums_the_ratio_and_cost_of_a_tables_rows() {
-        let report = fold(&[
-            row("catalogs/shop/schemas/sales/tables/orders", "id", 10, 10),
-            row("catalogs/shop/schemas/sales/tables/orders", "note", 30, 10),
-        ]);
+    fn folds_a_column_measured_in_several_files_once() {
+        let first = blob("/lake/lineitem/part-0.parquet");
+        let second = blob("/lake/lineitem/part-1.parquet");
+        let table = "catalogs/tpch/schemas/sf1/tables/lineitem";
+        let report = fold(
+            &[
+                column(&first, Some(table), "l_comment", 60),
+                column(&second, Some(table), "l_comment", 40),
+            ],
+            &[first, second],
+        );
+
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        assert_eq!(node.file_count, 2);
+        assert_eq!(node.columns.len(), 1);
+        assert_eq!(node.columns[0].column, "l_comment");
+        assert_eq!(node.columns[0].compressed_bytes, 100);
+        assert_eq!(node.columns[0].value_count, 20);
+        assert_eq!(node.columns[0].bytes_per_value, 5.0);
+    }
+
+    #[test]
+    fn folds_the_compression_ratio_over_the_column_files() {
+        let first = blob("/lake/lineitem/part-0.parquet");
+        let second = blob("/lake/lineitem/part-1.parquet");
+        let table = "catalogs/tpch/schemas/sf1/tables/lineitem";
+        let report = fold(
+            &[
+                measured(&first, Some(table), "l_comment", 8, 24),
+                measured(&second, Some(table), "l_comment", 4, 12),
+            ],
+            &[first, second],
+        );
 
         let catalog = &report.catalogs[0];
+        assert_eq!(catalog.compression_ratio, Some(3.0));
+        assert_eq!(catalog.schemas[0].compression_ratio, Some(3.0));
         let table = &catalog.schemas[0].tables[0];
-        assert_eq!(table.compressed_bytes, 40);
         assert_eq!(table.compression_ratio, Some(3.0));
-        assert_eq!(
-            table.storage_cost_per_month,
-            Some(CostEstimate {
-                first: 4.0,
-                last: 4.0
-            })
-        );
-        assert_eq!(catalog.storage_cost_per_month, table.storage_cost_per_month);
-        assert_eq!(title(&report), "shop.sales.orders");
+        assert_eq!(table.columns[0].compression_ratio, Some(3.0));
     }
 
     #[test]
-    fn leaves_the_ratio_unknown_when_a_row_omits_uncompressed_bytes() {
-        let mut missing = row("catalogs/shop/schemas/sales/tables/orders", "id", 10, 10);
-        missing.uncompressed_bytes = None;
-        let report = fold(&[
-            row("catalogs/shop/schemas/sales/tables/orders", "note", 30, 10),
-            missing,
-        ]);
+    fn weights_the_parents_ratio_by_the_child_bytes() {
+        let orders = blob("/lake/orders/part-0.parquet");
+        let items = blob("/lake/items/part-0.parquet");
+        let report = fold(
+            &[
+                measured(
+                    &orders,
+                    Some("catalogs/shop/schemas/sales/tables/orders"),
+                    "id",
+                    10,
+                    20,
+                ),
+                measured(
+                    &items,
+                    Some("catalogs/shop/schemas/sales/tables/items"),
+                    "id",
+                    30,
+                    30,
+                ),
+            ],
+            &[orders, items],
+        );
+
+        let catalog = &report.catalogs[0];
+        assert_eq!(catalog.schemas[0].compression_ratio, Some(1.25));
+        assert_eq!(catalog.compression_ratio, Some(1.25));
+    }
+
+    #[test]
+    fn leaves_the_ratio_unknown_when_a_measurement_omits_uncompressed_bytes() {
+        let file = blob("/lake/lineitem/part-0.parquet");
+        let table = "catalogs/tpch/schemas/sf1/tables/lineitem";
+        let report = fold(
+            &[
+                measured(&file, Some(table), "l_comment", 8, 24),
+                column(&file, Some(table), "l_comment", 4),
+            ],
+            std::slice::from_ref(&file),
+        );
 
         let catalog = &report.catalogs[0];
         assert_eq!(catalog.compression_ratio, None);
         assert_eq!(catalog.schemas[0].compression_ratio, None);
         assert_eq!(catalog.schemas[0].tables[0].compression_ratio, None);
-    }
-
-    #[test]
-    fn leaves_the_cost_unknown_when_a_row_is_unpriced() {
-        let mut unpriced = row("catalogs/shop/schemas/sales/tables/orders", "id", 10, 10);
-        unpriced.storage_costs.clear();
-        let report = fold(&[unpriced]);
-
-        assert_eq!(report.catalogs[0].storage_cost_per_month, None);
-        assert_eq!(report.catalogs[0].schemas[0].storage_cost_per_month, None);
         assert_eq!(
-            report.catalogs[0].schemas[0].tables[0].storage_cost_per_month,
+            catalog.schemas[0].tables[0].columns[0].compression_ratio,
             None
         );
     }
 
     #[test]
+    fn prices_a_standard_s3_file_and_leaves_a_local_path_unpriced() {
+        let table = "catalogs/shop/schemas/sales/tables/orders";
+        let s3 = blob("s3://lake/orders/part-0.parquet");
+        let report = fold(
+            &[column(&s3, Some(table), "id", 4)],
+            std::slice::from_ref(&s3),
+        );
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        let expected = 40.0 / GIBIBYTE * 0.023;
+        let cost = node.storage_cost_per_month.expect("a priced file");
+        assert!((cost.first - expected).abs() < 1e-15);
+        assert!((cost.last - expected).abs() < 1e-15);
+        assert_eq!(node.storage_classes, vec!["STANDARD".to_string()]);
+        assert_eq!(node.columns[0].storage_cost_per_month, Some(cost));
+        assert_eq!(
+            report.catalogs[0].schemas[0].storage_cost_per_month,
+            Some(cost)
+        );
+        assert_eq!(report.catalogs[0].storage_cost_per_month, Some(cost));
+
+        let local = blob("/lake/local.parquet");
+        let report = fold(
+            &[column(&local, None, "id", 4)],
+            std::slice::from_ref(&local),
+        );
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        assert!(node.storage_cost_per_month.is_none());
+        assert!(node.storage_classes.is_empty());
+        assert!(report.catalogs[0].storage_cost_per_month.is_none());
+    }
+
+    #[test]
+    fn ranges_intelligent_tiering_over_its_sub_tiers() {
+        let mut file = blob("s3://lake/part-0.parquet");
+        file.size_bytes = Some(GIBIBYTE as u64);
+        file.storage_class = Some("INTELLIGENT_TIERING".into());
+        let table = "catalogs/shop/schemas/sales/tables/orders";
+        let report = fold(
+            &[column(&file, Some(table), "id", 4)],
+            std::slice::from_ref(&file),
+        );
+
+        let node = &report.catalogs[0].schemas[0].tables[0];
+        let cost = node.storage_cost_per_month.expect("a priced file");
+        assert!((cost.first - 0.00099).abs() < 1e-12, "{cost:?}");
+        assert!((cost.last - 0.023).abs() < 1e-12, "{cost:?}");
+        assert_eq!(
+            node.storage_classes,
+            vec!["INTELLIGENT_TIERING".to_string()]
+        );
+    }
+
+    #[test]
     fn a_bare_file_takes_the_local_table() {
-        let report = fold(&[row(
-            "catalogs/local/schemas/local/tables/quickstart.parquet",
-            "text",
-            8,
-            10,
-        )]);
+        let file = blob("/lake/quickstart.parquet");
+        let report = fold(
+            &[column(&file, None, "text", 8)],
+            std::slice::from_ref(&file),
+        );
 
         let catalog = &report.catalogs[0];
         assert_eq!(catalog.display_name, "local");
@@ -543,16 +778,13 @@ mod tests {
 
     #[test]
     fn report_writes_html() {
+        let file = blob("/tmp/a<b>.parquet");
         let directory = tempfile::tempdir().unwrap();
         let prefix = directory.path().join("masses");
         write_report(
             &prefix,
-            &[row(
-                "catalogs/local/schemas/local/tables/a<b>.parquet",
-                "text",
-                4,
-                10,
-            )],
+            &[column(&file, None, "text", 4)],
+            std::slice::from_ref(&file),
         )
         .unwrap();
 
@@ -565,11 +797,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_rows_fail() {
+    fn empty_columns_fail() {
         let directory = tempfile::tempdir().unwrap();
-        let error = write_report(&directory.path().join("empty"), &[])
+        let error = write_report(&directory.path().join("empty"), &[], &[])
             .unwrap_err()
             .to_string();
-        assert!(error.contains("summarized columns"), "{error}");
+        assert!(error.contains("bytemass columns"), "{error}");
     }
 }
