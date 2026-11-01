@@ -89,7 +89,8 @@ plugins:
         "cli.md": "reference/cli.md"
         "profile.md": "reference/profile.md"
         "diff.md": "reference/diff.md"
-        "viz.md": "reference/viz.md"
+        "viz.md": "reference/format.md"
+        "reference/viz.md": "reference/format.md"
         "skill.md": "reference/skill.md"
         "delta.md": "guides/delta.md"
         "iceberg.md": "guides/iceberg.md"
@@ -147,7 +148,7 @@ nav:
       - Documents: reference/documents.md
       - Profile: reference/profile.md
       - Diff: reference/diff.md
-      - Visualization: reference/viz.md
+      - Format: reference/format.md
       - Agent skills: reference/skill.md
       - Authentication: reference/authentication.md
       - Configuration: reference/configuration.md
