@@ -162,8 +162,8 @@ pub fn summarize_columns(
         total.value_count += values;
         total.blobs.insert(blob.clone());
         if let Some(class) = blob_class(&blob, &facts) {
-            *total.classes.entry(class.clone()).or_default() += bytes;
-            *table.classes.entry(class).or_default() += bytes;
+            *total.class_bytes.entry(class.clone()).or_default() += bytes;
+            *table.class_bytes.entry(class).or_default() += bytes;
         }
     }
 
@@ -187,7 +187,7 @@ pub fn summarize_columns(
                 compression_ratio: mass.uncompressed.ratio(mass.compressed_bytes),
                 file_count: round(count_files(&mass.blobs, &facts)?, "file_count")?,
                 storage_classes: column_classes(&mass.blobs, &facts),
-                storage_costs: column_costs(&mass.classes, &total.classes, &costs),
+                storage_costs: column_costs(&mass.class_bytes, &total.class_bytes, &costs),
             });
         }
     }
@@ -264,9 +264,6 @@ fn ratio(uncompressed_bytes: Option<f64>, compressed_bytes: f64) -> Option<f64> 
     (compressed_bytes > 0.0).then(|| uncompressed / compressed_bytes)
 }
 
-/// Compressed bytes per storage class.
-type ClassBytes = BTreeMap<String, f64>;
-
 /// What one column adds up to while a table is folded, weighted to the table.
 #[derive(Default)]
 struct ColumnBytes {
@@ -274,7 +271,7 @@ struct ColumnBytes {
     uncompressed: Uncompressed,
     value_count: f64,
     blobs: BTreeSet<String>,
-    classes: ClassBytes,
+    class_bytes: BTreeMap<String, f64>,
 }
 
 /// What one table's columns add up to while the rows are built.
@@ -282,7 +279,7 @@ struct ColumnBytes {
 struct TableBytes {
     columns: BTreeMap<String, ColumnBytes>,
     blobs: BTreeSet<String>,
-    classes: ClassBytes,
+    class_bytes: BTreeMap<String, f64>,
 }
 
 /// The files of one storage class, and whether every one of them has a size.
@@ -354,9 +351,10 @@ fn table_class_costs(
 }
 
 /// A column's share of each class's cost, by the column's bytes in that class.
+/// Each map holds compressed bytes per storage class.
 fn column_costs(
-    column: &ClassBytes,
-    table: &ClassBytes,
+    column: &BTreeMap<String, f64>,
+    table: &BTreeMap<String, f64>,
     costs: &BTreeMap<String, Vec<StorageTierCost>>,
 ) -> Vec<StorageTierCost> {
     let mut out = Vec::new();
