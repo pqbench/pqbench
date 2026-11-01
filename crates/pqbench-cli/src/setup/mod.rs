@@ -3,7 +3,7 @@
 //! A child process cannot set its parent's environment, so `setup` prints the
 //! `export` lines instead:
 //!
-//! ```console no-run
+//! ```text
 //! $ eval "$(pqbench setup)"
 //! ```
 //!
