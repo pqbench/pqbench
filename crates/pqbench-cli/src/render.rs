@@ -119,11 +119,23 @@ impl Row for v1::TableFile {
 }
 
 impl Row for v1::Column {
-    const HEADER: &'static [&'static str] = &["column", "codec", "encodings", "bytes", "values"];
+    const HEADER: &'static [&'static str] = &[
+        "column",
+        "type",
+        "codec",
+        "encoding",
+        "bytes",
+        "dict bytes",
+        "bytes/row",
+        "values",
+    ];
     const ALIGN: &[Align] = &[
         Align::Left,
         Align::Left,
         Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Right,
         Align::Right,
         Align::Right,
     ];
@@ -135,17 +147,70 @@ impl Row for v1::Column {
         let mass = self.mass.as_ref();
         vec![
             name,
+            self.physical_data_type.clone().unwrap_or_default(),
             mass.and_then(|mass| mass.codec.clone()).unwrap_or_default(),
-            mass.map(|mass| mass.encodings.join(","))
+            mass.map(|mass| encoding_text(mass, self.physical_data_type.as_deref()))
                 .unwrap_or_default(),
             mass.and_then(|mass| mass.compressed_bytes)
                 .unwrap_or(0)
                 .to_string(),
+            mass.map(|mass| {
+                if mass.dictionary {
+                    mass.dictionary_bytes
+                        .map(|bytes| bytes.to_string())
+                        .unwrap_or_default()
+                } else {
+                    "0".to_string()
+                }
+            })
+            .unwrap_or_default(),
+            mass.and_then(|mass| mass.bytes_per_row)
+                .map(|bytes| format!("{bytes:.2}"))
+                .unwrap_or_default(),
             mass.and_then(|mass| mass.value_count)
                 .unwrap_or(0)
                 .to_string(),
         ]
     }
+}
+
+/// The data-page encodings, with the dictionary spellings collapsed to `dict`.
+///
+/// The footer's `encodings` mixes the dictionary page and level encodings with
+/// the data-page encodings; `data_encodings` is exact when the writer recorded
+/// page statistics. Otherwise the renderer falls back to the raw set, dropping
+/// the level-only `RLE` for non-boolean columns.
+fn encoding_text(mass: &v1::Bytemass, physical_data_type: Option<&str>) -> String {
+    if let Some(encodings) = &mass.data_encodings {
+        return summarize_encodings(encodings.iter().map(String::as_str));
+    }
+    if mass.dictionary {
+        return "dict".to_string();
+    }
+    let boolean = physical_data_type == Some("BOOLEAN");
+    let data: Vec<&str> = mass
+        .encodings
+        .iter()
+        .map(String::as_str)
+        .filter(|encoding| boolean || *encoding != "RLE")
+        .collect();
+    if data.is_empty() {
+        summarize_encodings(mass.encodings.iter().map(String::as_str))
+    } else {
+        summarize_encodings(data)
+    }
+}
+
+/// Join encoding names, spelling both dictionary encodings as `dict`.
+fn summarize_encodings<'a>(encodings: impl IntoIterator<Item = &'a str>) -> String {
+    encodings
+        .into_iter()
+        .map(|encoding| match encoding {
+            "RLE_DICTIONARY" | "PLAIN_DICTIONARY" => "dict",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// One table from records of a single curated type.

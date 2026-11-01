@@ -294,6 +294,9 @@ message Column {
   // The probability the table file naming this column was kept with, when a
   // `sample files` stage chose it. Absent means unsampled, weight one.
   optional double sample_rate = 8;
+
+  int32 max_definition_level = 9;
+  int32 max_repetition_level = 10;
 }
 
 // A column's byte mass (the footer's `ColumnMetaData`), folded over the column's
@@ -304,7 +307,10 @@ message Bytemass {
   int64 uncompressed_bytes = 3;
   string codec = 4;
   repeated string encodings = 5;
+  repeated string data_encodings = 15;
   bool dictionary = 6;
+  int64 dictionary_bytes = 16;
+  int64 unencoded_bytes = 17;
   int64 value_count = 7;
   int64 null_count = 8;
   int64 distinct_count = 9;
@@ -315,6 +321,8 @@ message Bytemass {
   double bytes_per_value = 12;
   double compression_ratio = 13;
   double null_fraction = 14;
+  double bytes_per_row = 18;
+  double dictionary_fraction = 19;
 }
 
 // A codec sweep of a column.

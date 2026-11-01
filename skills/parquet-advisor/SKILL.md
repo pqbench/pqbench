@@ -28,7 +28,7 @@ $ pqb skill parquet-advisor recipes | head -1
 
 | Layer | Command | Returns | Cost |
 | --- | --- | --- | --- |
-| L0 footer | `pqb table-file FILE | pqb bytemass` | per column: compressed/uncompressed bytes, codec, encodings, dictionary, value count, null fraction, first/last value, bytes per value, compression ratio | cheap (footer only) |
+| L0 footer | `pqb table-file FILE | pqb bytemass` | per column: compressed/uncompressed bytes, codec, data encoding, dictionary bytes, value count, null fraction, first/last value, bytes per value, bytes per row, compression ratio | cheap (footer only) |
 | Table files | `cat TABLE.ndjson \| pqb ls files` | the table's active files (path, blob, size) | cheap (log only) |
 | L1 columns | `pqb profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
 

@@ -24,6 +24,8 @@ struct Fold {
     chunks: usize,
     codec: Option<String>,
     codec_mixed: bool,
+    unencoded_seen: bool,
+    unencoded_complete: bool,
 }
 
 impl Fold {
@@ -31,11 +33,15 @@ impl Fold {
         Self {
             mass: v1::Bytemass {
                 null_count: Some(0),
+                data_encodings: Some(Vec::new()),
+                dictionary_bytes: Some(0),
                 ..v1::Bytemass::default()
             },
             chunks: 0,
             codec: None,
             codec_mixed: false,
+            unencoded_seen: false,
+            unencoded_complete: true,
         }
     }
 
@@ -56,6 +62,33 @@ impl Fold {
             if !mass.encodings.contains(&encoding) {
                 mass.encodings.push(encoding);
             }
+        }
+        // The exact data-page encodings are known only when every chunk
+        // records them; one missing chunk makes the file total unknown.
+        mass.data_encodings = match (mass.data_encodings.take(), chunk.data_encodings) {
+            (Some(mut total), Some(encodings)) => {
+                for encoding in encodings {
+                    if !total.contains(&encoding) {
+                        total.push(encoding);
+                    }
+                }
+                Some(total)
+            }
+            _ => None,
+        };
+        if chunk.dictionary {
+            mass.dictionary_bytes = match (mass.dictionary_bytes, chunk.dictionary_bytes) {
+                (Some(total), Some(bytes)) => total.checked_add(bytes),
+                _ => None,
+            };
+        }
+        if let Some(bytes) = chunk.unencoded_bytes {
+            self.unencoded_seen = true;
+            if self.unencoded_complete {
+                mass.unencoded_bytes = add(mass.unencoded_bytes, bytes);
+            }
+        } else {
+            self.unencoded_complete = false;
         }
         // A group with no statistics makes the file total unknown, not smaller.
         mass.null_count = match (mass.null_count, chunk.null_count) {
@@ -78,12 +111,24 @@ impl Fold {
     }
 
     /// The folded mass, with the ratios and the single codec resolved.
-    fn finish(mut self) -> v1::Bytemass {
+    fn finish(mut self, row_count: u64) -> v1::Bytemass {
         self.mass.codec = (!self.codec_mixed).then_some(self.codec).flatten();
+        if !self.mass.dictionary {
+            self.mass.dictionary_bytes = None;
+        }
+        if self.mass.data_encodings.as_ref().is_some_and(Vec::is_empty) {
+            self.mass.data_encodings = None;
+        }
+        if !self.unencoded_seen || !self.unencoded_complete {
+            self.mass.unencoded_bytes = None;
+        }
         self.mass.bytes_per_value = ratio(self.mass.compressed_bytes, self.mass.value_count);
+        self.mass.bytes_per_row = ratio(self.mass.compressed_bytes, Some(row_count));
         self.mass.compression_ratio =
             ratio(self.mass.uncompressed_bytes, self.mass.compressed_bytes);
         self.mass.null_fraction = ratio(self.mass.null_count, self.mass.value_count);
+        self.mass.dictionary_fraction =
+            ratio(self.mass.dictionary_bytes, self.mass.compressed_bytes);
         self.mass
     }
 }
@@ -92,14 +137,21 @@ impl Fold {
 fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
     let (service, locator) = v1::name::parse_blob(blob_name)
         .ok_or_else(|| Error::Name(format!("{blob_name} is not a blobs/… name")))?;
+    let row_count = mass.row_count;
+    let row_group_count = mass.row_group_count as u64;
     let mut at: BTreeMap<String, usize> = BTreeMap::new();
     let mut columns: Vec<v1::Column> = Vec::new();
     let mut folds: Vec<Fold> = Vec::new();
     for chunk in mass.columns {
         let index = *at.entry(chunk.column.clone()).or_insert_with(|| {
+            let position = columns.len() as u64;
             columns.push(v1::Column {
                 name: v1::name::column(&service, &locator, &chunk.column),
-                row_group_count: Some(mass.row_group_count as u64),
+                position: Some(position),
+                physical_data_type: Some(chunk.physical_data_type.clone()),
+                max_definition_level: Some(chunk.max_definition_level),
+                max_repetition_level: Some(chunk.max_repetition_level),
+                row_group_count: Some(row_group_count),
                 ..v1::Column::default()
             });
             folds.push(Fold::new());
@@ -108,7 +160,7 @@ fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
         folds[index].add(chunk);
     }
     for (column, fold) in columns.iter_mut().zip(folds) {
-        column.mass = Some(fold.finish());
+        column.mass = Some(fold.finish(row_count));
     }
     Ok(columns)
 }

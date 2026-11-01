@@ -18,5 +18,5 @@ fn usage() {
 fn document() {
     // document, from line 76
     support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files > /tmp/partition.ndjson", 77, None);
-    support::run("pqb bytemass < /tmp/partition.ndjson | pqb fmt", 78, Some(&["column  codec   encodings                 bytes  values", "------  ------  ------------------------  -----  ------", "id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3", "label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3"]));
+    support::run("pqb bytemass < /tmp/partition.ndjson | pqb fmt", 78, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
 }

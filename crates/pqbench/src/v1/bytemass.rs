@@ -17,9 +17,19 @@ pub struct Bytemass {
     /// Encodings listed on the column chunks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub encodings: Vec<String>,
+    /// Encodings used by the data pages, when the writer recorded them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_encodings: Option<Vec<String>>,
     /// A dictionary page is present.
     #[serde(default)]
     pub dictionary: bool,
+    /// Bytes from the dictionary page offset to the first data page, when a
+    /// dictionary page is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_bytes: Option<u64>,
+    /// Variable-length value bytes before encoding, when the writer recorded them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unencoded_bytes: Option<u64>,
     /// Values in the column (including nulls).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_count: Option<u64>,
@@ -38,10 +48,16 @@ pub struct Bytemass {
     /// Compressed bytes divided by [`Self::value_count`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_per_value: Option<f64>,
+    /// Compressed bytes divided by the file's row count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_row: Option<f64>,
     /// Uncompressed divided by compressed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compression_ratio: Option<f64>,
     /// [`Self::null_count`] divided by [`Self::value_count`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub null_fraction: Option<f64>,
+    /// [`Self::dictionary_bytes`] divided by [`Self::compressed_bytes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_fraction: Option<f64>,
 }

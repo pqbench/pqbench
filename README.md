@@ -82,15 +82,15 @@ verify a layout change, and read SQuAD and a TPC-DS table from the wild. On a
 
 ```console run
 $ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb fmt
-column            codec         encodings                  bytes  values
-----------------  ------------  ------------------------  ------  ------
-text              UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  743566    3000
-label             UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2469    3000
-dataType          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     360    3000
-communityName     UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    2468    3000
-datetime          UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY      87    3000
-username_encoded  UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  446197    3000
-url_encoded       UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY  907117    3000
+column            type        codec         encoding   bytes  dict bytes  bytes/row  values
+----------------  ----------  ------------  --------  ------  ----------  ---------  ------
+text              BYTE_ARRAY  UNCOMPRESSED  dict      743566      738658     247.86    3000
+label             BYTE_ARRAY  UNCOMPRESSED  dict        2469         527       0.82    3000
+dataType          BYTE_ARRAY  UNCOMPRESSED  dict         360          33       0.12    3000
+communityName     BYTE_ARRAY  UNCOMPRESSED  dict        2468         527       0.82    3000
+datetime          BYTE_ARRAY  UNCOMPRESSED  dict          87          28       0.03    3000
+username_encoded  BYTE_ARRAY  UNCOMPRESSED  dict      446197      441331     148.73    3000
+url_encoded       BYTE_ARRAY  UNCOMPRESSED  dict      907117      901963     302.37    3000
 ```
 
 `profile` explains it and `compression` picks the codec. The
@@ -146,17 +146,17 @@ value count, its chunks summed over the file's row groups.
 
 ```console run
 $ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb fmt
-column                 codec         encodings         bytes  values
----------------------  ------------  ----------------  -----  ------
-c_customer_id          UNCOMPRESSED  DELTA_BYTE_ARRAY   8248    1000
-c_salutation           UNCOMPRESSED  DELTA_BYTE_ARRAY   3362    1000
-c_first_name           UNCOMPRESSED  DELTA_BYTE_ARRAY   6595    1000
-c_last_name            UNCOMPRESSED  DELTA_BYTE_ARRAY   6955    1000
-c_preferred_cust_flag  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220    1000
-c_birth_country        UNCOMPRESSED  DELTA_BYTE_ARRAY   9599    1000
-c_login                UNCOMPRESSED  DELTA_BYTE_ARRAY     42    1000
-c_email_address        UNCOMPRESSED  DELTA_BYTE_ARRAY  27763    1000
-c_last_review_date     UNCOMPRESSED  DELTA_BYTE_ARRAY   3511    1000
+column                 type        codec         encoding          bytes  dict bytes  bytes/row  values
+---------------------  ----------  ------------  ----------------  -----  ----------  ---------  ------
+c_customer_id          BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   8248           0       8.25    1000
+c_salutation           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3362           0       3.36    1000
+c_first_name           BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6595           0       6.59    1000
+c_last_name            BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   6955           0       6.96    1000
+c_preferred_cust_flag  BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   1220           0       1.22    1000
+c_birth_country        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   9599           0       9.60    1000
+c_login                BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY     42           0       0.04    1000
+c_email_address        BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY  27763           0      27.76    1000
+c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511           0       3.51    1000
 ```
 
 - Reads only the footer, so it works on any file, compressed or not.
@@ -192,10 +192,10 @@ The files are the input to `bytemass`:
 
 ```console run delta
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt
-column  codec   encodings                 bytes  values
-------  ------  ------------------------  -----  ------
-id      SNAPPY  PLAIN,RLE,RLE_DICTIONARY     66       3
-label   SNAPPY  PLAIN,RLE,RLE_DICTIONARY     72       3
+column  type        codec   encoding  bytes  dict bytes  bytes/row  values
+------  ----------  ------  --------  -----  ----------  ---------  ------
+id      INT64       SNAPPY  dict         66          37      22.00       3
+label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
 ```
 
 The lease rides on every file, so a short-lived lease travels to `bytemass`.

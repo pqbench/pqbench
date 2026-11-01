@@ -42,6 +42,26 @@ async fn measures_a_local_file_from_its_footer() {
 }
 
 #[tokio::test]
+async fn reports_the_dictionary_page_and_data_encoding() {
+    let columns = measure(&fixture("small_snappy.parquet")).await;
+    let column = &columns[0];
+    let mass = column.mass.as_ref().expect("a measured column");
+
+    assert_eq!(column.physical_data_type.as_deref(), Some("BYTE_ARRAY"));
+    assert_eq!(
+        mass.data_encodings,
+        Some(vec!["RLE_DICTIONARY".to_string()])
+    );
+    let dictionary_bytes = mass.dictionary_bytes.expect("a dictionary page");
+    let compressed_bytes = mass.compressed_bytes.expect("compressed bytes");
+    assert!(dictionary_bytes > 0);
+    assert!(dictionary_bytes < compressed_bytes);
+    assert!(mass.unencoded_bytes.expect("unencoded bytes") > mass.uncompressed_bytes.unwrap_or(0));
+    assert!(mass.bytes_per_row.expect("bytes per row") > 0.0);
+    assert!(mass.dictionary_fraction.expect("dictionary fraction") > 0.0);
+}
+
+#[tokio::test]
 async fn treats_brackets_as_literal_path_characters() {
     let directory = tempfile::tempdir().unwrap();
     let literal = directory.path().join("archive[1].parquet");

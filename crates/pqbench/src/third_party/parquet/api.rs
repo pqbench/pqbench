@@ -175,6 +175,12 @@ pub fn default_parser() -> impl PageParser {
 pub struct ColumnMass {
     /// Column path in schema form, e.g. `content` or `a.b`.
     pub column: String,
+    /// The leaf column's physical type.
+    pub physical_data_type: String,
+    /// The leaf column's maximum definition level.
+    pub max_definition_level: u16,
+    /// The leaf column's maximum repetition level.
+    pub max_repetition_level: u16,
     /// On-disk (compressed) bytes for this column chunk.
     pub compressed_bytes: u64,
     /// Encoded bytes before compression (including page headers).
@@ -183,11 +189,18 @@ pub struct ColumnMass {
     pub codec: String,
     /// Encodings listed on the column chunk.
     pub encodings: Vec<String>,
+    /// Encodings used by the chunk's data pages, when the writer recorded them.
+    pub data_encodings: Option<Vec<String>>,
     /// Values in this chunk (including nulls).
     // aipnaming: allow(aip-141/count-suffix)
     pub num_values: u64,
     /// Dictionary page offset is present.
     pub dictionary: bool,
+    /// Bytes from the dictionary page offset to the first data page, when a
+    /// dictionary page is present.
+    pub dictionary_bytes: Option<u64>,
+    /// Variable-length value bytes before encoding, when the writer recorded them.
+    pub unencoded_bytes: Option<u64>,
     /// Footer `null_count`, when statistics exist.
     pub null_count: Option<u64>,
     /// Footer `distinct_count`, when statistics exist.

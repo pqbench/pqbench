@@ -47,10 +47,10 @@ file:
 
 ```console run
 $ pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt
-column  codec         encodings                 bytes  values
-------  ------------  ------------------------  -----  ------
-id      UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY    102       8
-year    UNCOMPRESSED  PLAIN,RLE,RLE_DICTIONARY     68       8
+column  type   codec         encoding  bytes  dict bytes  bytes/row  values
+------  -----  ------------  --------  -----  ----------  ---------  ------
+id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
+year    INT32  UNCOMPRESSED  dict         68          46       8.50       8
 ```
 
 Two invocations under the `iceberg` cargo feature:

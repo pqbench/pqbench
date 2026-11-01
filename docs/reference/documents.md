@@ -64,8 +64,9 @@ stage streams and never holds the table.
 Each kept `TableFile` records the probability it was kept with as
 `sample_rate`; `bytemass` copies it onto the `Blob` and every `Bytemass`. Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
-`uncompressed_bytes`, `value_count`, `null_count`, `row_group_count` — and
-recompute the ratios (`bytes_per_value`, `compression_ratio`, `null_fraction`)
+`uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
+`null_count`, `row_group_count` — and recompute the ratios (`bytes_per_value`,
+`bytes_per_row`, `compression_ratio`, `null_fraction`, `dictionary_fraction`)
 from the weighted sums; `distinct_count` is not additive. A sum over the kept
 records alone is the sample, not the table — the coverage line on standard
 error says how many files and bytes it holds. A record that already carries a
