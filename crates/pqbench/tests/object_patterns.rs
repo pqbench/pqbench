@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use pqbench::third_party::object_store::api::{expand_glob, KeyPattern};
 #[test]
 fn key_patterns_keep_path_boundaries_and_literal_prefixes() {

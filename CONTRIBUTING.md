@@ -50,6 +50,11 @@ make check        # = fmt-check + check-docs + clippy -D warnings + isolation + 
   build in parallel. A bare `cargo` in a worktree should go through `make cargo
   CMD="…"`; `make link-target` points the worktree's `target/` at the shared
   one.
+- **Integration tests are one target per crate.** `tests/it.rs` wires each
+  `tests/*.rs` file in with `#[path]` and `mod`; Cargo builds only `it` (one
+  binary per file used to link the whole graph once per file). Add the module
+  line when you add a test file, and run one file with
+  `cargo test -p <crate> --test it -- <module>`.
 - `make check-python` builds the data-only wheel with maturin and smoke-tests
   the installed binary. It is separate from the gate because it compiles every
   storage backend. CI runs it on every pull request.

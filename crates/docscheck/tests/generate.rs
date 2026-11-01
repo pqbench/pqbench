@@ -46,7 +46,9 @@ fn an_unmarked_block_emits_nothing() {
 fn the_header_names_the_source_and_the_support_module() {
     let out = gen(&transcript("$ one"));
     assert!(out.contains("// @generated"));
-    assert!(out.contains("#[path = \"gen_support.rs\"]"));
+    // Imported from the crate root, which declares `gen_support.rs` once: the
+    // file cannot be a module of its own in every generated file.
+    assert!(out.contains("use crate::support;"));
 }
 
 #[test]

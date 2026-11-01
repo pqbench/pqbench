@@ -187,6 +187,9 @@ analogy, convention, or precedent:
   reproduce a specific CI leg.
 - `cargo check --all-features` is the edit loop: no codegen, no link, the same
   artifacts. Save `make check` for the end of a change, not after each edit.
+- Integration tests are one target per crate: `tests/it.rs` lists every
+  `tests/*.rs` file as a `#[path]` module. Add the line when you add a file;
+  select one with `cargo test -p <crate> --test it -- <module>`.
 - The edit loop is incremental and cheap: `incremental = true` on
   `[profile.dev]` (the `test` profile inherits it) makes a one-line edit to
   `pqbench` a 1-second `cargo check --all-features -p pqbench`. A build is slow

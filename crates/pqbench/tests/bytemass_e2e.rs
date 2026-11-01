@@ -1,6 +1,6 @@
 //! Blackbox end-to-end tests of the public `list columns` command.
 
-mod common;
+use crate::common;
 
 use pqbench::bytemass::list_columns;
 use pqbench::v1;

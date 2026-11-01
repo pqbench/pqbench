@@ -72,7 +72,7 @@ test:
 # vended keys; Databricks default storage refuses externally issued sessions).
 dbx-e2e:
 	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/guides/auth.md)"; exit 1; }
-	$(CARGO_LOCKED) test -p pqbench-cli --features delta-s3,iceberg-s3 --test dbx_e2e -- --ignored --nocapture
+	$(CARGO_LOCKED) test -p pqbench-cli --features delta-s3,iceberg-s3 --test it -- dbx_e2e --ignored --nocapture
 
 # The live walk (scripts/dbx-walk.sh): one pass over the whole Unity Catalog,
 # from `list catalogs` to the `format --html` page. Needs DBX_HOST plus a bearer

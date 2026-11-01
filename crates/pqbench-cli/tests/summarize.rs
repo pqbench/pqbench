@@ -1,5 +1,5 @@
+use crate::common;
 use std::io::Write;
-mod common;
 
 use std::process::{Command, Stdio};
 
