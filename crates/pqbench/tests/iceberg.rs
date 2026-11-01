@@ -309,10 +309,10 @@ async fn load_emits_active_files_and_names_delete_files_in_the_log() {
         .iter()
         .find(|commit| commit.version == 1)
         .unwrap();
-    assert!(selected
-        .actions
-        .iter()
-        .any(|action| action.kind.as_deref() == Some("delete")));
+    assert!(selected.actions.iter().any(|action| {
+        action.kind.as_deref() == Some("delete")
+            && action.path.as_deref() == Some("data/deletes.parquet")
+    }));
     assert_eq!(latest.log.len(), 2);
 }
 
@@ -330,6 +330,18 @@ async fn file_list_walks_the_active_files() {
         .try_collect()
         .await
         .unwrap();
+    let mut paths: Vec<_> = files.iter().map(|file| file.path.as_str()).collect();
+    paths.sort();
+    assert_eq!(paths, ["data/first.parquet", "data/second.parquet"]);
+    let first = files
+        .iter()
+        .find(|file| file.path == "data/first.parquet")
+        .unwrap();
+    assert_eq!(
+        first.name,
+        "catalogs/local/schemas/local/tables/events/files/data%2Ffirst.parquet"
+    );
+
     let mut uris: Vec<_> = files.iter().map(|file| file.uri().unwrap()).collect();
     uris.sort();
     let mut expected = vec![
@@ -357,6 +369,46 @@ async fn file_list_walks_the_active_files() {
     let mut expected_sizes = vec![fixture.first_size, fixture.second_size];
     expected_sizes.sort_unstable();
     assert_eq!(sizes, expected_sizes);
+}
+
+#[tokio::test]
+async fn stream_files_resolves_relative_paths_against_the_table_location() {
+    let fixture = Fixture::new();
+    let metadata_dir = fixture.root.join("metadata");
+    let manifest = write_manifest(
+        &metadata_dir.join("relative.avro"),
+        &[data_entry(
+            "data/first.parquet".into(),
+            fixture.first_size,
+            3,
+            0,
+        )],
+    );
+    let list = write_manifest_list(&metadata_dir.join("snap-relative.avro"), &[(&manifest, 0)]);
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&fs::read(&fixture.metadata).unwrap()).unwrap();
+    metadata["snapshots"][0]["manifest-list"] = serde_json::json!(file_uri(&list));
+    fs::write(&fixture.metadata, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+    let files: Vec<_> = table::stream_files(
+        common::lake(),
+        &load_request(fixture.metadata.to_string_lossy(), Some(0)),
+    )
+    .await
+    .unwrap()
+    .try_collect()
+    .await
+    .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "data/first.parquet");
+    assert_eq!(
+        files[0].uri().unwrap(),
+        fixture
+            .root
+            .join("data/first.parquet")
+            .to_string_lossy()
+            .into_owned()
+    );
 }
 
 #[tokio::test]
