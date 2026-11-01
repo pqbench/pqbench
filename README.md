@@ -222,6 +222,18 @@ Draw a `summarize columns` document as a static HTML treemap — no server, no
 build step.
 
 ```console run delta
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb fmt
+table                           column                 bytes  values  bytes/value  ratio  files  class  $/month
+------------------------------  ---------------------  -----  ------  -----------  -----  -----  -----  -------
+local.delta_byte_array.parquet  c_birth_country         9599    1000         9.60   1.00      1
+local.delta_byte_array.parquet  c_customer_id           8248    1000         8.25   1.00      1
+local.delta_byte_array.parquet  c_email_address        27763    1000        27.76   1.00      1
+local.delta_byte_array.parquet  c_first_name            6595    1000         6.59   1.00      1
+local.delta_byte_array.parquet  c_last_name             6955    1000         6.96   1.00      1
+local.delta_byte_array.parquet  c_last_review_date      3511    1000         3.51   1.00      1
+local.delta_byte_array.parquet  c_login                   42    1000         0.04   1.00      1
+local.delta_byte_array.parquet  c_preferred_cust_flag   1220    1000         1.22   1.00      1
+local.delta_byte_array.parquet  c_salutation            3362    1000         3.36   1.00      1
 $ pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```

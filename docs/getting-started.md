@@ -80,6 +80,11 @@ column, and `format --html` draws those rows as a static HTML treemap. No server
 build step:
 
 ```console run
+$ pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb fmt
+table                     column  bytes  values  bytes/value  ratio  files  class  $/month
+------------------------  ------  -----  ------  -----------  -----  -----  -----  -------
+local.quickstart.parquet  id        102       8        12.75   1.00      1
+local.quickstart.parquet  year       68       8         8.50   1.00      1
 $ pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 

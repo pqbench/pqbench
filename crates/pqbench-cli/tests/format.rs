@@ -120,3 +120,23 @@ fn profile_table_format_lists_columns() {
         "table must not carry NDJSON: {stdout}"
     );
 }
+
+#[test]
+fn mass_rows_render_as_a_column_mass_table() {
+    let document = concat!(
+        r#"{"table":"catalogs/shop/schemas/sales/tables/orders","column":"id","compressed_bytes":8,"value_count":10,"bytes_per_value":0.8,"file_count":1,"storage_classes":["STANDARD"],"storage_costs":[{"storage_class":"STANDARD","dollars_per_gibibyte_per_month":0.023,"cost_per_month":0.0045}]}"#,
+        "\n",
+        r#"{"table":"catalogs/shop/schemas/sales/tables/orders","column":"note","compressed_bytes":2,"value_count":10,"bytes_per_value":0.2,"file_count":1}"#,
+        "\n",
+        r#"{"column":"id","left_bytes":8,"right_bytes":4}"#,
+        "\n",
+    );
+    let stdout = format_stream(document.as_bytes());
+    assert!(stdout.contains("bytes/value"), "{stdout}");
+    assert!(stdout.contains("sales.orders"), "{stdout}");
+    assert!(stdout.contains("$0.0045"), "{stdout}");
+    assert!(
+        !stdout.contains("left_bytes"),
+        "a nameless delta is not table data: {stdout}"
+    );
+}

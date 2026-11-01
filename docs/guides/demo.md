@@ -9,6 +9,11 @@ column  type   codec         encoding  bytes  dict bytes  bytes/row  values
 ------  -----  ------------  --------  -----  ----------  ---------  ------
 id      INT64  UNCOMPRESSED  dict        102          80      12.75       8
 year    INT32  UNCOMPRESSED  dict         68          46       8.50       8
+$ pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb fmt
+table                     column  bytes  values  bytes/value  ratio  files  class  $/month
+------------------------  ------  -----  ------  -----------  -----  -----  -----  -------
+local.quickstart.parquet  id        102       8        12.75   1.00      1
+local.quickstart.parquet  year       68       8         8.50   1.00      1
 $ pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 
@@ -66,6 +71,11 @@ file its `blob` names.
 commands:
 
 ```console run delta
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb fmt
+table        column  bytes  values  bytes/value  ratio  files  class  $/month
+-----------  ------  -----  ------  -----------  -----  -----  -----  -------
+local.table  id         66       3        22.00   0.98      1
+local.table  label      72       3        24.00   0.94      1
 $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html
 ```
 

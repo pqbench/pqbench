@@ -1,5 +1,7 @@
 //! `summarize columns`: fold a bytemass stream into one row per table column.
 
+use std::path::Path;
+
 use clap::Args;
 use futures_util::StreamExt;
 use pqbench::v1;
@@ -12,13 +14,13 @@ use crate::CliError;
 /// Arguments for `summarize columns`.
 #[derive(Args)]
 pub(crate) struct ColumnsArgs {
-    /// bytemass NDJSON stream, or `-` for standard input
+    /// bytemass NDJSON stream; reads standard input when omitted
     input: Option<String>,
 }
 
 pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
     let input = match &args.input {
-        Some(value) => Input::parse(value),
+        Some(value) => Input::File(Path::new(value)),
         None if is_stream() => Input::Stdin,
         None => return Err("summarize columns needs a bytemass stream on standard input".into()),
     };

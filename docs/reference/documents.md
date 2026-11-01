@@ -43,8 +43,9 @@ Some commands emit a document that is not a resource: it has no addressable
 | `ColumnMass` | [`summarize columns`](cli.md#pqbench-summarize-columns) | `table`, `column`, `compressed_bytes`, `uncompressed_bytes`, `value_count`, `bytes_per_value`, `compression_ratio`, `file_count`, `storage_classes`, `storage_costs` |
 | `Skill` | [`skill`](skill.md) (no arguments) | `kind: "pqbench.skill"`, `version`, `name`, `description`, `documents` |
 
-`ColumnDelta` and `ColumnMass` have no `name`, so `pqb fmt` cannot place them
-in a table; pipe them to `jq` (or `format --html`, for `ColumnMass`) or read the JSON.
+`ColumnDelta` has no `name`, so `pqb fmt` cannot place it in a table; pipe it
+to `jq` or read the JSON. A `ColumnMass` row has no name either, but its shape
+is recognized, so `pqb fmt` renders it as a table and `format --html` draws it.
 `Skill` is the one document that keeps an explicit `kind` and `version`: it is
 a listing, not a resource stream.
 

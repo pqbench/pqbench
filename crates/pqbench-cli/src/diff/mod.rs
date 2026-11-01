@@ -1,5 +1,7 @@
 //! `diff`: compare two bytemass streams.
 
+use std::path::Path;
+
 use crate::document::{self, Input, Record};
 use crate::emit::Emitter;
 use crate::CliError;
@@ -32,7 +34,11 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &DiffArgs) -> Result<(), Cli
 }
 
 async fn read(lake: &pqbench::Lake, input: &str) -> Result<Vec<v1::Column>, CliError> {
-    let source = Input::parse(input);
+    let source = if input == "-" {
+        Input::Stdin
+    } else {
+        Input::File(Path::new(input))
+    };
     if let Input::File(path) = source {
         if !document::is_document(path).await {
             let blob = v1::name::blob_name(input);

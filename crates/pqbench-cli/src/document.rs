@@ -39,17 +39,6 @@ pub(crate) enum Input<'a> {
     File(&'a Path),
 }
 
-impl<'a> Input<'a> {
-    /// The command line's input: `-` is standard input, anything else a path.
-    pub(crate) fn parse(input: &'a str) -> Self {
-        if input == "-" {
-            Self::Stdin
-        } else {
-            Self::File(Path::new(input))
-        }
-    }
-}
-
 /// The records of a document, one at a time. Each value is classified as it
 /// arrives, so a command is a filter over the stream and never buffers its
 /// input.
@@ -161,16 +150,11 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
             Ok(Record::File(parse_file(value)?))
         }
         Some(name) => Err(invalid_name(name)),
-        None => match mass_row(value) {
+        None => match mass::ColumnMass::from_document(&value) {
             Some(row) => Ok(Record::Mass(row)),
             None => Err("a document record needs a name".into()),
         },
     }
-}
-
-/// A summarized column row: no `name`, recognized by its shape.
-fn mass_row(value: serde_json::Value) -> Option<mass::ColumnMass> {
-    mass::ColumnMass::from_document(&value)
 }
 
 fn from_value<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Result<T, CliError> {

@@ -30,5 +30,6 @@ fn the_metadata_walk() {
 #[test]
 fn draw_the_result() {
     // draw_the_result, from line 82
-    support::run("pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 83, None);
+    support::run("pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb fmt", 83, Some(&["table                     column  bytes  values  bytes/value  ratio  files  class  $/month", "------------------------  ------  -----  ------  -----------  -----  -----  -----  -------", "local.quickstart.parquet  id        102       8        12.75   1.00      1", "local.quickstart.parquet  year       68       8         8.50   1.00      1"]));
+    support::run("pqb table-file examples/quickstart.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 88, None);
 }

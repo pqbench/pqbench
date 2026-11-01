@@ -9,6 +9,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use serde::Deserialize;
+
 use crate::v1;
 
 /// One candidate monthly storage cost: a class with one price, or one access
@@ -68,7 +70,7 @@ impl ColumnMass {
     /// a column path, and the measured bytes. A value without those is not a
     /// summarized column.
     pub fn from_document(value: &serde_json::Value) -> Option<Self> {
-        let row: Self = serde_json::from_value(value.clone()).ok()?;
+        let row: Self = Self::deserialize(value).ok()?;
         crate::v1::Table::parse_name(&row.table)?;
         (!row.column.is_empty()).then_some(row)
     }
@@ -122,12 +124,10 @@ pub fn summarize_columns(
     columns: &[v1::Column],
     blobs: &[v1::Blob],
 ) -> Result<Vec<ColumnMass>, Error> {
-    let facts: BTreeMap<&str, &v1::Blob> = blobs
-        .iter()
-        .map(|blob| (blob.name.as_str(), blob))
-        .collect();
+    let mut facts: BTreeMap<&str, &v1::Blob> = BTreeMap::new();
     for blob in blobs {
         sample_weight(blob.sample_rate)?;
+        facts.insert(blob.name.as_str(), blob);
     }
     let mut tables: BTreeMap<String, TableBytes> = BTreeMap::new();
     for column in columns {
@@ -167,7 +167,7 @@ pub fn summarize_columns(
         }
     }
 
-    let mut rows = Vec::new();
+    let mut rows = Vec::with_capacity(columns.len());
     for (table, total) in tables {
         let costs = table_class_costs(&total.blobs, &facts)?;
         for (column, mass) in total.columns {

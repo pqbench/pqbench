@@ -373,13 +373,15 @@ pub const FORMAT_ABOUT: &str = "Render a stream as tables, or a summarize column
 
 pub const FORMAT_LONG_ABOUT: &str = "\
 Read NDJSON on standard input. Tables are the default, one table per record
-kind; a record the curated type cannot hold still renders from its keys.
-`--html` reads a `summarize columns` stream and writes the static treemap page
-to standard output. No other input is supported for `--html`.";
+kind; a record the curated type cannot hold still renders from its keys, and a
+`summarize columns` row renders as a column-mass table. `--html` reads that
+same stream and writes the static treemap page to standard output. No other
+input is supported for `--html`.";
 
 pub const FORMAT_AFTER: &str = "\
 Examples:
   pqbench list catalogs | pqbench format
+  pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format --html > report.html
 
 See also:

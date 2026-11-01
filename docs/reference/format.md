@@ -8,6 +8,14 @@ treemap page on standard output. No other input is supported for `--html`.
 $ pqb table-file examples/quickstart.parquet \
 >   | pqb list columns \
 >   | pqb summarize columns \
+>   | pqb fmt
+table                     column  bytes  values  bytes/value  ratio  files  class  $/month
+------------------------  ------  -----  ------  -----------  -----  -----  -----  -------
+local.quickstart.parquet  id        102       8        12.75   1.00      1
+local.quickstart.parquet  year       68       8         8.50   1.00      1
+$ pqb table-file examples/quickstart.parquet \
+>   | pqb list columns \
+>   | pqb summarize columns \
 >   | pqb format --html > /tmp/report.html
 $ cat docker/e2e-lakehouse/table.ndjson \
 >   | pqb list files \
@@ -33,7 +41,10 @@ flowchart LR
 
 Without `--html`, the stream becomes tables: one section per record kind,
 columns from the curated type, and any record the type cannot hold rendered
-from its own keys. A record with no `name` (a `diff` delta) is not table data.
+from its own keys. A `ColumnMass` row has no `name`, so its shape places it in
+a column-mass table: the table, the column, its bytes and values, bytes per
+value, compression ratio, files, storage class, and monthly cost. A record with
+no name and no summarized columns (a `diff` delta) is not table data.
 
 ```console run
 $ pqb table-file examples/quickstart.parquet | pqb list columns | pqb format

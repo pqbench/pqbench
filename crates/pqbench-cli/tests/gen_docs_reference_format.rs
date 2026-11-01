@@ -12,17 +12,21 @@ fn format() {
     support::run(r#"pqb table-file examples/quickstart.parquet \
   | pqb list columns \
   | pqb summarize columns \
-  | pqb format --html > /tmp/report.html"#, 8, None);
+  | pqb fmt"#, 8, Some(&["table                     column  bytes  values  bytes/value  ratio  files  class  $/month", "------------------------  ------  -----  ------  -----------  -----  -----  -----  -------", "local.quickstart.parquet  id        102       8        12.75   1.00      1", "local.quickstart.parquet  year       68       8         8.50   1.00      1"]));
+    support::run(r#"pqb table-file examples/quickstart.parquet \
+  | pqb list columns \
+  | pqb summarize columns \
+  | pqb format --html > /tmp/report.html"#, 16, None);
     support::run(r#"cat docker/e2e-lakehouse/table.ndjson \
   | pqb list files \
   | pqb list columns \
   | pqb summarize columns \
-  | pqb format --html > /tmp/report.html"#, 12, None);
+  | pqb format --html > /tmp/report.html"#, 20, None);
 }
 
 #[rustfmt::skip]
 #[test]
 fn tables() {
-    // tables, from line 38
-    support::run("pqb table-file examples/quickstart.parquet | pqb list columns | pqb format", 39, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
+    // tables, from line 49
+    support::run("pqb table-file examples/quickstart.parquet | pqb list columns | pqb format", 50, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
 }

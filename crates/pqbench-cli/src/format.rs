@@ -4,16 +4,17 @@
 //! The walk is NDJSON end to end; this is the one command that turns a stream
 //! back into something a human reads. Records are typed by their `name` — the
 //! model's identity (AIP-122) — so a `catalogs/…/schemas/…` line is a `Schema`
-//! and takes its columns from [`crate::render`]. A record the curated type
-//! cannot hold, or whose name has no columns yet, still renders from its own
-//! keys; a record with no name at all (a `diff` delta) is not table data.
+//! and takes its columns from [`crate::render`]. A summarized column has no
+//! name, so its shape is what places it. A record the curated type cannot hold,
+//! or whose name has no columns yet, still renders from its own keys; a record
+//! with no name and no summarized columns (a `diff` delta) is not table data.
 //!
-//! `--html` is the one exception: it reads `ColumnMass` rows (no `name` either)
-//! and writes the treemap page to standard output.
+//! `--html` reads `ColumnMass` rows and writes the treemap page to standard
+//! output instead.
 
 use clap::Args;
 use futures_util::StreamExt;
-use pqbench::v1;
+use pqbench::{mass, v1};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -41,6 +42,8 @@ enum Class {
     Sweep,
     CompressionColumn,
     Profile,
+    /// A summarized table column: no name, recognized by its shape.
+    Mass,
     /// A record with no curated columns, grouped by its key set.
     Other(String),
 }
@@ -127,9 +130,12 @@ fn section(sections: &mut Vec<(Class, Section)>, class: Class) -> &mut Section {
     &mut sections[at].1
 }
 
-/// A record's class: the resource its `name` names, else the row kind.
+/// A record's class: the resource its `name` names, the row kind, or the shape
+/// of a summarized column.
 fn classify(record: &Value) -> Option<Class> {
-    let name = record.get("name")?.as_str()?;
+    let Some(name) = record.get("name").and_then(Value::as_str) else {
+        return mass::ColumnMass::from_document(record).map(|_| Class::Mass);
+    };
     Some(if v1::Column::parse_name(name).is_some() {
         Class::Column
     } else if name.contains("/codecs/") {
@@ -181,6 +187,7 @@ enum Section {
     Sweep(Vec<render::SweepRow>),
     CompressionColumn(Vec<render::ColumnSweepRow>),
     Profile(Vec<render::ProfileRow>),
+    Mass(Vec<mass::ColumnMass>),
     Other(Vec<Value>),
 }
 
@@ -196,6 +203,7 @@ impl Section {
             Class::Sweep => Self::Sweep(Vec::new()),
             Class::CompressionColumn => Self::CompressionColumn(Vec::new()),
             Class::Profile => Self::Profile(Vec::new()),
+            Class::Mass => Self::Mass(Vec::new()),
             Class::Other(_) => Self::Other(Vec::new()),
         }
     }
@@ -212,6 +220,10 @@ impl Section {
             Self::Sweep(rows) => push_typed(rows, record),
             Self::CompressionColumn(rows) => push_typed(rows, record),
             Self::Profile(rows) => push_typed(rows, record),
+            Self::Mass(rows) => {
+                rows.extend(mass::ColumnMass::from_document(&record));
+                None
+            }
             Self::Other(rows) => {
                 rows.push(record);
                 None
@@ -236,6 +248,7 @@ impl Section {
             Self::Sweep(rows) => render::render(rows),
             Self::CompressionColumn(rows) => render::render(rows),
             Self::Profile(rows) => render::render(rows),
+            Self::Mass(rows) => render::render(rows),
             Self::Other(rows) => render::render_values(rows),
         }
     }

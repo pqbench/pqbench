@@ -429,9 +429,10 @@ Read one table's record (`CATALOG.SCHEMA.TABLE`)
 ## `pqbench format`
 
 Read NDJSON on standard input. Tables are the default, one table per record
-kind; a record the curated type cannot hold still renders from its keys.
-`--html` reads a `summarize columns` stream and writes the static treemap page
-to standard output. No other input is supported for `--html`.
+kind; a record the curated type cannot hold still renders from its keys, and a
+`summarize columns` row renders as a column-mass table. `--html` reads that
+same stream and writes the static treemap page to standard output. No other
+input is supported for `--html`.
 
 **Usage:** `pqbench format [OPTIONS]`
 
@@ -440,6 +441,7 @@ to standard output. No other input is supported for `--html`.
 ```console no-run
 Examples:
   pqbench list catalogs | pqbench format
+  pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format --html > report.html
 
 See also:
@@ -876,7 +878,7 @@ Estimate each table column's mass from a bytemass stream
 
 ###### **Arguments:**
 
-* `<INPUT>` — bytemass NDJSON stream, or `-` for standard input
+* `<INPUT>` — bytemass NDJSON stream; reads standard input when omitted
 
 
 
