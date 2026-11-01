@@ -17,7 +17,9 @@ $ pqb ls catalogs | pqb rl \
     | pqb credentials get \
     | pqb get table \
     | pqb ls files \
-    | pqb bytemass
+    | pqb list columns \
+    | pqb summarize columns \
+    | pqb format --html > page.html
 ```
 
 `credentials check` is the walk's single filter: it drops a `system` catalog
@@ -39,9 +41,9 @@ $ eval "$(pqb setup --endpoint <url> --token <token> --region us-east-2)"
 fixture: `pqbench_ext`, whose external Delta tables on customer S3 are the
 synthetic `events`/`sales`/`reference` plus real sample data copied server-side
 from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-walk.sh` runs the whole
-walk once and prints each level's record count (the `dbx-walk` CI job);
-`make dbx-e2e` runs the live correctness e2e, and `make lakehouse` drives the
-compose stand for the file-level commands.
+walk once, prints each level's record count, and ends with the treemap page (the
+`dbx-walk` CI job); `make dbx-e2e` runs the live correctness e2e, and
+`make lakehouse` drives the compose stand for the file-level commands.
 
 The walk's catalog levels span the whole Unity Catalog; the table levels
 descend the one catalog this principal may read outside compute

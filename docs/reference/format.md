@@ -63,3 +63,33 @@ cell shows the estimated monthly S3 storage cost next to its bytes: an absent
 class on S3 is STANDARD, Intelligent-Tiering is a range over its access
 sub-tiers, and local files are not priced. No build step, no npm, no local
 server.
+
+## Whole metastore
+
+`make dbx-walk` runs the walk once against the live workspace and ends here. The
+catalog levels cover every catalog; the table levels cover the one catalog the
+principal may read outside compute (`PQB_WALK_CATALOG`, default `pqbench_ext`).
+
+```console no-run
+$ pqb list catalogs | pqb ratelimit --rate 15 \
+>   | pqb list schemas | pqb ratelimit --rate 15 \
+>   | pqb list tables | pqb ratelimit --rate 15 \
+>   | jq -c 'select(.name | startswith("catalogs/pqbench_ext/"))' \
+>   | pqb credentials check | pqb credentials get \
+>   | pqb get table | pqb list files | pqb list columns \
+>   | pqb summarize columns | pqb format --html > /tmp/metastore.html
+```
+
+One live run: 5 catalogs and 36 schemas (412 table refs); the `pqbench_ext`
+refs (120) narrowed by `credentials check` to 91 tables in 11 schemas, 224
+files, and 12,995 `Blob` and `Column` records folded into 1,726 `ColumnMass`
+rows on a 434 KB page. The rows total 19,647,713,732 bytes against
+19,651,902,193 on disk; the difference is Parquet footer and metadata, which no
+column owns.
+
+The other catalogs stop before storage: `samples` refuses `EXTERNAL USE SCHEMA`
+to the walk's principal, `dbx_samples` is Databricks default storage, and
+`workspace` and `system` are views and system tables. The `dbx-walk` CI job runs
+the walk on every push and on non-draft pull requests from this repository; set
+`PQB_WALK_PAGE` to keep the page, which otherwise stays in the script's temp
+directory.

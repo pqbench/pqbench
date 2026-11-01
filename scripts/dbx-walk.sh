@@ -6,7 +6,7 @@
 #
 #   list catalogs | ratelimit --rate 15 | list schemas | ratelimit --rate 15
 #     | list tables | ratelimit --rate 15 | credentials check | credentials get
-#     | get table | list files | bytemass
+#     | get table | list files | list columns | summarize columns | format --html
 #
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
@@ -16,7 +16,9 @@
 # from `credentials check` on (one catalog request per table, including
 # `credentials get`'s record read and `get table`'s). The storage levels
 # (`list files` down) read object storage, not the catalog, so they take no
-# stage of their own.
+# stage of their own. The last two stages fold the measured columns into the
+# sample-weighted rows and draw the treemap page, so one pass covers the whole
+# `list columns | summarize columns | format --html` pipeline.
 #
 # The catalog levels span the whole Unity Catalog; the table levels descend the
 # one catalog this principal may read outside compute (PQB_WALK_CATALOG,
@@ -49,7 +51,7 @@
 #   PQB_RATE=5 scripts/dbx-walk.sh
 #
 # Tunables (environment): PQB, PQB_RATE, PQB_WALK_RETRIES, PQB_WALK_CATALOG,
-# PQB_ENDPOINT, PQB_TOKEN, AWS_REGION.
+# PQB_WALK_PAGE, PQB_ENDPOINT, PQB_TOKEN, AWS_REGION.
 
 set -euo pipefail
 
@@ -86,14 +88,25 @@ walk() {
         "$PQB" credentials get | tee "$dir/vended" |
         "$PQB" get table | tee "$dir/tables" |
         "$PQB" list files | tee "$dir/files" |
-        "$PQB" bytemass >"$dir/bytemass"
+        "$PQB" list columns | tee "$dir/columns" |
+        "$PQB" summarize columns | tee "$dir/summary" |
+        "$PQB" format --html >"$dir/page.html"
     # `walk` runs in a condition, where the shell ignores `set -e`; return the
     # walk's status so the retry in `main` sees a failed walk.
     status=$?
     [ "$status" -eq 0 ] || return "$status"
-    for name in catalogs schemas refs readable checked vended tables files bytemass; do
+    grep -q '^<!DOCTYPE html>' "$dir/page.html" || {
+        echo "the walk wrote no HTML page" >&2
+        return 1
+    }
+    for name in catalogs schemas refs readable checked vended tables files columns summary; do
         printf '  %-12s %8s records\n' "$name" "$(wc -l <"$dir/$name")"
     done
+    printf '  %-12s %8s bytes\n' page "$(wc -c <"$dir/page.html")"
+    if [ -n "${PQB_WALK_PAGE:-}" ]; then
+        cp "$dir/page.html" "$PQB_WALK_PAGE"
+        echo "page: $PQB_WALK_PAGE"
+    fi
 }
 
 require() {
