@@ -23,6 +23,15 @@ pub(crate) fn iceberg_root(endpoint: &str) -> String {
     endpoint.trim_end_matches('/').to_string()
 }
 
+/// The Unity REST root of an endpoint of either dialect: an Iceberg REST
+/// catalog base names the root it was built from
+/// (`{root}/iceberg-rest/v1[/{prefix}]`).
+pub(crate) fn unity_root(endpoint: &str) -> String {
+    endpoint
+        .split_once("/iceberg-rest/")
+        .map_or_else(|| api_root(endpoint), |(root, _)| api_root(root))
+}
+
 /// Percent-encode one path or query value (RFC 3986 unreserved bytes pass).
 pub(crate) fn encode(value: &str) -> String {
     let mut encoded = String::new();

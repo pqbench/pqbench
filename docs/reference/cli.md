@@ -339,7 +339,9 @@ declared columns and properties are merged over the Delta log, which is read
 with without_files() — O(1) in files — so the table read needs a readable
 storage location: the ref's uri or the process environment. Under Iceberg REST
 (PQB_TABLE_FORMAT=iceberg) the schema level reads loadNamespace and the table
-level reads loadTable, whose metadata is inline, so no storage read runs.
+level reads loadTable, whose metadata is inline, so no storage read runs. A
+table loadTable refuses as not Iceberg compatible falls back to the Unity
+record and its own log (Delta wins UniForm), as the Unity dialect reads it.
 
 Vended credentials ride the refs from `credentials get`, and `credentials
 check` gates the walk on tables the catalog marks readable outside compute. The
@@ -489,7 +491,9 @@ PQB_TABLE_FORMAT=iceberg the schema and table levels speak Iceberg REST
 instead: the endpoint then names the catalog base ({root}/v1 or
 {root}/v1/{prefix}) and they read /namespaces under it. No config probe runs.
 Unity fills a table's storage location in the listing; Iceberg leaves it to
-`get table`.
+`get table`, and a table the Iceberg catalog will not serve (a Delta table:
+'is not an Iceberg compatible table') falls back to the Unity record and its
+own storage format, so Delta and UniForm tables walk under either dialect.
 
 `list files` resolves a snapshot and writes its active files, one TableFile per
 line, each with the table's lease — that stream is what `list columns` measures;

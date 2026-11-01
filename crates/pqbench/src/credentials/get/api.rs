@@ -52,7 +52,9 @@ pub async fn get(workspace: &Workspace, name: &str) -> Result<Option<Credentials
         Dialect::Unity => {
             super::r#impl::vend_unity(workspace, &catalog, &schema, &table_name).await?
         }
-        Dialect::Iceberg => super::r#impl::vend_iceberg(workspace, &schema, &table_name).await?,
+        Dialect::Iceberg => {
+            super::r#impl::vend_iceberg(workspace, &catalog, &schema, &table_name).await?
+        }
     };
     let Some(env) = env else {
         return Ok(None);
