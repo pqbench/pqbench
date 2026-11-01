@@ -821,7 +821,7 @@ See also:
 
 ## `pqbench summarize`
 
-Read a bytemass stream and write one `ColumnMass` row per table column: the
+Read a `list columns` stream and write one `ColumnMass` row per table column: the
 weighted bytes, values, and bytes per value over the files that measured it,
 the distinct file count and storage classes, and the monthly S3 storage cost
 (one candidate per class, and one per access sub-tier for Intelligent-Tiering).
@@ -835,12 +835,12 @@ static HTML treemap.
 
 ```console no-run
 Examples:
-  pqbench table-file data.parquet | pqbench bytemass | pqbench summarize columns
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns
+  pqbench table-file data.parquet | pqbench list columns | pqbench summarize columns
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns
   pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
 
 See also:
-  pqbench bytemass --help         produce the stream this command reduces
+  pqbench list columns --help     produce the stream this command reduces
   pqbench viz --help              draw them as a treemap
   docs/reference/cli.md
 ```

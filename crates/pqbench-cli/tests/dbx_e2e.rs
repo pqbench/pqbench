@@ -7,7 +7,7 @@
 //!
 //! The external fixture (`pqbench_ext`, external Delta on customer S3 — see
 //! `scripts/dbx-ext/`) covers the rest of the walk:
-//! `external_fixture_walks_to_bytemass` runs the full pipeline. The
+//! `external_fixture_walks_to_a_treemap` runs the full pipeline. The
 //! whole-catalog walk lives in `scripts/dbx-walk.sh` (`make dbx-walk`).
 //!
 //! The workspace URL comes from `DBX_HOST` (a repository secret in CI); the
@@ -1001,7 +1001,7 @@ fn timed_stage(
 
 /// The whole issue-#58 walk on a copied schema, all the way to a treemap:
 /// `list tables` → `credentials check` → `credentials get` → `get table` →
-/// `list files` → `bytemass` → `summarize columns` → `viz`, each stage fed the
+/// `list files` → `list columns` → `summarize columns` → `viz`, each stage fed the
 /// previous stage's NDJSON. Set
 /// `DBX_WALK_SCHEMA` to walk another schema (default `pqbench_ext.tpch_sf1`).
 #[test]
@@ -1035,7 +1035,7 @@ fn external_fixture_walks_to_a_treemap() {
     let (vended, _) = timed_stage(&env, &["credentials", "get"], &checked);
     let (info, _) = timed_stage(&env, &["get", "table"], &vended);
     let (files, _) = timed_stage(&env, &["list", "files"], &info);
-    let (measured, _) = timed_stage(&env, &["bytemass"], &files);
+    let (measured, _) = timed_stage(&env, &["list", "columns"], &files);
 
     // The walk narrows: tables → files → columns.
     let tables = ndjson(&info).len();

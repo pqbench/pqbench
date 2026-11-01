@@ -1,18 +1,18 @@
 # Visualization
 
-`bytemass` measures Parquet footers and writes NDJSON. `summarize columns`
+`list columns` measures Parquet footers and writes NDJSON. `summarize columns`
 folds that stream into one row per table column, and `pqb viz` draws the rows
 as a static HTML page. Measurement, aggregation, and presentation are separate
 commands so either end can change without the others.
 
 ```console run delta
 $ pqb table-file examples/quickstart.parquet \
->   | pqb bytemass \
+>   | pqb list columns \
 >   | pqb summarize columns \
 >   | pqb viz -o /tmp/report
 $ cat docker/e2e-lakehouse/table.ndjson \
 >   | pqb list files \
->   | pqb bytemass \
+>   | pqb list columns \
 >   | pqb summarize columns \
 >   | pqb viz -o /tmp/report
 ```
@@ -22,8 +22,8 @@ summary. The HTML file embeds the rows; open it without a server.
 
 ```mermaid
 flowchart LR
-    files[Parquet / table files] --> bytemass[pqb bytemass]
-    bytemass --> stream["Blob + Column lines"]
+    files[Parquet / table files] --> columns[pqb list columns]
+    columns --> stream["Blob + Column lines"]
     stream --> summarize[pqb summarize columns]
     summarize --> rows["ColumnMass rows"]
     rows --> viz[pqb viz]

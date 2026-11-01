@@ -150,7 +150,7 @@ fn summarize_columns_rejects_a_table_file() {
     let output = pipe(&["summarize", "columns"], document.as_bytes());
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("bytemass"), "{stderr}");
+    assert!(stderr.contains("list columns"), "{stderr}");
 }
 
 #[test]

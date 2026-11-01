@@ -209,11 +209,11 @@ $ pqb table-file s3://bucket/table/part-0.parquet | AWS_PROFILE=analytics pqb by
 
 ### summarize columns
 
-Fold the bytemass stream into one `ColumnMass` row per table column: weighted
+Fold the `list columns` stream into one `ColumnMass` row per table column: weighted
 bytes, values, file count, storage classes, and the monthly S3 cost.
 
 ```console no-run
-$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb summarize columns
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns
 ```
 
 ### viz
@@ -222,8 +222,8 @@ Draw a `summarize columns` document as a static HTML treemap — no server, no
 build step.
 
 ```console run delta
-$ pqb table-file data/samples/delta_byte_array.parquet | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
-$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb summarize columns | pqb viz -o /tmp/report
+$ pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb viz -o /tmp/report
+$ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb viz -o /tmp/report
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.

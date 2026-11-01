@@ -41,7 +41,7 @@ async fn collect(input: &str) -> Result<(Vec<v1::Column>, Vec<v1::Blob>), CliErr
             Record::Column(column) => columns.push(column),
             Record::File(file) => {
                 return Err(format!(
-                    "summarize columns reads a bytemass stream, not `{}`; measure with `pqbench bytemass` first",
+                    "summarize columns reads a `list columns` stream, not `{}`; measure with `pqbench list columns` first",
                     file.name
                 )
                 .into());

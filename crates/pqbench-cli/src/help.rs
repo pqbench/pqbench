@@ -3,7 +3,7 @@
 
 /// One-line summary for `pqbench -h`.
 pub const ROOT_ABOUT: &str =
-    "Measure Parquet storage and codec speed; pipe refs → list files → bytemass → summarize";
+    "Measure Parquet storage and codec speed; pipe refs → list files → list columns → summarize";
 
 /// Full summary for `pqbench --help`.
 pub const ROOT_LONG_ABOUT: &str = "\
@@ -349,7 +349,7 @@ See also:
 pub const SUMMARIZE_ABOUT: &str = "Estimate each table column's mass from a bytemass stream";
 
 pub const SUMMARIZE_LONG_ABOUT: &str = "\
-Read a bytemass stream and write one `ColumnMass` row per table column: the
+Read a `list columns` stream and write one `ColumnMass` row per table column: the
 weighted bytes, values, and bytes per value over the files that measured it,
 the distinct file count and storage classes, and the monthly S3 storage cost
 (one candidate per class, and one per access sub-tier for Intelligent-Tiering).
@@ -361,12 +361,12 @@ static HTML treemap.";
 
 pub const SUMMARIZE_AFTER: &str = "\
 Examples:
-  pqbench table-file data.parquet | pqbench bytemass | pqbench summarize columns
-  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass | pqbench summarize columns
+  pqbench table-file data.parquet | pqbench list columns | pqbench summarize columns
+  cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns
   pqbench list files | pqbench bytemass | pqbench summarize columns | pqbench viz -o report
 
 See also:
-  pqbench bytemass --help         produce the stream this command reduces
+  pqbench list columns --help     produce the stream this command reduces
   pqbench viz --help              draw them as a treemap
   docs/reference/cli.md";
 
