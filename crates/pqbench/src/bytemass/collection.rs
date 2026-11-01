@@ -24,9 +24,9 @@ struct Fold {
     chunks: usize,
     codec: Option<String>,
     codec_mixed: bool,
-    data_encodings: KnownSet,
-    dictionary_bytes: KnownSum,
-    unencoded_bytes: KnownSum,
+    data_encoding_set: KnownSet,
+    dictionary_byte_sum: KnownSum,
+    unencoded_byte_sum: KnownSum,
 }
 
 impl Fold {
@@ -39,9 +39,9 @@ impl Fold {
             chunks: 0,
             codec: None,
             codec_mixed: false,
-            data_encodings: KnownSet::new(),
-            dictionary_bytes: KnownSum::new(),
-            unencoded_bytes: KnownSum::new(),
+            data_encoding_set: KnownSet::new(),
+            dictionary_byte_sum: KnownSum::new(),
+            unencoded_byte_sum: KnownSum::new(),
         }
     }
 
@@ -59,11 +59,11 @@ impl Fold {
         }
         mass.dictionary |= chunk.dictionary;
         merge_encodings(&mut mass.encodings, chunk.encodings);
-        self.data_encodings.add(chunk.data_encodings);
+        self.data_encoding_set.add(chunk.data_encodings);
         if chunk.dictionary {
-            self.dictionary_bytes.add(chunk.dictionary_bytes);
+            self.dictionary_byte_sum.add(chunk.dictionary_bytes);
         }
-        self.unencoded_bytes.add(chunk.unencoded_bytes);
+        self.unencoded_byte_sum.add(chunk.unencoded_bytes);
         // A group with no statistics makes the file total unknown, not smaller.
         mass.null_count = match (mass.null_count, chunk.null_count) {
             (_, None) => None,
@@ -87,9 +87,9 @@ impl Fold {
     /// The folded mass, with the ratios and the single codec resolved.
     fn finish(mut self, row_count: u64) -> v1::Bytemass {
         self.mass.codec = (!self.codec_mixed).then_some(self.codec).flatten();
-        self.mass.data_encodings = self.data_encodings.finish();
-        self.mass.dictionary_bytes = self.dictionary_bytes.finish();
-        self.mass.unencoded_bytes = self.unencoded_bytes.finish();
+        self.mass.data_encodings = self.data_encoding_set.finish();
+        self.mass.dictionary_bytes = self.dictionary_byte_sum.finish();
+        self.mass.unencoded_bytes = self.unencoded_byte_sum.finish();
         self.mass.bytes_per_value = ratio(self.mass.compressed_bytes, self.mass.value_count);
         self.mass.bytes_per_row = ratio(self.mass.compressed_bytes, Some(row_count));
         self.mass.compression_ratio =
