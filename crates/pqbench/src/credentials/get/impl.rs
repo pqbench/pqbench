@@ -271,33 +271,17 @@ fn matching_config(
         .map(|credential| credential.config.clone())
 }
 
-/// The `AWS_*` options an Iceberg `s3.*` config names, with the token expiry
+/// The credential set an Iceberg `s3.*` config names, with the token expiry
 /// the catalog reports; `None` without an access key.
-fn aws_options(
-    config: &BTreeMap<String, String>,
-) -> Option<(BTreeMap<String, String>, Option<u64>)> {
-    let key = config.get("s3.access-key-id")?;
-    let secret = config.get("s3.secret-access-key")?;
-    let mut options = BTreeMap::from([
-        ("AWS_ACCESS_KEY_ID".to_string(), key.clone()),
-        ("AWS_SECRET_ACCESS_KEY".to_string(), secret.clone()),
-    ]);
-    if let Some(token) = config.get("s3.session-token") {
-        options.insert("AWS_SESSION_TOKEN".to_string(), token.clone());
-    }
-    let expire_time = config
-        .get("s3.session-token-expires-at-ms")
-        .and_then(|value| value.parse().ok());
-    Some((options, expire_time))
-}
-
-/// One credential set from an Iceberg `config` map, or `None` when it names
-/// no access key.
 fn read_credentials(config: &BTreeMap<String, String>) -> Option<Credentials> {
-    let (env, expire_time) = aws_options(config)?;
-    let mut credentials = Credentials::from_env(&env);
-    credentials.expire_time = expire_time;
-    (!credentials.is_empty()).then_some(credentials)
+    Some(Credentials {
+        access_key_id: Some(config.get("s3.access-key-id")?.clone()),
+        secret_access_key: Some(config.get("s3.secret-access-key")?.clone()),
+        session_token: config.get("s3.session-token").cloned(),
+        expire_time: config
+            .get("s3.session-token-expires-at-ms")
+            .and_then(|value| value.parse().ok()),
+    })
 }
 
 #[cfg(test)]
@@ -324,11 +308,9 @@ mod tests {
                 "1794050862767".to_string(),
             ),
         ]);
-        let (env, expire_time) = aws_options(&config).expect("the config has a key");
-        assert_eq!(expire_time, Some(1_794_050_862_767));
-        assert_eq!(env.get("AWS_ACCESS_KEY_ID").map(String::as_str), Some("a"));
-        let credentials = read_credentials(&config).expect("credentials");
+        let credentials = read_credentials(&config).expect("the config has a key");
         assert_eq!(credentials.expire_time, Some(1_794_050_862_767));
+        assert_eq!(credentials.access_key_id.as_deref(), Some("a"));
     }
 
     #[test]
