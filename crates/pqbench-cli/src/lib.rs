@@ -9,7 +9,7 @@ mod bytemass;
 mod catalog;
 mod compression;
 mod config;
-mod credentials;
+mod daemon;
 mod diff;
 mod document;
 mod emit;
@@ -114,12 +114,12 @@ enum Command {
     )]
     Sample(sample::SampleArgs),
     #[command(
-        about = help::CREDENTIALS_ABOUT,
-        long_about = help::CREDENTIALS_LONG_ABOUT,
-        after_help = help::CREDENTIALS_AFTER,
-        after_long_help = help::CREDENTIALS_AFTER
+        about = help::DAEMON_ABOUT,
+        long_about = help::DAEMON_LONG_ABOUT,
+        after_help = help::DAEMON_AFTER,
+        after_long_help = help::DAEMON_AFTER
     )]
-    Credentials(credentials::CredentialsArgs),
+    Daemon(daemon::DaemonArgs),
     #[command(
         name = "ratelimit",
         visible_alias = "rl",
@@ -185,6 +185,14 @@ pub async fn run() -> ExitCode {
 
 /// Resolve the shared configuration and context once, then run the command.
 async fn dispatch(cli: Cli) -> Result<(), CliError> {
+    // `daemon stop/status` with an explicit socket need no profile, endpoint,
+    // or token; resolve them from an empty configuration.
+    if let Command::Daemon(args) = &cli.command {
+        if args.socket_only() {
+            let workspace = pqbench::Workspace::new(pqbench::Config::default())?;
+            return daemon::run(&workspace, args).await;
+        }
+    }
     let config = config::resolve(
         cli.command.name(),
         &cli.config,
@@ -192,17 +200,18 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
     )?;
     let workspace = pqbench::Workspace::new(config)?;
     let lake = pqbench::Lake::new(&workspace);
+    let leases = daemon::LeaseCache::client(workspace.clone());
     match cli.command {
         Command::Diff(args) => diff::run(&lake, &args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
-        Command::Bytemass(args) => bytemass::run(&lake, &args).await,
-        Command::Get(args) => get::run(&workspace, &lake, &args).await,
+        Command::Bytemass(args) => bytemass::run(&lake, &leases, &args).await,
+        Command::Get(args) => get::run(&workspace, &lake, &leases, &args).await,
         Command::Format(args) => format::run(&args).await,
         Command::TableFile(args) => table_file::run(&args).await,
-        Command::List(args) => list::run(&workspace, &lake, &args).await,
+        Command::List(args) => list::run(&workspace, &lake, &leases, &args).await,
         Command::Sample(args) => sample::run(&args).await,
-        Command::Credentials(args) => credentials::run(&workspace, &args).await,
+        Command::Daemon(args) => daemon::run(&workspace, &args).await,
         Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Summarize(args) => summarize::run(&args).await,
@@ -224,7 +233,7 @@ impl Command {
             Command::TableFile(_) => "table-file",
             Command::List(args) => args.name(),
             Command::Sample(args) => args.name(),
-            Command::Credentials(_) => "credentials",
+            Command::Daemon(_) => "daemon",
             Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
             Command::Summarize(args) => args.name(),
@@ -237,7 +246,8 @@ impl Command {
     /// catalog; a storage-only command (`list files`, `bytemass`, …) does not.
     fn requires_endpoint(&self) -> bool {
         match self {
-            Command::Get(_) | Command::Credentials(_) => true,
+            Command::Get(_) => true,
+            Command::Daemon(args) => args.requires_endpoint(),
             Command::List(args) => args.requires_endpoint(),
             _ => false,
         }

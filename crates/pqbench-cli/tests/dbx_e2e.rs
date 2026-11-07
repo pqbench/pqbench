@@ -35,15 +35,35 @@ fn pqbench() -> Command {
 }
 
 /// pqbench with a scrubbed environment and piped stdin: the credentials are
-/// the test's, not the child's — the token travels on the document.
+/// the test's, not the parent shell's.
 fn scrubbed() -> Command {
     let mut command = pqbench();
-    command
-        .env_remove("DBX_TOKEN")
-        .env_remove("DBX_HOST")
-        .env_remove("DBX_SAMPLES_SP_CLIENT_ID")
-        .env_remove("DBX_SAMPLES_SP_CLIENT_SECRET")
-        .stdin(Stdio::piped());
+    for name in [
+        "DBX_TOKEN",
+        "DBX_HOST",
+        "DBX_SAMPLES_SP_CLIENT_ID",
+        "DBX_SAMPLES_SP_CLIENT_SECRET",
+        "PQB_ENDPOINT",
+        "PQB_TOKEN",
+        "PQB_PROFILE",
+        "PQB_CONFIG_FILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+        "AWS_ENDPOINT",
+        "AWS_ENDPOINT_URL",
+        "AWS_REGION",
+        "AWS_ALLOW_HTTP",
+        "AWS_VIRTUAL_HOSTED_STYLE_REQUEST",
+    ] {
+        command.env_remove(name);
+    }
+    // Do not attach to a developer's daemon at the derived socket path.
+    let socket = std::env::temp_dir().join(format!("pqbench-e2e-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&socket);
+    command.env("PQB_DAEMON_SOCK", socket);
+    command.stdin(Stdio::piped());
     command
 }
 
@@ -834,14 +854,12 @@ fn table_get_names_the_location_when_the_metadata_cannot_be_read() {
     assert!(stderr.contains("s3://"), "{stderr}");
 }
 
-/// `credentials check` on the live Unity catalog: the UniForm Delta fixture
-/// (`pqbench_delta_test`) lists no direct-external-engine capability in its
-/// manifest, so the check drops it with the reason on stderr; the managed
-/// Iceberg tables carry the capability and pass through, including from a
-/// mixed schema. A drop is the filter working, so the stage still succeeds.
+/// `get table` on the live Unity catalog: the UniForm Delta fixture
+/// (`pqbench_delta_test`) is on default storage, so it gets no lease and its
+/// storage read fails with the table named.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_check_filters_the_live_tables() {
+fn get_table_refuses_default_storage() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -851,91 +869,34 @@ fn credentials_check_filters_the_live_tables() {
         return;
     };
     let endpoint = unity_endpoint(&host);
+    let region = std::env::var("DBX_AWS_REGION")
+        .ok()
+        .filter(|region| !region.is_empty())
+        .unwrap_or_else(|| "us-east-2".to_string());
     let env = [
         ("PQB_ENDPOINT", endpoint.as_str()),
         ("PQB_TOKEN", token.as_str()),
+        ("AWS_REGION", region.as_str()),
     ];
-    let reference = |id: &str| table_ref(id);
     let unsupported = pipe_env(
-        &["credentials", "check"],
-        format!("{}\n", reference("dbx_samples.nyctaxi.pqbench_delta_test")).as_bytes(),
+        &["get", "table"],
+        format!("{}\n", table_ref("dbx_samples.nyctaxi.pqbench_delta_test")).as_bytes(),
         &env,
     );
-    assert!(
-        unsupported.status.success(),
-        "a credentials filter drop is not a failed read"
-    );
+    assert!(!unsupported.status.success());
     let stderr = String::from_utf8_lossy(&unsupported.stderr);
     assert!(
         stderr.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"),
         "{stderr}"
     );
-    assert!(stderr.contains("managed default storage"), "{stderr}");
-    assert!(
-        ndjson(&unsupported.stdout).is_empty(),
-        "a drop emits no ref"
-    );
-    let eligible = pipe_env(
-        &["credentials", "check"],
-        format!("{}\n", reference("dbx_samples.nyctaxi.trips")).as_bytes(),
-        &env,
-    );
-    assert!(
-        eligible.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&eligible.stderr)
-    );
-    let records = ndjson(&eligible.stdout);
-    assert_eq!(records.len(), 1);
-    assert_eq!(fqn(&records[0]), "dbx_samples.nyctaxi.trips");
-
-    // A mixed schema drops the ineligible table and keeps the eligible ones:
-    // the filter the walk composes on.
-    let refs = pipe_env(
-        &["list", "tables"],
-        schema_ref("dbx_samples.nyctaxi").as_bytes(),
-        &env,
-    );
-    assert!(
-        refs.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&refs.stderr)
-    );
-    let mixed = pipe_env(&["credentials", "check"], &refs.stdout, &env);
-    assert!(mixed.status.success());
-    let mixed_stderr = String::from_utf8_lossy(&mixed.stderr);
-    assert!(
-        mixed_stderr.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/pqbench_delta_test"),
-        "{mixed_stderr}"
-    );
-    assert!(
-        mixed_stderr.contains("managed default storage"),
-        "{mixed_stderr}"
-    );
-    let mixed_records = ndjson(&mixed.stdout);
-    let passed: Vec<String> = mixed_records.iter().map(fqn).collect();
-    assert_eq!(passed.len(), 2, "{passed:?}");
-    assert!(
-        passed
-            .iter()
-            .any(|table| table == "dbx_samples.nyctaxi.trips"),
-        "{passed:?}"
-    );
-    assert!(
-        passed
-            .iter()
-            .any(|table| table == "dbx_samples.nyctaxi.pqbench_iceberg_test"),
-        "{passed:?}"
-    );
 }
 
-/// The whole credentials stage on the external fixture: every table in the
-/// synthetic schemas and in a copied schema is eligible, so `list schemas |
-/// credentials check | credentials get` passes each ref through with a vended
-/// lease on `env`.
+/// `get table` on the external fixture: every table in the synthetic schemas
+/// and in a copied schema is eligible, so each read resolves its own lease and
+/// the emitted records carry no credentials.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_get_vends_the_external_fixture() {
+fn get_table_reads_the_external_fixture() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -945,9 +906,14 @@ fn credentials_get_vends_the_external_fixture() {
         return;
     };
     let endpoint = unity_endpoint(&host);
+    let region = std::env::var("DBX_AWS_REGION")
+        .ok()
+        .filter(|region| !region.is_empty())
+        .unwrap_or_else(|| "us-east-2".to_string());
     let env = [
         ("PQB_ENDPOINT", endpoint.as_str()),
         ("PQB_TOKEN", token.as_str()),
+        ("AWS_REGION", region.as_str()),
     ];
 
     let mut tables = 0;
@@ -959,22 +925,16 @@ fn credentials_get_vends_the_external_fixture() {
             "stderr: {}",
             String::from_utf8_lossy(&listed.stderr)
         );
-        let checked = pipe_env(&["credentials", "check"], &listed.stdout, &env);
+        let read = pipe_env(&["get", "table"], &listed.stdout, &env);
         assert!(
-            checked.status.success(),
+            read.status.success(),
             "stderr: {}",
-            String::from_utf8_lossy(&checked.stderr)
+            String::from_utf8_lossy(&read.stderr)
         );
-        let vended = pipe_env(&["credentials", "get"], &checked.stdout, &env);
-        assert!(
-            vended.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&vended.stderr)
-        );
-        for record in ndjson(&vended.stdout) {
+        for record in ndjson(&read.stdout) {
             assert!(
-                record["credentials"]["access_key_id"].is_string(),
-                "no vended lease: {record}"
+                record.get("credentials").is_none(),
+                "the lease rode on the record: {record}"
             );
             tables += 1;
         }
@@ -1000,7 +960,7 @@ fn timed_stage(
 }
 
 /// The whole issue-#58 walk on a copied schema, all the way to a treemap:
-/// `list tables` → `credentials check` → `credentials get` → `get table` →
+/// `list tables` → `get table` →
 /// `list files` → `list columns` → `summarize columns` → `format --html`, each
 /// stage fed the
 /// previous stage's NDJSON. Set
@@ -1032,9 +992,7 @@ fn external_fixture_walks_to_a_treemap() {
     ];
 
     let (listed, _) = timed_stage(&env, &["list", "tables"], schema_ref(&schema).as_bytes());
-    let (checked, _) = timed_stage(&env, &["credentials", "check"], &listed);
-    let (vended, _) = timed_stage(&env, &["credentials", "get"], &checked);
-    let (info, _) = timed_stage(&env, &["get", "table"], &vended);
+    let (info, _) = timed_stage(&env, &["get", "table"], &listed);
     let (files, _) = timed_stage(&env, &["list", "files"], &info);
     let (measured, _) = timed_stage(&env, &["list", "columns"], &files);
 
@@ -1098,10 +1056,9 @@ fn external_fixture_walks_to_a_treemap() {
     );
 }
 
-/// `get table` on a table in customer storage: `credentials get`
-/// materializes the vended lease on the ref, `get table` reads the Delta
-/// log under it, and the lease rides through on the emitted record for the
-/// next stage. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
+/// `get table` on a table in customer storage: the stage resolves the table's
+/// vended lease itself, reads the Delta log under it, and emits a record with
+/// no credentials. The fixture lives in `us-east-2`; set `DBX_AWS_TABLE` /
 /// `DBX_AWS_REGION` to read another one.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
@@ -1124,32 +1081,9 @@ fn table_get_reads_the_external_aws_table() {
         .unwrap_or_else(|| "us-east-2".to_string());
     let endpoint = unity_endpoint(&host);
     let reference = table_ref(&table);
-    let vended = pipe_env(
-        &["credentials", "get"],
-        format!("{reference}\n").as_bytes(),
-        &[
-            ("PQB_ENDPOINT", endpoint.as_str()),
-            ("PQB_TOKEN", token.as_str()),
-        ],
-    );
-    assert!(
-        vended.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&vended.stderr)
-    );
-    let vended = ndjson(&vended.stdout);
-    assert_eq!(vended.len(), 1);
-    assert!(
-        vended[0]["credentials"]["access_key_id"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty()),
-        "no vended lease: {}",
-        vended[0]
-    );
-    let enriched = vended[0].to_string();
     let output = pipe_env(
         &["get", "table"],
-        format!("{enriched}\n").as_bytes(),
+        format!("{reference}\n").as_bytes(),
         &[
             ("PQB_ENDPOINT", endpoint.as_str()),
             ("PQB_TOKEN", token.as_str()),
@@ -1178,84 +1112,16 @@ fn table_get_reads_the_external_aws_table() {
         "{record:?}"
     );
     assert!(
-        record["credentials"]["access_key_id"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty()),
-        "the lease did not ride through: {record:?}"
+        record.get("credentials").is_none(),
+        "the lease rode on the record: {record:?}"
     );
 }
 
-/// `credentials get` on the live Unity catalog: the managed Iceberg tables
-/// (`trips`, `pqbench_iceberg_test`) carry direct-external-engine support in
-/// their capability manifest, so Unity vends temporary read credentials onto
-/// the ref's `env`; the UniForm Delta table (`pqbench_delta_test`) lists no
-/// such capability and passes through with no `env`.
+/// `get table` with `PQB_TABLE_FORMAT=iceberg` on the live catalog: loadTable
+/// returns the metadata inline, and the emitted records carry no credentials.
 #[test]
 #[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_get_vends_the_live_tables() {
-    let Some(host) = dbx_host() else {
-        eprintln!("skipping: DBX_HOST is not set");
-        return;
-    };
-    let Some(token) = any_token(&host) else {
-        eprintln!("skipping: DBX_TOKEN and DBX_SAMPLES_SP_CLIENT_ID/SECRET are not set");
-        return;
-    };
-    let endpoint = unity_endpoint(&host);
-    let env = [
-        ("PQB_ENDPOINT", endpoint.as_str()),
-        ("PQB_TOKEN", token.as_str()),
-    ];
-    let refs = pipe_env(
-        &["list", "tables"],
-        schema_ref("dbx_samples.nyctaxi").as_bytes(),
-        &env,
-    );
-    assert!(
-        refs.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&refs.stderr)
-    );
-    let output = pipe_env(&["credentials", "get"], &refs.stdout, &env);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    for table in [
-        "dbx_samples.nyctaxi.trips",
-        "dbx_samples.nyctaxi.pqbench_iceberg_test",
-    ] {
-        let vended = records
-            .iter()
-            .find(|record| fqn(record) == table)
-            .unwrap_or_else(|| panic!("no {table}: {records:?}"));
-        assert_eq!(resource(vended), "tables");
-        for key in ["access_key_id", "secret_access_key", "session_token"] {
-            assert!(
-                vended["credentials"][key]
-                    .as_str()
-                    .is_some_and(|value| !value.is_empty()),
-                "{table} {key}: {vended:?}"
-            );
-        }
-    }
-    let passed = records
-        .iter()
-        .find(|record| fqn(record) == "dbx_samples.nyctaxi.pqbench_delta_test")
-        .unwrap_or_else(|| panic!("no pqbench_delta_test: {records:?}"));
-    assert!(passed["credentials"].is_null(), "{passed:?}");
-}
-
-/// `credentials get` with `PQB_TABLE_FORMAT=iceberg` on the live catalog: the
-/// `loadCredentials` route returns the catalog's credentials for the managed
-/// Iceberg tables onto the ref's `env`; the UniForm Delta table cannot mint
-/// there, falls back to the delegated `loadTable`, and passes through with no
-/// `env`.
-#[test]
-#[ignore = "network: reads the live Databricks endpoint"]
-fn credentials_get_iceberg_vends_the_live_tables() {
+fn get_table_reads_the_live_iceberg_tables() {
     let Some(host) = dbx_host() else {
         eprintln!("skipping: DBX_HOST is not set");
         return;
@@ -1273,46 +1139,28 @@ fn credentials_get_iceberg_vends_the_live_tables() {
         ("PQB_TOKEN", token.as_str()),
         ("PQB_TABLE_FORMAT", "iceberg"),
     ];
-    let refs = pipe_env(
-        &["list", "tables"],
-        schema_ref("dbx_samples.nyctaxi").as_bytes(),
-        &env,
-    );
-    assert!(
-        refs.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&refs.stderr)
-    );
-    let output = pipe_env(&["credentials", "get"], &refs.stdout, &env);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
     for table in [
         "dbx_samples.nyctaxi.trips",
         "dbx_samples.nyctaxi.pqbench_iceberg_test",
     ] {
-        let vended = records
-            .iter()
-            .find(|record| fqn(record) == table)
-            .unwrap_or_else(|| panic!("no {table}: {records:?}"));
-        assert_eq!(resource(vended), "tables");
-        for key in ["access_key_id", "secret_access_key", "session_token"] {
-            assert!(
-                vended["credentials"][key]
-                    .as_str()
-                    .is_some_and(|value| !value.is_empty()),
-                "{table} {key}: {vended:?}"
-            );
-        }
+        let output = pipe_env(
+            &["get", "table"],
+            format!("{}\n", table_ref(table)).as_bytes(),
+            &env,
+        );
+        assert!(
+            output.status.success(),
+            "{table} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records = ndjson(&output.stdout);
+        assert_eq!(records.len(), 1, "{table}");
+        assert!(
+            records[0].get("credentials").is_none(),
+            "{table}: the lease rode on the record: {}",
+            records[0]
+        );
     }
-    let passed = records
-        .iter()
-        .find(|record| fqn(record) == "dbx_samples.nyctaxi.pqbench_delta_test")
-        .unwrap_or_else(|| panic!("no pqbench_delta_test: {records:?}"));
-    assert!(passed["credentials"].is_null(), "{passed:?}");
 }
 
 /// The walk as a pipe, context in `PQB_ENDPOINT` / `PQB_TOKEN`:

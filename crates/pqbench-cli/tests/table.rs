@@ -3,7 +3,19 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 fn pqbench() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_pqbench"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pqbench"));
+    for name in [
+        "PQB_ENDPOINT",
+        "PQB_TOKEN",
+        "PQB_PROFILE",
+        "PQB_CONFIG_FILE",
+        "PQB_DAEMON_SOCK",
+        "DATABRICKS_HOST",
+        "DATABRICKS_TOKEN",
+    ] {
+        command.env_remove(name);
+    }
+    command
 }
 
 /// One parent record, as the stream carries it.
@@ -213,6 +225,22 @@ const SCHEMA_REFS: &str = concat!(
     r#"{"name":"catalogs/dbx_samples/schemas/bakehouse"}"#,
     "\n",
 );
+
+#[test]
+fn bytemass_reads_a_local_table_with_an_endpoint() {
+    let size = std::fs::metadata(parquet_fixture()).unwrap().len();
+    let document = table_file(LOCAL_TABLE, parquet_fixture(), Some(size));
+    let output = pipe_env(
+        &["bytemass"],
+        document.to_string().as_bytes(),
+        &[("PQB_ENDPOINT", "http://127.0.0.1:1")],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 #[test]
 fn bytemass_reads_a_table_file_from_stdin() {

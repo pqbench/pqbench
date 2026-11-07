@@ -2952,6 +2952,7 @@ version = "0.0.11"
 dependencies = [
  "clap",
  "futures-util",
+ "libc",
  "lz4",
  "pqbench",
  "reqwest 0.12.28",

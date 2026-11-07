@@ -1,4 +1,4 @@
-//! `credentials get`: one table's vended read credentials.
+//! Vending one table's read credentials for the lease daemon.
 
 use std::fmt;
 
@@ -48,17 +48,12 @@ impl std::error::Error for Error {
 pub async fn get(workspace: &Workspace, name: &str) -> Result<Option<Credentials>, Error> {
     let (catalog, schema, table_name) =
         Table::parse_name(name).ok_or_else(|| Error::Name(format!("not a table name: {name}")))?;
-    let env = match workspace.config().dialect {
+    match workspace.config().dialect {
         Dialect::Unity => {
-            super::r#impl::vend_unity(workspace, &catalog, &schema, &table_name).await?
+            super::r#impl::vend_unity(workspace, &catalog, &schema, &table_name).await
         }
         Dialect::Iceberg => {
-            super::r#impl::vend_iceberg(workspace, &catalog, &schema, &table_name).await?
+            super::r#impl::vend_iceberg(workspace, &catalog, &schema, &table_name).await
         }
-    };
-    let Some(env) = env else {
-        return Ok(None);
-    };
-    let credentials = Credentials::from_env(&env);
-    Ok((!credentials.is_empty()).then_some(credentials))
+    }
 }

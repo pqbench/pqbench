@@ -30,14 +30,15 @@ enum ListCollection {
 pub(crate) async fn run(
     workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
+    leases: &crate::daemon::LeaseCache,
     args: &ListArgs,
 ) -> Result<(), CliError> {
     match &args.collection {
         ListCollection::Catalogs(args) => crate::catalog::list::run(workspace, args).await,
         ListCollection::Schemas(args) => crate::schema::list::run(workspace, args).await,
         ListCollection::Tables(args) => crate::table::list::run(workspace, args).await,
-        ListCollection::Files(args) => crate::file::list::run(lake, args).await,
-        ListCollection::Columns(args) => crate::bytemass::run(lake, args).await,
+        ListCollection::Files(args) => crate::file::list::run(lake, leases, args).await,
+        ListCollection::Columns(args) => crate::bytemass::run(lake, leases, args).await,
     }
 }
 

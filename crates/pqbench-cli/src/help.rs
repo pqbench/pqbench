@@ -17,7 +17,7 @@ Commands compose on pipes: each writes a resource the next command reads.
   list          → Catalog / Schema / Table / TableFile / Column
                   a collection of the walk
   sample        → TableFile           keep a rate of them, by size
-  credentials   → Table          check + vend read credentials
+  daemon        → leases               cache and refresh catalog-vended leases
   bytemass      → Blob + Column        footer byte masses (alias for list columns)
   summarize     → ColumnMass           estimate each column's mass (summarize columns)
   skill         → markdown             bundled agent recipes (write / DDL / codec)
@@ -38,9 +38,9 @@ Examples:
   pqbench table-file data.parquet | pqbench bytemass
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench bytemass
   pqbench list catalogs | pqbench list schemas | pqbench list tables
+  pqbench daemon start
   pqbench list catalogs | pqbench list schemas | pqbench list tables \\
-    | pqbench credentials check | pqbench credentials get | pqbench get table \\
-    | pqbench list files | pqbench bytemass
+    | pqbench get table | pqbench list files | pqbench bytemass
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
@@ -51,7 +51,7 @@ Documents:
   Metastore              the endpoint's metastore record (get metastore)
   Catalog                the endpoint's catalogs (list catalogs) / one record (get catalog)
   Schema                 a catalog's schemas (list schemas) / one record (get schema)
-  Table                  a schema's tables (list tables) / one record (get table, credentials get)
+  Table                  a schema's tables (list tables) / one record (get table)
   TableFile              one table file (list files, sample files, table-file)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
@@ -67,8 +67,8 @@ Auth (how to reach data):
 
   s3://  (needs --features aws / delta-s3 / iceberg-s3)
     Default AWS provider chain (process env, shared config, instance role,
-    AWS_PROFILE). A ref's env (a vended lease) overrides that chain; it is
-    not exported into the process. Only AWS_* names are accepted on refs.
+    AWS_PROFILE). A table's vended lease overrides that chain for its reads;
+    it is held in memory and never exported or written to a document.
 
     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
     AWS_SESSION_TOKEN     STS or catalog-vended temp keys
@@ -80,13 +80,14 @@ Auth (how to reach data):
 
   Catalog config  (PQB_ENDPOINT / PQB_TOKEN)
     endpoint + token   a Databricks workspace URL + PAT (dapi-…), or a
-    Unity OSS / Iceberg REST URL. The token is a Bearer on the list API
-    only. Only AWS_* is copied onto listed tables — a PAT is not an S3 key.
+    Unity OSS / Iceberg REST URL. The token is a Bearer for catalog reads and
+    for storage-lease vending; a PAT is not an S3 key.
 
   Databricks-governed tables
-    The walk vends storage credentials: `credentials get` materializes the
-    vended keys onto the refs, and `get table` reads under the env it is
-    given. Reading the objects still needs keys that can GetObject.
+    Each storage-reading stage resolves the table's vended lease itself —
+    through `pqbench daemon` when one is running, else by calling the
+    catalog — and reads under it. The keys stay in memory; a table the
+    catalog will not vend for is dropped with the cause.
     https://docs.databricks.com/api/workspace/temporarytablecredentials/generatetemporarytablecredentials
 
   Producer pipe
@@ -165,10 +166,10 @@ level reads loadTable, whose metadata is inline, so no storage read runs. A
 table loadTable refuses as not Iceberg compatible falls back to the Unity
 record and its own log (Delta wins UniForm), as the Unity dialect reads it.
 
-Vended credentials ride the refs from `credentials get`, and `credentials
-check` gates the walk on tables the catalog marks readable outside compute. The
-emitted record keeps its credentials, so a later stage reads the table's files
-under the same lease.
+The emitted record carries no credentials. Each storage-reading stage resolves
+the table's vended lease itself — through the daemon when one is running, else
+directly from the catalog — so a table the catalog will not vend for is dropped
+there with the cause, and the level exits non-zero.
 
 The stream is NDJSON.";
 
@@ -278,52 +279,34 @@ See also:
   pqbench --help             catalog auth, PQB_* config
   docs/reference/cli.md";
 
-pub const CREDENTIALS_ABOUT: &str = "Check and vend read credentials for table-refs";
+pub const DAEMON_ABOUT: &str = "Cache and refresh catalog-vended storage leases";
 
-pub const CREDENTIALS_LONG_ABOUT: &str = "\
-Check and vend read credentials for table-refs. The endpoint, token, dialect,
-and object-store options come from the environment: PQB_ENDPOINT / PQB_TOKEN /
-PQB_TABLE_FORMAT and AWS_*.
+pub const DAEMON_LONG_ABOUT: &str = "\
+Cache the storage lease each table is read under, refresh it before expiry, and
+serve it to every pipeline stage over a local socket. One daemon per resolved
+identity (endpoint, dialect, and a token fingerprint); its socket is derived
+from that identity, so a reader finds it without an environment variable.
 
-  check  the walk's single filter: each Table on
-         standard input is checked against the catalog. A `system` catalog
-         ref, a view (the catalog reports no location), and a table on
-         Databricks default storage (`TABLE_DB_STORAGE`) all have no external
-         read, so the check drops each with the reason on standard error;
-         eligible refs pass through unchanged, so the stage composes ahead of
-         `credentials get` and a mixed schema keeps going. Under
-         PQB_TABLE_FORMAT=iceberg the metadata read is inline through the
-         catalog, so the check passes.
+  start   run it in the background, or reuse the one already running
+  stop    stop it
+  status  report whether it is running, and where its socket is
+  serve   run it in the foreground, for a sidecar or a service manager
 
-  get    each Table enriched with the table's
-         vended read credentials, held on the table — the explicit stage that
-         materializes the lease for the table read and other tools. Unity GET /tables/{full_name} reads the
-         table id and securable kind; Databricks default storage
-         (`TABLE_DB_STORAGE`) passes through with its own env, and any other
-         kind (or a catalog that reports none) is attempted; inside serverless
-         compute Unity refuses to mint storage credentials, so refs pass
-         through there too.
-         Under PQB_TABLE_FORMAT=iceberg the command reads the catalog's
-         credentials route (loadCredentials) and takes the storage-credentials
-         it returns, for the next storage read; a catalog that does not serve
-         it falls back to the delegated loadTable, and a table the catalog
-         cannot serve via Iceberg passes through with its own env.
+Without a running daemon each stage vends directly; the daemon only keeps a
+walk from vending the same table once per stage. Unity vends are paced at 15/s,
+the catalog's per-endpoint ceiling. Vended leases are session state and never
+ride a Table or TableFile document.";
 
-The stream is NDJSON.";
-
-pub const CREDENTIALS_AFTER: &str = "\
+pub const DAEMON_AFTER: &str = "\
 Examples:
-  export PQB_ENDPOINT=… PQB_TOKEN=…
-  echo '{\"name\":\"catalogs/dbx_samples/schemas/nyctaxi\"}' \
-    | pqbench list tables | pqbench credentials check | pqbench credentials get
-  echo '{\"name\":\"catalogs/dbx_samples/schemas/nyctaxi\"}' \
-    | pqbench list tables | pqbench credentials check | pqbench credentials get \
-    | pqbench get table
+  pqbench daemon start
+  pqbench list tables | pqbench get table | pqbench list files | pqbench bytemass
+  pqbench daemon status
+  pqbench daemon stop
 
 See also:
-  pqbench list --help  the tables in a schema
-  pqbench --help          catalog auth, PQB_* config
-  docs/reference/cli.md";
+  pqbench --help  catalog auth, PQB_* config
+  docs/reference/authentication.md";
 
 pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
 
@@ -517,7 +500,7 @@ Examples:
   pqbench setup --table-format iceberg --region us-west-2
 
 See also:
-  pqbench credentials --help  check and vend read credentials
+  pqbench daemon --help       cache and refresh vended leases
   pqbench get --help          read a listed table's record
   pqbench --help              auth, PQB_* config
   docs/reference/cli.md";

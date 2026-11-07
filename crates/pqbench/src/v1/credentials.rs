@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Vended storage credentials. Non-sensitive for now, so a [`Table`](super::Table) may carry
-/// them; a later pass moves them off the wire.
+/// Vended storage credentials. They are session state, not resource data: the
+/// reader holds them in memory and they never ride a [`Table`](super::Table)
+/// or [`TableFile`](super::TableFile).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Credentials {
@@ -15,13 +16,13 @@ pub struct Credentials {
     /// The session token, when the lease is temporary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_token: Option<String>,
-    /// When the lease expires, RFC-3339.
+    /// When the lease expires, milliseconds since the Unix epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expire_time: Option<String>,
+    pub expire_time: Option<u64>,
 }
 
 impl Credentials {
-    /// The lease the `AWS_*` options a document carries name.
+    /// The lease those `AWS_*` options name.
     #[must_use]
     pub fn from_env(env: &BTreeMap<String, String>) -> Self {
         Self {

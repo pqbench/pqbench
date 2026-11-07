@@ -175,13 +175,13 @@ three patterns let the stages overlap.
 ## A full walk: catalog to files
 
 The same patterns carry a whole catalog walk. This one lists every table a
-workspace exposes, keeps the credential-eligible ones, and writes their active
-files as a compressed NDJSON artifact.
+workspace exposes and writes the active files of the tables whose catalog vends
+a storage lease, as a compressed NDJSON artifact.
 
 The repository's `scripts/dbx-walk.sh` is the full version: it adds a `jq`
-filter before `credentials check` so the walk descends only the catalog the
-principal may read outside compute. On a workspace you do not own, that filter
-is required, not optional. The block below is the shape of the walk, not a
+filter before `get table` so the walk descends only the catalog the principal
+may read outside compute. On a workspace you do not own, that filter is
+required, not optional. The block below is the shape of the walk, not a
 copy-paste live run: it is the same pipeline without the filter.
 
 ```python
@@ -190,14 +190,13 @@ import subprocess
 PQB = "pqbench"
 script = f"""
 set -euo pipefail
+{PQB} daemon start
 {PQB} list catalogs \
   | {PQB} ratelimit --rate 15 \
   | {PQB} list schemas \
   | {PQB} ratelimit --rate 15 \
   | {PQB} list tables \
   | {PQB} ratelimit --rate 15 \
-  | {PQB} credentials check \
-  | {PQB} credentials get \
   | {PQB} get table \
   | {PQB} list files \
   | zstd -3 -T1 > .files.jsonl.zst
@@ -207,13 +206,13 @@ subprocess.run(["bash", "-o", "pipefail", "-c", script], check=True)
 ```
 
 Each `ratelimit` stage paces the catalog requests downstream of it: `list
-schemas`, `list tables`, and the table stages from `credentials check` on. The
-catalog endpoints allow about 15 requests per second, and every record at these
-levels is one request. `credentials check` keeps the tables whose credentials
-the endpoint will vend (it filters by eligibility, not by grant); `credentials
-get` and `get table` attach the vended lease. The hidden temp name plus `mv`
-keeps a reader from seeing a partial file; it is required only when something
-reads the directory while the pipeline runs.
+schemas`, `list tables`, and `get table`. The catalog endpoints allow about 15
+requests per second, and every record at these levels is one request. The
+storage-reading stages resolve the table's vended lease themselves — through
+the daemon when one is running, else directly from the catalog — and the lease
+never rides a document. The hidden temp name plus `mv` keeps a reader from
+seeing a partial file; it is required only when something reads the directory
+while the pipeline runs.
 
 ## Read the stream
 

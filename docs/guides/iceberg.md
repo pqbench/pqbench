@@ -71,9 +71,10 @@ echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/ta
   | cargo run -p pqbench-cli --features iceberg-s3 -- list files
 ```
 
-A producer can supply the table URI and vended credentials as
-a table record; `list files` reads the snapshot, and the credentials
-travel to `list files` and `bytemass`.
+A producer supplies the table URI as a table record; `list files` reads the
+snapshot, and `bytemass` reads the files under the lease the reader resolved. A
+`catalogs/local/...` record is read with the ambient `AWS_*` environment,
+because a catalog has nothing to vend for a path.
 
 ## Backends
 

@@ -40,12 +40,13 @@ impl GetArgs {
 pub(crate) async fn run(
     workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
+    leases: &crate::daemon::LeaseCache,
     args: &GetArgs,
 ) -> Result<(), CliError> {
     match &args.resource {
         GetResource::Metastore(args) => crate::metastore::get::run(workspace, args).await,
         GetResource::Catalog(args) => crate::catalog::get::run(workspace, args).await,
         GetResource::Schema(args) => crate::schema::get::run(workspace, args).await,
-        GetResource::Table(args) => crate::table::get::run(workspace, lake, args).await,
+        GetResource::Table(args) => crate::table::get::run(workspace, lake, leases, args).await,
     }
 }

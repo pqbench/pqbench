@@ -5,18 +5,18 @@
 # The walk is the issue-#58 pipeline, one process per level:
 #
 #   list catalogs | ratelimit --rate 15 | list schemas | ratelimit --rate 15
-#     | list tables | ratelimit --rate 15 | credentials check | credentials get
-#     | get table | list files | list columns | summarize columns | format --html
+#     | list tables | ratelimit --rate 15 | get table | list files
+#     | list columns | summarize columns | format --html
 #
 # The catalog levels fan out — one Unity Catalog request per record — and
 # Databricks rate-limits REST calls (the buckets are per endpoint; ~15/s is the
 # SDK's own ceiling and is safe — decisions/0006-catalog-rate-limit.md), so a
 # `ratelimit --rate` stage paces the refs ahead of each fan-out: `list schemas`
 # (one request per catalog), `list tables` (one per schema), and the table stages
-# from `credentials check` on (one catalog request per table, including
-# `credentials get`'s record read and `get table`'s). The storage levels
-# (`list files` down) read object storage, not the catalog, so they take no
-# stage of their own. The last two stages fold the measured columns into the
+# from `get table` on (one catalog request and one vending call per table).
+# `daemon start` shares the vended lease with `list files` and `list columns`,
+# so the storage levels make no catalog call of their own; they read object
+# storage, not the catalog, and take no rate-limit stage. The last two stages fold the measured columns into the
 # sample-weighted rows and draw the treemap page, so one pass covers the whole
 # `list columns | summarize columns | format --html` pipeline.
 #
@@ -26,8 +26,8 @@
 # scripts/dbx-ext/ and experiments/exp33_databricks_credential_vending.md).
 # Unity refuses `EXTERNAL USE SCHEMA` on the sample and managed-default
 # catalogs (`samples` is owned by `System user`; `dbx_samples` tables are
-# `TABLE_DB_STORAGE`), and `credentials check` filters by eligibility, not by
-# grant, so the walk narrows to the readable catalog before the table levels.
+# `TABLE_DB_STORAGE`), so the walk narrows to the readable catalog before the
+# table levels and drops `information_schema` (it lists internal views).
 # The Iceberg pass reads that catalog's namespaces and tables through Iceberg
 # REST (`{unity endpoint}/iceberg-rest/v1/catalogs/{catalog}`); a table the
 # catalog declines as not Iceberg compatible is read through its own format, so
@@ -61,7 +61,7 @@
 #
 # Tunables (environment): PQB, PQB_RATE, PQB_WALK_RETRIES, PQB_WALK_CATALOG,
 # PQB_WALK_DIALECT, PQB_WALK_FAN_OUT, PQB_WALK_PAGE, PQB_WALK_ICEBERG_PAGE,
-# PQB_ENDPOINT, PQB_TOKEN, AWS_REGION.
+# PQB_ENDPOINT, PQB_TOKEN, PQB_DAEMON_SOCK, AWS_REGION.
 
 set -euo pipefail
 
@@ -74,14 +74,23 @@ FAN_OUT="${PQB_WALK_FAN_OUT:-8}"
 REGION="${AWS_REGION:-us-east-2}"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+
+# Stop both identities' daemons, then drop the working tree.
+cleanup() {
+    rm -rf "$WORK"
+    "$PQB" daemon stop >/dev/null 2>&1 || true
+    if [ "${ICEBERG_ENDPOINT:-}" ]; then
+        "$PQB" daemon stop --table-format iceberg --endpoint "$ICEBERG_ENDPOINT" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT
 
 # Keep only the table-refs of the catalog the principal may read outside
 # compute. The levels above still listed the whole Unity Catalog; this narrows
-# the descent so `credentials get` is not refused for the rest.
+# the descent so the table stages do not ask for the rest.
 keep_readable_catalog() {
     jq -c --arg catalog "$CATALOG" \
-        'select((.name | startswith("catalogs/\($catalog)/")) and (.name | contains("/tables/")))'
+        'select((.name | startswith("catalogs/\($catalog)/")) and (.name | contains("/tables/")) and (.name | contains("/information_schema/") | not))'
 }
 
 # Print each level's record count and keep the page when asked.
@@ -114,8 +123,6 @@ walk_unity() {
         "$PQB" list tables | tee "$dir/refs" |
         "$PQB" ratelimit --rate "$RATE" |
         keep_readable_catalog | tee "$dir/readable" |
-        "$PQB" credentials check --fan-out "$FAN_OUT" | tee "$dir/checked" |
-        "$PQB" credentials get --fan-out "$FAN_OUT" | tee "$dir/vended" |
         "$PQB" get table --fan-out "$FAN_OUT" | tee "$dir/tables" |
         "$PQB" list files | tee "$dir/files" |
         "$PQB" list columns | tee "$dir/columns" |
@@ -125,7 +132,7 @@ walk_unity() {
     # return the walk's status so the retry in `main` sees a failed walk.
     status=$?
     [ "$status" -eq 0 ] || return "$status"
-    report "$dir" "catalogs schemas refs readable checked vended tables files columns summary" "${PQB_WALK_PAGE:-}"
+    report "$dir" "catalogs schemas refs readable tables files columns summary" "${PQB_WALK_PAGE:-}"
 }
 
 # The Iceberg pass: the same catalog through Iceberg REST. The catalog levels
@@ -134,25 +141,21 @@ walk_unity() {
 # Iceberg compatible falls back to its own format.
 walk_iceberg() {
     local dir="$WORK/iceberg" status
-    local endpoint="${PQB_ENDPOINT%/}/iceberg-rest/v1/catalogs/$CATALOG"
-    local iceberg=(--table-format iceberg --endpoint "$endpoint")
+    local iceberg=(--table-format iceberg --endpoint "$ICEBERG_ENDPOINT")
     mkdir -p "$dir"
     printf '{"name":"catalogs/%s"}\n' "$CATALOG" | tee "$dir/catalog" |
         "$PQB" list schemas "${iceberg[@]}" | tee "$dir/schemas" |
         "$PQB" ratelimit --rate "$RATE" |
         "$PQB" list tables "${iceberg[@]}" | tee "$dir/refs" |
         "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" credentials check "${iceberg[@]}" --fan-out "$FAN_OUT" | tee "$dir/checked" |
-        "$PQB" ratelimit --rate "$RATE" |
-        "$PQB" credentials get "${iceberg[@]}" --fan-out "$FAN_OUT" | tee "$dir/vended" |
         "$PQB" get table "${iceberg[@]}" --fan-out "$FAN_OUT" | tee "$dir/tables" |
-        "$PQB" list files | tee "$dir/files" |
-        "$PQB" list columns | tee "$dir/columns" |
+        "$PQB" list files "${iceberg[@]}" | tee "$dir/files" |
+        "$PQB" list columns "${iceberg[@]}" | tee "$dir/columns" |
         "$PQB" summarize columns | tee "$dir/summary" |
         "$PQB" format --html >"$dir/page.html"
     status=$?
     [ "$status" -eq 0 ] || return "$status"
-    report "$dir" "catalog schemas refs checked vended tables files columns summary" "${PQB_WALK_ICEBERG_PAGE:-}"
+    report "$dir" "catalog schemas refs tables files columns summary" "${PQB_WALK_ICEBERG_PAGE:-}"
 }
 
 # One pass again at half the rate, the pattern the CLI reference gives.
@@ -231,7 +234,16 @@ main() {
         PQB_ENDPOINT="$DBX_HOST/api/2.1/unity-catalog"
         PQB_TOKEN="$(mint_token)"
     fi
-    export PQB_ENDPOINT PQB_TOKEN AWS_REGION="$REGION"
+    export PQB_ENDPOINT PQB_TOKEN AWS_REGION="$REGION" PQB_TABLE_FORMAT=unity
+    unset PQB_PROFILE PQB_CONFIG_FILE
+    ICEBERG_ENDPOINT="${PQB_ENDPOINT%/}/iceberg-rest/v1/catalogs/$CATALOG"
+
+    # One daemon per identity: the Unity pass and the Iceberg pass speak
+    # different dialects, so each gets its own socket and cache.
+    "$PQB" daemon start
+    if [ "$DIALECT" != "unity" ]; then
+        "$PQB" daemon start --table-format iceberg --endpoint "$ICEBERG_ENDPOINT"
+    fi
 
     case "$DIALECT" in
         unity) retry walk_unity ;;

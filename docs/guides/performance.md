@@ -10,11 +10,10 @@ template).
 Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
+$ pqb daemon start
 $ pqb ls catalogs | pqb rl \
     | pqb ls schemas | pqb rl \
     | pqb ls tables | pqb rl \
-    | pqb credentials check \
-    | pqb credentials get \
     | pqb get table \
     | pqb ls files \
     | pqb list columns \
@@ -22,11 +21,16 @@ $ pqb ls catalogs | pqb rl \
     | pqb format --html > page.html
 ```
 
-`credentials check` is the walk's single filter: it drops a `system` catalog
-ref, a view, and a table on managed default storage, so a mixed schema keeps
-going. Measure a catalog with many tables, not one big table — the design
-target is "jobs are limited not by big tables, but by the number of tables in a
-catalog".
+The walk narrows to a catalog whose tables are externally readable. A ref the
+catalog will not vend for — a `system` catalog table, a view, a table on managed
+default storage — is dropped at the storage-reading stage with the cause, and
+that level exits non-zero; `scripts/dbx-walk.sh` filters the listing to
+`pqbench_ext` and skips `information_schema` for exactly this reason. Measure a
+catalog with many tables, not one big table — the design target is "jobs are
+limited not by big tables, but by the number of tables in a catalog".
+
+The lease daemon is what keeps the table stages from asking the catalog for
+the same table once per process.
 
 ## Point it at a target
 
@@ -40,11 +44,12 @@ $ eval "$(pqb setup --endpoint <url> --token <token> --region us-east-2)"
 `make dbx-walk` drives the live Databricks workspace and its external
 fixture: `pqbench_ext`, whose external Delta tables on customer S3 are the
 synthetic `events`/`sales`/`reference` plus real sample data copied server-side
-from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-walk.sh` runs the whole
-walk through Unity Catalog and again through Iceberg REST, prints each level's
-record count, checks that both summaries agree, and ends with the treemap page
-(the `dbx-walk` CI job); `make dbx-e2e` runs the live correctness e2e, and
-`make lakehouse` drives the compose stand for the file-level commands.
+from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-walk.sh` starts a lease
+daemon per dialect, runs the whole walk through Unity Catalog and again through
+Iceberg REST, prints each level's record count, checks that both summaries
+agree, and ends with the treemap page (the `dbx-walk` CI job); `make dbx-e2e`
+runs the live correctness e2e, and `make lakehouse` drives the compose stand
+for the file-level commands.
 
 The walk's catalog levels span the whole Unity Catalog; the table levels
 descend the one catalog this principal may read outside compute
@@ -84,3 +89,21 @@ time and bytes read as well.
   price of process partitioning, and the numbers should show it.
 - Flag obvious latency (retries, serial round trips beyond one per command,
   whole-object reads) and fix the obvious cause. No micro-optimization.
+
+## Lease daemon
+
+The daemon is optional; the numbers below compare the same pipeline with and
+without it. They were taken on the synthetic suite (10 tables x 1,000 files,
+Iceberg) and the live `pqbench_ext` Unity catalog, release builds.
+
+| Workload | without daemon | with daemon |
+| --- | ---: | ---: |
+| Iceberg, per table | 221.0 ms | 184.0 ms |
+| Unity `tpch_sf1` (8 tables) | 8.34 s | 6.10 s |
+| Unity `tpcds_sf1` (24 tables) | ~8.8 s | 7.56 s |
+
+The Delta suite (local paths) is unchanged: a `catalogs/local/...` read never
+vends a lease. The no-daemon Iceberg case asks the catalog once per stage; the
+daemon caches the answer, so the walk vends each table once. Unity vends from
+the daemon are paced at 15/s, the catalog's per-endpoint ceiling, so a wide
+fan-out queues instead of tripping the rate limit.

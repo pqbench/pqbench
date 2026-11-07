@@ -780,7 +780,11 @@ async fn file_list_walks_the_snapshots_active_files() {
         pqbench::v1::name::table_file_name(&table.name, "part=a/added.parquet")
     );
     assert!(file.size_bytes.unwrap() > 0);
-    assert!(files.iter().all(|file| file.credentials.is_none()));
+    // The record carries no credentials; the reader scopes the lake.
+    assert!(serde_json::to_value(&files[0])
+        .expect("a table file serialises")
+        .get("credentials")
+        .is_none());
 }
 
 /// A window keeps only the files the log dates inside it, and each file carries

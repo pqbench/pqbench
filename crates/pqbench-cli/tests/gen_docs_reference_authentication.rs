@@ -6,6 +6,6 @@ use crate::support;
 #[rustfmt::skip]
 #[test]
 fn catalog_config_unity_databricks_iceberg_rest() {
-    // catalog_config_unity_databricks_iceberg_rest, from line 133
-    support::run("PQB_CONFIG_FILE=examples/pqbenchrc pqb setup", 134, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='unity'", "export AWS_EC2_METADATA_DISABLED='true'"]));
+    // catalog_config_unity_databricks_iceberg_rest, from line 137
+    support::run("PQB_CONFIG_FILE=examples/pqbenchrc pqb setup", 138, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='unity'", "export AWS_EC2_METADATA_DISABLED='true'"]));
 }

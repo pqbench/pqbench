@@ -54,15 +54,15 @@ fn a_table_s_files_2() {
 #[rustfmt::skip]
 #[test]
 fn one_parquet_file() {
-    // one_parquet_file, from line 117
-    support::run("pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb fmt", 118, Some(&["column            type        codec         encoding   bytes  dict bytes  bytes/row  values", "----------------  ----------  ------------  --------  ------  ----------  ---------  ------", "text              BYTE_ARRAY  UNCOMPRESSED  dict      743566      738658     247.86    3000", "label             BYTE_ARRAY  UNCOMPRESSED  dict        2469         527       0.82    3000", "dataType          BYTE_ARRAY  UNCOMPRESSED  dict         360          33       0.12    3000", "communityName     BYTE_ARRAY  UNCOMPRESSED  dict        2468         527       0.82    3000", "datetime          BYTE_ARRAY  UNCOMPRESSED  dict          87          28       0.03    3000", "username_encoded  BYTE_ARRAY  UNCOMPRESSED  dict      446197      441331     148.73    3000", "url_encoded       BYTE_ARRAY  UNCOMPRESSED  dict      907117      901963     302.37    3000"]));
+    // one_parquet_file, from line 116
+    support::run("pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb bytemass | pqb fmt", 117, Some(&["column            type        codec         encoding   bytes  dict bytes  bytes/row  values", "----------------  ----------  ------------  --------  ------  ----------  ---------  ------", "text              BYTE_ARRAY  UNCOMPRESSED  dict      743566      738658     247.86    3000", "label             BYTE_ARRAY  UNCOMPRESSED  dict        2469         527       0.82    3000", "dataType          BYTE_ARRAY  UNCOMPRESSED  dict         360          33       0.12    3000", "communityName     BYTE_ARRAY  UNCOMPRESSED  dict        2468         527       0.82    3000", "datetime          BYTE_ARRAY  UNCOMPRESSED  dict          87          28       0.03    3000", "username_encoded  BYTE_ARRAY  UNCOMPRESSED  dict      446197      441331     148.73    3000", "url_encoded       BYTE_ARRAY  UNCOMPRESSED  dict      907117      901963     302.37    3000"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn one_delta_snapshot() {
-    // one_delta_snapshot, from line 139
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 140, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 145, None);
+    // one_delta_snapshot, from line 138
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 139, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 144, None);
 }
