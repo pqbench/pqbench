@@ -44,12 +44,8 @@
 // an input parameter — and there is no generator to read them. The AIP shape
 // (names, patterns, field names) still applies.
 //
-// Credentials are a value a document carries beside the resource's own data
-// (AIP-147 concerns storage; the messages below model the value). The vended
-// lease `credentials get` mints rides as the resource's own `credentials`
-// field, set by the stage that read it — a `Table` (the read that follows) or a
-// `TableFile` (the blob read) — so a pipeline stays in-band. It is treated as
-// non-sensitive for now; a later pass moves it off the wire.
+// Credentials are session state, not resource data: a reader resolves a table's
+// vended lease in memory and no resource carries a key.
 //
 // A table a catalog did not name — one read by storage path — is still a
 // resource: it takes the `local` catalog and schema (`catalogs/local/schemas/
@@ -83,13 +79,6 @@ enum TableFormat {
   TABLE_FORMAT_UNSPECIFIED = 0;
   TABLE_FORMAT_DELTA = 1;
   TABLE_FORMAT_ICEBERG = 2;
-}
-
-enum EligibilityReason {
-  ELIGIBILITY_REASON_UNSPECIFIED = 0;
-  ELIGIBILITY_REASON_SYSTEM_TABLE = 1;
-  ELIGIBILITY_REASON_NOT_A_TABLE = 2;
-  ELIGIBILITY_REASON_NO_EXTERNAL_READ = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,9 +159,9 @@ message Table {
 
   int64 partition_count = 10;
 
-  // The vended storage credentials for the table's files, when the caller
-  // holds them. Set by the stage that read the table.
-  Credentials credentials = 11;
+  // Removed: vended credentials are session state, not resource data.
+  reserved 11;
+  reserved "credentials";
 
   // The user-facing name the endpoint reports for the table.
   string display_name = 12;
@@ -235,8 +224,9 @@ message TableFile {
   // The Delta add action's statistics, when the log carries them.
   FileStats stats = 5;
 
-  // The vended credentials to read `blob` with, when the caller holds them.
-  Credentials credentials = 6;
+  // Removed: vended credentials are session state, not resource data.
+  reserved 6;
+  reserved "credentials";
 
   // The path relative to the table's storage root, normalized to a
   // `/`-separated path with percent escapes decoded.
@@ -410,22 +400,6 @@ message LogAction {
 // ---------------------------------------------------------------------------
 // Documents that are not resources.
 // ---------------------------------------------------------------------------
-
-// The vended credentials `credentials get` emits. Sensitive (AIP-147): carried
-// on the resource that needs it for now, and stored no further than that; a
-// later pass moves it off the wire.
-message Credentials {
-  string access_key_id = 1;
-  string secret_access_key = 2;
-  string session_token = 3;
-  string expire_time = 4;
-}
-
-// The result `credentials check` emits.
-message ReadEligibility {
-  bool eligible = 1;
-  EligibilityReason reason = 2;
-}
 
 // One rewrite `experiment` measured: the codec settings and the resulting size.
 message ExperimentTrial {

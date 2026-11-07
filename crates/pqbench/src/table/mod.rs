@@ -219,7 +219,7 @@ impl TableInfo {
 
 impl TableInfo {
     /// The wire [`v1::Table`] this record describes: what `table::get` emits.
-    /// The caller, which holds the lease, sets [`v1::Table::credentials`].
+    /// The reader, which holds the lease, keeps it off the record.
     #[must_use]
     pub fn resource(&self, catalog: &str, schema: &str, table: &str) -> v1::Table {
         let mut properties = self.delta_properties.clone();

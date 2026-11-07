@@ -11,7 +11,7 @@
 //!
 //! Iceberg REST serves `loadCredentials` (`GET
 //! …/tables/{table}/credentials`) with the catalog's vended credentials: a
-//! list of prefix-scoped configs whose `s3.*` keys become the ref's `AWS_*`
+//! list of prefix-scoped configs whose `s3.*` keys become the table's `AWS_*`
 //! env. A catalog that does not serve the route (or cannot mint for the table,
 //! like a UniForm Delta table) falls back to `loadTable` with
 //! `X-Iceberg-Access-Delegation: vended-credentials`, where the longest prefix
@@ -19,7 +19,7 @@
 //! table the catalog cannot serve via Iceberg (`is not an Iceberg compatible
 //! table`) falls back to the Unity vending route, so a Delta or UniForm table
 //! walks under either dialect; an unknown table and an unimplemented operation
-//! pass through with no credentials.
+//! return no credentials, so the read keeps its ambient env.
 //!
 //! The URLs and JSON shapes are this module's; the transport is the
 //! third-party facade.
@@ -31,6 +31,7 @@ use serde::Deserialize;
 use super::api::Error;
 use crate::dialect;
 use crate::third_party::reqwest::Request;
+use crate::v1::Credentials;
 use crate::Workspace;
 
 /// The subset of the Unity table record vending needs: the table id and the
@@ -69,7 +70,7 @@ pub(super) async fn vend_unity(
     catalog: &str,
     schema: &str,
     table: &str,
-) -> Result<Option<BTreeMap<String, String>>, Error> {
+) -> Result<Option<Credentials>, Error> {
     let name = format!("{catalog}.{schema}.{table}");
     // Under the Iceberg dialect the endpoint names the Iceberg base; the
     // Unity route is still the root it was built from.
@@ -109,15 +110,12 @@ pub(super) async fn vend_unity(
     }
     let record: CredentialsRecord = serde_json::from_slice(&response.bytes)
         .map_err(|error| Error::Http(crate::http::Error::Body(error)))?;
-    Ok(record.aws_temp_credentials.map(|credentials| {
-        BTreeMap::from([
-            ("AWS_ACCESS_KEY_ID".to_string(), credentials.access_key_id),
-            (
-                "AWS_SECRET_ACCESS_KEY".to_string(),
-                credentials.secret_access_key,
-            ),
-            ("AWS_SESSION_TOKEN".to_string(), credentials.session_token),
-        ])
+    let expire_time = record.expiration_time;
+    Ok(record.aws_temp_credentials.map(|credentials| Credentials {
+        access_key_id: Some(credentials.access_key_id),
+        secret_access_key: Some(credentials.secret_access_key),
+        session_token: Some(credentials.session_token),
+        expire_time,
     }))
 }
 
@@ -126,6 +124,8 @@ pub(super) async fn vend_unity(
 struct CredentialsRecord {
     #[serde(default)]
     aws_temp_credentials: Option<AwsTempCredentials>,
+    #[serde(default)]
+    expiration_time: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -144,7 +144,7 @@ pub(super) async fn vend_iceberg(
     catalog: &str,
     schema: &str,
     table: &str,
-) -> Result<Option<BTreeMap<String, String>>, Error> {
+) -> Result<Option<Credentials>, Error> {
     let url = format!(
         "{}/namespaces/{}/tables/{}/credentials",
         dialect::iceberg_root(workspace.config().endpoint.as_str()),
@@ -167,14 +167,15 @@ pub(super) async fn vend_iceberg(
 /// The delegated `loadTable` route: `X-Iceberg-Access-Delegation:
 /// vended-credentials` may carry `storage-credentials` — the longest prefix
 /// covering the table's location wins — or the `s3.*` keys in `config`. A
-/// table the catalog cannot serve via Iceberg, an unknown table, and an
-/// unimplemented operation all pass through with no credentials.
+/// table the catalog cannot serve via Iceberg falls back to the Unity vending
+/// route; an unknown table and an unimplemented operation pass through with no
+/// credentials.
 async fn vend_iceberg_load(
     workspace: &Workspace,
     catalog: &str,
     schema: &str,
     table: &str,
-) -> Result<Option<BTreeMap<String, String>>, Error> {
+) -> Result<Option<Credentials>, Error> {
     let url = format!(
         "{}/namespaces/{}/tables/{}",
         dialect::iceberg_root(workspace.config().endpoint.as_str()),
@@ -210,7 +211,7 @@ async fn vend_iceberg_load(
         .and_then(|metadata| metadata.location)
         .unwrap_or_default();
     let config = matching_config(&loaded.storage_credentials, &location).unwrap_or(loaded.config);
-    Ok(aws_options(&config))
+    Ok(read_credentials(&config))
 }
 
 /// The subset of the Iceberg REST `loadTable` response vending needs.
@@ -249,10 +250,10 @@ struct StorageCredential {
 /// The `AWS_*` options from the first vended credential naming an access key:
 /// the credentials route is table-scoped, so any credential it returns can
 /// supply the env.
-fn credential_options(credentials: &[StorageCredential]) -> Option<BTreeMap<String, String>> {
+fn credential_options(credentials: &[StorageCredential]) -> Option<Credentials> {
     credentials
         .iter()
-        .find_map(|credential| aws_options(&credential.config))
+        .find_map(|credential| read_credentials(&credential.config))
 }
 
 /// The config of the storage credential whose prefix covers `location`; the
@@ -270,17 +271,50 @@ fn matching_config(
         .map(|credential| credential.config.clone())
 }
 
-/// The `AWS_*` options an Iceberg `s3.*` config names; `None` without an
-/// access key.
-fn aws_options(config: &BTreeMap<String, String>) -> Option<BTreeMap<String, String>> {
-    let key = config.get("s3.access-key-id")?;
-    let secret = config.get("s3.secret-access-key")?;
-    let mut options = BTreeMap::from([
-        ("AWS_ACCESS_KEY_ID".to_string(), key.clone()),
-        ("AWS_SECRET_ACCESS_KEY".to_string(), secret.clone()),
-    ]);
-    if let Some(token) = config.get("s3.session-token") {
-        options.insert("AWS_SESSION_TOKEN".to_string(), token.clone());
+/// The credential set an Iceberg `s3.*` config names, with the token expiry
+/// the catalog reports; `None` without an access key.
+fn read_credentials(config: &BTreeMap<String, String>) -> Option<Credentials> {
+    Some(Credentials {
+        access_key_id: Some(config.get("s3.access-key-id")?.clone()),
+        secret_access_key: Some(config.get("s3.secret-access-key")?.clone()),
+        session_token: config.get("s3.session-token").cloned(),
+        expire_time: config
+            .get("s3.session-token-expires-at-ms")
+            .and_then(|value| value.parse().ok()),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unity_expiration_time_is_read() {
+        let record: CredentialsRecord = serde_json::from_str(
+            r#"{"aws_temp_credentials":{"access_key_id":"a","secret_access_key":"s","session_token":"t"},"expiration_time":1794050862767}"#,
+        )
+        .expect("the record parses");
+        assert_eq!(record.expiration_time, Some(1_794_050_862_767));
     }
-    Some(options)
+
+    #[test]
+    fn iceberg_session_expiry_is_read() {
+        let config = BTreeMap::from([
+            ("s3.access-key-id".to_string(), "a".to_string()),
+            ("s3.secret-access-key".to_string(), "s".to_string()),
+            ("s3.session-token".to_string(), "t".to_string()),
+            (
+                "s3.session-token-expires-at-ms".to_string(),
+                "1794050862767".to_string(),
+            ),
+        ]);
+        let credentials = read_credentials(&config).expect("the config has a key");
+        assert_eq!(credentials.expire_time, Some(1_794_050_862_767));
+        assert_eq!(credentials.access_key_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn an_iceberg_config_without_a_key_has_no_credentials() {
+        assert!(read_credentials(&BTreeMap::new()).is_none());
+    }
 }

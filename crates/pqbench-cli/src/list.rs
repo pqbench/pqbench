@@ -28,16 +28,16 @@ enum ListCollection {
 
 /// List a collection: the walk's list verb.
 pub(crate) async fn run(
-    workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
+    daemon: &crate::daemon::Daemon,
     args: &ListArgs,
 ) -> Result<(), CliError> {
     match &args.collection {
-        ListCollection::Catalogs(args) => crate::catalog::list::run(workspace, args).await,
-        ListCollection::Schemas(args) => crate::schema::list::run(workspace, args).await,
-        ListCollection::Tables(args) => crate::table::list::run(workspace, args).await,
-        ListCollection::Files(args) => crate::file::list::run(lake, args).await,
-        ListCollection::Columns(args) => crate::bytemass::run(lake, args).await,
+        ListCollection::Catalogs(args) => crate::catalog::list::run(daemon, args).await,
+        ListCollection::Schemas(args) => crate::schema::list::run(daemon, args).await,
+        ListCollection::Tables(args) => crate::table::list::run(daemon, args).await,
+        ListCollection::Files(args) => crate::file::list::run(lake, daemon, args).await,
+        ListCollection::Columns(args) => crate::bytemass::run(lake, daemon, args).await,
     }
 }
 

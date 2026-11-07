@@ -6,11 +6,10 @@
 //! Iceberg REST lists `{endpoint}/namespaces/{namespace}/tables` identifiers
 //! only; the ref carries its name and no storage URI, so `pqbench get table`
 //! derives the `loadTable` URL and reads the metadata inline. No config probe
-//! runs. A view
-//! carries no location: the ref keeps its `uri` unset, and
-//! `credentials check` is the stage that drops it. The URLs, the page shapes,
-//! and the pagination are this command's; the transport is the third-party
-//! facade.
+//! runs. A view carries no location: the ref keeps its `uri` unset, and the
+//! storage-reading stage that later asks for a lease reports the refusal. The
+//! URLs, the page shapes, and the pagination are this command's; the transport
+//! is the third-party facade.
 
 use serde::Deserialize;
 

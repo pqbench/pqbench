@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::api::{Error, Metastore};
 use crate::dialect;
-use crate::{Dialect, Workspace};
+use crate::Workspace;
 
 /// The subset of `GET /metastore_summary` this command reports.
 #[derive(Deserialize)]
@@ -40,10 +40,7 @@ pub(crate) async fn get(workspace: &Workspace) -> Result<Metastore, Error> {
 
 /// The metastore id: the dialect names it (`unity`, `iceberg`).
 fn metastore_id(workspace: &Workspace) -> &'static str {
-    match workspace.config().dialect {
-        Dialect::Unity => "unity",
-        Dialect::Iceberg => "iceberg",
-    }
+    workspace.config().dialect.as_str()
 }
 
 /// `Some` unless the endpoint reported nothing.

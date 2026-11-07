@@ -122,13 +122,11 @@ Iceberg walk. Stop after `pqbench list files` and pipe to `jq .` to read the
 
 A table-file record names one blob; `pqbench table-file PATH` writes one, and
 `list files` writes one per file the walk names. `pqbench bytemass` measures
-them, and a table's files come from the walk, `pqbench list files`. The walk's
-context is the environment: `PQB_ENDPOINT`, `PQB_TOKEN`, `PQB_TABLE_FORMAT` for
-the catalog, and `AWS_*` for storage.
-pqbench keeps no catalog dependency. A producer whose catalog vends expiring
-credentials puts them on the record's `credentials` instead, which travels to
-`bytemass`; only `AWS_*` names are accepted there, and anything else is a
-loud error. Both endpoint names appear because pqbench's object store reads
+them, and a table's files come from the walk, `pqbench get table |
+pqbench list files`. The walk's context is the environment: `PQB_ENDPOINT`,
+`PQB_TOKEN`, `PQB_TABLE_FORMAT` for the catalog, and `AWS_*` for storage.
+pqbench keeps no catalog dependency. A reader resolves the table's vended
+lease itself, from the daemon or the catalog; no record carries credentials. Both endpoint names appear because pqbench's object store reads
 `AWS_ENDPOINT` while delta-rs reads `AWS_ENDPOINT_URL`; against real AWS
 neither is needed.
 

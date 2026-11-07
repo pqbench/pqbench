@@ -42,15 +42,16 @@ Build with the feature when you run from source: name the table on stdin, e.g.
 `echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"./path/to/table"}' | cargo run -p pqbench-cli --features delta -- list files`, or run
 the same command in a container.
 
-Remote tables are resolved with `delta-s3` (which enables `aws`). Storage
-access comes from the table ref or the process environment.
-A table's vended credentials travel as its `credentials` value (`AWS_*` keys);
-they are not written into the process environment. The cargo command is
+Remote tables are resolved with `delta-s3` (which enables `aws`). The reader
+resolves the table's vended lease itself — through the daemon or directly from
+the catalog — and never writes it into the process environment or a document.
+The cargo command is
 `echo '{"name":"catalogs/local/schemas/local/tables/events","uri":"s3://bucket/table"}' | cargo run -p pqbench-cli --features delta-s3 -- list files`.
 
-A producer can supply the table URI and vended credentials as
-a table record. `list files` reads the log, and the credentials travel to
-`list files` and `bytemass`.
+A producer supplies the table URI as a table record; `list files` reads the
+log, and `bytemass` reads the files under the lease the reader resolved. A
+`catalogs/local/...` record is read with the ambient `AWS_*` environment,
+because a catalog has nothing to vend for a path:
 
 ## Backends
 

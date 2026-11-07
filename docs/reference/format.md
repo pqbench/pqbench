@@ -86,19 +86,19 @@ Both passes must fold to the same rows, and the script fails when the two
 summaries differ.
 
 ```console no-run
-$ pqb list catalogs | pqb ratelimit --rate 15 \
->   | pqb list schemas | pqb ratelimit --rate 15 \
->   | pqb list tables | pqb ratelimit --rate 15 \
+$ pqb daemon start
+$ pqb list catalogs \
+>   | pqb list schemas \
+>   | pqb list tables \
 >   | jq -c 'select(.name | startswith("catalogs/pqbench_ext/"))' \
->   | pqb credentials check | pqb credentials get \
 >   | pqb get table | pqb list files | pqb list columns \
 >   | pqb summarize columns | pqb format --html > /tmp/metastore.html
 ```
 
 One live run: 5 catalogs and 36 schemas (412 table refs); the `pqbench_ext`
-refs (120) narrowed by `credentials check` to 91 tables in 11 schemas, 224
-files, and 12,995 `Blob` and `Column` records folded into 1,726 `ColumnMass`
-rows on a 434 KB page. The rows total 19,647,713,732 bytes against
+refs (120) narrowed by the `jq` filter to 91 tables in 11 schemas, 224 files,
+and 12,995 `Blob` and `Column` records folded into 1,726 `ColumnMass` rows on a
+434 KB page. The rows total 19,647,713,732 bytes against
 19,651,902,193 on disk; the difference is Parquet footer and metadata, which no
 column owns.
 

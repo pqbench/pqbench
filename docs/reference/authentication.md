@@ -1,8 +1,9 @@
 # Authentication
 
-Local paths need no credentials. Remote objects and catalogs do. Credentials on
-a table override the process environment and are **not** written back into it.
-The [Databricks authentication guide](../guides/auth.md) creates the service
+Local paths need no credentials. Remote objects and catalogs do. A table's
+vended lease overrides the process environment for that read and is **not**
+written back into it, nor onto a document. The
+[Databricks authentication guide](../guides/auth.md) creates the service
 principal; this page is the reference for the variables and the credential
 flow.
 
@@ -10,7 +11,7 @@ flow.
 
 Needs `--features aws` (or `delta-s3` / `iceberg-s3`). The storage adapter
 builds an `AmazonS3Builder` from the default AWS provider chain, then applies
-the table's `credentials`.
+the table's vended lease (or the daemon's answer for it), when there is one.
 
 | Name | Role |
 | --- | --- |
@@ -68,25 +69,15 @@ the listing levels and `list files`, one per core on `get table`) caps the
 requests in flight — it is a limit, not a batch: up to that many run at once on
 one thread, and rows are written as requests finish, not in ref order. Reading
 is demand-driven: a slow endpoint or a slow downstream pipe stops the reads, so
-the level above backpressures instead of buffering. A `pqb rl` stage paces the
-refs between two levels at a target rate — records pass through unchanged, one
-bucket per resource type, nothing dropped. A ref whose read fails — a timeout, a
-dropped connection, an endpoint answer such as a 429, or a storage fault — is
-dropped by the level: it names the ref and the cause on standard error,
-finishes the stream, and exits non-zero with the count, so one bad ref does not
-truncate a walk. The drop is only the read: a ref that does not name a
+the level above backpressures instead of buffering. A ref whose read fails — a
+timeout, a dropped connection, an endpoint answer such as a 429, or a storage
+fault — is dropped by the level: it names the ref and the cause on standard
+error, finishes the stream, and exits non-zero with the count, so one bad ref
+does not truncate a walk. The drop is only the read: a ref that does not name a
 resource, a record whose fields are wrong, or an output failure still fails the
-level. `rl` keeps the endpoint from answering 429 in the first place; a level
-that fails outright — the root `list catalogs`, a malformed stream — still
-fails the pipeline, and the shell can retry it at a lower rate:
-
-```console no-run
-$ set -o pipefail
-$ rate=15
-$ until pqb ls catalogs | pqb rl --rate "$rate" | pqb ls schemas; do
->     rate=$((rate / 2))
-> done
-```
+level. With a daemon running, it makes every catalog request and paces Unity at
+15/s, so the levels do not answer 429 in the first place; a transient failure
+can still make a level fail, and the shell can retry the pipeline as it is.
 
 `list catalogs | list schemas` lists every schema at the endpoint; `list
 catalogs | get catalog` enriches each catalog instead. `get` emits the same
@@ -110,20 +101,23 @@ one `Table` line each — the document `get table` enriches. Unity's `/tables`
 pages carry the full name and storage location, so the ref is complete; Iceberg
 REST lists identifiers only, so the ref carries its name and no storage URI —
 `get table` derives the `loadTable` URL and reads the metadata inline. A view
-carries no location, so its ref keeps its `uri` unset; `credentials check` is
-the stage that drops it. Refs are addresses; the walk context (endpoint, token,
-storage options) comes from the environment (`PQB_*`, `AWS_*`). The walk is a
-plain pipeline: every command streams refs and keeps `--fan-out` in flight,
-`credentials get` writes the vended keys onto the refs, and `get table` passes
-them on so `bytemass` reads the files under the same lease:
+carries no location, so its ref keeps its `uri` unset. Refs are addresses; the
+walk context (endpoint, token, storage options) comes from the environment
+(`PQB_*`, `AWS_*`). The walk is a plain pipeline: every command streams refs
+and keeps `--fan-out` in flight. Each storage-reading command resolves the
+table's lease for itself — through the daemon when one is running, else by
+calling the catalog's vending route — and keeps it in memory. A view, a system
+table, or Databricks default storage has no lease the catalog will mint; that
+command fails for that ref, names the cause, drops it, and keeps the stream:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
+$ pqb daemon start
 $ echo '"dbx_samples.nyctaxi"' |
 >     pqb ls tables |
->     pqb credentials check |
->     pqb credentials get |
->     pqb get table
+>     pqb get table |
+>     pqb ls files |
+>     pqb bytemass
 ```
 
 `pqb setup` prints that environment for the shell to evaluate. Point
@@ -145,6 +139,44 @@ the region, which hangs where that endpoint is blackholed). A notebook kernel's
 dbutils context is not visible to a subprocess, so a notebook sets
 `DATABRICKS_*` from it first.
 
+## The daemon
+
+Each stage of a pipeline is its own process, so a process-local cache would
+still ask the catalog for the same table once per stage. `pqbench daemon start`
+runs one daemon for the resolved identity and every stage uses it:
+
+```console no-run
+$ pqbench daemon start
+$ pqbench daemon status
+running /run/user/1000/pqbench/d-0123456789abcdef.sock
+$ pqbench daemon stop
+```
+
+The socket path is derived from the endpoint, dialect, and a fingerprint of
+the token, under `$XDG_RUNTIME_DIR` (Linux) or `$TMPDIR`; two principals on the
+same workspace get different daemons, and no environment variable is needed.
+`PQB_DAEMON_SOCK` overrides the path for a sidecar or a test. The socket is 0600
+in a 0700 directory, so only the same user can connect.
+
+The daemon makes every catalog request for the walk — the `list` levels and
+every `get` level — and paces Unity at 15/s, the catalog's per-endpoint ceiling,
+so a walk with many refs in flight does not trip the rate limit. It caches the
+lease per table and refreshes it five minutes before the catalog's expiry — or at half the remaining lifetime when the lease is shorter
+than ten minutes. Unity reports `expiration_time` in epoch milliseconds;
+Iceberg reports `s3.session-token-expires-at-ms`; when neither is present the
+daemon assumes the usual one-hour lifetime and refreshes at 55 minutes. A
+catalog that vends nothing is remembered for five minutes, so a file walk does
+not ask once per file.
+
+The daemon is optional. With no socket, each command makes its own catalog call
+and vends directly, which is what a notebook, a serverless job, or an
+Airflow/Dagster task gets by default. The daemon saves catalog calls and does
+the pacing; correctness does not depend on it.
+
+A ref the catalog will not vend for is dropped with the cause on standard
+error, and that stage exits non-zero; run the walk over a catalog that is
+externally readable, or filter the refs first.
+
 ## Databricks-governed tables
 
 A governed table has two access modes, and pqbench is the second one:
@@ -155,7 +187,8 @@ A governed table has two access modes, and pqbench is the second one:
   this; pqbench does not.
 - **Credential-mediated.** An external reader calls the catalog's vending route
   and reads storage itself under a short-lived, downscoped lease — the
-  `credentials check` → `credentials get` → `get table` walk.
+  `get table` → `list files` → `bytemass` walk, with the lease held by the
+  reader (or the daemon) rather than carried on the documents.
 
 Whether the second mode exists is the storage's property, not the caller's:
 
@@ -166,8 +199,10 @@ Whether the second mode exists is the storage's property, not the caller's:
 | Databricks default storage, managed table | no — the catalog reports `TABLE_DB_STORAGE`; the vending route refuses, and the objects deny externally issued sessions |
 | Managed volume | files via FUSE in compute or the Files API; not a table read |
 
-`credentials check` reports the answer (a system table, a view, or Databricks
-default storage) with a reason; `credentials get` vends the lease.
+The vending route is the answer: it mints a lease for an external location and
+refuses a view, a system table, or Databricks default storage. There is no
+separate eligibility stage; the storage-reading command that asked for the
+lease reports the refusal and drops that ref.
 
 Two environment notes:
 
@@ -175,8 +210,8 @@ Two environment notes:
   but no region: set `AWS_REGION` (or the client's equivalent) for the read.
 - Inside serverless compute, Unity refuses to mint storage credentials to
   notebook code (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); the
-  refs pass through and the compute's own engines are the readers. Classic
-  compute reaches storage through its instance profile.
+  reader falls back to the ambient `AWS_*` and the compute's own engines.
+  Classic compute reaches storage through its instance profile.
 
 ## References
 

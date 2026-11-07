@@ -1,7 +1,8 @@
 //! `file::list`: a table's active files, one at a time.
 //!
-//! [`list`] is the only public function. Each record names a file and carries
-//! the table's lease, so a caller writes it as it arrives and holds nothing.
+//! [`list`] is the only public function. Each record names a file and nothing
+//! else: the caller scopes the lake with the table's lease and writes each
+//! record as it arrives.
 
 use std::fmt;
 
@@ -54,9 +55,9 @@ impl std::error::Error for Error {
 /// the day's files rather than the table's. A file whose log records no time
 /// cannot be shown to be in the window, so it is dropped.
 ///
-/// Each file is named as `{table}/files/{path}` and carries the table's lease,
-/// so a reader of the emitted record needs no catalog call. The caller scopes
-/// `lake` with that lease (`Lake::with_lease`).
+/// Each file is named as `{table}/files/{path}`. The caller scopes `lake` with
+/// the table's lease (`Lake::with_lease`); the emitted record carries no
+/// credentials.
 ///
 /// # Errors
 /// Fails when the table names no storage root or cannot be loaded. A failure
@@ -69,7 +70,6 @@ pub async fn list(
     let uri = table.uri.as_deref().ok_or_else(|| {
         Error::Invalid("a table record has no storage path; run `pqbench get table` first".into())
     })?;
-    let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
     let name = table.name.clone();
     // Iceberg records no per-file time, so a window over it can only drop
     // everything: say so rather than return an empty listing that looks like an
@@ -98,7 +98,6 @@ pub async fn list(
             } else {
                 let mut file = file;
                 file.name = v1::name::table_file_name(&name, &file.path);
-                file.credentials = lease.clone();
                 Some(file)
             };
             std::future::ready(Ok(record))

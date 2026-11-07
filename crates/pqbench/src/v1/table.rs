@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::{Credentials, DeclaredColumn, Resource, TableFormat};
+use super::{DeclaredColumn, Resource, TableFormat};
 
 /// One table's record.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
@@ -43,10 +43,6 @@ pub struct Table {
     /// The snapshot's partitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partition_count: Option<u64>,
-    /// The vended storage credentials, when the caller holds them. Held on the
-    /// table so a downstream stage reads the table's own lease.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<Credentials>,
 }
 
 #[cfg(test)]

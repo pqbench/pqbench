@@ -48,7 +48,7 @@ pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
 /// The column rows of the stream; a blob is structural, not a measurement.
 async fn column(record: Record) -> Result<Option<v1::Column>, CliError> {
     Ok(match record {
-        Record::Column(column) => Some(column),
+        Record::Column(column) => Some(*column),
         Record::Blob => None,
         Record::File(file) => {
             return Err(format!(

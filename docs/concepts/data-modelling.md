@@ -22,7 +22,7 @@ A resource is addressable: it has a `name`, one canonical parent, and
 `Get`/`List`. A value type has no identity and is carried inside a resource —
 `FileStats` in a `TableFile`, `LogAction` in a `Commit`, `DeclaredColumn` in a
 `Table`. A document is neither: it is the body of a custom method's request or
-response, such as `Credentials` or `ReadEligibility`.
+response, such as a `ReportRow` or a `ColumnMass`.
 
 ## Names
 
@@ -124,10 +124,10 @@ Two consequences:
   absent value is an `Option`, an output-only field is not an input parameter —
   and there is no generator to read them. The AIP *shape* (names, patterns,
   field names) still applies.
-- Credentials ride beside the resource that needs them — a `Table`, a
-  `TableFile` — as the resource's own `credentials` field, which
-  the stage that read it sets, never inside the backend's document, so a
-  pipeline stays in band. They are treated as non-sensitive on the wire.
+- Credentials are session state, never resource data. A reader resolves the
+  table's vended lease itself — through the daemon or directly from the
+  catalog — and holds it in memory; a `Table` or `TableFile` document carries
+  no keys.
 - A table references a blob through the `TableFile` association, not as its
   parent (AIP-124).
 

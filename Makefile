@@ -67,12 +67,19 @@ build:
 test:
 	@TIMEFORMAT='test: %3R s'; time $(CARGO_LOCKED) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
 
-# The live Databricks metastore e2e; needs the service principal credentials.
-# The S3 features are on so the walk's storage reads actually run (under the
-# vended keys; Databricks default storage refuses externally issued sessions).
+# The live Databricks metastore e2e (scripts/dbx_e2e.py); needs the service
+# principal credentials. Python drives the built binary: plumbum composes the
+# pipes and the assertions read the NDJSON. The S3 features are on so the walk's
+# storage reads actually run (under the vended keys; Databricks default storage
+# refuses externally issued sessions).
 dbx-e2e:
 	@test -n "$$DBX_HOST" && test -n "$$DBX_SAMPLES_SP_CLIENT_ID" || { echo "set DBX_HOST and DBX_SAMPLES_SP_CLIENT_ID/SECRET (see docs/guides/auth.md)"; exit 1; }
-	$(CARGO_LOCKED) test -p pqbench-cli --features delta-s3,iceberg-s3 --test it -- dbx_e2e --ignored --nocapture
+	test -d python/.venv || $(PYTHON) -m venv python/.venv
+	python/.venv/bin/python -c 'import plumbum' 2>/dev/null || \
+		python/.venv/bin/python -m pip install -q plumbum
+	$(CARGO_LOCKED) build -p pqbench-cli --features delta-s3,iceberg-s3
+	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" \
+		python/.venv/bin/python scripts/dbx_e2e.py
 
 # The live walk (scripts/dbx-walk.sh): one pass over the whole Unity Catalog,
 # from `list catalogs` to the `format --html` page. Needs DBX_HOST plus a bearer

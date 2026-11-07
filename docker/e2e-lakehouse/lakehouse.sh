@@ -70,8 +70,8 @@ wait_http() {
 
 # Set the walk's environment: the catalog endpoint and dialect (PQB_*) and the
 # object-store options (AWS_*), all read from the environment. An empty
-# endpoint, dialect, or key is unset, so a stage that only talks to the catalog
-# (`credentials get`) carries no storage key.
+# endpoint, dialect, or key is unset, so a stage that resolves a vended lease
+# carries no storage key.
 walk_env() {
     local endpoint=$1 dialect=$2 key=$3 secret=$4 token=${5:-}
     if [ -n "$endpoint" ]; then export PQB_ENDPOINT="$endpoint"; else unset PQB_ENDPOINT; fi
@@ -228,7 +228,7 @@ check_unity() {
     measured=$(expect_events "unity table" "$measurement")
 
     # `list tables` lists the same table from Unity; the walk reads it under the
-    # lease the environment carries, and measures the files the window added.
+    # lease the reader resolves, and measures the files the window added.
     walk_env "$unity_catalog" "" "$VENDED_ACCESS_KEY_ID" "$VENDED_SECRET_ACCESS_KEY" "$VENDED_SESSION_TOKEN"
     measurement=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
         "$pqbench_bin" get table |
@@ -276,32 +276,28 @@ check_unity() {
         exit 1
     }
 
-    # `credentials get` materializes the vended session on each ref; with no
-    # key in the environment it must come from the catalog. The ref carries the
-    # lease (keys + token) only — the endpoint stays in the environment.
+    # No AWS key in the environment: `get table` resolves the vended lease from
+    # the catalog itself, and the emitted record carries no credentials.
     walk_env "$unity_catalog" "" "" ""
-    local vended_ref
-    vended_ref=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
-        "$pqbench_bin" credentials get |
-        jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) key=\(.credentials.access_key_id // "-") session=\(if .credentials.session_token then "set" else "unset" end) endpoint=-"') || {
-        echo "check failed: credentials get produced no ref" >&2
-        exit 1
-    }
-    [ "$vended_ref" = "pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=-" ] || {
-        echo "check failed (unity credentials get): expected pqbench.demo.events key=$VENDED_ACCESS_KEY_ID session=set endpoint=-; measured ${vended_ref:-nothing}" >&2
-        exit 1
-    }
-
-    local vended_info
+    local vended_info vended_files
     vended_info=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
-        "$pqbench_bin" credentials get |
         "$pqbench_bin" get table |
-        jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) snapshot=\(.snapshot_version) columns=[\([.declared_columns[].column] | join(","))] env=\(if .credentials then "set" else "none" end)"') || {
+        jq -r '(.name | split("/")) as $p | "\($p[1]).\($p[3]).\($p[5]) \(.format) snapshot=\(.snapshot_version) columns=[\([.declared_columns[].column] | join(","))] lease=\(if has("credentials") then "set" else "none" end)"') || {
         echo "check failed: the vended table loop produced no record" >&2
         exit 1
     }
-    [ "$vended_info" = "pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label] env=set" ] || {
-        echo "check failed (unity vended get table): expected pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label] env=set; measured ${vended_info:-nothing}" >&2
+    [ "$vended_info" = "pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label] lease=none" ] || {
+        echo "check failed (unity vended get table): expected pqbench.demo.events TABLE_FORMAT_DELTA snapshot=0 columns=[id,label] lease=none; measured ${vended_info:-nothing}" >&2
+        exit 1
+    }
+    vended_files=$(schema_json pqbench.demo | "$pqbench_bin" list tables |
+        "$pqbench_bin" get table |
+        "$pqbench_bin" list files | wc -l) || {
+        echo "check failed: the vended list files stage produced nothing" >&2
+        exit 1
+    }
+    [ "$vended_files" -gt 0 ] || {
+        echo "check failed: the vended list files stage listed no file" >&2
         exit 1
     }
 

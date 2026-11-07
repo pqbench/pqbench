@@ -38,11 +38,10 @@ so the walk is one bash pipeline.
 ```console no-run
 $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
-$ pqb ls catalogs | pqb rl \
-    | pqb ls schemas | pqb rl \
-    | pqb ls tables | pqb rl \
-    | pqb credentials check \
-    | pqb credentials get \
+$ pqb daemon start
+$ pqb ls catalogs \
+    | pqb ls schemas \
+    | pqb ls tables \
     | pqb get table \
     | pqb ls files \
     | pqb bytemass \
@@ -52,23 +51,28 @@ $ pqb ls catalogs | pqb rl \
 
 Read it left to right:
 
-- `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
-  live endpoint fans out one request per ref, so `rl` paces each level at
-  15 refs/s by default — the schema and table listings and the table stages
-  (`credentials check`, `credentials get`, `get table`) alike; the
-  retry-at-half-the-rate recipe is in the
-  [CLI reference](https://pqbench.github.io/pqbench/reference/cli/).
-- `credentials check` drops the tables you can't read outside compute — a view,
-  a system catalog, Databricks default storage — and prints the reason;
-  `credentials get` vends a short-lived lease onto each remaining ref.
+- `list catalogs`, `list schemas`, `list tables`, and `get table` descend the
+  catalog. A live endpoint rate-limits its REST calls, so the daemon that the
+  next bullet starts owns those requests and paces Unity at 15/s, the catalog's
+  per-endpoint ceiling.
+- `daemon start` runs one daemon for the walk. It makes every catalog request
+  and caches the storage lease each table is read under, serving both to every
+  stage, so the catalog vends each table once rather than once per command.
+  Without a daemon each stage makes its own catalog call; the leases are held
+  in memory and never appear in a document.
 - `get table` enriches each ref with its format and snapshot; the Delta log is
   read with `without_files()`, so the read is O(1) in files. `list files` then
-  resolves each snapshot and writes its active files, one `TableFile` per line,
-  carrying the table's lease.
+  resolves each snapshot and writes its active files, one `TableFile` per line.
 - `bytemass` reads each file's footer and prints the on-disk bytes per column,
   the table in [bytemass](#bytemass). In a pipe it streams
   `Blob` and `Column` NDJSON instead; `pqb summarize columns` estimates each
   table column's mass and `pqb format --html` draws that as a treemap.
+
+A ref the catalog will not vend a lease for — a view, a system table, a table on
+Databricks default storage — is dropped with the cause on standard error, and
+that stage exits non-zero; `set -e` then stops the pipeline. Walk a catalog that
+is externally readable, or filter the refs to one first (`scripts/dbx-walk.sh`
+shows the `jq` filter). The lease itself is never written to a document.
 
 The same walk runs offline against the local Delta and Iceberg stand,
 `make lakehouse`. [Getting started](https://pqbench.github.io/pqbench/getting-started/) takes one Parquet

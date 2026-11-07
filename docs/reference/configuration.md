@@ -48,15 +48,17 @@ The environment overrides the selected profile:
 | --- | --- |
 | `PQB_PROFILE` | the `~/.pqbenchrc` profile to run under |
 | `PQB_ENDPOINT` | workspace URL, Unity OSS, or Iceberg REST base |
-| `PQB_TOKEN` | bearer PAT (`dapi-…`) or OAuth token; catalog API only |
+| `PQB_TOKEN` | bearer PAT (`dapi-…`) or OAuth token; catalog reads and vending |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg` |
-| `PQB_RATE` | default records per second for `ratelimit` (`15`; `0` disables pacing) |
 | `PQB_TABLE_FAN_OUT` | tables in flight for `get table` (default: the core count) |
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | a lower-priority fallback for the endpoint and bearer |
-| `AWS_*` | object-store region and credentials, read by the storage client |
+| `AWS_*` | object-store region and ambient credentials, read by the storage client |
+| `PQB_DAEMON_SOCK` | override the daemon socket path (a sidecar or a test) |
 
 `pqb setup` prints the resolved endpoint, bearer, and dialect for the shell to
-evaluate. A later layer wins, so the environment can override the profile:
+evaluate. A later layer wins, so the environment can override the profile.
+`pqb daemon start` runs the daemon for those values; without it each
+command vends directly, which is correct but asks the catalog once per stage.
 
 ```console run
 $ PQB_CONFIG_FILE=examples/pqbenchrc pqb setup --profile iceberg

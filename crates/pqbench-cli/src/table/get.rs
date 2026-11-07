@@ -21,20 +21,12 @@ pub(crate) struct GetArgs {
     fan_out: usize,
 }
 
-pub(crate) async fn run(
-    workspace: &pqbench::Workspace,
-    lake: &pqbench::Lake,
-    args: &GetArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &GetArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("get table").await?;
-    drive(map(parents, args.fan_out, |table: v1::Table| async move {
-        let lease = table.credentials.clone().filter(|lease| !lease.is_empty());
-        let lake = lake.with_lease(lease.as_ref());
-        let mut record = pqbench::table::get::get(workspace, &lake, &table).await;
-        if let Ok(record) = &mut record {
-            record.credentials = lease;
-        }
-        record
+    let daemon = daemon.clone();
+    drive(map(parents, args.fan_out, move |table: v1::Table| {
+        let daemon = daemon.clone();
+        async move { daemon.get_table(&table).await }
     }))
     .await
 }

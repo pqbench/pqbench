@@ -23,11 +23,11 @@ mod bytemass_e2e;
 #[path = "catalog.rs"]
 mod catalog;
 
+#[path = "catalog_daemon.rs"]
+mod catalog_daemon;
+
 #[path = "compression_e2e.rs"]
 mod compression_e2e;
-
-#[path = "dbx_e2e.rs"]
-mod dbx_e2e;
 
 #[path = "diff.rs"]
 mod diff;
@@ -52,9 +52,6 @@ mod piping;
 
 #[path = "profile.rs"]
 mod profile;
-
-#[path = "ratelimit.rs"]
-mod ratelimit;
 
 #[path = "sample.rs"]
 mod sample;

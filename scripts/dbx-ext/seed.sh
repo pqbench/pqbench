@@ -24,8 +24,7 @@
 # Every fixture table is external, so Unity Catalog vends read credentials for
 # it — what the issue-#58 walk exercises:
 #
-#       list tables | credentials check | credentials get
-#         | get table | list files | bytemass
+#       list tables | get table | list files | bytemass
 #
 # Copy set (source -> fixture), sized to fit the workspace's storage budget:
 #

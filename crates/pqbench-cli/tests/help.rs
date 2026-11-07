@@ -25,7 +25,7 @@ fn root_help_covers_auth_documents_and_format_skills() {
 #[test]
 fn help_shows_the_short_names() {
     let stdout = help(&["--help"]);
-    for alias in ["fmt", "ls", "rl"] {
+    for alias in ["fmt", "ls"] {
         assert!(stdout.contains(&format!("[alias: {alias}]")), "{stdout}");
     }
 }

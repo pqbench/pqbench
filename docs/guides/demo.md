@@ -60,9 +60,9 @@ $ cat docker/e2e-lakehouse/table.ndjson \
 {"column":"label","compressed_bytes":72}
 ```
 
-The `list files` stream carries each file's `credentials` on the record, so
-the lease travels with it through `jq`, `sort`, and `head`: `bytemass` reads the
-file its `blob` names.
+The `list files` stream carries no credentials. `bytemass` resolves the
+table's lease for itself — through the daemon when one is running, else from
+the catalog — and reads the file its `blob` names.
 
 ## A table's files
 
@@ -93,15 +93,14 @@ label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
 
 The catalog comes from the environment (`PQB_ENDPOINT`, `PQB_TOKEN`). The
 dialect is declared, not probed: `PQB_TABLE_FORMAT` is `unity` (the default) or
-`iceberg`. The walk descends `list catalogs` → `list schemas`
-→ `list tables`, checks and vends credentials, then enriches each table and lists
-its files:
+`iceberg`. `pqb daemon start` keeps the vended leases across the pipeline, then
+the walk descends `list catalogs` → `list schemas` → `list tables`, enriches
+each table, and lists its files:
 
 ```console no-run
 $ export PQB_ENDPOINT=… PQB_TOKEN=…
+$ pqb daemon start
 $ echo '"CAT.SCHEMA"' | pqb ls tables |
-    pqb credentials check |
-    pqb credentials get |
     pqb get table |
     pqb ls files |
     pqb bytemass | pqb fmt
@@ -160,8 +159,8 @@ $ cat docker/e2e-lakehouse/iceberg.ndjson | pqb ls files > /tmp/iceberg.ndjson
 ```
 
 With the stand up, walk the Iceberg REST catalog (`PQB_ENDPOINT=…
-PQB_TABLE_FORMAT=iceberg`) and measure through it: `list tables | credentials
-check | credentials get | get table | list files | bytemass`.
+PQB_TABLE_FORMAT=iceberg`) and measure through it: `list tables | get table |
+list files | bytemass`.
 `docs/demos/pqbench-iceberg-session.sh` runs the REST pipe when the stand answers
 at `localhost:8181`.
 

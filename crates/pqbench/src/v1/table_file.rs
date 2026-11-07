@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::name;
-use super::{Credentials, FileStats, Resource};
+use super::{FileStats, Resource};
 
 /// A table's reference to one [`Blob`](super::Blob): a row of the table's
 /// log (the Delta `add`). The AIP-124 association between them.
@@ -33,11 +33,6 @@ pub struct TableFile {
     /// The log's statistics, when it carries them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<FileStats>,
-    /// The vended storage credentials to read [`Self::blob`] with, when the
-    /// caller holds them. Held on the record so the blob read uses the lease
-    /// the log read used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<Credentials>,
     /// The probability a `sample files` stage kept this record with: its
     /// inverse is the weight a sum over the stream must apply. Absent means
     /// the record was not sampled and weighs one.

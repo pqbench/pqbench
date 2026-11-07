@@ -1,7 +1,7 @@
 //! Documents on stdin or a file. The resource's name decides what it is.
 //!
-//! A [`v1::TableFile`] names the blob to read and carries its lease; the
-//! bytemass kinds are its own output. The `name`'s collection segment
+//! A [`v1::TableFile`] names the blob to read; its lease is session state and
+//! never on the record. The bytemass kinds are its own output. The `name`'s collection segment
 //! identifies each record (AIP-122), so no record carries a `kind`. A pipe
 //! writes NDJSON; a terminal prints an aligned table (override with
 //! `--format`). A summarized column row names no resource, so it is the one
@@ -20,12 +20,13 @@ use crate::CliError;
 
 /// One JSON value from a table-file stream or a one-object document.
 pub(crate) enum Record {
-    /// One table file: its blob and the lease to read it.
+    /// One table file: the blob to read, without a lease.
     File(v1::TableFile),
     /// One measured file's facts; structural, not a row.
     Blob,
-    /// One file column and its byte mass.
-    Column(v1::Column),
+    /// One file column and its byte mass. Boxed: a column record is much
+    /// larger than a table-file one, and a stream holds one at a time.
+    Column(Box<v1::Column>),
     /// One summarized table column: a document with no addressable name.
     Mass(mass::ColumnMass),
 }
@@ -143,7 +144,7 @@ fn classify(value: serde_json::Value) -> Result<Record, CliError> {
         .map(str::to_owned);
     match name.as_deref() {
         Some(name) if v1::Column::parse_name(name).is_some() => {
-            Ok(Record::Column(from_value(value)?))
+            Ok(Record::Column(Box::new(from_value(value)?)))
         }
         Some(name) if v1::name::parse_blob(name).is_some() => {
             let _: v1::Blob = from_value(value)?;

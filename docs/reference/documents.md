@@ -14,7 +14,7 @@ schema.
 | `Metastore` | `metastores/{metastore}` | [`get metastore`](cli.md#pqbench-get-metastore) | humans / scripts |
 | `Catalog` | `catalogs/{catalog}` | [`list catalogs`](cli.md#pqbench-list-catalogs), [`get catalog`](cli.md#pqbench-get-catalog) | `get catalog`, `list schemas` |
 | `Schema` | `catalogs/{catalog}/schemas/{schema}` | [`list schemas`](cli.md#pqbench-list-schemas), [`get schema`](cli.md#pqbench-get-schema) | `get schema`, `list tables` |
-| `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table), [`credentials get`](cli.md#pqbench-credentials) | `get table`, `list files`, `credentials get` |
+| `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table) | `get table`, `list files` |
 | `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass` |
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |

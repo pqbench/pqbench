@@ -95,6 +95,11 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
 /// A command's records: each record, or the failure that replaced it.
 pub(crate) type Records<'a, B> = LocalBoxStream<'a, Result<B, CliError>>;
 
+/// A whole answer as a record stream: what a daemon request returned.
+pub(crate) fn rows<B: 'static>(rows: Vec<B>) -> Records<'static, B> {
+    stream::iter(rows.into_iter().map(Ok)).boxed_local()
+}
+
 /// `map` over batches of parents: one record per parent.
 pub(crate) fn map<'a, A, B, E, F, Fut>(
     parents: impl Stream<Item = Result<A, CliError>> + 'a,
