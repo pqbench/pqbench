@@ -18,6 +18,17 @@ pub enum Dialect {
     Iceberg,
 }
 
+impl Dialect {
+    /// The spelling `PQB_TABLE_FORMAT` accepts: `unity` or `iceberg`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unity => "unity",
+            Self::Iceberg => "iceberg",
+        }
+    }
+}
+
 /// One command's resolved configuration: the endpoint and bearer a metadata
 /// command runs under, and the catalog dialect it speaks.
 #[derive(Debug, Clone)]

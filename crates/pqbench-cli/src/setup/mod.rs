@@ -14,7 +14,7 @@
 //! environment; the vended lease carries none.
 
 use clap::Args;
-use pqbench::{Dialect, Workspace};
+use pqbench::Workspace;
 
 use crate::CliError;
 
@@ -43,21 +43,13 @@ pub(crate) fn run(workspace: &Workspace, args: &SetupArgs) -> Result<(), CliErro
     let mut out = String::new();
     export(&mut out, "PQB_ENDPOINT", &config.endpoint);
     export(&mut out, "PQB_TOKEN", token);
-    export(&mut out, "PQB_TABLE_FORMAT", dialect_name(config.dialect));
+    export(&mut out, "PQB_TABLE_FORMAT", config.dialect.as_str());
     if let Some(region) = non_empty(args.region.as_deref()) {
         export(&mut out, "AWS_REGION", region);
     }
     export(&mut out, "AWS_EC2_METADATA_DISABLED", "true");
     print!("{out}");
     Ok(())
-}
-
-/// The dialect as `PQB_TABLE_FORMAT` spells it.
-fn dialect_name(dialect: Dialect) -> &'static str {
-    match dialect {
-        Dialect::Unity => "unity",
-        Dialect::Iceberg => "iceberg",
-    }
 }
 
 /// A value with the surrounding whitespace trimmed; blank is nothing.
