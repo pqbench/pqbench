@@ -33,7 +33,7 @@ use crate::CliError;
 
 use super::client;
 use super::path;
-use super::protocol::{Collection, Get, Request, Response};
+use super::protocol::{Collection, Request, Resource, Response};
 use super::rate::UnityRate;
 
 /// How long before expiry a lease is refreshed.
@@ -153,16 +153,14 @@ impl Daemon {
     pub(crate) async fn records(&self, request: &Request) -> Result<Vec<Value>, CliError> {
         match &self.vendor {
             Vendor::Direct(_) => self.execute(request).await,
-            Vendor::Daemon { path, fallback } => {
-                match client::request(path, request).await {
-                    Ok(response) => records(response),
-                    // No daemon (or a broken one): run the call here. Catalog
-                    // commands must keep working without the optional daemon.
-                    Err(client::Error::Connect(_) | client::Error::Protocol(_)) => {
-                        Daemon::direct(fallback.clone()).execute(request).await
-                    }
+            Vendor::Daemon { path, .. } => match client::request(path, request).await {
+                Ok(response) => records(response),
+                // No daemon (or a broken one): run the call here. Catalog
+                // commands must keep working without the optional daemon.
+                Err(client::Error::Connect(_) | client::Error::Protocol(_)) => {
+                    self.execute(request).await
                 }
-            }
+            },
         }
     }
 
@@ -208,7 +206,7 @@ impl Daemon {
 
     /// One table's record, read from its catalog and storage.
     pub(crate) async fn get_table(&self, table: &v1::Table) -> Result<v1::Table, CliError> {
-        self.fetch_one(&Request::table_get(serde_json::to_value(table)?))
+        self.fetch_one(&Request::table(serde_json::to_value(table)?))
             .await
     }
 
@@ -251,33 +249,37 @@ impl Daemon {
         match collection {
             Collection::Catalogs => values(pqbench::catalog::list::list(self.workspace())).await,
             Collection::Schemas => {
-                let catalog: v1::Catalog = decode_record(parent, "list schemas")?;
+                let catalog: v1::Catalog = record_value(parent, "list schemas")?;
                 values(pqbench::schema::list::list(self.workspace(), &catalog)).await
             }
             Collection::Tables => {
-                let schema: v1::Schema = decode_record(parent, "list tables")?;
+                let schema: v1::Schema = record_value(parent, "list tables")?;
                 values(pqbench::table::list::list(self.workspace(), &schema)).await
             }
         }
     }
 
-    async fn get(&self, resource: Get, record: Option<&Value>) -> Result<Vec<Value>, CliError> {
+    async fn get(
+        &self,
+        resource: Resource,
+        record: Option<&Value>,
+    ) -> Result<Vec<Value>, CliError> {
         match resource {
-            Get::Metastore => {
+            Resource::Metastore => {
                 self.pace().await;
                 one_value(pqbench::metastore::get::get(self.workspace()).await?)
             }
-            Get::Catalog => {
+            Resource::Catalog => {
                 self.pace().await;
-                let catalog: v1::Catalog = decode_record(record, "get catalog")?;
+                let catalog: v1::Catalog = record_value(record, "get catalog")?;
                 one_value(pqbench::catalog::get::get(self.workspace(), &catalog).await?)
             }
-            Get::Schema => {
+            Resource::Schema => {
                 self.pace().await;
-                let schema: v1::Schema = decode_record(record, "get schema")?;
+                let schema: v1::Schema = record_value(record, "get schema")?;
                 one_value(pqbench::schema::get::get(self.workspace(), &schema).await?)
             }
-            Get::Table => self.get_table_record(record).await,
+            Resource::Table => self.get_table_record(record).await,
         }
     }
 
@@ -306,18 +308,14 @@ impl Daemon {
         table: &str,
     ) -> Result<BTreeMap<String, String>, CliError> {
         Ok(self
-            .resolve(table)
+            .resolve_vended(table)
             .await?
             .map(|vended| vended.env)
             .unwrap_or_default())
     }
 
-    /// The daemon's answer for `table`: the lease, or `None` for ambient.
+    /// The lease to read `table` with; `None` means the ambient `AWS_*`.
     pub(crate) async fn resolve_vended(&self, table: &str) -> Result<Option<Vended>, CliError> {
-        self.resolve(table).await
-    }
-
-    async fn resolve(&self, table: &str) -> Result<Option<Vended>, CliError> {
         if local(table) {
             return Ok(None);
         }
@@ -383,7 +381,7 @@ impl Vendor {
         match self {
             Vendor::Direct(workspace) => direct(workspace, table).await,
             Vendor::Daemon { path, fallback } => {
-                match client::request(path, &Request::table(table)).await {
+                match client::request(path, &Request::lease(table)).await {
                     Ok(response) => parse_response(response),
                     Err(client::Error::Connect(_) | client::Error::Protocol(_)) => {
                         direct(fallback, table).await
@@ -413,14 +411,15 @@ async fn direct(workspace: &Workspace, table: &str) -> Result<Option<Vended>, Cl
 }
 
 fn parse_response(response: Response) -> Result<Option<Vended>, CliError> {
-    if let Some(error) = response.error {
-        return Err(error.into());
-    }
-    if response.none || response.env.is_none() {
+    let response = answer(response)?;
+    if response.none {
         return Ok(None);
     }
+    let Some(env) = response.env else {
+        return Ok(None);
+    };
     Ok(Some(Vended {
-        env: response.env.unwrap_or_default(),
+        env,
         expire_time_ms: response.expire_time_ms,
     }))
 }
@@ -490,29 +489,32 @@ fn remaining(epoch_ms: u64) -> Option<Duration> {
 
 /// An `Instant` as epoch milliseconds.
 fn epoch_ms(instant: Instant, now: Instant) -> u64 {
-    let remaining = instant.saturating_duration_since(now);
+    let left = instant.saturating_duration_since(now);
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64);
-    now_ms + remaining.as_millis() as u64
+        .map_or(0, millis);
+    now_ms.saturating_add(millis(left))
+}
+
+/// A duration as whole milliseconds, clamped rather than wrapped.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The answer, unless it reports the request's failure.
+fn answer(response: Response) -> Result<Response, CliError> {
+    match response.error {
+        Some(error) => Err(error.into()),
+        None => Ok(response),
+    }
 }
 
 /// The records an answer carries, or the error it reports.
 fn records(response: Response) -> Result<Vec<Value>, CliError> {
-    if let Some(error) = response.error {
-        return Err(error.into());
-    }
-    Ok(response.records)
+    Ok(answer(response)?.records)
 }
 
 /// Decode a request's parent record.
-fn decode_record<T: DeserializeOwned>(
-    record: Option<&Value>,
-    request: &str,
-) -> Result<T, CliError> {
-    record_value(record, request)
-}
-
 fn record_value<T: DeserializeOwned>(record: Option<&Value>, request: &str) -> Result<T, CliError> {
     let record = record.ok_or_else(|| format!("a {request} request carries no record"))?;
     serde_json::from_value(record.clone())
@@ -543,11 +545,7 @@ mod tests {
         Vended {
             env: BTreeMap::from([("AWS_ACCESS_KEY_ID".to_string(), "key".to_string())]),
             expire_time_ms: Some(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    + expires_in.as_millis() as u64,
+                millis(SystemTime::now().duration_since(UNIX_EPOCH).unwrap()) + millis(expires_in),
             ),
         }
     }

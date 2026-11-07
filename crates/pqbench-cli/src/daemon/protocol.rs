@@ -29,7 +29,7 @@ pub(crate) enum Request {
     },
     /// a `get` level: its resource and the parent record it enriches.
     Get {
-        resource: Get,
+        resource: Resource,
         #[serde(skip_serializing_if = "Option::is_none")]
         record: Option<Value>,
     },
@@ -47,7 +47,7 @@ pub(crate) enum Collection {
 /// The resource a `get` request reads.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Get {
+pub(crate) enum Resource {
     Metastore,
     Catalog,
     Schema,
@@ -55,7 +55,7 @@ pub(crate) enum Get {
 }
 
 impl Request {
-    pub(crate) fn table(table: impl Into<String>) -> Self {
+    pub(crate) fn lease(table: impl Into<String>) -> Self {
         Self::Lease {
             table: table.into(),
         }
@@ -92,28 +92,28 @@ impl Request {
 
     pub(crate) fn metastore() -> Self {
         Self::Get {
-            resource: Get::Metastore,
+            resource: Resource::Metastore,
             record: None,
         }
     }
 
     pub(crate) fn catalog(record: Value) -> Self {
         Self::Get {
-            resource: Get::Catalog,
+            resource: Resource::Catalog,
             record: Some(record),
         }
     }
 
     pub(crate) fn schema(record: Value) -> Self {
         Self::Get {
-            resource: Get::Schema,
+            resource: Resource::Schema,
             record: Some(record),
         }
     }
 
-    pub(crate) fn table_get(record: Value) -> Self {
+    pub(crate) fn table(record: Value) -> Self {
         Self::Get {
-            resource: Get::Table,
+            resource: Resource::Table,
             record: Some(record),
         }
     }

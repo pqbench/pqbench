@@ -14,25 +14,24 @@ use super::session::Daemon;
 
 /// Serve leases on `socket` until stopped, or until `idle_seconds` pass with
 /// no connection (`0` serves until stopped).
-pub(crate) async fn run(cache: Daemon, socket: PathBuf, idle_seconds: u64) -> Result<(), String> {
+pub(crate) async fn run(session: Daemon, socket: PathBuf, idle_seconds: u64) -> Result<(), String> {
     path::prepare(&socket)?;
     let listener = UnixListener::bind(&socket)
         .map_err(|error| format!("cannot bind {}: {error}", socket.display()))?;
     path::set_socket_mode(&socket)?;
 
     let shutdown = Arc::new(Notify::new());
-    let idle = (idle_seconds > 0).then(|| Duration::from_secs(idle_seconds));
+    let idle = (idle_seconds > 0).then_some(Duration::from_secs(idle_seconds));
     loop {
         let accepted = accept(&listener, idle);
         tokio::select! {
             _ = shutdown.notified() => break,
             result = accepted => match result {
-                Ok(Some(connection)) => {
-                    let (stream, _) = connection;
-                    let cache = cache.clone();
+                Ok(Some(stream)) => {
+                    let session = session.clone();
                     let shutdown = Arc::clone(&shutdown);
                     tokio::spawn(async move {
-                        let _ = handle(stream, cache, shutdown).await;
+                        let _ = handle(stream, session, shutdown).await;
                     });
                 }
                 Ok(None) => break,
@@ -50,22 +49,22 @@ pub(crate) async fn run(cache: Daemon, socket: PathBuf, idle_seconds: u64) -> Re
 async fn accept(
     listener: &UnixListener,
     idle: Option<Duration>,
-) -> Result<Option<(UnixStream, tokio::net::unix::SocketAddr)>, String> {
+) -> Result<Option<UnixStream>, String> {
     match idle {
         Some(idle) => match tokio::time::timeout(idle, listener.accept()).await {
-            Ok(Ok(connection)) => Ok(Some(connection)),
+            Ok(Ok((stream, _))) => Ok(Some(stream)),
             Ok(Err(error)) => Err(format!("cannot accept a connection: {error}")),
             Err(_) => Ok(None),
         },
         None => listener
             .accept()
             .await
-            .map(Some)
+            .map(|(stream, _)| Some(stream))
             .map_err(|error| format!("cannot accept a connection: {error}")),
     }
 }
 
-async fn handle(stream: UnixStream, cache: Daemon, shutdown: Arc<Notify>) -> Result<(), String> {
+async fn handle(stream: UnixStream, session: Daemon, shutdown: Arc<Notify>) -> Result<(), String> {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     let Some(line) = lines
@@ -78,7 +77,25 @@ async fn handle(stream: UnixStream, cache: Daemon, shutdown: Arc<Notify>) -> Res
     let request: Request =
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
 
-    let response = match &request {
+    let response = respond(&request, &session, &shutdown).await;
+
+    let mut line = serde_json::to_string(&response)
+        .map_err(|error| format!("cannot encode the answer: {error}"))?;
+    line.push('\n');
+    write
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|error| format!("cannot write the answer: {error}"))?;
+    write
+        .flush()
+        .await
+        .map_err(|error| format!("cannot flush the answer: {error}"))?;
+    Ok(())
+}
+
+/// Answer one request, recording a failure the reader reports per record.
+async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Response {
+    match request {
         Request::Stop => {
             shutdown.notify_one();
             Response {
@@ -90,7 +107,7 @@ async fn handle(stream: UnixStream, cache: Daemon, shutdown: Arc<Notify>) -> Res
             ok: true,
             ..Response::default()
         },
-        Request::Lease { table } => match cache.resolve_vended(table).await {
+        Request::Lease { table } => match session.resolve_vended(table).await {
             Ok(Some(vended)) => Response {
                 env: Some(vended.env),
                 expire_time_ms: vended.expire_time_ms,
@@ -105,7 +122,7 @@ async fn handle(stream: UnixStream, cache: Daemon, shutdown: Arc<Notify>) -> Res
                 ..Response::default()
             },
         },
-        Request::List { .. } | Request::Get { .. } => match cache.records(&request).await {
+        Request::List { .. } | Request::Get { .. } => match session.records(request).await {
             Ok(records) => Response {
                 records,
                 ..Response::default()
@@ -115,23 +132,7 @@ async fn handle(stream: UnixStream, cache: Daemon, shutdown: Arc<Notify>) -> Res
                 ..Response::default()
             },
         },
-    };
-
-    let line = serde_json::to_string(&response)
-        .map_err(|error| format!("cannot encode the answer: {error}"))?;
-    write
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|error| format!("cannot write the answer: {error}"))?;
-    write
-        .write_all(b"\n")
-        .await
-        .map_err(|error| format!("cannot write the answer: {error}"))?;
-    write
-        .flush()
-        .await
-        .map_err(|error| format!("cannot flush the answer: {error}"))?;
-    Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -165,7 +166,7 @@ mod tests {
 
         let response = client::request(
             &socket,
-            &Request::table("catalogs/local/schemas/local/tables/t"),
+            &Request::lease("catalogs/local/schemas/local/tables/t"),
         )
         .await
         .expect("the daemon answers a table request");
