@@ -22,6 +22,12 @@ pub(crate) struct UnityRate {
     next: Mutex<Instant>,
 }
 
+impl Default for UnityRate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UnityRate {
     pub(crate) fn new() -> Self {
         Self {

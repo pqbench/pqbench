@@ -9,19 +9,15 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use pqbench::{Config, Dialect};
+use pqbench::Config;
+
+/// Linux's `sun_path` holds 108 bytes; keep a margin for the NUL and a rename.
+const SOCKET_PATH_LIMIT: usize = 100;
 
 /// The socket for `config`'s identity, or `PQB_DAEMON_SOCK`.
 pub(crate) fn socket_path(config: &Config) -> PathBuf {
     if let Some(path) = std::env::var_os("PQB_DAEMON_SOCK") {
-        let path = PathBuf::from(path);
-        return if path.is_absolute() {
-            path
-        } else {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&path))
-                .unwrap_or(path)
-        };
+        return absolute(Path::new(&path));
     }
     let name = format!("d-{:016x}.sock", fingerprint(config));
     let mut candidates = Vec::with_capacity(3);
@@ -33,16 +29,22 @@ pub(crate) fn socket_path(config: &Config) -> PathBuf {
     }
     candidates.push(PathBuf::from(format!("/tmp/pqbench-{}", uid())));
     let paths: Vec<PathBuf> = candidates.into_iter().map(|dir| dir.join(&name)).collect();
-    if let Some(path) = paths
-        .iter()
-        .find(|path| path.as_os_str().as_bytes().len() < 100)
-    {
+    if let Some(path) = paths.iter().find(|path| fits(path)) {
         return path.clone();
     }
     paths
         .into_iter()
-        .min_by_key(|path| path.as_os_str().as_bytes().len())
+        .min_by_key(|path| socket_length(path))
         .unwrap_or_else(|| PathBuf::from(format!("/tmp/pqbench-{}/{}", uid(), name)))
+}
+
+/// Whether the path fits a socket address.
+fn fits(path: &Path) -> bool {
+    socket_length(path) < SOCKET_PATH_LIMIT
+}
+
+fn socket_length(path: &Path) -> usize {
+    path.as_os_str().as_bytes().len()
 }
 
 /// A stable fingerprint of the identity the daemon serves.
@@ -52,7 +54,7 @@ fn fingerprint(config: &Config) -> u64 {
     let mut hash = OFFSET;
     for part in [
         config.endpoint.as_str(),
-        dialect_name(config.dialect),
+        config.dialect.as_str(),
         config.token.as_deref().unwrap_or_default(),
     ] {
         for byte in part.as_bytes() {
@@ -65,15 +67,8 @@ fn fingerprint(config: &Config) -> u64 {
     hash
 }
 
-fn dialect_name(dialect: Dialect) -> &'static str {
-    match dialect {
-        Dialect::Unity => "unity",
-        Dialect::Iceberg => "iceberg",
-    }
-}
-
 fn uid() -> u32 {
-    // `getuid` is always successful and has no preconditions.
+    // SAFETY: `getuid` has no preconditions and cannot fail.
     unsafe { libc::getuid() }
 }
 
@@ -145,6 +140,7 @@ fn ensure_dir(dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pqbench::Dialect;
 
     fn config(token: &str) -> Config {
         Config {

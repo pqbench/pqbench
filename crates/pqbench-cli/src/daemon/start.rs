@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use pqbench::{Config, Dialect};
+use pqbench::Config;
 
 use super::client;
 use super::path;
@@ -19,6 +19,24 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
     }
     path::prepare(socket)?;
 
+    let mut child = serve_command(config, socket, idle_seconds)?
+        .spawn()
+        .map_err(|error| format!("cannot start the daemon: {error}"))?;
+
+    for _ in 0..250 {
+        if client::ping(socket).await {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(format!("the daemon did not start on {}", socket.display()))
+}
+
+/// The background daemon's command: this executable, serving `socket` with
+/// the resolved identity passed explicitly.
+fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Command, String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("cannot find the pqbench executable: {error}"))?;
     let mut command = Command::new(exe);
@@ -44,7 +62,7 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
     // keeps a multi-profile ~/.pqbenchrc from changing it.
     command.env("PQB_CONFIG_FILE", "/dev/null");
     command.env("PQB_ENDPOINT", &config.endpoint);
-    command.env("PQB_TABLE_FORMAT", dialect_name(config.dialect));
+    command.env("PQB_TABLE_FORMAT", config.dialect.as_str());
     if let Some(token) = &config.token {
         command.env("PQB_TOKEN", token);
     }
@@ -54,6 +72,8 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
         .stderr(Stdio::inherit());
     // A new session keeps the daemon alive when the shell that started it
     // closes the terminal.
+    // SAFETY: `pre_exec` runs after fork and before exec, so the closure may
+    // only call async-signal-safe functions; `setsid` is one.
     unsafe {
         command.pre_exec(|| {
             if libc::setsid() == -1 {
@@ -63,19 +83,7 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
             }
         });
     }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("cannot start the daemon: {error}"))?;
-
-    for _ in 0..250 {
-        if client::ping(socket).await {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-    Err(format!("the daemon did not start on {}", socket.display()))
+    Ok(command)
 }
 
 /// Stop the daemon listening at `socket`.
@@ -104,12 +112,5 @@ pub(crate) async fn status(socket: &Path) -> Result<(), String> {
         Ok(())
     } else {
         Err("the daemon is not running".into())
-    }
-}
-
-fn dialect_name(dialect: Dialect) -> &'static str {
-    match dialect {
-        Dialect::Unity => "unity",
-        Dialect::Iceberg => "iceberg",
     }
 }
