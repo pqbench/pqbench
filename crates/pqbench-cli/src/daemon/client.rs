@@ -1,6 +1,8 @@
 //! The client side of the lease socket: one request, one response.
 
 use std::fmt;
+use std::future::Future;
+use std::io;
 use std::path::Path;
 use std::time::Duration;
 
@@ -13,7 +15,7 @@ use super::protocol::{Request, Response};
 #[derive(Debug)]
 pub(crate) enum Error {
     /// The daemon is not there, or the connection broke.
-    Connect(std::io::Error),
+    Connect(io::Error),
     /// The daemon answered something that is not this protocol.
     Protocol(String),
 }
@@ -46,30 +48,15 @@ pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response, 
 }
 
 async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<Response, Error> {
-    let mut stream = tokio::time::timeout(timeout, UnixStream::connect(path))
-        .await
-        .map_err(|_| timed_out())?
-        .map_err(Error::Connect)?;
+    let mut stream = bounded(timeout, UnixStream::connect(path)).await?;
     let line = serde_json::to_vec(request).map_err(|error| Error::Protocol(error.to_string()))?;
-    tokio::time::timeout(timeout, stream.write_all(&line))
-        .await
-        .map_err(|_| timed_out())?
-        .map_err(Error::Connect)?;
-    tokio::time::timeout(timeout, stream.write_all(b"\n"))
-        .await
-        .map_err(|_| timed_out())?
-        .map_err(Error::Connect)?;
-    tokio::time::timeout(timeout, stream.flush())
-        .await
-        .map_err(|_| timed_out())?
-        .map_err(Error::Connect)?;
+    bounded(timeout, stream.write_all(&line)).await?;
+    bounded(timeout, stream.write_all(b"\n")).await?;
+    bounded(timeout, stream.flush()).await?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    tokio::time::timeout(timeout, reader.read_line(&mut line))
-        .await
-        .map_err(|_| timed_out())?
-        .map_err(Error::Connect)?;
+    bounded(timeout, reader.read_line(&mut line)).await?;
     if line.is_empty() {
         return Err(Error::Protocol(
             "the daemon closed the connection without an answer".into(),
@@ -78,9 +65,20 @@ async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<R
     serde_json::from_str(&line).map_err(|error| Error::Protocol(error.to_string()))
 }
 
+/// One socket operation, bounded by the exchange's timeout.
+async fn bounded<T>(
+    timeout: Duration,
+    operation: impl Future<Output = io::Result<T>>,
+) -> Result<T, Error> {
+    tokio::time::timeout(timeout, operation)
+        .await
+        .map_err(|_| timed_out())?
+        .map_err(Error::Connect)
+}
+
 fn timed_out() -> Error {
-    Error::Connect(std::io::Error::new(
-        std::io::ErrorKind::TimedOut,
+    Error::Connect(io::Error::new(
+        io::ErrorKind::TimedOut,
         "the daemon did not answer",
     ))
 }

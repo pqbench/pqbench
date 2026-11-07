@@ -10,8 +10,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-use crate::CliError;
 use pqbench::Workspace;
+
+use crate::CliError;
 
 mod client;
 mod path;
@@ -67,14 +68,12 @@ impl DaemonArgs {
             && std::env::var_os("PQB_DAEMON_SOCK").is_some()
     }
 
-    /// Whether the command needs a catalog endpoint. With an explicit socket,
-    /// stop and status can find the daemon without one; start and serve cannot.
+    /// Whether the command needs a catalog endpoint. Start and serve always
+    /// do; stop and status can find an explicit socket without one.
     pub(crate) fn requires_endpoint(&self) -> bool {
         match &self.command {
             DaemonCommand::Start(_) | DaemonCommand::Serve(_) => true,
-            DaemonCommand::Stop | DaemonCommand::Status => {
-                std::env::var_os("PQB_DAEMON_SOCK").is_none()
-            }
+            DaemonCommand::Stop | DaemonCommand::Status => !self.socket_only(),
         }
     }
 }
@@ -89,8 +88,8 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
         DaemonCommand::Status => start::status(&socket).await?,
         DaemonCommand::Serve(args) => {
             let socket = args.socket.as_deref().map_or(socket, path::absolute);
-            let cache = Daemon::direct(workspace.clone());
-            serve::run(cache, socket, args.idle_seconds).await?;
+            let session = Daemon::direct(workspace.clone());
+            serve::run(session, socket, args.idle_seconds).await?;
         }
     }
     Ok(())
