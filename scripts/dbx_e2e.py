@@ -3,13 +3,16 @@
 
     python scripts/dbx_e2e.py -v
     PQB=target/debug/pqbench python scripts/dbx_e2e.py -v
+    python scripts/dbx_e2e.py --jobs 1 -k schema_get
 
 Each test runs ``pqbench`` against the live workspace and checks the NDJSON it
-emits; plumbum composes the multi-stage pipes. The suite is the live half of
-``scripts/dbx-walk.sh``: `get metastore`, the catalog levels through both
-dialects, the external S3 fixture, lease-backed table reads, and the walk from
-`list tables` to a treemap page. The whole metastore walk itself lives in
-``scripts/walk_metastore.py`` and is run from here.
+emits; plumbum composes the multi-stage pipes, so every level of a walk starts
+before the previous one finishes. Test cases run concurrently by default, as
+`cargo test` runs its tests; `--jobs 1` runs them one at a time. The suite is
+the live half of ``scripts/dbx-walk.sh``: `get metastore`, the catalog levels
+through both dialects, the external S3 fixture, lease-backed table reads, and
+the walk from `list tables` to a treemap page. The whole metastore walk itself
+lives in ``scripts/walk_metastore.py`` and is run from here.
 
 The workspace URL comes from ``DBX_HOST`` (a repository secret in CI); the
 service principal's credentials come from ``DBX_SAMPLES_SP_CLIENT_ID`` /
@@ -22,7 +25,10 @@ Run with ``make dbx-e2e`` (or ``python -m unittest`` for one test).
 
 from __future__ import annotations
 
+import argparse
 import base64
+import contextlib
+import io
 import json
 import os
 import sys
@@ -31,8 +37,7 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import contextmanager
-from time import monotonic
+from concurrent.futures import ProcessPoolExecutor
 
 from plumbum import local
 
@@ -108,43 +113,76 @@ def iceberg_endpoint(host: str, catalog: str = "dbx_samples") -> str:
     return f"{unity_endpoint(host)}/iceberg-rest/v1/catalogs/{catalog}"
 
 
-@contextmanager
-def scrubbed(extra: dict[str, str] | None = None):
-    """Run the child with the tests' environment, not the caller's."""
-    with local.env():
-        for name in SCRUBBED:
-            local.env.pop(name, None)
-        local.env["PQB_DAEMON_SOCK"] = _SOCKET
-        local.env.update(extra or {})
-        # Do not attach to a developer's daemon at the derived socket path.
-        try:
-            os.unlink(_SOCKET)
-        except FileNotFoundError:
-            pass
-        yield
+def scrub_environment() -> None:
+    """Give every child the tests' environment, not the caller's.
+
+    The daemon socket is pinned too, so no test can attach to a developer's
+    daemon. Each `run`/`pipeline` adds its own context on top; the base stays
+    read-only, so test cases can run concurrently.
+    """
+    for name in SCRUBBED:
+        local.env.pop(name, None)
+    local.env["PQB_DAEMON_SOCK"] = _SOCKET
+
+
+def fresh_socket() -> None:
+    """Do not attach to a developer's daemon at the pinned path."""
+    try:
+        os.unlink(_SOCKET)
+    except FileNotFoundError:
+        pass
+
+
+scrub_environment()
 
 
 def run(args: list[str], stdin: str | None = None, env: dict[str, str] | None = None):
     """Run pqbench and return `(status, stdout, stderr)`."""
-    with scrubbed(env):
+    fresh_socket()
+    command = local[PQ_BENCH][args]
+    if stdin is None:
+        return command.run(retcode=None, env=env)
+    return (command << stdin).run(retcode=None, env=env)
+
+
+def pipeline(
+    stages: list[list[str]],
+    env: dict[str, str] | None = None,
+    tees: list[str | None] | None = None,
+    stdin: str | None = None,
+):
+    """Compose pqbench stages into one pipe and return `(status, stdout, stderr)`.
+
+    The stages start together and stream through kernel pipes, as the Python
+    guide builds them; nothing waits for one level before starting the next.
+    A non-empty `tees` entry after stage `i` runs `tee` on that level, so a test
+    can inspect an intermediate stream of a walk that continues past it.
+    `stdin` feeds the first stage only.
+    """
+    tees = tees or []
+    fresh_socket()
+    commands = []
+    for index, args in enumerate(stages):
         command = local[PQ_BENCH][args]
-        if stdin is None:
-            return command.run(retcode=None)
-        return (command << stdin).run(retcode=None)
-
-
-def pipeline(stages: list[list[str]], env: dict[str, str] | None = None):
-    """Compose pqbench stages into one pipe and return `(status, stdout, stderr)`."""
-    with scrubbed(env):
-        commands = [local[PQ_BENCH][args] for args in stages]
-        combined = commands[0]
-        for command in commands[1:]:
-            combined = combined | command
-        return combined.run(retcode=None)
+        if index == 0 and stdin is not None:
+            command = command << stdin
+        commands.append(command)
+        if index < len(tees) and tees[index]:
+            commands.append(local["tee"][tees[index]])
+    combined = commands[0]
+    for command in commands[1:]:
+        combined = combined | command
+    return combined.run(retcode=None, env=env)
 
 
 def ndjson(text: str) -> list[dict]:
     return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def read_records(path: str) -> list[dict]:
+    """Read one tee'd NDJSON level."""
+    with open(path, encoding="utf-8") as file:
+        return ndjson(file.read())
 
 
 def resource(record: dict) -> str:
@@ -299,10 +337,10 @@ class LiveE2E(unittest.TestCase):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "walk_metastore.py")
         env = source(host, token)
         env.update({"PQB_CONFIG_FILE": "/dev/null"})
-        with scrubbed(env):
-            status, out, err = (
-                local[sys.executable][script, "--pqbench", PQ_BENCH, "--fan-out", "64"]
-            ).run(retcode=None)
+        fresh_socket()
+        status, out, err = (
+            local[sys.executable][script, "--pqbench", PQ_BENCH, "--fan-out", "64"]
+        ).run(retcode=None, env=env)
         self.assertEqual(status, 0, f"walk stderr: {err}")
         self.assertIn("walk: 5 catalogs,", out, "the walk did not finish")
         print(out, end="")
@@ -443,9 +481,18 @@ class LiveE2E(unittest.TestCase):
             "PQB_TOKEN": token,
             "PQB_TABLE_FORMAT": "iceberg",
         }
-        listing = self.assert_ok(
-            ["list", "tables"], stdin=schema_ref("dbx_samples.nyctaxi"), env=env
-        )
+        with tempfile.TemporaryDirectory(prefix="pqbench-e2e-") as work:
+            listing_path = os.path.join(work, "listing.ndjson")
+            status, enriched, err = pipeline(
+                [["list", "tables"], ["get", "table"]],
+                env,
+                tees=[listing_path],
+                stdin=schema_ref("dbx_samples.nyctaxi"),
+            )
+            self.assertEqual(status, 0, f"iceberg listing/get table stderr: {err}")
+            with open(listing_path, encoding="utf-8") as listing_file:
+                listing = listing_file.read()
+
         trips = find(ndjson(listing), "dbx_samples.nyctaxi.trips")
         self.assertIsNotNone(trips, listing)
         self.assertEqual(trips["name"], "catalogs/dbx_samples/schemas/nyctaxi/tables/trips")
@@ -453,7 +500,7 @@ class LiveE2E(unittest.TestCase):
 
         # The new tree enriches its own v2 refs: `get table` reads the
         # `loadTable` metadata inline, so no storage read runs.
-        info = ndjson(self.assert_ok(["get", "table"], stdin=listing, env=env))
+        info = ndjson(enriched)
         trips = find(info, "dbx_samples.nyctaxi.trips")
         self.assertIsNotNone(trips, info)
         self.assertEqual(resource(trips), "tables")
@@ -532,26 +579,22 @@ class LiveE2E(unittest.TestCase):
 
         tables = 0
         for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"]:
-            listing = self.assert_ok(
-                ["list", "tables"],
+            status, out, err = pipeline(
+                [["list", "tables"], ["get", "table"]],
+                env,
                 stdin=schema_ref(f"pqbench_ext.{schema}"),
-                env=env,
             )
-            for record in ndjson(self.assert_ok(["get", "table"], stdin=listing, env=env)):
+            self.assertEqual(status, 0, f"pqbench_ext.{schema}: {err}")
+            for record in ndjson(out):
                 self.assertNotIn("credentials", record, f"the lease rode on the record: {record}")
                 tables += 1
         self.assertEqual(tables, 39)
 
-    def _timed(self, args: list[str], stdin: str, env: dict[str, str]):
-        started = monotonic()
-        out = self.assert_ok(args, stdin=stdin, env=env)
-        return out, monotonic() - started
-
     # The whole issue-#58 walk on a copied schema, all the way to a treemap:
-    # `list tables` → `get table` → `list files` → `list columns` →
-    # `summarize columns` → `format --html`, each stage fed the previous stage's
-    # NDJSON. Set `DBX_WALK_SCHEMA` to walk another schema (default
-    # `pqbench_ext.tpch_sf1`).
+    # `list tables | get table | list files | list columns | summarize columns
+    # | format --html`, one pipe with every stage feeding the next. `tee` keeps
+    # the intermediate levels so the narrowing can be checked. Set
+    # `DBX_WALK_SCHEMA` to walk another schema (default `pqbench_ext.tpch_sf1`).
     def test_external_fixture_walks_to_a_treemap(self):
         host = self.require_host()
         token = self.require_token(host)
@@ -559,15 +602,39 @@ class LiveE2E(unittest.TestCase):
         env = source(host, token)
         env["AWS_REGION"] = aws_region()
 
-        listed, _ = self._timed(["list", "tables"], schema_ref(schema), env)
-        info, _ = self._timed(["get", "table"], listed, env)
-        files, _ = self._timed(["list", "files"], info, env)
-        measured, _ = self._timed(["list", "columns"], files, env)
+        with tempfile.TemporaryDirectory(prefix="pqbench-e2e-") as work:
+            levels = {
+                name: os.path.join(work, f"{name}.ndjson")
+                for name in ["tables", "files", "columns", "summary"]
+            }
+            status, rendered, err = pipeline(
+                [
+                    ["list", "tables"],
+                    ["get", "table"],
+                    ["list", "files"],
+                    ["list", "columns"],
+                    ["summarize", "columns"],
+                    ["format", "--html"],
+                ],
+                env,
+                tees=[
+                    None,
+                    levels["tables"],
+                    levels["files"],
+                    levels["columns"],
+                    levels["summary"],
+                ],
+                stdin=schema_ref(schema),
+            )
+            self.assertEqual(status, 0, f"{schema}: {err}")
+            info = read_records(levels["tables"])
+            files = read_records(levels["files"])
+            records = read_records(levels["columns"])
+            rows = read_records(levels["summary"])
 
         # The walk narrows: tables → files → columns.
-        tables = len(ndjson(info))
-        file_count = len(ndjson(files))
-        records = ndjson(measured)
+        tables = len(info)
+        file_count = len(files)
         self.assertGreater(tables, 0, f"{schema}: no tables")
         self.assertGreaterEqual(
             file_count, tables, f"{schema}: {file_count} files < {tables} tables"
@@ -575,8 +642,6 @@ class LiveE2E(unittest.TestCase):
         self.assertTrue(any(is_blob(record) for record in records), f"{schema}: no Blob record")
         self.assertTrue(any(is_column(record) for record in records), f"{schema}: no Column record")
 
-        summarized, _ = self._timed(["summarize", "columns"], measured, env)
-        rows = ndjson(summarized)
         self.assertTrue(rows, f"{schema}: no ColumnMass row")
         self.assertTrue(
             all(is_table({"name": row.get("table", "")}) for row in rows),
@@ -587,7 +652,6 @@ class LiveE2E(unittest.TestCase):
             f"{schema}: no measured bytes",
         )
 
-        rendered = self.assert_ok(["format", "--html"], stdin=summarized, env=env)
         self.assertTrue(rendered.startswith("<!DOCTYPE html>"), f"{schema}: no page")
         self.assertIn("d3-hierarchy@3", rendered, f"{schema}: no treemap")
         schema_id = schema.rsplit(".", 1)[-1]
@@ -717,5 +781,74 @@ def aws_region() -> str:
     return environment("DBX_AWS_REGION") or "us-east-2"
 
 
+def run_one(name: str):
+    """Run one test method in a worker; return only picklable results."""
+    output = io.StringIO()
+    result = unittest.TestResult()
+    with contextlib.redirect_stdout(output):
+        LiveE2E(name).run(result)
+    problems = [
+        (test.id(), traceback) for test, traceback in result.failures + result.errors
+    ]
+    skipped = [reason for _, reason in result.skipped]
+    return name, output.getvalue(), problems, skipped
+
+
+def run_parallel(names: list[str], jobs: int) -> bool:
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        results = list(pool.map(run_one, names))
+    failed = False
+    for name, output, problems, skipped in sorted(results):
+        print(output, end="")
+        if problems:
+            failed = True
+            print(f"{name}: FAIL")
+            for test_id, traceback in problems:
+                print(f"\n{test_id}\n{traceback}")
+        elif skipped:
+            print(f"{name}: skipped ({skipped[0]})")
+        else:
+            print(f"{name}: ok")
+    print(f"\nRan {len(names)} tests in parallel ({jobs} jobs)")
+    return not failed
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "-k", dest="pattern", default="", help="only tests whose name contains PATTERN"
+    )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=os.cpu_count() or 1,
+        help="test cases in flight (default: logical CPUs; 1 runs serially)",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="print each test's walk summary"
+    )
+    args = parser.parse_args()
+    names = [
+        name
+        for name in unittest.defaultTestLoader.getTestCaseNames(LiveE2E)
+        if args.pattern in name
+    ]
+    if not names:
+        print(f"no test matches {args.pattern!r}", file=sys.stderr)
+        return 1
+    host = environment("DBX_HOST")
+    if host:
+        # Mint once; the forked workers inherit the bearer.
+        any_token(host)
+    if args.jobs <= 1:
+        suite = unittest.TestSuite(LiveE2E(name) for name in names)
+        runner = unittest.TextTestRunner(verbosity=2 if args.verbose else 1)
+        return 0 if runner.run(suite).wasSuccessful() else 1
+    return 0 if run_parallel(names, args.jobs) else 1
+
+
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(main())

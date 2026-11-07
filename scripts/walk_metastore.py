@@ -25,17 +25,31 @@ import sys
 from collections import defaultdict
 from typing import Iterable
 
-from plumbum import ProcessExecutionError, local
+from plumbum import local
 
 # The workspace the repository's live e2e targets. `list catalogs` sorts by
 # name, so this is the order the listing emits.
 EXPECTED_CATALOGS = ["dbx_samples", "pqbench_ext", "samples", "system", "workspace"]
 
 
-def records(pipeline) -> list[dict]:
-    """Run one pipeline and parse its NDJSON output."""
-    text = pipeline()
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+def records(pipeline) -> Iterable[dict]:
+    """Stream one pipeline's NDJSON records as they arrive.
+
+    The stages overlap: every process starts before the first record is read,
+    and `wait()` reports any stage that failed.
+    """
+    process = pipeline.popen()
+    if process.stdout is None:
+        fail("plumbum did not provide a stdout pipe")
+    try:
+        for line in process.stdout:
+            if line.strip():
+                yield json.loads(line)
+    finally:
+        process.stdout.close()
+        status = process.wait()
+        if status != 0:
+            fail(f"the walk pipeline exited {status}")
 
 
 def kind(record: dict) -> str:
@@ -92,25 +106,22 @@ def main() -> None:
     list_schemas = pqb["list", "schemas", "--fan-out", str(args.fan_out)]
     list_tables = pqb["list", "tables", "--fan-out", str(args.fan_out)]
 
-    try:
-        metastore = require_kind(records(pqb["get", "metastore"]), "metastores", "get metastore")
-        catalogs = require_kind(records(list_catalogs), "catalogs", "list catalogs")
-        catalog_info = require_kind(
-            records(list_catalogs | pqb["get", "catalog"]), "catalogs", "get catalog"
-        )
-        schemas = require_kind(
-            records(list_catalogs | list_schemas), "schemas", "list schemas"
-        )
-        schema_info = require_kind(
-            records(list_catalogs | list_schemas | pqb["get", "schema"]),
-            "schemas",
-            "get schema",
-        )
-        tables = require_kind(
-            records(list_catalogs | list_schemas | list_tables), "tables", "list tables"
-        )
-    except ProcessExecutionError as error:
-        fail(str(error))
+    metastore = require_kind(records(pqb["get", "metastore"]), "metastores", "get metastore")
+    catalogs = require_kind(records(list_catalogs), "catalogs", "list catalogs")
+    catalog_info = require_kind(
+        records(list_catalogs | pqb["get", "catalog"]), "catalogs", "get catalog"
+    )
+    schemas = require_kind(
+        records(list_catalogs | list_schemas), "schemas", "list schemas"
+    )
+    schema_info = require_kind(
+        records(list_catalogs | list_schemas | pqb["get", "schema"]),
+        "schemas",
+        "get schema",
+    )
+    tables = require_kind(
+        records(list_catalogs | list_schemas | list_tables), "tables", "list tables"
+    )
 
     if len(metastore) != 1:
         fail(f"get metastore emitted {len(metastore)} records")
