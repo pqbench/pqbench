@@ -125,7 +125,7 @@ Two consequences:
   and there is no generator to read them. The AIP *shape* (names, patterns,
   field names) still applies.
 - Credentials are session state, never resource data. A reader resolves the
-  table's vended lease itself — through the lease daemon or directly from the
+  table's vended lease itself — through the daemon or directly from the
   catalog — and holds it in memory; a `Table` or `TableFile` document carries
   no keys.
 - A table references a blob through the `TableFile` association, not as its

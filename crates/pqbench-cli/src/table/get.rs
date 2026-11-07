@@ -21,28 +21,12 @@ pub(crate) struct GetArgs {
     fan_out: usize,
 }
 
-pub(crate) async fn run(
-    workspace: &pqbench::Workspace,
-    lake: &pqbench::Lake,
-    leases: &crate::daemon::LeaseCache,
-    args: &GetArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &GetArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("get table").await?;
-    let lake = lake.clone();
-    let leases = leases.clone();
+    let daemon = daemon.clone();
     drive(map(parents, args.fan_out, move |table: v1::Table| {
-        let lake = lake.clone();
-        let leases = leases.clone();
-        async move {
-            // Unity names an S3 location the reader must reach with vended
-            // credentials. Iceberg's loadTable is usually inline, but a table
-            // it declines as not Iceberg compatible falls back to the Unity
-            // record and a storage read, so it needs the lease too.
-            let env = leases.resolve_env(&table.name).await?;
-            let credentials = v1::Credentials::from_env(&env);
-            let lake = lake.with_lease(Some(&credentials));
-            Ok::<_, CliError>(pqbench::table::get::get(workspace, &lake, &table).await?)
-        }
+        let daemon = daemon.clone();
+        async move { daemon.get_table(&table).await }
     }))
     .await
 }

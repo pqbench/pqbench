@@ -69,25 +69,15 @@ the listing levels and `list files`, one per core on `get table`) caps the
 requests in flight — it is a limit, not a batch: up to that many run at once on
 one thread, and rows are written as requests finish, not in ref order. Reading
 is demand-driven: a slow endpoint or a slow downstream pipe stops the reads, so
-the level above backpressures instead of buffering. A `pqb rl` stage paces the
-refs between two levels at a target rate — records pass through unchanged, one
-bucket per resource type, nothing dropped. A ref whose read fails — a timeout, a
-dropped connection, an endpoint answer such as a 429, or a storage fault — is
-dropped by the level: it names the ref and the cause on standard error,
-finishes the stream, and exits non-zero with the count, so one bad ref does not
-truncate a walk. The drop is only the read: a ref that does not name a
+the level above backpressures instead of buffering. A ref whose read fails — a
+timeout, a dropped connection, an endpoint answer such as a 429, or a storage
+fault — is dropped by the level: it names the ref and the cause on standard
+error, finishes the stream, and exits non-zero with the count, so one bad ref
+does not truncate a walk. The drop is only the read: a ref that does not name a
 resource, a record whose fields are wrong, or an output failure still fails the
-level. `rl` keeps the endpoint from answering 429 in the first place; a level
-that fails outright — the root `list catalogs`, a malformed stream — still
-fails the pipeline, and the shell can retry it at a lower rate:
-
-```console no-run
-$ set -o pipefail
-$ rate=15
-$ until pqb ls catalogs | pqb rl --rate "$rate" | pqb ls schemas; do
->     rate=$((rate / 2))
-> done
-```
+level. With a daemon running, it makes every catalog request and paces Unity at
+15/s, so the levels do not answer 429 in the first place; a transient failure
+can still make a level fail, and the shell can retry the pipeline as it is.
 
 `list catalogs | list schemas` lists every schema at the endpoint; `list
 catalogs | get catalog` enriches each catalog instead. `get` emits the same
@@ -149,7 +139,7 @@ the region, which hangs where that endpoint is blackholed). A notebook kernel's
 dbutils context is not visible to a subprocess, so a notebook sets
 `DATABRICKS_*` from it first.
 
-## The lease daemon
+## The daemon
 
 Each stage of a pipeline is its own process, so a process-local cache would
 still ask the catalog for the same table once per stage. `pqbench daemon start`
@@ -168,8 +158,9 @@ same workspace get different daemons, and no environment variable is needed.
 `PQB_DAEMON_SOCK` overrides the path for a sidecar or a test. The socket is 0600
 in a 0700 directory, so only the same user can connect.
 
-The daemon paces Unity vends at 15/s, the catalog's per-endpoint ceiling, so a
-walk with many tables in flight does not trip the rate limit. It caches the
+The daemon makes every catalog request for the walk — the `list` levels and
+every `get` level — and paces Unity at 15/s, the catalog's per-endpoint ceiling,
+so a walk with many refs in flight does not trip the rate limit. It caches the
 lease per table and refreshes it five minutes before the catalog's expiry — or at half the remaining lifetime when the lease is shorter
 than ten minutes. Unity reports `expiration_time` in epoch milliseconds;
 Iceberg reports `s3.session-token-expires-at-ms`; when neither is present the
@@ -177,9 +168,10 @@ daemon assumes the usual one-hour lifetime and refreshes at 55 minutes. A
 catalog that vends nothing is remembered for five minutes, so a file walk does
 not ask once per file.
 
-The daemon is optional. With no socket, each command vends directly, which is
-what a notebook, a serverless job, or an Airflow/Dagster task gets by default.
-The daemon only saves catalog calls; correctness does not depend on it.
+The daemon is optional. With no socket, each command makes its own catalog call
+and vends directly, which is what a notebook, a serverless job, or an
+Airflow/Dagster task gets by default. The daemon saves catalog calls and does
+the pacing; correctness does not depend on it.
 
 A ref the catalog will not vend for is dropped with the cause on standard
 error, and that stage exits non-zero; run the walk over a catalog that is

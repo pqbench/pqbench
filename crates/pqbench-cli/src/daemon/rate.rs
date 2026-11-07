@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
 
-/// The catalog's per-endpoint ceiling, also the walk's `ratelimit` default.
+/// The catalog's per-endpoint ceiling: the daemon's only pacing rate.
 const VENDS_PER_SECOND: u32 = 15;
 
 /// A strict-interval limiter: one vend every 1/15 s, no burst.

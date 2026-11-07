@@ -87,9 +87,9 @@ summaries differ.
 
 ```console no-run
 $ pqb daemon start
-$ pqb list catalogs | pqb ratelimit --rate 15 \
->   | pqb list schemas | pqb ratelimit --rate 15 \
->   | pqb list tables | pqb ratelimit --rate 15 \
+$ pqb list catalogs \
+>   | pqb list schemas \
+>   | pqb list tables \
 >   | jq -c 'select(.name | startswith("catalogs/pqbench_ext/"))' \
 >   | pqb get table | pqb list files | pqb list columns \
 >   | pqb summarize columns | pqb format --html > /tmp/metastore.html

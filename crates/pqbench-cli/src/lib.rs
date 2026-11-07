@@ -23,7 +23,6 @@ mod lz;
 mod metastore;
 mod parse;
 mod profile;
-mod ratelimit;
 mod render;
 mod rows;
 mod sample;
@@ -121,15 +120,6 @@ enum Command {
     )]
     Daemon(daemon::DaemonArgs),
     #[command(
-        name = "ratelimit",
-        visible_alias = "rl",
-        about = help::RATELIMIT_ABOUT,
-        long_about = help::RATELIMIT_LONG_ABOUT,
-        after_help = help::RATELIMIT_AFTER,
-        after_long_help = help::RATELIMIT_AFTER
-    )]
-    RateLimit(ratelimit::RateLimitArgs),
-    #[command(
         about = help::PROFILE_ABOUT,
         long_about = help::PROFILE_LONG_ABOUT,
         after_help = help::PROFILE_AFTER,
@@ -200,19 +190,18 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
     )?;
     let workspace = pqbench::Workspace::new(config)?;
     let lake = pqbench::Lake::new(&workspace);
-    let leases = daemon::LeaseCache::client(workspace.clone());
+    let daemon = daemon::Daemon::client(workspace.clone());
     match cli.command {
         Command::Diff(args) => diff::run(&lake, &args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
-        Command::Bytemass(args) => bytemass::run(&lake, &leases, &args).await,
-        Command::Get(args) => get::run(&workspace, &lake, &leases, &args).await,
+        Command::Bytemass(args) => bytemass::run(&lake, &daemon, &args).await,
+        Command::Get(args) => get::run(&daemon, &args).await,
         Command::Format(args) => format::run(&args).await,
         Command::TableFile(args) => table_file::run(&args).await,
-        Command::List(args) => list::run(&workspace, &lake, &leases, &args).await,
+        Command::List(args) => list::run(&lake, &daemon, &args).await,
         Command::Sample(args) => sample::run(&args).await,
         Command::Daemon(args) => daemon::run(&workspace, &args).await,
-        Command::RateLimit(args) => ratelimit::run(&args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Summarize(args) => summarize::run(&args).await,
         Command::Skill(args) => skill::run(&args),
@@ -234,7 +223,6 @@ impl Command {
             Command::List(args) => args.name(),
             Command::Sample(args) => args.name(),
             Command::Daemon(_) => "daemon",
-            Command::RateLimit(_) => "ratelimit",
             Command::Profile(_) => "profile",
             Command::Summarize(args) => args.name(),
             Command::Skill(_) => "skill",

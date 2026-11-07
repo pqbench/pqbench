@@ -1,9 +1,10 @@
-//! The lease daemon: one process per identity, serving vended storage leases
-//! to every pipeline stage over a local socket.
+//! The catalog daemon: one process per identity, serving catalog records and
+//! vended storage leases to every pipeline stage over a local socket.
 //!
-//! The daemon is optional. A reader with no socket vends directly, so a bare
-//! `pqbench list files` and a scheduler task still work; `daemon start` only
-//! keeps the catalog from seeing the same table once per stage.
+//! The daemon is optional. A reader with no socket makes its own catalog
+//! calls, so a bare `pqbench list files` and a scheduler task still work;
+//! `daemon start` paces the catalog and keeps it from seeing the same table
+//! once per stage.
 
 use std::path::PathBuf;
 
@@ -12,15 +13,15 @@ use clap::{Args, Subcommand};
 use crate::CliError;
 use pqbench::Workspace;
 
-mod cache;
 mod client;
 mod path;
 mod protocol;
 mod rate;
 mod serve;
+mod session;
 mod start;
 
-pub(crate) use cache::LeaseCache;
+pub(crate) use session::Daemon;
 
 /// Arguments for `daemon`.
 #[derive(Args)]
@@ -31,11 +32,11 @@ pub(crate) struct DaemonArgs {
 
 #[derive(Subcommand)]
 enum DaemonCommand {
-    /// Start the lease daemon in the background
+    /// Start the daemon in the background
     Start(StartArgs),
-    /// Stop the lease daemon
+    /// Stop the daemon
     Stop,
-    /// Report whether the lease daemon is running
+    /// Report whether the daemon is running
     Status,
     /// Serve leases in the foreground
     Serve(ServeArgs),
@@ -88,7 +89,7 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
         DaemonCommand::Status => start::status(&socket).await?,
         DaemonCommand::Serve(args) => {
             let socket = args.socket.as_deref().map_or(socket, path::absolute);
-            let cache = LeaseCache::direct(workspace.clone());
+            let cache = Daemon::direct(workspace.clone());
             serve::run(cache, socket, args.idle_seconds).await?;
         }
     }

@@ -19,15 +19,15 @@ pub(crate) struct BytemassArgs {
 /// List each table file's columns as its record arrives.
 pub(crate) async fn run(
     lake: &pqbench::Lake,
-    leases: &crate::daemon::LeaseCache,
+    daemon: &crate::daemon::Daemon,
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::TableFile>("list columns").await?;
     let lake = lake.clone();
-    let leases = leases.clone();
+    let daemon = daemon.clone();
     let rows = flat_map(parents, args.fan_out, move |file: v1::TableFile| {
         let lake = lake.clone();
-        let leases = leases.clone();
+        let daemon = daemon.clone();
         async move {
             let name = file
                 .blob
@@ -38,7 +38,7 @@ pub(crate) async fn run(
                 .ok_or_else(|| {
                     "a table-file record needs a catalogs/…/tables/… name".to_string()
                 })?;
-            let env = leases.resolve_env(&table).await?;
+            let env = daemon.resolve_env(&table).await?;
             let credentials = v1::Credentials::from_env(&env);
             let lake = lake.with_lease(Some(&credentials));
             let measured = bytemass::measure_file(&lake, name).await?;

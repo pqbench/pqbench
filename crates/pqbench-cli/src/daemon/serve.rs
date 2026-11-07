@@ -1,4 +1,4 @@
-//! The lease daemon: one socket, one cache, one request per connection.
+//! The daemon: one socket, one cache, one request per connection.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,17 +8,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
-use super::cache::LeaseCache;
 use super::path;
 use super::protocol::{Request, Response};
+use super::session::Daemon;
 
 /// Serve leases on `socket` until stopped, or until `idle_seconds` pass with
 /// no connection (`0` serves until stopped).
-pub(crate) async fn run(
-    cache: LeaseCache,
-    socket: PathBuf,
-    idle_seconds: u64,
-) -> Result<(), String> {
+pub(crate) async fn run(cache: Daemon, socket: PathBuf, idle_seconds: u64) -> Result<(), String> {
     path::prepare(&socket)?;
     let listener = UnixListener::bind(&socket)
         .map_err(|error| format!("cannot bind {}: {error}", socket.display()))?;
@@ -69,11 +65,7 @@ async fn accept(
     }
 }
 
-async fn handle(
-    stream: UnixStream,
-    cache: LeaseCache,
-    shutdown: Arc<Notify>,
-) -> Result<(), String> {
+async fn handle(stream: UnixStream, cache: Daemon, shutdown: Arc<Notify>) -> Result<(), String> {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     let Some(line) = lines
@@ -86,19 +78,19 @@ async fn handle(
     let request: Request =
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
 
-    let response = if request.stop {
-        shutdown.notify_one();
-        Response {
+    let response = match &request {
+        Request::Stop => {
+            shutdown.notify_one();
+            Response {
+                ok: true,
+                ..Response::default()
+            }
+        }
+        Request::Ping => Response {
             ok: true,
             ..Response::default()
-        }
-    } else if request.ping {
-        Response {
-            ok: true,
-            ..Response::default()
-        }
-    } else if let Some(table) = request.table {
-        match cache.resolve_vended(&table).await {
+        },
+        Request::Lease { table } => match cache.resolve_vended(table).await {
             Ok(Some(vended)) => Response {
                 env: Some(vended.env),
                 expire_time_ms: vended.expire_time_ms,
@@ -112,12 +104,17 @@ async fn handle(
                 error: Some(crate::error::error_chain(error.as_ref())),
                 ..Response::default()
             },
-        }
-    } else {
-        Response {
-            error: Some("the request names no table".into()),
-            ..Response::default()
-        }
+        },
+        Request::List { .. } | Request::Get { .. } => match cache.records(&request).await {
+            Ok(records) => Response {
+                records,
+                ..Response::default()
+            },
+            Err(error) => Response {
+                error: Some(crate::error::error_chain(error.as_ref())),
+                ..Response::default()
+            },
+        },
     };
 
     let line = serde_json::to_string(&response)
@@ -140,7 +137,7 @@ async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::{cache::LeaseCache, client, start};
+    use crate::daemon::{client, session::Daemon, start};
 
     #[tokio::test]
     async fn a_ping_and_a_stop_round_trip() {
@@ -153,7 +150,7 @@ mod tests {
             request_timeout: None,
         })
         .expect("the workspace builds");
-        let cache = LeaseCache::direct(workspace);
+        let cache = Daemon::direct(workspace);
         let server = tokio::spawn(run(cache, socket.clone(), 0));
 
         let mut running = false;

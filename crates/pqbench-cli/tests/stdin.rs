@@ -50,7 +50,7 @@ fn a_command_does_not_read_a_socket_standard_input() {
         &["list", "files"][..],
         &["bytemass"][..],
         &["diff", "-", "unused.parquet"][..],
-        &["ratelimit"][..],
+        &["summarize", "columns"][..],
     ] {
         let output = socket_stdin(args);
         assert!(
@@ -73,7 +73,7 @@ fn a_redirected_file_is_a_stream() {
     file.flush().unwrap();
 
     let output = pqbench()
-        .args(["ratelimit", "--rate", "0"])
+        .args(["format"])
         .stdin(Stdio::from(file.reopen().unwrap()))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -84,8 +84,9 @@ fn a_redirected_file_is_a_stream() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "{\"kind\":\"pqbench.catalog\",\"version\":1,\"name\":\"dbx_samples\"}\n"
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("dbx_samples"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }

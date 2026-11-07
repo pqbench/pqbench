@@ -29,7 +29,6 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench daemon stop`↴](#pqbench-daemon-stop)
 * [`pqbench daemon status`↴](#pqbench-daemon-status)
 * [`pqbench daemon serve`↴](#pqbench-daemon-serve)
-* [`pqbench ratelimit`↴](#pqbench-ratelimit)
 * [`pqbench profile`↴](#pqbench-profile)
 * [`pqbench summarize`↴](#pqbench-summarize)
 * [`pqbench summarize columns`↴](#pqbench-summarize-columns)
@@ -154,8 +153,7 @@ Format skills (read these when the input is Parquet or a table):
 * `table-file` — Name storage paths as table-file records
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
-* `daemon` — Cache and refresh catalog-vended storage leases
-* `ratelimit` — Pace an NDJSON ref stream to a records-per-second rate
+* `daemon` — Own the catalog calls and cache storage leases
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
 * `summarize` — Estimate each table column's mass from a list columns stream
 * `skill` — Print a bundled agent skill (write / DDL / compression recipes)
@@ -677,10 +675,10 @@ Keep a rate of a table's files, by size
 
 ## `pqbench daemon`
 
-Cache the storage lease each table is read under, refresh it before expiry, and
-serve it to every pipeline stage over a local socket. One daemon per resolved
-identity (endpoint, dialect, and a token fingerprint); its socket is derived
-from that identity, so a reader finds it without an environment variable.
+Own every catalog request the walk makes and cache the storage lease each table
+is read under. One daemon per resolved identity (endpoint, dialect, and a token
+fingerprint); its socket is derived from that identity, so a reader finds it
+without an environment variable.
 
 ```text
   start   run it in the background, or reuse the one already running
@@ -689,10 +687,12 @@ from that identity, so a reader finds it without an environment variable.
   serve   run it in the foreground, for a sidecar or a service manager
 ```
 
-Without a running daemon each stage vends directly; the daemon only keeps a
-walk from vending the same table once per stage. Unity vends are paced at 15/s,
-the catalog's per-endpoint ceiling. Vended leases are session state and never
-ride a Table or TableFile document.
+`list catalogs`, `list schemas`, `list tables`, and every `get` level ask the
+daemon, which paces Unity at 15 requests a second, the catalog's per-endpoint
+ceiling; the storage levels (`list files`, `list columns`) ask it only for the
+table's lease. Without a running daemon each command makes its own catalog call
+and paces nothing. Vended leases are session state and never ride a Table or
+TableFile document.
 
 **Usage:** `pqbench daemon <COMMAND>`
 
@@ -710,16 +710,16 @@ See also:
 
 ###### **Subcommands:**
 
-* `start` — Start the lease daemon in the background
-* `stop` — Stop the lease daemon
-* `status` — Report whether the lease daemon is running
+* `start` — Start the daemon in the background
+* `stop` — Stop the daemon
+* `status` — Report whether the daemon is running
 * `serve` — Serve leases in the foreground
 
 
 
 ## `pqbench daemon start`
 
-Start the lease daemon in the background
+Start the daemon in the background
 
 **Usage:** `pqbench daemon start [OPTIONS]`
 
@@ -734,14 +734,14 @@ Start the lease daemon in the background
 
 ## `pqbench daemon stop`
 
-Stop the lease daemon
+Stop the daemon
 
 **Usage:** `pqbench daemon stop`
 
 
 ## `pqbench daemon status`
 
-Report whether the lease daemon is running
+Report whether the daemon is running
 
 **Usage:** `pqbench daemon status`
 
@@ -759,44 +759,6 @@ Serve leases in the foreground
 * `--idle-seconds <IDLE_SECONDS>` — seconds without a connection before the daemon exits; 0 serves until stopped
 
   Default value: `0`
-
-
-
-## `pqbench ratelimit`
-
-Pace an NDJSON ref stream: records pass through unchanged, delayed so each
-record kind observes at most --rate records per second (15 by default; 0
-turns pacing off). Nothing is dropped. One bucket per kind, so catalogs,
-schemas, and table refs pace independently — the walk's per-endpoint pace.
-
-```console no-run
-  list catalogs | pqbench ratelimit | list schemas
-  list schemas | pqbench ratelimit --rate 5 | list tables
-```
-
-A consumer that issues one request per record as it arrives sees the same
-rate. A 429 fails the level; retry it at a lower --rate.
-
-**Usage:** `pqbench ratelimit [OPTIONS]`
-
-**Command Alias:** `rl`
-
-```console no-run
-Examples:
-  pqbench list catalogs | pqbench ratelimit | pqbench list schemas
-  pqbench list schemas | pqbench ratelimit --rate 5 | pqbench list tables
-
-See also:
-  pqbench list --help     the walk's collections
-  pqbench get --help      read one resource of it
-  docs/reference/cli.md
-```
-
-###### **Options:**
-
-* `--rate <RATE>` — records per second per resource type; 0 turns pacing off [env: PQB_RATE]
-
-  Default value: `15`
 
 
 

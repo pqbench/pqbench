@@ -1,4 +1,4 @@
-//! Starting, stopping, and checking the lease daemon.
+//! Starting, stopping, and checking the daemon.
 
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -65,7 +65,7 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
     }
     let mut child = command
         .spawn()
-        .map_err(|error| format!("cannot start the lease daemon: {error}"))?;
+        .map_err(|error| format!("cannot start the daemon: {error}"))?;
 
     for _ in 0..250 {
         if client::ping(socket).await {
@@ -75,10 +75,7 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
     }
     let _ = child.kill();
     let _ = child.wait();
-    Err(format!(
-        "the lease daemon did not start on {}",
-        socket.display()
-    ))
+    Err(format!("the daemon did not start on {}", socket.display()))
 }
 
 /// Stop the daemon listening at `socket`.
@@ -86,7 +83,7 @@ pub(crate) async fn stop(socket: &Path) -> Result<(), String> {
     match client::request(socket, &Request::stop()).await {
         Ok(_) => {}
         Err(client::Error::Connect(_)) => {
-            return Err("the lease daemon is not running".into());
+            return Err("the daemon is not running".into());
         }
         Err(error) => return Err(error.to_string()),
     }
@@ -106,7 +103,7 @@ pub(crate) async fn status(socket: &Path) -> Result<(), String> {
         println!("running {}", socket.display());
         Ok(())
     } else {
-        Err("the lease daemon is not running".into())
+        Err("the daemon is not running".into())
     }
 }
 

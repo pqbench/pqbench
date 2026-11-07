@@ -1,4 +1,4 @@
-//! Where the lease daemon's socket lives.
+//! Where the daemon's socket lives.
 //!
 //! The path is derived from the resolved identity — endpoint, dialect, and a
 //! fingerprint of the token — so a client can find the daemon without an
@@ -88,7 +88,7 @@ pub(crate) fn prepare(socket: &Path) -> Result<(), String> {
     if socket.exists() {
         if std::os::unix::net::UnixStream::connect(socket).is_ok() {
             return Err(format!(
-                "a lease daemon is already listening on {}",
+                "a daemon is already listening on {}",
                 socket.display()
             ));
         }

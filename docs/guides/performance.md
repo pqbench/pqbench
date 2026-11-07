@@ -11,9 +11,9 @@ Each command resolves one level and streams its children to the next stage:
 
 ```console no-run
 $ pqb daemon start
-$ pqb ls catalogs | pqb rl \
-    | pqb ls schemas | pqb rl \
-    | pqb ls tables | pqb rl \
+$ pqb ls catalogs \
+    | pqb ls schemas \
+    | pqb ls tables \
     | pqb get table \
     | pqb ls files \
     | pqb list columns \
@@ -29,8 +29,8 @@ that level exits non-zero; `scripts/dbx-walk.sh` filters the listing to
 catalog with many tables, not one big table — the design target is "jobs are
 limited not by big tables, but by the number of tables in a catalog".
 
-The lease daemon is what keeps the table stages from asking the catalog for
-the same table once per process.
+The daemon is what keeps the stages from asking the catalog for the same
+table once per process, and paces the catalog requests they do make.
 
 ## Point it at a target
 
@@ -48,15 +48,15 @@ from `dbx_samples` (`scripts/dbx-ext/`). `scripts/dbx-walk.sh` starts a lease
 daemon per dialect, runs the whole walk through Unity Catalog and again through
 Iceberg REST, prints each level's record count, checks that both summaries
 agree, and ends with the treemap page (the `dbx-walk` CI job); `make dbx-e2e`
-runs the live correctness e2e, and `make lakehouse` drives the compose stand
-for the file-level commands.
+runs the live correctness e2e from Python (`scripts/dbx_e2e.py`), and
+`make lakehouse` drives the compose stand for the file-level commands.
 
 The walk's catalog levels span the whole Unity Catalog; the table levels
 descend the one catalog this principal may read outside compute
 (`PQB_WALK_CATALOG`, default `pqbench_ext`). Unity refuses
 `EXTERNAL USE SCHEMA` on the sample and managed-default catalogs, and a live run
-shares the endpoint and is rate-limited, so the script paces the catalog
-fan-outs with `rl` and retries the walk at a lower rate on failure.
+shares the endpoint and is rate-limited, so the daemon paces every catalog
+request at 15/s and the script retries the walk on a transient failure.
 
 ## Run perf
 

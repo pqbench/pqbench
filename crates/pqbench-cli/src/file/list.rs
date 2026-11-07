@@ -30,19 +30,19 @@ pub(crate) struct ListArgs {
 /// flight, however large the tables are.
 pub(crate) async fn run(
     lake: &pqbench::Lake,
-    leases: &crate::daemon::LeaseCache,
+    daemon: &crate::daemon::Daemon,
     args: &ListArgs,
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("list files").await?;
     let window = args.window.window();
     let lake = lake.clone();
-    let leases = leases.clone();
+    let daemon = daemon.clone();
     drive(flat_map(parents, args.fan_out, move |table: v1::Table| {
         let lake = lake.clone();
-        let leases = leases.clone();
+        let daemon = daemon.clone();
         async move {
             let reference = table.name.clone();
-            let env = leases.resolve_env(&reference).await?;
+            let env = daemon.resolve_env(&reference).await?;
             let credentials = v1::Credentials::from_env(&env);
             let lake = lake.with_lease(Some(&credentials));
             let files = pqbench::file::list::list(&lake, &table, window)

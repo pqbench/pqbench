@@ -39,9 +39,9 @@ so the walk is one bash pipeline.
 $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
 $ pqb daemon start
-$ pqb ls catalogs | pqb rl \
-    | pqb ls schemas | pqb rl \
-    | pqb ls tables | pqb rl \
+$ pqb ls catalogs \
+    | pqb ls schemas \
+    | pqb ls tables \
     | pqb get table \
     | pqb ls files \
     | pqb bytemass \
@@ -51,16 +51,15 @@ $ pqb ls catalogs | pqb rl \
 
 Read it left to right:
 
-- `list catalogs`, `list schemas`, and `list tables` descend the catalog. A
-  live endpoint fans out one request per ref, so `rl` paces each level at
-  15 refs/s by default — the schema and table listings and `get table` alike;
-  the retry-at-half-the-rate recipe is in the
-  [CLI reference](https://pqbench.github.io/pqbench/reference/cli/).
-- `daemon start` runs one lease daemon for the walk. It caches the storage
-  lease each table is read under and serves it to every stage, so the catalog
-  vends each table once rather than once per command; Unity vends are paced at
-  15/s, the catalog's per-endpoint ceiling. Without a daemon each stage vends
-  directly; the leases are held in memory and never appear in a document.
+- `list catalogs`, `list schemas`, `list tables`, and `get table` descend the
+  catalog. A live endpoint rate-limits its REST calls, so the daemon that the
+  next bullet starts owns those requests and paces Unity at 15/s, the catalog's
+  per-endpoint ceiling.
+- `daemon start` runs one daemon for the walk. It makes every catalog request
+  and caches the storage lease each table is read under, serving both to every
+  stage, so the catalog vends each table once rather than once per command.
+  Without a daemon each stage makes its own catalog call; the leases are held
+  in memory and never appear in a document.
 - `get table` enriches each ref with its format and snapshot; the Delta log is
   read with `without_files()`, so the read is O(1) in files. `list files` then
   resolves each snapshot and writes its active files, one `TableFile` per line.

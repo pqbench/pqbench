@@ -192,11 +192,8 @@ script = f"""
 set -euo pipefail
 {PQB} daemon start
 {PQB} list catalogs \
-  | {PQB} ratelimit --rate 15 \
   | {PQB} list schemas \
-  | {PQB} ratelimit --rate 15 \
   | {PQB} list tables \
-  | {PQB} ratelimit --rate 15 \
   | {PQB} get table \
   | {PQB} list files \
   | zstd -3 -T1 > .files.jsonl.zst
@@ -205,14 +202,14 @@ mv .files.jsonl.zst files.jsonl.zst
 subprocess.run(["bash", "-o", "pipefail", "-c", script], check=True)
 ```
 
-Each `ratelimit` stage paces the catalog requests downstream of it: `list
-schemas`, `list tables`, and `get table`. The catalog endpoints allow about 15
-requests per second, and every record at these levels is one request. The
-storage-reading stages resolve the table's vended lease themselves — through
-the daemon when one is running, else directly from the catalog — and the lease
-never rides a document. The hidden temp name plus `mv` keeps a reader from
-seeing a partial file; it is required only when something reads the directory
-while the pipeline runs.
+The daemon makes the catalog requests for `list schemas`, `list tables`, and
+`get table`, and paces them at 15/s. The catalog endpoints allow about 15
+requests per second, and every record at these levels is one request. Without
+a daemon each level makes its own request. The storage-reading stages resolve
+the table's vended lease themselves — through the daemon when one is running,
+else directly from the catalog — and the lease never rides a document. The
+hidden temp name plus `mv` keeps a reader from seeing a partial file; it is
+required only when something reads the directory while the pipeline runs.
 
 ## Read the stream
 

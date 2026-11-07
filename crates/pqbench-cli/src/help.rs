@@ -279,23 +279,25 @@ See also:
   pqbench --help             catalog auth, PQB_* config
   docs/reference/cli.md";
 
-pub const DAEMON_ABOUT: &str = "Cache and refresh catalog-vended storage leases";
+pub const DAEMON_ABOUT: &str = "Own the catalog calls and cache storage leases";
 
 pub const DAEMON_LONG_ABOUT: &str = "\
-Cache the storage lease each table is read under, refresh it before expiry, and
-serve it to every pipeline stage over a local socket. One daemon per resolved
-identity (endpoint, dialect, and a token fingerprint); its socket is derived
-from that identity, so a reader finds it without an environment variable.
+Own every catalog request the walk makes and cache the storage lease each table
+is read under. One daemon per resolved identity (endpoint, dialect, and a token
+fingerprint); its socket is derived from that identity, so a reader finds it
+without an environment variable.
 
   start   run it in the background, or reuse the one already running
   stop    stop it
   status  report whether it is running, and where its socket is
   serve   run it in the foreground, for a sidecar or a service manager
 
-Without a running daemon each stage vends directly; the daemon only keeps a
-walk from vending the same table once per stage. Unity vends are paced at 15/s,
-the catalog's per-endpoint ceiling. Vended leases are session state and never
-ride a Table or TableFile document.";
+`list catalogs`, `list schemas`, `list tables`, and every `get` level ask the
+daemon, which paces Unity at 15 requests a second, the catalog's per-endpoint
+ceiling; the storage levels (`list files`, `list columns`) ask it only for the
+table's lease. Without a running daemon each command makes its own catalog call
+and paces nothing. Vended leases are session state and never ride a Table or
+TableFile document.";
 
 pub const DAEMON_AFTER: &str = "\
 Examples:
@@ -307,30 +309,6 @@ Examples:
 See also:
   pqbench --help  catalog auth, PQB_* config
   docs/reference/authentication.md";
-
-pub const RATELIMIT_ABOUT: &str = "Pace an NDJSON ref stream to a records-per-second rate";
-
-pub const RATELIMIT_LONG_ABOUT: &str = "\
-Pace an NDJSON ref stream: records pass through unchanged, delayed so each
-record kind observes at most --rate records per second (15 by default; 0
-turns pacing off). Nothing is dropped. One bucket per kind, so catalogs,
-schemas, and table refs pace independently — the walk's per-endpoint pace.
-
-  list catalogs | pqbench ratelimit | list schemas
-  list schemas | pqbench ratelimit --rate 5 | list tables
-
-A consumer that issues one request per record as it arrives sees the same
-rate. A 429 fails the level; retry it at a lower --rate.";
-
-pub const RATELIMIT_AFTER: &str = "\
-Examples:
-  pqbench list catalogs | pqbench ratelimit | pqbench list schemas
-  pqbench list schemas | pqbench ratelimit --rate 5 | pqbench list tables
-
-See also:
-  pqbench list --help     the walk's collections
-  pqbench get --help      read one resource of it
-  docs/reference/cli.md";
 
 pub const SUMMARIZE_ABOUT: &str = "Estimate each table column's mass from a list columns stream";
 
