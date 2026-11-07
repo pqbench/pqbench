@@ -78,7 +78,7 @@ dbx-e2e:
 	python/.venv/bin/python -m pip install -q plumbum
 	$(CARGO_LOCKED) build -p pqbench-cli --features delta-s3,iceberg-s3
 	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" \
-		python/.venv/bin/python scripts/dbx_e2e.py -v
+		python/.venv/bin/python scripts/dbx_e2e.py
 
 # The live walk (scripts/dbx-walk.sh): one pass over the whole Unity Catalog,
 # from `list catalogs` to the `format --html` page. Needs DBX_HOST plus a bearer

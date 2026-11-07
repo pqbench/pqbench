@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Live Databricks metastore e2e, as Python tests.
 
-    python scripts/dbx_e2e.py -v
-    PQB=target/debug/pqbench python scripts/dbx_e2e.py -v
-    python scripts/dbx_e2e.py --jobs 1 -k schema_get
+    python scripts/dbx_e2e.py
+    PQB=target/debug/pqbench python scripts/dbx_e2e.py
+    python scripts/dbx_e2e.py -k schema_get
 
 Each test runs ``pqbench`` against the live workspace and checks the NDJSON it
 emits; plumbum composes the multi-stage pipes, so every level of a walk starts
-before the previous one finishes. Test cases run concurrently by default, as
-`cargo test` runs its tests; `--jobs 1` runs them one at a time. The suite is
-the live half of ``scripts/dbx-walk.sh``: `get metastore`, the catalog levels
-through both dialects, the external S3 fixture, lease-backed table reads, and
-the walk from `list tables` to a treemap page. The whole metastore walk itself
-lives in ``scripts/walk_metastore.py`` and is run from here.
+before the previous one finishes. The test cases run concurrently, as
+`cargo test` ran the Rust suite. The suite is the live half of
+``scripts/dbx-walk.sh``: `get metastore`, the catalog levels through both
+dialects, the external S3 fixture, lease-backed table reads, and the walk from
+`list tables` to a treemap page. The whole metastore walk itself lives in
+``scripts/walk_metastore.py`` and is run from here.
 
 The workspace URL comes from ``DBX_HOST`` (a repository secret in CI); the
 service principal's credentials come from ``DBX_SAMPLES_SP_CLIENT_ID`` /
@@ -20,7 +20,7 @@ service principal's credentials come from ``DBX_SAMPLES_SP_CLIENT_ID`` /
 Without ``DBX_HOST`` or credentials every test skips, so a leg without secrets
 stays green.
 
-Run with ``make dbx-e2e`` (or ``python -m unittest`` for one test).
+Run with ``make dbx-e2e``; ``-k`` filters to the tests whose name contains it.
 """
 
 from __future__ import annotations
@@ -794,8 +794,8 @@ def run_one(name: str):
     return name, output.getvalue(), problems, skipped
 
 
-def run_parallel(names: list[str], jobs: int) -> bool:
-    with ProcessPoolExecutor(max_workers=jobs) as pool:
+def run_parallel(names: list[str]) -> bool:
+    with ProcessPoolExecutor() as pool:
         results = list(pool.map(run_one, names))
     failed = False
     for name, output, problems, skipped in sorted(results):
@@ -809,7 +809,8 @@ def run_parallel(names: list[str], jobs: int) -> bool:
             print(f"{name}: skipped ({skipped[0]})")
         else:
             print(f"{name}: ok")
-    print(f"\nRan {len(names)} tests in parallel ({jobs} jobs)")
+    plural = "" if len(names) == 1 else "s"
+    print(f"\nRan {len(names)} test{plural} in parallel")
     return not failed
 
 
@@ -819,16 +820,6 @@ def main() -> int:
     )
     parser.add_argument(
         "-k", dest="pattern", default="", help="only tests whose name contains PATTERN"
-    )
-    parser.add_argument(
-        "-j",
-        "--jobs",
-        type=int,
-        default=os.cpu_count() or 1,
-        help="test cases in flight (default: logical CPUs; 1 runs serially)",
-    )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="print each test's walk summary"
     )
     args = parser.parse_args()
     names = [
@@ -843,11 +834,7 @@ def main() -> int:
     if host:
         # Mint once; the forked workers inherit the bearer.
         any_token(host)
-    if args.jobs <= 1:
-        suite = unittest.TestSuite(LiveE2E(name) for name in names)
-        runner = unittest.TextTestRunner(verbosity=2 if args.verbose else 1)
-        return 0 if runner.run(suite).wasSuccessful() else 1
-    return 0 if run_parallel(names, args.jobs) else 1
+    return 0 if run_parallel(names) else 1
 
 
 if __name__ == "__main__":
