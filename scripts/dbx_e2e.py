@@ -37,7 +37,9 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
+from time import perf_counter
 
 from plumbum import local
 
@@ -123,6 +125,11 @@ def scrub_environment() -> None:
     for name in SCRUBBED:
         local.env.pop(name, None)
     local.env["PQB_DAEMON_SOCK"] = _SOCKET
+    # There is no instance metadata service here; point the AWS credential
+    # chain at a closed local port so a credential-less read fails at once
+    # instead of waiting out the link-local address. Vended leases bring their
+    # own keys, so this only affects the negative tests.
+    local.env["AWS_METADATA_ENDPOINT"] = "http://127.0.0.1:1"
 
 
 def fresh_socket() -> None:
@@ -378,37 +385,37 @@ class LiveE2E(unittest.TestCase):
             names.append(resource_id(record))
         self.assertEqual(names, DBX_SAMPLES_SCHEMAS)
 
-    def _schema_ids(self, env: dict[str, str], schema: str) -> list[str]:
-        out = self.assert_ok(
-            ["list", "tables"],
-            stdin=schema_ref(f"pqbench_ext.{schema}"),
-            env=env,
-            label=f"list tables pqbench_ext.{schema}",
-        )
-        return [fqn(record) for record in ndjson(out)]
-
     # `list schemas` and `list tables` on the external-location fixture: the
     # synthetic `events`/`sales`/`reference` (ten two-column tables each) and the
     # real sample data copied from `dbx_samples`, all external Delta on customer
-    # S3 through the `pqbench_uc_e2e` external location.
+    # S3 through the `pqbench_uc_e2e` external location. One pipe lists every
+    # schema's tables; `tee` keeps the schema level.
     def test_schema_ls_lists_the_external_fixture(self):
         host = self.require_host()
         token = self.require_token(host)
         env = source(host, token)
-        schemas = [
-            resource_id(record)
-            for record in ndjson(
-                self.assert_ok(
-                    ["list", "schemas"], stdin=catalog_ref("pqbench_ext"), env=env
-                )
+        with tempfile.TemporaryDirectory(prefix="pqbench-e2e-") as work:
+            schemas_path = os.path.join(work, "schemas.ndjson")
+            status, out, err = pipeline(
+                [["list", "schemas"], ["list", "tables"]],
+                env,
+                tees=[schemas_path],
+                stdin=catalog_ref("pqbench_ext"),
             )
-        ]
+            self.assertEqual(status, 0, f"list schemas | list tables stderr: {err}")
+            schemas = [resource_id(record) for record in read_records(schemas_path)]
+            tables_by_schema = defaultdict(list)
+            for record in ndjson(out):
+                self.assertEqual(resource(record), "tables")
+                catalog, schema, _ = fqn(record).split(".")
+                self.assertEqual(catalog, "pqbench_ext")
+                tables_by_schema[schema].append(fqn(record))
         self.assertEqual(schemas, EXTERNAL_FIXTURE_SCHEMAS)
 
         # The synthetic tables name t01..t10.
         synthetic = 0
         for schema in ["events", "sales", "reference"]:
-            ids = self._schema_ids(env, schema)
+            ids = tables_by_schema[schema]
             self.assertEqual(ids, [f"pqbench_ext.{schema}.t{i:02}" for i in range(1, 11)])
             synthetic += len(ids)
         self.assertEqual(synthetic, 30)
@@ -426,12 +433,12 @@ class LiveE2E(unittest.TestCase):
             "clickbench": 1,
         }
         for schema, count in copies.items():
-            ids = self._schema_ids(env, schema)
+            ids = tables_by_schema[schema]
             self.assertEqual(len(ids), count, f"{schema}: {ids}")
-        self.assertEqual(self._schema_ids(env, "nyctaxi"), ["pqbench_ext.nyctaxi.trips"])
-        self.assertEqual(self._schema_ids(env, "clickbench"), ["pqbench_ext.clickbench.hits"])
+        self.assertEqual(tables_by_schema["nyctaxi"], ["pqbench_ext.nyctaxi.trips"])
+        self.assertEqual(tables_by_schema["clickbench"], ["pqbench_ext.clickbench.hits"])
         self.assertEqual(
-            self._schema_ids(env, "healthverity"),
+            tables_by_schema["healthverity"],
             ["pqbench_ext.healthverity.claims_sample_synthetic"],
         )
 
@@ -577,17 +584,23 @@ class LiveE2E(unittest.TestCase):
         env = source(host, token)
         env["AWS_REGION"] = aws_region()
 
+        schemas = {"events", "sales", "reference", "tpch_sf1", "clickbench"}
+        status, listing, err = pipeline(
+            [["list", "schemas"], ["list", "tables"]],
+            env,
+            stdin=catalog_ref("pqbench_ext"),
+        )
+        self.assertEqual(status, 0, f"list schemas | list tables stderr: {err}")
+        refs = "".join(
+            json.dumps({"name": record["name"]}) + "\n"
+            for record in ndjson(listing)
+            if fqn(record).split(".")[1] in schemas
+        )
+        out = self.assert_ok(["get", "table"], stdin=refs, env=env)
         tables = 0
-        for schema in ["events", "sales", "reference", "tpch_sf1", "clickbench"]:
-            status, out, err = pipeline(
-                [["list", "tables"], ["get", "table"]],
-                env,
-                stdin=schema_ref(f"pqbench_ext.{schema}"),
-            )
-            self.assertEqual(status, 0, f"pqbench_ext.{schema}: {err}")
-            for record in ndjson(out):
-                self.assertNotIn("credentials", record, f"the lease rode on the record: {record}")
-                tables += 1
+        for record in ndjson(out):
+            self.assertNotIn("credentials", record, f"the lease rode on the record: {record}")
+            tables += 1
         self.assertEqual(tables, 39)
 
     # The whole issue-#58 walk on a copied schema, all the way to a treemap:
@@ -785,32 +798,35 @@ def run_one(name: str):
     """Run one test method in a worker; return only picklable results."""
     output = io.StringIO()
     result = unittest.TestResult()
+    started = perf_counter()
     with contextlib.redirect_stdout(output):
         LiveE2E(name).run(result)
     problems = [
         (test.id(), traceback) for test, traceback in result.failures + result.errors
     ]
     skipped = [reason for _, reason in result.skipped]
-    return name, output.getvalue(), problems, skipped
+    return name, perf_counter() - started, output.getvalue(), problems, skipped
 
 
 def run_parallel(names: list[str]) -> bool:
+    started = perf_counter()
     with ProcessPoolExecutor() as pool:
         results = list(pool.map(run_one, names))
+    elapsed = perf_counter() - started
     failed = False
-    for name, output, problems, skipped in sorted(results):
+    for name, seconds, output, problems, skipped in sorted(results):
         print(output, end="")
         if problems:
             failed = True
-            print(f"{name}: FAIL")
+            print(f"{name}: FAIL ({seconds:.1f}s)")
             for test_id, traceback in problems:
                 print(f"\n{test_id}\n{traceback}")
         elif skipped:
             print(f"{name}: skipped ({skipped[0]})")
         else:
-            print(f"{name}: ok")
+            print(f"{name}: ok ({seconds:.1f}s)")
     plural = "" if len(names) == 1 else "s"
-    print(f"\nRan {len(names)} test{plural} in parallel")
+    print(f"\nRan {len(names)} test{plural} in parallel in {elapsed:.1f}s")
     return not failed
 
 
