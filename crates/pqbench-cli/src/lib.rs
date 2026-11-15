@@ -21,6 +21,7 @@ mod help;
 mod lint;
 mod list;
 mod lz;
+mod measure;
 mod metastore;
 mod parse;
 mod profile;

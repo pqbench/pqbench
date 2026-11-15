@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream;
-use pqbench::{bytemass, v1};
+use pqbench::v1;
 
 use crate::parse;
 use crate::source::{drive, flat_map};
@@ -46,21 +46,10 @@ pub(crate) async fn run(
                 )
                 .into());
             }
-            let table = v1::name::parse_table_file(&file.name)
-                .map(|(table, _)| table)
-                .ok_or("a table-file record needs a catalogs/…/tables/… name")?;
-            let env = daemon.resolve_env(&table).await?;
-            let credentials = v1::Credentials::from_env(&env);
-            let lake = lake.with_lease(Some(&credentials));
-            let measured = bytemass::measure_file(&lake, blob).await?;
-            let mut columns = measured.columns;
-            for column in &mut columns {
-                column.table = Some(table.clone());
-                column.sample_rate = file.sample_rate;
-                column.size_bytes = measured.blob.size_bytes;
-            }
+            let measured = crate::measure::table_file(&lake, &daemon, &file).await?;
             let path = PathBuf::from(locator);
-            let suggestions = pqbench::lint::suggestions(&path, blob, &columns, Some(rows))?;
+            let suggestions =
+                pqbench::lint::suggestions(&path, blob, &measured.columns, Some(rows))?;
             Ok(stream::iter(suggestions.into_iter().map(Ok::<_, CliError>)))
         }
     });

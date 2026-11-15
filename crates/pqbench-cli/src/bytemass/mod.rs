@@ -2,7 +2,7 @@
 
 use clap::Args;
 use futures_util::stream;
-use pqbench::{bytemass, v1};
+use pqbench::v1;
 
 use crate::parse;
 use crate::source::{drive, flat_map};
@@ -29,38 +29,11 @@ pub(crate) async fn run(
         let lake = lake.clone();
         let daemon = daemon.clone();
         async move {
-            let name = file
-                .blob
-                .as_deref()
-                .ok_or_else(|| "a table-file record needs a blob to read".to_string())?;
-            let table = v1::name::parse_table_file(&file.name)
-                .map(|(table, _)| table)
-                .ok_or_else(|| {
-                    "a table-file record needs a catalogs/…/tables/… name".to_string()
-                })?;
-            let env = daemon.resolve_env(&table).await?;
-            let credentials = v1::Credentials::from_env(&env);
-            let lake = lake.with_lease(Some(&credentials));
-            let measured = bytemass::measure_file(&lake, name).await?;
-            let mut blob = measured.blob;
-            let mut columns = measured.columns;
-            if let Some(rate) = file.sample_rate {
-                if !(rate > 0.0 && rate <= 1.0) {
-                    return Err(format!(
-                        "a table file's sample rate must be in (0, 1], not {rate}"
-                    )
-                    .into());
-                }
-            }
-            blob.sample_rate = file.sample_rate;
-            for column in &mut columns {
-                column.table = Some(table.clone());
-                column.sample_rate = file.sample_rate;
-                column.size_bytes = blob.size_bytes;
-                column.storage_class = blob.storage_class.clone();
-            }
+            let measured = crate::measure::table_file(&lake, &daemon, &file).await?;
             Ok(stream::iter(
-                rows(blob, columns).into_iter().map(Ok::<_, CliError>),
+                rows(measured.blob, measured.columns)
+                    .into_iter()
+                    .map(Ok::<_, CliError>),
             ))
         }
     });
