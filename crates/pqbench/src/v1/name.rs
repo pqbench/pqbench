@@ -75,6 +75,22 @@ pub fn column(service: &str, locator: &str, column: &str) -> String {
     )
 }
 
+/// `{blob}/columns/{column}/suggestions/{rule}`.
+#[must_use]
+pub fn suggestion(blob: &str, column: &str, rule: &str) -> String {
+    format!(
+        "{blob}/columns/{}/suggestions/{}",
+        encode(column),
+        encode(rule)
+    )
+}
+
+/// `{blob}/suggestions`.
+#[must_use]
+pub fn suggestions(blob: &str) -> String {
+    format!("{blob}/suggestions")
+}
+
 /// The metastore id in a `metastores/{metastore}` name.
 #[must_use]
 pub fn parse_metastore(value: &str) -> Option<String> {

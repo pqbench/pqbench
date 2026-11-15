@@ -18,6 +18,7 @@ mod file;
 mod format;
 mod get;
 mod help;
+mod lint;
 mod list;
 mod lz;
 mod metastore;
