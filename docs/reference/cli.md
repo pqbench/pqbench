@@ -22,6 +22,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench list tables`↴](#pqbench-list-tables)
 * [`pqbench list files`↴](#pqbench-list-files)
 * [`pqbench list columns`↴](#pqbench-list-columns)
+* [`pqbench list suggestions`↴](#pqbench-list-suggestions)
 * [`pqbench sample`↴](#pqbench-sample)
 * [`pqbench sample files`↴](#pqbench-sample-files)
 * [`pqbench daemon`↴](#pqbench-daemon)
@@ -77,6 +78,7 @@ Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
+  pqbench table-file data.parquet | pqbench list suggestions
   pqbench skill parquet-advisor
   pqbench list catalogs | pqbench format
 
@@ -90,6 +92,7 @@ Documents:
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
   ColumnProfile          one column's profile (profile | format)
+  Suggestion             one storage suggestion (list suggestions)
   pqbench.skill          name + description (pqbench skill with no args)
 ```
 
@@ -485,6 +488,8 @@ List a collection of the walk, by name:
               TableFile line each
   columns     a file's columns and their byte masses (TableFile refs on
               standard input), one Column line each
+  suggestions the storage each local blob's values do not need (TableFile refs
+              on standard input), one Suggestion line each
 ```
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
@@ -531,6 +536,7 @@ Examples:
   echo '"dbx_samples.nyctaxi"' | pqbench list tables
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench list columns
+  pqbench table-file data.parquet | pqbench list suggestions
 
 See also:
   pqbench get --help          read one resource
@@ -546,6 +552,7 @@ See also:
 * `tables` — List the tables in a schema (`CATALOG.SCHEMA`)
 * `files` — List a table's active files (Table refs on stdin)
 * `columns` — List a file's columns and their byte masses (Table-file refs on stdin)
+* `suggestions` — List storage suggestions for each local blob (Table-file refs on stdin)
 
 
 
@@ -615,6 +622,21 @@ List a file's columns and their byte masses (Table-file refs on stdin)
 * `--fan-out <FAN_OUT>` — files in flight at once
 
   Default value: `128`
+
+
+
+## `pqbench list suggestions`
+
+List storage suggestions for each local blob (Table-file refs on stdin)
+
+**Usage:** `pqbench list suggestions [OPTIONS]`
+
+
+###### **Options:**
+
+* `--rows <ROWS>` — leading rows to inspect and price
+
+  Default value: `8192`
 
 
 

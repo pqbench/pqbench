@@ -284,6 +284,25 @@ pub fn read_typed_sample(path: &Path, max_rows: Option<usize>) -> Result<TypedSa
     super::r#impl::read_typed_sample(path, max_rows)
 }
 
+/// Read up to `max_rows` leading rows of the named leaf columns as raw bytes.
+///
+/// `columns` are dotted leaf paths (`a.b`, `list.element`). The paths must not
+/// sit under a repeated group; a caller that wants a row-per-row sample reads
+/// scalar leaves only. The result is one row of cells per requested column, in
+/// request order; a missing or null leaf is `None`. Rows are decoded whole and
+/// the requested leaves kept.
+///
+/// # Errors
+/// Returns [`Error`] if `path` is not a readable Parquet file or decoding a
+/// value fails.
+pub fn read_leaf_sample(
+    path: &Path,
+    columns: &[String],
+    max_rows: Option<usize>,
+) -> Result<Vec<Vec<Option<Vec<u8>>>>, Error> {
+    super::r#impl::read_leaf_sample(path, columns, max_rows)
+}
+
 /// Write typed columns and rows to an in-memory Parquet file.
 ///
 /// # Errors

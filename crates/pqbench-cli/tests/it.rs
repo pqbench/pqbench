@@ -62,6 +62,9 @@ mod schema;
 #[path = "skill.rs"]
 mod skill;
 
+#[path = "suggestions.rs"]
+mod suggestions;
+
 #[path = "stdin.rs"]
 mod stdin;
 

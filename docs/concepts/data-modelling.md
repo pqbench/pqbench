@@ -62,7 +62,7 @@ A resource has at most one canonical parent, and a `List` must not require two
 | `Table` | `Schema` |
 | `TableFile`, `Commit` | `Table` |
 | `Column` | `Blob` |
-| `ColumnProfile` | `Column` |
+| `ColumnProfile`, `Suggestion` | `Column` |
 
 `Blob` is the exception: it is storage-rooted (`blobs/{service}/{locator}`), so
 a bare object or a local path names a resource like any other, and it has no

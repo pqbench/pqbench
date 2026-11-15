@@ -222,8 +222,9 @@ sorting_columns      = chosen sort
 ```markdown
 ## Recipe: store device_id as bytes not uuid-string
 - Aim: storage
-- Evidence: profile physical_kind=string, length_mean 36 on device_id;
-  bytemass device_id 13% of table (source: sample 8192 / footer)
+- Evidence: list suggestions device_id rule=uuid-text, savings_bytes=…
+  (a binary-rewrite estimate measured on the first 8192 rows); bytemass
+  device_id 13% of table (source: footer)
 - Write / ingest: parse UUID to 16 bytes at ingest
 - Table DDL: BINARY(16) / UUID native type, not STRING
 - Compression: leave zstd@3 — level will not shrink hex text much

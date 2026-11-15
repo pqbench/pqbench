@@ -16,6 +16,7 @@ mod dialect;
 pub mod diff;
 pub mod file;
 pub mod http;
+pub mod lint;
 pub mod lz;
 pub mod mass;
 pub mod metastore;

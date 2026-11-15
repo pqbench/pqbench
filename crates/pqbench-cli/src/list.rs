@@ -24,6 +24,8 @@ enum ListCollection {
     Files(crate::file::list::ListArgs),
     /// List a file's columns and their byte masses (Table-file refs on stdin)
     Columns(crate::bytemass::BytemassArgs),
+    /// List storage suggestions for each local blob (Table-file refs on stdin)
+    Suggestions(crate::lint::SuggestionsArgs),
 }
 
 /// List a collection: the walk's list verb.
@@ -38,6 +40,7 @@ pub(crate) async fn run(
         ListCollection::Tables(args) => crate::table::list::run(daemon, args).await,
         ListCollection::Files(args) => crate::file::list::run(lake, daemon, args).await,
         ListCollection::Columns(args) => crate::bytemass::run(lake, daemon, args).await,
+        ListCollection::Suggestions(args) => crate::lint::run(lake, daemon, args).await,
     }
 }
 
@@ -50,6 +53,7 @@ impl ListArgs {
             ListCollection::Tables(_) => "list tables",
             ListCollection::Files(_) => "list files",
             ListCollection::Columns(_) => "list columns",
+            ListCollection::Suggestions(_) => "list suggestions",
         }
     }
 
