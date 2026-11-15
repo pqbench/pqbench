@@ -18,7 +18,7 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::{SerializedColumnWriter, SerializedFileWriter};
-use parquet::record::{Field, Row};
+use parquet::record::Field;
 use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
@@ -73,27 +73,16 @@ pub(crate) fn read_footer_masses(footer: &[u8], size_bytes: u64) -> Result<FileM
     Ok(create_masses(&metadata, size_bytes))
 }
 
-/// Visit up to `max_rows` leading decoded rows of a local file.
-fn visit_rows(
-    path: &Path,
-    max_rows: Option<usize>,
-    mut visit: impl FnMut(&Row),
-) -> Result<(), Error> {
-    let file = std::fs::File::open(path).map_err(Error::Io)?;
-    let reader = SerializedFileReader::new(file)?;
-    for (rows, row) in reader.get_row_iter(None)?.enumerate() {
-        if max_rows.is_some_and(|max| rows >= max) {
-            break;
-        }
-        visit(&row?);
-    }
-    Ok(())
-}
-
 /// Decode up to `max_rows` leading rows of a local file into stringified cells.
 pub(crate) fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error> {
+    let file = std::fs::File::open(path).map_err(Error::Io)?;
+    let reader = SerializedFileReader::new(file)?;
     let mut sample = Sample::default();
-    visit_rows(path, max_rows, |row| {
+    for row in reader.get_row_iter(None)? {
+        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
+            break;
+        }
+        let row = row?;
         if sample.columns.is_empty() {
             sample.columns = row
                 .get_column_iter()
@@ -105,7 +94,7 @@ pub(crate) fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample
                 .map(|(_, field)| field_text(field))
                 .collect(),
         );
-    })?;
+    }
     Ok(sample)
 }
 
@@ -132,8 +121,14 @@ pub(crate) fn read_leaf_sample(
         .enumerate()
         .map(|(at, column)| (column.as_str(), at))
         .collect();
+    let file = std::fs::File::open(path).map_err(Error::Io)?;
+    let reader = SerializedFileReader::new(file)?;
     let mut sample: Vec<Vec<Option<Vec<u8>>>> = vec![Vec::new(); columns.len()];
-    visit_rows(path, max_rows, |row| {
+    for (rows, row) in reader.get_row_iter(None)?.enumerate() {
+        if max_rows.is_some_and(|max| rows >= max) {
+            break;
+        }
+        let row = row?;
         let mut cells = vec![None; columns.len()];
         for (name, field) in row.get_column_iter() {
             collect_leaf(name, field, "", &index, &mut cells);
@@ -141,7 +136,7 @@ pub(crate) fn read_leaf_sample(
         for (value, column) in cells.into_iter().zip(sample.iter_mut()) {
             column.push(value);
         }
-    })?;
+    }
     Ok(sample)
 }
 
@@ -184,9 +179,15 @@ pub(crate) fn read_typed_sample(
     path: &Path,
     max_rows: Option<usize>,
 ) -> Result<TypedSample, Error> {
+    let file = std::fs::File::open(path).map_err(Error::Io)?;
+    let reader = SerializedFileReader::new(file)?;
     let mut sample = TypedSample::default();
     let mut kinds: Vec<Option<Kind>> = Vec::new();
-    visit_rows(path, max_rows, |row| {
+    for row in reader.get_row_iter(None)? {
+        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
+            break;
+        }
+        let row = row?;
         if sample.columns.is_empty() {
             sample.columns = row
                 .get_column_iter()
@@ -207,7 +208,7 @@ pub(crate) fn read_typed_sample(
                 .map(|(_, field)| field_value(field))
                 .collect(),
         );
-    })?;
+    }
     for (column, kind) in sample.columns.iter_mut().zip(kinds.iter()) {
         column.kind = kind.unwrap_or(Kind::Bytes);
     }
