@@ -1,11 +1,14 @@
 //! `lint`: the storage a column's values do not need.
 //!
-//! The first rule prices UUID text stored as 36-byte strings. The footer gives
-//! the column's on-disk bytes; a decoded sample gives its value shape and lets
-//! the rule encode the same values as 16-byte binary. A suggestion is emitted
-//! only when that binary sample is smaller, so repeated UUIDs are priced below
-//! the 16-byte floor they would have if every value were unique.
+//! Two rules. UUID text stored as 36-byte strings prices the same values as
+//! 16-byte binary; a dictionary page on nearly-unique values prices the same
+//! values with the dictionary off. The footer gives the column's on-disk
+//! bytes; a decoded sample gives its value shape and lets a rule encode the
+//! same values the other way. A suggestion is emitted only when that encode is
+//! smaller, so repeated UUIDs price below the 16-byte floor they would have if
+//! every value were unique.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 
@@ -20,11 +23,18 @@ use crate::v1;
 /// Leading rows decoded to judge a column's values and price the rewrite.
 pub const SAMPLE_ROWS: usize = 8192;
 
+/// The rule id a suggestion carries.
+pub const UUID_TEXT_RULE: &str = "uuid-text";
+
+/// The rule id for a dictionary page on nearly-unique values.
+pub const DICTIONARY_UNIQUE_RULE: &str = "dictionary-unique";
+
 /// Suggestions smaller than this are noise.
 const MIN_SAVINGS_BYTES: u64 = 64 * 1024;
 
-/// The rule id a suggestion carries.
-pub const UUID_TEXT_RULE: &str = "uuid-text";
+/// Values are nearly unique when at least this fraction of the sampled
+/// non-null values are distinct.
+const UNIQUE_FRACTION: f64 = 0.98;
 
 /// One column whose representation would shrink.
 #[derive(Debug, Clone, Serialize)]
@@ -118,15 +128,7 @@ pub fn suggestions(
 
     for (at, (column, leaf)) in targets.iter().enumerate() {
         let cells: Vec<Option<&[u8]>> = sample[at].iter().map(Option::as_deref).collect();
-        let uuids: Option<Vec<Option<[u8; 16]>>> = cells
-            .iter()
-            .map(|cell| match *cell {
-                Some(bytes) => parse_uuid(bytes).map(Some),
-                None => Some(None),
-            })
-            .collect();
-        let Some(uuids) = uuids else { continue };
-        let non_null = uuids.iter().filter(|uuid| uuid.is_some()).count() as u64;
+        let non_null = cells.iter().filter(|cell| cell.is_some()).count() as u64;
         if non_null == 0 {
             continue;
         }
@@ -149,62 +151,88 @@ pub fn suggestions(
         if non_null_values == 0 {
             continue;
         }
-        let binary_rows: Vec<Vec<Value>> = uuids
+        let text_bpv = compressed_bytes as f64 / non_null_values as f64;
+        let options = write_options(mass.codec.as_deref());
+
+        // UUID text: every sampled non-null value is a canonical UUID, and the
+        // same values as 16-byte binary price smaller.
+        let uuids: Option<Vec<Option<[u8; 16]>>> = cells
             .iter()
-            .map(|uuid| {
-                vec![match uuid {
-                    Some(bytes) => Value::Bytes(bytes.to_vec()),
-                    None => Value::Null,
-                }]
+            .map(|cell| match *cell {
+                Some(bytes) => parse_uuid(bytes).map(Some),
+                None => Some(None),
             })
             .collect();
-        let binary = write_parquet(
-            &[TypedColumn {
-                name: "uuid".into(),
-                kind: Kind::Bytes,
-            }],
-            &binary_rows,
-            &write_options(mass.codec.as_deref()),
-        )?;
-        let binary_mass = read_buffer_masses(&binary)?;
-        let Some(binary_bytes) = binary_mass
-            .columns
-            .first()
-            .map(|column| column.compressed_bytes)
-        else {
-            continue;
-        };
-        let text_bpv = compressed_bytes as f64 / non_null_values as f64;
-        let binary_bpv = binary_bytes as f64 / non_null as f64;
-        if binary_bpv >= text_bpv {
-            continue;
+        if let Some(uuids) = uuids {
+            let binary_rows: Vec<Vec<Value>> = uuids
+                .iter()
+                .map(|uuid| {
+                    vec![match uuid {
+                        Some(bytes) => Value::Bytes(bytes.to_vec()),
+                        None => Value::Null,
+                    }]
+                })
+                .collect();
+            let binary_bpv = price_bytes(&binary_rows, &options)? as f64 / non_null as f64;
+            if binary_bpv < text_bpv {
+                let savings = ((text_bpv - binary_bpv) * non_null_values as f64).round() as u64;
+                if savings >= MIN_SAVINGS_BYTES {
+                    let annotated = uuids.iter().flatten().all(|bytes| {
+                        (1..=8).contains(&(bytes[6] >> 4)) && (8..=11).contains(&(bytes[8] >> 4))
+                    });
+                    suggestions.push(suggestion(
+                        blob,
+                        leaf,
+                        column,
+                        UUID_TEXT_RULE,
+                        format!(
+                            "UUID text at {text_bpv:.2} B/value; a 16-byte binary sample prices \
+                             at {binary_bpv:.2} B/value"
+                        ),
+                        if annotated {
+                            "store as BINARY(16) with the UUID logical type"
+                        } else {
+                            "store as BINARY(16)"
+                        },
+                        savings,
+                    ));
+                    continue;
+                }
+            }
         }
-        let savings = ((text_bpv - binary_bpv) * non_null_values as f64).round() as u64;
-        if savings < MIN_SAVINGS_BYTES {
-            continue;
+
+        // A dictionary on nearly-unique values: the writer paid for a
+        // dictionary that stored almost every value; the same sample without
+        // it prices smaller.
+        if mass.dictionary && unique_fraction(&cells) >= UNIQUE_FRACTION {
+            let plain_rows: Vec<Vec<Value>> = cells
+                .iter()
+                .map(|cell| {
+                    vec![match *cell {
+                        Some(bytes) => Value::Bytes(bytes.to_vec()),
+                        None => Value::Null,
+                    }]
+                })
+                .collect();
+            let plain_bpv = price_bytes(&plain_rows, &options)? as f64 / non_null as f64;
+            if plain_bpv < text_bpv {
+                let savings = ((text_bpv - plain_bpv) * non_null_values as f64).round() as u64;
+                if savings >= MIN_SAVINGS_BYTES {
+                    suggestions.push(suggestion(
+                        blob,
+                        leaf,
+                        column,
+                        DICTIONARY_UNIQUE_RULE,
+                        format!(
+                            "a dictionary on nearly-unique values at {text_bpv:.2} B/value; \
+                             without it the sample prices at {plain_bpv:.2} B/value"
+                        ),
+                        "disable the dictionary for this column at write",
+                        savings,
+                    ));
+                }
+            }
         }
-        let annotated = uuids
-            .iter()
-            .flatten()
-            .all(|bytes| (1..=8).contains(&(bytes[6] >> 4)) && (8..=11).contains(&(bytes[8] >> 4)));
-        suggestions.push(Suggestion {
-            name: v1::name::suggestion(blob, leaf, UUID_TEXT_RULE),
-            rule: UUID_TEXT_RULE,
-            column: leaf.clone(),
-            table: column.table.clone(),
-            sample_rate: column.sample_rate,
-            size_bytes: column.size_bytes,
-            message: format!(
-                "UUID text at {text_bpv:.2} B/value; a 16-byte binary sample prices at \
-                 {binary_bpv:.2} B/value"
-            ),
-            remedy: if annotated {
-                "store as BINARY(16) with the UUID logical type"
-            } else {
-                "store as BINARY(16)"
-            },
-            savings_bytes: savings,
-        });
     }
 
     suggestions.sort_by(|left, right| {
@@ -214,6 +242,54 @@ pub fn suggestions(
             .then_with(|| left.column.cmp(&right.column))
     });
     Ok(suggestions)
+}
+
+/// The fraction of a column's sampled non-null values that are distinct.
+fn unique_fraction(cells: &[Option<&[u8]>]) -> f64 {
+    let values: Vec<&[u8]> = cells.iter().flatten().copied().collect();
+    let distinct: HashSet<&[u8]> = values.iter().copied().collect();
+    distinct.len() as f64 / values.len().max(1) as f64
+}
+
+/// Encode one byte column of `rows` in memory with these writer settings and
+/// return its compressed bytes: how a rule prices a rewrite on its sample.
+fn price_bytes(rows: &[Vec<Value>], options: &WriteOptions) -> Result<u64, Error> {
+    let encoded = write_parquet(
+        &[TypedColumn {
+            name: "value".into(),
+            kind: Kind::Bytes,
+        }],
+        rows,
+        options,
+    )?;
+    let mass = read_buffer_masses(&encoded)?;
+    Ok(mass
+        .columns
+        .first()
+        .map_or(0, |column| column.compressed_bytes))
+}
+
+/// One suggestion record, on the column's own name and context.
+fn suggestion(
+    blob: &str,
+    leaf: &str,
+    column: &v1::Column,
+    rule: &'static str,
+    message: String,
+    remedy: &'static str,
+    savings_bytes: u64,
+) -> Suggestion {
+    Suggestion {
+        name: v1::name::suggestion(blob, leaf, rule),
+        rule,
+        column: leaf.to_string(),
+        table: column.table.clone(),
+        sample_rate: column.sample_rate,
+        size_bytes: column.size_bytes,
+        message,
+        remedy,
+        savings_bytes,
+    }
 }
 
 /// Parse canonical 36-byte UUID text into its 16 big-endian bytes.
