@@ -634,9 +634,6 @@ List storage suggestions for each local blob (Table-file refs on stdin)
 
 ###### **Options:**
 
-* `--fan-out <FAN_OUT>` — files in flight at once
-
-  Default value: `8`
 * `--rows <ROWS>` — leading rows to inspect and price
 
   Default value: `8192`

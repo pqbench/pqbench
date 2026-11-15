@@ -13,9 +13,6 @@ use crate::CliError;
 /// Arguments for `list suggestions`.
 #[derive(Args)]
 pub(crate) struct SuggestionsArgs {
-    /// files in flight at once
-    #[arg(long, default_value_t = 8)]
-    fan_out: usize,
     /// leading rows to inspect and price
     #[arg(long, default_value_t = pqbench::lint::SAMPLE_ROWS)]
     rows: usize,
@@ -31,7 +28,9 @@ pub(crate) async fn run(
     let lake = lake.clone();
     let daemon = daemon.clone();
     let rows = args.rows;
-    let records = flat_map(parents, args.fan_out, move |file: v1::TableFile| {
+    // One file at a time: decoding and pricing a sample is CPU-bound, so
+    // overlapping files buys nothing and holds more samples in memory.
+    let records = flat_map(parents, 1, move |file: v1::TableFile| {
         let lake = lake.clone();
         let daemon = daemon.clone();
         async move {
