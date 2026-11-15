@@ -93,7 +93,6 @@ Documents:
   ColumnMass             one table column's estimated mass (summarize columns)
   ColumnProfile          one column's profile (profile | format)
   Suggestion             one storage suggestion (list suggestions)
-  SuggestionReport       a file's suggestion total (list suggestions)
   pqbench.skill          name + description (pqbench skill with no args)
 ```
 
@@ -637,7 +636,7 @@ List storage suggestions for each local blob (Table-file refs on stdin)
 
 * `--fan-out <FAN_OUT>` — files in flight at once
 
-  Default value: `128`
+  Default value: `8`
 * `--rows <ROWS>` — leading rows to inspect and price
 
   Default value: `8192`

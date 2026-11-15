@@ -59,7 +59,6 @@ Documents:
   ColumnMass             one table column's estimated mass (summarize columns)
   ColumnProfile          one column's profile (profile | format)
   Suggestion             one storage suggestion (list suggestions)
-  SuggestionReport       a file's suggestion total (list suggestions)
   pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3

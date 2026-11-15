@@ -91,22 +91,19 @@ fn suggestions(path: &Path) -> Vec<Json> {
         .collect()
 }
 
-fn uuid_suggestions(records: &[Json]) -> Vec<&Json> {
-    records
-        .iter()
-        .filter(|record| record["rule"] == "uuid-text")
-        .collect()
-}
-
-fn report(records: &[Json]) -> &Json {
-    records
-        .iter()
-        .find(|record| {
-            record["name"]
-                .as_str()
-                .is_some_and(|name| name.ends_with("/suggestions"))
-        })
-        .expect("suggestion report")
+/// The sampled binary price in a suggestion's message, in bytes per value.
+fn sampled_price(finding: &Json) -> f64 {
+    finding["message"]
+        .as_str()
+        .expect("message")
+        .split("prices at ")
+        .nth(1)
+        .expect("sampled price")
+        .split(' ')
+        .next()
+        .expect("price token")
+        .parse()
+        .expect("price")
 }
 
 #[test]
@@ -117,19 +114,14 @@ fn unique_uuid_text_is_reported_with_savings() {
     write_uuids(&path, &values, false);
 
     let records = suggestions(&path);
-    let findings = uuid_suggestions(&records);
-    assert_eq!(findings.len(), 1, "{records:?}");
-    let finding = findings[0];
+    assert_eq!(records.len(), 1, "{records:?}");
+    let finding = &records[0];
     assert_eq!(finding["column"], "id");
-    assert!(finding["savings_bytes"].as_u64().unwrap() > 0, "{finding}");
-    assert!(
-        finding["message"].as_str().unwrap().contains("prices at"),
-        "{finding}"
-    );
-
-    let report = report(&records);
-    assert_eq!(report["suggestion_count"], 1);
-    assert_eq!(report["potential_savings_bytes"], finding["savings_bytes"]);
+    assert_eq!(finding["rule"], "uuid-text");
+    assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    assert!(finding["table"].is_string(), "{finding}");
+    assert!(finding["size_bytes"].is_u64(), "{finding}");
+    assert!(sampled_price(finding) > 0.0, "{finding}");
 
     let _ = std::fs::remove_dir_all(directory);
 }
@@ -142,14 +134,12 @@ fn repeated_uuid_text_is_priced_below_the_binary_floor() {
     write_uuids(&path, &values, true);
 
     let records = suggestions(&path);
-    let findings = uuid_suggestions(&records);
-    assert_eq!(findings.len(), 1, "{records:?}");
-    let finding = findings[0];
-    let savings = finding["savings_bytes"].as_u64().unwrap();
-    assert!(savings >= 64 * 1024, "{finding}");
+    assert_eq!(records.len(), 1, "{records:?}");
+    let finding = &records[0];
+    assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
     assert!(
-        finding["message"].as_str().unwrap().contains("prices at"),
-        "{finding}"
+        sampled_price(finding) < 16.0,
+        "repeated values should price below the 16-byte floor: {finding}"
     );
 
     let _ = std::fs::remove_dir_all(directory);
@@ -163,8 +153,7 @@ fn non_uuid_text_is_not_reported() {
     write_uuids(&path, &values, false);
 
     let records = suggestions(&path);
-    assert!(uuid_suggestions(&records).is_empty(), "{records:?}");
-    assert_eq!(report(&records)["suggestion_count"], 0);
+    assert!(records.is_empty(), "{records:?}");
 
     let _ = std::fs::remove_dir_all(directory);
 }

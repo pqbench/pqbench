@@ -6,27 +6,21 @@
 //! only when that binary sample is smaller, so repeated UUIDs are priced below
 //! the 16-byte floor they would have if every value were unique.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::third_party::parquet::api::{
-    read_buffer_masses, read_file_masses, read_leaf_sample, write_parquet, ColumnMass,
-    Error as ParquetError, Kind, TypedColumn, Value, WriteOptions,
+    read_buffer_masses, read_leaf_sample, write_parquet, Error as ParquetError, Kind, TypedColumn,
+    Value, WriteOptions,
 };
 use crate::v1;
 
 /// Leading rows decoded to judge a column's values and price the rewrite.
 pub const SAMPLE_ROWS: usize = 8192;
 
-/// A column is UUID text when at least this fraction of its sampled values
-/// match the canonical 36-byte shape.
-const UUID_FRACTION: f64 = 0.99;
-
-/// Suggestions smaller than this are noise: a handful of values is not worth a
-/// schema change.
+/// Suggestions smaller than this are noise.
 const MIN_SAVINGS_BYTES: u64 = 64 * 1024;
 
 /// The rule id a suggestion carries.
@@ -35,50 +29,27 @@ pub const UUID_TEXT_RULE: &str = "uuid-text";
 /// One column whose representation would shrink.
 #[derive(Debug, Clone, Serialize)]
 pub struct Suggestion {
-    /// `blobs/{service}/{locator}/columns/{column}/suggestions/{rule}`.
+    /// `{blob}/columns/{column}/suggestions/{rule}`.
     pub name: String,
     /// The stable rule id.
     pub rule: &'static str,
-    /// How serious the suggestion is.
-    pub severity: &'static str,
     /// The column's dotted leaf path.
     pub column: String,
+    /// The table whose file was measured, when measured through a table file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    /// The probability the table file was kept with, when a sample stage chose it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
+    /// The size in bytes of the file the column was measured in, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
     /// One-line explanation, with the measured bytes per value.
     pub message: String,
     /// The change that recovers the bytes.
     pub remedy: &'static str,
     /// Estimated bytes saved by the change.
     pub savings_bytes: u64,
-    /// How the suggestion was established: `footer`, `sample`, or both.
-    pub basis: &'static str,
-    /// Rows decoded to establish the suggestion.
-    pub sample_rows: u64,
-}
-
-/// One file's suggestion total.
-#[derive(Debug, Clone, Serialize)]
-pub struct SuggestionReport {
-    /// `blobs/{service}/{locator}/suggestions`.
-    pub name: String,
-    /// The file's size in bytes.
-    pub size_bytes: u64,
-    /// Suggestions emitted for the file.
-    pub suggestion_count: u64,
-    /// Suggestions with a byte estimate.
-    pub priced_count: u64,
-    /// Sum of the suggestions' estimates.
-    pub potential_savings_bytes: u64,
-    /// [`Self::potential_savings_bytes`] divided by [`Self::size_bytes`].
-    pub potential_savings_fraction: f64,
-    /// Rows decoded for the file.
-    pub sample_rows: u64,
-}
-
-/// One linted file: its suggestions and total.
-#[derive(Debug, Clone)]
-pub struct SuggestionsFile {
-    pub suggestions: Vec<Suggestion>,
-    pub report: SuggestionReport,
 }
 
 /// Errors from the lint layer.
@@ -111,78 +82,89 @@ impl From<ParquetError> for Error {
     }
 }
 
-/// Lint one local Parquet file.
+/// Lint one local Parquet file's measured columns.
 ///
 /// `blob` is the record's blob name, so each suggestion names the file the walk
 /// read, not the local path a caller may have copied it to.
 ///
 /// # Errors
-/// Fails when the footer, the sample, or a binary sample encode cannot be read.
+/// Fails when the sample or a binary sample encode cannot be read.
 pub fn suggestions(
     path: &Path,
     blob: &str,
+    columns: &[v1::Column],
     sample_rows: Option<usize>,
-) -> Result<SuggestionsFile, Error> {
-    let mass = read_file_masses(path)?;
-    let facts = fold_columns(mass.columns);
-    let targets: Vec<String> = facts
+) -> Result<Vec<Suggestion>, Error> {
+    let targets: Vec<(&v1::Column, String)> = columns
         .iter()
-        .filter(|(_, column)| !column.repeated && byte_leaf(&column.physical_data_type))
-        .map(|(column, _)| column.clone())
+        .filter(|column| {
+            column.max_repetition_level == Some(0)
+                && matches!(
+                    column.physical_data_type.as_deref(),
+                    Some("BYTE_ARRAY" | "FIXED_LEN_BYTE_ARRAY")
+                )
+        })
+        .filter_map(|column| {
+            let (_, _, leaf) = v1::Column::parse_name(&column.name)?;
+            Some((column, leaf))
+        })
         .collect();
-    let sample = read_leaf_sample(path, &targets, sample_rows)?;
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let leaves: Vec<String> = targets.iter().map(|(_, leaf)| leaf.clone()).collect();
+    let sample = read_leaf_sample(path, &leaves, sample_rows)?;
     let mut suggestions = Vec::new();
 
-    for (at, column) in targets.iter().enumerate() {
-        let fact = &facts[column];
-        let cells: Vec<Option<&[u8]>> = sample
-            .rows
+    for (at, (column, leaf)) in targets.iter().enumerate() {
+        let cells: Vec<Option<&[u8]>> = sample[at].iter().map(Option::as_deref).collect();
+        let uuids: Option<Vec<Option<[u8; 16]>>> = cells
             .iter()
-            .map(|row| row.get(at).and_then(Option::as_deref))
+            .map(|cell| match *cell {
+                Some(bytes) => parse_uuid(bytes).map(Some),
+                None => Some(None),
+            })
             .collect();
-        let non_null = cells.iter().filter(|cell| cell.is_some()).count() as u64;
+        let Some(uuids) = uuids else { continue };
+        let non_null = uuids.iter().filter(|uuid| uuid.is_some()).count() as u64;
         if non_null == 0 {
             continue;
         }
-        let mut uuid = 0_u64;
-        let mut versions = 0_u64;
-        let mut variants = 0_u64;
-        let mut binary_rows = Vec::with_capacity(cells.len());
-        for cell in &cells {
-            match cell.and_then(parse_uuid) {
-                Some(bytes) => {
-                    uuid += 1;
-                    if (1..=8).contains(&(bytes[6] >> 4)) {
-                        versions += 1;
-                    }
-                    if (8..=11).contains(&(bytes[8] >> 4)) {
-                        variants += 1;
-                    }
-                    binary_rows.push(vec![Value::Bytes(bytes.to_vec())]);
-                }
-                None => binary_rows.push(vec![Value::Null]),
-            }
-        }
-        if (uuid as f64 / non_null as f64) < UUID_FRACTION {
+        let Some(mass) = column.mass.as_ref() else {
             continue;
-        }
-        let non_null_values = match fact.null_count {
-            Some(nulls) => fact.value_count.saturating_sub(nulls),
+        };
+        let Some(compressed_bytes) = mass.compressed_bytes else {
+            continue;
+        };
+        let Some(value_count) = mass.value_count else {
+            continue;
+        };
+        let non_null_values = match mass.null_count {
+            Some(nulls) => value_count.saturating_sub(nulls),
             None => {
                 let fraction = non_null as f64 / cells.len().max(1) as f64;
-                (fact.value_count as f64 * fraction).round() as u64
+                (value_count as f64 * fraction).round() as u64
             }
         };
         if non_null_values == 0 {
             continue;
         }
+        let binary_rows: Vec<Vec<Value>> = uuids
+            .iter()
+            .map(|uuid| {
+                vec![match uuid {
+                    Some(bytes) => Value::Bytes(bytes.to_vec()),
+                    None => Value::Null,
+                }]
+            })
+            .collect();
         let binary = write_parquet(
             &[TypedColumn {
                 name: "uuid".into(),
                 kind: Kind::Bytes,
             }],
             &binary_rows,
-            &write_options(&fact.codec),
+            &write_options(mass.codec.as_deref()),
         )?;
         let binary_mass = read_buffer_masses(&binary)?;
         let Some(binary_bytes) = binary_mass
@@ -192,7 +174,7 @@ pub fn suggestions(
         else {
             continue;
         };
-        let text_bpv = fact.compressed_bytes as f64 / non_null_values as f64;
+        let text_bpv = compressed_bytes as f64 / non_null_values as f64;
         let binary_bpv = binary_bytes as f64 / non_null as f64;
         if binary_bpv >= text_bpv {
             continue;
@@ -201,24 +183,27 @@ pub fn suggestions(
         if savings < MIN_SAVINGS_BYTES {
             continue;
         }
-        let annotated = versions == uuid && variants == uuid;
+        let annotated = uuids
+            .iter()
+            .flatten()
+            .all(|bytes| (1..=8).contains(&(bytes[6] >> 4)) && (8..=11).contains(&(bytes[8] >> 4)));
         suggestions.push(Suggestion {
-            name: v1::name::suggestion(blob, column, UUID_TEXT_RULE),
+            name: v1::name::suggestion(blob, leaf, UUID_TEXT_RULE),
             rule: UUID_TEXT_RULE,
-            severity: "warning",
-            column: column.clone(),
+            column: leaf.clone(),
+            table: column.table.clone(),
+            sample_rate: column.sample_rate,
+            size_bytes: column.size_bytes,
             message: format!(
                 "UUID text at {text_bpv:.2} B/value; a 16-byte binary sample prices at \
-                 {binary_bpv:.2} B/value over {non_null_values} values"
+                 {binary_bpv:.2} B/value"
             ),
             remedy: if annotated {
-                "store as BINARY(16) with the UUID logical type; disable the dictionary"
+                "store as BINARY(16) with the UUID logical type"
             } else {
-                "store as BINARY(16) without a UUID logical type; disable the dictionary"
+                "store as BINARY(16)"
             },
             savings_bytes: savings,
-            basis: "footer+sample",
-            sample_rows: sample.rows.len() as u64,
         });
     }
 
@@ -228,74 +213,7 @@ pub fn suggestions(
             .cmp(&left.savings_bytes)
             .then_with(|| left.column.cmp(&right.column))
     });
-    let potential_savings_bytes = suggestions
-        .iter()
-        .map(|suggestion| suggestion.savings_bytes)
-        .sum();
-    let report = SuggestionReport {
-        name: v1::name::suggestions(blob),
-        size_bytes: mass.size_bytes,
-        suggestion_count: suggestions.len() as u64,
-        priced_count: suggestions.len() as u64,
-        potential_savings_bytes,
-        potential_savings_fraction: if mass.size_bytes == 0 {
-            0.0
-        } else {
-            potential_savings_bytes as f64 / mass.size_bytes as f64
-        },
-        sample_rows: sample.rows.len() as u64,
-    };
-    Ok(SuggestionsFile {
-        suggestions,
-        report,
-    })
-}
-
-/// One column, folded over its row-group chunks.
-struct ColumnFacts {
-    physical_data_type: String,
-    compressed_bytes: u64,
-    value_count: u64,
-    null_count: Option<u64>,
-    null_stats: bool,
-    repeated: bool,
-    codec: String,
-}
-
-/// Fold one `ColumnMass` per chunk into one fact per column path.
-fn fold_columns(chunks: Vec<ColumnMass>) -> BTreeMap<String, ColumnFacts> {
-    let mut columns: BTreeMap<String, ColumnFacts> = BTreeMap::new();
-    for chunk in chunks {
-        let column = columns.entry(chunk.column).or_insert_with(|| ColumnFacts {
-            physical_data_type: chunk.physical_data_type.clone(),
-            compressed_bytes: 0,
-            value_count: 0,
-            null_count: Some(0),
-            null_stats: true,
-            repeated: chunk.max_repetition_level > 0,
-            codec: chunk.codec.clone(),
-        });
-        column.compressed_bytes = column
-            .compressed_bytes
-            .saturating_add(chunk.compressed_bytes);
-        column.value_count = column.value_count.saturating_add(chunk.num_values);
-        column.repeated |= chunk.max_repetition_level > 0;
-        match (column.null_stats, chunk.null_count) {
-            (true, Some(count)) => {
-                column.null_count = Some(column.null_count.unwrap_or(0).saturating_add(count));
-            }
-            (_, _) => {
-                column.null_stats = false;
-                column.null_count = None;
-            }
-        }
-    }
-    columns
-}
-
-/// Whether a physical type is a byte array the UUID rule can inspect.
-fn byte_leaf(physical_data_type: &str) -> bool {
-    matches!(physical_data_type, "BYTE_ARRAY" | "FIXED_LEN_BYTE_ARRAY")
+    Ok(suggestions)
 }
 
 /// Parse canonical 36-byte UUID text into its 16 big-endian bytes.
@@ -323,12 +241,20 @@ fn parse_uuid(bytes: &[u8]) -> Option<[u8; 16]> {
     (at == 32).then_some(out)
 }
 
-/// The writer settings used to price a binary rewrite: the file's codec, no
-/// dictionary, and one row group.
-fn write_options(codec: &str) -> WriteOptions {
-    let codec = codec_name(codec);
+/// The writer settings used to price a binary rewrite: the file's codec when
+/// the writer has it (zstd otherwise), no dictionary, and one row group.
+fn write_options(codec: Option<&str>) -> WriteOptions {
+    let rendered = codec.unwrap_or("zstd").to_lowercase();
+    let codec = match rendered.split('(').next().unwrap_or("zstd").trim() {
+        "uncompressed" | "none" => "uncompressed",
+        "snappy" => "snappy",
+        "gzip" => "gzip",
+        "lz4" | "lz4_raw" => "lz4",
+        "zstd" => "zstd",
+        _ => "zstd",
+    };
     WriteOptions {
-        compression: codec.clone(),
+        compression: codec.to_string(),
         level: (codec == "zstd").then_some(3),
         dictionary: false,
         dictionary_bytes: None,
@@ -337,22 +263,6 @@ fn write_options(codec: &str) -> WriteOptions {
         sorting_columns: Vec::new(),
         row_group_size: 0,
     }
-}
-
-/// The bare codec name a footer spells: parquet-rs renders `ZSTD(ZSTD(1))`, and
-/// the writer takes `zstd`.
-fn codec_name(codec: &str) -> String {
-    let rendered = codec.to_lowercase();
-    let head = rendered.split('(').next().unwrap_or(&rendered).trim();
-    match head {
-        "uncompressed" | "none" => "uncompressed",
-        "snappy" => "snappy",
-        "gzip" => "gzip",
-        "lz4" | "lz4_raw" => "lz4",
-        "zstd" => "zstd",
-        other => other,
-    }
-    .to_string()
 }
 
 #[cfg(test)]

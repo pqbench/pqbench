@@ -78,19 +78,6 @@ pub struct TypedSample {
     pub rows: Vec<Vec<Value>>,
 }
 
-/// A decoded sample of selected leaf columns, with raw byte values.
-///
-/// The leaf paths are dotted schema paths (`a.b`). Nulls stay `None`. This is
-/// the shape a rule that only needs one family of leaves (strings, say) reads,
-/// so it does not materialise every column of a wide nested schema.
-#[derive(Debug, Clone, Default)]
-pub struct LeafSample {
-    /// The requested leaf paths, in request order.
-    pub columns: Vec<String>,
-    /// One row of cells per column, in request order.
-    pub rows: Vec<Vec<Option<Vec<u8>>>>,
-}
-
 /// How to write a typed sample back to Parquet bytes.
 #[derive(Debug, Clone)]
 pub struct WriteOptions {
@@ -301,7 +288,9 @@ pub fn read_typed_sample(path: &Path, max_rows: Option<usize>) -> Result<TypedSa
 ///
 /// `columns` are dotted leaf paths (`a.b`, `list.element`). The paths must not
 /// sit under a repeated group; a caller that wants a row-per-row sample reads
-/// scalar leaves only. Missing leaves stay `None`.
+/// scalar leaves only. The result is one row of cells per requested column, in
+/// request order; a missing or null leaf is `None`. Rows are decoded whole and
+/// the requested leaves kept.
 ///
 /// # Errors
 /// Returns [`Error`] if `path` is not a readable Parquet file or decoding a
@@ -310,7 +299,7 @@ pub fn read_leaf_sample(
     path: &Path,
     columns: &[String],
     max_rows: Option<usize>,
-) -> Result<LeafSample, Error> {
+) -> Result<Vec<Vec<Option<Vec<u8>>>>, Error> {
     super::r#impl::read_leaf_sample(path, columns, max_rows)
 }
 

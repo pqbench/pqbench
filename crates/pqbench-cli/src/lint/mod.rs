@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use futures_util::stream;
-use pqbench::v1;
+use pqbench::{bytemass, v1};
 
 use crate::parse;
 use crate::source::{drive, flat_map};
@@ -14,33 +14,27 @@ use crate::CliError;
 #[derive(Args)]
 pub(crate) struct SuggestionsArgs {
     /// files in flight at once
-    #[arg(long, default_value_t = 128)]
+    #[arg(long, default_value_t = 8)]
     fan_out: usize,
     /// leading rows to inspect and price
     #[arg(long, default_value_t = pqbench::lint::SAMPLE_ROWS)]
     rows: usize,
 }
 
-/// One output record: a suggestion or its file's total.
-#[derive(serde::Serialize)]
-#[serde(untagged)]
-enum Out {
-    Suggestion(pqbench::lint::Suggestion),
-    Report(pqbench::lint::SuggestionReport),
-}
-
 /// Emit each table file's suggestions as its record arrives.
 pub(crate) async fn run(
-    _lake: &pqbench::Lake,
-    _daemon: &crate::daemon::Daemon,
+    lake: &pqbench::Lake,
+    daemon: &crate::daemon::Daemon,
     args: &SuggestionsArgs,
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::TableFile>("list suggestions").await?;
+    let lake = lake.clone();
+    let daemon = daemon.clone();
     let rows = args.rows;
-    let records = flat_map(
-        parents,
-        args.fan_out,
-        move |file: v1::TableFile| async move {
+    let records = flat_map(parents, args.fan_out, move |file: v1::TableFile| {
+        let lake = lake.clone();
+        let daemon = daemon.clone();
+        async move {
             let blob = file
                 .blob
                 .as_deref()
@@ -53,19 +47,23 @@ pub(crate) async fn run(
                 )
                 .into());
             }
+            let table = v1::name::parse_table_file(&file.name)
+                .map(|(table, _)| table)
+                .ok_or("a table-file record needs a catalogs/…/tables/… name")?;
+            let env = daemon.resolve_env(&table).await?;
+            let credentials = v1::Credentials::from_env(&env);
+            let lake = lake.with_lease(Some(&credentials));
+            let measured = bytemass::measure_file(&lake, blob).await?;
+            let mut columns = measured.columns;
+            for column in &mut columns {
+                column.table = Some(table.clone());
+                column.sample_rate = file.sample_rate;
+                column.size_bytes = measured.blob.size_bytes;
+            }
             let path = PathBuf::from(locator);
-            let linted = pqbench::lint::suggestions(&path, blob, Some(rows))?;
-            let mut out: Vec<Result<Out, CliError>> =
-                Vec::with_capacity(1 + linted.suggestions.len());
-            out.extend(
-                linted
-                    .suggestions
-                    .into_iter()
-                    .map(|suggestion| Ok(Out::Suggestion(suggestion))),
-            );
-            out.push(Ok(Out::Report(linted.report)));
-            Ok(stream::iter(out))
-        },
-    );
+            let suggestions = pqbench::lint::suggestions(&path, blob, &columns, Some(rows))?;
+            Ok(stream::iter(suggestions.into_iter().map(Ok::<_, CliError>)))
+        }
+    });
     drive(records).await
 }

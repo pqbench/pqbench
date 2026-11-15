@@ -22,8 +22,8 @@ use parquet::record::Field;
 use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, Kind, LeafSample, MetadataParser, Page, PageParser,
-    ParquetFile, Sample, TypedColumn, TypedSample, Value, WriteOptions,
+    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
+    Sample, TypedColumn, TypedSample, Value, WriteOptions,
 };
 
 /// The parquet-rs-backed page parser.
@@ -109,11 +109,13 @@ fn field_text(field: &Field) -> Option<String> {
 }
 
 /// Decode up to `max_rows` leading rows of the named leaf columns as bytes.
+///
+/// The result is one row of cells per requested column, in request order.
 pub(crate) fn read_leaf_sample(
     path: &Path,
     columns: &[String],
     max_rows: Option<usize>,
-) -> Result<LeafSample, Error> {
+) -> Result<Vec<Vec<Option<Vec<u8>>>>, Error> {
     let index: HashMap<&str, usize> = columns
         .iter()
         .enumerate()
@@ -121,12 +123,9 @@ pub(crate) fn read_leaf_sample(
         .collect();
     let file = std::fs::File::open(path).map_err(Error::Io)?;
     let reader = SerializedFileReader::new(file)?;
-    let mut sample = LeafSample {
-        columns: columns.to_vec(),
-        rows: Vec::new(),
-    };
-    for row in reader.get_row_iter(None)? {
-        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
+    let mut sample: Vec<Vec<Option<Vec<u8>>>> = vec![Vec::new(); columns.len()];
+    for (rows, row) in reader.get_row_iter(None)?.enumerate() {
+        if max_rows.is_some_and(|max| rows >= max) {
             break;
         }
         let row = row?;
@@ -134,7 +133,9 @@ pub(crate) fn read_leaf_sample(
         for (name, field) in row.get_column_iter() {
             collect_leaf(name, field, "", &index, &mut cells);
         }
-        sample.rows.push(cells);
+        for (value, column) in cells.into_iter().zip(sample.iter_mut()) {
+            column.push(value);
+        }
     }
     Ok(sample)
 }
