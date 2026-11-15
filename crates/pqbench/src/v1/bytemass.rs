@@ -27,6 +27,10 @@ pub struct Bytemass {
     /// dictionary page is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dictionary_bytes: Option<u64>,
+    /// Every chunk carries a page index (a column index and an offset index),
+    /// so the column can be pruned at page granularity.
+    #[serde(default)]
+    pub page_index: bool,
     /// Variable-length value bytes before encoding, when the writer recorded them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unencoded_bytes: Option<u64>,
