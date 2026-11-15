@@ -49,7 +49,7 @@ pub(crate) async fn run(
             let measured = crate::measure::table_file(&lake, &daemon, &file).await?;
             let path = PathBuf::from(locator);
             let suggestions =
-                pqbench::lint::suggestions(&path, blob, &measured.columns, Some(rows))?;
+                pqbench::lint::suggestions(&path, &measured.blob, &measured.columns, Some(rows))?;
             Ok(stream::iter(suggestions.into_iter().map(Ok::<_, CliError>)))
         }
     });

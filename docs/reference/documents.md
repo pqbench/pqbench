@@ -77,7 +77,9 @@ Each kept `TableFile` records the probability it was kept with as
 `storage_class`, onto every `Column` (the `Blob` carries it too), so a column
 prices its own storage, and `list suggestions` copies it, with the file's
 `size_bytes`, onto every `Suggestion`, so a column's potential saving scales
-the same way. Scale
+the same way. `bytemass` also records the footer's `created_by` as the blob's
+`writer`, and `list suggestions` copies that onto each suggestion, so its
+`remedy` matches what the file's writer can actually change. Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
 `uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
 `null_count`, `row_group_count`, a `Suggestion`'s `savings_bytes` — and

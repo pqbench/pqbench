@@ -398,10 +398,14 @@ message Suggestion {
   // The size in bytes of the file this column was measured in, when known.
   int64 size_bytes = 6;
 
+  // The application that wrote the file, copied from the blob's `writer`, so
+  // the remedy can be read without the file record.
+  string writer = 10;
+
   // One-line explanation, with the measured bytes per value.
   string message = 7;
 
-  // The change that recovers the bytes.
+  // The change that recovers the bytes, in the terms of the file's writer.
   string remedy = 8;
 
   // Estimated bytes saved by the change.
