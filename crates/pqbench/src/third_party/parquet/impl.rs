@@ -74,7 +74,7 @@ pub(crate) fn read_footer_masses(footer: &[u8], size_bytes: u64) -> Result<FileM
 }
 
 /// Visit up to `max_rows` leading decoded rows of a local file.
-fn for_each_row(
+fn visit_rows(
     path: &Path,
     max_rows: Option<usize>,
     mut visit: impl FnMut(&Row),
@@ -93,7 +93,7 @@ fn for_each_row(
 /// Decode up to `max_rows` leading rows of a local file into stringified cells.
 pub(crate) fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error> {
     let mut sample = Sample::default();
-    for_each_row(path, max_rows, |row| {
+    visit_rows(path, max_rows, |row| {
         if sample.columns.is_empty() {
             sample.columns = row
                 .get_column_iter()
@@ -133,7 +133,7 @@ pub(crate) fn read_leaf_sample(
         .map(|(at, column)| (column.as_str(), at))
         .collect();
     let mut sample: Vec<Vec<Option<Vec<u8>>>> = vec![Vec::new(); columns.len()];
-    for_each_row(path, max_rows, |row| {
+    visit_rows(path, max_rows, |row| {
         let mut cells = vec![None; columns.len()];
         for (name, field) in row.get_column_iter() {
             collect_leaf(name, field, "", &index, &mut cells);
@@ -186,7 +186,7 @@ pub(crate) fn read_typed_sample(
 ) -> Result<TypedSample, Error> {
     let mut sample = TypedSample::default();
     let mut kinds: Vec<Option<Kind>> = Vec::new();
-    for_each_row(path, max_rows, |row| {
+    visit_rows(path, max_rows, |row| {
         if sample.columns.is_empty() {
             sample.columns = row
                 .get_column_iter()
