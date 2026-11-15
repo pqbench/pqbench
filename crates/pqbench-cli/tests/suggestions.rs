@@ -21,6 +21,13 @@ fn uuid(value: u64) -> String {
     )
 }
 
+/// A distinct 32-hex-digit string: unique like a UUID, but not UUID text.
+fn hex32(value: u64) -> String {
+    let high = mix(value);
+    let low = mix(value.wrapping_mul(0xbf58_476d_1ce4_e5b9));
+    format!("{high:016x}{low:016x}")
+}
+
 /// A deterministic 64-bit mixing function, so the fixture's UUIDs are random
 /// enough that text and binary compress on their own terms.
 fn mix(mut value: u64) -> u64 {
@@ -38,8 +45,8 @@ fn temporary(name: &str) -> PathBuf {
     directory
 }
 
-/// Write a one-column UUID text file, compressed with zstd.
-fn write_uuids(path: &Path, values: &[String], dictionary: bool) {
+/// Write a one-column text file, compressed with zstd.
+fn write_values(path: &Path, values: &[String], dictionary: bool, row_group_size: usize) {
     let rows: Vec<Vec<Value>> = values
         .iter()
         .map(|value| vec![Value::Bytes(value.as_bytes().to_vec())])
@@ -56,7 +63,7 @@ fn write_uuids(path: &Path, values: &[String], dictionary: bool) {
         encoding: None,
         page_size: None,
         sorting_columns: Vec::new(),
-        row_group_size: 0,
+        row_group_size,
     };
     let bytes = write_parquet(&columns, &rows, &options).expect("write fixture");
     std::fs::write(path, bytes).expect("write fixture file");
@@ -111,7 +118,7 @@ fn unique_uuid_text_is_reported_with_savings() {
     let directory = temporary("unique");
     let path = directory.join("data.parquet");
     let values: Vec<String> = (0..100_000).map(uuid).collect();
-    write_uuids(&path, &values, false);
+    write_values(&path, &values, false, 0);
 
     let records = suggestions(&path);
     assert_eq!(records.len(), 1, "{records:?}");
@@ -131,7 +138,7 @@ fn repeated_uuid_text_is_priced_below_the_binary_floor() {
     let directory = temporary("repeated");
     let path = directory.join("data.parquet");
     let values: Vec<String> = (0..200_000).map(|value| uuid(value / 2)).collect();
-    write_uuids(&path, &values, true);
+    write_values(&path, &values, true, 0);
 
     let records = suggestions(&path);
     assert_eq!(records.len(), 1, "{records:?}");
@@ -150,7 +157,40 @@ fn non_uuid_text_is_not_reported() {
     let directory = temporary("not-uuid");
     let path = directory.join("data.parquet");
     let values: Vec<String> = (0..10_000).map(|value| format!("value-{value}")).collect();
-    write_uuids(&path, &values, false);
+    write_values(&path, &values, false, 0);
+
+    let records = suggestions(&path);
+    assert!(records.is_empty(), "{records:?}");
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn dictionary_on_unique_strings_is_reported() {
+    let directory = temporary("dictionary-unique");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..200_000).map(hex32).collect();
+    write_values(&path, &values, true, 20_000);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let finding = &records[0];
+    assert_eq!(finding["rule"], "dictionary-unique");
+    assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    assert!(
+        finding["message"].as_str().unwrap().contains("prices at"),
+        "{finding}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn dictionary_on_repeated_strings_is_not_reported() {
+    let directory = temporary("dictionary-repeated");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..100_000).map(|value| hex32(value % 100)).collect();
+    write_values(&path, &values, true, 20_000);
 
     let records = suggestions(&path);
     assert!(records.is_empty(), "{records:?}");
