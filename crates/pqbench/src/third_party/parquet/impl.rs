@@ -4,6 +4,7 @@
 //! crate exposes is [`super::api::default_parser`]. Tool code never
 //! imports `parquet` directly.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -21,8 +22,8 @@ use parquet::record::Field;
 use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
-    Sample, TypedColumn, TypedSample, Value, WriteOptions,
+    ColumnChunk, ColumnMass, Error, FileMass, Kind, LeafSample, MetadataParser, Page, PageParser,
+    ParquetFile, Sample, TypedColumn, TypedSample, Value, WriteOptions,
 };
 
 /// The parquet-rs-backed page parser.
@@ -104,6 +105,71 @@ fn field_text(field: &Field) -> Option<String> {
         Field::Str(value) => Some(value.clone()),
         Field::Bytes(value) => Some(String::from_utf8_lossy(value.data()).into_owned()),
         other => Some(other.to_string()),
+    }
+}
+
+/// Decode up to `max_rows` leading rows of the named leaf columns as bytes.
+pub(crate) fn read_leaf_sample(
+    path: &Path,
+    columns: &[String],
+    max_rows: Option<usize>,
+) -> Result<LeafSample, Error> {
+    let index: HashMap<&str, usize> = columns
+        .iter()
+        .enumerate()
+        .map(|(at, column)| (column.as_str(), at))
+        .collect();
+    let file = std::fs::File::open(path).map_err(Error::Io)?;
+    let reader = SerializedFileReader::new(file)?;
+    let mut sample = LeafSample {
+        columns: columns.to_vec(),
+        rows: Vec::new(),
+    };
+    for row in reader.get_row_iter(None)? {
+        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
+            break;
+        }
+        let row = row?;
+        let mut cells = vec![None; columns.len()];
+        for (name, field) in row.get_column_iter() {
+            collect_leaf(name, field, "", &index, &mut cells);
+        }
+        sample.rows.push(cells);
+    }
+    Ok(sample)
+}
+
+/// Walk one decoded field, filling the requested leaf paths.
+fn collect_leaf(
+    name: &str,
+    field: &Field,
+    prefix: &str,
+    index: &HashMap<&str, usize>,
+    cells: &mut [Option<Vec<u8>>],
+) {
+    let path = if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    };
+    match field {
+        Field::Group(row) => {
+            for (child, field) in row.get_column_iter() {
+                collect_leaf(child, field, &path, index, cells);
+            }
+        }
+        Field::Str(value) => {
+            if let Some(&at) = index.get(path.as_str()) {
+                cells[at] = Some(value.as_bytes().to_vec());
+            }
+        }
+        Field::Bytes(value) => {
+            if let Some(&at) = index.get(path.as_str()) {
+                cells[at] = Some(value.data().to_vec());
+            }
+        }
+        Field::Null | Field::ListInternal(_) | Field::MapInternal(_) => {}
+        _ => {}
     }
 }
 
