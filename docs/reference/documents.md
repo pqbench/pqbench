@@ -15,10 +15,11 @@ schema.
 | `Catalog` | `catalogs/{catalog}` | [`list catalogs`](cli.md#pqbench-list-catalogs), [`get catalog`](cli.md#pqbench-get-catalog) | `get catalog`, `list schemas` |
 | `Schema` | `catalogs/{catalog}/schemas/{schema}` | [`list schemas`](cli.md#pqbench-list-schemas), [`get schema`](cli.md#pqbench-get-schema) | `get schema`, `list tables` |
 | `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table) | `get table`, `list files` |
-| `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass` |
+| `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass`, `list suggestions` |
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |
+| `Suggestion` | `blobs/{service}/{locator}/columns/{column}/suggestions/{rule}` | [`list suggestions`](cli.md#pqbench-list-suggestions) | humans / scripts |
 
 `profile` adds the CLI's `id` (the input path) to each `ColumnProfile` row;
 see [Profile](profile.md). The `Bytemass` value is nested in `Column.mass`; it
@@ -74,10 +75,13 @@ stage streams and never holds the table.
 Each kept `TableFile` records the probability it was kept with as
 `sample_rate`; `bytemass` copies it, with the file's `size_bytes` and
 `storage_class`, onto every `Column` (the `Blob` carries it too), so a column
-prices its own storage. Scale
+prices its own storage, and `list suggestions` copies it, with the file's
+`size_bytes`, onto every `Suggestion`, so a column's potential saving scales
+the same way. Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
 `uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
-`null_count`, `row_group_count` — and recompute the ratios (`bytes_per_value`,
+`null_count`, `row_group_count`, a `Suggestion`'s `savings_bytes` — and
+recompute the ratios (`bytes_per_value`,
 `bytes_per_row`, `compression_ratio`, `null_fraction`, `dictionary_fraction`)
 from the weighted sums; `distinct_count` is not additive. A sum over the kept
 records alone is the sample, not the table — the coverage line on standard

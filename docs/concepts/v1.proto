@@ -365,6 +365,41 @@ message ColumnProfile {
   string monotonic = 20;
 }
 
+// A storage suggestion for a column: one rule's measured estimate of the
+// bytes a representation change would save. `list suggestions` emits this
+// record from `pqbench::lint::Suggestion`; the fields below are the wire
+// contract.
+message Suggestion {
+  // Format:
+  // blobs/{service}/{locator}/columns/{column}/suggestions/{rule}
+  string name = 1;
+
+  // The stable rule id.
+  string rule = 2;
+
+  // The column's dotted leaf path.
+  string column = 3;
+
+  // The table whose file was measured, when measured through a table file.
+  string table = 4;
+
+  // The probability the table file naming this column was kept with, when a
+  // `sample files` stage chose it. Absent means unsampled, weight one.
+  optional double sample_rate = 5;
+
+  // The size in bytes of the file this column was measured in, when known.
+  int64 size_bytes = 6;
+
+  // One-line explanation, with the measured bytes per value.
+  string message = 7;
+
+  // The change that recovers the bytes.
+  string remedy = 8;
+
+  // Estimated bytes saved by the change.
+  int64 savings_bytes = 9;
+}
+
 // One frequent value in a column profile.
 message ValueCount {
   string value = 1;
