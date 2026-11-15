@@ -16,6 +16,11 @@ pub struct Blob {
     /// The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_class: Option<String>,
+    /// The writer that produced the file, as its footer names it
+    /// (`created_by`), e.g. `parquet-mr version 1.13.1`. Absent when the
+    /// footer names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<String>,
     /// Row groups in the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_group_count: Option<u64>,

@@ -196,6 +196,10 @@ message Blob {
   // The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
   string storage_class = 3;
 
+  // The writer that produced the file, as its footer names it (`created_by`),
+  // e.g. `parquet-mr version 1.13.1`. Absent when the footer names none.
+  string writer = 7;
+
   int64 row_group_count = 4;
 
   int64 column_count = 5;
@@ -307,6 +311,10 @@ message Bytemass {
   repeated string data_encodings = 15;
   bool dictionary = 6;
   int64 dictionary_bytes = 16;
+
+  // Every chunk carries a page index (a column index and an offset index), so
+  // the column can be pruned at page granularity.
+  bool page_index = 20;
   int64 unencoded_bytes = 17;
   int64 value_count = 7;
   int64 null_count = 8;

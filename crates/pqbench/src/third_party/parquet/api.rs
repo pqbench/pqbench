@@ -199,6 +199,8 @@ pub struct ColumnMass {
     /// Bytes from the dictionary page offset to the first data page, when a
     /// dictionary page is present.
     pub dictionary_bytes: Option<u64>,
+    /// Every chunk carries a page index (a column index and an offset index).
+    pub page_index: bool,
     /// Variable-length value bytes before encoding, when the writer recorded them.
     pub unencoded_bytes: Option<u64>,
     /// Footer `null_count`, when statistics exist.
@@ -219,6 +221,8 @@ pub struct ColumnMass {
 pub struct FileMass {
     /// The file's size in bytes.
     pub size_bytes: u64,
+    /// The writer the footer names (`created_by`), when it names one.
+    pub writer: Option<String>,
     /// Number of rows in the file.
     pub row_count: u64,
     /// Number of row groups.

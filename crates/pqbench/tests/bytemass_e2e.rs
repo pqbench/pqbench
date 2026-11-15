@@ -62,6 +62,41 @@ async fn reports_the_dictionary_page_and_data_encoding() {
 }
 
 #[tokio::test]
+async fn reports_the_page_index_and_the_writer() {
+    let quickstart = format!(
+        "{}/../../examples/quickstart.parquet",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let measured =
+        pqbench::bytemass::measure_file(common::lake(), &v1::name::blob_name(&quickstart))
+            .await
+            .unwrap();
+    assert!(
+        measured
+            .blob
+            .writer
+            .as_deref()
+            .is_some_and(|writer| writer.contains("parquet-rs")),
+        "the footer names its writer"
+    );
+    assert!(
+        measured
+            .columns
+            .iter()
+            .all(|column| column.mass.as_ref().is_some_and(|mass| mass.page_index)),
+        "parquet-rs records page indexes"
+    );
+
+    let unindexed = measure(&fixture("small_snappy.parquet")).await;
+    assert!(
+        unindexed
+            .iter()
+            .all(|column| !column.mass.as_ref().expect("a measured column").page_index),
+        "parquet-cpp records no page indexes"
+    );
+}
+
+#[tokio::test]
 async fn treats_brackets_as_literal_path_characters() {
     let directory = tempfile::tempdir().unwrap();
     let literal = directory.path().join("archive[1].parquet");

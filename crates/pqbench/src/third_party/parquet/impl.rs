@@ -589,6 +589,8 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
                 num_values: u64::try_from(meta.num_values()).unwrap_or(0),
                 dictionary: dictionary_page_offset.is_some(),
                 dictionary_bytes,
+                page_index: meta.column_index_offset().is_some()
+                    && meta.offset_index_offset().is_some(),
                 unencoded_bytes: meta
                     .unencoded_byte_array_data_bytes()
                     .and_then(|bytes| u64::try_from(bytes).ok()),
@@ -601,6 +603,7 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
     }
     FileMass {
         size_bytes,
+        writer: metadata.file_metadata().created_by().map(str::to_owned),
         row_count,
         row_group_count: metadata.row_groups().len(),
         columns,

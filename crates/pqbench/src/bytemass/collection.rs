@@ -23,11 +23,13 @@ pub(super) async fn measure_file(lake: &Lake, name: &str) -> Result<MeasuredFile
         .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
     let (stat, mass) = read_input(lake, &uri).await?;
     let row_group_count = mass.row_group_count as u64;
+    let writer = mass.writer.clone();
     let columns = columns(name, mass)?;
     let blob = v1::Blob {
         name: name.to_string(),
         size_bytes: Some(stat.size_bytes),
         storage_class: stat.storage_class,
+        writer,
         row_group_count: Some(row_group_count),
         column_count: Some(columns.len() as u64),
         ..v1::Blob::default()
@@ -72,6 +74,7 @@ fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
     let uncompressed_bytes = chunks.iter().map(|chunk| chunk.uncompressed_bytes).sum();
     let value_count = chunks.iter().map(|chunk| chunk.num_values).sum();
     let dictionary = chunks.iter().any(|chunk| chunk.dictionary);
+    let page_index = chunks.iter().all(|chunk| chunk.page_index);
     let encodings = union(chunks.iter().map(|chunk| chunk.encodings.as_slice()));
     let data_encodings = known_union(chunks.iter().map(|chunk| chunk.data_encodings.as_deref()));
     let null_count = known_sum(chunks.iter().map(|chunk| chunk.null_count));
@@ -92,6 +95,7 @@ fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
         data_encodings,
         dictionary,
         dictionary_bytes,
+        page_index,
         unencoded_bytes,
         value_count: Some(value_count),
         null_count,
