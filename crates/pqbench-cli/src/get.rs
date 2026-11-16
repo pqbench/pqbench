@@ -22,6 +22,8 @@ enum GetResource {
     Schema(crate::schema::NameArgs),
     /// Read one table's record (`CATALOG.SCHEMA.TABLE`)
     Table(crate::table::get::GetArgs),
+    /// Verify one column's potential suggestion (Suggestion refs on stdin)
+    Suggestion(crate::lint::VerifyArgs),
 }
 
 impl GetArgs {
@@ -32,16 +34,28 @@ impl GetArgs {
             GetResource::Catalog(_) => "get catalog",
             GetResource::Schema(_) => "get schema",
             GetResource::Table(_) => "get table",
+            GetResource::Suggestion(_) => "get suggestion",
         }
+    }
+
+    /// Whether the resource needs `PQB_ENDPOINT`. Suggestions measure a local
+    /// file, like `list suggestions`.
+    pub(crate) fn requires_endpoint(&self) -> bool {
+        !matches!(&self.resource, GetResource::Suggestion(_))
     }
 }
 
 /// Read one resource: the walk's read verb.
-pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &GetArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    lake: &pqbench::Lake,
+    daemon: &crate::daemon::Daemon,
+    args: &GetArgs,
+) -> Result<(), CliError> {
     match &args.resource {
         GetResource::Metastore(args) => crate::metastore::get::run(daemon, args).await,
         GetResource::Catalog(args) => crate::catalog::get::run(daemon, args).await,
         GetResource::Schema(args) => crate::schema::get::run(daemon, args).await,
         GetResource::Table(args) => crate::table::get::run(daemon, args).await,
+        GetResource::Suggestion(args) => crate::lint::verify(lake, args).await,
     }
 }

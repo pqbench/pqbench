@@ -24,7 +24,7 @@ enum ListCollection {
     Files(crate::file::list::ListArgs),
     /// List a file's columns and their byte masses (Table-file refs on stdin)
     Columns(crate::bytemass::BytemassArgs),
-    /// List storage suggestions for each local blob (Table-file refs on stdin)
+    /// List potential storage suggestions for each local blob (Table-file refs on stdin)
     Suggestions(crate::lint::SuggestionsArgs),
 }
 

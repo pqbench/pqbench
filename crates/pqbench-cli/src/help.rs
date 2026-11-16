@@ -44,7 +44,7 @@ Examples:
   pqbench lz file.bin -c zstd@3 --samples 10
   pqbench compression data.parquet --per-column
   pqbench profile data.parquet --columns 'text' --top 5
-  pqbench table-file data.parquet | pqbench list suggestions
+  pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
   pqbench skill parquet-advisor
   pqbench list catalogs | pqbench format
 
@@ -58,7 +58,7 @@ Documents:
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
   ColumnProfile          one column's profile (profile | format)
-  Suggestion             one storage suggestion (list suggestions)
+  Suggestion             one storage suggestion (list suggestions / get suggestion)
   pqbench.skill          name + description (pqbench skill with no args)
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
@@ -151,13 +151,15 @@ Read one resource of the walk, by type:
              properties), from a Schema ref
   table      one table's record (format, snapshot_version, declared_columns,
              partition_columns, properties), from a Table ref
+  suggestion one potential suggestion measured against its control, from a
+             Suggestion ref (a local file, no endpoint)
 
 The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
-PQB_TABLE_FORMAT; a `get` reads a catalog, so it needs an endpoint. `get`
-reads the matching resource records on standard input — one per line — so it
-enriches a listing: `pqbench list catalogs | pqbench get catalog`. A JSON
-record names the resource: `echo '\"dbx_samples.nyctaxi\"' | pqbench
-get schema`.
+PQB_TABLE_FORMAT; the catalog resources need an endpoint, while `get
+suggestion` measures a local file. `get` reads the matching resource records
+on standard input — one per line — so it enriches a listing: `pqbench list
+catalogs | pqbench get catalog`. A JSON record names the resource: `echo
+'\"dbx_samples.nyctaxi\"' | pqbench get schema`.
 
 Unity REST serves /schemas/{full_name} and /tables/{full_name}; the catalog's
 declared columns and properties are merged over the Delta log, which is read
@@ -168,7 +170,7 @@ level reads loadTable, whose metadata is inline, so no storage read runs. A
 table loadTable refuses as not Iceberg compatible falls back to the Unity
 record and its own log (Delta wins UniForm), as the Unity dialect reads it.
 
-The emitted record carries no credentials. Each storage-reading stage resolves
+The emitted record carries no credentials. Each catalog-backed stage resolves
 the table's vended lease itself — through the daemon when one is running, else
 directly from the catalog — so a table the catalog will not vend for is dropped
 there with the cause, and the level exits non-zero.
@@ -182,6 +184,7 @@ Examples:
   echo '\"dbx_samples.nyctaxi\"' | pqbench list tables | pqbench get table
   pqbench list schemas | pqbench get schema
   pqbench list tables | pqbench get table
+  pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
 
 See also:
   pqbench list --help      the walk's collections
@@ -203,8 +206,9 @@ List a collection of the walk, by name:
               TableFile line each
   columns     a file's columns and their byte masses (TableFile refs on
               standard input), one Column line each
-  suggestions the storage each local blob's values do not need (TableFile refs
-              on standard input), one Suggestion line each
+  suggestions the storage each local blob's values may not need (TableFile refs
+              on standard input), one Suggestion line each; `get suggestion`
+              measures them
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
 PQB_TABLE_FORMAT=iceberg the schema and table levels speak Iceberg REST
@@ -244,7 +248,7 @@ Examples:
   echo '\"dbx_samples.nyctaxi\"' | pqbench list tables
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench list columns
-  pqbench table-file data.parquet | pqbench list suggestions
+  pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
 
 See also:
   pqbench get --help          read one resource

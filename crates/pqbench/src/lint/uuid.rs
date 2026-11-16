@@ -2,56 +2,53 @@
 
 use crate::third_party::parquet::api::Value;
 
-use super::price::price_bytes;
-use super::{ColumnSample, Error, Suggestion};
+use super::control::{self, Measurement};
+use super::{ColumnSample, Error, Finding};
 
 /// The rule id a suggestion carries.
 pub const UUID_TEXT_RULE: &str = "uuid-text";
 
-/// The suggestion this column earns when every sampled non-null value is a
-/// canonical UUID and the same values as 16-byte binary price smaller.
-pub(super) fn suggest(sample: &ColumnSample<'_>) -> Result<Option<Suggestion>, Error> {
-    let uuids: Option<Vec<Option<[u8; 16]>>> = sample
+/// The finding this column earns when every sampled non-null value is a
+/// canonical UUID. The control prices the same values as 16-byte binary.
+pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
+    let uuids: Vec<Option<[u8; 16]>> = sample
         .cells
         .iter()
         .map(|cell| match *cell {
             Some(bytes) => parse_uuid(bytes).map(Some),
             None => Some(None),
         })
-        .collect();
-    let Some(uuids) = uuids else {
-        return Ok(None);
-    };
-    let rows: Vec<Vec<Value>> = uuids
-        .iter()
-        .map(|uuid| {
-            vec![match uuid {
-                Some(bytes) => Value::Bytes(bytes.to_vec()),
-                None => Value::Null,
-            }]
-        })
-        .collect();
-    let binary_bpv = price_bytes(&rows, &sample.rewrite)? as f64 / sample.non_null as f64;
-    let Some(savings) = sample.saving(binary_bpv) else {
-        return Ok(None);
-    };
+        .collect::<Option<_>>()?;
     let annotated = uuids
         .iter()
         .flatten()
         .all(|bytes| (1..=8).contains(&(bytes[6] >> 4)) && (8..=11).contains(&(bytes[8] >> 4)));
-    Ok(Some(sample.suggestion(
-        UUID_TEXT_RULE,
-        format!(
-            "UUID text at {:.2} B/value; a 16-byte binary sample prices at {binary_bpv:.2} B/value",
-            sample.text_bpv
-        ),
-        if annotated {
+    Some(Finding {
+        message: format!("UUID text at {:.2} B/value", sample.text_bpv),
+        remedy: if annotated {
             "store as BINARY(16) with the UUID logical type".to_string()
         } else {
             "store as BINARY(16)".to_string()
         },
-        savings,
-    )))
+        measure,
+    })
+}
+
+/// Price the text arm against the binary arm, both written by the same writer
+/// at the file's codec and level.
+fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
+    let rows: Option<Vec<Vec<Value>>> = sample
+        .cells
+        .iter()
+        .map(|cell| match *cell {
+            Some(bytes) => parse_uuid(bytes).map(|uuid| vec![Value::Bytes(uuid.to_vec())]),
+            None => Some(vec![Value::Null]),
+        })
+        .collect();
+    let Some(rows) = rows else {
+        return Ok(None);
+    };
+    control::compare(sample, &sample.text_rows(), &rows, false, None)
 }
 
 /// Parse canonical 36-byte UUID text into its 16 big-endian bytes.

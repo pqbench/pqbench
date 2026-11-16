@@ -4,8 +4,8 @@
 ///
 /// A suggestion's remedy names a setting, so it has to be a setting the
 /// writing application actually has: parquet-mr takes per-column keys,
-/// pyarrow and parquet-rs take per-column writer options, and Photon exposes
-/// no per-column setting at all.
+/// pyarrow and parquet-rs take per-column writer options, and whether Photon
+/// forwards the parquet-mr keys is unverified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Writer {
     /// Databricks Photon.

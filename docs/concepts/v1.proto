@@ -373,10 +373,10 @@ message ColumnProfile {
   string monotonic = 20;
 }
 
-// A storage suggestion for a column: one rule's measured estimate of the
-// bytes a representation change would save. `list suggestions` emits this
-// record from `pqbench::lint::Suggestion`; the fields below are the wire
-// contract.
+// A storage suggestion for a column. `list suggestions` emits a potential (no
+// `verified`); `get suggestion` measures it against a control written by the
+// same writer at the same codec and level, then sets `verified` and, on a win,
+// `savings_bytes`. The fields below are the wire contract.
 message Suggestion {
   // Format:
   // blobs/{service}/{locator}/columns/{column}/suggestions/{rule}
@@ -402,14 +402,24 @@ message Suggestion {
   // the remedy can be read without the file record.
   string writer = 10;
 
-  // One-line explanation, with the measured bytes per value.
+  // One-line explanation: the detection evidence, then the control's verdict.
   string message = 7;
 
   // The change that recovers the bytes, in the terms of the file's writer.
   string remedy = 8;
 
-  // Estimated bytes saved by the change.
-  int64 savings_bytes = 9;
+  // Whether the controlled rewrite confirms a saving. Absent on a potential
+  // from `list suggestions`; true when `get suggestion` measured a win; false
+  // when it measured none.
+  optional bool verified = 11;
+
+  // Estimated bytes saved, conservative across compression levels. Present
+  // only when `verified` is true.
+  optional int64 savings_bytes = 9;
+
+  // Leading rows the detection sampled, so `get suggestion` measures the same
+  // values. Absent means the default.
+  optional int64 sample_row_count = 12;
 }
 
 // One frequent value in a column profile.
