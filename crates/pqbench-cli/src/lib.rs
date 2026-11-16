@@ -198,7 +198,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &daemon, &args).await,
-        Command::Get(args) => get::run(&daemon, &args).await,
+        Command::Get(args) => get::run(&lake, &daemon, &args).await,
         Command::Format(args) => format::run(&args).await,
         Command::TableFile(args) => table_file::run(&args).await,
         Command::List(args) => list::run(&lake, &daemon, &args).await,
@@ -236,7 +236,7 @@ impl Command {
     /// catalog; a storage-only command (`list files`, `bytemass`, …) does not.
     fn requires_endpoint(&self) -> bool {
         match self {
-            Command::Get(_) => true,
+            Command::Get(args) => args.requires_endpoint(),
             Command::Daemon(args) => args.requires_endpoint(),
             Command::List(args) => args.requires_endpoint(),
             _ => false,

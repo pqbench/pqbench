@@ -1,51 +1,40 @@
-//! `dictionary-unique`: a dictionary page on nearly-unique values priced
-//! without it.
+//! `dictionary-unique`: a dictionary page on nearly-unique values, priced
+//! against the same writer with the dictionary off.
 
 use std::collections::HashSet;
 
-use crate::third_party::parquet::api::Value;
-
-use super::price::price_bytes;
+use super::control::{self, Measurement};
 use super::writer::Writer;
-use super::{ColumnSample, Error, Suggestion};
+use super::{ColumnSample, Error, Finding};
 
 /// The rule id a suggestion carries.
 pub const DICTIONARY_UNIQUE_RULE: &str = "dictionary-unique";
 
 /// Values are nearly unique when at least this fraction of the sampled
 /// non-null values are distinct.
-const UNIQUE_FRACTION: f64 = 0.98;
+const UNIQUE_FRACTION: f64 = 0.5;
 
-/// The suggestion this column earns when its chunk carries a dictionary page
-/// and the same sample without it prices smaller.
-pub(super) fn suggest(sample: &ColumnSample<'_>) -> Result<Option<Suggestion>, Error> {
+/// The finding this column earns when its chunk carries a dictionary page and
+/// the values are nearly unique.
+pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     if !sample.mass.dictionary || unique_fraction(&sample.cells) < UNIQUE_FRACTION {
-        return Ok(None);
+        return None;
     }
-    let rows: Vec<Vec<Value>> = sample
-        .cells
-        .iter()
-        .map(|cell| {
-            vec![match *cell {
-                Some(bytes) => Value::Bytes(bytes.to_vec()),
-                None => Value::Null,
-            }]
-        })
-        .collect();
-    let plain_bpv = price_bytes(&rows, &sample.rewrite)? as f64 / sample.non_null as f64;
-    let Some(savings) = sample.saving(plain_bpv) else {
-        return Ok(None);
-    };
-    Ok(Some(sample.suggestion(
-        DICTIONARY_UNIQUE_RULE,
-        format!(
-            "a dictionary on nearly-unique values at {:.2} B/value; without it the sample prices \
-             at {plain_bpv:.2} B/value",
+    Some(Finding {
+        message: format!(
+            "a dictionary on nearly-unique values at {:.2} B/value",
             sample.text_bpv
         ),
-        remedy(sample.writer_kind(), sample.leaf),
-        savings,
-    )))
+        remedy: remedy(sample.writer_kind(), sample.leaf),
+        measure,
+    })
+}
+
+/// Price the dictionary arm against the same values with the dictionary off,
+/// both written by the same writer at the file's codec and level.
+fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
+    let rows = sample.text_rows();
+    control::compare(sample, &rows, &rows, false, None)
 }
 
 /// The setting that disables one column's dictionary, in the writer's terms.
@@ -60,11 +49,10 @@ fn remedy(writer: Writer, leaf: &str) -> String {
         Writer::ArrowRs => {
             format!("disable the dictionary for this column: set_column_dictionary_enabled({leaf:?}, false)")
         }
-        Writer::Photon => {
-            "write this column with a writer that can disable its dictionary: Photon has no \
-             per-column setting"
-                .to_string()
-        }
+        Writer::Photon => format!(
+            "disable the dictionary for this column: \
+             spark.hadoop.parquet.enable.dictionary#{leaf}=false (Photon forwarding unverified)"
+        ),
         Writer::Other => "disable the dictionary for this column at write".to_string(),
     }
 }
@@ -92,7 +80,8 @@ mod tests {
             "disable the dictionary for this column: set_column_dictionary_enabled(\"id\", false)"
         );
         assert!(remedy(Writer::ArrowCpp, "id").contains("use_dictionary"));
-        assert!(remedy(Writer::Photon, "id").contains("no per-column setting"));
+        assert!(remedy(Writer::Photon, "id").contains("parquet.enable.dictionary#id=false"));
+        assert!(remedy(Writer::Photon, "id").contains("unverified"));
         assert!(remedy(Writer::Other, "id").contains("at write"));
     }
 }

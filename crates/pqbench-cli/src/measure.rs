@@ -8,6 +8,17 @@ use pqbench::{bytemass, v1};
 
 use crate::CliError;
 
+/// Measure one blob: its storage facts and columns, with no table context.
+///
+/// # Errors
+/// Fails when the blob name is not a blob name or its footer cannot be read.
+pub(crate) async fn blob(
+    lake: &pqbench::Lake,
+    name: &str,
+) -> Result<bytemass::MeasuredFile, CliError> {
+    Ok(bytemass::measure_file(lake, name).await?)
+}
+
 /// Measure the file a table-file record names, enriched for the walk.
 ///
 /// # Errors
@@ -33,7 +44,7 @@ pub(crate) async fn table_file(
     let env = daemon.resolve_env(&table).await?;
     let credentials = v1::Credentials::from_env(&env);
     let lake = lake.with_lease(Some(&credentials));
-    let measured = bytemass::measure_file(&lake, name).await?;
+    let measured = blob(&lake, name).await?;
     let mut blob = measured.blob;
     let mut columns = measured.columns;
     blob.sample_rate = file.sample_rate;

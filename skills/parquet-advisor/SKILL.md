@@ -31,7 +31,7 @@ $ pqb skill parquet-advisor recipes | head -1
 | L0 footer | `pqb table-file FILE | pqb bytemass` | per column: compressed/uncompressed bytes, codec, data encoding, dictionary bytes, value count, null fraction, first/last value, bytes per value, bytes per row, compression ratio | cheap (footer only) |
 | Table files | `cat TABLE.ndjson \| pqb ls files` | the table's active files (path, blob, size) | cheap (log only) |
 | L1 columns | `pqb profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
-| L1 suggestions | `pqb table-file FILE \| pqb list suggestions` | per column: rule, message, remedy, savings_bytes — a measured rewrite estimate (binary UUIDs, dictionary off) on the first 8192 rows | decode |
+| L1 suggestions | `pqb table-file FILE \| pqb list suggestions \| pqb get suggestion` | per column: rule, message, remedy, verified, savings_bytes — a potential rewrite, then its controlled estimate (binary UUIDs, dictionary off) on the first 8192 rows | decode |
 
 Not in the CLI (do not invent measurements): ALP encoding, page/min/max
 overlap, JSON-explode rewrites, pairwise/locality measures, and pattern
@@ -48,8 +48,10 @@ unverified).
 2. **Column facts.** `pqb profile data.parquet --rows first:8192`.
    Pass the same local file, or a file `list files` named from a table.
 3. **Measured suggestions.** `pqb table-file data.parquet | pqb list
-   suggestions` prices rewrites on that sample (binary UUIDs, dictionary off);
-   its `savings_bytes` is an estimate, not a writer measurement.
+   suggestions | pqb get suggestion` detects rewrites on that sample (binary
+   UUIDs, dictionary off) and measures each against a control written by the
+   same writer at the same codec and level; `verified` says whether the
+   control confirms, and only then is `savings_bytes` present.
 4. **Hypotheses** from the facts (see the table below).
 5. **Recipes** from the hypotheses: write/ingest settings, table DDL,
    compression level. See [recipes.md](recipes.md) (`pqb skill
@@ -64,8 +66,8 @@ Prioritize `optimization_value ~= byte_mass * expected_improvement`.
 | Finding | Hypothesis | Change to try |
 | --- | --- | --- |
 | `physical_kind` string, but `top_values` all look numeric | wrong physical type | cast the column to int64/double at ingest |
-| `list suggestions` `rule=uuid-text` | 36-byte UUID text | binary 16 / UUID logical type at ingest; the estimate is measured |
-| `list suggestions` `rule=dictionary-unique` | a dictionary page on nearly-unique values | disable the dictionary for that column; the suggestion's `remedy` names the setting for the file's `writer` (Photon has none); the estimate is measured |
+| `get suggestion` `rule=uuid-text` verified | 36-byte UUID text | binary 16 / UUID logical type at ingest; the estimate is measured |
+| `get suggestion` `rule=dictionary-unique` verified | a dictionary page on nearly-unique values | disable the dictionary for that column; the suggestion's `remedy` names the setting for the file's `writer` (Photon forwarding is unverified); the estimate is measured |
 | `ndv <= 32` or low `ndv_ratio` with non-trivial mass | dictionary + low-cardinality sort key | enable the dictionary; sort by the column |
 | `dictionary: false` on a low-NDV column in bytemass | dictionary was off at write | enable the dictionary |
 | `monotonic` increasing, `physical_kind` integer | delta encoding / keep time order | delta encoding; keep time order |

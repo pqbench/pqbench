@@ -19,7 +19,7 @@ schema.
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |
-| `Suggestion` | `blobs/{service}/{locator}/columns/{column}/suggestions/{rule}` | [`list suggestions`](cli.md#pqbench-list-suggestions) | humans / scripts |
+| `Suggestion` | `blobs/{service}/{locator}/columns/{column}/suggestions/{rule}` | [`list suggestions`](cli.md#pqbench-list-suggestions), [`get suggestion`](cli.md#pqbench-get-suggestion) | `get suggestion`, humans / scripts |
 
 `profile` adds the CLI's `id` (the input path) to each `ColumnProfile` row;
 see [Profile](profile.md). The `Bytemass` value is nested in `Column.mass`; it
@@ -78,8 +78,9 @@ Each kept `TableFile` records the probability it was kept with as
 prices its own storage, and `list suggestions` copies it, with the file's
 `size_bytes`, onto every `Suggestion`, so a column's potential saving scales
 the same way. `bytemass` also records the footer's `created_by` as the blob's
-`writer`, and `list suggestions` copies that onto each suggestion, so its
-`remedy` matches what the file's writer can actually change. Scale
+`writer`, and the suggestion copies that, so its `remedy` matches what the
+file's writer can actually change; `get suggestion` writes only the verdict
+(`verified`, `savings_bytes`). Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
 `uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
 `null_count`, `row_group_count`, a `Suggestion`'s `savings_bytes` — and

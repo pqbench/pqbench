@@ -69,25 +69,26 @@ fn write_values(path: &Path, values: &[String], dictionary: bool, row_group_size
     std::fs::write(path, bytes).expect("write fixture file");
 }
 
-/// Feed one table-file record to `list suggestions` and return its NDJSON.
-fn suggestions(path: &Path) -> Vec<Json> {
+/// Run a command with an NDJSON standard input and return its NDJSON output.
+fn run(args: &[&str], input: &str) -> Vec<Json> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pqbench"))
-        .args(["list", "suggestions"])
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("run pqbench list suggestions");
+        .expect("run pqbench");
     child
         .stdin
         .take()
         .expect("stdin")
-        .write_all(crate::common::table_file(path.to_str().expect("utf-8 path")).as_bytes())
-        .expect("write table file");
+        .write_all(input.as_bytes())
+        .expect("write input");
     let output = child.wait_with_output().expect("wait for pqbench");
     assert!(
         output.status.success(),
-        "list suggestions failed: {}",
+        "{} failed: {}",
+        args.join(" "),
         String::from_utf8_lossy(&output.stderr)
     );
     output
@@ -98,23 +99,22 @@ fn suggestions(path: &Path) -> Vec<Json> {
         .collect()
 }
 
-/// The sampled binary price in a suggestion's message, in bytes per value.
-fn sampled_price(finding: &Json) -> f64 {
-    finding["message"]
-        .as_str()
-        .expect("message")
-        .split("prices at ")
-        .nth(1)
-        .expect("sampled price")
-        .split(' ')
-        .next()
-        .expect("price token")
-        .parse()
-        .expect("price")
+/// List a file's potential suggestions.
+fn suggestions(path: &Path) -> Vec<Json> {
+    run(
+        &["list", "suggestions"],
+        &crate::common::table_file(path.to_str().expect("utf-8 path")),
+    )
+}
+
+/// Verify candidates, as `list suggestions | get suggestion` does.
+fn verified(records: &[Json]) -> Vec<Json> {
+    let input: Vec<String> = records.iter().map(ToString::to_string).collect();
+    run(&["get", "suggestion"], &input.join("\n"))
 }
 
 #[test]
-fn unique_uuid_text_is_reported_with_savings() {
+fn unique_uuid_text_is_a_candidate_then_verified() {
     let directory = temporary("unique");
     let path = directory.join("data.parquet");
     let values: Vec<String> = (0..100_000).map(uuid).collect();
@@ -125,7 +125,8 @@ fn unique_uuid_text_is_reported_with_savings() {
     let finding = &records[0];
     assert_eq!(finding["column"], "id");
     assert_eq!(finding["rule"], "uuid-text");
-    assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    assert!(finding.get("verified").is_none(), "{finding}");
+    assert!(finding.get("savings_bytes").is_none(), "{finding}");
     assert!(finding["table"].is_string(), "{finding}");
     assert!(finding["size_bytes"].is_u64(), "{finding}");
     assert!(
@@ -135,13 +136,25 @@ fn unique_uuid_text_is_reported_with_savings() {
             .starts_with("parquet-rs"),
         "{finding}"
     );
-    assert!(sampled_price(finding) > 0.0, "{finding}");
+    assert!(finding["message"].as_str().unwrap().contains("B/value"));
+
+    let measured = verified(&records);
+    assert_eq!(measured.len(), 1, "{measured:?}");
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    assert!(
+        measured[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("smaller at zstd"),
+        "{measured:?}"
+    );
 
     let _ = std::fs::remove_dir_all(directory);
 }
 
 #[test]
-fn repeated_uuid_text_is_priced_below_the_binary_floor() {
+fn repeated_uuid_text_is_measured() {
     let directory = temporary("repeated");
     let path = directory.join("data.parquet");
     let values: Vec<String> = (0..200_000).map(|value| uuid(value / 2)).collect();
@@ -149,11 +162,20 @@ fn repeated_uuid_text_is_priced_below_the_binary_floor() {
 
     let records = suggestions(&path);
     assert_eq!(records.len(), 1, "{records:?}");
-    let finding = &records[0];
-    assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    let measured = verified(&records);
+    let finding = &measured[0];
+    assert_eq!(finding["rule"], "uuid-text");
+    match finding["verified"].as_bool() {
+        Some(true) => assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024),
+        Some(false) => assert!(finding.get("savings_bytes").is_none()),
+        None => panic!("get suggestion must verify or reject: {finding}"),
+    }
     assert!(
-        sampled_price(finding) < 16.0,
-        "repeated values should price below the 16-byte floor: {finding}"
+        finding["message"]
+            .as_str()
+            .unwrap()
+            .contains("controlled rewrite"),
+        "{finding}"
     );
 
     let _ = std::fs::remove_dir_all(directory);
@@ -173,7 +195,7 @@ fn non_uuid_text_is_not_reported() {
 }
 
 #[test]
-fn dictionary_on_unique_strings_is_reported() {
+fn dictionary_on_unique_strings_is_verified() {
     let directory = temporary("dictionary-unique");
     let path = directory.join("data.parquet");
     let values: Vec<String> = (0..200_000).map(hex32).collect();
@@ -183,7 +205,7 @@ fn dictionary_on_unique_strings_is_reported() {
     assert_eq!(records.len(), 1, "{records:?}");
     let finding = &records[0];
     assert_eq!(finding["rule"], "dictionary-unique");
-    assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    assert!(finding.get("savings_bytes").is_none(), "{finding}");
     assert!(
         finding["remedy"]
             .as_str()
@@ -191,9 +213,16 @@ fn dictionary_on_unique_strings_is_reported() {
             .contains("set_column_dictionary_enabled"),
         "{finding}"
     );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
     assert!(
-        finding["message"].as_str().unwrap().contains("prices at"),
-        "{finding}"
+        measured[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("smaller at"),
+        "{measured:?}"
     );
 
     let _ = std::fs::remove_dir_all(directory);
@@ -208,6 +237,34 @@ fn dictionary_on_repeated_strings_is_not_reported() {
 
     let records = suggestions(&path);
     assert!(records.is_empty(), "{records:?}");
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn a_stale_candidate_is_rejected_not_dropped() {
+    let directory = temporary("stale");
+    let path = directory.join("data.parquet");
+    let unique: Vec<String> = (0..200_000).map(hex32).collect();
+    write_values(&path, &unique, true, 20_000);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+
+    let repeated: Vec<String> = (0..100_000).map(|value| hex32(value % 100)).collect();
+    write_values(&path, &repeated, true, 20_000);
+
+    let measured = verified(&records);
+    assert_eq!(measured.len(), 1, "{measured:?}");
+    assert_eq!(measured[0]["verified"], false, "{measured:?}");
+    assert!(measured[0].get("savings_bytes").is_none(), "{measured:?}");
+    assert!(
+        measured[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no longer detects"),
+        "{measured:?}"
+    );
 
     let _ = std::fs::remove_dir_all(directory);
 }
