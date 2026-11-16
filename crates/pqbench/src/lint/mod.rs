@@ -11,10 +11,15 @@
 //! A new rule is a module with a `suggest` function plus one entry in
 //! [`RULES`]. The first rule that fires wins, so a column's bytes are priced
 //! once and two rules never count the same saving.
+//!
+//! A suggestion carries the file's writer, because its remedy depends on what
+//! that writer can change: parquet-mr, pyarrow, and parquet-rs take per-column
+//! options, while Photon takes none.
 
 mod dictionary;
 mod price;
 mod uuid;
+mod writer;
 
 use std::fmt;
 use std::path::Path;
@@ -23,6 +28,8 @@ use serde::Serialize;
 
 use crate::third_party::parquet::api::{read_leaf_sample, Error as ParquetError, WriteOptions};
 use crate::v1;
+
+use self::writer::Writer;
 
 pub use dictionary::DICTIONARY_UNIQUE_RULE;
 pub use uuid::UUID_TEXT_RULE;
@@ -51,10 +58,13 @@ pub struct Suggestion {
     /// The size in bytes of the file the column was measured in, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
+    /// The application that wrote the file, as the footer's `created_by` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<String>,
     /// One-line explanation, with the measured bytes per value.
     pub message: String,
-    /// The change that recovers the bytes.
-    pub remedy: &'static str,
+    /// The change that recovers the bytes, in the terms of the file's writer.
+    pub remedy: String,
     /// Estimated bytes saved by the change.
     pub savings_bytes: u64,
 }
@@ -96,7 +106,8 @@ pub(crate) struct ColumnSample<'a> {
     column: &'a v1::Column,
     mass: &'a v1::Bytemass,
     cells: Vec<Option<&'a [u8]>>,
-    writer: WriteOptions,
+    rewrite: WriteOptions,
+    writer: Option<&'a str>,
     non_null: u64,
     non_null_values: u64,
     text_bpv: f64,
@@ -110,6 +121,7 @@ impl<'a> ColumnSample<'a> {
         leaf: &'a str,
         column: &'a v1::Column,
         cells: Vec<Option<&'a [u8]>>,
+        writer: Option<&'a str>,
     ) -> Option<Self> {
         let mass = column.mass.as_ref()?;
         let compressed_bytes = mass.compressed_bytes?;
@@ -134,11 +146,17 @@ impl<'a> ColumnSample<'a> {
             column,
             mass,
             cells,
-            writer: price::write_options(mass.codec.as_deref()),
+            rewrite: price::write_options(mass.codec.as_deref()),
+            writer,
             non_null,
             non_null_values,
             text_bpv: compressed_bytes as f64 / non_null_values as f64,
         })
+    }
+
+    /// The writer this file came from, as the rules' remedies need it.
+    fn writer_kind(&self) -> Writer {
+        Writer::classify(self.writer)
     }
 
     /// The bytes a rewrite saves, when `priced_bpv` beats the on-disk rate by
@@ -156,7 +174,7 @@ impl<'a> ColumnSample<'a> {
         &self,
         rule: &'static str,
         message: String,
-        remedy: &'static str,
+        remedy: String,
         savings_bytes: u64,
     ) -> Suggestion {
         Suggestion {
@@ -166,6 +184,7 @@ impl<'a> ColumnSample<'a> {
             table: self.column.table.clone(),
             sample_rate: self.column.sample_rate,
             size_bytes: self.column.size_bytes,
+            writer: self.writer.map(ToString::to_string),
             message,
             remedy,
             savings_bytes,
@@ -182,14 +201,15 @@ const RULES: &[Rule] = &[uuid::suggest, dictionary::suggest];
 
 /// Lint one local Parquet file's measured columns.
 ///
-/// `blob` is the record's blob name, so each suggestion names the file the walk
-/// read, not the local path a caller may have copied it to.
+/// `blob` is the file's record, so each suggestion names the file the walk
+/// read, not the local path a caller may have copied it to, and its remedy
+/// matches the application that wrote the file.
 ///
 /// # Errors
 /// Fails when the sample or a rewrite encode cannot be read.
 pub fn suggestions(
     path: &Path,
-    blob: &str,
+    blob: &v1::Blob,
     columns: &[v1::Column],
     sample_rows: Option<usize>,
 ) -> Result<Vec<Suggestion>, Error> {
@@ -216,7 +236,9 @@ pub fn suggestions(
 
     for (at, (column, leaf)) in targets.iter().enumerate() {
         let cells: Vec<Option<&[u8]>> = decoded[at].iter().map(Option::as_deref).collect();
-        let Some(sample) = ColumnSample::new(blob, leaf, column, cells) else {
+        let Some(sample) =
+            ColumnSample::new(&blob.name, leaf, column, cells, blob.writer.as_deref())
+        else {
             continue;
         };
         for rule in RULES {

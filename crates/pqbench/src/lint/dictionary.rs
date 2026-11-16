@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use crate::third_party::parquet::api::Value;
 
 use super::price::price_bytes;
+use super::writer::Writer;
 use super::{ColumnSample, Error, Suggestion};
 
 /// The rule id a suggestion carries.
@@ -31,7 +32,7 @@ pub(super) fn suggest(sample: &ColumnSample<'_>) -> Result<Option<Suggestion>, E
             }]
         })
         .collect();
-    let plain_bpv = price_bytes(&rows, &sample.writer)? as f64 / sample.non_null as f64;
+    let plain_bpv = price_bytes(&rows, &sample.rewrite)? as f64 / sample.non_null as f64;
     let Some(savings) = sample.saving(plain_bpv) else {
         return Ok(None);
     };
@@ -42,9 +43,30 @@ pub(super) fn suggest(sample: &ColumnSample<'_>) -> Result<Option<Suggestion>, E
              at {plain_bpv:.2} B/value",
             sample.text_bpv
         ),
-        "disable the dictionary for this column at write",
+        remedy(sample.writer_kind(), sample.leaf),
         savings,
     )))
+}
+
+/// The setting that disables one column's dictionary, in the writer's terms.
+fn remedy(writer: Writer, leaf: &str) -> String {
+    match writer {
+        Writer::ParquetMr => format!(
+            "disable the dictionary for this column: spark.hadoop.parquet.enable.dictionary#{leaf}=false"
+        ),
+        Writer::ArrowCpp => format!(
+            "disable the dictionary for this column: leave {leaf} out of pyarrow's use_dictionary"
+        ),
+        Writer::ArrowRs => {
+            format!("disable the dictionary for this column: set_column_dictionary_enabled({leaf:?}, false)")
+        }
+        Writer::Photon => {
+            "write this column with a writer that can disable its dictionary: Photon has no \
+             per-column setting"
+                .to_string()
+        }
+        Writer::Other => "disable the dictionary for this column at write".to_string(),
+    }
 }
 
 /// The fraction of a column's sampled non-null values that are distinct.
@@ -52,4 +74,25 @@ fn unique_fraction(cells: &[Option<&[u8]>]) -> f64 {
     let values: Vec<&[u8]> = cells.iter().flatten().copied().collect();
     let distinct: HashSet<&[u8]> = values.iter().copied().collect();
     distinct.len() as f64 / values.len().max(1) as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remedy;
+    use crate::lint::writer::Writer;
+
+    #[test]
+    fn each_writer_gets_a_setting_it_has() {
+        assert_eq!(
+            remedy(Writer::ParquetMr, "id"),
+            "disable the dictionary for this column: spark.hadoop.parquet.enable.dictionary#id=false"
+        );
+        assert_eq!(
+            remedy(Writer::ArrowRs, "id"),
+            "disable the dictionary for this column: set_column_dictionary_enabled(\"id\", false)"
+        );
+        assert!(remedy(Writer::ArrowCpp, "id").contains("use_dictionary"));
+        assert!(remedy(Writer::Photon, "id").contains("no per-column setting"));
+        assert!(remedy(Writer::Other, "id").contains("at write"));
+    }
 }

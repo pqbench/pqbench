@@ -65,7 +65,7 @@ Prioritize `optimization_value ~= byte_mass * expected_improvement`.
 | --- | --- | --- |
 | `physical_kind` string, but `top_values` all look numeric | wrong physical type | cast the column to int64/double at ingest |
 | `list suggestions` `rule=uuid-text` | 36-byte UUID text | binary 16 / UUID logical type at ingest; the estimate is measured |
-| `list suggestions` `rule=dictionary-unique` | a dictionary page on nearly-unique values | disable the dictionary for that column at write; the estimate is measured |
+| `list suggestions` `rule=dictionary-unique` | a dictionary page on nearly-unique values | disable the dictionary for that column; the suggestion's `remedy` names the setting for the file's `writer` (Photon has none); the estimate is measured |
 | `ndv <= 32` or low `ndv_ratio` with non-trivial mass | dictionary + low-cardinality sort key | enable the dictionary; sort by the column |
 | `dictionary: false` on a low-NDV column in bytemass | dictionary was off at write | enable the dictionary |
 | `monotonic` increasing, `physical_kind` integer | delta encoding / keep time order | delta encoding; keep time order |

@@ -31,7 +31,7 @@ pub(super) fn suggest(sample: &ColumnSample<'_>) -> Result<Option<Suggestion>, E
             }]
         })
         .collect();
-    let binary_bpv = price_bytes(&rows, &sample.writer)? as f64 / sample.non_null as f64;
+    let binary_bpv = price_bytes(&rows, &sample.rewrite)? as f64 / sample.non_null as f64;
     let Some(savings) = sample.saving(binary_bpv) else {
         return Ok(None);
     };
@@ -46,9 +46,9 @@ pub(super) fn suggest(sample: &ColumnSample<'_>) -> Result<Option<Suggestion>, E
             sample.text_bpv
         ),
         if annotated {
-            "store as BINARY(16) with the UUID logical type"
+            "store as BINARY(16) with the UUID logical type".to_string()
         } else {
-            "store as BINARY(16)"
+            "store as BINARY(16)".to_string()
         },
         savings,
     )))

@@ -128,6 +128,13 @@ fn unique_uuid_text_is_reported_with_savings() {
     assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
     assert!(finding["table"].is_string(), "{finding}");
     assert!(finding["size_bytes"].is_u64(), "{finding}");
+    assert!(
+        finding["writer"]
+            .as_str()
+            .unwrap()
+            .starts_with("parquet-rs"),
+        "{finding}"
+    );
     assert!(sampled_price(finding) > 0.0, "{finding}");
 
     let _ = std::fs::remove_dir_all(directory);
@@ -177,6 +184,13 @@ fn dictionary_on_unique_strings_is_reported() {
     let finding = &records[0];
     assert_eq!(finding["rule"], "dictionary-unique");
     assert!(finding["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    assert!(
+        finding["remedy"]
+            .as_str()
+            .unwrap()
+            .contains("set_column_dictionary_enabled"),
+        "{finding}"
+    );
     assert!(
         finding["message"].as_str().unwrap().contains("prices at"),
         "{finding}"
