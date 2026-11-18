@@ -33,7 +33,8 @@
 #
 # macOS wheels declare the floor their target starts at: 11 for arm64, 13 for
 # Intel — what the retired `macos-13` runner produced, its replacement being
-# `macos-15-intel`.
+# `macos-15-intel`. GitHub retired the `macos-14` image on 2026-11-02, so arm64
+# builds on `macos-15`.
 #
 # No Windows wheel: nothing in the project builds for MSVC — no CI leg, no
 # `dist` target — and the first attempt died on `.cargo/config.toml`'s
@@ -73,7 +74,7 @@ jobs:
           - os: macos-15-intel
             target: x86_64-apple-darwin
             macosx_deployment_target: "13.0"
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             macosx_deployment_target: "11.0"
     steps:

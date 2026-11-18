@@ -26,6 +26,11 @@ all-features = true
 # (verify with `gh attestation verify <file> --repo pqbench/pqbench`).
 github-attestations = true
 
+# GitHub retired the macOS 14 runner image on 2026-11-02; dist 0.33 still
+# defaults Apple Silicon builds to it, so pin the current arm64 image.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+
 # The installer also creates `pqb` as a symlink to `pqbench`. Aliases stay out
 # of the archives, so an unpacked tarball and `cargo install` carry only
 # `pqbench`.
