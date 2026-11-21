@@ -21,7 +21,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.94.1"
-  # The Makefile caps local jobs at 2 (the multi-GB test links exhaust a
+  # `.cargo/config.toml` caps local jobs at 2 (the test links exhaust a
   # workstation); CI runners have 4 vCPU and 16 GB, so use them.
   CARGO_BUILD_JOBS: 4
 

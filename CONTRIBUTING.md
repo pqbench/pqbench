@@ -45,11 +45,10 @@ make check        # = fmt-check + check-docs + clippy -D warnings + isolation + 
 - `make check` is the gate and runs automatically in the pre-commit hook.
 - `make check-fast` is the iteration gate: fmt-check + check-docs + `cargo
   check --all-targets`, with no codegen or links. The full `make check` is for
-  before pushing. Heavy cargo runs are serialized by `make` (one lock across
-  profiles and worktrees) and capped by `[build] jobs`; do not run a second
-  build in parallel. A bare `cargo` in a worktree should go through `make cargo
-  CMD="…"`; `make link-target` points the worktree's `target/` at the shared
-  one.
+  before pushing. Cargo jobs are capped by `[build] jobs` in
+  `.cargo/config.toml`; run one build at a time. `make` shares the main
+  checkout's `target/` with every worktree, and `make link-target` points a
+  worktree's `target/` at it so a bare `cargo` shares it too.
 - **Integration tests are one target per crate.** `tests/it.rs` wires each
   `tests/*.rs` file in with `#[path]` and `mod`; Cargo builds only `it` (one
   binary per file used to link the whole graph once per file). Add the module
@@ -108,9 +107,7 @@ make check        # = fmt-check + check-docs + clippy -D warnings + isolation + 
   rolls the whole tree up for the job summary.
 - Tests are **blackbox** (observable behavior through the public API), unit
   level, sub-second, no network, no external build steps.
-- During implementation, prefer `cargo check` for fast feedback. The repository
-  uses `sccache` automatically when installed; inspect it with `make cache-stats`.
-  Use release builds only when measuring benchmark behavior or release artifacts.
+- During implementation, prefer `cargo check` for fast feedback. Use release builds only when measuring benchmark behavior or release artifacts.
 
 ## 3. Tidy (Tidy First?)
 

@@ -27,10 +27,8 @@ The reply is the shortest text that carries the answer.
   small; prefer the default (gnu) target; reuse cached artifacts (shared
   `CARGO_TARGET_DIR`) and incremental builds; avoid heavy new dependencies
   (e.g. anything that drags in a full LLVM rebuild).
-- **Bounded builds.** The all-features test binaries link at multi-GB RSS
-  each: keep cargo's jobs capped, take the `flock` in `make`, and use
-  `make check-fast` (type-check, no links) while iterating. Parallel links
-  exhaust a 14 GB machine and take the editor down with them.
+- **Bounded builds.** One build at a time, one feature set
+  (`--all-features`), one shared target dir; see *Build / check workflow*.
 - **Fast tests.** The test suite must stay fast (sub-second). Keep tests at
   unit level; no network, no external build steps. Every change must pass
   `make check`.
@@ -154,12 +152,10 @@ analogy, convention, or precedent:
   `make check-python` builds the data-only wheel from `crates/pqbench-cli`
   with maturin and smoke-tests the installed binary; CI runs it, the local gate
   does not (it compiles every storage backend).
-- **Worktrees share the main checkout's `target/`.** The Makefile derives it
-  from `git rev-parse --git-common-dir`, so a linked worktree reuses the cached
-  artifacts instead of recompiling the tree for the pre-commit gate.
-  `CARGO_BUILD_JOBS` defaults to 2 because the test binaries link several GB
-  each; raise it only when the machine has the memory. When the gate already
-  passed, `git commit --no-verify` is acceptable.
+- The edit loop is `cargo check --all-features` (no codegen, no link), then
+  `cargo test -p <crate> --test it -- <module>` for the test in hand, then one
+  `make check` before pushing. When the gate already passed, `git commit
+  --no-verify` is acceptable.
 - Docs: the CLI reference is generated from the clap tree with `clap-markdown`;
   `make sync-docs` writes `docs/reference/cli.md`, and `check-docs` fails when
   it is stale. The `console` transcripts in the Markdown are generated into
@@ -185,33 +181,24 @@ analogy, convention, or precedent:
   (deltalake, arrow, the AWS SDK) and everything downstream of it, and the next
   default-feature call compiles a third. Override `CARGO_FEATURES` only to
   reproduce a specific CI leg.
-- `cargo check --all-features` is the edit loop: no codegen, no link, the same
-  artifacts. Save `make check` for the end of a change, not after each edit.
 - Integration tests are one target per crate: `tests/it.rs` lists every
-  `tests/*.rs` file as a `#[path]` module. Add the line when you add a file;
-  select one with `cargo test -p <crate> --test it -- <module>`.
-- The edit loop is incremental and cheap: `incremental = true` on
-  `[profile.dev]` (the `test` profile inherits it) makes a one-line edit to
-  `pqbench` a 1-second `cargo check --all-features -p pqbench`. A build is slow
-  only when it is not incremental — a new profile, a new feature set, a new
-  target dir, or a fresh worktree — and a profile is part of every artifact's
-  fingerprint, so changing one rebuilds all 236 crates of the graph.
-- `CARGO_BUILD_JOBS` matters only for those full rebuilds; pass 6 for them
-  (compilation leaves ten of twelve cores idle at 2 on this 14 GB machine).
-  What spikes memory is the *link* phase of `cargo test`, which allocates
-  gigabytes per binary; `split-debuginfo = "unpacked"` in `[profile.dev]` cuts
-  each binary from ~490 MB to ~250 MB and the link cost with it.
-- `sccache` is installed at `~/.local/bin/sccache`; `.cargo/config.toml` routes
-  rustc through `.cargo/scripts/rustc-wrapper.sh`, which uses it when it is on
-  `PATH`. Prepend `export PATH="$HOME/.local/bin:$PATH"` to cargo and make
-  calls: it turns a repeat compile with the same flags into cache hits (8 s for
-  a crate set into a fresh target dir). It does not help across a profile,
-  feature-set or check/clippy change.
-- Export one `CARGO_TARGET_DIR` shared by every worktree before building;
-  never `cargo clean` it. A per-worktree target recompiles the ~70 AWS SDK and
-  ~130 deltalake artifacts it already has. If a build says `Blocking waiting for
-  file lock on build directory`, another session owns it: wait, do not take a
-  private target dir.
+  `tests/*.rs` file as a `#[path]` module. Add the line when you add a file.
+- Build footprint. Dependencies build without debug info
+  (`[profile.dev.package."*"] debug = false`), there is one test binary per
+  crate, and the rustc wrapper links with mold when it is installed.
+  `[build] jobs = 2` in `.cargo/config.toml` is the only job cap (CI sets
+  `CARGO_BUILD_JOBS=4`). Do not change `[profile]` settings in passing:
+  the profile is part of every artifact's fingerprint, so any change rebuilds
+  the whole graph.
+- Worktrees share the main checkout's `target/`: the Makefile derives it from
+  `git rev-parse --git-common-dir`, and `make link-target` makes a worktree's
+  `target/` a symlink to it, so a bare `cargo` and rust-analyzer use it too.
+  Workspace crates still rebuild per worktree (cargo keys them by path), so
+  keep few worktrees and remove them once their branch is merged. If a build
+  prints `Blocking waiting for file lock on build directory`, another build owns
+  the dir: wait.
+- No sccache: with one shared target it caches nothing cargo does not already
+  have, and its server runs rustc outside cargo's job cap.
 - CI is two workflows. `.github/workflows/ci.yml` is the lightweight gate: fmt,
   aipnaming, `make check-docs`, isolation, and lfs. The heavy workflow,
   `.github/workflows/ci-heavy.yml`, runs one clippy over `--all-features` and a

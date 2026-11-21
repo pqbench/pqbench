@@ -46,6 +46,11 @@ incremental = true
 # find the line tables; the executable does not carry them.
 split-debuginfo = "unpacked"
 
+# No debug info for dependencies: the AWS SDK, arrow and deltalake are most of
+# every test binary and of its link, and their line tables are rarely read. Backtraces still resolve the workspace's own frames.
+[profile.dev.package."*"]
+debug = false
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

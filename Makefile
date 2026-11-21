@@ -13,12 +13,11 @@ CARGO_FEATURES ?= --all-features
 TEST_FLAGS ?=
 PYTHON ?= python3
 
-# Share one target dir across linked worktrees. The pre-commit hook runs
-# `make check`, and a fresh worktree would otherwise recompile the whole tree
-# (and link the multi-GB test binaries) into its own target/ — the memory spike
-# that gets OOM-killed. `--git-common-dir` is the main checkout's .git in both
-# the main checkout and a linked worktree, so its parent is the target to
-# share. An explicit CARGO_TARGET_DIR from the environment wins.
+# Share one target dir across linked worktrees, so a fresh worktree reuses the
+# compiled dependency graph instead of rebuilding it. `--git-common-dir` is the
+# main checkout's .git in both the main checkout and a linked worktree, so its
+# parent holds the target to share. An explicit CARGO_TARGET_DIR wins. The job
+# cap lives in `.cargo/config.toml`, so it applies to a bare `cargo` too.
 GIT_COMMON_DIR := $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
 MAIN_CHECKOUT := $(patsubst %/.git,%,$(GIT_COMMON_DIR))
 CARGO_TARGET_DIR ?= $(if $(MAIN_CHECKOUT),$(MAIN_CHECKOUT)/target)
@@ -26,19 +25,6 @@ ifneq ($(CARGO_TARGET_DIR),)
 export CARGO_TARGET_DIR
 endif
 
-# Cap parallel rustc/link jobs by default: the test binaries link several GB
-# each, and a full rebuild at one job per core exhausts a 16 GB machine. Raise
-# it (`CARGO_BUILD_JOBS=8 make check`) when the memory is there; CI sets its own.
-CARGO_BUILD_JOBS ?= 2
-export CARGO_BUILD_JOBS
-
-# Cargo locks only the profile dir (target/debug/.cargo-lock), so a debug gate
-# and a release build can link at the same time. Serialize every heavy
-# invocation on one lock in the shared git dir; `flock` is not present on every
-# platform (macOS), so run unlocked there rather than fail.
-FLOCK := $(shell command -v flock 2>/dev/null)
-CARGO_LOCK ?= $(if $(GIT_COMMON_DIR),$(GIT_COMMON_DIR)/pqbench-cargo.lock,/tmp/pqbench-cargo.lock)
-CARGO_LOCKED = $(if $(FLOCK),$(FLOCK) $(CARGO_LOCK),) $(CARGO)
 # rust-code-analysis CLI and inputs; see the `code-analysis` target.
 RCA ?= rust-code-analysis-cli
 CODE_ANALYSIS_PATHS ?= crates
@@ -48,7 +34,7 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 # no portable millisecond format). Each timed target prints `<name>: N s`.
 SHELL := /bin/bash
 
-.PHONY: all fmt fmt-check build test lint cache-stats cargo link-target samples lakehouse dbx-e2e \
+.PHONY: all fmt fmt-check build test lint link-target samples lakehouse dbx-e2e \
 	dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check check-fast isolation lfs-check check-python sync-docs \
 	check-docs code-analysis test-code-analysis clean
@@ -62,10 +48,10 @@ fmt-check:
 	@TIMEFORMAT='fmt-check: %3R s'; time $(CARGO) fmt --all -- --check
 
 build:
-	@TIMEFORMAT='build: %3R s'; time $(CARGO_LOCKED) build --workspace $(CARGO_FEATURES)
+	@TIMEFORMAT='build: %3R s'; time $(CARGO) build --workspace $(CARGO_FEATURES)
 
 test:
-	@TIMEFORMAT='test: %3R s'; time $(CARGO_LOCKED) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
+	@TIMEFORMAT='test: %3R s'; time $(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
 
 # The live Databricks metastore e2e (scripts/dbx_e2e.py); needs the service
 # principal credentials. Python drives the built binary: plumbum composes the
@@ -77,7 +63,7 @@ dbx-e2e:
 	test -d python/.venv || $(PYTHON) -m venv python/.venv
 	python/.venv/bin/python -c 'import plumbum' 2>/dev/null || \
 		python/.venv/bin/python -m pip install -q plumbum
-	$(CARGO_LOCKED) build -p pqbench-cli --features delta-s3,iceberg-s3
+	$(CARGO) build -p pqbench-cli --features delta-s3,iceberg-s3
 	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" \
 		python/.venv/bin/python scripts/dbx_e2e.py
 
@@ -89,23 +75,11 @@ dbx-e2e:
 # one and point PQB at it to profile with `perf` (docs/guides/performance.md).
 dbx-walk:
 	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/guides/auth.md)"; exit 1; }
-	$(CARGO_LOCKED) build -p pqbench-cli $(CARGO_FEATURES)
+	$(CARGO) build -p pqbench-cli $(CARGO_FEATURES)
 	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" ./scripts/dbx-walk.sh
 
 lint:
-	@TIMEFORMAT='lint: %3R s'; time $(CARGO_LOCKED) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
-
-cache-stats:
-	@if command -v sccache >/dev/null 2>&1; then \
-		sccache --show-stats; \
-	else \
-		echo "sccache is not installed; run: cargo install sccache"; \
-	fi
-
-# Run cargo through the shared target dir and the job cap:
-# make cargo CMD="check -p pqbench --all-features".
-cargo:
-	$(CARGO_LOCKED) $(CMD)
+	@TIMEFORMAT='lint: %3R s'; time $(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
 
 # A linked worktree's bare `cargo` writes to ./target, not the shared root.
 # Point it at the main checkout so every command reuses one artifact tree.
@@ -149,7 +123,7 @@ check: fmt-check check-docs lint isolation lfs-check test test-code-analysis
 # Fast gate for iteration: type-check every target (no codegen, no links).
 # Run the full `make check` once before pushing.
 check-fast: fmt-check check-docs
-	@TIMEFORMAT='check: %3R s'; time $(CARGO_LOCKED) check --workspace --all-targets $(CARGO_FEATURES)
+	@TIMEFORMAT='check: %3R s'; time $(CARGO) check --workspace --all-targets $(CARGO_FEATURES)
 
 # `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
@@ -191,11 +165,11 @@ check-python:
 # `make check-docs` fails if either is out of date with its source.
 DOCS ?= README.md docs/ skills/ examples/
 sync-docs:
-	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO_LOCKED) run -q -p docscheck-cli -- sync $(DOCS)
-	$(CARGO_LOCKED) run -q -p docsgen -- write docs/reference/cli.md
+	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
+	$(CARGO) run -q -p docsgen -- write docs/reference/cli.md
 check-docs:
-	@TIMEFORMAT='check-docs: %3R s'; time $(CARGO_LOCKED) run -q -p docscheck-cli -- check $(DOCS)
-	$(CARGO_LOCKED) run -q -p docsgen -- check docs/reference/cli.md
+	@TIMEFORMAT='check-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- check $(DOCS)
+	$(CARGO) run -q -p docsgen -- check docs/reference/cli.md
 
 # Software metrics (rust-code-analysis) over the source tree; prints the CLI's
 # own metrics tree. Needs `rust-code-analysis-cli` on PATH — CI pins the
