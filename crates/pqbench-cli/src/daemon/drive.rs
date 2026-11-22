@@ -61,6 +61,8 @@ struct Driver {
     running: JoinSet<(Key, Outcome)>,
     /// The walk, while it runs.
     walk: JoinSet<Result<(), String>>,
+    /// The trash being emptied, if it is.
+    emptying: JoinSet<()>,
     /// When the last walk started, milliseconds since the Unix epoch.
     walk_time: Option<u64>,
     walked: bool,
@@ -84,6 +86,7 @@ pub(crate) fn spawn(
         socket,
         running: JoinSet::new(),
         walk: JoinSet::new(),
+        emptying: JoinSet::new(),
         walk_time,
         walked: false,
         checkpoint_time: Instant::now(),
@@ -102,6 +105,7 @@ pub(crate) fn spawn(
                     let outcome = done.unwrap_or_else(|error| Err(error.to_string()));
                     driver.finish_walk(outcome);
                 }
+                Some(_) = driver.emptying.join_next() => {}
                 () = tokio::time::sleep(TICK) => {}
             }
         }
@@ -140,24 +144,41 @@ impl Driver {
         }
     }
 
-    /// Give the master a finished run. A version that is done drops its
-    /// copy of the sample file, and the version it replaces can go.
+    /// Give the master a finished run. A version with no transition left to
+    /// read it drops its copy of the sample file, and the version a finished
+    /// one replaces can go.
     fn finish(&mut self, key: &Key, outcome: Outcome) {
-        let state = write(&self.master).finish(key, outcome, master::now_ms());
-        if state == Some(State::UpToDate) {
+        let conclusion = write(&self.master).finish(key, outcome, master::now_ms());
+        let Some(conclusion) = conclusion else {
+            return;
+        };
+        if !conclusion.sample {
             self.store.remove_sample(key);
+        }
+        if conclusion.state == State::UpToDate {
             self.purge(&key.0);
         }
     }
 
-    /// Purge the partitions under `prefix`; their results go after their
-    /// rows.
+    /// Purge the partitions under `prefix`: their rows go now, their results
+    /// move to the trash, which is emptied off the runtime.
     fn purge(&mut self, prefix: &str) {
+        let mut trashed = false;
         for key in write(&self.master).purge(prefix) {
-            if let Err(error) = self.store.remove_version(&key) {
-                eprintln!("pqbench daemon: {error}");
+            match self.store.trash(&key) {
+                Ok(()) => trashed = true,
+                Err(error) => eprintln!("pqbench daemon: {error}"),
             }
         }
+        if !trashed || !self.emptying.is_empty() {
+            return;
+        }
+        let store = self.store.clone();
+        self.emptying.spawn_blocking(move || {
+            if let Err(error) = store.empty_trash() {
+                eprintln!("pqbench daemon: {error}");
+            }
+        });
     }
 
     /// Start a walk when none runs and one is due: the first since the
@@ -241,7 +262,7 @@ impl Driver {
         };
         let key = master::key(name, etag)
             .ok_or_else(|| format!("{name} at {etag} is not a partition version"))?;
-        if !read(&self.master).contains(&key) {
+        if read(&self.master).state(&key).is_none() {
             self.store.write_listing(&key, line)?;
         }
         write(&self.master).found(&key, &listing, now);

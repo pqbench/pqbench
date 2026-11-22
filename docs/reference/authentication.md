@@ -213,9 +213,10 @@ version and what a finished command means for it.
   its price a version runs `bytemass` on the sample file in place, which reads
   only the footer, and is then `UP_TO_DATE` without suggestions. A failure
   puts the version back with the command's error; after two it waits.
-- **Purge** drops `DELETED` versions and their results, except a partition's
-  last `UP_TO_DATE` version while its newer one is in progress, so its
-  complete results are shown until the new ones replace them.
+- **Purge** drops `DELETED` versions, except a partition's last `UP_TO_DATE`
+  version while its newer one is in progress, so its complete results are
+  shown until the new ones replace them. Their results are renamed under
+  `DIR/deleted/` and removed from there.
 A command's output lands in `DIR/results/{partition}/{etag}/` through a
 temporary file and is renamed into place when the command succeeds. The map is
 written whole to `DIR/checkpoint.ndjson` every 5 minutes while commands run,

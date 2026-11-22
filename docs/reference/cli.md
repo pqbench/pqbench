@@ -893,8 +893,9 @@ commands the daemon runs as child processes and awaits:
             runs `bytemass` on the sample file in place (it reads only the
             footer) and is then UP_TO_DATE. A failure puts the version back
             with its error; after two it waits.
-  purge     DELETED versions and their results, except a partition's last
-            UP_TO_DATE version while its new one is in progress.
+  purge     DELETED versions, except a partition's last UP_TO_DATE version
+            while its new one is in progress; their results are moved to
+            DIR/deleted and removed.
 ```
 
 The map is checkpointed to DIR/checkpoint.ndjson every 5 minutes while

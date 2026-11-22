@@ -160,7 +160,7 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
                     let store = store::Store::open(&root)?;
                     let master =
                         master::Master::new(store.read_checkpoint()?, args.master.low_network)?;
-                    store.sweep(|key| master.contains(key))?;
+                    store.sweep(|key| master.state(key))?;
                     let master = std::sync::Arc::new(std::sync::RwLock::new(master));
                     let settings = args.master.settings();
                     drive::spawn(master.clone(), store.clone(), settings, socket.clone());

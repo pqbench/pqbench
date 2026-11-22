@@ -5,19 +5,23 @@
 //! {store}/checkpoint.ndjson                  the map, one PartitionVersion per line
 //! {store}/walk/                              the running walk's output and errors
 //! {store}/results/{partition}/{etag}/{file}  a version's results
+//! {store}/deleted/{partition}/{etag}/        results waiting to be removed
 //! ```
 //!
 //! A command's output goes to `{file}.tmp` in its version's directory, and is
-//! renamed in when the command succeeds.
+//! renamed in when the command succeeds. A purged version's directory is
+//! renamed under `deleted/`, so dropping it from the map is one syscall, and
+//! emptied later.
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use pqbench::v1::partition_version::State;
 use pqbench::v1::PartitionVersion;
 use serde_json::Value;
 
-use super::master::Key;
+use super::master::{self, Key};
 
 /// A version's listing: the walk's Partition record for it.
 pub(crate) const LISTING: &str = "list-partitions.ndjson";
@@ -32,17 +36,23 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    /// Open the store at `root`: create it, and delete the walk's directory,
-    /// which only a running walk uses.
+    /// Open the store at `root`: create it, and delete the walk's directory
+    /// and the trash a previous run left.
     pub(crate) fn open(root: &Path) -> Result<Self, String> {
         let store = Store {
             root: root.to_path_buf(),
         };
         remove_dir(&store.walk_dir())?;
+        store.empty_trash()?;
         let results = store.root.join("results");
         fs::create_dir_all(&results)
             .map_err(|error| format!("cannot create {}: {error}", results.display()))?;
         Ok(store)
+    }
+
+    /// The directory purged results wait in.
+    pub(crate) fn trash_dir(&self) -> PathBuf {
+        self.root.join("deleted")
     }
 
     /// The directory of the running walk's output and errors.
@@ -156,9 +166,21 @@ impl Store {
         Ok(results)
     }
 
-    /// Delete one version's results.
-    pub(crate) fn remove_version(&self, key: &Key) -> Result<(), String> {
-        remove_dir(&self.version_dir(key))
+    /// Move one version's results to the trash: one rename, so a purge never
+    /// waits on deleting them.
+    pub(crate) fn trash(&self, key: &Key) -> Result<(), String> {
+        let target = self.trash_dir().join(&key.0).join(&key.1);
+        let parent = target
+            .parent()
+            .expect("a version's trash path has a parent");
+        fs::create_dir_all(parent)
+            .and_then(|()| fs::rename(self.version_dir(key), &target))
+            .map_err(|error| format!("cannot move the results of {} to the trash: {error}", key.0))
+    }
+
+    /// Delete what the trash holds.
+    pub(crate) fn empty_trash(&self) -> Result<(), String> {
+        remove_dir(&self.trash_dir())
     }
 
     /// Delete a version's copy of its sample file: it was for the
@@ -167,10 +189,10 @@ impl Store {
         let _ = fs::remove_file(self.version_dir(key).join(SAMPLE));
     }
 
-    /// Delete the result directories of versions that are not `live`, and
-    /// the outputs unfinished runs left beside any result: what a crash
-    /// left.
-    pub(crate) fn sweep(&self, live: impl Fn(&Key) -> bool) -> Result<(), String> {
+    /// Delete the result directories of versions that are not in the map, the
+    /// outputs unfinished runs left beside any result, and the sample copies
+    /// no transition will read: what a crash left.
+    pub(crate) fn sweep(&self, state: impl Fn(&Key) -> Option<State>) -> Result<(), String> {
         let results = self.root.join("results");
         for directory in version_dirs(&results) {
             let Ok(relative) = directory.strip_prefix(&results) else {
@@ -184,9 +206,15 @@ impl Store {
                 name(relative.parent()),
                 name(relative.file_name().map(Path::new)),
             );
-            if !live(&key) {
-                remove_dir(&directory)?;
-                continue;
+            let state = match state(&key) {
+                Some(state) => state,
+                None => {
+                    remove_dir(&directory)?;
+                    continue;
+                }
+            };
+            if !master::needs_sample(state) {
+                let _ = fs::remove_file(directory.join(SAMPLE));
             }
             for file in fs::read_dir(&directory).into_iter().flatten().flatten() {
                 if file
@@ -242,9 +270,62 @@ mod tests {
             store.write_listing(key, "{}").unwrap();
             fs::write(store.temporary(key, "price.ndjson"), "{}").unwrap();
         }
-        store.sweep(|key| *key == live).unwrap();
+        store
+            .sweep(|key| (*key == live).then_some(State::UpToDate))
+            .unwrap();
         assert_eq!(store.read_listing(&live).unwrap(), "{}");
         assert!(!store.temporary(&live, "price.ndjson").exists());
         assert!(!store.version_dir(&dead).exists());
+    }
+
+    /// A sweep deletes a finished version's sample copy; a version waiting
+    /// for a transition that reads it keeps it.
+    #[test]
+    fn a_sweep_keeps_only_the_samples_a_transition_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let partition = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
+        let versions: Vec<(Key, State, bool)> = [
+            (State::UpToDate, false),
+            (State::Downloaded, true),
+            (State::Bytemassed, true),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(at, (state, kept))| ((partition.to_string(), format!("a{at}")), state, kept))
+        .collect();
+        for (key, _, _) in &versions {
+            store.write_listing(key, "{}").unwrap();
+            fs::write(store.version_dir(key).join(SAMPLE), "x").unwrap();
+        }
+        store
+            .sweep(|key| {
+                versions
+                    .iter()
+                    .find(|(other, _, _)| other == key)
+                    .map(|(_, state, _)| *state)
+            })
+            .unwrap();
+        for (key, _, kept) in &versions {
+            assert_eq!(store.version_dir(key).join(SAMPLE).exists(), *kept);
+        }
+    }
+
+    /// A trashed version is gone from its results and waits in the trash,
+    /// which opening the store empties.
+    #[test]
+    fn a_trashed_version_waits_outside_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let key = (
+            "catalogs/c/schemas/s/tables/t/partitions/day%3D1".to_string(),
+            "aa".to_string(),
+        );
+        store.write_listing(&key, "{}").unwrap();
+        store.trash(&key).unwrap();
+        assert!(!store.version_dir(&key).exists());
+        assert!(store.trash_dir().join(&key.0).join(&key.1).exists());
+        let store = Store::open(directory.path()).unwrap();
+        assert!(!store.trash_dir().exists());
     }
 }

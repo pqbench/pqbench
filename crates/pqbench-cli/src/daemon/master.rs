@@ -235,9 +235,9 @@ impl Master {
         Ok((found.0.clone(), named(found.0, found.1)))
     }
 
-    /// Whether the map has a version.
-    pub(crate) fn contains(&self, key: &Key) -> bool {
-        self.rows.contains_key(key)
+    /// A version's state, if the map has it.
+    pub(crate) fn state(&self, key: &Key) -> Option<State> {
+        self.rows.get(key).map(|row| row.state)
     }
 
     /// When the newest walk found anything: the time a walk was last due
@@ -338,14 +338,14 @@ impl Master {
     /// none for any other transition, else its error. A success moves the
     /// version on; a price whose partition has no live file, or whose files
     /// need a restore, ends it, since there is nothing to read. A failure
-    /// puts the version back with the error counted. Returns the version's
-    /// state, `None` when the run no longer has a version.
+    /// puts the version back with the error counted. Returns how it ended,
+    /// `None` when the run no longer has a version.
     pub(crate) fn finish(
         &mut self,
         key: &Key,
         outcome: Result<Option<PartitionPrice>, String>,
         now: u64,
-    ) -> Option<State> {
+    ) -> Option<Conclusion> {
         let row = self.rows.get_mut(key)?;
         let transition = running_transition(self.transitions, row.state)?;
         self.changed = true;
@@ -372,7 +372,10 @@ impl Master {
                 row.error = Some(error);
             }
         }
-        Some(row.state)
+        Some(Conclusion {
+            state: row.state,
+            sample: master_needs_sample(row),
+        })
     }
 
     /// Drop the `DELETED` versions of the partitions under `prefix` (every
@@ -424,6 +427,32 @@ impl Master {
             }
         }
     }
+}
+
+/// How a finished run left its version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Conclusion {
+    pub state: State,
+    /// Whether the version still reads its copy of the sample file: a
+    /// transition it waits for does, and one that stopped for good does not.
+    pub sample: bool,
+}
+
+fn master_needs_sample(row: &PartitionVersion) -> bool {
+    row.failure_count < MAX_FAILURES && needs_sample(row.state)
+}
+
+/// Whether a version in `state` reads its copy of the sample file: from the
+/// download to the transitions that read the data.
+pub(crate) fn needs_sample(state: State) -> bool {
+    matches!(
+        state,
+        State::Downloading
+            | State::Downloaded
+            | State::Bytemassing
+            | State::Bytemassed
+            | State::Linting
+    )
 }
 
 /// The transition of `transitions` a version in `state` is running, if any.
@@ -527,9 +556,9 @@ mod tests {
                 "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
         }))
         .unwrap();
-        let state = master.finish(&key, Ok(Some(price)), 3).unwrap();
+        let conclusion = master.finish(&key, Ok(Some(price)), 3).unwrap();
         assert_eq!(master.rows[&key].highest_cost_per_month, Some(1.0));
-        state
+        conclusion.state
     }
 
     /// A price ends the version when there is nothing to read: no live file,
@@ -558,8 +587,8 @@ mod tests {
         let (mut master, key) = found(1);
         for attempt in 0..2 {
             assert_eq!(master.start(1).len(), 1);
-            let state = master.finish(&key, Err(format!("boom {attempt}")), 3);
-            assert_eq!(state, Some(State::Pending));
+            let conclusion = master.finish(&key, Err(format!("boom {attempt}")), 3);
+            assert_eq!(conclusion.map(|c| c.state), Some(State::Pending));
         }
         assert_eq!(master.rows[&key].failure_count, 2);
         assert_eq!(master.rows[&key].error.as_deref(), Some("boom 1"));
