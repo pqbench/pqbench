@@ -21,6 +21,10 @@ use crate::third_party::object_store::api::{
 };
 use crate::third_party::reqwest::r#impl::Http;
 
+/// How long the store retries a failed request, the credential probes
+/// included: the same two seconds the client bounds one request with.
+const RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The one `reqwest` client backs every store. `object_store` builds a fresh
 /// client on each `build()`, and `reqwest` re-parses the platform CA bundle
 /// inside every client build; handing it the shared [`Http`] keeps one pool and
@@ -276,7 +280,16 @@ impl Stores {
         // it.
         let mut builder = AmazonS3Builder::from_env()
             .with_url(url.to_string())
-            .with_http_connector(SharedConnector(self.http.clone()));
+            .with_http_connector(SharedConnector(self.http.clone()))
+            // The retry loop also covers the credential chain: a host that
+            // is not in AWS answers the metadata probe with a refused
+            // connection, and the store's default three-minute window turned
+            // every unreadable table into minutes of a walk. A table that
+            // cannot be read now fails within seconds, and is skipped.
+            .with_retry(::object_store::RetryConfig {
+                retry_timeout: RETRY_TIMEOUT,
+                ..::object_store::RetryConfig::default()
+            });
         for (key, value) in options {
             let config_key: AmazonS3ConfigKey = key
                 .to_ascii_lowercase()

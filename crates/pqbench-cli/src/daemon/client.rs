@@ -33,8 +33,10 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// How long a lease exchange may take before the reader reports the daemon
-/// as gone.
-const LEASE_TIMEOUT: Duration = Duration::from_secs(2);
+/// as gone. A lease waits its turn in the daemon, which paces vends at the
+/// catalog's ceiling, so a walk with a stream per CPU queues dozens ahead of
+/// the last one; the wait is the daemon's, not a hung connection.
+const LEASE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a catalog exchange may take: the daemon is doing the endpoint
 /// and storage read the reader would have done itself.

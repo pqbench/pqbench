@@ -307,10 +307,11 @@ fn a_change_is_a_new_version_and_the_old_is_purged() {
     assert!(!result_file(&master, &old, "list-partitions.ndjson").exists());
 }
 
-/// A walk that read every table deletes the tables it did not list; a walk
-/// with a failed table deletes no other table.
+/// A walk purges the tables it does not list; a table it lists but cannot
+/// read keeps its versions, and a walk that cannot list the tables purges
+/// nothing.
 #[test]
-fn only_a_complete_walk_deletes_the_tables_it_lacks() {
+fn a_walk_purges_the_tables_it_does_not_list() {
     let directory = tempfile::tempdir().unwrap();
     let events = directory.path().join("events");
     let orders = directory.path().join("orders");
@@ -323,22 +324,31 @@ fn only_a_complete_walk_deletes_the_tables_it_lacks() {
     let master = Master::start(directory.path(), &["--walk-period-seconds", "0"]);
     master.wait(|rows| rows.len() == 4);
 
-    walk(
-        directory.path(),
-        &[
-            ("events", &events),
-            ("broken", &directory.path().join("missing")),
-        ],
-    );
+    // `events` is listed but its log is gone: its versions stay.
+    std::fs::remove_dir_all(events.join("_delta_log")).unwrap();
     let rewritten = pqbench_time();
-    master.wait(|rows| rows[0]["list_time"].as_u64().unwrap() > rewritten + 200);
-    assert_eq!(master.rows().len(), 4, "a failed walk deleted a table");
+    master.wait(|rows| {
+        rows.iter()
+            .any(|row| row["list_time"].as_u64().unwrap_or(0) > rewritten + 200)
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        master.rows().len(),
+        4,
+        "an unreadable table lost its versions"
+    );
 
-    walk(directory.path(), &[("events", &events)]);
+    // `events` is no longer listed: its versions go, `orders` stays.
+    walk(directory.path(), &[("orders", &orders)]);
     let rows = master.wait(|rows| rows.len() == 2);
     assert!(rows
         .iter()
-        .all(|row| row["name"].as_str().unwrap().contains("/tables/events/")));
+        .all(|row| row["name"].as_str().unwrap().contains("/tables/orders/")));
+
+    // No table listing at all: nothing is purged.
+    std::fs::remove_file(directory.path().join("tables.ndjson")).unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(master.rows().len(), 2);
 }
 
 /// Milliseconds since the Unix epoch.
@@ -694,6 +704,31 @@ fn the_web_app_serves_the_stats_and_the_records() {
         .0,
         400
     );
+    // The map whole: every version, the newest found first, one page at a
+    // time.
+    let (status, body) = http_get(&address, "/v1/partitions");
+    assert_eq!(status, 200, "{body}");
+    let all: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(all["total_size"], 2);
+    let recent = all["partitions"].as_array().unwrap();
+    assert_eq!(recent.len(), 2);
+    assert!(recent.iter().all(|v| v["name"]
+        .as_str()
+        .is_some_and(|name| name.contains("/versions/"))));
+    let first_page: Value =
+        serde_json::from_str(&http_get(&address, "/v1/partitions?page_size=1").1).unwrap();
+    assert_eq!(first_page["partitions"][0]["name"], recent[0]["name"]);
+    let token = first_page["next_page_token"].as_str().unwrap();
+    let second_page: Value = serde_json::from_str(
+        &http_get(
+            &address,
+            &format!("/v1/partitions?page_size=1&page_token={token}"),
+        )
+        .1,
+    )
+    .unwrap();
+    assert_eq!(second_page["partitions"][0]["name"], recent[1]["name"]);
+
     let name = partition(&pages[0]);
     let (status, body) = http_get(&address, &format!("/v1/{name}"));
     assert_eq!(status, 200);

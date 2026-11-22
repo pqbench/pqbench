@@ -12,6 +12,10 @@
 //! - `/v1/{partition}`: that partition's versions with every result, the
 //!   column masses and suggestions included.
 //!
+//! `/v1/partitions` is the master's map whole: every version, the newest
+//! found first, one page at a time. It reads no stats file, so it shows what
+//! the master has as soon as it has it.
+//!
 //! A level's page reads the master's stats file; a partitions page sorts the
 //! master's rows for the one table. Only a page's versions read their results
 //! from the store.
@@ -113,6 +117,9 @@ async fn handle(mut stream: TcpStream, master: Arc<RwLock<Master>>) -> std::io::
 /// What `name` names: a level's stats, a page of one table's versions, or
 /// one partition's versions. `None` when it names none of them.
 fn read(master: &RwLock<Master>, name: &str, query: &str) -> Result<Option<Value>, String> {
+    if name == "partitions" {
+        return Ok(Some(recent(master, query)?));
+    }
     let segments: Vec<&str> = name.split('/').collect();
     if level(&segments) {
         return Ok(Some(Value::Array(stats(master, &segments)?)));
@@ -138,19 +145,56 @@ fn read(master: &RwLock<Master>, name: &str, query: &str) -> Result<Option<Value
         let master = lock(master);
         let mut rows = master.list(&parent)?;
         rows.sort_by(|a, b| page.order.compare(a, b));
-        let total_size = rows.len();
-        let rows: Vec<PartitionVersion> = rows
-            .into_iter()
-            .skip(page.offset)
-            .take(page.size)
-            .map(|(key, row)| version(key, row))
-            .collect();
-        (master.store().to_path_buf(), total_size, rows)
+        (
+            master.store().to_path_buf(),
+            rows.len(),
+            select(rows, &page),
+        )
     };
+    Ok(Some(page_response(&store, total_size, rows, &page)))
+}
+
+/// One page of the map whole: every version, the newest found first.
+fn recent(master: &RwLock<Master>, query: &str) -> Result<Value, String> {
+    let page = Page::parse(query)?;
+    let (store, total_size, rows) = {
+        let master = lock(master);
+        let mut rows = master.list("")?;
+        rows.sort_by(|(a_key, a), (b_key, b)| {
+            b.create_time
+                .cmp(&a.create_time)
+                .then_with(|| a_key.cmp(b_key))
+        });
+        (
+            master.store().to_path_buf(),
+            rows.len(),
+            select(rows, &page),
+        )
+    };
+    Ok(page_response(&store, total_size, rows, &page))
+}
+
+/// The page's rows of `rows`, from its offset.
+fn select(rows: Vec<(&Key, &PartitionVersion)>, page: &Page) -> Vec<PartitionVersion> {
+    rows.into_iter()
+        .skip(page.offset)
+        .take(page.size)
+        .map(|(key, row)| version(key, row))
+        .collect()
+}
+
+/// A page of versions as the web app serves it, with each row's listing and
+/// price.
+fn page_response(
+    store: &Path,
+    total_size: usize,
+    rows: Vec<PartitionVersion>,
+    page: &Page,
+) -> Value {
     let partitions: Vec<Value> = rows
         .iter()
         .map(|row| {
-            let mut view = view(&store, row, &["list-partitions", "price"]);
+            let mut view = view(store, row, &["list-partitions", "price"]);
             trim_files(&mut view);
             view
         })
@@ -160,7 +204,7 @@ fn read(master: &RwLock<Master>, name: &str, query: &str) -> Result<Option<Value
     if next < total_size {
         response["next_page_token"] = Value::String(next.to_string());
     }
-    Ok(Some(response))
+    response
 }
 
 /// Whether `segments` names a level: `catalogs`, `catalogs/{c}/schemas`, or

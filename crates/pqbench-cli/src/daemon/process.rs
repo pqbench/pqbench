@@ -6,7 +6,7 @@
 //! non-blocking `waitpid` reaps it and reads its exit status; nothing is held
 //! while a command runs.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
@@ -40,8 +40,8 @@ fn command(arguments: &[String], socket: &Path) -> io::Result<Command> {
 }
 
 /// Start one command: standard input from `input`, standard output to
-/// `output` (discarded when `None`), standard error to `error`. Returns its
-/// process id.
+/// `output` (discarded when `None`), standard error appended to `error`.
+/// Returns its process id.
 pub(crate) fn start(
     arguments: &[String],
     input: &Path,
@@ -53,10 +53,12 @@ pub(crate) fn start(
         Some(path) => Stdio::from(File::create(path)?),
         None => Stdio::null(),
     };
+    // Appended: a walk's phase writes several commands into one error file.
+    let error = OpenOptions::new().create(true).append(true).open(error)?;
     let child = command(arguments, socket)?
         .stdin(File::open(input)?)
         .stdout(stdout)
-        .stderr(File::create(error)?)
+        .stderr(error)
         .spawn()?;
     Ok(child.id())
 }

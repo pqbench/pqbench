@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
@@ -48,12 +48,134 @@ pub(crate) struct Settings {
     pub time_limit: Option<Duration>,
 }
 
-/// A walk in progress: its processes, output and error file.
+/// A walk in progress: one command per phase, each phase reading the file the
+/// one before it wrote.
+///
+/// `list catalogs`, `list schemas` and `list tables` name every table, in
+/// seconds; then the same Table records go through `get table` and `list
+/// partitions` in as many streams as there are CPUs, since one stream would
+/// pay each table's catalog calls in turn.
 struct Walk {
+    phase: Phase,
     process_ids: Vec<u32>,
+    /// How the phase's commands ended.
     finished: Vec<Result<(), String>>,
-    output: PathBuf,
+    /// The tables `list tables` named: their versions are kept even when
+    /// they cannot be read, and the tables it did not name are purged.
+    listed: BTreeSet<String>,
+    /// Each stream's listing.
+    outputs: Vec<PathBuf>,
+    /// Where the phase's error text goes.
     error: PathBuf,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Catalogs,
+    Schemas,
+    Tables,
+    Columns,
+    Partitions,
+}
+
+impl Walk {
+    /// Start `phase`'s commands, reading the files the phase before wrote.
+    fn start(&mut self, driver: &Driver, phase: Phase) -> Result<(), String> {
+        let directory = driver.store.join("walk");
+        self.phase = phase;
+        self.process_ids.clear();
+        self.finished.clear();
+        self.error = directory.join(format!("{}.err", phase.name()));
+        File::create(&self.error).map_err(|error| error.to_string())?;
+        let (words, inputs, prefix): (Vec<&str>, Vec<PathBuf>, &str) = match phase {
+            Phase::Catalogs => (
+                vec!["list", "catalogs"],
+                vec![PathBuf::from("/dev/null")],
+                "catalogs",
+            ),
+            Phase::Schemas => (
+                vec!["list", "schemas"],
+                vec![directory.join("catalogs.ndjson")],
+                "schemas",
+            ),
+            Phase::Tables => (
+                vec!["list", "tables"],
+                vec![directory.join("schemas.ndjson")],
+                "tables",
+            ),
+            Phase::Columns => (vec!["get", "table"], driver.chunks(&directory)?, "columns"),
+            Phase::Partitions => (
+                vec!["list", "partitions"],
+                partition_inputs(&directory)?,
+                "partitions",
+            ),
+        };
+        let mut outputs = Vec::new();
+        for (at, input) in inputs.iter().enumerate() {
+            // One input is one file the next phase reads by name; a stream
+            // per CPU is numbered.
+            let output = match inputs.len() {
+                1 => directory.join(format!("{prefix}.ndjson")),
+                _ => directory.join(format!("{prefix}-{at}.ndjson")),
+            };
+            let process_id = driver.run_command(&words, input, &output, &self.error)?;
+            self.process_ids.push(process_id);
+            outputs.push(output);
+        }
+        self.outputs = outputs;
+        Ok(())
+    }
+}
+
+impl Phase {
+    /// The phase's name, in the store's files.
+    fn name(self) -> &'static str {
+        match self {
+            Phase::Catalogs => "catalogs",
+            Phase::Schemas => "schemas",
+            Phase::Tables => "tables",
+            Phase::Columns => "columns",
+            Phase::Partitions => "partitions",
+        }
+    }
+}
+
+/// The files the Partitions phase reads: the Columns phase's records, or the
+/// chunks themselves when the operator's Table records are already complete.
+fn partition_inputs(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut columns = streams(directory, "columns")?;
+    if columns.is_empty() {
+        columns = streams(directory, "chunk")?;
+    }
+    Ok(columns)
+}
+
+/// The `{prefix}-{n}.ndjson` files in a directory, in number order.
+fn streams(directory: &Path, prefix: &str) -> Result<Vec<PathBuf>, String> {
+    let mut paths: Vec<PathBuf> = fs::read_dir(directory)
+        .map_err(|error| error.to_string())?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.strip_prefix(prefix)
+                        .and_then(|rest| rest.strip_prefix('-'))
+                        .and_then(|rest| rest.strip_suffix(".ndjson"))
+                        .is_some_and(|number| number.parse::<usize>().is_ok())
+                })
+        })
+        .collect();
+    paths.sort_by_key(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.rsplit_once('-'))
+            .and_then(|(_, rest)| rest.strip_suffix(".ndjson"))
+            .and_then(|number| number.parse::<usize>().ok())
+            .unwrap_or(0)
+    });
+    Ok(paths)
 }
 
 /// The stats run in progress.
@@ -78,7 +200,9 @@ struct Driver {
     checkpoint_time: Instant,
 }
 
-/// Start the driver thread.
+/// Start the driver on the daemon's runtime: one thread, like the rest of
+/// the daemon. A pass does short blocking file work (a checkpoint, a
+/// spawn), which the socket and the web app wait out.
 pub(crate) fn spawn(master: Arc<RwLock<Master>>, settings: Settings, socket: PathBuf) {
     let store = read(&master).store().to_path_buf();
     let walk_time = read(&master).last_list_time();
@@ -95,9 +219,11 @@ pub(crate) fn spawn(master: Arc<RwLock<Master>>, settings: Settings, socket: Pat
         stats_due: None,
         checkpoint_time: Instant::now(),
     };
-    std::thread::spawn(move || loop {
-        driver.pass();
-        std::thread::sleep(PASS_PERIOD);
+    tokio::spawn(async move {
+        loop {
+            driver.pass();
+            tokio::time::sleep(PASS_PERIOD).await;
+        }
     });
 }
 
@@ -209,7 +335,7 @@ impl Driver {
         if !due {
             return;
         }
-        match self.walk_processes() {
+        match self.start_walk_phase() {
             Ok(walk) => self.walk = Some(walk),
             Err(error) => eprintln!("pqbench daemon: cannot start the walk: {error}"),
         }
@@ -217,43 +343,87 @@ impl Driver {
         self.walk_time = Some(now);
     }
 
-    /// The walk's pipeline: the whole metastore, from `list catalogs`, or
-    /// `list partitions` over the configured Table records instead.
-    fn walk_processes(&self) -> std::io::Result<Walk> {
+    /// The walk's first phase: `list catalogs` names the catalogs. A
+    /// --walk-tables file is its own table listing, so the walk starts at the
+    /// columns of those records.
+    fn start_walk_phase(&self) -> Result<Walk, String> {
         let directory = self.store.join("walk");
-        fs::create_dir_all(&directory)?;
-        let error_path = directory.join("walk.err");
-        let error = File::create(&error_path)?;
-        let stage = |words: &[&str]| words.iter().map(|word| (*word).to_string()).collect();
-        let (stages, input): (Vec<Vec<String>>, File) = match &self.settings.walk_tables {
-            Some(tables) => (vec![stage(&["list", "partitions"])], File::open(tables)?),
-            None => (
-                vec![
-                    stage(&["list", "catalogs"]),
-                    stage(&["list", "schemas"]),
-                    stage(&["list", "tables"]),
-                    stage(&["get", "table"]),
-                    stage(&["list", "partitions"]),
-                ],
-                File::open("/dev/null")?,
-            ),
-        };
-        let output = directory.join("partitions.ndjson");
-        let process_ids =
-            process::start_pipeline(&stages, input, File::create(&output)?, &error, &self.socket)?;
-        Ok(Walk {
-            process_ids,
+        fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let mut walk = Walk {
+            phase: Phase::Catalogs,
+            process_ids: Vec::new(),
             finished: Vec::new(),
-            output,
-            error: error_path,
-        })
+            listed: BTreeSet::new(),
+            outputs: Vec::new(),
+            error: directory.join("walk.err"),
+        };
+        if let Some(tables) = &self.settings.walk_tables {
+            let output = directory.join("tables.ndjson");
+            fs::copy(tables, &output).map_err(|error| error.to_string())?;
+            walk.listed = table_names(&output)?;
+            // The records are complete, so `list partitions` reads them as
+            // they are: no `get table` between.
+            for (at, chunk) in self.chunks(&directory)?.into_iter().enumerate() {
+                fs::rename(&chunk, directory.join(format!("columns-{at}.ndjson")))
+                    .map_err(|error| error.to_string())?;
+            }
+            walk.start(self, Phase::Partitions)?;
+            return Ok(walk);
+        }
+        walk.start(self, Phase::Catalogs)?;
+        Ok(walk)
     }
 
-    /// Once every process of the walk exited, apply its listing: each listed
-    /// table's versions are found or deleted, and when every process
-    /// succeeded, the tables the walk did not list are deleted too.
+    /// Run one command on one file.
+    fn run_command(
+        &self,
+        words: &[&str],
+        input: &Path,
+        output: &Path,
+        error: &Path,
+    ) -> Result<u32, String> {
+        let arguments: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
+        process::start(&arguments, input, Some(output), error, &self.socket)
+            .map_err(|error| error.to_string())
+    }
+
+    /// The chunk files the Columns and Partitions phases read, one per CPU.
+    fn chunks(&self, directory: &Path) -> Result<Vec<PathBuf>, String> {
+        let tables = directory.join("tables.ndjson");
+        let text = fs::read_to_string(&tables).map_err(|error| error.to_string())?;
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        if lines.is_empty() {
+            return Ok(Vec::new());
+        }
+        let count = self.commands.min(lines.len());
+        let mut files: Vec<BufWriter<File>> = Vec::new();
+        let mut paths = Vec::new();
+        for at in 0..count {
+            let path = directory.join(format!("chunk-{at}.ndjson"));
+            files.push(BufWriter::new(
+                File::create(&path).map_err(|error| error.to_string())?,
+            ));
+            paths.push(path);
+        }
+        for (at, line) in lines.iter().enumerate() {
+            writeln!(files[at % count], "{line}").map_err(|error| error.to_string())?;
+        }
+        for mut file in files {
+            file.flush().map_err(|error| error.to_string())?;
+        }
+        Ok(paths)
+    }
+
+    /// Check the walk's phase without waiting on any process: when every
+    /// command of the phase exited, start the next, or apply the listing. A
+    /// table `get table` drops is left alone: its versions are neither found
+    /// nor deleted, though purge still drops the tables the walk no longer
+    /// lists.
     fn finish_walk(&mut self) {
-        let Some(walk) = &mut self.walk else {
+        let Some(mut walk) = self.walk.take() else {
             return;
         };
         walk.process_ids
@@ -265,43 +435,99 @@ impl Driver {
                 }
             });
         if !walk.process_ids.is_empty() {
+            self.walk = Some(walk);
             return;
         }
-        let walk = self.walk.take().expect("a walk runs");
         let complete = walk.finished.iter().all(Result::is_ok);
         if !complete {
+            // Each failure is one line in the error file, which the operator
+            // can read whole; the pass says how many and where.
             let text = fs::read_to_string(&walk.error).unwrap_or_default();
-            eprintln!("pqbench daemon: the walk failed: {}", tail(text.trim()));
+            let failed = text
+                .lines()
+                .filter(|line| line.starts_with("error"))
+                .count();
+            eprintln!(
+                "pqbench daemon: the walk's {} phase lost {failed} error(s), in {}",
+                walk.phase.name(),
+                walk.error.display()
+            );
         }
+        let next = match walk.phase {
+            Phase::Catalogs => Some(Phase::Schemas),
+            Phase::Schemas => Some(Phase::Tables),
+            Phase::Tables if !complete => {
+                // The tables are unknown, so no table's versions may be
+                // purged: stop here.
+                eprintln!(
+                    "pqbench daemon: the walk could not list the tables; no versions were purged"
+                );
+                None
+            }
+            Phase::Tables => {
+                walk.listed = match table_names(&self.store.join("walk/tables.ndjson")) {
+                    Ok(listed) => listed,
+                    Err(error) => {
+                        eprintln!("pqbench daemon: {error}");
+                        BTreeSet::new()
+                    }
+                };
+                Some(Phase::Columns)
+            }
+            Phase::Columns => Some(Phase::Partitions),
+            Phase::Partitions => None,
+        };
+        match next {
+            Some(phase) => match walk.start(self, phase) {
+                Ok(()) => self.walk = Some(walk),
+                Err(error) => {
+                    eprintln!("pqbench daemon: cannot start the walk: {error}");
+                    let _ = fs::remove_dir_all(self.store.join("walk"));
+                }
+            },
+            None => {
+                if walk.phase == Phase::Partitions {
+                    self.apply_walk(walk);
+                }
+                let _ = fs::remove_dir_all(self.store.join("walk"));
+            }
+        }
+    }
+
+    /// Apply the walk's listing, once the Partitions phase is done: each
+    /// table's versions are found or deleted, and a walk that listed the
+    /// tables purges the ones it no longer lists.
+    fn apply_walk(&mut self, walk: Walk) {
+        let complete = !walk.listed.is_empty();
         let now = master::now_ms();
         let mut found: BTreeMap<String, BTreeSet<master::Key>> = BTreeMap::new();
-        let lines = File::open(&walk.output)
-            .map(|file| BufReader::new(file).lines().map_while(Result::ok))
-            .into_iter()
-            .flatten();
-        for line in lines {
-            if line.trim().is_empty() {
-                continue;
-            }
-            match write(&self.master).found(&line, now) {
-                Ok(key) => {
-                    let table = key
-                        .0
-                        .split_once("/partitions/")
-                        .map_or("", |(table, _)| table);
-                    found.entry(table.to_string()).or_default().insert(key);
+        for output in &walk.outputs {
+            let lines = File::open(output)
+                .map(|file| BufReader::new(file).lines().map_while(Result::ok))
+                .into_iter()
+                .flatten();
+            for line in lines {
+                if line.trim().is_empty() {
+                    continue;
                 }
-                Err(error) => eprintln!("pqbench daemon: walk: {error}"),
+                match write(&self.master).found(&line, now) {
+                    Ok(key) => {
+                        let table = key
+                            .0
+                            .split_once("/partitions/")
+                            .map_or("", |(table, _)| table);
+                        found.entry(table.to_string()).or_default().insert(key);
+                    }
+                    Err(error) => eprintln!("pqbench daemon: walk: {error}"),
+                }
             }
         }
         for (table, keys) in &found {
             write(&self.master).missing(table, keys);
         }
         if complete {
-            let tables: BTreeSet<String> = found.into_keys().collect();
-            write(&self.master).retain(&tables);
+            write(&self.master).retain(&walk.listed);
         }
-        let _ = fs::remove_dir_all(self.store.join("walk"));
     }
 
     /// Drop what the walk deleted; the directories go after the lock.
@@ -401,6 +627,21 @@ fn command_error(run: &master::Running, status: &str) -> String {
         true => format!("`pqbench {}` {status}", run.command.join(" ")),
         false => tail(text),
     }
+}
+
+/// The names of the tables a listing names.
+fn table_names(path: &Path) -> Result<BTreeSet<String>, String> {
+    let mut names = BTreeSet::new();
+    let text =
+        fs::read_to_string(path).map_err(|error| format!("cannot read the tables: {error}"))?;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let record: serde_json::Value =
+            serde_json::from_str(line).map_err(|error| format!("bad table line: {error}"))?;
+        if let Some(name) = record["name"].as_str() {
+            names.insert(name.to_string());
+        }
+    }
+    Ok(names)
 }
 
 /// The end of a long error text.

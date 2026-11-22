@@ -763,8 +763,9 @@ fn table_ls_prints_the_tables_as_a_table() {
         "{stdout}"
     );
     assert!(stdout.contains("s3://bucket/trips"), "{stdout}");
+    // A view is not a table: it has no files, so `list tables` drops it.
     assert!(
-        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/recent"),
+        !stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/recent"),
         "{stdout}"
     );
 }
@@ -783,18 +784,12 @@ fn table_ls_streams_table_refs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2);
-    // Sorted by name: the view (`recent`) precedes the table (`trips`).
+    assert_eq!(records.len(), 1);
     assert_eq!(
         records[0]["name"],
-        "catalogs/dbx_samples/schemas/nyctaxi/tables/recent"
-    );
-    assert!(records[0].get("uri").is_none(), "{}", records[0]);
-    assert_eq!(
-        records[1]["name"],
         "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     );
-    assert_eq!(records[1]["uri"], "s3://bucket/trips");
+    assert_eq!(records[0]["uri"], "s3://bucket/trips");
 }
 
 #[test]
@@ -866,7 +861,7 @@ fn table_ls_reads_a_schema_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), 2);
     assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
@@ -888,7 +883,7 @@ fn table_ls_multiplexes_its_refs() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(ndjson(&output.stdout).len(), 4);
+    assert_eq!(ndjson(&output.stdout).len(), 2);
     assert!(
         peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
         "the two refs' requests did not overlap"

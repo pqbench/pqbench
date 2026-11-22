@@ -2,14 +2,13 @@
 //!
 //! The table format is declared by the caller (`PQB_TABLE_FORMAT`). Unity
 //! serves `/tables?catalog_name=&schema_name=` pages, each entry carrying
-//! `full_name` and `storage_location`, so a ref is complete in one page.
+//! `full_name`, `table_type` and `storage_location`, so a ref is complete in
+//! one page. A view is not a table: it has no files, so it is not listed.
 //! Iceberg REST lists `{endpoint}/namespaces/{namespace}/tables` identifiers
 //! only; the ref carries its name and no storage URI, so `pqbench get table`
 //! derives the `loadTable` URL and reads the metadata inline. No config probe
-//! runs. A view carries no location: the ref keeps its `uri` unset, and the
-//! storage-reading stage that later asks for a lease reports the refusal. The
-//! URLs, the page shapes, and the pagination are this command's; the transport
-//! is the third-party facade.
+//! runs. The URLs, the page shapes, and the pagination are this command's;
+//! the transport is the third-party facade.
 
 use serde::Deserialize;
 
@@ -38,8 +37,14 @@ struct UnityTable {
     #[serde(default)]
     full_name: Option<String>,
     #[serde(default)]
+    table_type: Option<String>,
+    #[serde(default)]
     storage_location: Option<String>,
 }
+
+/// The table types that hold no files: a view reads tables when it is
+/// queried, so it has no storage to measure.
+const VIEW_TYPES: &[&str] = &["VIEW", "MATERIALIZED_VIEW", "METRIC_VIEW"];
 
 /// One page of Iceberg REST `GET /v1/{prefix}/namespaces/{namespace}/tables`.
 #[derive(Deserialize)]
@@ -83,7 +88,13 @@ async fn unity_tables(
                 .await
                 .map_err(Error::Http)?;
         for entry in page.tables {
-            tables.push(unity_table(catalog, schema, entry)?);
+            let view = entry
+                .table_type
+                .as_deref()
+                .is_some_and(|kind| VIEW_TYPES.contains(&kind));
+            if !view {
+                tables.push(unity_table(catalog, schema, entry)?);
+            }
         }
         match page.next_page_token {
             Some(next) if !next.is_empty() => page_token = Some(next),

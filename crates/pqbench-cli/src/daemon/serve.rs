@@ -51,10 +51,12 @@ pub(crate) async fn run(
             }
         }
     };
-    let _ = std::fs::remove_file(&socket);
+    // The checkpoint first: a reader that waits for the socket to go away,
+    // `daemon stop` included, waits for the map to be on disk.
     if let Some(master) = &master {
         read_master(master).checkpoint()?;
     }
+    let _ = std::fs::remove_file(&socket);
     result
 }
 

@@ -101,7 +101,8 @@ one `Table` line each — the document `get table` enriches. Unity's `/tables`
 pages carry the full name and storage location, so the ref is complete; Iceberg
 REST lists identifiers only, so the ref carries its name and no storage URI —
 `get table` derives the `loadTable` URL and reads the metadata inline. A view
-carries no location, so its ref keeps its `uri` unset. Refs are addresses; the
+is not a table: it has no files, so `list tables` does not list it. Refs are
+addresses; the
 walk context (endpoint, token, storage options) comes from the environment
 (`PQB_*`, `AWS_*`). The walk is a plain pipeline: every command streams refs
 and keeps `--fan-out` in flight. Each storage-reading command resolves the
@@ -194,9 +195,11 @@ command means for it.
   FILE instead (for local tables). It runs once when the daemon
   starts, then every `--walk-period-seconds`. A partition at a new etag is a
   new `PENDING` version, and a listed table's versions the walk no longer
-  finds are `DELETED`. When every table was read, the versions of tables the
-  walk did not list are deleted too; a walk where a table failed deletes no
-  other table.
+  finds are `DELETED`. The tables `list tables` did not name are deleted too;
+  a table that is listed but cannot be read keeps its versions. The walk is one
+  command per phase — `list catalogs`, `list schemas`, `list tables`, then
+  `get table` and `list partitions` in a stream per CPU — each reading the file
+  the phase before wrote.
 - **Each version** goes through one command at a time, each from the state
   before it to the state after it: `price` (`get partition-price`),
   `download` (the partition's sample file into the version's directory),

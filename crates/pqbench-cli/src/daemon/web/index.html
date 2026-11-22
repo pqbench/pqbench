@@ -30,7 +30,7 @@ pre { background:#26231f; color:#efe9df; padding:10px 12px; border-radius:6px; o
 </style>
 </head>
 <body>
-<header><b>pqbench</b><a href="#/">warehouse</a></header>
+<header><b>pqbench</b><a href="#/">warehouse</a><a href="#/partitions">partitions</a></header>
 <main id="main"><p class="note">loading…</p></main>
 <script>
 // Every number on the page is a field of a record from /v1/: a page of
@@ -129,6 +129,34 @@ async function viewPartitions(table) {
       <td class="n" title="${esc(v.error)}">${v.failure_count || ""}</td></tr>`).join("")}</table>`;
 }
 
+// The map whole: every version the master holds, the newest found first, as
+// it is; the page reads it again every few seconds.
+let recent = { tokens: [""] };
+
+async function viewRecent() {
+  const token = recent.tokens[recent.tokens.length - 1];
+  const query = new URLSearchParams({ page_size: PAGE_SIZE, page_token: token });
+  const page = await get(`partitions?${query}`);
+  if (!page) return `<div class="empty">The map could not be read.</div>`;
+  const first = (recent.tokens.length - 1) * PAGE_SIZE;
+  setTimeout(() => {
+    const next = document.getElementById("next"), prev = document.getElementById("prev");
+    if (next) next.onclick = () => { recent.tokens.push(page.next_page_token); route(); };
+    if (prev) prev.onclick = () => { recent.tokens.pop(); route(); };
+  });
+  return `<h1>Partitions</h1>
+    <p class="sub">${page.total_size.toLocaleString()} versions in the master's map, the newest found first; the page reads it again every 3 s.</p>
+    <div class="pager"><span class="note">${page.partitions.length ? `${(first + 1).toLocaleString()}–${(first + page.partitions.length).toLocaleString()} of ${page.total_size.toLocaleString()}` : "none"}</span>
+      ${recent.tokens.length > 1 ? `<button id="prev">previous</button>` : ""}
+      ${page.next_page_token ? `<button id="next">next</button>` : ""}</div>
+    <table><tr><th>table</th><th>partition</th><th>state</th><th class="n">files</th><th class="n">bytes</th><th class="n">stock /mo</th><th class="n">found</th><th class="n">failures</th></tr>
+    ${page.partitions.map(v => `<tr><td class="mono">${esc(dotted(v.name.split("/versions/")[0]))}</td>
+      <td><a href="#/${partitionOf(v.name)}">${esc(leaf(partitionOf(v.name)))}</a></td><td>${tag(v.state)}</td>
+      <td class="n">${v.file_count.toLocaleString()}</td><td class="n">${bytes(v.size_bytes)}</td>
+      <td class="n">${range(costRange(v.price?.storage_costs))}/mo</td><td class="n">${time(v.create_time)}</td>
+      <td class="n" title="${esc(v.error)}">${v.failure_count || ""}</td></tr>`).join("")}</table>`;
+}
+
 // A version's name is its partition's, then `/versions/{etag}`.
 const partitionOf = name => name.split("/versions/")[0];
 const etagOf = name => name.split("/versions/")[1];
@@ -182,11 +210,17 @@ async function viewPartition(name) {
     ${raw(versions)}`;
 }
 
+let timer = null;
+
 async function route() {
   // Names stay encoded: a partition id is one segment that may hold `%2F`.
   const name = (location.hash || "#/").slice(2).replace(/\/$/, "");
+  clearTimeout(timer);
   let html;
-  if (!name || /^catalogs\/[^/]+(\/schemas\/[^/]+)?$/.test(name)) html = await viewStats(name);
+  if (name === "partitions") {
+    html = await viewRecent();
+    timer = setTimeout(route, 3000);
+  } else if (!name || /^catalogs\/[^/]+(\/schemas\/[^/]+)?$/.test(name)) html = await viewStats(name);
   else if (/^catalogs\/[^/]+\/schemas\/[^/]+\/tables\/[^/]+$/.test(name)) html = await viewPartitions(name);
   else if (/\/partitions\/[^/]+$/.test(name)) html = await viewPartition(name);
   else html = `<div class="empty">No page for ${esc(decodeURIComponent(name))}.</div>`;
