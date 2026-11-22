@@ -421,8 +421,9 @@ impl Master {
     /// A run's process exited: `Ok` when it succeeded, else its error. A
     /// success renames the output in and moves the version on: a price whose
     /// partition has no live file, or whose files need a restore, ends the
-    /// version, since there is nothing to read; a failure puts the version
-    /// back with the error counted.
+    /// version, since there is nothing to read, and a version that is done
+    /// drops its copy of the sample file. A failure puts the version back
+    /// with the error counted.
     pub(crate) fn finish(&mut self, key: &Key, outcome: Result<(), String>, now: u64) {
         self.running.remove(key);
         let directory = self.result_dir(key);
@@ -456,6 +457,9 @@ impl Master {
                 if next == State::UpToDate {
                     row.up_to_date_time = Some(now);
                     self.purge_due = true;
+                    // The copy was for the steps that read data; they are
+                    // done, and a sample file can be large.
+                    let _ = fs::remove_file(directory.join("sample.parquet"));
                 }
             }
             Err(error) => {

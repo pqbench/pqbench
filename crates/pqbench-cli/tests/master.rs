@@ -414,9 +414,9 @@ fn the_rows_survive_a_restart() {
     assert_eq!(master.rows(), rows);
 }
 
-/// The steps take each version to UP_TO_DATE: a price, a copy of the sample
-/// file, its columns and its suggestions, the records naming the table's
-/// file and not the copy.
+/// The steps take each version to UP_TO_DATE: a price, the sample file's
+/// columns and suggestions, the records naming the table's file and not the
+/// copy they were read from, which is gone once the version is done.
 #[test]
 fn the_steps_take_each_version_up_to_date() {
     let directory = tempfile::tempdir().unwrap();
@@ -429,17 +429,13 @@ fn the_steps_take_each_version_up_to_date() {
     for row in &rows {
         assert!(row["up_to_date_time"].is_u64());
         assert!(row.get("process_id").is_none(), "{row}");
-        for output in [
-            "price.ndjson",
-            "sample.parquet",
-            "bytemass.ndjson",
-            "list-suggestions.ndjson",
-        ] {
+        for output in ["price.ndjson", "bytemass.ndjson", "list-suggestions.ndjson"] {
             assert!(
                 result_file(&master, row, output).exists(),
                 "{output} for {row}"
             );
         }
+        assert!(!result_file(&master, row, "sample.parquet").exists());
         let bytemass =
             std::fs::read_to_string(result_file(&master, row, "bytemass.ndjson")).unwrap();
         let blob: Value = serde_json::from_str(bytemass.lines().next().unwrap()).unwrap();

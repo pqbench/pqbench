@@ -200,7 +200,8 @@ command means for it.
 - **The steps** run one command per version, each from the state before it to
   the state after it: `price` (`get partition-price`), `download` (the
   partition's sample file into the version's directory), `bytemass` and
-  `lint` (`bytemass --local` and `list suggestions --local` on that copy).
+  `lint` (`bytemass --local` and `list suggestions --local` on that copy,
+  which is deleted once the version is done).
   Each `--step NAME` turns one on, with at most `--processes` commands at once
   and `--step-time-limit-seconds` before one is killed. A version with no live
   file, or whose files are in an archive class or tier, is `UP_TO_DATE` after
