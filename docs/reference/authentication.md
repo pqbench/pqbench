@@ -216,9 +216,9 @@ version and what a finished command means for it.
 - **Purge** drops `DELETED` versions and their results, except a partition's
   last `UP_TO_DATE` version while its newer one is in progress, so its
   complete results are shown until the new ones replace them.
-A command's output lands in `DIR/results/{partition}/{etag}/` under the
-attempt's id and is renamed into place when the command succeeds. The map is
-written whole to `DIR/checkpoint.ndjson` every 10 seconds while commands run,
+A command's output lands in `DIR/results/{partition}/{etag}/` through a
+temporary file and is renamed into place when the command succeeds. The map is
+written whole to `DIR/checkpoint.ndjson` every 5 minutes while commands run,
 at once when none do, and on stop. A restart loads it and puts each running
 version back; a crash loses at most the changes since the last checkpoint,
 and the commands redo them.

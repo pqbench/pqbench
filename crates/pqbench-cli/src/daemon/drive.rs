@@ -36,7 +36,7 @@ const TICK: Duration = Duration::from_secs(1);
 /// How often the map is checkpointed while commands run and it changes: the
 /// most work a crash can cost. Once nothing runs, a change is checkpointed at
 /// once.
-const CHECKPOINT_PERIOD: Duration = Duration::from_secs(10);
+const CHECKPOINT_PERIOD: Duration = Duration::from_secs(5 * 60);
 
 /// What the driver runs: the operator's settings.
 pub(crate) struct Settings {

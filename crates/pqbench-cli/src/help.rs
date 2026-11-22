@@ -392,7 +392,7 @@ commands the daemon runs as child processes and awaits:
   purge     DELETED versions and their results, except a partition's last
             UP_TO_DATE version while its new one is in progress.
 
-The map is checkpointed to DIR/checkpoint.ndjson every 10 seconds while
+The map is checkpointed to DIR/checkpoint.ndjson every 5 minutes while
 commands run, at once when none do, and on stop. A restart loads it and puts
 running versions back; the commands redo the rest. `pqbench list
 partition-versions [PARENT]` prints the map, and `pqbench get
