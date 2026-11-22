@@ -22,6 +22,7 @@ mod rate;
 mod serve;
 mod session;
 mod start;
+mod web;
 
 pub(crate) use session::Daemon;
 
@@ -62,9 +63,20 @@ pub(crate) struct MasterArgs {
     /// the master's store: its image, edit log, and results (with --master)
     #[arg(long, requires = "master", value_name = "DIR")]
     store: Option<PathBuf>,
+    /// also serve the web app: the master's records and status page (with --master)
+    #[arg(long, requires = "master")]
+    web_ui: bool,
+    /// the web app's address (with --web-ui)
+    #[arg(long, value_name = "ADDR", default_value = "127.0.0.1:8180")]
+    listen: String,
 }
 
 impl MasterArgs {
+    /// The web app's address, when it runs.
+    pub(crate) fn web_ui(&self) -> Option<&str> {
+        (self.master && self.web_ui).then_some(self.listen.as_str())
+    }
+
     /// The store, when the master runs.
     pub(crate) fn store(&self) -> Option<PathBuf> {
         self.master
@@ -112,6 +124,7 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
                 &socket,
                 args.idle_seconds,
                 args.master.store().as_deref(),
+                args.master.web_ui(),
             )
             .await?;
         }
@@ -126,6 +139,10 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
                 ))),
                 None => None,
             };
+            if let (Some(address), Some(master)) = (args.master.web_ui(), &master) {
+                let listener = web::bind(address).await?;
+                tokio::spawn(web::run(listener, std::sync::Arc::clone(master)));
+            }
             serve::run(session, master, socket, args.idle_seconds).await?;
         }
     }

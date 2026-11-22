@@ -18,6 +18,10 @@ struct Master {
 
 impl Master {
     fn start(directory: &Path) -> Self {
+        Self::start_flagged(directory, &[])
+    }
+
+    fn start_flagged(directory: &Path, flags: &[&str]) -> Self {
         let socket = directory.join("d.sock");
         let store = directory.join("store");
         // A killed daemon leaves its socket behind.
@@ -27,6 +31,7 @@ impl Master {
             .arg(&store)
             .arg("--socket")
             .arg(&socket)
+            .args(flags)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -410,4 +415,68 @@ fn a_failing_version_is_left_after_two_failures() {
     assert_eq!(row["state"], "PRICED");
     assert_eq!(row["failure_count"], 2);
     assert!(row["error"].as_str().is_some_and(|error| !error.is_empty()));
+}
+
+/// One HTTP GET to the web app: the status code and the body.
+fn http_get(address: &str, path: &str) -> (u16, String) {
+    use std::io::Read;
+    let mut stream = std::net::TcpStream::connect(address).unwrap();
+    write!(stream, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    let status = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+    (status, body.to_string())
+}
+
+/// The web app serves its page and the master's records by name: the
+/// partitions collection with `-` parents, and one partition with every
+/// result.
+#[test]
+fn the_web_app_serves_the_records_by_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1", "2"]));
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let address = format!("127.0.0.1:{port}");
+    let master = Master::start_flagged(directory.path(), &["--web-ui", "--listen", &address]);
+    master.scan(&table_record("events", &root), false);
+    run_steps(&master);
+    let (status, page) = http_get(&address, "/");
+    assert_eq!(status, 200);
+    assert!(page.contains("/v1/"));
+    let (status, body) = http_get(&address, "/v1/catalogs/-/schemas/-/tables/-/partitions");
+    assert_eq!(status, 200);
+    let versions: Vec<Value> = serde_json::from_str(&body).unwrap();
+    assert_eq!(versions.len(), 2);
+    assert!(versions
+        .iter()
+        .all(|v| v["list_partitions"]["etag"] == v["etag"]));
+    assert!(versions.iter().all(|v| v.get("bytemass").is_none()));
+    let name = versions[0]["name"].as_str().unwrap();
+    let (status, body) = http_get(&address, &format!("/v1/{name}"));
+    assert_eq!(status, 200);
+    let one: Vec<Value> = serde_json::from_str(&body).unwrap();
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0]["state"], "UP_TO_DATE");
+    assert!(one[0]["bytemass"]
+        .as_array()
+        .is_some_and(|lines| !lines.is_empty()));
+    assert!(one[0]["list_suggestions"].is_array());
+    assert_eq!(http_get(&address, "/v1/catalogs/local").0, 404);
+}
+
+/// The web app needs the master.
+#[test]
+fn the_web_app_requires_the_master() {
+    let output = pqbench()
+        .args(["daemon", "serve", "--web-ui"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--master"));
 }

@@ -19,6 +19,7 @@ pub(crate) async fn start(
     socket: &Path,
     idle_seconds: u64,
     store: Option<&Path>,
+    web_ui: Option<&str>,
 ) -> Result<(), String> {
     if client::ping(socket).await {
         if store.is_some() && !runs_master(socket).await {
@@ -31,7 +32,7 @@ pub(crate) async fn start(
     }
     path::prepare(socket)?;
 
-    let mut child = serve_command(config, socket, idle_seconds, store)?
+    let mut child = serve_command(config, socket, idle_seconds, store, web_ui)?
         .spawn()
         .map_err(|error| format!("cannot start the daemon: {error}"))?;
 
@@ -53,6 +54,7 @@ fn serve_command(
     socket: &Path,
     idle_seconds: u64,
     store: Option<&Path>,
+    web_ui: Option<&str>,
 ) -> Result<Command, String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("cannot find the pqbench executable: {error}"))?;
@@ -66,6 +68,9 @@ fn serve_command(
         .arg(idle_seconds.to_string());
     if let Some(store) = store {
         command.arg("--master").arg("--store").arg(store);
+    }
+    if let Some(address) = web_ui {
+        command.arg("--web-ui").arg("--listen").arg(address);
     }
     // The child resolves the same identity from explicit environment values;
     // the token is never on its command line.

@@ -181,6 +181,11 @@ impl Master {
         Ok(master)
     }
 
+    /// The directory the master keeps its image, edits and results in.
+    pub(crate) fn store(&self) -> &Path {
+        &self.store
+    }
+
     /// Every row, or the rows of one table, in key order.
     pub(crate) fn list(&self, table: Option<&str>) -> Vec<Entry> {
         let prefix = table.map(table_prefix);

@@ -194,8 +194,14 @@ image `DIR/master/image.ndjson` is rewritten hourly or every million edits, and
 on stop. A restart loads the image, replays the edits, returns work held by
 jobs to where it was, and deletes results no row names.
 
+With `--web-ui` (and `--listen ADDR`, default `127.0.0.1:8180`) the daemon
+also serves the web app: a status page over the master's records, read-only.
+`GET /v1/{name}` returns the records a name names: a partitions collection
+(`catalogs/-/schemas/-/tables/-/partitions`, `-` for any parent) or one
+partition with every result; the page's numbers are sums over them.
+
 ```console no-run
-$ pqbench daemon start --master --store /var/lib/pqbench
+$ pqbench daemon start --master --store /var/lib/pqbench --web-ui
 $ echo '{"name":"catalogs/main/schemas/sales"}' | pqbench list tables | pqbench get table | pqbench job scan --complete
 $ pqbench job list
 ```

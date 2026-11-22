@@ -958,7 +958,9 @@ With --master --store DIR the daemon also runs the master: one map of partition
 versions (a partition at one etag) that `pqbench job` processes move through
 their states, and the results the jobs' commands wrote, under DIR. Each call on
 the map is atomic and is appended to an edit log before it is answered; the
-full image is rewritten hourly or every million edits, and on stop.
+full image is rewritten hourly or every million edits, and on stop. With
+--web-ui it also serves the web app (--listen, default 127.0.0.1:8180): a status
+page over the master's records, and the records at GET /v1/{name}.
 
 **Usage:** `pqbench daemon <COMMAND>`
 
@@ -997,6 +999,10 @@ Start the daemon in the background
   Default value: `900`
 * `--master` — also run the master: the partition map and the calls jobs make on it
 * `--store <DIR>` — the master's store: its image, edit log, and results (with --master)
+* `--web-ui` — also serve the web app: the master's records and status page (with --master)
+* `--listen <ADDR>` — the web app's address (with --web-ui)
+
+  Default value: `127.0.0.1:8180`
 
 
 
@@ -1029,6 +1035,10 @@ Serve leases in the foreground
   Default value: `0`
 * `--master` — also run the master: the partition map and the calls jobs make on it
 * `--store <DIR>` — the master's store: its image, edit log, and results (with --master)
+* `--web-ui` — also serve the web app: the master's records and status page (with --master)
+* `--listen <ADDR>` — the web app's address (with --web-ui)
+
+  Default value: `127.0.0.1:8180`
 
 
 
