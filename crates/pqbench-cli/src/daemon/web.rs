@@ -1,6 +1,12 @@
 //! The web app: the master's partition versions, read-only over HTTP.
 //!
-//! `GET /` is the page; `GET /v1/{name}` reads records:
+//! The page is the same tables `pqbench format` prints: one ASCII table per
+//! resource, and every row links to the resource it names. `GET /` is the
+//! catalogs, `/catalogs/{c}` their schemas, `…/tables/{t}` the table's
+//! partitions, `…/partitions/{p}` that partition's versions with its columns
+//! and files. No script runs in the browser.
+//!
+//! `GET /v1/{name}` reads the same records as JSON:
 //!
 //! - `/v1/catalogs`, `/v1/catalogs/{c}/schemas`,
 //!   `/v1/catalogs/{c}/schemas/{s}/tables`, ids `-` for any (AIP-159): the
@@ -27,11 +33,12 @@ use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use pqbench::v1::partition_version::State;
 use pqbench::v1::{PartitionStats, PartitionVersion};
 
-use super::master::{version, Key, Master};
+use crate::render::{render_cells, Align};
 
-const PAGE: &str = include_str!("web/index.html");
+use super::master::{version, Key, Master};
 
 /// The largest request head read; a GET needs a few hundred bytes.
 const HEAD_LIMIT: usize = 16 * 1024;
@@ -79,7 +86,22 @@ async fn handle(mut stream: TcpStream, master: Arc<RwLock<Master>>) -> std::io::
     );
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let (status, kind, body) = match (method, path) {
-        ("GET", "/") => ("200 OK", "text/html; charset=utf-8", PAGE.to_string()),
+        ("GET", path) if !path.starts_with("/v1/") => {
+            let page = tokio::task::spawn_blocking({
+                let (path, master) = (path.to_string(), Arc::clone(&master));
+                move || page(&master, &path)
+            })
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
+            match page {
+                Ok(body) => ("200 OK", "text/html; charset=utf-8", body),
+                Err(error) => (
+                    "404 Not Found",
+                    "text/plain; charset=utf-8",
+                    format!("{error}\n"),
+                ),
+            }
+        }
         ("GET", path) if path.starts_with("/v1/") => {
             let name = path.trim_start_matches("/v1/").trim_end_matches('/');
             let read = tokio::task::spawn_blocking({
@@ -114,6 +136,458 @@ async fn handle(mut stream: TcpStream, master: Arc<RwLock<Master>>) -> std::io::
     stream.shutdown().await
 }
 
+/// A page: the ASCII table of one resource, every row a link to what it
+/// names. `GET /v1/` is the JSON; this is the same data as `pqbench format`
+/// prints.
+fn page(master: &RwLock<Master>, path: &str) -> Result<String, String> {
+    let name = path.trim_matches('/');
+    let segments: Vec<&str> = if name.is_empty() {
+        Vec::new()
+    } else {
+        name.split('/').collect()
+    };
+    // A level's records are the ones under its collection name: `/` is the
+    // catalogs, `/catalogs/{c}` their schemas, `…/schemas/{s}` their tables.
+    let body = match segments.len() {
+        0 => levels_page(master, &["catalogs"])?,
+        1 if segments[0] == "partitions" => recent_page(master)?,
+        2 => levels_page(master, &[segments[0], segments[1], "schemas"])?,
+        4 => levels_page(
+            master,
+            &[segments[0], segments[1], segments[2], segments[3], "tables"],
+        )?,
+        6 => partitions_page(master, name)?,
+        8 => partition_page(master, name)?,
+        _ => return Err(format!("no page for /{name}")),
+    };
+    Ok(shell(&crumbs(&segments), &body))
+}
+
+/// The catalogs, schemas or tables under a collection, dearest first.
+fn levels_page(master: &RwLock<Master>, segments: &[&str]) -> Result<String, String> {
+    let rows = stats(master, segments)?;
+    let cells: Vec<(String, Vec<String>)> = rows
+        .iter()
+        .map(|row| {
+            let name = row.name.trim_end_matches("/partitionStats").to_string();
+            (
+                name.clone(),
+                vec![
+                    name,
+                    row.partition_count.to_string(),
+                    row.file_count.to_string(),
+                    bytes(row.size_bytes),
+                    money(row.highest_cost_per_month.or(row.lowest_cost_per_month)),
+                    row.version_counts
+                        .iter()
+                        .map(|(state, count)| format!("{} {count}", state_name(*state)))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    row.failed_version_count.to_string(),
+                    when(row.last_modification_time),
+                ],
+            )
+        })
+        .collect();
+    Ok(ascii(
+        &[
+            "name",
+            "partitions",
+            "files",
+            "bytes",
+            "stock /mo",
+            "versions",
+            "failed",
+            "newest file",
+        ],
+        cells,
+    ))
+}
+
+/// One table's partitions, dearest first.
+fn partitions_page(master: &RwLock<Master>, table: &str) -> Result<String, String> {
+    let (rows, listed): (Vec<PartitionVersion>, usize) = {
+        let master = lock(master);
+        let mut rows = master.list(table)?;
+        rows.sort_by(|a, b| cost_version(b.1).total_cmp(&cost_version(a.1)));
+        let listed = rows.len();
+        let rows: Vec<PartitionVersion> = rows
+            .into_iter()
+            .take(MAX_ROWS)
+            .map(|(key, row)| version(key, row))
+            .collect();
+        (rows, listed)
+    };
+    let cells: Vec<(String, Vec<String>)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.name.clone(),
+                vec![
+                    row.name.clone(),
+                    state_name(row.state).to_string(),
+                    row.file_count.to_string(),
+                    bytes(row.size_bytes),
+                    bytes(row.removed_size_bytes.unwrap_or(0)),
+                    money(Some(cost_version(row))),
+                    when(Some(row.create_time)),
+                    row.failure_count.to_string(),
+                ],
+            )
+        })
+        .collect();
+    let table = ascii(
+        &[
+            "partition",
+            "state",
+            "files",
+            "bytes",
+            "removed",
+            "stock /mo",
+            "found",
+            "failures",
+        ],
+        cells,
+    );
+    Ok(note_if_truncated(table, rows.len(), listed))
+}
+
+/// The map whole: every version, the newest found first.
+fn recent_page(master: &RwLock<Master>) -> Result<String, String> {
+    let (rows, listed) = {
+        let master = lock(master);
+        let mut rows = master.list("")?;
+        rows.sort_by(|(a_key, a), (b_key, b)| {
+            b.create_time
+                .cmp(&a.create_time)
+                .then_with(|| a_key.cmp(b_key))
+        });
+        let listed = rows.len();
+        let rows: Vec<PartitionVersion> = rows
+            .into_iter()
+            .take(MAX_ROWS)
+            .map(|(key, row)| version(key, row))
+            .collect();
+        (rows, listed)
+    };
+    let cells: Vec<(String, Vec<String>)> = rows
+        .iter()
+        .map(|row| {
+            let partition = row.name.split("/versions/").next().unwrap_or_default();
+            (
+                partition.to_string(),
+                vec![
+                    row.name.clone(),
+                    state_name(row.state).to_string(),
+                    row.file_count.to_string(),
+                    bytes(row.size_bytes),
+                    money(Some(cost_version(row))),
+                    when(Some(row.create_time)),
+                ],
+            )
+        })
+        .collect();
+    let table = ascii(
+        &["version", "state", "files", "bytes", "stock /mo", "found"],
+        cells,
+    );
+    Ok(note_if_truncated(table, rows.len(), listed))
+}
+
+/// One partition: its versions, then the newest's columns and files.
+fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, String> {
+    let (store, mut rows) = {
+        let master = lock(master);
+        (master.store().to_path_buf(), master.records(partition)?)
+    };
+    if rows.is_empty() {
+        return Err(format!("no such partition: {partition}"));
+    }
+    rows.sort_by_key(|row| std::cmp::Reverse(row.create_time));
+    let cells: Vec<(String, Vec<String>)> = rows
+        .iter()
+        .map(|row| {
+            (
+                row.name.clone(),
+                vec![
+                    row.name.rsplit('/').next().unwrap_or_default().to_string(),
+                    state_name(row.state).to_string(),
+                    row.file_count.to_string(),
+                    bytes(row.size_bytes),
+                    money(Some(cost_version(row))),
+                    when(Some(row.create_time)),
+                    when(row.up_to_date_time),
+                    row.failure_count.to_string(),
+                ],
+            )
+        })
+        .collect();
+    let mut body = ascii(
+        &[
+            "version",
+            "state",
+            "files",
+            "bytes",
+            "stock /mo",
+            "found",
+            "done",
+            "failures",
+        ],
+        cells,
+    );
+    let current = rows
+        .iter()
+        .find(|row| row.state != State::Deleted)
+        .unwrap_or(&rows[0]);
+    let view = view(&store, current, &["list-partitions", "price", "bytemass"]);
+    let masses: Vec<&Value> = view["bytemass"]
+        .as_array()
+        .map(|rows| rows.iter().collect())
+        .unwrap_or_default();
+    let columns: Vec<(String, Vec<String>)> = masses
+        .iter()
+        .filter(|row| row["mass"].is_object())
+        .map(|row| {
+            let mass = &row["mass"];
+            (
+                String::new(),
+                vec![
+                    row["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                    row["physical_data_type"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    mass["codec"].as_str().unwrap_or_default().to_string(),
+                    if mass["dictionary"].as_bool().unwrap_or(false) {
+                        format!(
+                            "yes {}",
+                            bytes(mass["dictionary_bytes"].as_u64().unwrap_or(0))
+                        )
+                    } else {
+                        "no".to_string()
+                    },
+                    count(mass["value_count"].as_u64()),
+                    count(mass["null_count"].as_u64()),
+                    bytes(mass["compressed_bytes"].as_u64().unwrap_or(0)),
+                    bytes(mass["uncompressed_bytes"].as_u64().unwrap_or(0)),
+                    number(mass["compression_ratio"].as_f64()),
+                    number(mass["bytes_per_row"].as_f64()),
+                ],
+            )
+        })
+        .collect();
+    if !columns.is_empty() {
+        body.push('\n');
+        body.push_str(&ascii(
+            &[
+                "column",
+                "type",
+                "codec",
+                "dictionary",
+                "values",
+                "nulls",
+                "compressed",
+                "uncompressed",
+                "ratio",
+                "bytes/row",
+            ],
+            columns,
+        ));
+    }
+    let listing = &view["list_partitions"];
+    let files: Vec<(String, Vec<String>)> = ["first_file", "last_file", "sample_file"]
+        .iter()
+        .filter_map(|field| listing.get(*field).filter(|file| file.is_object()))
+        .map(|file| {
+            (
+                String::new(),
+                vec![
+                    file["path"].as_str().unwrap_or_default().to_string(),
+                    bytes(file["size_bytes"].as_u64().unwrap_or(0)),
+                    when(file["modification_time"].as_u64()),
+                ],
+            )
+        })
+        .collect();
+    if !files.is_empty() {
+        body.push('\n');
+        body.push_str(&ascii(&["file", "size", "modified"], files));
+    }
+    Ok(body)
+}
+/// The most rows one page shows; the map can be larger than a screen.
+const MAX_ROWS: usize = 1000;
+
+/// One ASCII table, every data line a link to the resource it names.
+fn ascii(header: &[&str], cells: Vec<(String, Vec<String>)>) -> String {
+    let align: Vec<Align> = header.iter().map(|_| Align::Left).collect();
+    let rows: Vec<Vec<String>> = cells.iter().map(|(_, cells)| cells.clone()).collect();
+    let text = render_cells(header, &align, &rows);
+    let mut lines = text.lines();
+    let mut out = String::new();
+    for line in lines.by_ref().take(2) {
+        out.push_str(&esc(line));
+        out.push('\n');
+    }
+    for (line, (href, _)) in lines.zip(&cells) {
+        let line = esc(line);
+        if href.is_empty() {
+            out.push_str(&line);
+            out.push('\n');
+        } else {
+            out.push_str(&format!("<a href=\"/{}\">{line}</a>\n", esc(href)));
+        }
+    }
+    out
+}
+
+/// The page shell: the crumbs, then the table.
+fn shell(crumbs: &str, body: &str) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <title>pqbench</title><style>\
+         body{{margin:0;background:#faf8f5;color:#26231f;font:13px/1.45 ui-monospace,monospace}}\
+         header{{padding:8px 16px;background:#26231f;color:#d9d2c8}}\
+         header a{{color:#f3efe9;text-decoration:none}} header b{{color:#f3efe9}}\
+         main{{padding:12px 16px 40px;overflow-x:auto}}\
+         pre{{margin:0}} a{{color:inherit;text-decoration:none}}\
+         a:hover{{background:#e8e2d9}} .note{{color:#77706a;margin:10px 0 0}}\
+         </style></head><body><header><b>pqbench</b> · \n\
+         <a href=\"/\">warehouse</a> · <a href=\"/partitions\">partitions</a>\n\
+         {crumbs}</header><main><pre>{body}</pre></main></body></html>\n"
+    )
+}
+
+/// The path from the warehouse to the resource, as links.
+fn crumbs(segments: &[&str]) -> String {
+    let mut out = String::new();
+    for (at, segment) in segments.iter().enumerate() {
+        if at % 2 == 0 {
+            out.push_str("/ \n");
+        } else {
+            let label = percent_decode(segment);
+            let path = segments[..=at].join("/");
+            out.push_str(&format!("<a href=\"/{path}\">{}</a>\n", esc(&label)));
+        }
+    }
+    out
+}
+
+/// A note under a table that showed fewer rows than the master holds.
+fn note_if_truncated(table: String, shown: usize, total: usize) -> String {
+    if shown >= total {
+        return table;
+    }
+    format!(
+        "{table}\n<p class=\"note\">the first {shown} of {total}; the JSON API pages the rest</p>\n"
+    )
+}
+
+/// A percentage-decoded path segment, for a label.
+fn percent_decode(text: &str) -> String {
+    url::form_urlencoded::parse(text.as_bytes())
+        .next()
+        .map(|(key, _)| key.into_owned())
+        .unwrap_or_else(|| text.to_string())
+}
+
+/// Bytes as a short binary unit.
+fn bytes(bytes: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    match unit {
+        0 => format!("{bytes} B"),
+        _ => format!("{value:.1} {}", UNITS[unit]),
+    }
+}
+
+/// A monthly cost, or a dash.
+fn money(cost: Option<f64>) -> String {
+    match cost {
+        None => "—".to_string(),
+        Some(0.0) => "$0".to_string(),
+        Some(cost) if cost < 0.01 => "<$0.01".to_string(),
+        Some(cost) if cost >= 1e6 => format!("${:.2}M", cost / 1e6),
+        Some(cost) if cost >= 1e3 => format!("${:.1}k", cost / 1e3),
+        Some(cost) => format!("${cost:.2}"),
+    }
+}
+
+/// A millisecond instant as UTC `YYYY-MM-DD HH:MM`, or a dash.
+fn when(time: Option<u64>) -> String {
+    let Some(time) = time.filter(|time| *time > 0) else {
+        return "—".to_string();
+    };
+    let seconds = time / 1000;
+    let (days, rest) = (seconds / 86_400, seconds % 86_400);
+    let (year, month, day) = civil_date(days as i64);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}",
+        rest / 3600,
+        rest % 3600 / 60
+    )
+}
+
+/// Days since the Unix epoch as a civil date (Howard Hinnant's algorithm).
+fn civil_date(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month + 2) / 5 + 1;
+    let month = if month < 10 { month + 3 } else { month - 9 };
+    (year + i64::from(month <= 2), month as u32, day as u32)
+}
+
+/// A count, or a dash.
+fn count(value: Option<u64>) -> String {
+    value.map_or_else(|| "—".to_string(), |value| value.to_string())
+}
+
+/// A measurement with two decimals, or a dash.
+fn number(value: Option<f64>) -> String {
+    value.map_or_else(|| "—".to_string(), |value| format!("{value:.2}"))
+}
+
+/// The wire spelling of a version's state.
+fn state_name(state: State) -> &'static str {
+    match state {
+        State::Deleted => "DELETED",
+        State::Pending => "PENDING",
+        State::Pricing => "PRICING",
+        State::Priced => "PRICED",
+        State::Downloading => "DOWNLOADING",
+        State::Downloaded => "DOWNLOADED",
+        State::Bytemassing => "BYTEMASSING",
+        State::Bytemassed => "BYTEMASSED",
+        State::Linting => "LINTING",
+        State::UpToDate => "UP_TO_DATE",
+        _ => "UNKNOWN",
+    }
+}
+
+/// A HTML text with the characters that end it escaped.
+fn esc(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// What `name` names: a level's stats, a page of one table's versions, or
 /// one partition's versions. `None` when it names none of them.
 fn read(master: &RwLock<Master>, name: &str, query: &str) -> Result<Option<Value>, String> {
@@ -122,7 +596,13 @@ fn read(master: &RwLock<Master>, name: &str, query: &str) -> Result<Option<Value
     }
     let segments: Vec<&str> = name.split('/').collect();
     if level(&segments) {
-        return Ok(Some(Value::Array(stats(master, &segments)?)));
+        let records = stats(master, &segments)?;
+        return Ok(Some(Value::Array(
+            records
+                .iter()
+                .filter_map(|stats| serde_json::to_value(stats).ok())
+                .collect(),
+        )));
     }
     let collection = segments.len() == 7 && segments[6] == "partitions";
     let one = segments.len() == 8 && segments[6] == "partitions" && !segments.contains(&"-");
@@ -219,7 +699,7 @@ fn level(segments: &[&str]) -> bool {
 /// The stats the stats job wrote, the ones under the `segments` (which may
 /// hold `-`), dearest first and then by size: a level's page reads no
 /// versions.
-fn stats(master: &RwLock<Master>, segments: &[&str]) -> Result<Vec<Value>, String> {
+fn stats(master: &RwLock<Master>, segments: &[&str]) -> Result<Vec<PartitionStats>, String> {
     let file = lock(master).stats_file();
     let Some(file) = file else {
         return Ok(Vec::new());
@@ -239,10 +719,7 @@ fn stats(master: &RwLock<Master>, segments: &[&str]) -> Result<Vec<Value>, Strin
             .total_cmp(&cost(a))
             .then_with(|| b.size_bytes.cmp(&a.size_bytes))
     });
-    Ok(rows
-        .iter()
-        .filter_map(|stats| serde_json::to_value(stats).ok())
-        .collect())
+    Ok(rows)
 }
 
 /// Whether a stats record.s parent is what `segments` names: one segment

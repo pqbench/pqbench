@@ -654,9 +654,26 @@ fn the_web_app_serves_the_stats_and_the_records() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
+    // The page is an ASCII table of the same records, one row per catalog,
+    // and every row links to the catalog it names.
     let (status, page) = http_get(&address, "/");
-    assert_eq!(status, 200);
-    assert!(page.contains("/v1/"));
+    assert_eq!(status, 200, "{page}");
+    assert!(page.contains("<pre>"), "{page}");
+    assert!(page.contains("catalogs/local"), "{page}");
+    assert!(page.contains("href=\"/catalogs/local\""), "{page}");
+    assert!(page.contains("partition"), "{page}");
+    let (status, schemas) = http_get(&address, "/catalogs/local");
+    assert_eq!(status, 200, "{schemas}");
+    assert!(
+        schemas.contains("catalogs/local/schemas/local"),
+        "{schemas}"
+    );
+    let (status, table) = http_get(&address, "/catalogs/local/schemas/local/tables/events");
+    assert_eq!(status, 200, "{table}");
+    assert!(table.contains("UP_TO_DATE"), "{table}");
+    // A level with no records is an empty table, not an error.
+    let (status, empty) = http_get(&address, "/catalogs/local/schemas/nope");
+    assert_eq!(status, 200, "{empty}");
     let stats = |path: &str| -> Vec<Value> {
         let (status, body) = http_get(&address, path);
         assert_eq!(status, 200, "{body}");

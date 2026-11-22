@@ -408,7 +408,7 @@ fn cell(value: Option<&Value>) -> String {
     }
 }
 
-fn render_cells(header: &[&str], align: &[Align], rows: &[Vec<String>]) -> String {
+pub(crate) fn render_cells(header: &[&str], align: &[Align], rows: &[Vec<String>]) -> String {
     let mut widths: Vec<usize> = header.iter().map(|text| text.chars().count()).collect();
     for row in rows {
         for (width, cell) in widths.iter_mut().zip(row) {

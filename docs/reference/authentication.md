@@ -236,9 +236,14 @@ checkpoint is the same records, and `pqbench summarize partition-versions`
 totals them per catalog, schema and table as `PartitionStats` records.
 
 With `--web-ui` (and `--listen ADDR`, default `127.0.0.1:8180`) the daemon
-also serves the web app, read-only: the warehouse by catalog, schema and
-table, then a table's partitions, then one partition's versions. `GET
-/v1/{name}` returns what a name names:
+also serves the web app, read-only. Each page is one ASCII table, the same one
+`pqbench format` prints, and every row links to the resource it names: `/` is
+the catalogs, `/catalogs/{c}` their schemas, `…/tables/{t}` the table's
+partitions, `…/partitions/{p}` that partition's versions with its columns and
+files, and `/partitions` the master's map whole, newest found first. No
+script runs in the browser.
+
+`GET /v1/{name}` returns what a name names, as JSON:
 
 - `/v1/catalogs`, `/v1/catalogs/{c}/schemas` and
   `/v1/catalogs/{c}/schemas/{s}/tables` (`-` for any id) return the

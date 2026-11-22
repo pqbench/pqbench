@@ -401,8 +401,9 @@ The map is checkpointed to DIR/checkpoint.ndjson every 10 seconds while
 commands run, at once when none do, and on stop. A restart loads it and puts
 running versions back; the commands redo the rest. `pqbench list
 partition-versions` prints the map. With --web-ui the daemon also serves the
-web app (--listen, default 127.0.0.1:8180): the stats by catalog, schema and
-table, each table's partitions, and the records at GET /v1/{name}.";
+web app (--listen, default 127.0.0.1:8180): one ASCII table per page, the
+same one `pqbench format` prints, from the catalogs down to a partition's
+versions and columns, every row a link; and the records at GET /v1/{name}.";
 
 pub const DAEMON_AFTER: &str = "\
 Examples:
