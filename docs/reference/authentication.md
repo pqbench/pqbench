@@ -195,10 +195,15 @@ on stop. A restart loads the image, replays the edits, returns work held by
 jobs to where it was, and deletes results no row names.
 
 With `--web-ui` (and `--listen ADDR`, default `127.0.0.1:8180`) the daemon
-also serves the web app: a status page over the master's records, read-only.
-`GET /v1/{name}` returns the records a name names: a partitions collection
-(`catalogs/-/schemas/-/tables/-/partitions`, `-` for any parent) or one
-partition with every result; the page's numbers are sums over them.
+also serves the web app, read-only: the master's partition versions as a
+sortable, paged list. `GET /v1/{name}` returns what a name names. A partitions
+collection (`catalogs/-/schemas/-/tables/-/partitions`, `-` for any parent)
+returns one page, `{"partitions", "next_page_token", "total_size"}`, taking
+`page_size` (100 by default, at most 1000), `page_token`, and `order_by` (`name`,
+`size_bytes`, `file_count`, `removed_size_bytes`, `create_time`, or
+`failure_count`, then ` desc` to reverse); the order comes from the master's
+rows in memory, and only the page's versions read their listing and price. One
+partition returns its versions with every result.
 
 ```console no-run
 $ pqbench daemon start --master --store /var/lib/pqbench --web-ui

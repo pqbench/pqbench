@@ -14,6 +14,7 @@ main { max-width:1180px; margin:0 auto; padding:16px 20px 60px; }
 h1 { font-size:20px; margin:2px 0 4px; } h2 { font-size:15px; margin:22px 0 8px; display:flex; gap:8px; align-items:center; }
 .sub { color:var(--mute); margin:0 0 12px; } .name { font-family:ui-monospace, monospace; font-size:11px; color:var(--mute); font-weight:400; }
 .kpis { display:grid; grid-template-columns:repeat(5, 1fr); gap:12px; }
+.pager { display:flex; gap:10px; align-items:center; margin:10px 0; } .pager button { font:inherit; padding:3px 10px; }
 .kpi { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
 .kpi .v { font-size:22px; font-weight:600; } .kpi .l { color:var(--mute); font-size:12px; }
 .tag { font-size:10px; font-weight:700; padding:1px 6px; border-radius:3px; color:#fff; background:#77706a; white-space:nowrap; }
@@ -26,20 +27,17 @@ th { font-size:12px; color:var(--mute); background:#f4f1ec; cursor:pointer; } td
 .empty { border:1px dashed #cfc8bf; border-radius:8px; padding:10px 12px; color:var(--mute); background:#fdfcfa; }
 details { margin-top:8px; } summary { cursor:pointer; color:var(--mute); font-size:12px; }
 pre { background:#26231f; color:#efe9df; padding:10px 12px; border-radius:6px; overflow:auto; font-size:11.5px; max-height:360px; }
-.legend span { display:inline-flex; align-items:center; gap:5px; margin-right:14px; font-size:12px; color:var(--mute); }
-.legend i { width:12px; height:12px; border-radius:2px; display:inline-block; }
-svg text { font-size:11px; fill:#5d5750; }
 </style>
 </head>
 <body>
-<header><b>pqbench</b><a href="#/">warehouse</a><a href="#/processing">processing</a></header>
+<header><b>pqbench</b><a href="#/">partitions</a></header>
 <main id="main"><p class="note">loading…</p></main>
 <script>
-// Every number on the page is a field of a record from /v1/, or a sum of
-// partition fields. Nothing is inlined.
-const STATES = ["PENDING", "PRICING", "PRICED", "BYTEMASSING", "BYTEMASSED", "LINTING", "UP_TO_DATE", "DELETED"];
+// Every number on the page is a field of a record from /v1/: a page of
+// partition versions, or one partition's versions with their results.
 const COLOR = { PENDING: "#c9a25a", PRICING: "#b98a3a", PRICED: "#7f8f3a", BYTEMASSING: "#5f8f5a", BYTEMASSED: "#3f7f5a", LINTING: "#2f6f5a", UP_TO_DATE: "#1f6f43", DELETED: "#a33" };
-const ALL = "catalogs/-/schemas/-/tables/-/partitions";
+const ALL = "catalogs/-/schemas/-/tables/-";
+const PAGE_SIZE = 100;
 
 const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const usd = v => v == null ? "—" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}k` : `$${v.toFixed(v < 10 ? 2 : 0)}`;
@@ -48,107 +46,72 @@ const bytes = b => { if (b == null) return "—"; const u = ["B", "KiB", "MiB", 
 const time = ms => ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "—";
 const tag = s => `<span class="tag" style="background:${COLOR[s] ?? "#77706a"}">${s}</span>`;
 const leaf = n => decodeURIComponent(n.split("/").pop());
-const link = n => `<a href="#/${n}">${esc(leaf(n))}</a>`;
 const raw = rs => `<details><summary>records</summary><pre>${esc(JSON.stringify(rs, null, 2))}</pre></details>`;
 const title = (h, n) => `<h2>${h} <span class="name">${esc(n)}</span></h2>`;
 const kpi = (l, v, s) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div><div class="l">${s}</div></div>`;
-const tableOf = n => n.split("/").slice(0, 6).join("/");
-const sum = (xs, f) => xs.reduce((a, x) => a + (f(x) ?? 0), 0);
-// Reductions, not Math.min(...xs): a warehouse has more partitions than a
-// call takes arguments.
-const least = xs => xs.reduce((a, x) => Math.min(a, x), Infinity);
-const most = xs => xs.reduce((a, x) => Math.max(a, x), -Infinity);
-async function get(name) { const r = await fetch(`/v1/${name}`); return r.ok ? r.json() : []; }
+const dotted = n => n.split("/").filter((_, i) => i % 2).map(decodeURIComponent).join(".");
+async function get(path) { const r = await fetch(`/v1/${path}`); return r.ok ? r.json() : null; }
 
 // A cost record's span over its classes and access sub-tiers.
 function costRange(costs) {
   if (!costs || !costs.length) return null;
   const v = costs.map(c => c.cost_per_month);
-  return [least(v), most(v)];
+  return [v.reduce((a, x) => Math.min(a, x)), v.reduce((a, x) => Math.max(a, x))];
 }
-
-// One partition from its versions: the newest live version gives the state;
-// results come from it, or from the last complete version while it is new.
-function partitions(versions) {
-  const byName = new Map();
-  for (const v of versions) (byName.get(v.name) ?? byName.set(v.name, []).get(v.name)).push(v);
-  return [...byName.values()].map(vs => {
-    vs.sort((a, b) => b.create_time - a.create_time);
-    const current = vs.find(v => v.state !== "DELETED") ?? vs[0];
-    const complete = vs.find(v => v.up_to_date_time) ?? current;
-    const shown = current.price ? current : complete;
-    const listing = current.list_partitions ?? {};
-    return { name: current.name, state: current.state, current, shown, versions: vs, listing,
-      size: listing.size_bytes ?? 0, removed: listing.removed_size_bytes ?? 0,
-      cost: costRange(shown.price?.storage_costs), removedCost: costRange(shown.price?.removed_storage_costs),
-      firstTime: listing.first_file?.modification_time ?? current.create_time };
-  });
-}
-const rangeSum = (ps, f) => { const rs = ps.map(f).filter(Boolean); return rs.length ? [sum(rs, r => r[0]), sum(rs, r => r[1])] : null; };
 
 function crumbs(name) {
-  const parts = name.split("/"); const out = [`<a href="#/">warehouse</a>`];
+  const parts = name.split("/"); const out = [`<a href="#/">partitions</a>`];
   for (let i = 6; i <= parts.length; i += 2) out.push(`<a href="#/${parts.slice(0, i).join("/")}">${esc(decodeURIComponent(parts[i - 1]))}</a>`);
   return `<div class="crumbs">${out.join(" / ")}</div>`;
 }
 
-function kpis(ps) {
-  const live = ps.filter(p => p.state !== "DELETED");
-  const priced = live.filter(p => p.cost);
-  const done = sum(live.filter(p => !["PENDING", "PRICING"].includes(p.state)), p => p.size);
-  const size = sum(live, p => p.size);
-  return `<div class="kpis">
-    ${kpi("Stock", `${range(rangeSum(priced, p => p.cost))}/mo`, `${bytes(size)} in ${live.length.toLocaleString()} partitions; ${priced.length.toLocaleString()} priced`)}
-    ${kpi("Removed, not vacuumed", `${range(rangeSum(priced, p => p.removedCost))}/mo`, `${bytes(sum(live, p => p.removed))}`)}
-    ${kpi("Oldest partition", time(live.length ? least(live.map(p => p.firstTime)) : null), "its oldest file")}
-    ${kpi("Up to date", live.filter(p => p.state === "UP_TO_DATE").length.toLocaleString(), "every step done for this version")}
-    ${kpi("Priced", size ? `${(100 * done / size).toFixed(1)}%` : "—", "of bytes past pricing")}
-  </div>`;
+// The list's order and page: the server sorts and pages, the page keeps the
+// tokens it was given so it can step back.
+let list = { parent: null, order: "size_bytes desc", tokens: [""] };
+const COLUMNS = [["partition", "name"], ["state", null], ["files", "file_count"], ["bytes", "size_bytes"], ["removed", "removed_size_bytes"], ["stock", null], ["found", "create_time"], ["failures", "failure_count"]];
+
+async function viewList(parent) {
+  if (list.parent !== parent) list = { ...list, parent, tokens: [""] };
+  const token = list.tokens[list.tokens.length - 1];
+  const query = new URLSearchParams({ page_size: PAGE_SIZE, order_by: list.order, page_token: token });
+  const page = await get(`${parent}/partitions?${query}`);
+  if (!page) return `<div class="empty">The list could not be read.</div>`;
+  const [field, direction] = list.order.split(" ");
+  const first = (list.tokens.length - 1) * PAGE_SIZE;
+  setTimeout(() => {
+    document.querySelectorAll("#pt th[data-k]").forEach(th => th.onclick = () => {
+      const k = th.dataset.k;
+      list.order = k === field ? `${k} ${direction === "desc" ? "asc" : "desc"}` : `${k} ${k === "name" ? "asc" : "desc"}`;
+      list.tokens = [""]; route();
+    });
+    const next = document.getElementById("next"), prev = document.getElementById("prev");
+    if (next) next.onclick = () => { list.tokens.push(page.next_page_token); route(); };
+    if (prev) prev.onclick = () => { list.tokens.pop(); route(); };
+  });
+  const scoped = parent !== ALL;
+  return `${scoped ? crumbs(parent) : ""}<h1>${scoped ? esc(leaf(parent)) : "Partitions"}</h1>
+    <p class="sub">${page.total_size.toLocaleString()} partition versions; a changed partition is a new version and the old one is DELETED until purge.</p>
+    <table id="pt"><tr>${COLUMNS.map(([c, k]) => `<th class="${k && k !== "name" ? "n" : ""}" ${k ? `data-k="${k}"` : ""}>${c}${k === field ? (direction === "desc" ? " ▾" : " ▴") : ""}</th>`).join("")}</tr>
+    ${page.partitions.map(v => `<tr><td><a href="#/${v.name}">${esc(scoped ? leaf(v.name) : `${dotted(v.name.split("/").slice(0, 6).join("/"))} ${leaf(v.name)}`)}</a></td>
+      <td>${tag(v.state)}</td><td class="n">${v.file_count.toLocaleString()}</td><td class="n">${bytes(v.size_bytes)}</td><td class="n">${bytes(v.removed_size_bytes)}</td>
+      <td class="n">${range(costRange(v.price?.storage_costs))}/mo</td><td class="n">${time(v.create_time)}</td>
+      <td class="n" title="${esc(v.error)}">${v.failure_count || ""}</td></tr>`).join("")}</table>
+    <div class="pager">${list.tokens.length > 1 ? `<button id="prev">previous</button>` : ""}
+      <span class="note">${page.partitions.length ? `${(first + 1).toLocaleString()}–${(first + page.partitions.length).toLocaleString()} of ${page.total_size.toLocaleString()}` : "none"}</span>
+      ${page.next_page_token ? `<button id="next">next</button>` : ""}</div>`;
 }
 
-async function viewWarehouse() {
-  const ps = partitions(await get(ALL));
-  const tables = new Map();
-  for (const p of ps) (tables.get(tableOf(p.name)) ?? tables.set(tableOf(p.name), []).get(tableOf(p.name))).push(p);
-  return `<h1>Warehouse</h1><p class="sub">Every number is a sum of partition records.</p>${kpis(ps)}
-    ${title("Tables", "catalogs/-/schemas/-/tables")}
-    <table><tr><th>table</th><th class="n">partitions</th><th class="n">bytes</th><th class="n">stock</th><th class="n">removed</th><th class="n">up to date</th></tr>
-    ${[...tables].map(([t, tp]) => `<tr><td><a href="#/${t}">${esc(t.split("/").filter((_, i) => i % 2).join("."))}</a></td><td class="n">${tp.length.toLocaleString()}</td>
-      <td class="n">${bytes(sum(tp, p => p.size))}</td><td class="n">${range(rangeSum(tp, p => p.cost))}/mo</td><td class="n">${bytes(sum(tp, p => p.removed))}</td>
-      <td class="n">${tp.filter(p => p.state === "UP_TO_DATE").length.toLocaleString()}</td></tr>`).join("")}</table>`;
-}
-
-function timeline(ps) {
-  const W = 1120, H = 220, l = 60, r = 20, t = 10, b = 26;
-  if (!ps.length) return "";
-  const x0 = least(ps.map(p => p.firstTime)), x1 = most(ps.map(p => p.firstTime)) || x0 + 1;
-  const y1 = most(ps.map(p => Math.max(p.size, p.removed))) * 1.05 || 1;
-  const x = v => l + (W - l - r) * (v - x0) / Math.max(1, x1 - x0), y = v => H - b - (H - b - t) * v / y1;
-  const bars = ps.map(p => `<a href="#/${p.name}"><rect x="${x(p.firstTime)}" width="1.5" y="${y(p.size)}" height="${y(0) - y(p.size)}" fill="${COLOR[p.state]}"><title>${esc(leaf(p.name))}: ${bytes(p.size)}, ${p.state}</title></rect></a>`
-    + (p.removed ? `<rect x="${x(p.firstTime)}" width="1.5" y="${y(p.removed)}" height="${y(0) - y(p.removed)}" fill="#a33" opacity="0.8"/>` : "")).join("");
-  return `<div class="card"><div class="legend">${STATES.filter(s => s !== "DELETED").map(s => `<span><i style="background:${COLOR[s]}"></i>${s}</span>`).join("")}<span><i style="background:#a33"></i>removed, not vacuumed</span></div>
-    <svg width="${W}" height="${H}"><text x="${l}" y="${H - 6}">${time(x0)}</text><text x="${W - r}" y="${H - 6}" text-anchor="end">${time(x1)}</text>
-    <text x="4" y="${t + 10}">${bytes(y1)}</text>${bars}</svg>
-    <div class="note">one bar per partition at its oldest file; click a bar to open the partition</div></div>`;
-}
-
-let sortKey = "size";
-function partitionTable(ps) {
-  const cols = [["partition", null], ["state", null], ["files", p => p.listing.file_count], ["bytes", p => p.size], ["stock", p => p.cost?.[1]], ["removed", p => p.removed], ["oldest file", p => -p.firstTime]];
-  const key = cols.find(c => c[0] === sortKey)?.[1] ?? (p => p.size);
-  const rows = [...ps].sort((a, b) => (key(b) ?? 0) - (key(a) ?? 0)).slice(0, 100);
-  setTimeout(() => document.querySelectorAll("#pt th").forEach(th => th.onclick = () => { if (th.dataset.k) { sortKey = th.dataset.k; route(); } }));
-  return `<table id="pt"><tr>${cols.map(([c, f]) => `<th class="${f ? "n" : ""}" data-k="${f ? c : ""}">${c}${c === sortKey ? " ▾" : ""}</th>`).join("")}</tr>
-    ${rows.map(p => `<tr><td>${link(p.name)}</td><td>${tag(p.state)}</td><td class="n">${(p.listing.file_count ?? 0).toLocaleString()}</td><td class="n">${bytes(p.size)}</td>
-      <td class="n">${range(p.cost)}/mo</td><td class="n">${bytes(p.removed)}</td><td class="n">${time(p.firstTime)}</td></tr>`).join("")}</table>
-    <p class="note">Top 100 of ${ps.length.toLocaleString()}; click a header to sort.</p>`;
-}
-
-async function viewTable(name) {
-  const ps = partitions(await get(`${name}/partitions`)).filter(p => p.state !== "DELETED");
-  return `${crumbs(name)}<h1>${esc(leaf(name))}</h1>${kpis(ps)}
-    ${title("Partitions", `${name}/partitions`)}${timeline(ps)}
-    ${title("Partitions by size", `${name}/partitions`)}${partitionTable(ps)}`;
+// One partition from its versions: the newest live version gives the state;
+// results come from it, or from the last complete version while it is new.
+function partition(versions) {
+  versions.sort((a, b) => b.create_time - a.create_time);
+  const current = versions.find(v => v.state !== "DELETED") ?? versions[0];
+  const complete = versions.find(v => v.up_to_date_time) ?? current;
+  const shown = current.price ? current : complete;
+  const listing = current.list_partitions ?? {};
+  return { name: current.name, state: current.state, current, shown, listing,
+    size: listing.size_bytes ?? 0, removed: listing.removed_size_bytes ?? 0,
+    cost: costRange(shown.price?.storage_costs), removedCost: costRange(shown.price?.removed_storage_costs) };
 }
 
 function fileRow(label, f) {
@@ -156,11 +119,11 @@ function fileRow(label, f) {
 }
 async function viewPartition(name) {
   const versions = await get(name);
-  if (!versions.length) return `${crumbs(name)}<div class="empty">No such partition.</div>`;
-  const [p] = partitions(versions), s = p.shown, l = p.listing;
+  if (!versions?.length) return `${crumbs(name)}<div class="empty">No such partition.</div>`;
+  const p = partition(versions), s = p.shown, l = p.listing;
   const blob = (s.bytemass ?? []).find(r => !r.name.includes("/columns/"));
   const columns = (s.bytemass ?? []).filter(r => r.name.includes("/columns/") && r.mass);
-  const fileBytes = sum(columns, c => c.mass.compressed_bytes);
+  const fileBytes = columns.reduce((a, c) => a + c.mass.compressed_bytes, 0);
   const why = { PENDING: "Waits for the price job.", PRICING: "The price job is on it.", PRICED: "Waits for the bytemass job.", BYTEMASSING: "The bytemass job is on it.", DELETED: "The scan no longer finds this version." };
   return `${crumbs(name)}<h1>${esc(leaf(name))} ${tag(p.state)}</h1>
     <p class="sub">etag <span class="mono">${esc(p.current.etag)}</span> · found ${time(p.current.create_time)} · up to date ${time(s.up_to_date_time)} · versions before this one ${p.current.etag_change_count}</p>
@@ -187,24 +150,13 @@ async function viewPartition(name) {
     ${raw(versions)}`;
 }
 
-async function viewProcessing() {
-  const versions = await get(ALL);
-  const count = s => versions.filter(v => v.state === s).length;
-  const failed = versions.filter(v => v.error).sort((a, b) => b.failure_count - a.failure_count);
-  return `<h1>Processing</h1><p class="sub">Every version and where it is; a version that failed twice waits for its partition's next version.</p>
-    <table><tr>${STATES.map(s => `<th class="n">${s}</th>`).join("")}</tr><tr>${STATES.map(s => `<td class="n">${count(s).toLocaleString()}</td>`).join("")}</tr></table>
-    ${title("Failures", "error")}${failed.length ? `<table><tr><th>partition</th><th>state</th><th class="n">failures</th><th>error</th></tr>
-      ${failed.slice(0, 200).map(v => `<tr><td>${link(v.name)}</td><td>${tag(v.state)}</td><td class="n">${v.failure_count}</td><td class="mono">${esc(v.error)}</td></tr>`).join("")}</table>` : `<div class="empty">None.</div>`}`;
-}
-
 async function route() {
   // Names stay encoded: a partition id is one segment that may hold `%2F`.
   const name = (location.hash || "#/").slice(2).replace(/\/$/, "");
   let html;
-  if (!name) html = await viewWarehouse();
-  else if (name === "processing") html = await viewProcessing();
+  if (!name) html = await viewList(ALL);
   else if (/\/partitions\/[^/]+$/.test(name)) html = await viewPartition(name);
-  else if (/^catalogs\/[^/]+\/schemas\/[^/]+\/tables\/[^/]+$/.test(name)) html = await viewTable(name);
+  else if (/^catalogs\/[^/]+\/schemas\/[^/]+\/tables\/[^/]+$/.test(name)) html = await viewList(name);
   else html = `<div class="empty">No page for ${esc(decodeURIComponent(name))}.</div>`;
   document.getElementById("main").innerHTML = html;
 }

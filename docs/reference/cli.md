@@ -944,8 +944,9 @@ versions (a partition at one etag) that `pqbench job` processes move through
 their states, and the results the jobs' commands wrote, under DIR. Each call on
 the map is atomic and is appended to an edit log before it is answered; the
 full image is rewritten hourly or every million edits, and on stop. With
---web-ui it also serves the web app (--listen, default 127.0.0.1:8180): a status
-page over the master's records, and the records at GET /v1/{name}.
+--web-ui it also serves the web app (--listen, default 127.0.0.1:8180): the
+master's partition versions as a sortable, paged list, and the records at GET
+/v1/{name}.
 
 **Usage:** `pqbench daemon <COMMAND>`
 

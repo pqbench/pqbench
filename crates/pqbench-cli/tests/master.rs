@@ -429,14 +429,24 @@ fn http_get(address: &str, path: &str) -> (u16, String) {
     (status, body.to_string())
 }
 
-/// The web app serves its page and the master's records by name: the
-/// partitions collection with `-` parents, and one partition with every
-/// result.
+/// The web app serves its page and the master's records by name: a page of
+/// the partitions collection with `-` parents, sorted and paged, and one
+/// partition with every result.
 #[test]
 fn the_web_app_serves_the_records_by_name() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
-    commit(&root, 0, readable_table(&root, &["1", "2"]));
+    let mut actions = readable_table(&root, &["1", "2"]);
+    std::fs::copy(
+        root.join("day=2/part-0.parquet"),
+        root.join("day=2/part-1.parquet"),
+    )
+    .unwrap();
+    let size = std::fs::metadata(root.join("day=2/part-1.parquet"))
+        .unwrap()
+        .len();
+    actions.push(add("day=2/part-1.parquet", "2", size));
+    commit(&root, 0, actions);
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -449,14 +459,41 @@ fn the_web_app_serves_the_records_by_name() {
     let (status, page) = http_get(&address, "/");
     assert_eq!(status, 200);
     assert!(page.contains("/v1/"));
-    let (status, body) = http_get(&address, "/v1/catalogs/-/schemas/-/tables/-/partitions");
-    assert_eq!(status, 200);
-    let versions: Vec<Value> = serde_json::from_str(&body).unwrap();
-    assert_eq!(versions.len(), 2);
+    let list = |query: &str| {
+        let (status, body) = http_get(
+            &address,
+            &format!("/v1/catalogs/-/schemas/-/tables/-/partitions?{query}"),
+        );
+        assert_eq!(status, 200, "{body}");
+        serde_json::from_str::<Value>(&body).unwrap()
+    };
+    let all = list("order_by=size_bytes+desc");
+    assert_eq!(all["total_size"], 2);
+    let versions = all["partitions"].as_array().unwrap();
     assert!(versions
         .iter()
-        .all(|v| v["list_partitions"]["etag"] == v["etag"]));
+        .all(|v| v["list_partitions"]["etag"] == v["etag"]
+            && v["size_bytes"] == v["list_partitions"]["size_bytes"]));
+    assert_eq!(versions[0]["size_bytes"], 2 * size);
+    assert_eq!(versions[1]["size_bytes"], size);
     assert!(versions.iter().all(|v| v.get("bytemass").is_none()));
+    assert!(all.get("next_page_token").is_none());
+    let first = list("order_by=size_bytes%20desc&page_size=1");
+    let token = first["next_page_token"].as_str().unwrap();
+    let second = list(&format!(
+        "order_by=size_bytes%20desc&page_size=1&page_token={token}"
+    ));
+    assert_eq!(first["partitions"][0]["name"], versions[0]["name"]);
+    assert_eq!(second["partitions"][0]["name"], versions[1]["name"]);
+    assert!(second.get("next_page_token").is_none());
+    assert_eq!(
+        http_get(
+            &address,
+            "/v1/catalogs/-/schemas/-/tables/-/partitions?order_by=etag"
+        )
+        .0,
+        400
+    );
     let name = versions[0]["name"].as_str().unwrap();
     let (status, body) = http_get(&address, &format!("/v1/{name}"));
     assert_eq!(status, 200);

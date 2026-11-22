@@ -99,6 +99,16 @@ pub(crate) struct Row {
     /// The last failure's error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The version's files, from its listing.
+    #[serde(default)]
+    pub file_count: u64,
+    /// The version's bytes, from its listing.
+    #[serde(default)]
+    pub size_bytes: u64,
+    /// The bytes of the files removed from the log but not vacuumed, from its
+    /// listing, when the log reports them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_size_bytes: Option<u64>,
 }
 
 /// A row with its key, as the store and the socket carry it.
@@ -135,7 +145,7 @@ struct Edit {
     remove: Vec<(String, String)>,
 }
 
-type Key = (String, String);
+pub(crate) type Key = (String, String);
 
 pub(crate) struct Master {
     store: PathBuf,
@@ -200,6 +210,11 @@ impl Master {
             .collect()
     }
 
+    /// Every row by reference, in key order: a read that copies nothing.
+    pub(crate) fn rows(&self) -> impl Iterator<Item = (&Key, &Row)> {
+        self.rows.iter()
+    }
+
     /// Where a scan job writes `table`'s `list partitions` output.
     pub(crate) fn scan_path(&self, table: &str) -> PathBuf {
         self.store
@@ -209,7 +224,8 @@ impl Master {
 
     /// Apply one table's listing, the scan file the job wrote: a version the
     /// listing names and the map lacks is a new `PENDING` row (its history
-    /// from the partition's newest version), a `DELETED` one found again is
+    /// from the partition's newest version, its file count and sizes from the
+    /// listing), a `DELETED` one found again is
     /// `PENDING`, and any other row of the table it does not name is
     /// `DELETED`. Every found version's listing line is renamed in.
     pub(crate) fn scan(&mut self, table: &str) -> Result<usize, String> {
@@ -241,7 +257,12 @@ impl Master {
                     ..row.clone()
                 }),
                 Some(_) => None,
-                None => Some(self.new_version(name, now)),
+                None => Some(Row {
+                    file_count: record["file_count"].as_u64().unwrap_or(0),
+                    size_bytes: record["size_bytes"].as_u64().unwrap_or(0),
+                    removed_size_bytes: record["removed_size_bytes"].as_u64(),
+                    ..self.new_version(name, now)
+                }),
             };
             if let Some(row) = row {
                 self.rows.insert(key.clone(), row.clone());
@@ -466,6 +487,9 @@ impl Master {
             etag_change_count: newest.map_or(0, |row| row.etag_change_count + 1),
             failure_count: 0,
             error: None,
+            file_count: 0,
+            size_bytes: 0,
+            removed_size_bytes: None,
         }
     }
 
@@ -663,7 +687,7 @@ fn replay(path: &Path, image_seq: u64, rows: &mut BTreeMap<Key, Row>) -> Result<
     Ok(seq)
 }
 
-fn entry(name: &str, etag: &str, row: &Row) -> Entry {
+pub(crate) fn entry(name: &str, etag: &str, row: &Row) -> Entry {
     Entry {
         name: name.to_string(),
         etag: etag.to_string(),
