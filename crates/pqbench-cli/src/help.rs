@@ -55,6 +55,7 @@ Documents:
   Table                  a schema's tables (list tables) / one record (get table)
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
+  PartitionPrice         a partition's storage classes and cost (price partitions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -299,6 +300,30 @@ See also:
   pqbench list files --help  the stream this command samples
   pqbench bytemass --help    measure the kept files
   pqbench --help             catalog auth, PQB_* config
+  docs/reference/cli.md";
+
+pub const PRICE_ABOUT: &str = "Price each partition at its files' storage classes";
+
+pub const PRICE_LONG_ABOUT: &str = "\
+Price partitions: read Partition records on standard input (from `list
+partitions`) and write one PartitionPrice per partition: the storage classes of
+its oldest, sample and newest files, and its bytes and removed bytes at each
+class's S3 list price (us-east-1).
+
+Each partition costs up to three HEADs under its table's lease, nothing is read
+from the files, and a HEAD does not count as Intelligent-Tiering access. S3
+omits the class for STANDARD. Lifecycle moves objects by age, so one class
+covers the partition and two bound a transition inside it; a class that prices
+by access (INTELLIGENT_TIERING) lists each access sub-tier. A file that is not
+an S3 object has no class, and a partition with none has no cost.";
+
+pub const PRICE_AFTER: &str = "\
+Examples:
+  cat table.ndjson | pqbench list partitions | pqbench price partitions
+
+See also:
+  pqbench list partitions --help  the records this command prices
+  pqbench --help                  catalog auth, PQB_* config
   docs/reference/cli.md";
 
 pub const DAEMON_ABOUT: &str = "Own the catalog calls and cache storage leases";

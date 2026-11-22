@@ -25,6 +25,7 @@ mod measure;
 mod metastore;
 mod parse;
 mod partition;
+mod price;
 mod profile;
 mod render;
 mod rows;
@@ -116,6 +117,13 @@ enum Command {
     )]
     Sample(sample::SampleArgs),
     #[command(
+        about = help::PRICE_ABOUT,
+        long_about = help::PRICE_LONG_ABOUT,
+        after_help = help::PRICE_AFTER,
+        after_long_help = help::PRICE_AFTER
+    )]
+    Price(price::PriceArgs),
+    #[command(
         about = help::DAEMON_ABOUT,
         long_about = help::DAEMON_LONG_ABOUT,
         after_help = help::DAEMON_AFTER,
@@ -204,6 +212,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::TableFile(args) => table_file::run(&args).await,
         Command::List(args) => list::run(&lake, &daemon, &args).await,
         Command::Sample(args) => sample::run(&args).await,
+        Command::Price(args) => price::run(&lake, &daemon, &args).await,
         Command::Daemon(args) => daemon::run(&workspace, &args).await,
         Command::Profile(args) => profile::run(&args).await,
         Command::Summarize(args) => summarize::run(&args).await,
@@ -225,6 +234,7 @@ impl Command {
             Command::TableFile(_) => "table-file",
             Command::List(args) => args.name(),
             Command::Sample(args) => args.name(),
+            Command::Price(args) => args.name(),
             Command::Daemon(_) => "daemon",
             Command::Profile(_) => "profile",
             Command::Summarize(args) => args.name(),

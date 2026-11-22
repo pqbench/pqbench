@@ -156,6 +156,44 @@ impl Row for v1::Partition {
     }
 }
 
+impl Row for v1::PartitionPrice {
+    const HEADER: &'static [&'static str] = &[
+        "partition",
+        "storage_classes",
+        "cost_per_month",
+        "removed_cost_per_month",
+    ];
+    const ALIGN: &[Align] = &[Align::Left, Align::Left, Align::Right, Align::Right];
+
+    fn cells(&self) -> Vec<String> {
+        let partition = v1::PartitionPrice::parse_name(&self.name)
+            .map(|(_, _, _, partition)| partition)
+            .unwrap_or_else(|| self.name.clone());
+        vec![
+            partition,
+            self.storage_classes.join(","),
+            cost_range(&self.storage_costs),
+            cost_range(&self.removed_storage_costs),
+        ]
+    }
+}
+
+/// The span of candidate monthly costs, `first` or `first..last` dollars.
+fn cost_range(costs: &[v1::StorageTierCost]) -> String {
+    let mut prices = costs.iter().map(|cost| cost.cost_per_month);
+    let Some(first) = prices.next() else {
+        return String::new();
+    };
+    let (first, last) = prices.fold((first, first), |(low, high), price| {
+        (low.min(price), high.max(price))
+    });
+    if first == last {
+        format!("{first:.2}")
+    } else {
+        format!("{first:.2}..{last:.2}")
+    }
+}
+
 impl Row for v1::Column {
     const HEADER: &'static [&'static str] = &[
         "column",

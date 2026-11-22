@@ -298,6 +298,44 @@ message Partition {
   optional int64 removed_size_bytes = 13;
 }
 
+// A partition's storage price at one etag: the storage classes of the files
+// `price partitions` looked at, and what the partition's bytes cost in each.
+message PartitionPrice {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/price
+  string name = 1;
+
+  // The partition's etag when it was priced.
+  string partition_etag = 2;
+
+  // The storage classes of the partition's oldest, sample and newest files,
+  // without repeats, in that order. Lifecycle moves objects by age, so one
+  // class covers the partition and two mean a transition inside it. Empty
+  // when the files are not S3 objects.
+  repeated string storage_classes = 3;
+
+  // The partition's bytes priced in each class it shows: one entry per class,
+  // and one per access sub-tier for a class that prices by access. With one
+  // class this is the cost; with two they bound it.
+  repeated StorageTierCost storage_costs = 4;
+
+  // The partition's removed bytes priced the same way.
+  repeated StorageTierCost removed_storage_costs = 5;
+}
+
+// One candidate monthly storage cost: a class with one price, or one access
+// sub-tier of a class that chooses its price by access.
+message StorageTierCost {
+  string storage_class = 1;
+
+  // The access sub-tier, for a class that prices by access.
+  optional string access_tier = 2;
+
+  // The S3 list price, in dollars per gibibyte per month (us-east-1).
+  double dollars_per_gibibyte_per_month = 3;
+
+  double cost_per_month = 4;
+}
+
 // One commit of a table's log. The `{commit}` id segment is the log version, a
 // number (a valid URI path segment).
 message Commit {

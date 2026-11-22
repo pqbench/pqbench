@@ -27,6 +27,8 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench list suggestions`↴](#pqbench-list-suggestions)
 * [`pqbench sample`↴](#pqbench-sample)
 * [`pqbench sample files`↴](#pqbench-sample-files)
+* [`pqbench price`↴](#pqbench-price)
+* [`pqbench price partitions`↴](#pqbench-price-partitions)
 * [`pqbench daemon`↴](#pqbench-daemon)
 * [`pqbench daemon start`↴](#pqbench-daemon-start)
 * [`pqbench daemon stop`↴](#pqbench-daemon-stop)
@@ -91,6 +93,7 @@ Documents:
   Table                  a schema's tables (list tables) / one record (get table)
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
+  PartitionPrice         a partition's storage classes and cost (price partitions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -159,6 +162,7 @@ Format skills (read these when the input is Parquet or a table):
 * `table-file` — Name storage paths as table-file records
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
+* `price` — Price each partition at its files' storage classes
 * `daemon` — Own the catalog calls and cache storage leases
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
 * `summarize` — Estimate each table column's mass from a list columns stream
@@ -741,6 +745,53 @@ Keep a rate of a table's files, by size
 * `--rate <RATE>` — keep probability at 256 MiB; 1 keeps every file
 
   Default value: `1/100`
+
+
+
+## `pqbench price`
+
+Price partitions: read Partition records on standard input (from `list
+partitions`) and write one PartitionPrice per partition: the storage classes of
+its oldest, sample and newest files, and its bytes and removed bytes at each
+class's S3 list price (us-east-1).
+
+Each partition costs up to three HEADs under its table's lease, nothing is read
+from the files, and a HEAD does not count as Intelligent-Tiering access. S3
+omits the class for STANDARD. Lifecycle moves objects by age, so one class
+covers the partition and two bound a transition inside it; a class that prices
+by access (INTELLIGENT_TIERING) lists each access sub-tier. A file that is not
+an S3 object has no class, and a partition with none has no cost.
+
+**Usage:** `pqbench price <COMMAND>`
+
+```console no-run
+Examples:
+  cat table.ndjson | pqbench list partitions | pqbench price partitions
+
+See also:
+  pqbench list partitions --help  the records this command prices
+  pqbench --help                  catalog auth, PQB_* config
+  docs/reference/cli.md
+```
+
+###### **Subcommands:**
+
+* `partitions` — Price each partition at its files' storage classes (Partition records on stdin)
+
+
+
+## `pqbench price partitions`
+
+Price each partition at its files' storage classes (Partition records on stdin)
+
+**Usage:** `pqbench price partitions [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — partitions in flight at once
+
+  Default value: `16`
 
 
 

@@ -5,3 +5,4 @@
 //! number of partitions, not of files.
 
 pub mod list;
+pub mod price;

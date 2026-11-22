@@ -50,6 +50,9 @@ mod metastore;
 #[path = "partition.rs"]
 mod partition;
 
+#[path = "partition_price.rs"]
+mod partition_price;
+
 #[path = "piping.rs"]
 mod piping;
 
