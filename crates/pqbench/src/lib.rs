@@ -21,6 +21,7 @@ pub mod lz;
 pub mod mass;
 pub mod metastore;
 pub mod partition;
+mod price;
 pub mod profile;
 pub mod report;
 pub mod schema;

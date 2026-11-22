@@ -14,22 +14,9 @@ use std::fmt;
 use futures_util::stream::{Stream, StreamExt};
 use serde::Deserialize;
 
+use crate::price::{object_storage, storage_prices, GIBIBYTE};
 use crate::v1;
-
-/// One candidate monthly storage cost: a class with one price, or one access
-/// sub-tier of a class that chooses its price by access.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct StorageTierCost {
-    /// The storage class, e.g. `STANDARD` or `INTELLIGENT_TIERING`.
-    pub storage_class: String,
-    /// The access sub-tier, for a class that prices by access.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_tier: Option<String>,
-    /// The S3 list price this tier charges, in dollars per gibibyte per month.
-    pub dollars_per_gibibyte_per_month: f64,
-    /// The column's estimated monthly cost at this tier.
-    pub cost_per_month: f64,
-}
+pub use crate::v1::StorageTierCost;
 
 /// One table column's estimated mass over the files that measured it.
 ///
@@ -537,44 +524,6 @@ fn count_files(blobs: &BTreeMap<String, MeasuredFile>) -> Result<f64, Error> {
             field: "file_count",
         })
     }
-}
-
-/// Whether a blob service is S3 object storage (the Hadoop-prefixed `s3a` too).
-fn object_storage(service: &str) -> bool {
-    matches!(service, "s3" | "s3a")
-}
-
-/// Bytes in a gibibyte. The list prices are quoted per GB-month; this uses the
-/// binary gigabyte AWS bills against.
-const GIBIBYTE: f64 = 1_073_741_824.0;
-
-/// The S3 list prices per GiB-month (us-east-1) for a storage class, keyed by
-/// access sub-tier: one entry for a class with a single price, five for
-/// Intelligent-Tiering.
-///
-/// HEAD reports only the class, never the sub-tier, so a class that prices by
-/// access returns every sub-tier (Frequent Access down to Deep Archive Access)
-/// and the consumer picks. The sub-tier is chosen by how often the object is
-/// read; the object monitoring fee is not included.
-fn storage_prices(storage_class: &str) -> Option<&'static [(Option<&'static str>, f64)]> {
-    Some(match storage_class {
-        "STANDARD" => &[(None, 0.023)],
-        "REDUCED_REDUNDANCY" => &[(None, 0.024)],
-        "INTELLIGENT_TIERING" => &[
-            (Some("FREQUENT_ACCESS"), 0.023),
-            (Some("INFREQUENT_ACCESS"), 0.0125),
-            (Some("ARCHIVE_INSTANT_ACCESS"), 0.004),
-            (Some("ARCHIVE_ACCESS"), 0.0036),
-            (Some("DEEP_ARCHIVE_ACCESS"), 0.00099),
-        ],
-        "STANDARD_IA" => &[(None, 0.0125)],
-        "ONEZONE_IA" => &[(None, 0.01)],
-        "EXPRESS_ONEZONE" => &[(None, 0.11)],
-        "GLACIER_IR" => &[(None, 0.004)],
-        "GLACIER" => &[(None, 0.0036)],
-        "DEEP_ARCHIVE" => &[(None, 0.00099)],
-        _ => return None,
-    })
 }
 
 /// The table a measurement names: the table-file's table, or the local table a
