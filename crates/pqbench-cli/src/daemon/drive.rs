@@ -176,13 +176,18 @@ impl Driver {
                     &self.socket,
                 )
             });
-            let now = master::now_ms();
-            let mut master = write(&self.master);
             match started {
-                Ok(process_id) => master.start(&run, process_id, now),
+                Ok(process_id) => write(&self.master).start(&run, process_id, master::now_ms()),
+                // Not the version's failure: the host could not start a
+                // process. It stays where it is, and the next pass tries
+                // again.
                 Err(error) => {
-                    master.start(&run, 0, now);
-                    master.finish(&run.key, Err(format!("cannot start: {error}")), now);
+                    let _ = fs::remove_file(&run.input_path);
+                    eprintln!(
+                        "pqbench daemon: cannot start `pqbench {}`: {error}",
+                        run.step.command.join(" ")
+                    );
+                    return;
                 }
             }
         }

@@ -19,10 +19,12 @@ pub(crate) enum Exit {
     Exited(Result<(), String>),
 }
 
-/// The pqbench command `arguments` from this executable, talking to the
-/// daemon on `socket`.
+/// The pqbench command `arguments` from the daemon's own executable, talking
+/// to the daemon on `socket`. `/proc/self/exe` is the image the daemon runs,
+/// so a binary replaced on disk (an upgrade, a rebuild) changes no command
+/// of a daemon that is still running the old one.
 fn command(arguments: &[String], socket: &Path) -> io::Result<Command> {
-    let mut command = Command::new(std::env::current_exe()?);
+    let mut command = Command::new("/proc/self/exe");
     command.args(arguments).env("PQB_DAEMON_SOCK", socket);
     // SAFETY: `prctl` is async-signal-safe, so it may run between fork and
     // exec.

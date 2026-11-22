@@ -531,6 +531,51 @@ fn a_failing_version_is_left_after_two_failures() {
         .is_some_and(|error| !error.is_empty()));
 }
 
+/// A daemon whose executable is replaced on disk keeps running its own: its
+/// commands start from the image it runs, so the steps go on.
+#[test]
+fn the_steps_go_on_after_the_executable_is_replaced() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1", "2"]));
+    walk(directory.path(), &[("events", &root)]);
+    // A second name for the binary, on its filesystem, to delete under the
+    // running daemon.
+    let binaries = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let binary = binaries.path().join("pqbench");
+    std::fs::hard_link(env!("CARGO_BIN_EXE_pqbench"), &binary).unwrap();
+    let socket = directory.path().join("d.sock");
+    let daemon = Command::new(&binary)
+        .env("PQB_CONFIG_FILE", "/dev/null")
+        .env("PQB_ENDPOINT", "http://127.0.0.1:1")
+        .args(["daemon", "serve", "--master", "--store"])
+        .arg(directory.path().join("store"))
+        .arg("--socket")
+        .arg(&socket)
+        .arg("--walk-tables")
+        .arg(directory.path().join("tables.ndjson"))
+        .args(STEPS)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    while !socket.exists() {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::fs::remove_file(&binary).unwrap();
+    let master = Master {
+        child: daemon,
+        socket,
+        store: directory.path().join("store"),
+    };
+    let rows =
+        master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
+    assert!(
+        rows.iter().all(|row| row.get("error").is_none()),
+        "{rows:#?}"
+    );
+}
+
 /// One HTTP GET to the web app: the status code and the body.
 fn http_get(address: &str, path: &str) -> (u16, String) {
     use std::io::Read;
