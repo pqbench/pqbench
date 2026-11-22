@@ -323,6 +323,73 @@ message PartitionPrice {
   repeated StorageTierCost removed_storage_costs = 5;
 }
 
+// A partition at one etag and where it is in the pipeline: the daemon
+// master's record of it (`list partition-versions`). The scan makes a version
+// for each etag it finds; the previous one is kept, DELETED, until purge.
+message PartitionVersion {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/versions/{version}
+  // The version id is the partition's etag.
+  string name = 1;
+
+  // Where a version is: each step's job takes it from the state before the
+  // step, through the step's own state, to the state after it.
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // The scan no longer finds this version; its results wait for purge.
+    DELETED = 1;
+    // Found, not processed yet.
+    PENDING = 2;
+    PRICING = 3;
+    PRICED = 4;
+    BYTEMASSING = 5;
+    BYTEMASSED = 6;
+    LINTING = 7;
+    // Every step done for this version.
+    UP_TO_DATE = 8;
+  }
+
+  State state = 2;
+
+  // When the scan found this version.
+  int64 create_time = 3;
+
+  // When this version reached UP_TO_DATE.
+  optional int64 up_to_date_time = 4;
+
+  // The partition's first scan, carried from version to version.
+  int64 first_listed_time = 5;
+
+  // The partition's versions before this one.
+  int64 etag_change_count = 6;
+
+  // Failures of the current step on this version; a version that failed
+  // twice is left out of the step's claims.
+  int64 failure_count = 7;
+
+  // The last failure's error.
+  optional string error = 8;
+
+  // The version's files and bytes, from its listing.
+  int64 file_count = 9;
+
+  int64 size_bytes = 10;
+
+  // The bytes removed from the log but not vacuumed, when the log reports
+  // them.
+  optional int64 removed_size_bytes = 11;
+
+  // When the version's newest file was written; absent when the log records
+  // no per-file time (Iceberg).
+  optional int64 last_modification_time = 12;
+
+  // The version's monthly storage cost from its price: the cheapest and the
+  // dearest class or access tier it may be in. Absent until priced, and for
+  // files with no storage class.
+  optional double lowest_cost_per_month = 13;
+
+  optional double highest_cost_per_month = 14;
+}
+
 // One candidate monthly storage cost: a class with one price, or one access
 // sub-tier of a class that chooses its price by access.
 message StorageTierCost {

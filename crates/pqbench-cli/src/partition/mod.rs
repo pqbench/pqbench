@@ -2,3 +2,4 @@
 
 pub(crate) mod list;
 pub(crate) mod price;
+pub(crate) mod version;

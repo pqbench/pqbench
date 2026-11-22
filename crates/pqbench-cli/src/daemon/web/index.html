@@ -92,7 +92,7 @@ async function viewList(parent) {
   return `${scoped ? crumbs(parent) : ""}<h1>${scoped ? esc(leaf(parent)) : "Partitions"}</h1>
     <p class="sub">${page.total_size.toLocaleString()} partition versions; a changed partition is a new version and the old one is DELETED until purge.</p>
     <table id="pt"><tr>${COLUMNS.map(([c, k]) => `<th class="${k && k !== "name" ? "n" : ""}" ${k ? `data-k="${k}"` : ""}>${c}${k === field ? (direction === "desc" ? " ▾" : " ▴") : ""}</th>`).join("")}</tr>
-    ${page.partitions.map(v => `<tr><td><a href="#/${v.name}">${esc(scoped ? leaf(v.name) : `${dotted(v.name.split("/").slice(0, 6).join("/"))} ${leaf(v.name)}`)}</a></td>
+    ${page.partitions.map(v => `<tr><td><a href="#/${partitionOf(v.name)}">${esc(scoped ? leaf(partitionOf(v.name)) : `${dotted(v.name.split("/").slice(0, 6).join("/"))} ${leaf(partitionOf(v.name))}`)}</a></td>
       <td>${tag(v.state)}</td><td class="n">${v.file_count.toLocaleString()}</td><td class="n">${bytes(v.size_bytes)}</td><td class="n">${bytes(v.removed_size_bytes)}</td>
       <td class="n">${range(costRange(v.price?.storage_costs))}/mo</td><td class="n">${time(v.create_time)}</td>
       <td class="n" title="${esc(v.error)}">${v.failure_count || ""}</td></tr>`).join("")}</table>
@@ -100,6 +100,10 @@ async function viewList(parent) {
       <span class="note">${page.partitions.length ? `${(first + 1).toLocaleString()}–${(first + page.partitions.length).toLocaleString()} of ${page.total_size.toLocaleString()}` : "none"}</span>
       ${page.next_page_token ? `<button id="next">next</button>` : ""}</div>`;
 }
+
+// A version's name is its partition's, then `/versions/{etag}`.
+const partitionOf = name => name.split("/versions/")[0];
+const etagOf = name => name.split("/versions/")[1];
 
 // One partition from its versions: the newest live version gives the state;
 // results come from it, or from the last complete version while it is new.
@@ -109,7 +113,7 @@ function partition(versions) {
   const complete = versions.find(v => v.up_to_date_time) ?? current;
   const shown = current.price ? current : complete;
   const listing = current.list_partitions ?? {};
-  return { name: current.name, state: current.state, current, shown, listing,
+  return { name: partitionOf(current.name), etag: etagOf(current.name), state: current.state, current, shown, listing,
     size: listing.size_bytes ?? 0, removed: listing.removed_size_bytes ?? 0,
     cost: costRange(shown.price?.storage_costs), removedCost: costRange(shown.price?.removed_storage_costs) };
 }
@@ -126,7 +130,7 @@ async function viewPartition(name) {
   const fileBytes = columns.reduce((a, c) => a + c.mass.compressed_bytes, 0);
   const why = { PENDING: "Waits for the price job.", PRICING: "The price job is on it.", PRICED: "Waits for the bytemass job.", BYTEMASSING: "The bytemass job is on it.", DELETED: "The scan no longer finds this version." };
   return `${crumbs(name)}<h1>${esc(leaf(name))} ${tag(p.state)}</h1>
-    <p class="sub">etag <span class="mono">${esc(p.current.etag)}</span> · found ${time(p.current.create_time)} · up to date ${time(s.up_to_date_time)} · versions before this one ${p.current.etag_change_count}</p>
+    <p class="sub">etag <span class="mono">${esc(p.etag)}</span> · found ${time(p.current.create_time)} · up to date ${time(s.up_to_date_time)} · versions before this one ${p.current.etag_change_count}</p>
     ${p.current.error ? `<div class="empty">Failed ${p.current.failure_count}×: <span class="mono">${esc(p.current.error)}</span></div>` : ""}
     <div class="kpis">
       ${kpi("Stock", `${range(p.cost)}/mo`, bytes(p.size))}

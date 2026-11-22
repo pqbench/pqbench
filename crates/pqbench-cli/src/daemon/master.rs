@@ -1,8 +1,8 @@
 //! The master: one map of partition versions, kept in memory, and the calls
 //! that move them between states.
 //!
-//! A row is a partition at one etag; a change to a partition is a new row and
-//! the old one goes to `DELETED`. Every call is one atomic step: the master
+//! A row is a [`PartitionVersion`]: a partition at one etag; a change to a
+//! partition is a new row and the old one goes to `DELETED`. Every call is one atomic step: the master
 //! takes one call at a time, renames the files it names, and changes the
 //! rows. The map is the state: the daemon writes it whole to a checkpoint
 //! every few seconds while it changes, and on stop, and a restart loads the
@@ -12,7 +12,7 @@
 //! The store, which only the master writes:
 //!
 //! ```text
-//! {store}/master/checkpoint.ndjson  the rows, one per line
+//! {store}/master/checkpoint.ndjson  the rows, one PartitionVersion per line
 //! {store}/scan/{table}.ndjson       a scan job's listing of one table, before `scan`
 //! {store}/results/{partition}/{etag}/{output}.ndjson
 //! ```
@@ -27,101 +27,33 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) use pqbench::v1::partition_version::State;
+use pqbench::v1::PartitionVersion;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A version that failed this many times in one step is left out of claims.
 const MAX_FAILURES: u64 = 2;
 
-/// Where a partition version is in the pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub(crate) enum State {
-    /// The scan no longer finds this version; its results wait for purge.
-    Deleted,
-    /// Found, not processed yet.
-    Pending,
-    Pricing,
-    Priced,
-    Bytemassing,
-    Bytemassed,
-    Linting,
-    /// Every step done for this version.
-    UpToDate,
-}
-
-impl State {
-    /// The result a job in this state writes, by the command that writes it.
-    fn output(self) -> Option<&'static str> {
-        match self {
-            State::Pricing => Some("price"),
-            State::Bytemassing => Some("bytemass"),
-            State::Linting => Some("list-suggestions"),
-            _ => None,
-        }
-    }
-
-    /// The state a version in this job state goes back to when the job
-    /// fails or dies.
-    fn source(self) -> Option<State> {
-        match self {
-            State::Pricing => Some(State::Pending),
-            State::Bytemassing => Some(State::Priced),
-            State::Linting => Some(State::Bytemassed),
-            _ => None,
-        }
+/// The result a job in `state` writes, by the command that writes it.
+fn output(state: State) -> Option<&'static str> {
+    match state {
+        State::Pricing => Some("price"),
+        State::Bytemassing => Some("bytemass"),
+        State::Linting => Some("list-suggestions"),
+        _ => None,
     }
 }
 
-/// One partition version's row.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Row {
-    pub state: State,
-    /// When the scan found this version, milliseconds since the Unix epoch.
-    pub create_time: u64,
-    /// When this version reached `UP_TO_DATE`.
-    // aipnaming: allow(aip-140/prepositions)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub up_to_date_time: Option<u64>,
-    /// The partition's first scan, carried from version to version.
-    pub first_listed_time: u64,
-    /// The partition's versions before this one.
-    pub etag_change_count: u64,
-    /// Failures of the current step on this version.
-    pub failure_count: u64,
-    /// The last failure's error.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    /// The version's files, from its listing.
-    #[serde(default)]
-    pub file_count: u64,
-    /// The version's bytes, from its listing.
-    #[serde(default)]
-    pub size_bytes: u64,
-    /// The bytes of the files removed from the log but not vacuumed, from its
-    /// listing, when the log reports them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub removed_size_bytes: Option<u64>,
-    /// When the version's newest file was written, from its listing; absent
-    /// when the log records no per-file time (Iceberg).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_modification_time: Option<u64>,
-    /// The version's monthly storage cost, from its price: the cheapest and
-    /// the dearest class or access tier it may be in. Absent until priced,
-    /// and for files with no storage class.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lowest_cost_per_month: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub highest_cost_per_month: Option<f64>,
-}
-
-/// A row with its key, as the store and the socket carry it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Entry {
-    pub name: String,
-    pub etag: String,
-    #[serde(flatten)]
-    pub row: Row,
+/// The state a version in the job state `state` goes back to when the job
+/// fails or dies.
+fn source(state: State) -> Option<State> {
+    match state {
+        State::Pricing => Some(State::Pending),
+        State::Bytemassing => Some(State::Priced),
+        State::Linting => Some(State::Bytemassed),
+        _ => None,
+    }
 }
 
 /// One version a claim handed to a job: its listing, and where to write the
@@ -143,7 +75,9 @@ pub(crate) type Key = (String, String);
 
 pub(crate) struct Master {
     store: PathBuf,
-    rows: BTreeMap<Key, Row>,
+    /// The versions by partition and etag; a row's `name` is left empty, the
+    /// key holds it, and [`version`] puts it back.
+    rows: BTreeMap<Key, PartitionVersion>,
     /// Whether the rows changed since the last checkpoint.
     changed: bool,
 }
@@ -178,22 +112,45 @@ impl Master {
         &self.store
     }
 
-    /// Every row, or the rows of one table, in key order.
-    pub(crate) fn list(&self, table: Option<&str>) -> Vec<Entry> {
-        let prefix = table.map(table_prefix);
-        self.rows
-            .iter()
-            .filter(|((name, _), _)| {
-                prefix
-                    .as_ref()
-                    .is_none_or(|prefix| name.starts_with(prefix))
-            })
-            .map(|((name, etag), row)| entry(name, etag, row))
-            .collect()
+    /// The versions under `parent`, in key order: a catalog, schema, table or
+    /// partition name, with `-` for any id (AIP-159), or every version when
+    /// it is empty.
+    pub(crate) fn list(&self, parent: &str) -> Result<Vec<PartitionVersion>, String> {
+        let wanted: Vec<&str> = parent
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        let collections = ["catalogs", "schemas", "tables", "partitions"];
+        if !wanted.len().is_multiple_of(2)
+            || wanted.len() > 2 * collections.len()
+            || wanted
+                .iter()
+                .step_by(2)
+                .zip(collections)
+                .any(|(have, want)| *have != want)
+        {
+            return Err(format!(
+                "{parent} is not a catalog, schema, table or partition name"
+            ));
+        }
+        let literal = wanted.iter().take_while(|segment| **segment != "-").count();
+        let prefix = wanted[..literal].join("/");
+        let under = |name: &str| {
+            name.split('/')
+                .zip(&wanted)
+                .all(|(have, want)| *want == "-" || have == *want)
+        };
+        Ok(self
+            .rows
+            .range((prefix.clone(), String::new())..)
+            .take_while(|((name, _), _)| name.starts_with(&prefix))
+            .filter(|((name, _), _)| under(name))
+            .map(|(key, row)| version(key, row))
+            .collect())
     }
 
     /// Every row by reference, in key order: a read that copies nothing.
-    pub(crate) fn rows(&self) -> impl Iterator<Item = (&Key, &Row)> {
+    pub(crate) fn rows(&self) -> impl Iterator<Item = (&Key, &PartitionVersion)> {
         self.rows.iter()
     }
 
@@ -231,14 +188,14 @@ impl Master {
             let key = (name.to_string(), etag.to_string());
             self.write_result(&key, "list-partitions", line)?;
             let row = match self.rows.get(&key) {
-                Some(row) if row.state == State::Deleted => Some(Row {
+                Some(row) if row.state == State::Deleted => Some(PartitionVersion {
                     state: State::Pending,
                     failure_count: 0,
                     error: None,
                     ..row.clone()
                 }),
                 Some(_) => None,
-                None => Some(Row {
+                None => Some(PartitionVersion {
                     file_count: record["file_count"].as_u64().unwrap_or(0),
                     size_bytes: record["size_bytes"].as_u64().unwrap_or(0),
                     removed_size_bytes: record["removed_size_bytes"].as_u64(),
@@ -294,10 +251,10 @@ impl Master {
         to: State,
         limit: usize,
     ) -> Result<Vec<Claim>, String> {
-        if to.source() != Some(from) {
+        if source(to) != Some(from) {
             return Err(format!("cannot claim {from:?} into {to:?}"));
         }
-        let output = to.output().expect("a job state has an output");
+        let output = output(to).expect("a job state has an output");
         let keys: Vec<Key> = self
             .rows
             .iter()
@@ -346,9 +303,7 @@ impl Master {
         to: State,
         error: Option<String>,
     ) -> Result<bool, String> {
-        let output = from
-            .output()
-            .ok_or_else(|| format!("{from:?} is not a job state"))?;
+        let output = output(from).ok_or_else(|| format!("{from:?} is not a job state"))?;
         let temporary = self.result_dir(key).join(format!("{output}.ndjson.tmp"));
         let current = self.rows.get(key).map(|row| row.state);
         if current != Some(from) {
@@ -377,7 +332,7 @@ impl Master {
             }
             Some(error) => {
                 let _ = fs::remove_file(&temporary);
-                row.state = from.source().expect("a job state has a source");
+                row.state = source(from).expect("a job state has a source");
                 row.failure_count += 1;
                 row.error = Some(error);
             }
@@ -390,10 +345,8 @@ impl Master {
     /// and delete its temporary output: what a job does when it starts, since
     /// with one instance at a time only a dead run can have left them.
     pub(crate) fn revert(&mut self, state: State) -> Result<usize, String> {
-        let source = state
-            .source()
-            .ok_or_else(|| format!("{state:?} is not a job state"))?;
-        let output = state.output().expect("a job state has an output");
+        let source = source(state).ok_or_else(|| format!("{state:?} is not a job state"))?;
+        let output = output(state).expect("a job state has an output");
         let keys: Vec<Key> = self
             .rows
             .iter()
@@ -414,7 +367,7 @@ impl Master {
     /// newer version of it is live and not `UP_TO_DATE` yet, so the last
     /// complete results are shown until the new ones replace them.
     pub(crate) fn purge(&mut self) -> Result<usize, String> {
-        let mut by_name: BTreeMap<&str, Vec<(&Key, &Row)>> = BTreeMap::new();
+        let mut by_name: BTreeMap<&str, Vec<(&Key, &PartitionVersion)>> = BTreeMap::new();
         for (key, row) in &self.rows {
             by_name.entry(key.0.as_str()).or_default().push((key, row));
         }
@@ -446,8 +399,8 @@ impl Master {
         let temporary = path.with_extension("ndjson.new");
         let write = || -> std::io::Result<()> {
             let mut file = BufWriter::new(File::create(&temporary)?);
-            for ((name, etag), row) in &self.rows {
-                serde_json::to_writer(&mut file, &entry(name, etag, row))?;
+            for (key, row) in &self.rows {
+                serde_json::to_writer(&mut file, &version(key, row))?;
                 file.write_all(b"\n")?;
             }
             file.flush()?;
@@ -459,33 +412,25 @@ impl Master {
         Ok(())
     }
 
-    fn new_version(&self, name: &str, now: u64) -> Row {
+    fn new_version(&self, name: &str, now: u64) -> PartitionVersion {
         let newest = self
             .rows
             .range((name.to_string(), String::new())..)
             .take_while(|((other, _), _)| other == name)
             .map(|(_, row)| row)
             .max_by_key(|row| row.create_time);
-        Row {
+        PartitionVersion {
             state: State::Pending,
             create_time: now,
-            up_to_date_time: None,
             first_listed_time: newest.map_or(now, |row| row.first_listed_time),
             etag_change_count: newest.map_or(0, |row| row.etag_change_count + 1),
-            failure_count: 0,
-            error: None,
-            file_count: 0,
-            size_bytes: 0,
-            removed_size_bytes: None,
-            last_modification_time: None,
-            lowest_cost_per_month: None,
-            highest_cost_per_month: None,
+            ..PartitionVersion::default()
         }
     }
 
     fn delete_version(&mut self, key: &Key) {
         let row = self.rows.get_mut(key).expect("the key exists");
-        if let Some(output) = row.state.output() {
+        if let Some(output) = output(row.state) {
             let _ = fs::remove_file(
                 self.store
                     .join("results")
@@ -570,7 +515,7 @@ fn cost_bounds(price: &Path) -> (Option<f64>, Option<f64>) {
 
 /// The newest version of one partition that reached `UP_TO_DATE`, while the
 /// partition has a newer live version that has not.
-fn kept_version<'a>(versions: &[(&'a Key, &Row)]) -> Option<&'a Key> {
+fn kept_version<'a>(versions: &[(&'a Key, &PartitionVersion)]) -> Option<&'a Key> {
     let (key, row) = versions
         .iter()
         .filter(|(_, row)| row.up_to_date_time.is_some())
@@ -605,24 +550,30 @@ fn remove_dir(directory: &Path) -> Result<(), String> {
     }
 }
 
-fn read_checkpoint(path: &Path) -> Result<BTreeMap<Key, Row>, String> {
+fn read_checkpoint(path: &Path) -> Result<BTreeMap<Key, PartitionVersion>, String> {
     let mut rows = BTreeMap::new();
     let Ok(file) = File::open(path) else {
         return Ok(rows);
     };
     for line in BufReader::new(file).lines() {
-        let entry: Entry = serde_json::from_str(&line.map_err(|error| error.to_string())?)
-            .map_err(|error| format!("bad checkpoint row: {error}"))?;
-        rows.insert((entry.name, entry.etag), entry.row);
+        let mut row: PartitionVersion =
+            serde_json::from_str(&line.map_err(|error| error.to_string())?)
+                .map_err(|error| format!("bad checkpoint row: {error}"))?;
+        let key = match row.name.rsplit_once("/versions/") {
+            Some((name, etag)) if valid_key(name, etag) => (name.to_string(), etag.to_string()),
+            _ => return Err(format!("bad checkpoint row: {} names no version", row.name)),
+        };
+        row.name = String::new();
+        rows.insert(key, row);
     }
     Ok(rows)
 }
 
-pub(crate) fn entry(name: &str, etag: &str, row: &Row) -> Entry {
-    Entry {
-        name: name.to_string(),
-        etag: etag.to_string(),
-        row: row.clone(),
+/// A row as the [`PartitionVersion`] it is, its name put back.
+pub(crate) fn version(key: &Key, row: &PartitionVersion) -> PartitionVersion {
+    PartitionVersion {
+        name: format!("{}/versions/{}", key.0, key.1),
+        ..row.clone()
     }
 }
 
@@ -716,6 +667,6 @@ mod tests {
         let line = serde_json::json!({"name": format!("{TABLE}/partitions/.."), "etag": "aa"});
         fs::write(master.scan_path(TABLE), format!("{line}\n")).unwrap();
         assert!(master.scan(TABLE).is_err());
-        assert!(master.list(None).is_empty());
+        assert!(master.list("").unwrap().is_empty());
     }
 }

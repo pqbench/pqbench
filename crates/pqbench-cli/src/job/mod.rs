@@ -41,16 +41,6 @@ enum Job {
     Lint(step::StepArgs),
     /// Delete the results and rows of the versions the scan no longer finds
     Purge,
-    /// Print the master's partition versions, one row per line
-    List(ListArgs),
-}
-
-/// Arguments for `job list`.
-#[derive(Args)]
-pub(crate) struct ListArgs {
-    /// only this table's versions (`catalogs/…/tables/…`)
-    #[arg(long)]
-    table: Option<String>,
 }
 
 /// Run one job.
@@ -65,18 +55,6 @@ pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &JobArgs) -> Resul
             daemon.master(&Request::Purge).await?;
             Ok(())
         }
-        Job::List(args) => {
-            let response = daemon
-                .master(&Request::Partitions {
-                    table: args.table.clone(),
-                })
-                .await?;
-            let mut out = std::io::stdout().lock();
-            for row in response.records {
-                writeln!(out, "{row}")?;
-            }
-            Ok(())
-        }
     }
 }
 
@@ -89,7 +67,6 @@ impl JobArgs {
             Job::Bytemass(_) => "job bytemass",
             Job::Lint(_) => "job lint",
             Job::Purge => "job purge",
-            Job::List(_) => "job list",
         }
     }
 }

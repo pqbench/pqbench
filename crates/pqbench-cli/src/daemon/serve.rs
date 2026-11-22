@@ -109,10 +109,16 @@ async fn handle(
     };
     let request: Request =
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
+    if let Request::ListPartitionVersions { parent } = &request {
+        let versions = match &master {
+            Some(master) => lock(master).list(parent),
+            None => Err("the daemon runs no master; start it with --master".into()),
+        };
+        return write_versions(write, versions).await;
+    }
 
     let response = match &request {
-        Request::Partitions { .. }
-        | Request::ScanPath { .. }
+        Request::ScanPath { .. }
         | Request::Scan { .. }
         | Request::RetainTables { .. }
         | Request::Claim { .. }
@@ -142,6 +148,43 @@ async fn handle(
     Ok(())
 }
 
+/// Answer a `ListPartitionVersions`: the count, then one line per version,
+/// written after the master's lock is released.
+async fn write_versions(
+    write: tokio::net::unix::OwnedWriteHalf,
+    versions: Result<Vec<pqbench::v1::PartitionVersion>, String>,
+) -> Result<(), String> {
+    let header = match &versions {
+        Ok(versions) => Response {
+            count: Some(versions.len() as u64),
+            ..Response::default()
+        },
+        Err(error) => Response {
+            error: Some(error.clone()),
+            ..Response::default()
+        },
+    };
+    let mut write = tokio::io::BufWriter::new(write);
+    let mut line = serde_json::to_vec(&header).map_err(|error| error.to_string())?;
+    for version in versions.iter().flatten() {
+        line.push(b'\n');
+        write
+            .write_all(&line)
+            .await
+            .map_err(|error| format!("cannot write the versions: {error}"))?;
+        line = serde_json::to_vec(version).map_err(|error| error.to_string())?;
+    }
+    line.push(b'\n');
+    write
+        .write_all(&line)
+        .await
+        .map_err(|error| format!("cannot write the versions: {error}"))?;
+    write
+        .flush()
+        .await
+        .map_err(|error| format!("cannot flush the versions: {error}"))
+}
+
 /// Answer one master call; it runs whole while the master is locked.
 fn answer(request: &Request, master: &mut Master) -> Response {
     let count = |result: Result<usize, String>| match result {
@@ -155,15 +198,6 @@ fn answer(request: &Request, master: &mut Master) -> Response {
         },
     };
     match request {
-        Request::Partitions { table } => Response {
-            records: master
-                .list(table.as_deref())
-                .into_iter()
-                .filter_map(|entry| serde_json::to_value(entry).ok())
-                .collect(),
-            ok: true,
-            ..Response::default()
-        },
         Request::ScanPath { table } => Response {
             path: Some(master.scan_path(table).to_string_lossy().into_owned()),
             ..Response::default()

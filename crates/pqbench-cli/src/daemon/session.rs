@@ -300,6 +300,31 @@ impl Daemon {
         }
     }
 
+    /// One listing call on the daemon's master: how many lines follow, and
+    /// the lines.
+    pub(crate) async fn master_list(
+        &self,
+        request: &Request,
+    ) -> Result<
+        (
+            u64,
+            tokio::io::Lines<tokio::io::BufReader<tokio::net::UnixStream>>,
+        ),
+        CliError,
+    > {
+        let path = self.socket().ok_or_else(|| -> CliError {
+            "the master's records need its daemon; run `pqbench daemon start --master --store DIR`"
+                .into()
+        })?;
+        let (response, lines) = client::list(path, request)
+            .await
+            .map_err(|error| connect_error(path, error))?;
+        match response.error {
+            Some(error) => Err(error.into()),
+            None => Ok((response.count.unwrap_or(0), lines)),
+        }
+    }
+
     /// The daemon's socket, for a reader that asks one.
     pub(crate) fn socket(&self) -> Option<&std::path::Path> {
         match &self.vendor {
@@ -396,14 +421,18 @@ impl Vendor {
 async fn ask(path: &std::path::Path, request: &Request) -> Result<Response, CliError> {
     client::request(path, request)
         .await
-        .map_err(|error| match error {
-            client::Error::Connect(_) => format!(
-                "no daemon is listening at {}; run `pqbench daemon start`",
-                path.display()
-            )
-            .into(),
-            client::Error::Protocol(_) => error.to_string().into(),
-        })
+        .map_err(|error| connect_error(path, error))
+}
+
+fn connect_error(path: &std::path::Path, error: client::Error) -> CliError {
+    match error {
+        client::Error::Connect(_) => format!(
+            "no daemon is listening at {}; run `pqbench daemon start`",
+            path.display()
+        )
+        .into(),
+        client::Error::Protocol(_) => error.to_string().into(),
+    }
 }
 
 async fn direct(workspace: &Workspace, table: &str) -> Result<Option<Vended>, CliError> {

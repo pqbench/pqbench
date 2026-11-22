@@ -206,10 +206,15 @@ returns one page, `{"partitions", "next_page_token", "total_size"}`, taking
 rows in memory, and only the page's versions read their listing and price. One
 partition returns its versions with every result.
 
+`pqbench list partition-versions [PARENT]` prints the master's rows as
+`PartitionVersion` records, named `…/partitions/{partition}/versions/{etag}`:
+all of them, or those under a catalog, schema, table or partition name, with
+`-` for any id. The checkpoint is the same records.
+
 ```console no-run
 $ pqbench daemon start --master --store /var/lib/pqbench --web-ui
 $ echo '{"name":"catalogs/main/schemas/sales"}' | pqbench list tables | pqbench get table | pqbench job scan --complete
-$ pqbench job list
+$ pqbench list partition-versions catalogs/main/schemas/sales
 ```
 
 ## Databricks-governed tables

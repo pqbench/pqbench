@@ -111,10 +111,11 @@ fn serve_command(
     Ok(command)
 }
 
-/// Whether the daemon at `socket` runs the master.
+/// Whether the daemon at `socket` runs the master: asked with a master call
+/// that changes nothing.
 async fn runs_master(socket: &Path) -> bool {
-    let request = Request::Partitions {
-        table: Some(String::new()),
+    let request = Request::ScanPath {
+        table: String::new(),
     };
     client::request(socket, &request)
         .await

@@ -24,6 +24,8 @@ enum ListCollection {
     Files(crate::file::list::ListArgs),
     /// List a table's partitions (Table refs on stdin)
     Partitions(crate::partition::list::ListArgs),
+    /// List the daemon master's partition versions (`PARENT`, or all)
+    PartitionVersions(crate::partition::version::ListArgs),
     /// List a file's columns and their byte masses (Table-file refs on stdin)
     Columns(crate::bytemass::BytemassArgs),
     /// List potential storage suggestions for each local blob (Table-file refs on stdin)
@@ -42,6 +44,9 @@ pub(crate) async fn run(
         ListCollection::Tables(args) => crate::table::list::run(daemon, args).await,
         ListCollection::Files(args) => crate::file::list::run(lake, daemon, args).await,
         ListCollection::Partitions(args) => crate::partition::list::run(lake, daemon, args).await,
+        ListCollection::PartitionVersions(args) => {
+            crate::partition::version::run(daemon, args).await
+        }
         ListCollection::Columns(args) => crate::bytemass::run(lake, daemon, args).await,
         ListCollection::Suggestions(args) => crate::lint::run(lake, daemon, args).await,
     }
@@ -56,6 +61,7 @@ impl ListArgs {
             ListCollection::Tables(_) => "list tables",
             ListCollection::Files(_) => "list files",
             ListCollection::Partitions(_) => "list partitions",
+            ListCollection::PartitionVersions(_) => "list partition-versions",
             ListCollection::Columns(_) => "list columns",
             ListCollection::Suggestions(_) => "list suggestions",
         }

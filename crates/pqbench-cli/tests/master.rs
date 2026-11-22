@@ -1,7 +1,7 @@
 #![cfg(feature = "delta")]
 
 //! The daemon's master through its jobs: `job scan` lists tables into it,
-//! `job list` reads its rows, `job purge` drops what the scan no longer finds.
+//! `list partition-versions` reads its rows, `job purge` drops what the scan no longer finds.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -83,9 +83,14 @@ impl Master {
         self.run(&args, tables);
     }
 
-    /// The rows, by partition id and etag.
+    /// The partition versions, in name order.
     fn rows(&self) -> Vec<Value> {
-        let output = self.run(&["job", "list"], "");
+        self.versions(&[])
+    }
+
+    /// `list partition-versions ARGS`.
+    fn versions(&self, args: &[&str]) -> Vec<Value> {
+        let output = self.run(&[&["list", "partition-versions"], args].concat(), "");
         output
             .stdout
             .split(|byte| *byte == b'\n')
@@ -172,17 +177,30 @@ fn table_record(name: &str, root: &Path) -> String {
     )
 }
 
+/// A version's partition id.
 fn id(row: &Value) -> String {
+    let partition = partition(row);
+    partition.rsplit_once("/partitions/").unwrap().1.to_string()
+}
+
+/// A version's partition name.
+fn partition(row: &Value) -> &str {
     let name = row["name"].as_str().unwrap();
-    name.rsplit_once("/partitions/").unwrap().1.to_string()
+    name.rsplit_once("/versions/").unwrap().0
+}
+
+/// A version's etag.
+fn etag(row: &Value) -> &str {
+    let name = row["name"].as_str().unwrap();
+    name.rsplit_once("/versions/").unwrap().1
 }
 
 fn result_file(master: &Master, row: &Value, output: &str) -> PathBuf {
     master
         .store
         .join("results")
-        .join(row["name"].as_str().unwrap())
-        .join(row["etag"].as_str().unwrap())
+        .join(partition(row))
+        .join(etag(row))
         .join(format!("{output}.ndjson"))
 }
 
@@ -205,7 +223,7 @@ fn a_scan_adds_each_partition_once() {
     let listing =
         std::fs::read_to_string(result_file(&master, &first[0], "list-partitions")).unwrap();
     let record: Value = serde_json::from_str(listing.trim()).unwrap();
-    assert_eq!(record["etag"], first[0]["etag"]);
+    assert_eq!(record["etag"], etag(&first[0]));
     master.scan(&tables, false);
     assert_eq!(master.rows(), first);
 }
@@ -229,9 +247,9 @@ fn a_change_is_a_new_version_and_purge_drops_the_old() {
     assert_eq!(day1.len(), 2, "{rows:?}");
     let old = day1
         .iter()
-        .find(|row| row["etag"] == before.iter().find(|row| id(row) == "day%3D1").unwrap()["etag"])
+        .find(|row| etag(row) == etag(before.iter().find(|row| id(row) == "day%3D1").unwrap()))
         .unwrap();
-    let new = day1.iter().find(|row| row["etag"] != old["etag"]).unwrap();
+    let new = day1.iter().find(|row| etag(row) != etag(old)).unwrap();
     assert_eq!(old["state"], "DELETED");
     assert_eq!(new["state"], "PENDING");
     assert_eq!(new["etag_change_count"], 1);
@@ -273,6 +291,48 @@ fn a_complete_walk_deletes_the_tables_it_lacks() {
         .all(|row| row["name"].as_str().unwrap().contains("/tables/orders/")));
 }
 
+/// `list partition-versions` takes a parent at any level, `-` for any id,
+/// and refuses a name that is not one.
+#[test]
+fn list_partition_versions_reads_under_a_parent() {
+    let directory = tempfile::tempdir().unwrap();
+    let events = directory.path().join("events");
+    let orders = directory.path().join("orders");
+    table(&events);
+    table(&orders);
+    let master = Master::start(directory.path());
+    master.scan(
+        &(table_record("events", &events) + &table_record("orders", &orders)),
+        false,
+    );
+    let names = |args: &[&str]| -> Vec<String> {
+        master
+            .versions(args)
+            .iter()
+            .map(|row| partition(row).to_string())
+            .collect()
+    };
+    let all = names(&[]);
+    assert_eq!(all.len(), 4);
+    assert_eq!(names(&["catalogs/local"]), all);
+    let orders = names(&["catalogs/-/schemas/-/tables/orders"]);
+    assert_eq!(orders.len(), 2);
+    assert!(orders.iter().all(|name| name.contains("/tables/orders/")));
+    assert_eq!(names(&[&orders[0]]), [orders[0].clone()]);
+    assert_eq!(
+        names(&["catalogs/local/schemas/-/tables/-/partitions/day%3D1"]).len(),
+        2
+    );
+    assert!(names(&["catalogs/other"]).is_empty());
+    let refused = pqbench()
+        .args(["list", "partition-versions", "catalogs/local/tables/orders"])
+        .env("PQB_DAEMON_SOCK", &master.socket)
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("is not a catalog"));
+}
+
 /// The rows outlive the daemon: a restart over the same store has them all.
 #[test]
 fn the_rows_survive_a_restart() {
@@ -302,7 +362,7 @@ fn a_scan_after_a_kill_finds_the_same_versions() {
         let mut versions: Vec<(Value, Value)> = rows
             .into_iter()
             .filter(|row| row["state"] != "DELETED")
-            .map(|row| (row["name"].clone(), row["etag"].clone()))
+            .map(|row| (row["name"].clone(), row["state"].clone()))
             .collect();
         versions.sort_by_key(|version| version.0.to_string());
         versions
@@ -399,7 +459,7 @@ fn purge_keeps_the_last_complete_version_until_it_is_replaced() {
     master.run(&["job", "purge"], "");
     let rows = master.rows();
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_ne!(rows[0]["etag"], old["etag"]);
+    assert_ne!(etag(&rows[0]), etag(&old));
     assert_eq!(rows[0]["state"], "UP_TO_DATE");
     assert!(!result_file(&master, &old, "bytemass").exists());
 }
@@ -482,7 +542,7 @@ fn the_web_app_serves_the_records_by_name() {
     let versions = all["partitions"].as_array().unwrap();
     assert!(versions
         .iter()
-        .all(|v| v["list_partitions"]["etag"] == v["etag"]
+        .all(|v| v["list_partitions"]["etag"] == etag(v)
             && v["size_bytes"] == v["list_partitions"]["size_bytes"]));
     assert_eq!(versions[0]["size_bytes"], 2 * size);
     assert_eq!(versions[1]["size_bytes"], size);
@@ -504,7 +564,7 @@ fn the_web_app_serves_the_records_by_name() {
         .0,
         400
     );
-    let name = versions[0]["name"].as_str().unwrap();
+    let name = partition(&versions[0]);
     let (status, body) = http_get(&address, &format!("/v1/{name}"));
     assert_eq!(status, 200);
     let one: Vec<Value> = serde_json::from_str(&body).unwrap();

@@ -35,11 +35,10 @@ pub(crate) enum Request {
         #[serde(skip_serializing_if = "Option::is_none")]
         record: Option<Value>,
     },
-    /// The master's rows, or one table's.
-    Partitions {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        table: Option<String>,
-    },
+    /// The master's partition versions under `parent` (every one when it is
+    /// empty): the answer's `count` says how many lines follow it, one
+    /// PartitionVersion each.
+    ListPartitionVersions { parent: String },
     /// Where a scan job writes one table's listing.
     ScanPath { table: String },
     /// Apply the listing the scan job wrote for one table.

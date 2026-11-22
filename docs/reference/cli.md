@@ -24,6 +24,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench list tables`↴](#pqbench-list-tables)
 * [`pqbench list files`↴](#pqbench-list-files)
 * [`pqbench list partitions`↴](#pqbench-list-partitions)
+* [`pqbench list partition-versions`↴](#pqbench-list-partition-versions)
 * [`pqbench list columns`↴](#pqbench-list-columns)
 * [`pqbench list suggestions`↴](#pqbench-list-suggestions)
 * [`pqbench sample`↴](#pqbench-sample)
@@ -34,7 +35,6 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench job bytemass`↴](#pqbench-job-bytemass)
 * [`pqbench job lint`↴](#pqbench-job-lint)
 * [`pqbench job purge`↴](#pqbench-job-purge)
-* [`pqbench job list`↴](#pqbench-job-list)
 * [`pqbench daemon`↴](#pqbench-daemon)
 * [`pqbench daemon start`↴](#pqbench-daemon-start)
 * [`pqbench daemon stop`↴](#pqbench-daemon-stop)
@@ -100,6 +100,7 @@ Documents:
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
+  PartitionVersion       a partition at one etag in the master (list partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -587,6 +588,11 @@ their partition unless an active file still holds the path. A partition's name f
 partition column order, so the input is `get table` output, which names the
 columns; a `list tables` ref is refused.
 
+`list partition-versions [PARENT]` reads no catalog and no storage: it prints
+the daemon master's rows, one PartitionVersion per line in name order, all of
+them or those under a catalog, schema, table or partition name (`-` for any
+id).
+
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
 
@@ -629,6 +635,7 @@ See also:
 * `tables` — List the tables in a schema (`CATALOG.SCHEMA`)
 * `files` — List a table's active files (Table refs on stdin)
 * `partitions` — List a table's partitions (Table refs on stdin)
+* `partition-versions` — List the daemon master's partition versions (`PARENT`, or all)
 * `columns` — List a file's columns and their byte masses (Table-file refs on stdin)
 * `suggestions` — List potential storage suggestions for each local blob (Table-file refs on stdin)
 
@@ -700,6 +707,19 @@ List a table's partitions (Table refs on stdin)
 * `--fan-out <FAN_OUT>` — tables in flight at once
 
   Default value: `4`
+
+
+
+## `pqbench list partition-versions`
+
+List the daemon master's partition versions (`PARENT`, or all)
+
+**Usage:** `pqbench list partition-versions [PARENT]`
+
+
+###### **Arguments:**
+
+* `<PARENT>` — only the versions under this catalog, schema, table or partition (`catalogs/…`; `-` for any id); every version without it
 
 
 
@@ -809,9 +829,9 @@ scheduler's.
   purge     delete the results and rows of the versions the scan no longer
             finds, keeping a partition's last complete version until a newer
             one is done
-  list      print the master's partition versions (name, etag, state, times,
-            failures), one per line
 ```
+
+`pqbench list partition-versions` prints the master's rows.
 
 **Usage:** `pqbench job <COMMAND>`
 
@@ -833,7 +853,6 @@ See also:
 * `bytemass` — Measure each priced version's sample file (`bytemass`)
 * `lint` — List each measured version's storage suggestions (`list suggestions`)
 * `purge` — Delete the results and rows of the versions the scan no longer finds
-* `list` — Print the master's partition versions, one row per line
 
 
 
@@ -903,19 +922,6 @@ List each measured version's storage suggestions (`list suggestions`)
 Delete the results and rows of the versions the scan no longer finds
 
 **Usage:** `pqbench job purge`
-
-
-## `pqbench job list`
-
-Print the master's partition versions, one row per line
-
-**Usage:** `pqbench job list [OPTIONS]`
-
-
-###### **Options:**
-
-* `--table <TABLE>` — only this table's versions (`catalogs/…/tables/…`)
-
 
 
 ## `pqbench daemon`

@@ -56,6 +56,7 @@ Documents:
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
+  PartitionVersion       a partition at one etag in the master (list partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -249,6 +250,11 @@ their partition unless an active file still holds the path. A partition's name f
 partition column order, so the input is `get table` output, which names the
 columns; a `list tables` ref is refused.
 
+`list partition-versions [PARENT]` reads no catalog and no storage: it prints
+the daemon master's rows, one PartitionVersion per line in name order, all of
+them or those under a catalog, schema, table or partition name (`-` for any
+id).
+
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
 
@@ -344,8 +350,8 @@ scheduler's.
   purge     delete the results and rows of the versions the scan no longer
             finds, keeping a partition's last complete version until a newer
             one is done
-  list      print the master's partition versions (name, etag, state, times,
-            failures), one per line";
+
+`pqbench list partition-versions` prints the master's rows.";
 
 pub const JOB_AFTER: &str = "\
 Examples:

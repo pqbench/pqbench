@@ -1,4 +1,5 @@
-//! The client side of the lease socket: one request, one response.
+//! The client side of the lease socket: one request, one response, and for
+//! a listing the lines after it.
 
 use std::fmt;
 use std::future::Future;
@@ -6,7 +7,7 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::UnixStream;
 
 use super::protocol::{Request, Response};
@@ -49,6 +50,15 @@ pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response, 
 }
 
 async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<Response, Error> {
+    Ok(open(path, request, timeout).await?.0)
+}
+
+/// Send `request` and read the answer, leaving the connection open after it.
+async fn open(
+    path: &Path,
+    request: &Request,
+    timeout: Duration,
+) -> Result<(Response, BufReader<UnixStream>), Error> {
     let mut stream = bounded(timeout, UnixStream::connect(path)).await?;
     let line = serde_json::to_vec(request).map_err(|error| Error::Protocol(error.to_string()))?;
     bounded(timeout, stream.write_all(&line)).await?;
@@ -63,7 +73,19 @@ async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<R
             "the daemon closed the connection without an answer".into(),
         ));
     }
-    serde_json::from_str(&line).map_err(|error| Error::Protocol(error.to_string()))
+    let response =
+        serde_json::from_str(&line).map_err(|error| Error::Protocol(error.to_string()))?;
+    Ok((response, reader))
+}
+
+/// Send a listing `request`: its answer, and the lines that follow it, as
+/// many as the answer's `count`.
+pub(crate) async fn list(
+    path: &Path,
+    request: &Request,
+) -> Result<(Response, Lines<BufReader<UnixStream>>), Error> {
+    let (response, reader) = open(path, request, CATALOG_TIMEOUT).await?;
+    Ok((response, reader.lines()))
 }
 
 /// One socket operation, bounded by the exchange's timeout.

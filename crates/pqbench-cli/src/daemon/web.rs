@@ -19,7 +19,9 @@ use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use super::master::{entry, Entry, Key, Master, Row};
+use pqbench::v1::PartitionVersion;
+
+use super::master::{version, Key, Master};
 
 const PAGE: &str = include_str!("web/index.html");
 
@@ -124,10 +126,10 @@ fn read(master: &Mutex<Master>, name: &str, query: &str) -> Result<Option<Value>
     if one {
         let (store, rows) = {
             let master = lock(master);
-            let rows: Vec<Entry> = master
+            let rows: Vec<PartitionVersion> = master
                 .rows()
                 .filter(|((row, _), _)| row == name)
-                .map(|((name, etag), row)| entry(name, etag, row))
+                .map(|(key, row)| version(key, row))
                 .collect();
             (master.store().to_path_buf(), rows)
         };
@@ -138,7 +140,7 @@ fn read(master: &Mutex<Master>, name: &str, query: &str) -> Result<Option<Value>
     let page = Page::parse(query)?;
     let (store, total_size, rows) = {
         let master = lock(master);
-        let mut rows: Vec<(&Key, &Row)> =
+        let mut rows: Vec<(&Key, &PartitionVersion)> =
             master.rows().filter(|((row, _), _)| matches(row)).collect();
         if let Some(order) = page.order {
             rows.sort_by(|a, b| {
@@ -153,11 +155,11 @@ fn read(master: &Mutex<Master>, name: &str, query: &str) -> Result<Option<Value>
             rows.reverse();
         }
         let total_size = rows.len();
-        let rows: Vec<Entry> = rows
+        let rows: Vec<PartitionVersion> = rows
             .into_iter()
             .skip(page.offset)
             .take(page.size)
-            .map(|((name, etag), row)| entry(name, etag, row))
+            .map(|(key, row)| version(key, row))
             .collect();
         (master.store().to_path_buf(), total_size, rows)
     };
@@ -197,8 +199,12 @@ enum Order {
 
 impl Order {
     /// Compare two rows by the field, then by key.
-    fn compare(self, (a_key, a): &(&Key, &Row), (b_key, b): &(&Key, &Row)) -> std::cmp::Ordering {
-        let field = |row: &Row| match self {
+    fn compare(
+        self,
+        (a_key, a): &(&Key, &PartitionVersion),
+        (b_key, b): &(&Key, &PartitionVersion),
+    ) -> std::cmp::Ordering {
+        let field = |row: &PartitionVersion| match self {
             Order::SizeBytes => row.size_bytes,
             Order::FileCount => row.file_count,
             Order::RemovedSizeBytes => row.removed_size_bytes.unwrap_or(0),
@@ -279,12 +285,14 @@ fn trim_files(view: &mut Value) {
 
 /// One version as the page reads it: the row, then each stored result under
 /// its command's name (a one-line result as a record, longer ones as arrays).
-fn view(store: &Path, entry: &Entry, outputs: &[&str]) -> Value {
-    let mut view = match serde_json::to_value(entry) {
+fn view(store: &Path, version: &PartitionVersion, outputs: &[&str]) -> Value {
+    let mut view = match serde_json::to_value(version) {
         Ok(Value::Object(map)) => map,
         _ => Map::new(),
     };
-    let directory = store.join("results").join(&entry.name).join(&entry.etag);
+    let directory = store
+        .join("results")
+        .join(version.name.replace("/versions/", "/"));
     for output in outputs {
         let Ok(text) = std::fs::read_to_string(directory.join(format!("{output}.ndjson"))) else {
             continue;
