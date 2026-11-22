@@ -160,6 +160,7 @@ fn page(master: &RwLock<Master>, path: &str) -> Result<String, String> {
         5 if segments[4] == "tables" => levels_page(master, &segments)?,
         6 => partitions_page(master, name)?,
         8 => partition_page(master, name)?,
+        10 if segments[8] == "versions" => version_page(master, name)?,
         _ => return Err(format!("no page for /{name}")),
     };
     Ok(shell(&crumbs(&segments), &body))
@@ -172,10 +173,11 @@ fn levels_page(master: &RwLock<Master>, segments: &[&str]) -> Result<String, Str
         .iter()
         .map(|row| {
             let name = row.name.trim_end_matches("/partitionStats").to_string();
+            let id = name.rsplit('/').next().unwrap_or_default();
             (
                 name.clone(),
                 vec![
-                    name,
+                    percent_decode(id),
                     row.partition_count.to_string(),
                     row.file_count.to_string(),
                     size_text(row.size_bytes),
@@ -226,7 +228,12 @@ fn partitions_page(master: &RwLock<Master>, table: &str) -> Result<String, Strin
             (
                 partition_name(&row.name),
                 vec![
-                    row.name.clone(),
+                    percent_decode(
+                        partition_name(&row.name)
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or_default(),
+                    ),
                     state_name(row.state).to_string(),
                     row.file_count.to_string(),
                     size_text(row.size_bytes),
@@ -275,11 +282,19 @@ fn recent_page(master: &RwLock<Master>) -> Result<String, String> {
     let cells: Vec<(String, Vec<String>)> = rows
         .iter()
         .map(|row| {
-            let partition = row.name.split("/versions/").next().unwrap_or_default();
+            let partition = partition_name(&row.name);
+            let table = partition
+                .split_once("/partitions/")
+                .map_or("", |(table, _)| table)
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string();
             (
-                partition.to_string(),
+                partition.clone(),
                 vec![
-                    row.name.clone(),
+                    table,
+                    percent_decode(partition.rsplit('/').next().unwrap_or_default()),
                     state_name(row.state).to_string(),
                     row.file_count.to_string(),
                     size_text(row.size_bytes),
@@ -290,7 +305,15 @@ fn recent_page(master: &RwLock<Master>) -> Result<String, String> {
         })
         .collect();
     let table = ascii(
-        &["version", "state", "files", "bytes", "stock /mo", "found"],
+        &[
+            "table",
+            "partition",
+            "state",
+            "files",
+            "bytes",
+            "stock /mo",
+            "found",
+        ],
         cells,
     );
     Ok(note_if_truncated(table, rows.len(), listed))
@@ -306,25 +329,31 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
         return Err(format!("no such partition: {partition}"));
     }
     rows.sort_by_key(|row| std::cmp::Reverse(row.create_time));
+    let mut body = String::new();
     let cells: Vec<(String, Vec<String>)> = rows
         .iter()
         .map(|row| {
             (
-                String::new(),
+                row.name.clone(),
                 vec![
-                    row.name.rsplit('/').next().unwrap_or_default().to_string(),
+                    row.name
+                        .rsplit_once("/versions/")
+                        .map_or("", |(_, etag)| etag)
+                        .to_string(),
                     state_name(row.state).to_string(),
                     row.file_count.to_string(),
                     size_text(row.size_bytes),
                     money(Some(cost_version(row))),
                     when(Some(row.create_time)),
-                    when(row.up_to_date_time),
+                    row.up_to_date_time
+                        .map(|time| when(Some(time)))
+                        .unwrap_or_default(),
                     row.failure_count.to_string(),
                 ],
             )
         })
         .collect();
-    let mut body = ascii(
+    body.push_str(&ascii(
         &[
             "version",
             "state",
@@ -336,14 +365,52 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
             "failures",
         ],
         cells,
-    );
+    ));
     let current = rows
         .iter()
         .find(|row| row.state != State::Deleted)
         .unwrap_or(&rows[0]);
+    results(&mut body, &store, current);
+    Ok(body)
+}
+
+/// One version: the same results the partition page shows for its newest
+/// live one.
+fn version_page(master: &RwLock<Master>, version: &str) -> Result<String, String> {
+    let (store, rows) = {
+        let master = lock(master);
+        let partition = partition_name(version);
+        (master.store().to_path_buf(), master.records(&partition)?)
+    };
+    let etag = version
+        .rsplit_once("/versions/")
+        .map_or("", |(_, etag)| etag);
+    let Some(row) = rows
+        .iter()
+        .find(|row| row.name.rsplit_once("/versions/").map(|(_, e)| e) == Some(etag))
+    else {
+        return Err(format!("no such version: {version}"));
+    };
+    let files = match row.file_count {
+        1 => "1 file".to_string(),
+        count => format!("{count} files"),
+    };
+    let mut body = format!(
+        "{etag} · {} · {files} · {} · {}/mo\n\n",
+        state_name(row.state),
+        size_text(row.size_bytes),
+        money(Some(cost_version(row))),
+    );
+    results(&mut body, &store, row);
+    Ok(body)
+}
+
+/// Append one version's records: its price by class, its lint suggestions, its
+/// columns and the files its listing names.
+fn results(body: &mut String, store: &Path, row: &PartitionVersion) {
     let view = view(
-        &store,
-        current,
+        store,
+        row,
         &["list-partitions", "price", "bytemass", "list-suggestions"],
     );
     // The price: the classes its files are in, and what the partition costs in
@@ -416,8 +483,6 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
                     } else {
                         "no".to_string()
                     },
-                    count(mass["value_count"].as_u64()),
-                    count(mass["null_count"].as_u64()),
                     size_text(mass["compressed_bytes"].as_u64().unwrap_or(0)),
                     size_text(mass["uncompressed_bytes"].as_u64().unwrap_or(0)),
                     number(mass["compression_ratio"].as_f64()),
@@ -448,8 +513,6 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
                 "type",
                 "codec",
                 "dictionary",
-                "values",
-                "nulls",
                 "compressed",
                 "uncompressed",
                 "ratio",
@@ -458,9 +521,9 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
             columns,
         ));
     }
-    let listing = &view["list_partitions"];
     // Which file of the partition each is: the listing's oldest and newest,
     // and the one `bytemass` measured.
+    let listing = &view["list_partitions"];
     let files: Vec<(String, Vec<String>)> = [
         ("oldest", "first_file"),
         ("newest", "last_file"),
@@ -489,8 +552,8 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
         body.push('\n');
         body.push_str(&ascii(&["file", "path", "size", "modified"], files));
     }
-    Ok(body)
 }
+
 /// The most rows one page shows; the map can be larger than a screen.
 const MAX_ROWS: usize = 1000;
 
@@ -631,11 +694,6 @@ fn civil_date(days: i64) -> (i64, u32, u32) {
     let day = day_of_year - (153 * month + 2) / 5 + 1;
     let month = if month < 10 { month + 3 } else { month - 9 };
     (year + i64::from(month <= 2), month as u32, day as u32)
-}
-
-/// A count, or a dash.
-fn count(value: Option<u64>) -> String {
-    value.map_or_else(|| "—".to_string(), |value| value.to_string())
 }
 
 /// A measurement with two decimals, or a dash.

@@ -240,10 +240,12 @@ also serves the web app, read-only. Each page is one ASCII table, the same one
 `pqbench format` prints, and every row links to the resource it names: `/` is
 the catalogs, `/catalogs/{c}` their schemas, `…/tables/{t}` the table's
 partitions, `…/partitions/{p}` that partition's versions with its columns and
-files, and `/partitions` the master's map whole, newest found first. No
-script runs in the browser. A partition's page is that partition's records:
-its versions, the newest one's price by storage class, its columns from
-`bytemass`, its lint suggestions, and the files it used.
+files, `…/versions/{etag}` one version's results, and `/partitions` the
+master's map whole, newest found first. No script runs in the browser. A
+table's page names its partitions by their id, a partition's page names its
+versions by etag. A version's records are its price by storage class, its
+lint suggestions, its columns from `bytemass`, and the files its listing
+names; a partition's page shows the newest live version's.
 
 `GET /v1/{name}` returns what a name names, as JSON:
 
