@@ -612,7 +612,21 @@ fn data_file(
         Some(root) => local_uri(root, &relative)?,
         None => object_uri(table_url, &relative)?,
     };
-    let mut stats = file_stats(file.stats());
+    // Without the per-column maps, the record count comes from the parsed
+    // stats column; `stats()` would render each row back to JSON to parse it.
+    let record_count = if keep_stats {
+        None
+    } else {
+        file.num_records()
+            .and_then(|count| u64::try_from(count).ok())
+    };
+    let mut stats = match record_count {
+        Some(record_count) => Some(v1::FileStats {
+            record_count,
+            ..v1::FileStats::default()
+        }),
+        None => file_stats(file.stats()),
+    };
     if let Some(stats) = stats.as_mut() {
         stats.bytes_per_row = bytes_per_row(size, stats.record_count);
         if !keep_stats {
