@@ -222,7 +222,7 @@ fn partitions_page(master: &RwLock<Master>, table: &str) -> Result<String, Strin
         .iter()
         .map(|row| {
             (
-                partition_of(&row.name),
+                partition_name(&row.name),
                 vec![
                     row.name.clone(),
                     state_name(row.state).to_string(),
@@ -481,7 +481,7 @@ fn crumbs(segments: &[&str]) -> String {
 
 /// A version's name without its `/versions/{etag}`: the partition's name,
 /// which is the page a row links to.
-fn partition_of(version: &str) -> String {
+fn partition_name(version: &str) -> String {
     version
         .split_once("/versions/")
         .map_or(version, |(partition, _)| partition)
