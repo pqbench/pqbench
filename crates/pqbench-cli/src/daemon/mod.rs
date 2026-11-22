@@ -67,10 +67,7 @@ pub(crate) struct MasterArgs {
     /// the master's store: its checkpoint and results (with --master)
     #[arg(long, requires = "master", value_name = "DIR")]
     store: Option<PathBuf>,
-    /// walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
-    #[arg(long, requires = "master", value_name = "NAME", value_parser = walk_root)]
-    walk: Vec<String>,
-    /// walk the tables these Table records name, as they are (e.g. local tables)
+    /// walk the tables these Table records name instead of the metastore (e.g. local tables)
     #[arg(long, requires = "master", value_name = "FILE")]
     walk_tables: Option<PathBuf>,
     /// seconds from one walk to the next; without it the master walks once, when it starts
@@ -90,26 +87,10 @@ pub(crate) struct MasterArgs {
     listen: String,
 }
 
-/// A walk root: a catalog or a schema name.
-fn walk_root(value: &str) -> Result<String, String> {
-    let segments: Vec<&str> = value.trim_end_matches('/').split('/').collect();
-    match segments.as_slice() {
-        ["catalogs", catalog] | ["catalogs", catalog, "schemas", _]
-            if !catalog.is_empty() && segments.iter().all(|segment| !segment.is_empty()) =>
-        {
-            Ok(segments.join("/"))
-        }
-        _ => Err(format!(
-            "{value} is not a catalog or schema name (catalogs/C or catalogs/C/schemas/S)"
-        )),
-    }
-}
-
 impl MasterArgs {
     /// What the driver runs.
     fn settings(&self) -> drive::Settings {
         drive::Settings {
-            walk: self.walk.clone(),
             walk_tables: self.walk_tables.as_deref().map(path::absolute),
             walk_period: self.walk_period_seconds.map(Duration::from_secs),
             time_limit: self.time_limit_seconds.map(Duration::from_secs),
@@ -123,9 +104,6 @@ impl MasterArgs {
             return arguments;
         };
         arguments.extend(["--master".into(), "--store".into(), store.into()]);
-        for root in &self.walk {
-            arguments.extend(["--walk".into(), root.into()]);
-        }
         if let Some(tables) = &self.walk_tables {
             arguments.extend(["--walk-tables".into(), path::absolute(tables).into()]);
         }

@@ -373,9 +373,9 @@ map of partition versions (a partition at one etag); the work is plain pqbench
 commands the daemon runs as child processes, checked on a pass every 100 ms
 and never waited for:
 
-  walk      `list schemas | list tables | get table | list partitions` from
-            each --walk catalog or schema, and `list partitions` over the
-            --walk-tables records; once at start, then every
+  walk      `list catalogs | list schemas | list tables | get table | list
+            partitions`, the whole metastore, or `list partitions` over the
+            --walk-tables records instead; once at start, then every
             --walk-period-seconds. A new version is PENDING; a listed table's
             versions it no longer finds are DELETED, and when every table was
             read, so are the tables it did not list.
@@ -408,7 +408,7 @@ Examples:
   pqbench list tables | pqbench get table | pqbench list files | pqbench bytemass
   pqbench daemon status
   pqbench daemon stop
-  pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main \\
+  pqbench daemon start --master --store /var/lib/pqbench \\
     --walk-period-seconds 86400 --web-ui
 
 See also:

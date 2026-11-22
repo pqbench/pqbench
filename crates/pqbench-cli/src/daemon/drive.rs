@@ -7,12 +7,13 @@
 //! also purges, checkpoints, and refreshes the stats. Only the driver changes
 //! the map, and each change takes the write lock for one short update.
 //!
-//! - **Steps**: one command per version (`get partition-price`, `download`,
-//!   `bytemass --local`, `list suggestions --local`), at most
-//!   [`Settings::processes`] at once, each killed past the time limit.
-//! - **The walk**: `list schemas | list tables | get table | list partitions`
-//!   from the configured catalogs and schemas, and `list partitions` over
-//!   the configured Table records; its listing makes and deletes versions.
+//! - **Versions**: one command per version (`get partition-price`,
+//!   `download`, `bytemass`, `list suggestions`), one per CPU at once, each
+//!   killed past the time limit.
+//! - **The walk**: `list catalogs | list schemas | list tables | get table |
+//!   list partitions`, the whole metastore, or `list partitions` over the
+//!   configured Table records instead; its listing makes and deletes
+//!   versions.
 //! - **Stats**: `summarize partition-versions` over each new checkpoint.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,9 +39,7 @@ const ERROR_BYTES: usize = 2000;
 
 /// What the driver runs: the operator's settings.
 pub(crate) struct Settings {
-    /// Catalog and schema names the walk starts from.
-    pub walk: Vec<String>,
-    /// A file of Table records the walk lists as they are.
+    /// A file of Table records the walk lists instead of the metastore.
     pub walk_tables: Option<PathBuf>,
     /// How long after a walk the next one is due; `None` walks once, when the
     /// daemon starts.
@@ -49,11 +48,11 @@ pub(crate) struct Settings {
     pub time_limit: Option<Duration>,
 }
 
-/// A walk in progress: its processes, outputs and error file.
+/// A walk in progress: its processes, output and error file.
 struct Walk {
     process_ids: Vec<u32>,
     finished: Vec<Result<(), String>>,
-    outputs: Vec<PathBuf>,
+    output: PathBuf,
     error: PathBuf,
 }
 
@@ -195,9 +194,7 @@ impl Driver {
     /// Start a walk when none runs and one is due: the first since the
     /// daemon started, then one each walk period.
     fn start_walk(&mut self) {
-        if self.walk.is_some()
-            || (self.settings.walk.is_empty() && self.settings.walk_tables.is_none())
-        {
+        if self.walk.is_some() {
             return;
         }
         let now = master::now_ms();
@@ -220,81 +217,36 @@ impl Driver {
         self.walk_time = Some(now);
     }
 
-    /// The walk's pipelines: one from the catalogs, one from the schemas, one
-    /// over the Table records.
+    /// The walk's pipeline: the whole metastore, from `list catalogs`, or
+    /// `list partitions` over the configured Table records instead.
     fn walk_processes(&self) -> std::io::Result<Walk> {
         let directory = self.store.join("walk");
         fs::create_dir_all(&directory)?;
         let error_path = directory.join("walk.err");
         let error = File::create(&error_path)?;
         let stage = |words: &[&str]| words.iter().map(|word| (*word).to_string()).collect();
-        let catalogs: Vec<&String> = self
-            .settings
-            .walk
-            .iter()
-            .filter(|name| name.split('/').count() == 2)
-            .collect();
-        let schemas: Vec<&String> = self
-            .settings
-            .walk
-            .iter()
-            .filter(|name| name.split('/').count() == 4)
-            .collect();
-        let mut pipelines: Vec<(Vec<Vec<String>>, File)> = Vec::new();
-        for (roots, stages, name) in [
-            (
-                catalogs,
+        let (stages, input): (Vec<Vec<String>>, File) = match &self.settings.walk_tables {
+            Some(tables) => (vec![stage(&["list", "partitions"])], File::open(tables)?),
+            None => (
                 vec![
+                    stage(&["list", "catalogs"]),
                     stage(&["list", "schemas"]),
                     stage(&["list", "tables"]),
                     stage(&["get", "table"]),
                     stage(&["list", "partitions"]),
                 ],
-                "catalogs",
+                File::open("/dev/null")?,
             ),
-            (
-                schemas,
-                vec![
-                    stage(&["list", "tables"]),
-                    stage(&["get", "table"]),
-                    stage(&["list", "partitions"]),
-                ],
-                "schemas",
-            ),
-        ] {
-            if roots.is_empty() {
-                continue;
-            }
-            let input = directory.join(format!("{name}.in"));
-            let lines: String = roots
-                .iter()
-                .map(|root| format!("{}\n", serde_json::json!({ "name": root })))
-                .collect();
-            fs::write(&input, lines)?;
-            pipelines.push((stages, File::open(input)?));
-        }
-        if let Some(tables) = &self.settings.walk_tables {
-            pipelines.push((vec![stage(&["list", "partitions"])], File::open(tables)?));
-        }
-        let mut walk = Walk {
-            process_ids: Vec::new(),
-            finished: Vec::new(),
-            outputs: Vec::new(),
-            error: error_path,
         };
-        for (at, (stages, input)) in pipelines.into_iter().enumerate() {
-            let output = directory.join(format!("{at}.ndjson"));
-            let file = File::create(&output)?;
-            walk.process_ids.extend(process::start_pipeline(
-                &stages,
-                input,
-                file,
-                &error,
-                &self.socket,
-            )?);
-            walk.outputs.push(output);
-        }
-        Ok(walk)
+        let output = directory.join("partitions.ndjson");
+        let process_ids =
+            process::start_pipeline(&stages, input, File::create(&output)?, &error, &self.socket)?;
+        Ok(Walk {
+            process_ids,
+            finished: Vec::new(),
+            output,
+            error: error_path,
+        })
     }
 
     /// Once every process of the walk exited, apply its listing: each listed
@@ -323,24 +275,23 @@ impl Driver {
         }
         let now = master::now_ms();
         let mut found: BTreeMap<String, BTreeSet<master::Key>> = BTreeMap::new();
-        for output in &walk.outputs {
-            let Ok(file) = File::open(output) else {
+        let lines = File::open(&walk.output)
+            .map(|file| BufReader::new(file).lines().map_while(Result::ok))
+            .into_iter()
+            .flatten();
+        for line in lines {
+            if line.trim().is_empty() {
                 continue;
-            };
-            for line in BufReader::new(file).lines().map_while(Result::ok) {
-                if line.trim().is_empty() {
-                    continue;
+            }
+            match write(&self.master).found(&line, now) {
+                Ok(key) => {
+                    let table = key
+                        .0
+                        .split_once("/partitions/")
+                        .map_or("", |(table, _)| table);
+                    found.entry(table.to_string()).or_default().insert(key);
                 }
-                match write(&self.master).found(&line, now) {
-                    Ok(key) => {
-                        let table = key
-                            .0
-                            .split_once("/partitions/")
-                            .map_or("", |(table, _)| table);
-                        found.entry(table.to_string()).or_default().insert(key);
-                    }
-                    Err(error) => eprintln!("pqbench daemon: walk: {error}"),
-                }
+                Err(error) => eprintln!("pqbench daemon: walk: {error}"),
             }
         }
         for (table, keys) in &found {

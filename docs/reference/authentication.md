@@ -188,10 +188,10 @@ runs as child processes and checks on a pass every 100 ms without waiting for
 any; the master decides what runs next for a version and what a finished
 command means for it.
 
-- **The walk** runs `list schemas | list tables | get table | list partitions`
-  from each `--walk` catalog or schema (`catalogs/main`,
-  `catalogs/main/schemas/sales`), and `list partitions` over the Table records
-  in `--walk-tables FILE` (for local tables). It runs once when the daemon
+- **The walk** runs `list catalogs | list schemas | list tables | get table |
+  list partitions`: every table the endpoint's metastore shows. With
+  `--walk-tables FILE` it runs `list partitions` over the Table records in
+  FILE instead (for local tables). It runs once when the daemon
   starts, then every `--walk-period-seconds`. A partition at a new etag is a
   new `PENDING` version, and a listed table's versions the walk no longer
   finds are `DELETED`. When every table was read, the versions of tables the
@@ -245,7 +245,7 @@ table, then a table's partitions, then one partition's versions. `GET
 - One partition returns its versions with every result.
 
 ```console no-run
-$ pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main --walk-period-seconds 86400 --web-ui
+$ pqbench daemon start --master --store /var/lib/pqbench --walk-period-seconds 86400 --web-ui
 $ pqbench list partition-versions catalogs/main/schemas/sales
 ```
 

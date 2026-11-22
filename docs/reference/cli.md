@@ -862,9 +862,9 @@ commands the daemon runs as child processes, checked on a pass every 100 ms
 and never waited for:
 
 ```text
-  walk      `list schemas | list tables | get table | list partitions` from
-            each --walk catalog or schema, and `list partitions` over the
-            --walk-tables records; once at start, then every
+  walk      `list catalogs | list schemas | list tables | get table | list
+            partitions`, the whole metastore, or `list partitions` over the
+            --walk-tables records instead; once at start, then every
             --walk-period-seconds. A new version is PENDING; a listed table's
             versions it no longer finds are DELETED, and when every table was
             read, so are the tables it did not list.
@@ -900,7 +900,7 @@ Examples:
   pqbench list tables | pqbench get table | pqbench list files | pqbench bytemass
   pqbench daemon status
   pqbench daemon stop
-  pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main \
+  pqbench daemon start --master --store /var/lib/pqbench \
     --walk-period-seconds 86400 --web-ui
 
 See also:
@@ -931,8 +931,7 @@ Start the daemon in the background
   Default value: `900`
 * `--master` — also run the master: the partition versions and the commands that move them
 * `--store <DIR>` — the master's store: its checkpoint and results (with --master)
-* `--walk <NAME>` — walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
-* `--walk-tables <FILE>` — walk the tables these Table records name, as they are (e.g. local tables)
+* `--walk-tables <FILE>` — walk the tables these Table records name instead of the metastore (e.g. local tables)
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
 * `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
 * `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
@@ -972,8 +971,7 @@ Serve leases in the foreground
   Default value: `0`
 * `--master` — also run the master: the partition versions and the commands that move them
 * `--store <DIR>` — the master's store: its checkpoint and results (with --master)
-* `--walk <NAME>` — walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
-* `--walk-tables <FILE>` — walk the tables these Table records name, as they are (e.g. local tables)
+* `--walk-tables <FILE>` — walk the tables these Table records name instead of the metastore (e.g. local tables)
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
 * `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
 * `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
