@@ -433,7 +433,7 @@ const INSIGHTS_TTL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The latest storage class each live version reports, or the one that
 /// covers most of it, with the monthly cost that class carries there.
-fn class_of(costs: &[Value]) -> Option<(String, f64)> {
+fn storage_class(costs: &[Value]) -> Option<(String, f64)> {
     costs
         .iter()
         .filter_map(|cost| {
@@ -492,7 +492,7 @@ fn insights_page(master: &RwLock<Master>) -> Result<String, String> {
             .to_string();
         let price = read_lines(&directory.join("price.ndjson"));
         if let Some(price) = price.first() {
-            if let Some((class, cost)) = class_of(
+            if let Some((class, cost)) = storage_class(
                 price["storage_costs"]
                     .as_array()
                     .map(Vec::as_slice)
