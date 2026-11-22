@@ -21,7 +21,7 @@ default = []
 # reqwest signs a HEAD to read `x-amz-storage-class`, which object_store drops.
 aws = ["dep:object_store", "object_store/aws", "dep:async-trait"]
 # Delta snapshot resolution requires Rust 1.94.1 or newer.
-delta = ["dep:deltalake", "dep:futures", "dep:async-stream"]
+delta = ["dep:deltalake", "dep:delta_kernel", "dep:percent-encoding", "dep:futures", "dep:async-stream", "dep:tokio"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
 # Iceberg snapshot planning reads metadata JSON and Avro manifests.
 iceberg = ["dep:apache-avro", "dep:async-stream"]
@@ -46,6 +46,13 @@ bytes = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 deltalake = { version = "1.0", default-features = false, features = ["rustls"], optional = true }
+# The kernel delta-rs is built on, with the same version and features, so it
+# adds no build: its log segment reads the snapshot's `remove` actions, which
+# delta-rs exposes without their partition values.
+delta_kernel = { package = "buoyant_kernel", version = "=0.28.1", features = ["arrow-59", "internal-api"], optional = true }
+percent-encoding = { version = "2", optional = true }
+# The kernel reads on a blocking thread and hands batches over a channel.
+tokio = { version = "1", features = ["rt", "sync"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 # A stream that owns the reader it borrows: the loaders below build one

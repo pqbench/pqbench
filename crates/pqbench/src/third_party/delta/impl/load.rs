@@ -592,6 +592,127 @@ pub(super) async fn stream_active_files(
     .boxed())
 }
 
+/// The snapshot's `remove` actions, one batch at a time: the kernel reads the
+/// log segment (checkpoint and commits) on a blocking thread, projected to the
+/// three fields a removed file needs, and hands each batch over a channel.
+pub(super) async fn stream_removed_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, Error> {
+    use delta_kernel::schema::{DataType, MapType, StructField, StructType};
+
+    let store = open_store(lake, request)?;
+    let engine = store.engine(None);
+    let mut root = store.root_url().clone();
+    if !root.path().ends_with('/') {
+        root.set_path(&format!("{}/", root.path()));
+    }
+    let version = request.snapshot_version;
+    let remove = StructType::try_new([
+        StructField::not_null("path", DataType::STRING),
+        StructField::nullable(
+            "partitionValues",
+            MapType::new(DataType::STRING, DataType::STRING, true),
+        ),
+        StructField::nullable("size", DataType::LONG),
+    ])
+    .map_err(kernel_error)?;
+    let schema = Arc::new(
+        StructType::try_new([StructField::nullable("remove", remove)]).map_err(kernel_error)?,
+    );
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Result<Vec<v1::TableFile>, Error>>(2);
+    tokio::task::spawn_blocking(move || {
+        let read = || -> Result<(), Error> {
+            let mut builder = delta_kernel::Snapshot::builder_for(root);
+            if let Some(version) = version {
+                builder = builder.at_version(version);
+            }
+            let snapshot = builder.build(engine.as_ref()).map_err(kernel_error)?;
+            let batches = snapshot
+                .log_segment()
+                .read_actions(engine.as_ref(), schema)
+                .map_err(kernel_error)?;
+            for batch in batches {
+                let actions = batch.map_err(kernel_error)?.actions;
+                let data = delta_kernel::engine::arrow_data::ArrowEngineData::try_from_engine_data(
+                    actions,
+                )
+                .map_err(kernel_error)?;
+                if sender
+                    .blocking_send(Ok(removed_files(data.record_batch())?))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(())
+        };
+        if let Err(error) = read() {
+            let _ = sender.blocking_send(Err(error));
+        }
+    });
+    Ok(async_stream::try_stream! {
+        while let Some(files) = receiver.recv().await {
+            for file in files? {
+                yield file;
+            }
+        }
+    }
+    .boxed())
+}
+
+/// The removed files in one batch of `remove` actions; other rows are null.
+fn removed_files(
+    batch: &deltalake::arrow::array::RecordBatch,
+) -> Result<Vec<v1::TableFile>, Error> {
+    use deltalake::arrow::array::{Array, AsArray};
+    use deltalake::arrow::datatypes::Int64Type;
+
+    let invalid = || Error::Invalid("the log's remove actions have an unexpected shape".into());
+    let remove = batch.column(0).as_struct_opt().ok_or_else(invalid)?;
+    let paths = remove
+        .column(0)
+        .as_string_opt::<i32>()
+        .ok_or_else(invalid)?;
+    let values = remove.column(1).as_map_opt().ok_or_else(invalid)?;
+    let sizes = remove
+        .column(2)
+        .as_primitive_opt::<Int64Type>()
+        .ok_or_else(invalid)?;
+    let keys = values.keys().as_string_opt::<i32>().ok_or_else(invalid)?;
+    let entries = values.values().as_string_opt::<i32>().ok_or_else(invalid)?;
+    let mut files = Vec::new();
+    for row in 0..remove.len() {
+        if remove.is_null(row) {
+            continue;
+        }
+        let path = percent_encoding::percent_decode_str(paths.value(row))
+            .decode_utf8_lossy()
+            .into_owned();
+        let mut partition_values = BTreeMap::new();
+        if !values.is_null(row) {
+            for entry in values.value_offsets()[row]..values.value_offsets()[row + 1] {
+                let entry = entry as usize;
+                let value = (!entries.is_null(entry)).then(|| entries.value(entry).to_string());
+                partition_values.insert(keys.value(entry).to_string(), value);
+            }
+        }
+        files.push(v1::TableFile {
+            path,
+            size_bytes: (!sizes.is_null(row))
+                .then(|| u64::try_from(sizes.value(row)).ok())
+                .flatten(),
+            partition_values,
+            ..v1::TableFile::default()
+        });
+    }
+    Ok(files)
+}
+
+fn kernel_error(error: delta_kernel::Error) -> Error {
+    Error::Snapshot(Box::new(error))
+}
+
 /// The table's local filesystem root, when it is a `file://` table.
 fn local_table_root(table_url: &Url) -> Result<Option<PathBuf>, Error> {
     if table_url.scheme() != "file" {

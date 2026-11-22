@@ -384,6 +384,28 @@ pub async fn stream_active_files(
     }
 }
 
+/// Stream the files the requested snapshot removed but still names, without
+/// collecting them: for Delta, the `remove` actions whose tombstones the
+/// table's deleted-file retention has not expired, billed until a vacuum
+/// deletes them. `None` for a format whose removed files are not read
+/// (Iceberg).
+///
+/// A removed path can still be live (a deletion-vector update removes and
+/// re-adds it); drop the paths [`stream_active_files`] yields to count the
+/// bytes only the tombstones hold.
+///
+/// # Errors
+/// As [`stream_active_files`].
+pub async fn stream_removed_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<Option<FileStream<'static>>, Error> {
+    match detect(lake, &request.uri).await? {
+        v1::TableFormat::Delta => Ok(Some(delta::stream_removed_files(lake, request).await?)),
+        v1::TableFormat::Iceberg => Ok(None),
+    }
+}
+
 /// Stream a table's commits, newest first, without collecting them.
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller and

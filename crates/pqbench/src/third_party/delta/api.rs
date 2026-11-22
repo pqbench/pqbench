@@ -48,6 +48,23 @@ pub async fn stream_files(
     super::r#impl::stream_files(lake, request).await
 }
 
+/// Stream the files the requested snapshot removed and still keeps tombstones
+/// for (until the table's deleted-file retention expires them), with the path,
+/// the size and the partition values the `remove` action records.
+///
+/// A tombstone's file may still be live: a deletion-vector update removes and
+/// re-adds the same path. The caller that needs removed bytes drops the paths
+/// the active files still hold.
+///
+/// # Errors
+/// As [`load`]; an error raised after the first file is a stream item.
+pub async fn stream_removed_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, crate::table::Error> {
+    super::r#impl::stream_removed_files(lake, request).await
+}
+
 /// Stream the requested snapshot's active files, newest first.
 ///
 /// The read is the kernel scan, a record batch at a time, over a lazy snapshot:
