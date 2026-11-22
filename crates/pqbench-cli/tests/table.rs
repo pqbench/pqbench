@@ -381,7 +381,8 @@ fn unity_table_record(location: &std::path::Path, columns: serde_json::Value) ->
         "data_source_format": "DELTA",
         "storage_location": location.to_string_lossy(),
         "columns": columns,
-        "properties": {"owner": "data"}
+        "properties": {"owner": "data"},
+        "created_at": 1_600_000_000_000u64
     })
     .to_string()
 }
@@ -443,6 +444,7 @@ fn table_get_reads_a_unity_table() {
     );
     assert_eq!(record["format"], "TABLE_FORMAT_DELTA");
     assert_eq!(record["snapshot_version"], 0);
+    assert_eq!(record["create_time"], 1_700_000_000_000u64);
     assert_eq!(record["uri"], dir.path().to_string_lossy().as_ref());
     let columns: Vec<&str> = record["declared_columns"]
         .as_array()
@@ -454,6 +456,21 @@ fn table_get_reads_a_unity_table() {
     assert_eq!(record["properties"]["owner"], "data");
     assert_eq!(record["properties"]["delta.appendOnly"], "false");
     assert!(record.get("iceberg_properties").is_none(), "{record:?}");
+}
+
+/// A log without `metaData.createdTime` takes the catalog's `created_at`.
+#[cfg(feature = "delta")]
+#[test]
+fn table_get_takes_the_catalog_create_time_without_the_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    delta_table(dir.path());
+    let commit = dir.path().join("_delta_log/00000000000000000000.json");
+    let text = std::fs::read_to_string(&commit).unwrap();
+    let text = text.replace(r#""createdTime":1700000000000,"#, "");
+    assert!(!text.contains("createdTime"), "{text}");
+    std::fs::write(&commit, text).unwrap();
+    let record = read_unity_table(dir.path(), unity_columns());
+    assert_eq!(record["create_time"], 1_600_000_000_000u64);
 }
 
 /// Spark writes a bare `NULL` as a `void` column. Delta leaves the type

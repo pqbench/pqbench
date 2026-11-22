@@ -25,6 +25,10 @@ pub struct Table {
     /// The detected table format, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<TableFormat>,
+    /// When the table was created, milliseconds since the Unix epoch: the
+    /// Delta log's `metaData.createdTime`, else the catalog record's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_time: Option<u64>,
     /// Snapshot version the record describes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_version: Option<u64>,

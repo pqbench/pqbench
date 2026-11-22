@@ -163,6 +163,9 @@ pub struct TableInfo {
     pub name: String,
     /// Snapshot version the files belong to.
     pub snapshot_version: u64,
+    /// When the table was created, milliseconds since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_time: Option<u64>,
     /// Partition columns live in the log and need not occupy Parquet columns.
     pub partition_columns: Vec<String>,
     /// Table schema columns, when the metadata carries them.
@@ -206,6 +209,7 @@ impl TableInfo {
             uri: uri.into(),
             name: String::new(),
             snapshot_version,
+            create_time: None,
             partition_columns,
             columns: Vec::new(),
             delta_properties: BTreeMap::new(),
@@ -230,6 +234,7 @@ impl TableInfo {
             uri: non_empty(&self.uri),
             format: Some(self.format),
             snapshot_version: Some(self.snapshot_version),
+            create_time: self.create_time,
             partition_columns: self.partition_columns.clone(),
             declared_columns: self
                 .columns

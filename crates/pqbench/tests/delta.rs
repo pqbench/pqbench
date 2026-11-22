@@ -367,6 +367,7 @@ async fn load_accepts_a_file_uri() {
     assert_eq!(info.snapshot_version, 1);
     assert_eq!(info.files.len(), 2);
     assert_eq!(info.partition_columns, ["part"]);
+    assert_eq!(info.create_time, Some(1_760_000_000_000));
 }
 
 #[tokio::test]

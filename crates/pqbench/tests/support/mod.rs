@@ -117,7 +117,7 @@ pub fn metadata(configuration: Value) -> Value {
         ]}).to_string(),
         "partitionColumns": ["part"],
         "configuration": configuration,
-        "createdTime": 0
+        "createdTime": 1_760_000_000_000i64
     }})
 }
 

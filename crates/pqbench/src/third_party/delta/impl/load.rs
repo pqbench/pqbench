@@ -45,6 +45,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     );
     info.columns = meta.columns;
     info.delta_properties = meta.properties;
+    info.create_time = meta.create_time;
     if !request.require_files {
         return Ok(info);
     }
@@ -140,6 +141,7 @@ fn shared_store(lake: &Lake, url: &Url) -> Result<Option<Arc<dyn deltalake::Obje
 
 struct SnapshotMeta {
     version: u64,
+    create_time: Option<u64>,
     partition_columns: Vec<String>,
     columns: Vec<v1::DeclaredColumn>,
     properties: BTreeMap<String, String>,
@@ -148,6 +150,10 @@ struct SnapshotMeta {
 fn snapshot_meta(snapshot: &Snapshot) -> SnapshotMeta {
     SnapshotMeta {
         version: snapshot.version(),
+        create_time: snapshot
+            .metadata()
+            .created_time()
+            .and_then(|time| u64::try_from(time).ok()),
         partition_columns: snapshot.metadata().partition_columns().to_vec(),
         columns: snapshot
             .schema()

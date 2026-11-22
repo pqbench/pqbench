@@ -165,6 +165,10 @@ message Table {
 
   // The user-facing name the endpoint reports for the table.
   string display_name = 12;
+
+  // When the table was created, milliseconds since the Unix epoch: the Delta
+  // log's `metaData.createdTime`, else the catalog record's `created_at`.
+  optional int64 create_time = 13;
 }
 
 // A column of a table's schema. Not a resource: the declared column is a
