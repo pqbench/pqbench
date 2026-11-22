@@ -110,6 +110,9 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
 }
 
 /// The walk's config: `PQB_ENDPOINT` names the endpoint.
+/// The catalog keeps `information_schema` for itself: it holds views over
+/// metadata, no files, so `list schemas` does not list it.
+///
 /// One parent record, as the stream carries it.
 fn parent(name: &str) -> Vec<u8> {
     format!(r#"{{"name":"{name}"}}"#).into_bytes()
@@ -132,8 +135,7 @@ const SCHEMA_REFS: &str = concat!(
     "\n",
 );
 
-const SCHEMAS: &str =
-    r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"}],"next_page_token":null}"#;
+const SCHEMAS: &str = r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"},{"name":"information_schema","securable_kind":"SCHEMA_SYSTEM"}],"next_page_token":null}"#;
 const SCHEMAS_PAGE: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":"more"}"#;
 const SCHEMAS_LAST: &str = r#"{"schemas":[{"name":"bakehouse"}]}"#;
 const ICEBERG_NAMESPACES: &str =

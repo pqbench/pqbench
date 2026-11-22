@@ -2,9 +2,10 @@
 //!
 //! Unity serves `GET /tables/{catalog}.{schema}.{table}`; the record names the
 //! table id and the securable kind. Databricks default storage
-//! (`TABLE_DB_STORAGE`) is the kind the vending route refuses, so it stops
-//! there; for any other kind `POST /temporary-table-credentials` vends read
-//! credentials. A missing kind says nothing, so a catalog that reports none
+//! (`TABLE_DB_STORAGE`) is the kind the vending route refuses, so the call
+//! stops there with [`Error::Refused`]: no lease can be minted, and the
+//! table's files are unreadable outside the workspace's compute. For any other
+//! kind `POST /temporary-table-credentials` vends read credentials. A missing kind says nothing, so a catalog that reports none
 //! (Unity OSS) is attempted. Serverless notebooks are refused
 //! (`UC_SERVERLESS_UNTRUSTED_DOMAIN_STORAGE_TOKEN_MINTING`); those refs pass
 //! through with no env, since the compute reaches storage itself.
@@ -77,7 +78,7 @@ pub(super) async fn vend_unity(
     let root = dialect::unity_root(workspace.config().endpoint.as_str());
     let record = table_record(workspace, &root, &name).await?;
     if !record.eligible() {
-        return Ok(None);
+        return Err(Error::Refused { name });
     }
     let Some(table_id) = record.table_id.filter(|id| !id.is_empty()) else {
         return Ok(None);

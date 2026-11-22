@@ -59,9 +59,11 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
     address
 }
 
-const CATALOGS: &str = r#"{"catalogs":[{"name":"dbx_samples","catalog_type":"MANAGED_CATALOG"},{"name":"system","catalog_type":"SYSTEM_CATALOG"}]}"#;
+/// Two managed catalogs: a system catalog is not listed, so the pipeline
+/// keeps two catalogs that are.
+const CATALOGS: &str = r#"{"catalogs":[{"name":"dbx_samples","catalog_type":"MANAGED_CATALOG"},{"name":"lakehouse","catalog_type":"MANAGED_CATALOG"}]}"#;
 const DBX_SAMPLES: &str = r#"{"name":"dbx_samples","catalog_type":"MANAGED_CATALOG","comment":"sample catalog","owner":"owner@example.com"}"#;
-const SYSTEM: &str = r#"{"name":"system","catalog_type":"SYSTEM_CATALOG"}"#;
+const LAKEHOUSE: &str = r#"{"name":"lakehouse","catalog_type":"MANAGED_CATALOG"}"#;
 const SCHEMAS: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":null}"#;
 const SCHEMA: &str =
     r#"{"name":"nyctaxi","comment":"taxi data","storage_location":"s3://bucket/nyctaxi"}"#;
@@ -74,7 +76,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
         ("/schemas/", 200, SCHEMA),
         ("/tables", 200, TABLES),
         ("/catalogs/dbx_samples", 200, DBX_SAMPLES),
-        ("/catalogs/system", 200, SYSTEM),
+        ("/catalogs/lakehouse", 200, LAKEHOUSE),
         ("/catalogs?", 200, CATALOGS),
     ]);
     let env = [("PQB_ENDPOINT", address.as_str())];
@@ -103,7 +105,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
     assert_eq!(dbx_samples["comment"], "sample catalog");
     assert!(records
         .iter()
-        .any(|record| record["name"] == "catalogs/system"));
+        .any(|record| record["name"] == "catalogs/lakehouse"));
 
     let schemas = pipe_env(&["list", "schemas"], &refs, &env);
     assert!(
@@ -118,7 +120,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
         .any(|record| record["name"] == "catalogs/dbx_samples/schemas/nyctaxi"));
     assert!(records
         .iter()
-        .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
+        .any(|record| record["name"] == "catalogs/lakehouse/schemas/nyctaxi"));
 
     let enriched = pipe_env(&["get", "schema"], &schemas.stdout, &env);
     assert!(
@@ -134,7 +136,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
     ));
     assert!(records
         .iter()
-        .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi"));
+        .any(|record| record["name"] == "catalogs/lakehouse/schemas/nyctaxi"));
 
     let tables = pipe_env(&["list", "tables"], &schemas.stdout, &env);
     assert!(
@@ -148,7 +150,7 @@ fn list_catalogs_pipes_into_get_catalog_and_list_schemas() {
         && record["uri"] == "s3://bucket/trips"));
     assert!(records
         .iter()
-        .any(|record| record["name"] == "catalogs/system/schemas/nyctaxi/tables/trips"));
+        .any(|record| record["name"] == "catalogs/lakehouse/schemas/nyctaxi/tables/trips"));
 }
 
 #[test]

@@ -29,6 +29,10 @@ struct SchemasPage {
 #[derive(Deserialize)]
 struct Named {
     name: String,
+    /// `SCHEMA_SYSTEM` for a schema the catalog keeps for itself, like
+    /// `information_schema`: it holds views over metadata, no files.
+    #[serde(default)]
+    securable_kind: Option<String>,
 }
 
 /// One page of Iceberg REST `GET {endpoint}/namespaces`.
@@ -85,7 +89,11 @@ async fn unity_schemas(workspace: &Workspace, catalog: &str) -> Result<Vec<Strin
                     "the endpoint listed a nameless schema".to_string(),
                 ));
             }
-            names.push(schema.name);
+            // A schema the catalog keeps for itself, like
+            // `information_schema`, holds views over metadata: no files.
+            if schema.securable_kind.as_deref() != Some("SCHEMA_SYSTEM") {
+                names.push(schema.name);
+            }
         }
         match page.next_page_token {
             Some(next) if !next.is_empty() => page_token = Some(next),

@@ -52,10 +52,15 @@ listed tables. A PAT does not open `s3://`.
 
 `get metastore` reads the same endpoint and reports its metastore record
 (name, uid, cloud_provider, region) as `Metastore`. `list catalogs` lists the
-catalogs at the endpoint, one `Catalog` line each (name, catalog_type). `get
-catalog` reports one catalog's record (name, catalog_type, comment, owner) as a
-single `Catalog` line. `list schemas` lists the schemas in the catalog, one
-`Schema` line each (name, comment, uri): Unity REST serves `/schemas`; with
+catalogs at the endpoint, one `Catalog` line each (name, catalog_type); a
+system catalog (`CATALOG_SYSTEM`) and a catalog whose managed storage is
+Databricks default storage (`CATALOG_DB_STORAGE`), which no reader outside the
+workspace's compute can open, are not listed. `get catalog` reports one
+catalog's record (name, catalog_type, comment, owner) as a single `Catalog`
+line. `list schemas` lists the schemas in the catalog, one `Schema` line each
+(name, comment, uri); a schema the catalog keeps for itself
+(`SCHEMA_SYSTEM`, like `information_schema`) holds views over metadata and is
+not listed. Unity REST serves `/schemas`; with
 `PQB_TABLE_FORMAT=iceberg` (or `"table_format": "iceberg"` in the document) the
 command speaks Iceberg REST instead — the endpoint then names the catalog base
 (`{root}/v1` or `{root}/v1/{prefix}`) and the command reads `/namespaces` under

@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::api::{Catalog, Error};
 use crate::dialect;
-use crate::v1::name;
+use crate::v1::{name, CatalogType};
 use crate::Workspace;
 
 /// Catalog names per page; the walk follows `next_page_token`.
@@ -28,7 +28,14 @@ struct Entry {
     name: String,
     #[serde(default)]
     catalog_type: Option<String>,
+    #[serde(default)]
+    securable_kind: Option<String>,
 }
+
+/// The catalog kinds with no storage of their own to measure: a system
+/// catalog, and a catalog whose managed storage is Databricks default
+/// storage, which no reader outside the workspace's compute can open.
+const UNREADABLE: &[&str] = &["CATALOG_SYSTEM", "CATALOG_DB_STORAGE"];
 
 pub(crate) async fn list(workspace: &Workspace) -> Result<Vec<Catalog>, Error> {
     let root = dialect::api_root(workspace.config().endpoint.as_str());
@@ -45,15 +52,24 @@ pub(crate) async fn list(workspace: &Workspace) -> Result<Vec<Catalog>, Error> {
         let page: Page = crate::http::get_json(workspace, &url, token)
             .await
             .map_err(Error::Http)?;
-        catalogs.extend(page.catalogs.into_iter().map(|entry| {
-            Catalog {
-                name: name::catalog(&entry.name),
-                catalog_type: entry
-                    .catalog_type
+        catalogs.extend(page.catalogs.into_iter().filter_map(|entry| {
+            let catalog_type = entry
+                .catalog_type
+                .as_deref()
+                .and_then(dialect::catalog_type);
+            let unreadable = catalog_type == Some(CatalogType::System)
+                || entry
+                    .securable_kind
                     .as_deref()
-                    .and_then(dialect::catalog_type),
-                ..Catalog::default()
+                    .is_some_and(|kind| UNREADABLE.contains(&kind));
+            if unreadable {
+                return None;
             }
+            Some(Catalog {
+                name: name::catalog(&entry.name),
+                catalog_type,
+                ..Catalog::default()
+            })
         }));
         match page.next_page_token {
             Some(next) if !next.is_empty() => page_token = Some(next),

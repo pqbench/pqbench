@@ -408,6 +408,49 @@ fn read_unity_table(dir: &std::path::Path, columns: serde_json::Value) -> serde_
     records.remove(0)
 }
 
+/// A table the catalog marks `TABLE_DB_STORAGE`: its files are unreadable
+/// outside the workspace's compute, so no lease can be minted and the read
+/// never starts. The credential route answers 500, so a fallback to it would
+/// show as a different error.
+#[test]
+fn get_table_refuses_default_storage_at_once() {
+    let record = json!({
+        "name": "reviews",
+        "catalog_name": "dbx_samples",
+        "schema_name": "bakehouse",
+        "data_source_format": "DELTA",
+        "storage_location": "s3://dbstorage-prod-1lflv/uc/x/__unitystorage/catalogs/c/tables/t",
+        "table_id": "11111111-1111-1111-1111-111111111111",
+        "securable_kind": "TABLE_DB_STORAGE",
+        "columns": unity_columns(),
+        "properties": {},
+        "created_at": 1_600_000_000_000u64
+    })
+    .to_string();
+    let address = routes_owned(vec![
+        ("/temporary-table-credentials", 500, "{}".to_string()),
+        ("/tables/", 200, record),
+    ]);
+    let started = std::time::Instant::now();
+    let output = pipe_env(
+        &["get", "table"],
+        &parent("catalogs/dbx_samples/schemas/bakehouse/tables/reviews"),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.stdout.is_empty(), "the table was read");
+    assert!(stderr.contains("TABLE_DB_STORAGE"), "{stderr}");
+    assert!(
+        !stderr.contains("temporary-table-credentials") && !stderr.contains("500"),
+        "it asked for credentials anyway: {stderr}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "it waited: {:?}",
+        started.elapsed()
+    );
+}
+
 /// An Iceberg REST `loadTable` record with the metadata JSON inline. The
 /// `metadata-location` names a path that does not exist, so a command that
 /// reads storage would fail.
