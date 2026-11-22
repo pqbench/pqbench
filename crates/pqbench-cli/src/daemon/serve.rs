@@ -111,7 +111,7 @@ async fn handle(
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
     if let Request::ListPartitionVersions { parent } = &request {
         let versions = match &master {
-            Some(master) => lock(master).list(parent),
+            Some(master) => lock(master).records(parent),
             None => Err("the daemon runs no master; start it with --master".into()),
         };
         return write_versions(write, versions).await;
@@ -119,6 +119,8 @@ async fn handle(
 
     let response = match &request {
         Request::ScanPath { .. }
+        | Request::StatsPath
+        | Request::Stats
         | Request::Scan { .. }
         | Request::RetainTables { .. }
         | Request::Claim { .. }
@@ -198,6 +200,20 @@ fn answer(request: &Request, master: &mut Master) -> Response {
         },
     };
     match request {
+        Request::StatsPath => Response {
+            path: Some(master.stats_path().to_string_lossy().into_owned()),
+            ..Response::default()
+        },
+        Request::Stats => match master.commit_stats() {
+            Ok(()) => Response {
+                ok: true,
+                ..Response::default()
+            },
+            Err(error) => Response {
+                error: Some(error),
+                ..Response::default()
+            },
+        },
         Request::ScanPath { table } => Response {
             path: Some(master.scan_path(table).to_string_lossy().into_owned()),
             ..Response::default()

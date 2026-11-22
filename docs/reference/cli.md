@@ -35,6 +35,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench job bytemass`↴](#pqbench-job-bytemass)
 * [`pqbench job lint`↴](#pqbench-job-lint)
 * [`pqbench job purge`↴](#pqbench-job-purge)
+* [`pqbench job stats`↴](#pqbench-job-stats)
 * [`pqbench daemon`↴](#pqbench-daemon)
 * [`pqbench daemon start`↴](#pqbench-daemon-start)
 * [`pqbench daemon stop`↴](#pqbench-daemon-stop)
@@ -102,7 +103,7 @@ Documents:
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
   PartitionVersion       a partition at one etag in the master (list partition-versions)
-  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
+  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions, job stats)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -831,6 +832,9 @@ scheduler's.
   purge     delete the results and rows of the versions the scan no longer
             finds, keeping a partition's last complete version until a newer
             one is done
+  stats     total the versions per catalog, schema and table into the file
+            the master names, for the web app (`list partition-versions |
+            summarize partition-versions`)
 ```
 
 `pqbench list partition-versions` prints the master's rows.
@@ -855,6 +859,7 @@ See also:
 * `bytemass` — Measure each priced version's sample file (`bytemass`)
 * `lint` — List each measured version's storage suggestions (`list suggestions`)
 * `purge` — Delete the results and rows of the versions the scan no longer finds
+* `stats` — Total the versions per catalog, schema and table for the web app
 
 
 
@@ -924,6 +929,13 @@ List each measured version's storage suggestions (`list suggestions`)
 Delete the results and rows of the versions the scan no longer finds
 
 **Usage:** `pqbench job purge`
+
+
+## `pqbench job stats`
+
+Total the versions per catalog, schema and table for the web app
+
+**Usage:** `pqbench job stats`
 
 
 ## `pqbench daemon`

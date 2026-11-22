@@ -8,6 +8,7 @@
 //! time limit is the scheduler's (`timeout 3600 pqbench job scan`).
 
 pub(crate) mod scan;
+pub(crate) mod stats;
 mod step;
 
 use std::fs::{File, OpenOptions};
@@ -41,6 +42,8 @@ enum Job {
     Lint(step::StepArgs),
     /// Delete the results and rows of the versions the scan no longer finds
     Purge,
+    /// Total the versions per catalog, schema and table for the web app
+    Stats(stats::StatsArgs),
 }
 
 /// Run one job.
@@ -50,6 +53,7 @@ pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &JobArgs) -> Resul
         Job::Price(args) => step::run(daemon, &step::PRICE, args).await,
         Job::Bytemass(args) => step::run(daemon, &step::BYTEMASS, args).await,
         Job::Lint(args) => step::run(daemon, &step::LINT, args).await,
+        Job::Stats(args) => stats::run(daemon, args).await,
         Job::Purge => {
             let _lock = lock(daemon, "purge")?;
             daemon.master(&Request::Purge).await?;
@@ -67,6 +71,7 @@ impl JobArgs {
             Job::Bytemass(_) => "job bytemass",
             Job::Lint(_) => "job lint",
             Job::Purge => "job purge",
+            Job::Stats(_) => "job stats",
         }
     }
 }

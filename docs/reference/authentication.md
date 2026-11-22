@@ -196,15 +196,25 @@ deletes results no row names; a crash loses at most the calls since the last
 checkpoint, and the jobs and the next scan redo them.
 
 With `--web-ui` (and `--listen ADDR`, default `127.0.0.1:8180`) the daemon
-also serves the web app, read-only: the master's partition versions as a
-sortable, paged list. `GET /v1/{name}` returns what a name names. A partitions
-collection (`catalogs/-/schemas/-/tables/-/partitions`, `-` for any parent)
-returns one page, `{"partitions", "next_page_token", "total_size"}`, taking
-`page_size` (100 by default, at most 1000), `page_token`, and `order_by` (`name`,
-`size_bytes`, `file_count`, `removed_size_bytes`, `create_time`, or
-`failure_count`, then ` desc` to reverse); the order comes from the master's
-rows in memory, and only the page's versions read their listing and price. One
-partition returns its versions with every result.
+also serves the web app, read-only: the warehouse by catalog, schema and
+table, then a table's partitions, then one partition's versions. `GET
+/v1/{name}` returns what a name names:
+
+- `/v1/catalogs`, `/v1/catalogs/{c}/schemas` and
+  `/v1/catalogs/{c}/schemas/{s}/tables` (`-` for any id) return the stats
+  job's `PartitionStats` records under that level, dearest first and then by
+  size. The page reads them; it sums and sorts nothing.
+- A partitions collection (`{table}/partitions`) returns one page,
+  `{"partitions", "next_page_token", "total_size"}`, taking `page_size` (100 by
+  default, at most 1000), `page_token`, and `order_by`: `highest_cost_per_month
+  desc` (the default) or `last_modification_time desc`. The daemon sorts the
+  master's rows for the one table, and only the page's versions read their
+  listing and price.
+- One partition returns its versions with every result.
+
+`pqbench job stats` writes those totals: `list partition-versions | summarize
+partition-versions` into a temporary file the master renames in and serves. Run
+it after the other jobs, and as often as the page should be fresh.
 
 `pqbench list partition-versions [PARENT]` prints the master's rows as
 `PartitionVersion` records, named `…/partitions/{partition}/versions/{etag}`:
@@ -217,6 +227,7 @@ totals them per catalog, schema and table as `PartitionStats` records.
 $ pqbench daemon start --master --store /var/lib/pqbench --web-ui
 $ echo '{"name":"catalogs/main/schemas/sales"}' | pqbench list tables | pqbench get table | pqbench job scan --complete
 $ pqbench list partition-versions catalogs/main/schemas/sales
+$ pqbench job stats
 ```
 
 ## Databricks-governed tables

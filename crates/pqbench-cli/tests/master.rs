@@ -537,7 +537,29 @@ fn the_web_app_serves_the_records_by_name() {
         assert_eq!(status, 200, "{body}");
         serde_json::from_str::<Value>(&body).unwrap()
     };
-    let all = list("order_by=size_bytes+desc");
+    master.run(&["job", "stats"], "");
+    let stats = |path: &str| -> Vec<Value> {
+        let (status, body) = http_get(&address, path);
+        assert_eq!(status, 200, "{body}");
+        serde_json::from_str(&body).unwrap()
+    };
+    let catalogs = stats("/v1/catalogs");
+    assert_eq!(catalogs.len(), 1);
+    assert_eq!(catalogs[0]["name"], "catalogs/local/partitionStats");
+    assert_eq!(catalogs[0]["partition_count"], 2);
+    assert_eq!(catalogs[0]["size_bytes"], 3 * size);
+    let schemas = stats("/v1/catalogs/local/schemas");
+    assert_eq!(
+        schemas[0]["name"],
+        "catalogs/local/schemas/local/partitionStats"
+    );
+    let tables = stats("/v1/catalogs/-/schemas/-/tables");
+    assert_eq!(
+        tables[0]["name"],
+        "catalogs/local/schemas/local/tables/events/partitionStats"
+    );
+    assert_eq!(tables[0]["version_counts"]["UP_TO_DATE"], 2);
+    let all = list("");
     assert_eq!(all["total_size"], 2);
     let versions = all["partitions"].as_array().unwrap();
     assert!(versions
@@ -548,14 +570,14 @@ fn the_web_app_serves_the_records_by_name() {
     assert_eq!(versions[1]["size_bytes"], size);
     assert!(versions.iter().all(|v| v.get("bytemass").is_none()));
     assert!(all.get("next_page_token").is_none());
-    let first = list("order_by=size_bytes%20desc&page_size=1");
+    let first = list("page_size=1");
     let token = first["next_page_token"].as_str().unwrap();
-    let second = list(&format!(
-        "order_by=size_bytes%20desc&page_size=1&page_token={token}"
-    ));
+    let second = list(&format!("page_size=1&page_token={token}"));
     assert_eq!(first["partitions"][0]["name"], versions[0]["name"]);
     assert_eq!(second["partitions"][0]["name"], versions[1]["name"]);
     assert!(second.get("next_page_token").is_none());
+    let newest = list("order_by=last_modification_time+desc");
+    assert_eq!(newest["total_size"], 2);
     assert_eq!(
         http_get(
             &address,
@@ -575,6 +597,43 @@ fn the_web_app_serves_the_records_by_name() {
         .is_some_and(|lines| !lines.is_empty()));
     assert!(one[0]["list_suggestions"].is_array());
     assert_eq!(http_get(&address, "/v1/catalogs/local").0, 404);
+}
+
+/// `job stats` writes the same records the pipe writes, to a file the master
+/// names, and a second run replaces the first.
+#[test]
+fn a_stats_run_writes_the_totals_and_replaces_the_last() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1", "2"]));
+    let master = Master::start(directory.path());
+    master.scan(&table_record("events", &root), false);
+    run_steps(&master);
+    master.run(&["job", "stats"], "");
+    let files = || -> Vec<std::path::PathBuf> {
+        let mut files: Vec<std::path::PathBuf> =
+            std::fs::read_dir(directory.path().join("store/stats"))
+                .unwrap()
+                .map(|file| file.unwrap().path())
+                .collect();
+        files.sort();
+        files
+    };
+    let written = files();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let versions = master.run(&["list", "partition-versions"], "");
+    let summarized = master.run(
+        &["summarize", "partition-versions"],
+        &String::from_utf8(versions.stdout).unwrap(),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&written[0]).unwrap(),
+        String::from_utf8(summarized.stdout).unwrap()
+    );
+    master.run(&["job", "stats"], "");
+    let replaced = files();
+    assert_eq!(replaced.len(), 1, "{replaced:?}");
+    assert_ne!(replaced[0], written[0]);
 }
 
 /// The web app needs the master.

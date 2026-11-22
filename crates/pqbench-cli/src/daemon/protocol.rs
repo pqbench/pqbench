@@ -39,6 +39,10 @@ pub(crate) enum Request {
     /// empty): the answer's `count` says how many lines follow it, one
     /// PartitionVersion each.
     ListPartitionVersions { parent: String },
+    /// Where the stats job writes its totals.
+    StatsPath,
+    /// Rename the stats job's file in, replacing the previous one.
+    Stats,
     /// Where a scan job writes one table's listing.
     ScanPath { table: String },
     /// Apply the listing the scan job wrote for one table.

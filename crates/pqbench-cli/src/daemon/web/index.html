@@ -30,18 +30,18 @@ pre { background:#26231f; color:#efe9df; padding:10px 12px; border-radius:6px; o
 </style>
 </head>
 <body>
-<header><b>pqbench</b><a href="#/">partitions</a></header>
+<header><b>pqbench</b><a href="#/">warehouse</a></header>
 <main id="main"><p class="note">loading…</p></main>
 <script>
 // Every number on the page is a field of a record from /v1/: a page of
 // partition versions, or one partition's versions with their results.
 const COLOR = { PENDING: "#c9a25a", PRICING: "#b98a3a", PRICED: "#7f8f3a", BYTEMASSING: "#5f8f5a", BYTEMASSED: "#3f7f5a", LINTING: "#2f6f5a", UP_TO_DATE: "#1f6f43", DELETED: "#a33" };
-const ALL = "catalogs/-/schemas/-/tables/-";
 const PAGE_SIZE = 100;
+const STATE_ORDER = ["PENDING", "PRICING", "PRICED", "BYTEMASSING", "BYTEMASSED", "LINTING", "UP_TO_DATE", "DELETED"];
 
 const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const usd = v => v == null ? "—" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}k` : `$${v.toFixed(v < 10 ? 2 : 0)}`;
-const range = r => !r ? "—" : r[0] === r[1] ? usd(r[0]) : `${usd(r[0])}–${usd(r[1])}`;
+const usd = v => v == null ? "—" : v === 0 ? "$0" : v > 0 && v < 0.01 ? "<$0.01" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}k` : `$${v.toFixed(v < 10 ? 2 : 0)}`;
+const range = r => !r || r[0] == null ? "—" : usd(r[0]) === usd(r[1]) ? usd(r[0]) : `${usd(r[0])}–${usd(r[1])}`;
 const bytes = b => { if (b == null) return "—"; const u = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]; let i = 0; while (b >= 1024 && i < 5) { b /= 1024; i++; } return `${b.toFixed(b >= 100 ? 0 : 1)} ${u[i]}`; };
 const time = ms => ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "—";
 const tag = s => `<span class="tag" style="background:${COLOR[s] ?? "#77706a"}">${s}</span>`;
@@ -60,45 +60,73 @@ function costRange(costs) {
 }
 
 function crumbs(name) {
-  const parts = name.split("/"); const out = [`<a href="#/">partitions</a>`];
-  for (let i = 6; i <= parts.length; i += 2) out.push(`<a href="#/${parts.slice(0, i).join("/")}">${esc(decodeURIComponent(parts[i - 1]))}</a>`);
+  const parts = name.split("/"); const out = [`<a href="#/">warehouse</a>`];
+  for (let i = 2; i <= parts.length; i += 2) {
+    const collection = parts[i - 2] === "catalogs" ? "schemas" : parts[i - 2] === "schemas" ? "tables" : "";
+    out.push(`<a href="#/${collection && i === parts.length ? parts.slice(0, i).join("/") + "/" + collection : parts.slice(0, i).join("/")}">${esc(decodeURIComponent(parts[i - 1]))}</a>`);
+  }
   return `<div class="crumbs">${out.join(" / ")}</div>`;
 }
 
-// The list's order and page: the server sorts and pages, the page keeps the
-// tokens it was given so it can step back.
-let list = { parent: null, order: "size_bytes desc", tokens: [""] };
-const COLUMNS = [["partition", "name"], ["state", null], ["files", "file_count"], ["bytes", "size_bytes"], ["removed", "removed_size_bytes"], ["stock", null], ["found", "create_time"], ["failures", "failure_count"]];
+// A stats record's parent: its name without `/partitionStats`.
+const parentOf = name => name.slice(0, -"/partitionStats".length);
 
-async function viewList(parent) {
-  if (list.parent !== parent) list = { ...list, parent, tokens: [""] };
+// A level's page: the stats job's totals under it, dearest first and then by
+// size, and one row per catalog, schema or table.
+function states(counts) {
+  return STATE_ORDER.filter(s => counts[s]).map(s => `${tag(s)} <span class="n">${counts[s].toLocaleString()}</span>`).join(" ");
+}
+
+async function viewStats(name) {
+  const collection = !name ? "catalogs" : name.split("/").length === 2 ? "schemas" : "tables";
+  const path = !name ? "catalogs" : `${name}/${collection}`;
+  const rows = await get(path);
+  if (!rows) return `<div class="empty">The stats could not be read.</div>`;
+  const title = !name ? "Warehouse" : `${name.split("/").length === 2 ? "Schemas in " : "Tables in "}${esc(dotted(name))}`;
+  if (!rows.length)
+    return `${name ? crumbs(name) : ""}<h1>${title}</h1><div class="empty">Nothing here yet. Run <span class="mono">pqbench job stats</span> if the totals are missing.</div>`;
+  return `${name ? crumbs(name) : ""}<h1>${title}</h1>
+    <p class="sub">${rows.length} ${collection}; dearest first, then by size. Stock is the live partitions' monthly cost, summed over their cheapest and dearest class.</p>
+    <table><tr><th>${collection === "catalogs" ? "catalog" : collection === "schemas" ? "schema" : "table"}</th><th class="n">partitions</th><th class="n">files</th><th class="n">bytes</th><th class="n">stock /mo</th><th>versions</th><th class="n">failed</th><th>newest file</th></tr>
+    ${rows.map(r => `<tr><td><a href="#/${parentOf(r.name)}">${esc(leaf(parentOf(r.name)))}</a></td>
+      <td class="n">${r.partition_count.toLocaleString()}</td><td class="n">${r.file_count.toLocaleString()}</td>
+      <td class="n">${bytes(r.size_bytes)}</td><td class="n">${range([r.lowest_cost_per_month, r.highest_cost_per_month])}/mo</td>
+      <td>${states(r.version_counts ?? {})}</td><td class="n">${r.failed_version_count || ""}</td><td>${time(r.last_modification_time)}</td></tr>`).join("")}</table>`;
+}
+
+// A table's partitions: the server sorts and pages them, dearest first or
+// newest file first; the page keeps the tokens it was given so it can step
+// back.
+let list = { table: null, order: "highest_cost_per_month desc", tokens: [""] };
+
+async function viewPartitions(table) {
+  if (list.table !== table) list = { table, order: "highest_cost_per_month desc", tokens: [""] };
   const token = list.tokens[list.tokens.length - 1];
   const query = new URLSearchParams({ page_size: PAGE_SIZE, order_by: list.order, page_token: token });
-  const page = await get(`${parent}/partitions?${query}`);
-  if (!page) return `<div class="empty">The list could not be read.</div>`;
-  const [field, direction] = list.order.split(" ");
+  const page = await get(`${table}/partitions?${query}`);
+  if (!page) return `${crumbs(table)}<div class="empty">The list could not be read.</div>`;
   const first = (list.tokens.length - 1) * PAGE_SIZE;
+  const order = o => `<button id="${o === "highest_cost_per_month desc" ? "by-cost" : "by-time"}" ${list.order === o ? "disabled" : ""}>${o === "highest_cost_per_month desc" ? "dearest" : "newest file"}</button>`;
   setTimeout(() => {
-    document.querySelectorAll("#pt th[data-k]").forEach(th => th.onclick = () => {
-      const k = th.dataset.k;
-      list.order = k === field ? `${k} ${direction === "desc" ? "asc" : "desc"}` : `${k} ${k === "name" ? "asc" : "desc"}`;
-      list.tokens = [""]; route();
-    });
+    for (const [id, value] of [["by-cost", "highest_cost_per_month desc"], ["by-time", "last_modification_time desc"]]) {
+      const button = document.getElementById(id);
+      if (button) button.onclick = () => { list.order = value; list.tokens = [""]; route(); };
+    }
     const next = document.getElementById("next"), prev = document.getElementById("prev");
     if (next) next.onclick = () => { list.tokens.push(page.next_page_token); route(); };
     if (prev) prev.onclick = () => { list.tokens.pop(); route(); };
   });
-  const scoped = parent !== ALL;
-  return `${scoped ? crumbs(parent) : ""}<h1>${scoped ? esc(leaf(parent)) : "Partitions"}</h1>
+  return `${crumbs(table)}<h1>${esc(leaf(table))}</h1>
     <p class="sub">${page.total_size.toLocaleString()} partition versions; a changed partition is a new version and the old one is DELETED until purge.</p>
-    <table id="pt"><tr>${COLUMNS.map(([c, k]) => `<th class="${k && k !== "name" ? "n" : ""}" ${k ? `data-k="${k}"` : ""}>${c}${k === field ? (direction === "desc" ? " ▾" : " ▴") : ""}</th>`).join("")}</tr>
-    ${page.partitions.map(v => `<tr><td><a href="#/${partitionOf(v.name)}">${esc(scoped ? leaf(partitionOf(v.name)) : `${dotted(v.name.split("/").slice(0, 6).join("/"))} ${leaf(partitionOf(v.name))}`)}</a></td>
+    <div class="pager">${order("highest_cost_per_month desc")}${order("last_modification_time desc")}
+      <span class="note">${page.partitions.length ? `${(first + 1).toLocaleString()}–${(first + page.partitions.length).toLocaleString()} of ${page.total_size.toLocaleString()}` : "none"}</span>
+      ${list.tokens.length > 1 ? `<button id="prev">previous</button>` : ""}
+      ${page.next_page_token ? `<button id="next">next</button>` : ""}</div>
+    <table id="pt"><tr><th>partition</th><th>state</th><th class="n">files</th><th class="n">bytes</th><th class="n">removed</th><th class="n">stock /mo</th><th class="n">found</th><th class="n">failures</th></tr>
+    ${page.partitions.map(v => `<tr><td><a href="#/${partitionOf(v.name)}">${esc(leaf(partitionOf(v.name)))}</a></td>
       <td>${tag(v.state)}</td><td class="n">${v.file_count.toLocaleString()}</td><td class="n">${bytes(v.size_bytes)}</td><td class="n">${bytes(v.removed_size_bytes)}</td>
       <td class="n">${range(costRange(v.price?.storage_costs))}/mo</td><td class="n">${time(v.create_time)}</td>
-      <td class="n" title="${esc(v.error)}">${v.failure_count || ""}</td></tr>`).join("")}</table>
-    <div class="pager">${list.tokens.length > 1 ? `<button id="prev">previous</button>` : ""}
-      <span class="note">${page.partitions.length ? `${(first + 1).toLocaleString()}–${(first + page.partitions.length).toLocaleString()} of ${page.total_size.toLocaleString()}` : "none"}</span>
-      ${page.next_page_token ? `<button id="next">next</button>` : ""}</div>`;
+      <td class="n" title="${esc(v.error)}">${v.failure_count || ""}</td></tr>`).join("")}</table>`;
 }
 
 // A version's name is its partition's, then `/versions/{etag}`.
@@ -158,9 +186,9 @@ async function route() {
   // Names stay encoded: a partition id is one segment that may hold `%2F`.
   const name = (location.hash || "#/").slice(2).replace(/\/$/, "");
   let html;
-  if (!name) html = await viewList(ALL);
+  if (!name || /^catalogs\/[^/]+(\/schemas\/[^/]+)?$/.test(name)) html = await viewStats(name);
+  else if (/^catalogs\/[^/]+\/schemas\/[^/]+\/tables\/[^/]+$/.test(name)) html = await viewPartitions(name);
   else if (/\/partitions\/[^/]+$/.test(name)) html = await viewPartition(name);
-  else if (/^catalogs\/[^/]+\/schemas\/[^/]+\/tables\/[^/]+$/.test(name)) html = await viewList(name);
   else html = `<div class="empty">No page for ${esc(decodeURIComponent(name))}.</div>`;
   document.getElementById("main").innerHTML = html;
 }

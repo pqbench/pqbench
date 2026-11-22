@@ -14,6 +14,7 @@
 //! ```text
 //! {store}/master/checkpoint.ndjson  the rows, one PartitionVersion per line
 //! {store}/scan/{table}.ndjson       a scan job's listing of one table, before `scan`
+//! {store}/stats/{n}.ndjson          the stats job's totals, renamed in when done
 //! {store}/results/{partition}/{etag}/{output}.ndjson
 //! ```
 //!
@@ -80,6 +81,8 @@ pub(crate) struct Master {
     rows: BTreeMap<Key, PartitionVersion>,
     /// Whether the rows changed since the last checkpoint.
     changed: bool,
+    /// The stats job's current file, by number.
+    stats: Option<u64>,
 }
 
 impl Master {
@@ -88,7 +91,7 @@ impl Master {
     /// state before it (no job holds a claim across a master restart), and
     /// temporary files and result directories without a row are deleted.
     pub(crate) fn open(store: &Path) -> Result<Self, String> {
-        for directory in ["master", "scan", "results"] {
+        for directory in ["master", "scan", "stats", "results"] {
             fs::create_dir_all(store.join(directory))
                 .map_err(|error| format!("cannot create {}: {error}", store.display()))?;
         }
@@ -96,7 +99,10 @@ impl Master {
             store: store.to_path_buf(),
             rows: read_checkpoint(&store.join("master/checkpoint.ndjson"))?,
             changed: false,
+            stats: newest_stats(&store.join("stats")),
         };
+        let leftover = master.stats_path();
+        let _ = fs::remove_file(leftover);
         for state in [State::Pricing, State::Bytemassing, State::Linting] {
             master.revert(state)?;
         }
@@ -112,10 +118,10 @@ impl Master {
         &self.store
     }
 
-    /// The versions under `parent`, in key order: a catalog, schema, table or
-    /// partition name, with `-` for any id (AIP-159), or every version when
-    /// it is empty.
-    pub(crate) fn list(&self, parent: &str) -> Result<Vec<PartitionVersion>, String> {
+    /// The versions under `parent`, by reference, in key order: a catalog,
+    /// schema, table or partition name, with `-` for any id (AIP-159), or
+    /// every version when it is empty.
+    pub(crate) fn list(&self, parent: &str) -> Result<Vec<(&Key, &PartitionVersion)>, String> {
         let wanted: Vec<&str> = parent
             .split('/')
             .filter(|segment| !segment.is_empty())
@@ -145,13 +151,58 @@ impl Master {
             .range((prefix.clone(), String::new())..)
             .take_while(|((name, _), _)| name.starts_with(&prefix))
             .filter(|((name, _), _)| under(name))
+            .collect())
+    }
+
+    /// The versions under `parent` as the records they are, in key order.
+    pub(crate) fn records(&self, parent: &str) -> Result<Vec<PartitionVersion>, String> {
+        Ok(self
+            .list(parent)?
+            .into_iter()
             .map(|(key, row)| version(key, row))
             .collect())
     }
 
-    /// Every row by reference, in key order: a read that copies nothing.
-    pub(crate) fn rows(&self) -> impl Iterator<Item = (&Key, &PartitionVersion)> {
-        self.rows.iter()
+    /// The directory the stats job writes in.
+    fn stats_directory(&self) -> PathBuf {
+        self.store.join("stats")
+    }
+
+    /// The number of the stats file the next run writes.
+    fn next_stats(&self) -> u64 {
+        self.stats.map_or(1, |stats| stats + 1)
+    }
+
+    /// Where the stats job writes its next totals: a temporary file the
+    /// master renames in when the job commits.
+    pub(crate) fn stats_path(&self) -> PathBuf {
+        self.stats_directory()
+            .join(format!("{}.ndjson.tmp", self.next_stats()))
+    }
+
+    /// The stats file the web app serves, if the stats job has run.
+    pub(crate) fn stats_file(&self) -> Option<PathBuf> {
+        self.stats
+            .map(|stats| self.stats_directory().join(format!("{stats}.ndjson")))
+    }
+
+    /// Rename the stats job's file in and delete the previous one, so a
+    /// reader never sees a half-written set.
+    pub(crate) fn commit_stats(&mut self) -> Result<(), String> {
+        let temporary = self.stats_path();
+        if !temporary.exists() {
+            return Err("the stats job wrote no file".into());
+        }
+        let next = self
+            .stats_directory()
+            .join(format!("{}.ndjson", self.next_stats()));
+        fs::rename(&temporary, &next)
+            .map_err(|error| format!("cannot rename {}: {error}", temporary.display()))?;
+        if let Some(current) = self.stats_file() {
+            let _ = fs::remove_file(current);
+        }
+        self.stats = Some(self.next_stats());
+        Ok(())
     }
 
     /// Where a scan job writes `table`'s `list partitions` output.
@@ -550,6 +601,19 @@ fn remove_dir(directory: &Path) -> Result<(), String> {
     }
 }
 
+/// The number of the newest stats file, if the stats job has run.
+fn newest_stats(directory: &Path) -> Option<u64> {
+    fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|file| {
+            let name = file.file_name().to_string_lossy().into_owned();
+            name.strip_suffix(".ndjson")?.parse().ok()
+        })
+        .max()
+}
+
 fn read_checkpoint(path: &Path) -> Result<BTreeMap<Key, PartitionVersion>, String> {
     let mut rows = BTreeMap::new();
     let Ok(file) = File::open(path) else {
@@ -667,6 +731,6 @@ mod tests {
         let line = serde_json::json!({"name": format!("{TABLE}/partitions/.."), "etag": "aa"});
         fs::write(master.scan_path(TABLE), format!("{line}\n")).unwrap();
         assert!(master.scan(TABLE).is_err());
-        assert!(master.list("").unwrap().is_empty());
+        assert!(master.records("").unwrap().is_empty());
     }
 }

@@ -2,15 +2,19 @@
 //!
 //! `GET /` is the page; `GET /v1/{name}` reads records:
 //!
-//! - `/v1/{parent}/partitions`, parent segments `-` for any (AIP-159): one
-//!   page of versions (AIP-158 `page_size`, `page_token`; AIP-132 `order_by`
-//!   on a row field, ` desc` to reverse), each its row with its listing and
+//! - `/v1/catalogs`, `/v1/catalogs/{c}/schemas`,
+//!   `/v1/catalogs/{c}/schemas/{s}/tables`, ids `-` for any (AIP-159): the
+//!   stats job's PartitionStats, dearest first and then by size;
+//! - `/v1/{table}/partitions`: one page of the table's versions (AIP-158
+//!   `page_size`, `page_token`; AIP-132 `order_by`, dearest first by default
+//!   or `last_modification_time desc`), each its row with its listing and
 //!   price; the listing's file references keep only their size and time;
 //! - `/v1/{partition}`: that partition's versions with every result, the
 //!   column masses and suggestions included.
 //!
-//! The order and the page come from the master's rows in memory; only the
-//! page's versions read their results from the store.
+//! A level's page reads the stats job's file; a partitions page sorts the
+//! master's rows for the one table. Only a page's versions read their results
+//! from the store.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -19,7 +23,7 @@ use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use pqbench::v1::PartitionVersion;
+use pqbench::v1::{PartitionStats, PartitionVersion};
 
 use super::master::{version, Key, Master};
 
@@ -106,31 +110,22 @@ async fn handle(mut stream: TcpStream, master: Arc<Mutex<Master>>) -> std::io::R
     stream.shutdown().await
 }
 
-/// What `name` names: a page of a partitions collection (parents may be
-/// `-`), or one partition's versions. `None` when it names neither.
+/// What `name` names: a level's stats, a page of one table's versions, or
+/// one partition's versions. `None` when it names none of them.
 fn read(master: &Mutex<Master>, name: &str, query: &str) -> Result<Option<Value>, String> {
     let segments: Vec<&str> = name.split('/').collect();
+    if level(&segments) {
+        return Ok(Some(Value::Array(stats(master, &segments)?)));
+    }
     let collection = segments.len() == 7 && segments[6] == "partitions";
     let one = segments.len() == 8 && segments[6] == "partitions" && !segments.contains(&"-");
     if !collection && !one {
         return Ok(None);
     }
-    let matches = |row: &str| {
-        let row: Vec<&str> = row.split('/').collect();
-        row.len() == 8
-            && segments
-                .iter()
-                .zip(&row)
-                .all(|(want, have)| *want == "-" || want == have)
-    };
     if one {
         let (store, rows) = {
             let master = lock(master);
-            let rows: Vec<PartitionVersion> = master
-                .rows()
-                .filter(|((row, _), _)| row == name)
-                .map(|(key, row)| version(key, row))
-                .collect();
+            let rows: Vec<PartitionVersion> = master.records(name)?;
             (master.store().to_path_buf(), rows)
         };
         let outputs = ["list-partitions", "price", "bytemass", "list-suggestions"];
@@ -138,22 +133,11 @@ fn read(master: &Mutex<Master>, name: &str, query: &str) -> Result<Option<Value>
         return Ok(Some(Value::Array(versions.collect())));
     }
     let page = Page::parse(query)?;
+    let parent = segments[..6].join("/");
     let (store, total_size, rows) = {
         let master = lock(master);
-        let mut rows: Vec<(&Key, &PartitionVersion)> =
-            master.rows().filter(|((row, _), _)| matches(row)).collect();
-        if let Some(order) = page.order {
-            rows.sort_by(|a, b| {
-                let ordering = order.compare(a, b);
-                if page.descending {
-                    ordering.reverse()
-                } else {
-                    ordering
-                }
-            });
-        } else if page.descending {
-            rows.reverse();
-        }
+        let mut rows = master.list(&parent)?;
+        rows.sort_by(|a, b| page.order.compare(a, b));
         let total_size = rows.len();
         let rows: Vec<PartitionVersion> = rows
             .into_iter()
@@ -179,40 +163,103 @@ fn read(master: &Mutex<Master>, name: &str, query: &str) -> Result<Option<Value>
     Ok(Some(response))
 }
 
-/// A list request's page: where it starts, how many, in which order.
+/// Whether `segments` names a level: `catalogs`, `catalogs/{c}/schemas`, or
+/// `catalogs/{c}/schemas/{s}/tables`.
+fn level(segments: &[&str]) -> bool {
+    matches!(
+        segments,
+        ["catalogs"] | ["catalogs", _, "schemas"] | ["catalogs", _, "schemas", _, "tables"]
+    )
+}
+
+/// The stats the stats job wrote, the ones under the `segments` (which may
+/// hold `-`), dearest first and then by size: a level's page reads no
+/// versions.
+fn stats(master: &Mutex<Master>, segments: &[&str]) -> Result<Vec<Value>, String> {
+    let file = lock(master).stats_file();
+    let Some(file) = file else {
+        return Ok(Vec::new());
+    };
+    let text = std::fs::read_to_string(&file)
+        .map_err(|error| format!("cannot read the stats: {error}"))?;
+    let mut rows: Vec<PartitionStats> = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let stats: PartitionStats =
+            serde_json::from_str(line).map_err(|error| format!("bad stats line: {error}"))?;
+        if same_parent(segments, &stats.name) {
+            rows.push(stats);
+        }
+    }
+    rows.sort_by(|a, b| {
+        cost(b)
+            .total_cmp(&cost(a))
+            .then_with(|| b.size_bytes.cmp(&a.size_bytes))
+    });
+    Ok(rows
+        .iter()
+        .filter_map(|stats| serde_json::to_value(stats).ok())
+        .collect())
+}
+
+/// Whether a stats record.s parent is what `segments` names: one segment
+/// deeper, with `-` matching any id.
+fn same_parent(segments: &[&str], name: &str) -> bool {
+    let segments_of_name: Vec<&str> = name.split('/').collect();
+    segments_of_name.len() == segments.len() + 2
+        && segments
+            .iter()
+            .zip(&segments_of_name)
+            .all(|(want, have)| *want == "-" || want == have)
+}
+
+/// A stats record's dearest monthly cost, its cheapest when it has no range.
+fn cost(stats: &PartitionStats) -> f64 {
+    stats
+        .highest_cost_per_month
+        .or(stats.lowest_cost_per_month)
+        .unwrap_or(0.0)
+}
+
+/// A partitions request's page: where it starts, how many, in which order.
 struct Page {
     offset: usize,
     size: usize,
-    order: Option<Order>,
-    descending: bool,
+    order: Order,
 }
 
-/// A row field a list can be ordered by; `None` is the key order (`name`).
+/// The two orders a table's partitions come in: dearest first, or the newest
+/// file first.
 #[derive(Clone, Copy)]
 enum Order {
-    SizeBytes,
-    FileCount,
-    RemovedSizeBytes,
-    CreateTime,
-    FailureCount,
+    Cost,
+    NewestFile,
 }
 
 impl Order {
-    /// Compare two rows by the field, then by key.
+    /// Compare two versions by the order, then by key.
     fn compare(
         self,
         (a_key, a): &(&Key, &PartitionVersion),
         (b_key, b): &(&Key, &PartitionVersion),
     ) -> std::cmp::Ordering {
-        let field = |row: &PartitionVersion| match self {
-            Order::SizeBytes => row.size_bytes,
-            Order::FileCount => row.file_count,
-            Order::RemovedSizeBytes => row.removed_size_bytes.unwrap_or(0),
-            Order::CreateTime => row.create_time,
-            Order::FailureCount => row.failure_count,
+        let ordering = match self {
+            Order::Cost => cost_version(b)
+                .total_cmp(&cost_version(a))
+                .then_with(|| b.size_bytes.cmp(&a.size_bytes)),
+            Order::NewestFile => b
+                .last_modification_time
+                .cmp(&a.last_modification_time)
+                .then_with(|| cost_version(b).total_cmp(&cost_version(a))),
         };
-        field(a).cmp(&field(b)).then_with(|| a_key.cmp(b_key))
+        ordering.then_with(|| a_key.cmp(b_key))
     }
+}
+
+fn cost_version(version: &PartitionVersion) -> f64 {
+    version
+        .highest_cost_per_month
+        .or(version.lowest_cost_per_month)
+        .unwrap_or(0.0)
 }
 
 impl Page {
@@ -220,8 +267,7 @@ impl Page {
         let mut page = Page {
             offset: 0,
             size: DEFAULT_PAGE_SIZE,
-            order: None,
-            descending: false,
+            order: Order::Cost,
         };
         for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
             match &*key {
@@ -238,22 +284,15 @@ impl Page {
                         .map_err(|_| format!("page_token {value:?} is not one this list gave"))?;
                 }
                 "order_by" => {
-                    let mut words = value.split_whitespace();
-                    let field = words.next().unwrap_or("name");
-                    page.descending = match words.next() {
-                        None | Some("asc") => false,
-                        Some("desc") => true,
-                        Some(other) => return Err(format!("order_by direction {other:?}")),
-                    };
-                    page.order = match field {
-                        "name" => None,
-                        "size_bytes" => Some(Order::SizeBytes),
-                        "file_count" => Some(Order::FileCount),
-                        "removed_size_bytes" => Some(Order::RemovedSizeBytes),
-                        "create_time" => Some(Order::CreateTime),
-                        "failure_count" => Some(Order::FailureCount),
-                        other => return Err(format!("cannot order by {other:?}")),
-                    };
+                    page.order = match value.trim() {
+                        "highest_cost_per_month desc" | "" => Order::Cost,
+                        "last_modification_time desc" => Order::NewestFile,
+                        other => {
+                            return Err(format!(
+                                "order_by {other:?}: a table's partitions come as `highest_cost_per_month desc` or `last_modification_time desc`"
+                            ))
+                        }
+                    }
                 }
                 _ => {}
             }
