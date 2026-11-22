@@ -203,11 +203,11 @@ fn the_catalog_levels_go_through_the_daemon() {
     stop(socket);
 }
 
-/// A socket nobody listens on falls back to direct calls, with the same
-/// records on standard output.
+/// A catalog command makes no catalog call of its own: with no daemon on the
+/// socket it fails, names the socket, says how to start one, and calls nothing.
 #[test]
-fn the_catalog_levels_work_without_a_daemon() {
-    let (endpoint, _hits) = server();
+fn a_catalog_level_without_a_daemon_says_how_to_start_one() {
+    let (endpoint, hits) = server();
     let directory = tempfile::tempdir().unwrap();
     let socket = directory.path().join("absent.sock");
     let env = [
@@ -216,13 +216,12 @@ fn the_catalog_levels_work_without_a_daemon() {
         ("PQB_TABLE_FORMAT", "unity"),
     ];
     let catalogs = pipe(&["list", "catalogs"], b"", &env);
-    assert!(
-        catalogs.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&catalogs.stderr)
-    );
-    let catalogs = ndjson(&catalogs.stdout);
-    assert_eq!(catalogs.len(), 2);
+    let stderr = String::from_utf8_lossy(&catalogs.stderr);
+    assert!(!catalogs.status.success());
+    assert!(stderr.contains("pqbench daemon start"), "stderr: {stderr}");
+    assert!(stderr.contains("absent.sock"), "stderr: {stderr}");
+    assert!(catalogs.stdout.is_empty());
+    assert!(hits.lock().unwrap().is_empty());
 }
 
 fn catalogs_output(records: &[Value]) -> Vec<u8> {

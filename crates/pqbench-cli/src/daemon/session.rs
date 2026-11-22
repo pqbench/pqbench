@@ -11,8 +11,9 @@
 //! schemas`, `list tables`, `get metastore`, `get catalog`, `get schema`, and
 //! `get table` — is a request this session executes. The daemon's instance
 //! runs them directly, which lets it pace Unity's endpoint at the catalog's
-//! ceiling; a reader's instance asks the daemon over its socket and falls back
-//! to running the call itself when no daemon is listening.
+//! ceiling; a reader's instance asks the daemon over its socket, and fails
+//! with a hint when no daemon is listening. A reader with no endpoint (local
+//! files) has no catalog to ask and never needs one.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -79,10 +80,11 @@ pub(crate) struct Daemon {
 
 #[derive(Clone)]
 enum Vendor {
-    /// Vend directly from the catalog.
+    /// Vend directly from the catalog: the daemon itself, or a reader with
+    /// no endpoint, which has no catalog to call.
     Direct(Workspace),
-    /// Ask the daemon; fall back to the catalog if it cannot be reached.
-    Daemon { path: PathBuf, fallback: Workspace },
+    /// Ask the daemon at `path`.
+    Daemon { path: PathBuf, workspace: Workspace },
 }
 
 #[derive(Clone)]
@@ -110,24 +112,15 @@ impl Daemon {
         Self::new(Vendor::Direct(workspace), false, rate)
     }
 
-    /// A reader's cache: use the daemon when its socket exists, else the
-    /// catalog.
+    /// A reader's cache: every catalog call and lease goes to the daemon.
     pub(crate) fn client(workspace: Workspace) -> Self {
         // An explicit socket can serve a reader that knows no endpoint; only
         // an unconfigured reader has nothing to ask.
         if workspace.config().endpoint.is_empty() && std::env::var_os("PQB_DAEMON_SOCK").is_none() {
             return Self::new(Vendor::Direct(workspace), true, None);
         }
-        let socket = path::socket_path(workspace.config());
-        let vendor = if socket.exists() {
-            Vendor::Daemon {
-                path: socket,
-                fallback: workspace,
-            }
-        } else {
-            Vendor::Direct(workspace)
-        };
-        Self::new(vendor, true, None)
+        let path = path::socket_path(workspace.config());
+        Self::new(Vendor::Daemon { path, workspace }, true, None)
     }
 
     fn new(vendor: Vendor, cache_failures: bool, rate: Option<Arc<UnityRate>>) -> Self {
@@ -144,7 +137,7 @@ impl Daemon {
     fn workspace(&self) -> &Workspace {
         match &self.vendor {
             Vendor::Direct(workspace) => workspace,
-            Vendor::Daemon { fallback, .. } => fallback,
+            Vendor::Daemon { workspace, .. } => workspace,
         }
     }
 
@@ -153,14 +146,7 @@ impl Daemon {
     pub(crate) async fn records(&self, request: &Request) -> Result<Vec<Value>, CliError> {
         match &self.vendor {
             Vendor::Direct(_) => self.execute(request).await,
-            Vendor::Daemon { path, .. } => match client::request(path, request).await {
-                Ok(response) => records(response),
-                // No daemon (or a broken one): run the call here. Catalog
-                // commands must keep working without the optional daemon.
-                Err(client::Error::Connect(_) | client::Error::Protocol(_)) => {
-                    self.execute(request).await
-                }
-            },
+            Vendor::Daemon { path, .. } => records(ask(path, request).await?),
         }
     }
 
@@ -380,16 +366,24 @@ impl Vendor {
     async fn vend(&self, table: &str) -> Result<Option<Vended>, CliError> {
         match self {
             Vendor::Direct(workspace) => direct(workspace, table).await,
-            Vendor::Daemon { path, fallback } => {
-                match client::request(path, &Request::lease(table)).await {
-                    Ok(response) => parse_response(response),
-                    Err(client::Error::Connect(_) | client::Error::Protocol(_)) => {
-                        direct(fallback, table).await
-                    }
-                }
-            }
+            Vendor::Daemon { path, .. } => parse_response(ask(path, &Request::lease(table)).await?),
         }
     }
+}
+
+/// One request to the daemon at `path`; no daemon is an error that says how
+/// to start one.
+async fn ask(path: &std::path::Path, request: &Request) -> Result<Response, CliError> {
+    client::request(path, request)
+        .await
+        .map_err(|error| match error {
+            client::Error::Connect(_) => format!(
+                "no daemon is listening at {}; run `pqbench daemon start`",
+                path.display()
+            )
+            .into(),
+            client::Error::Protocol(_) => error.to_string().into(),
+        })
 }
 
 async fn direct(workspace: &Workspace, table: &str) -> Result<Option<Vended>, CliError> {

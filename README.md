@@ -58,8 +58,8 @@ Read it left to right:
 - `daemon start` runs one daemon for the walk. It makes every catalog request
   and caches the storage lease each table is read under, serving both to every
   stage, so the catalog vends each table once rather than once per command.
-  Without a daemon each stage makes its own catalog call; the leases are held
-  in memory and never appear in a document.
+  A stage that needs the catalog and finds no daemon fails with a hint to
+  start one; the leases are held in memory and never appear in a document.
 - `get table` enriches each ref with its format and snapshot; the Delta log is
   read with `without_files()`, so the read is O(1) in files. `list files` then
   resolves each snapshot and writes its active files, one `TableFile` per line.

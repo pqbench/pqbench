@@ -14,14 +14,15 @@ fn pipe_stdin(args: &[&str], stdin: &[u8]) -> std::process::Output {
 
 /// pqbench with extra environment: the walk's context comes from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
-    let mut child = pqbench()
+    let mut command = pqbench();
+    command
         .args(args)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let _daemon = crate::common::serve_for(&mut command);
+    let mut child = command.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();
     child.wait_with_output().unwrap()
 }

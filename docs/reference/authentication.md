@@ -168,10 +168,12 @@ daemon assumes the usual one-hour lifetime and refreshes at 55 minutes. A
 catalog that vends nothing is remembered for five minutes, so a file walk does
 not ask once per file.
 
-The daemon is optional. With no socket, each command makes its own catalog call
-and vends directly, which is what a notebook, a serverless job, or an
-Airflow/Dagster task gets by default. The daemon saves catalog calls and does
-the pacing; correctness does not depend on it.
+Every catalog call goes through the daemon: a command that needs the catalog
+and finds no daemon on its socket fails with a hint to run `pqbench daemon
+start`, and makes no call of its own. A notebook, a serverless job, or a
+scheduler task starts one first (`pqbench daemon start`, or `pqbench daemon
+serve` as a sidecar). A read of local files names no endpoint and needs no
+daemon.
 
 A ref the catalog will not vend for is dropped with the cause on standard
 error, and that stage exits non-zero; run the walk over a catalog that is

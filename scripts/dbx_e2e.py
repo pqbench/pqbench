@@ -31,8 +31,10 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -119,8 +121,9 @@ def scrub_environment() -> None:
     """Give every child the tests' environment, not the caller's.
 
     The daemon socket is pinned too, so no test can attach to a developer's
-    daemon. Each `run`/`pipeline` adds its own context on top; the base stays
-    read-only, so test cases can run concurrently.
+    daemon; each run then starts its own (`daemon`). Each `run`/`pipeline`
+    adds its own context on top; the base stays read-only, so test cases can
+    run concurrently.
     """
     for name in SCRUBBED:
         local.env.pop(name, None)
@@ -132,24 +135,45 @@ def scrub_environment() -> None:
     local.env["AWS_METADATA_ENDPOINT"] = "http://127.0.0.1:1"
 
 
-def fresh_socket() -> None:
-    """Do not attach to a developer's daemon at the pinned path."""
-    try:
-        os.unlink(_SOCKET)
-    except FileNotFoundError:
-        pass
-
-
 scrub_environment()
+
+
+@contextlib.contextmanager
+def daemon(env: dict[str, str] | None):
+    """A `pqbench daemon serve` for one run, on a private socket and with the
+    run's environment; yields the environment that points the run at it.
+
+    Every catalog call goes through a daemon, so each run gets its own: runs
+    stay independent and can go concurrently. A daemon that cannot start (no
+    endpoint) is skipped, and the run reports what it would without one.
+    """
+    directory = tempfile.mkdtemp(dir=_WORK.name)
+    socket = os.path.join(directory, "d.sock")
+    merged = {**local.env.getdict(), **(env or {})}
+    process = subprocess.Popen(
+        [PQ_BENCH, "daemon", "serve", "--socket", socket],
+        env=merged,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 10
+    while not os.path.exists(socket) and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    try:
+        yield {**(env or {}), "PQB_DAEMON_SOCK": socket}
+    finally:
+        process.terminate()
+        process.wait()
 
 
 def run(args: list[str], stdin: str | None = None, env: dict[str, str] | None = None):
     """Run pqbench and return `(status, stdout, stderr)`."""
-    fresh_socket()
     command = local[PQ_BENCH][args]
-    if stdin is None:
+    if stdin is not None:
+        command = command << stdin
+    with daemon(env) as env:
         return command.run(retcode=None, env=env)
-    return (command << stdin).run(retcode=None, env=env)
 
 
 def pipeline(
@@ -167,7 +191,6 @@ def pipeline(
     `stdin` feeds the first stage only.
     """
     tees = tees or []
-    fresh_socket()
     commands = []
     for index, args in enumerate(stages):
         command = local[PQ_BENCH][args]
@@ -179,7 +202,8 @@ def pipeline(
     combined = commands[0]
     for command in commands[1:]:
         combined = combined | command
-    return combined.run(retcode=None, env=env)
+    with daemon(env) as env:
+        return combined.run(retcode=None, env=env)
 
 
 def ndjson(text: str) -> list[dict]:
@@ -344,10 +368,10 @@ class LiveE2E(unittest.TestCase):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "walk_metastore.py")
         env = source(host, token)
         env.update({"PQB_CONFIG_FILE": "/dev/null"})
-        fresh_socket()
-        status, out, err = (
-            local[sys.executable][script, "--pqbench", PQ_BENCH, "--fan-out", "64"]
-        ).run(retcode=None, env=env)
+        with daemon(env) as env:
+            status, out, err = (
+                local[sys.executable][script, "--pqbench", PQ_BENCH, "--fan-out", "64"]
+            ).run(retcode=None, env=env)
         self.assertEqual(status, 0, f"walk stderr: {err}")
         self.assertIn("walk: 5 catalogs,", out, "the walk did not finish")
         print(out, end="")

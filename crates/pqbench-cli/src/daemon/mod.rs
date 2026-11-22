@@ -1,10 +1,10 @@
 //! The catalog daemon: one process per identity, serving catalog records and
 //! vended storage leases to every pipeline stage over a local socket.
 //!
-//! The daemon is optional. A reader with no socket makes its own catalog
-//! calls, so a bare `pqbench list files` and a scheduler task still work;
-//! `daemon start` paces the catalog and keeps it from seeing the same table
-//! once per stage.
+//! Every catalog call goes through it: a reader asks the daemon, which paces
+//! the catalog and keeps it from seeing the same table once per stage, and a
+//! reader with no daemon to ask fails with a hint to run `daemon start`. A
+//! read of local files names no endpoint and needs no daemon.
 
 use std::path::PathBuf;
 

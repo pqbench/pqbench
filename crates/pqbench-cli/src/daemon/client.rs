@@ -31,8 +31,8 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// How long a lease exchange may take: a reader falls back to vending
-/// directly when the daemon is slow or gone.
+/// How long a lease exchange may take before the reader reports the daemon
+/// as gone.
 const LEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long a catalog exchange may take: the daemon is doing the endpoint

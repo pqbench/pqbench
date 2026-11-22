@@ -48,14 +48,15 @@ fn table(records: &[u8]) -> String {
 
 /// pqbench with extra environment: the walk's context can come from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
-    let mut child = pqbench()
+    let mut command = pqbench();
+    command
         .args(args)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let _daemon = crate::common::serve_for(&mut command);
+    let mut child = command.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();
     child.wait_with_output().unwrap()
 }
@@ -869,11 +870,13 @@ fn table_ls_reads_a_schema_stream() {
     assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
+/// The refs' requests overlap: the reply takes longer than the daemon's
+/// Unity pace (15/s), so a second request starts while the first waits.
 #[test]
 fn table_ls_multiplexes_its_refs() {
     let (address, peak) = overlapping_routes(
         &[("/tables", 200, TABLES)],
-        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(200),
     );
     let output = pipe_env(
         &["list", "tables"],

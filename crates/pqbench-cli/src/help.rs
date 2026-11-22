@@ -342,8 +342,8 @@ without an environment variable.
 `list catalogs`, `list schemas`, `list tables`, and every `get` level ask the
 daemon, which paces Unity at 15 requests a second, the catalog's per-endpoint
 ceiling; the storage levels (`list files`, `list columns`) ask it only for the
-table's lease. Without a running daemon each command makes its own catalog call
-and paces nothing. Vended leases are session state and never ride a Table or
+table's lease. A command that needs the catalog and finds no daemon fails with a
+hint to start one; a read of local files needs none. Vended leases are session state and never ride a Table or
 TableFile document.";
 
 pub const DAEMON_AFTER: &str = "\
