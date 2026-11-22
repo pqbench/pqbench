@@ -403,9 +403,8 @@ running versions back; the commands redo the rest. `pqbench list
 partition-versions` prints the map. With --web-ui the daemon also serves the
 web app (--listen, default 127.0.0.1:8180): one ASCII table per page, the
 same one `pqbench format` prints, from the catalogs down to a partition's
-versions and columns, every row a link, plus /insights — the monthly cost by
-storage class, the bytes removed and not vacuumed, and the suggestions by
-rule; and the records at GET /v1/{name}.";
+versions with its price, columns and lint suggestions, every row a link; and
+the records at GET /v1/{name}.";
 
 pub const DAEMON_AFTER: &str = "\
 Examples:
