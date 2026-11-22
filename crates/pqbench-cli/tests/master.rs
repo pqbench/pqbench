@@ -671,6 +671,11 @@ fn the_web_app_serves_the_stats_and_the_records() {
     let (status, table) = http_get(&address, "/catalogs/local/schemas/local/tables/events");
     assert_eq!(status, 200, "{table}");
     assert!(table.contains("UP_TO_DATE"), "{table}");
+    // Rows link to the partition, never to a version: a version has no page.
+    assert!(
+        !table.contains("/versions/\""),
+        "a row links to a version: {table}"
+    );
     // A level with no records is an empty table, not an error.
     let (status, empty) = http_get(&address, "/catalogs/local/schemas/nope");
     assert_eq!(status, 200, "{empty}");
