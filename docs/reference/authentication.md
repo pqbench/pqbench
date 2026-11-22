@@ -197,18 +197,17 @@ command means for it.
   finds are `DELETED`. When every table was read, the versions of tables the
   walk did not list are deleted too; a walk where a table failed deletes no
   other table.
-- **The steps** run one command per version, each from the state before it to
-  the state after it: `price` (`get partition-price`), `download` (the
-  partition's sample file into the version's directory), `bytemass` and
-  `lint` (`bytemass --local` and `list suggestions --local` on that copy,
-  which is deleted once the version is done).
-  Each `--step NAME` turns one on, with at most `--processes` commands at once
-  and `--step-time-limit-seconds` before one is killed. A version with no live
-  file, or whose files are in an archive class or tier, is `UP_TO_DATE` after
-  its price. A failure puts the version back with the command's error; after
-  two it waits. A version waits at the first step that is off, so `--step
-  price` alone reads no file's data: the setting for a host with little
-  network.
+- **Each version** goes through one command at a time, each from the state
+  before it to the state after it: `price` (`get partition-price`),
+  `download` (the partition's sample file into the version's directory),
+  `bytemass` and `lint` (`bytemass --local` and `list suggestions --local` on
+  that copy, which is deleted once the version is done). One command runs per
+  CPU at once; `--time-limit-seconds` kills one that runs longer. A version
+  with no live file, or whose files are in an archive class or tier, is
+  `UP_TO_DATE` after its price. With `--low-network` no file is copied: after
+  its price a version runs `bytemass` on the sample file in place, which reads
+  only the footer, and is then `UP_TO_DATE` without suggestions. A failure
+  puts the version back with the command's error; after two it waits.
 - **Purge** drops `DELETED` versions and their results, except a partition's
   last `UP_TO_DATE` version while its newer one is in progress, so its
   complete results are shown until the new ones replace them.
@@ -246,7 +245,7 @@ table, then a table's partitions, then one partition's versions. `GET
 - One partition returns its versions with every result.
 
 ```console no-run
-$ pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main --walk-period-seconds 86400 --step price --step download --step bytemass --step lint --web-ui
+$ pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main --walk-period-seconds 86400 --web-ui
 $ pqbench list partition-versions catalogs/main/schemas/sales
 ```
 

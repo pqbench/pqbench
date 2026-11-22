@@ -1,6 +1,6 @@
 #![cfg(feature = "delta")]
 
-//! The daemon's master: it walks the tables it is given, runs the steps on
+//! The daemon's master: it walks the tables it is given, runs the transitions on
 //! each partition version, purges what a walk no longer finds, and serves
 //! the versions to `list partition-versions` and the web app.
 
@@ -10,10 +10,6 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-
-const STEPS: &[&str] = &[
-    "--step", "price", "--step", "download", "--step", "bytemass", "--step", "lint",
-];
 
 /// A daemon serving the master over `store`, on a private socket.
 struct Master {
@@ -146,9 +142,13 @@ fn commit(root: &Path, version: u64, actions: Vec<Value>) {
     let mut lines: Vec<String> = actions.iter().map(Value::to_string).collect();
     lines.push(json!({"commitInfo": {"timestamp": 1_700_000_000_000i64}}).to_string());
     std::fs::create_dir_all(root.join("_delta_log")).unwrap();
-    std::fs::write(
+    // Whole or not at all, as a writer commits: a walk may read the log
+    // at any moment.
+    let temporary = root.join(format!("_delta_log/.{version:020}.json.tmp"));
+    std::fs::write(&temporary, lines.join("\n") + "\n").unwrap();
+    std::fs::rename(
+        &temporary,
         root.join(format!("_delta_log/{version:020}.json")),
-        lines.join("\n") + "\n",
     )
     .unwrap();
 }
@@ -186,7 +186,7 @@ fn table(root: &Path) {
 }
 
 /// A table whose files are real Parquet (one fixture file per partition), so
-/// the steps have data to read.
+/// the transitions have data to read.
 fn readable_table(root: &Path, partitions: &[&str]) -> Vec<Value> {
     let fixture = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -258,14 +258,8 @@ fn result_file(master: &Master, row: &Value, output: &str) -> PathBuf {
         .join(output)
 }
 
-fn states(rows: &[Value]) -> Vec<&str> {
-    rows.iter()
-        .map(|row| row["state"].as_str().unwrap())
-        .collect()
-}
-
-/// A walk makes each partition one PENDING version with its listing stored;
-/// later walks find the same versions and move nothing.
+/// A walk makes each partition one version with its listing stored; later
+/// walks find the same versions and make no new ones.
 #[test]
 fn a_walk_adds_each_partition_once() {
     let directory = tempfile::tempdir().unwrap();
@@ -274,7 +268,6 @@ fn a_walk_adds_each_partition_once() {
     walk(directory.path(), &[("events", &root)]);
     let master = Master::start(directory.path(), &["--walk-period-seconds", "0"]);
     let first = master.wait(|rows| rows.len() == 2);
-    assert_eq!(states(&first), ["PENDING", "PENDING"]);
     let listing =
         std::fs::read_to_string(result_file(&master, &first[0], "list-partitions.ndjson")).unwrap();
     let record: Value = serde_json::from_str(listing.trim()).unwrap();
@@ -309,7 +302,6 @@ fn a_change_is_a_new_version_and_the_old_is_purged() {
                 .any(|row| id(row) == "day%3D1" && etag(row) != etag(&old))
     });
     let new = rows.iter().find(|row| id(row) == "day%3D1").unwrap();
-    assert_eq!(new["state"], "PENDING");
     assert_eq!(new["etag_change_count"], 1);
     assert_eq!(new["first_listed_time"], old["first_listed_time"]);
     assert!(!result_file(&master, &old, "list-partitions.ndjson").exists());
@@ -404,26 +396,27 @@ fn list_partition_versions_reads_under_a_parent() {
 fn the_rows_survive_a_restart() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
-    table(&root);
+    commit(&root, 0, readable_table(&root, &["1", "2"]));
     walk(directory.path(), &[("events", &root)]);
     let master = Master::start(directory.path(), &[]);
-    let rows = master.wait(|rows| rows.len() == 2);
+    let rows =
+        master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
     master.stop();
     std::fs::remove_file(directory.path().join("tables.ndjson")).unwrap();
     let master = Master::start(directory.path(), &[]);
     assert_eq!(master.rows(), rows);
 }
 
-/// The steps take each version to UP_TO_DATE: a price, the sample file's
+/// The transitions take each version to UP_TO_DATE: a price, the sample file's
 /// columns and suggestions, the records naming the table's file and not the
 /// copy they were read from, which is gone once the version is done.
 #[test]
-fn the_steps_take_each_version_up_to_date() {
+fn the_transitions_take_each_version_up_to_date() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1", "2"]));
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), STEPS);
+    let master = Master::start(directory.path(), &[]);
     let rows =
         master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
     for row in &rows {
@@ -468,47 +461,71 @@ fn walk_files(directory: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// With only the price step on, versions stop at PRICED and no file is
-/// copied: the setting for a host with little network.
+/// On a low network no file is copied and nothing reads its data: bytemass
+/// reads the sample file's footer in place, and the version is done.
 #[test]
-fn only_the_configured_steps_run() {
+fn a_low_network_reads_only_the_footer() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1"]));
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &["--step", "price"]);
-    let rows = master.wait(|rows| rows.len() == 1 && rows[0]["state"] == "PRICED");
-    std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(master.rows()[0]["state"], "PRICED");
+    let master = Master::start(directory.path(), &["--low-network"]);
+    let rows = master.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
+    assert!(result_file(&master, &rows[0], "bytemass.ndjson").exists());
+    assert!(!result_file(&master, &rows[0], "list-suggestions.ndjson").exists());
     assert!(!result_file(&master, &rows[0], "sample.parquet").exists());
 }
 
-/// While a changed partition's new version is processed, the old version's
-/// complete results are kept; once the new one is UP_TO_DATE, the old goes.
+fn remove(path: &str, day: &str, size: u64) -> Value {
+    json!({"remove": {
+        "path": path,
+        "partitionValues": {"day": day},
+        "size": size,
+        "deletionTimestamp": 1_700_000_000_000i64,
+        "dataChange": true
+    }})
+}
+
+/// While a changed partition's new version is in progress, the old version's
+/// complete results are kept; once a newer version is UP_TO_DATE, the old
+/// goes.
 #[test]
 fn purge_keeps_the_last_complete_version_until_it_is_replaced() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1"]));
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), STEPS);
+    let master = Master::start(directory.path(), &["--walk-period-seconds", "0"]);
     let old = master
         .wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE")
         .remove(0);
-    master.stop();
-    let fixture = root.join("day=1/part-0.parquet");
-    std::fs::copy(&fixture, root.join("day=1/part-1.parquet")).unwrap();
-    let size = std::fs::metadata(&fixture).unwrap().len();
-    commit(&root, 1, vec![add("day=1/part-1.parquet", "1", size)]);
 
-    let master = Master::start(directory.path(), &[]);
-    let rows = master.wait(|rows| rows.len() == 2);
+    // A new version whose only file is missing: it cannot be done.
+    let fixture = root.join("day=1/part-0.parquet");
+    let size = std::fs::metadata(&fixture).unwrap().len();
+    commit(
+        &root,
+        1,
+        vec![
+            remove("day=1/part-0.parquet", "1", size),
+            add("day=1/part-1.parquet", "1", size),
+        ],
+    );
+    let rows = master.wait(|rows| rows.iter().any(|row| row["failure_count"] == 2));
+    assert_eq!(rows.len(), 2);
     let kept = rows.iter().find(|row| etag(row) == etag(&old)).unwrap();
     assert_eq!(kept["state"], "DELETED");
     assert!(result_file(&master, &old, "bytemass.ndjson").exists());
-    master.stop();
 
-    let master = Master::start(directory.path(), STEPS);
+    std::fs::copy(&fixture, root.join("day=1/part-2.parquet")).unwrap();
+    commit(
+        &root,
+        2,
+        vec![
+            remove("day=1/part-1.parquet", "1", size),
+            add("day=1/part-2.parquet", "1", size),
+        ],
+    );
     let rows = master.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
     assert_ne!(etag(&rows[0]), etag(&old));
     assert!(!result_file(&master, &old, "bytemass.ndjson").exists());
@@ -523,7 +540,7 @@ fn a_failing_version_is_left_after_two_failures() {
     commit(&root, 0, readable_table(&root, &["1"]));
     std::fs::remove_file(root.join("day=1/part-0.parquet")).unwrap();
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), STEPS);
+    let master = Master::start(directory.path(), &[]);
     let rows = master.wait(|rows| rows.len() == 1 && rows[0]["failure_count"] == 2);
     assert_eq!(rows[0]["state"], "PRICED");
     assert!(rows[0]["error"]
@@ -532,9 +549,9 @@ fn a_failing_version_is_left_after_two_failures() {
 }
 
 /// A daemon whose executable is replaced on disk keeps running its own: its
-/// commands start from the image it runs, so the steps go on.
+/// commands start from the image it runs, so the versions move on.
 #[test]
-fn the_steps_go_on_after_the_executable_is_replaced() {
+fn commands_go_on_after_the_executable_is_replaced() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1", "2"]));
@@ -554,7 +571,6 @@ fn the_steps_go_on_after_the_executable_is_replaced() {
         .arg(&socket)
         .arg("--walk-tables")
         .arg(directory.path().join("tables.ndjson"))
-        .args(STEPS)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .spawn()
@@ -612,8 +628,7 @@ fn the_web_app_serves_the_stats_and_the_records() {
         .unwrap()
         .port();
     let address = format!("127.0.0.1:{port}");
-    let flags = [STEPS, &["--web-ui", "--listen", &address]].concat();
-    let master = Master::start(directory.path(), &flags);
+    let master = Master::start(directory.path(), &["--web-ui", "--listen", &address]);
     master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
 
     let versions = master.run(&["list", "partition-versions"], "");

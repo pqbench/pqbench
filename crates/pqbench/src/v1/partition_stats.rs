@@ -39,6 +39,6 @@ pub struct PartitionStats {
     /// Every version, `DELETED` ones included, counted by state.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub version_counts: BTreeMap<State, u64>,
-    /// The versions whose last step failed.
+    /// The versions whose last command failed.
     pub failed_version_count: u64,
 }

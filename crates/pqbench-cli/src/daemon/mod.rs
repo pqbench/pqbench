@@ -76,15 +76,12 @@ pub(crate) struct MasterArgs {
     /// seconds from one walk to the next; without it the master walks once, when it starts
     #[arg(long, requires = "master", value_name = "SECONDS")]
     walk_period_seconds: Option<u64>,
-    /// run this step on the versions: price, download, bytemass or lint; repeatable
-    #[arg(long = "step", requires = "master", value_name = "STEP", value_parser = step_name)]
-    steps: Vec<String>,
-    /// the most step commands running at once
-    #[arg(long, requires = "master", default_value_t = 8)]
-    processes: usize,
-    /// kill a step command that runs longer, and count it as a failure
+    /// the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
+    #[arg(long, requires = "master")]
+    low_network: bool,
+    /// kill a command on a version that runs longer, and count it as a failure
     #[arg(long, requires = "master", value_name = "SECONDS")]
-    step_time_limit_seconds: Option<u64>,
+    time_limit_seconds: Option<u64>,
     /// also serve the web app: the master's records and status page (with --master)
     #[arg(long, requires = "master")]
     web_ui: bool,
@@ -108,21 +105,6 @@ fn walk_root(value: &str) -> Result<String, String> {
     }
 }
 
-/// A step's name.
-fn step_name(value: &str) -> Result<String, String> {
-    match master::STEPS.iter().find(|step| step.name == value) {
-        Some(step) => Ok(step.name.to_string()),
-        None => Err(format!(
-            "{value} is not a step: {}",
-            master::STEPS
-                .iter()
-                .map(|step| step.name)
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
-}
-
 impl MasterArgs {
     /// What the driver runs.
     fn settings(&self) -> drive::Settings {
@@ -130,12 +112,7 @@ impl MasterArgs {
             walk: self.walk.clone(),
             walk_tables: self.walk_tables.as_deref().map(path::absolute),
             walk_period: self.walk_period_seconds.map(Duration::from_secs),
-            steps: master::STEPS
-                .iter()
-                .filter(|step| self.steps.iter().any(|name| name == step.name))
-                .collect(),
-            processes: self.processes.max(1),
-            time_limit: self.step_time_limit_seconds.map(Duration::from_secs),
+            time_limit: self.time_limit_seconds.map(Duration::from_secs),
         }
     }
 
@@ -155,15 +132,11 @@ impl MasterArgs {
         if let Some(seconds) = self.walk_period_seconds {
             arguments.extend(["--walk-period-seconds".into(), seconds.to_string().into()]);
         }
-        for step in &self.steps {
-            arguments.extend(["--step".into(), step.into()]);
+        if self.low_network {
+            arguments.push("--low-network".into());
         }
-        arguments.extend(["--processes".into(), self.processes.to_string().into()]);
-        if let Some(seconds) = self.step_time_limit_seconds {
-            arguments.extend([
-                "--step-time-limit-seconds".into(),
-                seconds.to_string().into(),
-            ]);
+        if let Some(seconds) = self.time_limit_seconds {
+            arguments.extend(["--time-limit-seconds".into(), seconds.to_string().into()]);
         }
         if let Some(address) = self.web_ui() {
             arguments.extend(["--web-ui".into(), "--listen".into(), address.into()]);
@@ -227,7 +200,7 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
             let session = Daemon::direct(workspace.clone());
             let master = match args.master.store() {
                 Some(store) => Some(std::sync::Arc::new(std::sync::RwLock::new(
-                    master::Master::open(&store)?,
+                    master::Master::open(&store, args.master.low_network)?,
                 ))),
                 None => None,
             };

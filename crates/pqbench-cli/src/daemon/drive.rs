@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
-use super::master::{self, Master, Step};
+use super::master::{self, Master};
 use super::process::{self, Exit};
 
 /// How often the driver makes a pass.
@@ -45,11 +45,7 @@ pub(crate) struct Settings {
     /// How long after a walk the next one is due; `None` walks once, when the
     /// daemon starts.
     pub walk_period: Option<Duration>,
-    /// The steps that run; the others' versions wait.
-    pub steps: Vec<&'static Step>,
-    /// The most step commands running at once.
-    pub processes: usize,
-    /// How long a step command may run before it is killed.
+    /// How long a transition's command may run before it is killed.
     pub time_limit: Option<Duration>,
 }
 
@@ -69,6 +65,8 @@ struct Stats {
 struct Driver {
     master: Arc<RwLock<Master>>,
     settings: Settings,
+    /// The most transition commands running at once: one per CPU.
+    commands: usize,
     socket: PathBuf,
     store: PathBuf,
     walk: Option<Walk>,
@@ -88,6 +86,7 @@ pub(crate) fn spawn(master: Arc<RwLock<Master>>, settings: Settings, socket: Pat
     let mut driver = Driver {
         master,
         settings,
+        commands: std::thread::available_parallelism().map_or(1, usize::from),
         socket,
         store,
         walk: None,
@@ -117,19 +116,19 @@ fn write(master: &RwLock<Master>) -> RwLockWriteGuard<'_, Master> {
 
 impl Driver {
     fn pass(&mut self) {
-        self.finish_steps();
+        self.finish_transitions();
         self.finish_walk();
         self.purge();
         self.start_walk();
-        self.start_steps();
+        self.start_transitions();
         self.checkpoint();
         self.finish_stats();
         self.start_stats();
     }
 
-    /// Give the master each step command that exited, and kill the ones past
+    /// Give the master each transition command that exited, and kill the ones past
     /// the time limit.
-    fn finish_steps(&mut self) {
+    fn finish_transitions(&mut self) {
         let now = master::now_ms();
         let runs = read(&self.master).runs();
         for run in runs {
@@ -150,7 +149,7 @@ impl Driver {
                             run.command.join(" "),
                             limit.as_secs()
                         ),
-                        None => step_error(&run, &status),
+                        None => command_error(&run, &status),
                     });
                     write(&self.master).finish(&run.key, outcome, now);
                 }
@@ -159,13 +158,13 @@ impl Driver {
     }
 
     /// Start what the master plans next, while there are free processes.
-    fn start_steps(&mut self) {
+    fn start_transitions(&mut self) {
         let running = read(&self.master).runs().len();
-        let free = self.settings.processes.saturating_sub(running);
-        if free == 0 || self.settings.steps.is_empty() {
+        let free = self.commands.saturating_sub(running);
+        if free == 0 {
             return;
         }
-        let runs = read(&self.master).plan(&self.settings.steps, free);
+        let runs = read(&self.master).plan(free);
         for run in runs {
             let started = fs::write(&run.input_path, &run.input).and_then(|()| {
                 process::start(
@@ -185,7 +184,7 @@ impl Driver {
                     let _ = fs::remove_file(&run.input_path);
                     eprintln!(
                         "pqbench daemon: cannot start `pqbench {}`: {error}",
-                        run.step.command.join(" ")
+                        run.transition.command.join(" ")
                     );
                     return;
                 }
@@ -443,8 +442,8 @@ impl Driver {
     }
 }
 
-/// A failed step's error: the end of its standard error, else how it ended.
-fn step_error(run: &master::Running, status: &str) -> String {
+/// A failed transition's error: the end of its standard error, else how it ended.
+fn command_error(run: &master::Running, status: &str) -> String {
     let text = fs::read_to_string(&run.stderr).unwrap_or_default();
     let text = text.trim();
     match text.is_empty() {

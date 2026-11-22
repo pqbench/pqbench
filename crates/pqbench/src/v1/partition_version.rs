@@ -29,7 +29,7 @@ pub struct PartitionVersion {
     pub first_listed_time: u64,
     /// The partition's versions before this one.
     pub etag_change_count: u64,
-    /// Failures of the current step on this version.
+    /// Failures of the current transition on this version.
     pub failure_count: u64,
     /// The last failure's error.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,7 +53,7 @@ pub struct PartitionVersion {
     pub lowest_cost_per_month: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub highest_cost_per_month: Option<f64>,
-    /// While a step runs on this version: the process the master started,
+    /// While a command runs on this version: the process the master started,
     /// the attempt its files are named by, and when it started.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_id: Option<u32>,
@@ -63,8 +63,8 @@ pub struct PartitionVersion {
     pub start_time: Option<u64>,
 }
 
-/// Where a partition version is in the pipeline: each step takes a version
-/// from the state before it, through the step's running state, to the state
+/// Where a partition version is in the pipeline: each transition takes a
+/// version from the state before it, through its running state, to the state
 /// after it.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -81,12 +81,12 @@ pub enum State {
     Priced,
     /// The version's sample file is being copied into its directory.
     Downloading,
-    /// The sample file is on disk, for the steps that read its data.
+    /// The sample file is on disk, for the commands that read its data.
     Downloaded,
     Bytemassing,
     Bytemassed,
     Linting,
-    /// Every step the version needs is done: a version with no live file,
+    /// Every transition the version needs is done: a version with no live file,
     /// or whose files need a restore, is done after its price.
     UpToDate,
 }

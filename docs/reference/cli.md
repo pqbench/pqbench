@@ -868,17 +868,18 @@ and never waited for:
             --walk-period-seconds. A new version is PENDING; a listed table's
             versions it no longer finds are DELETED, and when every table was
             read, so are the tables it did not list.
-  steps     each --step, one command per version, at most --processes at
-            once, killed past --step-time-limit-seconds:
+  versions  one command per version, one per CPU at once, killed past
+            --time-limit-seconds:
               price     `get partition-price`; a version with no live file,
                         or in an archive class, is then UP_TO_DATE
               download  `download` of the sample file into the version's
                         directory
               bytemass  `bytemass --local` on that copy
               lint      `list suggestions --local` on it; then UP_TO_DATE
-            A failure puts the version back with its error; after two it
-            waits. A version waits at the first step that is off, so
-            `--step price` alone reads no file's data.
+            With --low-network no file is copied: after its price, a version
+            runs `bytemass` on the sample file in place (it reads only the
+            footer) and is then UP_TO_DATE. A failure puts the version back
+            with its error; after two it waits.
   purge     DELETED versions and their results, except a partition's last
             UP_TO_DATE version while its new one is in progress.
   stats     `summarize partition-versions` over each checkpoint.
@@ -900,8 +901,7 @@ Examples:
   pqbench daemon status
   pqbench daemon stop
   pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main \
-    --walk-period-seconds 86400 --step price --step download --step bytemass \
-    --step lint --web-ui
+    --walk-period-seconds 86400 --web-ui
 
 See also:
   pqbench --help  catalog auth, PQB_* config
@@ -934,11 +934,8 @@ Start the daemon in the background
 * `--walk <NAME>` — walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
 * `--walk-tables <FILE>` — walk the tables these Table records name, as they are (e.g. local tables)
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
-* `--step <STEP>` — run this step on the versions: price, download, bytemass or lint; repeatable
-* `--processes <PROCESSES>` — the most step commands running at once
-
-  Default value: `8`
-* `--step-time-limit-seconds <SECONDS>` — kill a step command that runs longer, and count it as a failure
+* `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
+* `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
 * `--web-ui` — also serve the web app: the master's records and status page (with --master)
 * `--listen <ADDR>` — the web app's address (with --web-ui)
 
@@ -978,11 +975,8 @@ Serve leases in the foreground
 * `--walk <NAME>` — walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
 * `--walk-tables <FILE>` — walk the tables these Table records name, as they are (e.g. local tables)
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
-* `--step <STEP>` — run this step on the versions: price, download, bytemass or lint; repeatable
-* `--processes <PROCESSES>` — the most step commands running at once
-
-  Default value: `8`
-* `--step-time-limit-seconds <SECONDS>` — kill a step command that runs longer, and count it as a failure
+* `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
+* `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
 * `--web-ui` — also serve the web app: the master's records and status page (with --master)
 * `--listen <ADDR>` — the web app's address (with --web-ui)
 

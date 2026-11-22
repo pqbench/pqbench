@@ -332,8 +332,8 @@ message PartitionVersion {
   // The version id is the partition's etag.
   string name = 1;
 
-  // Where a version is: each step takes it from the state before the step,
-  // through the step's running state, to the state after it.
+  // Where a version is: each transition takes it from the state before it,
+  // through the transition's running state, to the state after it.
   enum State {
     STATE_UNSPECIFIED = 0;
     // A walk no longer finds this version; its results wait for purge.
@@ -344,12 +344,12 @@ message PartitionVersion {
     PRICED = 4;
     // The version's sample file is being copied into its directory.
     DOWNLOADING = 5;
-    // The sample file is on disk, for the steps that read its data.
+    // The sample file is on disk, for the commands that read its data.
     DOWNLOADED = 6;
     BYTEMASSING = 7;
     BYTEMASSED = 8;
     LINTING = 9;
-    // Every step the version needs is done: a version with no live file, or
+    // Every transition the version needs is done: a version with no live file, or
     // whose files need a restore, is done after its price.
     UP_TO_DATE = 10;
   }
@@ -371,8 +371,8 @@ message PartitionVersion {
   // The partition's versions before this one.
   int64 etag_change_count = 6;
 
-  // Failures of the current step on this version; a version that failed
-  // twice is left out of the step's claims.
+  // Failures of the current transition on this version; a version that
+  // failed twice waits.
   int64 failure_count = 7;
 
   // The last failure's error.
@@ -398,7 +398,7 @@ message PartitionVersion {
 
   optional double highest_cost_per_month = 14;
 
-  // While a step runs on this version: the process the master started, the
+  // While a command runs on this version: the process the master started, the
   // attempt its files are named by, and when it started.
   optional uint32 process_id = 16;
 
@@ -445,7 +445,7 @@ message PartitionStats {
   // Every version, DELETED ones included, by its state's value name.
   map<string, int64> version_counts = 10;
 
-  // The versions whose last step failed.
+  // The versions whose last command failed.
   int64 failed_version_count = 11;
 }
 
