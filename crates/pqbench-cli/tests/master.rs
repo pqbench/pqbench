@@ -676,6 +676,14 @@ fn the_web_app_serves_the_stats_and_the_records() {
         !table.contains("/versions/\""),
         "a row links to a version: {table}"
     );
+    // The insights page folds what the versions found: the storage classes
+    // they priced at, and the suggestions by rule.
+    let (status, insights) = http_get(&address, "/insights");
+    assert_eq!(status, 200, "{insights}");
+    assert!(insights.contains("storage class"), "{insights}");
+    assert!(insights.contains("removed"), "{insights}");
+    assert!(insights.contains("rule"), "{insights}");
+
     // A level with no records is an empty table, not an error.
     let (status, empty) = http_get(&address, "/catalogs/local/schemas/nope");
     assert_eq!(status, 200, "{empty}");

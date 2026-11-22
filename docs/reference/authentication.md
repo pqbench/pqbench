@@ -241,7 +241,10 @@ also serves the web app, read-only. Each page is one ASCII table, the same one
 the catalogs, `/catalogs/{c}` their schemas, `…/tables/{t}` the table's
 partitions, `…/partitions/{p}` that partition's versions with its columns and
 files, and `/partitions` the master's map whole, newest found first. No
-script runs in the browser.
+script runs in the browser. `/insights` folds what the versions found into
+three tables: the monthly cost by storage class, the bytes removed from the
+logs but not vacuumed (and what they cost), and the suggestions by rule with
+how many tables and columns each touches.
 
 `GET /v1/{name}` returns what a name names, as JSON:
 

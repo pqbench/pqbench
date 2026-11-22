@@ -26,7 +26,8 @@
 //! master's rows for the one table. Only a page's versions read their results
 //! from the store.
 
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use serde_json::{json, Map, Value};
@@ -151,6 +152,7 @@ fn page(master: &RwLock<Master>, path: &str) -> Result<String, String> {
     let body = match segments.len() {
         0 => levels_page(master, &["catalogs"])?,
         1 if segments[0] == "partitions" => recent_page(master)?,
+        1 if segments[0] == "insights" => cached_insights(master)?,
         2 => levels_page(master, &[segments[0], segments[1], "schemas"])?,
         3 if segments[2] == "schemas" => levels_page(master, &segments)?,
         4 => levels_page(
@@ -178,7 +180,7 @@ fn levels_page(master: &RwLock<Master>, segments: &[&str]) -> Result<String, Str
                     name,
                     row.partition_count.to_string(),
                     row.file_count.to_string(),
-                    bytes(row.size_bytes),
+                    size_text(row.size_bytes),
                     money(row.highest_cost_per_month.or(row.lowest_cost_per_month)),
                     row.version_counts
                         .iter()
@@ -229,8 +231,8 @@ fn partitions_page(master: &RwLock<Master>, table: &str) -> Result<String, Strin
                     row.name.clone(),
                     state_name(row.state).to_string(),
                     row.file_count.to_string(),
-                    bytes(row.size_bytes),
-                    bytes(row.removed_size_bytes.unwrap_or(0)),
+                    size_text(row.size_bytes),
+                    size_text(row.removed_size_bytes.unwrap_or(0)),
                     money(Some(cost_version(row))),
                     when(Some(row.create_time)),
                     row.failure_count.to_string(),
@@ -282,7 +284,7 @@ fn recent_page(master: &RwLock<Master>) -> Result<String, String> {
                     row.name.clone(),
                     state_name(row.state).to_string(),
                     row.file_count.to_string(),
-                    bytes(row.size_bytes),
+                    size_text(row.size_bytes),
                     money(Some(cost_version(row))),
                     when(Some(row.create_time)),
                 ],
@@ -315,7 +317,7 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
                     row.name.rsplit('/').next().unwrap_or_default().to_string(),
                     state_name(row.state).to_string(),
                     row.file_count.to_string(),
-                    bytes(row.size_bytes),
+                    size_text(row.size_bytes),
                     money(Some(cost_version(row))),
                     when(Some(row.create_time)),
                     when(row.up_to_date_time),
@@ -369,15 +371,15 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
                     if mass["dictionary"].as_bool().unwrap_or(false) {
                         format!(
                             "yes {}",
-                            bytes(mass["dictionary_bytes"].as_u64().unwrap_or(0))
+                            size_text(mass["dictionary_bytes"].as_u64().unwrap_or(0))
                         )
                     } else {
                         "no".to_string()
                     },
                     count(mass["value_count"].as_u64()),
                     count(mass["null_count"].as_u64()),
-                    bytes(mass["compressed_bytes"].as_u64().unwrap_or(0)),
-                    bytes(mass["uncompressed_bytes"].as_u64().unwrap_or(0)),
+                    size_text(mass["compressed_bytes"].as_u64().unwrap_or(0)),
+                    size_text(mass["uncompressed_bytes"].as_u64().unwrap_or(0)),
                     number(mass["compression_ratio"].as_f64()),
                     number(mass["bytes_per_row"].as_f64()),
                 ],
@@ -411,7 +413,7 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
                 String::new(),
                 vec![
                     file["path"].as_str().unwrap_or_default().to_string(),
-                    bytes(file["size_bytes"].as_u64().unwrap_or(0)),
+                    size_text(file["size_bytes"].as_u64().unwrap_or(0)),
                     when(file["modification_time"].as_u64()),
                 ],
             )
@@ -423,6 +425,192 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
     }
     Ok(body)
 }
+/// The insights page reads every live version's results, so a refresh within
+/// [`INSIGHTS_TTL`] shows the render it just made.
+static INSIGHTS: std::sync::Mutex<Option<(std::time::Instant, String)>> =
+    std::sync::Mutex::new(None);
+const INSIGHTS_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The latest storage class each live version reports, or the one that
+/// covers most of it, with the monthly cost that class carries there.
+fn class_of(costs: &[Value]) -> Option<(String, f64)> {
+    costs
+        .iter()
+        .filter_map(|cost| {
+            let class = cost["storage_class"].as_str()?;
+            let tier = cost["access_tier"].as_str().unwrap_or_default();
+            let name = if tier.is_empty() {
+                class.to_string()
+            } else {
+                format!("{class} / {tier}")
+            };
+            Some((name, cost["cost_per_month"].as_f64().unwrap_or(0.0)))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// The insights page, from the cache while it is fresh.
+fn cached_insights(master: &RwLock<Master>) -> Result<String, String> {
+    let mut cache = INSIGHTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, text)) = cache.as_ref() {
+        if at.elapsed() < INSIGHTS_TTL {
+            return Ok(text.clone());
+        }
+    }
+    let text = insights_page(master)?;
+    *cache = Some((std::time::Instant::now(), text.clone()));
+    Ok(text)
+}
+
+/// The insights: what the versions found, folded into the three questions the
+/// tool exists to answer — where the bytes and the money are by storage class,
+/// what was removed and not vacuumed, and what the suggestions say by rule.
+fn insights_page(master: &RwLock<Master>) -> Result<String, String> {
+    let (store, versions): (PathBuf, Vec<PartitionVersion>) = {
+        let master = lock(master);
+        let rows: Vec<PartitionVersion> = master
+            .list("")?
+            .into_iter()
+            .filter(|(_, row)| row.state != State::Deleted)
+            .map(|(key, row)| version(key, row))
+            .collect();
+        (master.store().to_path_buf(), rows)
+    };
+    let mut classes: BTreeMap<String, (u64, f64)> = BTreeMap::new();
+    let mut removed: BTreeMap<String, (u64, u64, f64)> = BTreeMap::new();
+    let mut rules: BTreeMap<String, Rule> = BTreeMap::new();
+    for row in &versions {
+        let directory = store
+            .join("results")
+            .join(row.name.replace("/versions/", "/"));
+        let table = row
+            .name
+            .split_once("/partitions/")
+            .map_or("", |(table, _)| table)
+            .to_string();
+        let price = read_lines(&directory.join("price.ndjson"));
+        if let Some(price) = price.first() {
+            if let Some((class, cost)) = class_of(
+                price["storage_costs"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            ) {
+                let entry = classes.entry(class).or_default();
+                entry.0 += 1;
+                entry.1 += cost;
+            }
+            let removed_cost = price["removed_storage_costs"]
+                .as_array()
+                .map(|costs| {
+                    costs
+                        .iter()
+                        .filter_map(|cost| cost["cost_per_month"].as_f64())
+                        .sum()
+                })
+                .unwrap_or(0.0);
+            let entry = removed.entry(table.clone()).or_default();
+            entry.0 += 1;
+            entry.1 += row.removed_size_bytes.unwrap_or(0);
+            entry.2 += removed_cost;
+        }
+        for suggestion in read_lines(&directory.join("list-suggestions.ndjson")) {
+            let Some(rule) = suggestion["rule"].as_str() else {
+                continue;
+            };
+            let rule = rules.entry(rule.to_string()).or_default();
+            rule.suggestions += 1;
+            if let Some(column) = suggestion["column"].as_str() {
+                rule.columns.insert(column.to_string());
+            }
+            rule.tables.insert(table.clone());
+            if rule.message.is_none() {
+                rule.message = suggestion["message"]
+                    .as_str()
+                    .or_else(|| suggestion["remedy"].as_str())
+                    .map(str::to_string);
+            }
+        }
+    }
+    let mut body = String::new();
+    let class_cells: Vec<(String, Vec<String>)> = classes
+        .iter()
+        .map(|(class, (count, cost))| {
+            (
+                String::new(),
+                vec![class.clone(), count.to_string(), money(Some(*cost))],
+            )
+        })
+        .collect();
+    body.push_str(&ascii(
+        &["storage class", "versions", "stock /mo"],
+        class_cells,
+    ));
+    let removed_cells: Vec<(String, Vec<String>)> = removed
+        .iter()
+        .filter(|(_, (_, bytes, _))| *bytes > 0)
+        .map(|(table, (partitions, bytes, cost))| {
+            (
+                table.clone(),
+                vec![
+                    table.clone(),
+                    partitions.to_string(),
+                    size_text(*bytes),
+                    money(Some(*cost)),
+                ],
+            )
+        })
+        .collect();
+    body.push('\n');
+    body.push_str(&ascii(
+        &["table", "partitions", "removed", "removed /mo"],
+        removed_cells,
+    ));
+    let rule_cells: Vec<(String, Vec<String>)> = rules
+        .iter()
+        .map(|(rule, counts)| {
+            (
+                String::new(),
+                vec![
+                    rule.clone(),
+                    counts.suggestions.to_string(),
+                    counts.tables.len().to_string(),
+                    counts.columns.len().to_string(),
+                    counts.message.clone().unwrap_or_default(),
+                ],
+            )
+        })
+        .collect();
+    body.push('\n');
+    body.push_str(&ascii(
+        &["rule", "suggestions", "tables", "columns", "what it says"],
+        rule_cells,
+    ));
+    Ok(body)
+}
+
+/// One rule's suggestions across the map.
+#[derive(Default)]
+struct Rule {
+    suggestions: u64,
+    tables: BTreeSet<String>,
+    columns: BTreeSet<String>,
+    message: Option<String>,
+}
+
+/// The JSON lines a result file holds, or none.
+fn read_lines(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str(line).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The most rows one page shows; the map can be larger than a screen.
 const MAX_ROWS: usize = 1000;
 
@@ -461,7 +649,7 @@ fn shell(crumbs: &str, body: &str) -> String {
          pre{{margin:0}} a{{color:inherit;text-decoration:none}}\
          a:hover{{background:#e8e2d9}} .note{{color:#77706a;margin:10px 0 0}}\
          </style></head><body><header><b>pqbench</b> · \n\
-         <a href=\"/\">warehouse</a> · <a href=\"/partitions\">partitions</a>\n\
+         <a href=\"/\">warehouse</a> · <a href=\"/partitions\">partitions</a> · <a href=\"/insights\">insights</a>\n\
          {crumbs}</header><main><pre>{body}</pre></main></body></html>\n"
     )
 }
@@ -509,7 +697,7 @@ fn percent_decode(text: &str) -> String {
 }
 
 /// Bytes as a short binary unit.
-fn bytes(bytes: u64) -> String {
+fn size_text(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     let mut value = bytes as f64;
     let mut unit = 0;
