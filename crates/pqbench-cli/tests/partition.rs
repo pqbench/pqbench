@@ -68,10 +68,11 @@ fn add(path: &str, day: Option<&str>, size: u64, time: i64, rows: u64) -> Value 
     }})
 }
 
-fn remove(path: &str, day: &str) -> Value {
+fn remove(path: &str, day: &str, size: u64) -> Value {
     json!({"remove": {
         "path": path,
         "partitionValues": {"day": day},
+        "size": size,
         "deletionTimestamp": 1_700_000_100_000i64,
         "dataChange": true
     }})
@@ -164,6 +165,45 @@ fn list_partitions_folds_the_files_of_each_partition() {
     let sample = day["sample_file"]["path"].as_str().unwrap();
     assert!(sample.starts_with("day=1/"), "{sample}");
     assert_eq!(records[2]["partition_values"], json!({"day": null}));
+    assert_eq!(day["removed_file_count"], 0);
+    assert_eq!(day["removed_size_bytes"], 0);
+}
+
+/// A removed file counts until a vacuum, in its partition; a path removed and
+/// added again (a restore, or a deletion-vector update) is live, not removed; a partition
+/// whose files were all removed is still listed, with no files.
+#[test]
+fn list_partitions_counts_the_removed_files_no_active_file_holds() {
+    let table = fixture();
+    commit(
+        table.path(),
+        1,
+        vec![
+            remove("day=1/b.parquet", "1", 300),
+            remove("day=1/a.parquet", "1", 100),
+            remove("day=2/d.parquet", "2", 50),
+        ],
+    );
+    commit(
+        table.path(),
+        2,
+        vec![add("day=1/a.parquet", Some("1"), 100, 6_000, 10)],
+    );
+    let output = list_partitions(&table_record("events", table.path()));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let partitions = partitions_keyed(&records(&output.stdout));
+    assert_eq!(partitions["day%3D1"]["file_count"], 2);
+    assert_eq!(partitions["day%3D1"]["removed_file_count"], 1);
+    assert_eq!(partitions["day%3D1"]["removed_size_bytes"], 300);
+    assert_eq!(partitions["day%3D2"]["file_count"], 0);
+    assert_eq!(partitions["day%3D2"]["size_bytes"], 0);
+    assert_eq!(partitions["day%3D2"]["removed_file_count"], 1);
+    assert_eq!(partitions["day%3D2"]["removed_size_bytes"], 50);
+    assert!(partitions["day%3D2"].get("sample_file").is_none());
 }
 
 /// The etag is the same on a rerun and changes only for a partition a commit
@@ -175,7 +215,7 @@ fn list_partitions_etag_changes_only_with_the_partitions_files() {
     let first = partitions_keyed(&records(&list_partitions(&stdin).stdout));
     let again = partitions_keyed(&records(&list_partitions(&stdin).stdout));
     assert_eq!(first, again);
-    commit(table.path(), 1, vec![remove("day=1/b.parquet", "1")]);
+    commit(table.path(), 1, vec![remove("day=1/b.parquet", "1", 300)]);
     let after = partitions_keyed(&records(&list_partitions(&stdin).stdout));
     assert_ne!(after["day%3D1"]["etag"], first["day%3D1"]["etag"]);
     assert_eq!(after["day%3D1"]["file_count"], 2);

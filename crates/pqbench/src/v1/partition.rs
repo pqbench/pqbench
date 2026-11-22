@@ -11,7 +11,8 @@ pub struct Partition {
     /// `…/tables/{table}/partitions/{partition}`. `{partition}` is the
     /// Hive-style path of the values (`k=v/k2=v2`, the table's partition
     /// column order), encoded to one segment; `unpartitioned` for a table
-    /// without partition columns.
+    /// without partition columns, and for removed files whose `remove`
+    /// action records no partition values.
     #[resource(name = "catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}")]
     pub name: String,
     /// The log's partition values; a value is `None` for a null partition.
@@ -43,4 +44,12 @@ pub struct Partition {
     /// holds it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_file: Option<TableFile>,
+    /// Files the snapshot removed whose tombstones it still keeps and no
+    /// active file holds: stored, and billed, until a vacuum deletes them.
+    /// Absent when the format's removed files are not read (Iceberg).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_file_count: Option<u64>,
+    /// Sum of the removed files' sizes, as the `remove` actions record them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed_size_bytes: Option<u64>,
 }

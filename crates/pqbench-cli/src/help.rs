@@ -207,7 +207,7 @@ List a collection of the walk, by name:
               TableFile line each
   partitions  a table's partitions (Table records from `get table` on standard
               input), one Partition line each: file count, bytes, records,
-              etag, and the oldest, newest and sample file
+              removed bytes, etag, and the oldest, newest and sample file
   columns     a file's columns and their byte masses (TableFile refs on
               standard input), one Column line each
   suggestions the storage each local blob's values may not need (TableFile refs
@@ -235,7 +235,9 @@ daily run reads the day's writes without walking what the table already held.
 `list partitions` reads each table's snapshot once, without per-column
 statistics, and writes one Partition per partition, sorted by name, once the
 table is read. It holds one running total per partition, never the files, and
-a table that fails writes nothing. A partition's name follows the table's
+a table that fails writes nothing. Removed files (Delta tombstones a vacuum
+has not deleted) are read first, a path hash and a size each, and counted in
+their partition unless an active file still holds the path. A partition's name follows the table's
 partition column order, so the input is `get table` output, which names the
 columns; a `list tables` ref is refused.
 

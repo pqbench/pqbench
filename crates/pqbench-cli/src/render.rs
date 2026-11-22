@@ -125,10 +125,12 @@ impl Row for v1::Partition {
         "file_count",
         "size_bytes",
         "record_count",
+        "removed_size_bytes",
         "etag",
     ];
     const ALIGN: &[Align] = &[
         Align::Left,
+        Align::Right,
         Align::Right,
         Align::Right,
         Align::Right,
@@ -145,6 +147,9 @@ impl Row for v1::Partition {
             self.size_bytes.to_string(),
             self.record_count
                 .map(|count| count.to_string())
+                .unwrap_or_default(),
+            self.removed_size_bytes
+                .map(|size| size.to_string())
                 .unwrap_or_default(),
             self.etag.clone(),
         ]

@@ -256,7 +256,8 @@ message Partition {
   // `{partition}` is the Hive-style path of the values (`k=v/k2=v2`, in the
   // table's partition column order; `/`, `=` and `%` in a key or value
   // percent-escaped; a null value is `__HIVE_DEFAULT_PARTITION__`), URL-encoded
-  // to one segment. A table without partition columns has `unpartitioned`.
+  // to one segment. A table without partition columns has `unpartitioned`, as
+  // do removed files whose `remove` action records no partition values.
   string name = 1;
 
   // The log's partition values; a null value is JSON null.
@@ -287,6 +288,14 @@ message Partition {
   // The file a measurement reads for the partition: the one whose path and
   // size hash lowest, so it stays the same while the partition holds it.
   TableFile sample_file = 11;
+
+  // Files the snapshot removed whose tombstones it still keeps and no active
+  // file holds: stored, and billed, until a vacuum deletes them. Absent when
+  // the format's removed files are not read (Iceberg).
+  optional int64 removed_file_count = 12;
+
+  // Sum of the removed files' sizes, as the `remove` actions record them.
+  optional int64 removed_size_bytes = 13;
 }
 
 // One commit of a table's log. The `{commit}` id segment is the log version, a
