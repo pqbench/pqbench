@@ -1,33 +1,18 @@
 //! The master: the map of partition versions, its whole state, and the
 //! transitions that move them.
 //!
-//! The work is done by plain pqbench commands the daemon runs (`drive`); the
-//! master decides what runs next for a version and what a finished run means
-//! for it. A walk's listing makes versions and deletes the ones it no longer
-//! finds; each [`Transition`] takes a version from the state before it, through the
-//! transition's running state, to the state after it; purge drops what a walk
-//! deleted. Every change is a short update of the map; no command is waited
-//! for inside one.
-//!
-//! The store, which only the master writes:
-//!
-//! ```text
-//! {store}/checkpoint.ndjson                  the map, one PartitionVersion per line
-//! {store}/walk/                              the running walk's input and output
-//! {store}/results/{partition}/{etag}/{file}  a version's results
-//! ```
-//!
-//! A transition's output goes to `{file}.tmp` in its version's directory; a
-//! success renames it in, a failure deletes it.
+//! The master holds no file and runs no command. A walk's listing makes
+//! versions ([`Master::found`]) and deletes the ones it no longer finds;
+//! [`Master::start`] hands out the next runs, each a [`Transition`] on one
+//! version, and [`Master::finish`] takes how a run ended; [`Master::purge`]
+//! drops what a walk deleted. The driver runs the commands and keeps the
+//! files (`drive`, `store`); every call here is a short update of the map.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) use pqbench::v1::partition_version::State;
-use pqbench::v1::PartitionVersion;
+use pqbench::v1::{PartitionPrice, PartitionVersion};
 use serde_json::Value;
 
 /// A version that failed this many times in one transition is left where it is.
@@ -50,7 +35,6 @@ pub(crate) enum Input {
 /// One transition: the command it runs on a version and the states it moves the
 /// version through.
 pub(crate) struct Transition {
-    pub name: &'static str,
     pub source: State,
     pub running: State,
     pub done: State,
@@ -66,7 +50,6 @@ pub(crate) struct Transition {
 }
 
 const PRICE: Transition = Transition {
-    name: "price",
     source: State::Pending,
     running: State::Pricing,
     done: State::Priced,
@@ -82,7 +65,6 @@ const PRICE: Transition = Transition {
 const TRANSITIONS: &[Transition] = &[
     PRICE,
     Transition {
-        name: "download",
         source: State::Priced,
         running: State::Downloading,
         done: State::Downloaded,
@@ -93,7 +75,6 @@ const TRANSITIONS: &[Transition] = &[
         local: false,
     },
     Transition {
-        name: "bytemass",
         source: State::Downloaded,
         running: State::Bytemassing,
         done: State::Bytemassed,
@@ -104,7 +85,6 @@ const TRANSITIONS: &[Transition] = &[
         local: true,
     },
     Transition {
-        name: "lint",
         source: State::Bytemassed,
         running: State::Linting,
         done: State::UpToDate,
@@ -121,7 +101,6 @@ const TRANSITIONS: &[Transition] = &[
 const LOW_NETWORK_TRANSITIONS: &[Transition] = &[
     PRICE,
     Transition {
-        name: "bytemass",
         source: State::Priced,
         running: State::Bytemassing,
         done: State::UpToDate,
@@ -133,82 +112,63 @@ const LOW_NETWORK_TRANSITIONS: &[Transition] = &[
     },
 ];
 
-/// The transition of `transitions` a version in `state` is running, if any.
-fn running_transition(
-    transitions: &'static [Transition],
-    state: State,
-) -> Option<&'static Transition> {
-    transitions
-        .iter()
-        .find(|transition| transition.running == state)
-}
+/// A version: its partition name and etag.
+pub(crate) type Key = (String, String);
 
-/// One run of a transition the master wants started: its command line and
-/// its standard input.
+/// One run the master handed out: a transition on one version.
 pub(crate) struct Run {
     pub key: Key,
     pub transition: &'static Transition,
-    pub command_words: Vec<String>,
-    pub input: String,
 }
 
-pub(crate) type Key = (String, String);
-
 pub(crate) struct Master {
-    store: PathBuf,
-    /// The transitions the master runs: [`LOW_NETWORK_TRANSITIONS`] on a host
-    /// with little network, else [`TRANSITIONS`].
+    /// [`LOW_NETWORK_TRANSITIONS`] on a host with little network, else
+    /// [`TRANSITIONS`].
     transitions: &'static [Transition],
     /// The versions by partition and etag; a row's `name` is left empty, the
-    /// key holds it, and [`version`] puts it back.
+    /// key holds it, and [`named`] puts it back.
     rows: BTreeMap<Key, PartitionVersion>,
     /// Whether the rows changed since the last checkpoint.
     changed: bool,
-    /// Whether a version may be purgeable since the last purge.
-    purge_due: bool,
 }
 
 impl Master {
-    /// Open the store: load the checkpoint, then put back what a crash left.
-    /// The commands a version was running died with the old daemon, so the
-    /// version goes back to the state before its transition; unfinished
-    /// outputs, and result directories no row names, are deleted.
-    pub(crate) fn open(store: &Path, low_network: bool) -> Result<Self, String> {
-        for directory in ["results", "walk"] {
-            fs::create_dir_all(store.join(directory))
-                .map_err(|error| format!("cannot create {}: {error}", store.display()))?;
-        }
-        let transitions = if low_network {
-            LOW_NETWORK_TRANSITIONS
-        } else {
-            TRANSITIONS
+    /// The master over a checkpoint's versions. The commands a version was
+    /// running died with the old daemon, so it goes back to the state before
+    /// its transition.
+    pub(crate) fn new(versions: Vec<PartitionVersion>, low_network: bool) -> Result<Self, String> {
+        let transitions = match low_network {
+            true => LOW_NETWORK_TRANSITIONS,
+            false => TRANSITIONS,
         };
-        let mut master = Master {
-            store: store.to_path_buf(),
-            transitions,
-            rows: read_checkpoint(&store.join("checkpoint.ndjson"))?,
-            changed: true,
-            purge_due: true,
-        };
-        for row in master.rows.values_mut() {
+        let mut rows = BTreeMap::new();
+        for mut row in versions {
+            let key = row
+                .name
+                .rsplit_once("/versions/")
+                .and_then(|(name, etag)| key(name, etag))
+                .ok_or_else(|| format!("bad checkpoint row: {} names no version", row.name))?;
             if let Some(transition) = running_transition(transitions, row.state) {
                 row.state = transition.source;
             }
+            row.name = String::new();
+            rows.insert(key, row);
         }
-        let _ = fs::remove_dir_all(store.join("walk"));
-        fs::create_dir_all(store.join("walk")).map_err(|error| error.to_string())?;
-        master.sweep()?;
-        Ok(master)
+        Ok(Master {
+            transitions,
+            rows,
+            changed: true,
+        })
     }
 
-    /// The directory the master keeps its checkpoint and results in.
-    pub(crate) fn store(&self) -> &Path {
-        &self.store
+    /// Every version, in key order.
+    pub(crate) fn versions(&self) -> impl Iterator<Item = PartitionVersion> + '_ {
+        self.rows.iter().map(|(key, row)| named(key, row))
     }
 
-    /// The versions under `parent`, by reference, in key order: a catalog,
-    /// schema, table or partition name, or every version when it is empty.
-    pub(crate) fn list(&self, parent: &str) -> Result<Vec<(&Key, &PartitionVersion)>, String> {
+    /// The versions under `parent`, in key order: a catalog, schema, table or
+    /// partition name, or every version when it is empty.
+    pub(crate) fn records(&self, parent: &str) -> Result<Vec<PartitionVersion>, String> {
         let wanted: Vec<&str> = parent
             .split('/')
             .filter(|segment| !segment.is_empty())
@@ -237,79 +197,47 @@ impl Master {
         Ok(self
             .rows
             .range((prefix.clone(), String::new())..)
-            .take_while(|((name, _), _)| prefix.is_empty() || name.starts_with(&prefix))
+            .take_while(|((name, _), _)| name.starts_with(&prefix))
             .filter(|((name, _), _)| under(name))
+            .map(|(key, row)| named(key, row))
             .collect())
     }
 
-    /// The versions under `parent` as the records they are, in key order.
-    pub(crate) fn records(&self, parent: &str) -> Result<Vec<PartitionVersion>, String> {
-        Ok(self
-            .list(parent)?
-            .into_iter()
-            .map(|(key, row)| version(key, row))
-            .collect())
-    }
-
-    /// One version's stored results, in the order its transitions wrote
-    /// them: its price, each suggestion, each column mass, then the listing.
-    /// `name` is a version, or a partition for its newest live version.
-    pub(crate) fn results(&self, name: &str) -> Result<Vec<Value>, String> {
+    /// One version by name: a version, or a partition for its newest live
+    /// version.
+    pub(crate) fn version(&self, name: &str) -> Result<(Key, PartitionVersion), String> {
         if name.is_empty() {
             return Err("a version or partition name is required".into());
         }
-        let partition = match name.split_once("/versions/") {
-            Some((partition, _)) => partition.to_string(),
-            None => name.to_string(),
-        };
-        let mut rows = self.records(&partition)?;
-        if rows.is_empty() {
-            return Err(format!("no such partition: {name}"));
-        }
-        rows.sort_by_key(|row| std::cmp::Reverse(row.create_time));
-        let row = match name.split_once("/versions/") {
-            Some((_, etag)) => rows
-                .iter()
-                .find(|row| row.name.ends_with(&format!("/versions/{etag}")))
+        let found = match name.split_once("/versions/") {
+            Some((partition, etag)) => self
+                .rows
+                .get_key_value(&(partition.to_string(), etag.to_string()))
                 .ok_or_else(|| format!("no such version: {name}"))?,
-            None => rows
-                .iter()
-                .find(|row| row.state != State::Deleted)
-                .unwrap_or(&rows[0]),
-        };
-        let etag = row
-            .name
-            .rsplit_once("/versions/")
-            .map(|(_, etag)| etag.to_string())
-            .ok_or_else(|| format!("{} names no version", row.name))?;
-        let directory = self.result_dir(&(partition, etag));
-        let mut results = Vec::new();
-        for (file, all) in [
-            ("price.ndjson", false),
-            ("list-suggestions.ndjson", true),
-            ("bytemass.ndjson", true),
-            ("list-partitions.ndjson", false),
-        ] {
-            let Ok(text) = fs::read_to_string(directory.join(file)) else {
-                continue;
-            };
-            for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                let record: Value = serde_json::from_str(line)
-                    .map_err(|error| format!("bad result line in {file}: {error}"))?;
-                results.push(record);
-                if !all {
-                    break;
-                }
+            None => {
+                let versions: Vec<_> = self
+                    .rows
+                    .range((name.to_string(), String::new())..)
+                    .take_while(|((other, _), _)| other == name)
+                    .collect();
+                let newest = |live: bool| {
+                    versions
+                        .iter()
+                        .filter(|(_, row)| !live || row.state != State::Deleted)
+                        .max_by_key(|(_, row)| row.create_time)
+                        .copied()
+                };
+                newest(true)
+                    .or_else(|| newest(false))
+                    .ok_or_else(|| format!("no such partition: {name}"))?
             }
-        }
-        if results.is_empty() {
-            let state = serde_json::to_value(row.state)
-                .ok()
-                .and_then(|state| state.as_str().map(str::to_string))
-                .unwrap_or_default();
-            return Err(format!("{name} has no results yet ({state})"));
-        }
-        Ok(results)
+        };
+        Ok((found.0.clone(), named(found.0, found.1)))
+    }
+
+    /// Whether the map has a version.
+    pub(crate) fn contains(&self, key: &Key) -> bool {
+        self.rows.contains_key(key)
     }
 
     /// When the newest walk found anything: the time a walk was last due
@@ -318,61 +246,55 @@ impl Master {
         self.rows.values().filter_map(|row| row.list_time).max()
     }
 
-    /// Apply one line of a walk's listing, a Partition record: a version the
-    /// map lacks is a new `PENDING` row with its listing stored (its history
-    /// from the partition's newest version, its sizes and newest file's time
-    /// from the listing), a `DELETED` one found again is `PENDING`, and every
-    /// found version is stamped with the walk's time. Returns its key.
-    pub(crate) fn found(&mut self, line: &str, now: u64) -> Result<Key, String> {
-        let record: Value =
-            serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
-        let (Some(name), Some(etag)) = (record["name"].as_str(), record["etag"].as_str()) else {
-            return Err("a listing line has no name or etag".into());
-        };
-        if !valid_key(name, etag) {
-            return Err(format!("{name} at {etag} is not a partition version"));
-        }
-        let key = (name.to_string(), etag.to_string());
-        match self.rows.get_mut(&key) {
-            Some(row) => {
-                if row.state == State::Deleted {
-                    row.state = State::Pending;
-                    row.failure_count = 0;
-                    row.error = None;
-                }
-                row.list_time = Some(now);
-            }
-            None => {
-                self.write_result(&key, "list-partitions.ndjson", line)?;
-                let row = PartitionVersion {
-                    list_time: Some(now),
-                    file_count: record["file_count"].as_u64().unwrap_or(0),
-                    size_bytes: record["size_bytes"].as_u64().unwrap_or(0),
-                    removed_size_bytes: record["removed_size_bytes"].as_u64(),
-                    last_modification_time: record["last_file"]["modification_time"].as_u64(),
-                    ..self.new_version(name, now)
-                };
-                self.rows.insert(key.clone(), row);
-            }
-        }
+    /// A walk found a version, with `listing` its Partition record: a version
+    /// the map lacks is a new `PENDING` row (its history from the partition's
+    /// newest version, its sizes and newest file's time from the listing), a
+    /// `DELETED` one found again is `PENDING`, and every found version is
+    /// stamped with the walk's time.
+    pub(crate) fn found(&mut self, key: &Key, listing: &Value, now: u64) {
         self.changed = true;
-        Ok(key)
+        if let Some(row) = self.rows.get_mut(key) {
+            if row.state == State::Deleted {
+                row.state = State::Pending;
+                row.failure_count = 0;
+                row.error = None;
+            }
+            row.list_time = Some(now);
+            return;
+        }
+        let newest = self
+            .rows
+            .range((key.0.clone(), String::new())..)
+            .take_while(|((other, _), _)| *other == key.0)
+            .map(|(_, row)| row)
+            .max_by_key(|row| row.create_time);
+        let row = PartitionVersion {
+            state: State::Pending,
+            create_time: now,
+            list_time: Some(now),
+            first_listed_time: newest.map_or(now, |row| row.first_listed_time),
+            etag_change_count: newest.map_or(0, |row| row.etag_change_count + 1),
+            file_count: listing["file_count"].as_u64().unwrap_or(0),
+            size_bytes: listing["size_bytes"].as_u64().unwrap_or(0),
+            removed_size_bytes: listing["removed_size_bytes"].as_u64(),
+            last_modification_time: listing["last_file"]["modification_time"].as_u64(),
+            ..PartitionVersion::default()
+        };
+        self.rows.insert(key.clone(), row);
     }
 
     /// After a table's listing: its live versions the listing did not name
     /// are `DELETED`.
     pub(crate) fn missing(&mut self, table: &str, found: &BTreeSet<Key>) {
-        let prefix = table_prefix(table);
+        let prefix = format!("{}/partitions/", table.trim_end_matches('/'));
         let gone: Vec<Key> = self
             .rows
             .range((prefix.clone(), String::new())..)
             .take_while(|((name, _), _)| name.starts_with(&prefix))
-            .filter(|(key, row)| row.state != State::Deleted && !found.contains(*key))
+            .filter(|(key, _)| !found.contains(*key))
             .map(|(key, _)| key.clone())
             .collect();
-        for key in &gone {
-            self.delete_version(key);
-        }
+        self.delete(&gone);
     }
 
     /// After a walk that read every table: the live versions of the tables it
@@ -380,150 +302,91 @@ impl Master {
     pub(crate) fn retain(&mut self, tables: &BTreeSet<String>) {
         let gone: Vec<Key> = self
             .rows
-            .iter()
-            .filter(|((name, _), row)| {
-                row.state != State::Deleted && !tables.contains(parent_table(name))
-            })
-            .map(|(key, _)| key.clone())
+            .keys()
+            .filter(|(name, _)| !tables.contains(parent_table(name)))
+            .cloned()
             .collect();
-        for key in &gone {
-            self.delete_version(key);
-        }
+        self.delete(&gone);
     }
 
-    /// The runs to start next: up to `limit` versions waiting for a
-    /// transition, the later transitions first, so a version in progress
+    /// Hand out up to `limit` runs, each version now in its transition's
+    /// running state: the later transitions first, so a version in progress
     /// finishes before a new one starts. A version that failed its
     /// transition twice waits.
-    pub(crate) fn plan(&self, limit: usize) -> Vec<Run> {
+    pub(crate) fn start(&mut self, limit: usize) -> Vec<Run> {
         let mut runs = Vec::new();
-        for transition in self.transitions.iter().rev() {
-            for (key, row) in &self.rows {
+        let transitions = self.transitions;
+        for transition in transitions.iter().rev() {
+            for (key, row) in &mut self.rows {
                 if runs.len() >= limit {
-                    return runs;
+                    break;
                 }
-                if row.state != transition.source || row.failure_count >= MAX_FAILURES {
-                    continue;
-                }
-                if let Some(run) = self.run(key, transition) {
-                    runs.push(run);
+                if row.state == transition.source && row.failure_count < MAX_FAILURES {
+                    row.state = transition.running;
+                    runs.push(Run {
+                        key: key.clone(),
+                        transition,
+                    });
                 }
             }
         }
+        self.changed |= !runs.is_empty();
         runs
     }
 
-    /// The run of `transition` on one version: its command line and input.
-    fn run(&self, key: &Key, transition: &'static Transition) -> Option<Run> {
-        let directory = self.result_dir(key);
-        let listing = fs::read_to_string(directory.join("list-partitions.ndjson")).ok()?;
-        let input = match transition.input {
-            Input::Partition => listing.trim().to_string(),
-            Input::SampleFile => {
-                let record: Value = serde_json::from_str(listing.trim()).ok()?;
-                record.get("sample_file")?.to_string()
-            }
-        };
-        let mut command_words: Vec<String> =
-            transition.command.iter().map(|arg| (*arg).into()).collect();
-        if !transition.stdout {
-            let temporary = directory.join(format!("{}.tmp", transition.output));
-            command_words.push("--output".into());
-            command_words.push(temporary.to_string_lossy().into_owned());
-        }
-        if transition.local {
-            let sample = directory.join("sample.parquet");
-            command_words.push("--local".into());
-            command_words.push(sample.to_string_lossy().into_owned());
-        }
-        Some(Run {
-            key: key.clone(),
-            transition,
-            command_words,
-            input: input + "\n",
-        })
-    }
-
-    /// A run started: the version is in the transition's running state.
-    pub(crate) fn start(&mut self, run: &Run) {
-        let Some(row) = self.rows.get_mut(&run.key) else {
-            return;
-        };
-        row.state = run.transition.running;
+    /// A run ended: `Ok` with its price when it priced the version, `Ok` with
+    /// none for any other transition, else its error. A success moves the
+    /// version on; a price whose partition has no live file, or whose files
+    /// need a restore, ends it, since there is nothing to read. A failure
+    /// puts the version back with the error counted. Returns the version's
+    /// state, `None` when the run no longer has a version.
+    pub(crate) fn finish(
+        &mut self,
+        key: &Key,
+        outcome: Result<Option<PartitionPrice>, String>,
+        now: u64,
+    ) -> Option<State> {
+        let row = self.rows.get_mut(key)?;
+        let transition = running_transition(self.transitions, row.state)?;
         self.changed = true;
-    }
-
-    /// A run ended: its standard output when it succeeded, else its error. A
-    /// success lands the output and moves the version on: a price whose
-    /// partition has no live file, or whose files need a restore, ends the
-    /// version, since there is nothing to read, and a version that is done
-    /// drops its copy of the sample file. A failure puts the version back
-    /// with the error counted.
-    pub(crate) fn finish(&mut self, key: &Key, outcome: Result<Vec<u8>, String>, now: u64) {
-        let directory = self.result_dir(key);
-        let transitions = self.transitions;
-        let Some(row) = self.rows.get_mut(key) else {
-            return;
-        };
-        let Some(transition) = running_transition(transitions, row.state) else {
-            return;
-        };
-        let temporary = directory.join(format!("{}.tmp", transition.output));
-        let landed = directory.join(transition.output);
-        let outcome = outcome.and_then(|stdout| {
-            let written = match transition.stdout {
-                true => fs::write(&temporary, stdout),
-                false => Ok(()),
-            };
-            written
-                .and_then(|()| fs::rename(&temporary, &landed))
-                .map_err(|error| {
-                    format!("the {} transition left no output: {error}", transition.name)
-                })
-        });
         match outcome {
-            Ok(()) => {
-                let mut next = transition.done;
-                if transition.running == State::Pricing {
-                    (row.lowest_cost_per_month, row.highest_cost_per_month) = cost_bounds(&landed);
-                    if row.file_count == 0 || !readable(&landed) {
-                        next = State::UpToDate;
-                    }
-                }
-                row.state = next;
+            Ok(price) => {
+                row.state = transition.done;
                 row.failure_count = 0;
                 row.error = None;
-                if next == State::UpToDate {
+                if let Some(price) = price {
+                    let costs = price.storage_costs.iter().map(|cost| cost.cost_per_month);
+                    row.lowest_cost_per_month = costs.clone().reduce(f64::min);
+                    row.highest_cost_per_month = costs.reduce(f64::max);
+                    if row.file_count == 0 || archived(&price) {
+                        row.state = State::UpToDate;
+                    }
+                }
+                if row.state == State::UpToDate {
                     row.up_to_date_time = Some(now);
-                    self.purge_due = true;
-                    // The copy was for the transitions that read data; they are
-                    // done, and a sample file can be large.
-                    let _ = fs::remove_file(directory.join("sample.parquet"));
                 }
             }
             Err(error) => {
-                let _ = fs::remove_file(&temporary);
                 row.state = transition.source;
                 row.failure_count += 1;
                 row.error = Some(error);
             }
         }
-        self.changed = true;
+        Some(row.state)
     }
 
-    /// Drop every `DELETED` version except a kept one, and return the result
-    /// directories to delete: a partition's newest version that reached
-    /// `UP_TO_DATE` stays while a newer version of it is live and not
-    /// `UP_TO_DATE` yet, so its complete results are shown until the new ones
-    /// replace them. Nothing is walked unless a version may have become
-    /// purgeable since the last purge.
-    pub(crate) fn purge(&mut self) -> Vec<PathBuf> {
-        if !self.purge_due {
-            return Vec::new();
-        }
-        self.purge_due = false;
+    /// Drop the `DELETED` versions of the partitions under `prefix` (every
+    /// partition when it is empty) except a kept one, and return their keys:
+    /// a partition's newest version that reached `UP_TO_DATE` stays while a
+    /// newer version of it is live and not `UP_TO_DATE` yet, so its complete
+    /// results are shown until the new ones replace them.
+    pub(crate) fn purge(&mut self, prefix: &str) -> Vec<Key> {
         let mut by_name: BTreeMap<&str, Vec<(&Key, &PartitionVersion)>> = BTreeMap::new();
-        for (key, row) in &self.rows {
+        let under = self
+            .rows
+            .range((prefix.to_string(), String::new())..)
+            .take_while(|((name, _), _)| name.starts_with(prefix));
+        for (key, row) in under {
             by_name.entry(key.0.as_str()).or_default().push((key, row));
         }
         let mut purged = Vec::new();
@@ -536,14 +399,11 @@ impl Master {
                     .map(|(key, _)| (*key).clone()),
             );
         }
-        let directories = purged.iter().map(|key| self.result_dir(key)).collect();
         for key in &purged {
             self.rows.remove(key);
         }
-        if !purged.is_empty() {
-            self.changed = true;
-        }
-        directories
+        self.changed |= !purged.is_empty();
+        purged
     }
 
     /// Whether the rows changed since the last call.
@@ -551,150 +411,63 @@ impl Master {
         std::mem::take(&mut self.changed)
     }
 
-    /// Write every row to the checkpoint: a temporary file, synced, then
-    /// renamed over it. Returns its path.
-    pub(crate) fn checkpoint(&self) -> Result<PathBuf, String> {
-        let path = self.store.join("checkpoint.ndjson");
-        let temporary = path.with_extension("ndjson.tmp");
-        let write = || -> std::io::Result<()> {
-            let mut file = BufWriter::new(File::create(&temporary)?);
-            for (key, row) in &self.rows {
-                serde_json::to_writer(&mut file, &version(key, row))?;
-                file.write_all(b"\n")?;
-            }
-            file.flush()?;
-            file.get_ref().sync_all()?;
-            fs::rename(&temporary, &path)
-        };
-        write().map_err(|error| format!("cannot write the checkpoint: {error}"))?;
-        Ok(path)
-    }
-
-    fn new_version(&self, name: &str, now: u64) -> PartitionVersion {
-        let newest = self
-            .rows
-            .range((name.to_string(), String::new())..)
-            .take_while(|((other, _), _)| other == name)
-            .map(|(_, row)| row)
-            .max_by_key(|row| row.create_time);
-        PartitionVersion {
-            state: State::Pending,
-            create_time: now,
-            first_listed_time: newest.map_or(now, |row| row.first_listed_time),
-            etag_change_count: newest.map_or(0, |row| row.etag_change_count + 1),
-            ..PartitionVersion::default()
-        }
-    }
-
-    /// A version a walk no longer finds: a run on it is left to finish, and
-    /// its result is then dropped with the version.
-    fn delete_version(&mut self, key: &Key) {
-        let transitions = self.transitions;
-        let row = self.rows.get_mut(key).expect("the key exists");
-        if running_transition(transitions, row.state).is_none() {
-            row.state = State::Deleted;
-        } else {
-            // The run's finish moves it on; the next walk deletes it then.
-            return;
-        }
-        self.purge_due = true;
-        self.changed = true;
-    }
-
-    fn result_dir(&self, key: &Key) -> PathBuf {
-        self.store.join("results").join(&key.0).join(&key.1)
-    }
-
-    /// Write one result line through a temporary file and a rename.
-    fn write_result(&self, key: &Key, output: &str, line: &str) -> Result<(), String> {
-        let directory = self.result_dir(key);
-        fs::create_dir_all(&directory)
-            .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-        let target = directory.join(output);
-        let temporary = directory.join(format!("{output}.tmp"));
-        fs::write(&temporary, format!("{line}\n"))
-            .and_then(|()| fs::rename(&temporary, &target))
-            .map_err(|error| format!("cannot write {}: {error}", target.display()))
-    }
-
-    /// Delete the result directories no row names, and the outputs unfinished
-    /// runs left beside any result.
-    fn sweep(&self) -> Result<(), String> {
-        let results = self.store.join("results");
-        for directory in version_dirs(&results) {
-            let Ok(relative) = directory.strip_prefix(&results) else {
-                continue;
-            };
-            let etag = relative
-                .file_name()
-                .map(|etag| etag.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let name = relative
-                .parent()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if !self.rows.contains_key(&(name, etag)) {
-                remove_dir(&directory)?;
-                continue;
-            }
-            for file in fs::read_dir(&directory).into_iter().flatten().flatten() {
-                if file
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == "tmp")
-                {
-                    let _ = fs::remove_file(file.path());
-                }
+    /// Versions a walk no longer finds are `DELETED`; one a run is on is left
+    /// to finish, and the next walk deletes it.
+    fn delete(&mut self, keys: &[Key]) {
+        for key in keys {
+            let row = self.rows.get_mut(key).expect("the key exists");
+            if row.state != State::Deleted
+                && running_transition(self.transitions, row.state).is_none()
+            {
+                row.state = State::Deleted;
+                self.changed = true;
             }
         }
-        Ok(())
     }
 }
 
+/// The transition of `transitions` a version in `state` is running, if any.
+fn running_transition(
+    transitions: &'static [Transition],
+    state: State,
+) -> Option<&'static Transition> {
+    transitions
+        .iter()
+        .find(|transition| transition.running == state)
+}
+
+/// The key of a partition name of eight plain segments and a hex etag: a
+/// key that is also a path under the store's results, and cannot leave it.
+pub(crate) fn key(name: &str, etag: &str) -> Option<Key> {
+    let segments: Vec<&str> = name.split('/').collect();
+    let valid = segments.len() == 8
+        && segments[6] == "partitions"
+        && segments
+            .iter()
+            .all(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
+        && !etag.is_empty()
+        && etag.chars().all(|character| character.is_ascii_hexdigit());
+    valid.then(|| (name.to_string(), etag.to_string()))
+}
+
 /// The table a partition name is under.
-fn parent_table(name: &str) -> &str {
+pub(crate) fn parent_table(name: &str) -> &str {
     name.split_once("/partitions/")
         .map_or(name, |(table, _)| table)
 }
 
-/// The price a result file holds, if it holds one.
-fn read_price(price: &Path) -> Option<pqbench::v1::PartitionPrice> {
-    let text = fs::read_to_string(price).ok()?;
-    serde_json::from_str(text.lines().next()?).ok()
-}
-
-/// The cheapest and dearest monthly cost a price result names.
-fn cost_bounds(price: &Path) -> (Option<f64>, Option<f64>) {
-    let costs: Vec<f64> = read_price(price)
-        .map(|price| {
-            price
-                .storage_costs
-                .iter()
-                .map(|cost| cost.cost_per_month)
-                .collect()
+/// Whether any of a price's files needs a restore to be read: an archive
+/// class or access tier. Files with no class (not S3 objects) do not.
+fn archived(price: &PartitionPrice) -> bool {
+    let archive = |class: &str| ARCHIVE_CLASSES.contains(&class);
+    price.storage_classes.iter().any(|class| archive(class))
+        || price.storage_costs.iter().any(|cost| {
+            archive(&cost.storage_class)
+                || cost
+                    .access_tier
+                    .as_deref()
+                    .is_some_and(|tier| ARCHIVE_TIERS.contains(&tier))
         })
-        .unwrap_or_default();
-    (
-        costs.iter().copied().reduce(f64::min),
-        costs.iter().copied().reduce(f64::max),
-    )
-}
-
-/// Whether a price's files can be read without a restore: none is in an
-/// archive class or access tier. Files with no class (not S3 objects) are
-/// readable.
-fn readable(price: &Path) -> bool {
-    read_price(price).is_some_and(|price| {
-        let archived = |class: &str| ARCHIVE_CLASSES.contains(&class);
-        !price.storage_classes.iter().any(|class| archived(class))
-            && !price.storage_costs.iter().any(|cost| {
-                archived(&cost.storage_class)
-                    || cost
-                        .access_tier
-                        .as_deref()
-                        .is_some_and(|tier| ARCHIVE_TIERS.contains(&tier))
-            })
-    })
 }
 
 /// The newest version of one partition that reached `UP_TO_DATE`, while the
@@ -711,71 +484,12 @@ fn kept_version<'a>(versions: &[(&'a Key, &PartitionVersion)]) -> Option<&'a Key
     replaced_later.then_some(*key)
 }
 
-/// The `{partition}/{etag}` directories under `results`: a partition name is
-/// eight segments (`catalogs/…/partitions/{id}`), then the etag.
-fn version_dirs(results: &Path) -> Vec<PathBuf> {
-    let mut level = vec![results.to_path_buf()];
-    for _ in 0..9 {
-        level = level
-            .iter()
-            .flat_map(|directory| fs::read_dir(directory).into_iter().flatten().flatten())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect();
-    }
-    level
-}
-
-pub(crate) fn remove_dir(directory: &Path) -> Result<(), String> {
-    match fs::remove_dir_all(directory) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("cannot delete {}: {error}", directory.display())),
-    }
-}
-
-fn read_checkpoint(path: &Path) -> Result<BTreeMap<Key, PartitionVersion>, String> {
-    let mut rows = BTreeMap::new();
-    let Ok(file) = File::open(path) else {
-        return Ok(rows);
-    };
-    for line in BufReader::new(file).lines() {
-        let mut row: PartitionVersion =
-            serde_json::from_str(&line.map_err(|error| error.to_string())?)
-                .map_err(|error| format!("bad checkpoint row: {error}"))?;
-        let key = match row.name.rsplit_once("/versions/") {
-            Some((name, etag)) if valid_key(name, etag) => (name.to_string(), etag.to_string()),
-            _ => return Err(format!("bad checkpoint row: {} names no version", row.name)),
-        };
-        row.name = String::new();
-        rows.insert(key, row);
-    }
-    Ok(rows)
-}
-
 /// A row as the [`PartitionVersion`] it is, its name put back.
-pub(crate) fn version(key: &Key, row: &PartitionVersion) -> PartitionVersion {
+fn named(key: &Key, row: &PartitionVersion) -> PartitionVersion {
     PartitionVersion {
         name: format!("{}/versions/{}", key.0, key.1),
         ..row.clone()
     }
-}
-
-/// A partition name of eight plain segments and a hex etag: a key that is
-/// also a path under `results`, and cannot leave it.
-fn valid_key(name: &str, etag: &str) -> bool {
-    let segments: Vec<&str> = name.split('/').collect();
-    segments.len() == 8
-        && segments[6] == "partitions"
-        && segments
-            .iter()
-            .all(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
-        && !etag.is_empty()
-        && etag.chars().all(|character| character.is_ascii_hexdigit())
-}
-
-fn table_prefix(table: &str) -> String {
-    format!("{}/partitions/", table.trim_end_matches('/'))
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -791,33 +505,31 @@ mod tests {
 
     const PARTITION: &str = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
 
-    fn listing(etag: &str, file_count: u64) -> String {
-        serde_json::json!({
-            "name": PARTITION,
-            "etag": etag,
-            "file_count": file_count,
-            "sample_file": {"name": "catalogs/c/schemas/s/tables/t/files/a.parquet"},
-        })
-        .to_string()
+    /// A master that found one version of [`PARTITION`] with `file_count`
+    /// files.
+    fn found(file_count: u64) -> (Master, Key) {
+        let mut master = Master::new(Vec::new(), false).unwrap();
+        let key = key(PARTITION, "aa").unwrap();
+        master.found(&key, &serde_json::json!({"file_count": file_count}), 1);
+        (master, key)
     }
 
     /// Price one version with a result naming `class` and `tier`, and return
     /// the state it lands in.
     fn priced(file_count: u64, class: &str, tier: Option<&str>) -> State {
-        let directory = tempfile::tempdir().unwrap();
-        let mut master = Master::open(directory.path(), false).unwrap();
-        let key = master.found(&listing("aa", file_count), 1).unwrap();
-        let run = master.plan(1).remove(0);
-        master.start(&run);
-        let price = serde_json::json!({
+        let (mut master, key) = found(file_count);
+        assert_eq!(master.start(1).len(), 1);
+        let price: PartitionPrice = serde_json::from_value(serde_json::json!({
             "name": format!("{PARTITION}/price"),
+            "partition_etag": "aa",
             "storage_classes": [class],
             "storage_costs": [{"storage_class": class, "access_tier": tier,
                 "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
-        });
-        master.finish(&key, Ok(format!("{price}\n").into_bytes()), 3);
+        }))
+        .unwrap();
+        let state = master.finish(&key, Ok(Some(price)), 3).unwrap();
         assert_eq!(master.rows[&key].highest_cost_per_month, Some(1.0));
-        master.rows[&key].state
+        state
     }
 
     /// A price ends the version when there is nothing to read: no live file,
@@ -840,50 +552,37 @@ mod tests {
     }
 
     /// A failed run puts the version back with its error, and after two it
-    /// is not planned again.
+    /// is not handed out again.
     #[test]
     fn a_version_that_failed_twice_waits() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut master = Master::open(directory.path(), false).unwrap();
-        let key = master.found(&listing("aa", 1), 1).unwrap();
+        let (mut master, key) = found(1);
         for attempt in 0..2 {
-            let run = master.plan(1).remove(0);
-            master.start(&run);
-            master.finish(&key, Err(format!("boom {attempt}")), 3);
-            assert_eq!(master.rows[&key].state, State::Pending);
+            assert_eq!(master.start(1).len(), 1);
+            let state = master.finish(&key, Err(format!("boom {attempt}")), 3);
+            assert_eq!(state, Some(State::Pending));
         }
         assert_eq!(master.rows[&key].failure_count, 2);
         assert_eq!(master.rows[&key].error.as_deref(), Some("boom 1"));
-        assert!(master.plan(1).is_empty());
+        assert!(master.start(1).is_empty());
     }
 
-    /// A restart puts a running version back, and deletes what its run left.
+    /// A restart puts a running version back to the state before its
+    /// transition.
     #[test]
     fn a_restart_puts_running_versions_back() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut master = Master::open(directory.path(), false).unwrap();
-        let key = master.found(&listing("aa", 1), 1).unwrap();
-        let run = master.plan(1).remove(0);
-        master.start(&run);
-        let output = master.result_dir(&key).join("price.ndjson.tmp");
-        fs::write(&output, "{}\n").unwrap();
-        master.checkpoint().unwrap();
-        drop(master);
-        let master = Master::open(directory.path(), false).unwrap();
+        let (mut master, key) = found(1);
+        master.start(1);
+        let versions: Vec<_> = master.versions().collect();
+        assert_eq!(versions[0].state, State::Pricing);
+        let master = Master::new(versions, false).unwrap();
         assert_eq!(master.rows[&key].state, State::Pending);
-        assert!(!output.exists());
     }
 
-    /// A listing line that would name a path outside the store is refused.
+    /// A name that would be a path outside the store is no key.
     #[test]
-    fn a_listing_that_leaves_the_store_is_refused() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut master = Master::open(directory.path(), false).unwrap();
-        let line = serde_json::json!({
-            "name": "catalogs/c/schemas/s/tables/t/partitions/..",
-            "etag": "aa",
-        });
-        assert!(master.found(&line.to_string(), 1).is_err());
-        assert!(master.records("").unwrap().is_empty());
+    fn a_name_that_leaves_the_store_is_no_key() {
+        assert!(key("catalogs/c/schemas/s/tables/t/partitions/..", "aa").is_none());
+        assert!(key(PARTITION, "../x").is_none());
+        assert!(key(PARTITION, "aa").is_some());
     }
 }

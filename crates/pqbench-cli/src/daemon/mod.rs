@@ -25,6 +25,7 @@ mod rate;
 mod serve;
 mod session;
 mod start;
+mod store;
 
 pub(crate) use session::Daemon;
 
@@ -155,18 +156,18 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
             let socket = args.socket.as_deref().map_or(socket, path::absolute);
             let session = Daemon::direct(workspace.clone());
             let master = match args.master.store() {
-                Some(store) => Some(std::sync::Arc::new(std::sync::RwLock::new(
-                    master::Master::open(&store, args.master.low_network)?,
-                ))),
+                Some(root) => {
+                    let store = store::Store::open(&root)?;
+                    let master =
+                        master::Master::new(store.read_checkpoint()?, args.master.low_network)?;
+                    store.sweep(|key| master.contains(key))?;
+                    let master = std::sync::Arc::new(std::sync::RwLock::new(master));
+                    let settings = args.master.settings();
+                    drive::spawn(master.clone(), store.clone(), settings, socket.clone());
+                    Some(serve::SharedMaster { master, store })
+                }
                 None => None,
             };
-            if let Some(master) = &master {
-                drive::spawn(
-                    std::sync::Arc::clone(master),
-                    args.master.settings(),
-                    socket.clone(),
-                );
-            }
             serve::run(session, master, socket, args.idle_seconds).await?;
         }
     }

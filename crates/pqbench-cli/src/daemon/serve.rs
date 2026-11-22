@@ -12,9 +12,14 @@ use super::master::Master;
 use super::path;
 use super::protocol::{Request, Response};
 use super::session::Daemon;
+use super::store::Store;
 
-/// The master, when the daemon runs one.
-pub(crate) type SharedMaster = Option<Arc<RwLock<Master>>>;
+/// The master and its store, when the daemon runs one.
+#[derive(Clone)]
+pub(crate) struct SharedMaster {
+    pub master: Arc<RwLock<Master>>,
+    pub store: Store,
+}
 
 /// Serve leases on `socket` until stopped, or until `idle_seconds` pass with
 /// no connection (`0` serves until stopped). A daemon running the master
@@ -22,7 +27,7 @@ pub(crate) type SharedMaster = Option<Arc<RwLock<Master>>>;
 /// the master's map is checkpointed.
 pub(crate) async fn run(
     session: Daemon,
-    master: SharedMaster,
+    master: Option<SharedMaster>,
     socket: PathBuf,
     idle_seconds: u64,
 ) -> Result<(), String> {
@@ -53,11 +58,28 @@ pub(crate) async fn run(
     };
     // The checkpoint first: a reader that waits for the socket to go away,
     // `daemon stop` included, waits for the map to be on disk.
-    if let Some(master) = &master {
-        read_master(master).checkpoint()?;
+    if let Some(shared) = &master {
+        shared
+            .store
+            .write_checkpoint(read_master(&shared.master).versions())?;
     }
     let _ = std::fs::remove_file(&socket);
     result
+}
+
+/// One version's stored results: `name` is a version, or a partition for
+/// its newest live version.
+fn results(shared: &SharedMaster, name: &str) -> Result<Vec<serde_json::Value>, String> {
+    let (key, version) = read_master(&shared.master).version(name)?;
+    let results = shared.store.read_results(&key)?;
+    if results.is_empty() {
+        let state = serde_json::to_value(version.state).unwrap_or_default();
+        return Err(format!(
+            "{name} has no results yet ({})",
+            state.as_str().unwrap_or_default()
+        ));
+    }
+    Ok(results)
 }
 
 fn read_master(master: &RwLock<Master>) -> std::sync::RwLockReadGuard<'_, Master> {
@@ -87,7 +109,7 @@ async fn accept(
 async fn handle(
     stream: UnixStream,
     session: Daemon,
-    master: SharedMaster,
+    master: Option<SharedMaster>,
     shutdown: Arc<Notify>,
 ) -> Result<(), String> {
     let (read, mut write) = stream.into_split();
@@ -103,7 +125,7 @@ async fn handle(
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
     if let Request::ListPartitionVersions { parent } = &request {
         let versions = match &master {
-            Some(master) => read_master(master).records(parent),
+            Some(shared) => read_master(&shared.master).records(parent),
             None => Err("the daemon runs no master; start it with --master".into()),
         };
         return write_versions(write, versions).await;
@@ -111,7 +133,7 @@ async fn handle(
 
     let mut response = match &request {
         Request::PartitionResults { name } => match &master {
-            Some(master) => match read_master(master).results(name) {
+            Some(shared) => match results(shared, name) {
                 Ok(records) => Response {
                     records,
                     ..Response::default()
