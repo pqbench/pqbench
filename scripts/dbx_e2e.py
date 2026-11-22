@@ -73,14 +73,19 @@ SCRUBBED = [
 _WORK = tempfile.TemporaryDirectory(prefix="pqbench-e2e-")
 _SOCKET = os.path.join(_WORK.name, "daemon.sock")
 
-# The schemas `dbx_samples` answers with, from either dialect.
+# The schemas `dbx_samples` answers with, from either dialect: neither lists
+# the schemas the catalog keeps for itself, like `information_schema`.
 DBX_SAMPLES_SCHEMAS = [
     "bakehouse",
-    "information_schema",
     "nyctaxi",
     "tpch_sf1",
     "wanderbricks",
 ]
+
+# The catalogs `list catalogs` answers with: the ones a reader outside the
+# workspace's compute can open. `dbx_samples`, `samples` and `workspace` are on
+# Databricks default storage, and `system` is the system catalog.
+EXTERNAL_CATALOGS = ["pqbench_ext"]
 
 # The `pqbench_ext` schemas the e2e service principal can see, sorted: the
 # synthetic `events`/`sales`/`reference` plus the real sample data copied
@@ -91,7 +96,6 @@ EXTERNAL_FIXTURE_SCHEMAS = [
     "clickbench",
     "events",
     "healthverity",
-    "information_schema",
     "nyctaxi",
     "reference",
     "sales",
@@ -345,7 +349,8 @@ class LiveE2E(unittest.TestCase):
         self.assertTrue(records[0]["cloud_provider"])
         self.assertTrue(records[0]["region"])
 
-    # `list catalogs` lists the live catalogs, sorted by name.
+    # `list catalogs` lists the catalogs a reader outside compute can open,
+    # sorted by name.
     def test_catalog_ls_lists_the_live_catalogs(self):
         host = self.require_host()
         token = self.require_token(host)
@@ -355,9 +360,12 @@ class LiveE2E(unittest.TestCase):
             self.assertEqual(resource(record), "catalogs")
         self.assertEqual(
             [resource_id(record) for record in records],
-            ["dbx_samples", "pqbench_ext", "samples", "system", "workspace"],
+            EXTERNAL_CATALOGS,
         )
-        self.assertEqual(len(ndjson(self.assert_ok(["list", "catalogs"], env=env))), 5)
+        self.assertEqual(
+            len(ndjson(self.assert_ok(["list", "catalogs"], env=env))),
+            len(EXTERNAL_CATALOGS),
+        )
 
     # The live metastore walk is a streaming shell pipeline driven from Python
     # (`scripts/walk_metastore.py`): `list catalogs | list schemas | list tables`
@@ -373,7 +381,7 @@ class LiveE2E(unittest.TestCase):
                 local[sys.executable][script, "--pqbench", PQ_BENCH, "--fan-out", "64"]
             ).run(retcode=None, env=env)
         self.assertEqual(status, 0, f"walk stderr: {err}")
-        self.assertIn("walk: 5 catalogs,", out, "the walk did not finish")
+        self.assertIn("walk: 1 catalog,", out, "the walk did not finish")
         print(out, end="")
 
     # `get catalog` reads the live catalog.
@@ -753,12 +761,12 @@ class LiveE2E(unittest.TestCase):
 
         catalogs = self.assert_ok(["list", "catalogs"], env=env)
         names = [resource_id(record) for record in ndjson(catalogs)]
-        self.assertEqual(names, ["dbx_samples", "pqbench_ext", "samples", "system", "workspace"])
+        self.assertEqual(names, EXTERNAL_CATALOGS)
 
         status, info, err = pipeline([["list", "catalogs"], ["get", "catalog"]], env)
         self.assertEqual(status, 0, f"get catalog stderr: {err}")
         records = ndjson(info)
-        self.assertEqual(len(records), 5)
+        self.assertEqual(len(records), len(EXTERNAL_CATALOGS))
         for record in records:
             self.assertEqual(resource(record), "catalogs")
             self.assertIn(resource_id(record), names)

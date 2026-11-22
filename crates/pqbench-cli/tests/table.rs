@@ -358,7 +358,6 @@ fn write_delta_table(dir: &std::path::Path, schema: serde_json::Value) {
 }
 
 /// The columns a Unity table for the Delta fixture declares.
-#[cfg(feature = "delta")]
 fn unity_columns() -> serde_json::Value {
     json!([
         {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},

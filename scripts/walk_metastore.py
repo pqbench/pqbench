@@ -28,8 +28,8 @@ from typing import Iterable
 from plumbum import local
 
 # The workspace the repository's live e2e targets. `list catalogs` sorts by
-# name, so this is the order the listing emits.
-EXPECTED_CATALOGS = ["dbx_samples", "pqbench_ext", "samples", "system", "workspace"]
+# name and lists only the catalogs a reader outside compute can open.
+EXPECTED_CATALOGS = ["pqbench_ext"]
 
 
 def records(pipeline) -> Iterable[dict]:
@@ -69,6 +69,11 @@ def catalog_of(record: dict) -> str:
 
 def schema_of(record: dict) -> str:
     return record["name"].split("/")[3]
+
+
+def count(number: int, noun: str) -> str:
+    """`n noun`, with the noun in the plural unless n is one."""
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
 
 
 def fail(message: str) -> None:
@@ -160,7 +165,7 @@ def main() -> None:
         print(f"schema {fqn}: {len(tables_by_schema[fqn])} table(s)")
 
     print(
-        f"walk: {len(catalogs)} catalogs, {len(schemas)} schemas, "
+        f"walk: {count(len(catalogs), 'catalog')}, {count(len(schemas), 'schema')}, "
         f"{len(tables)} tables"
     )
 
