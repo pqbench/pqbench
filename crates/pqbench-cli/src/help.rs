@@ -254,8 +254,7 @@ columns; a `list tables` ref is refused.
 
 `list partition-versions [PARENT]` reads no catalog and no storage: it prints
 the daemon master's rows, one PartitionVersion per line in name order, all of
-them or those under a catalog, schema, table or partition name (`-` for any
-id).
+them or those under a catalog, schema, table or partition name.
 
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
@@ -380,8 +379,7 @@ and never waited for:
             --walk-period-seconds. A new version is PENDING; a listed table's
             versions it no longer finds are DELETED, and when every table was
             read, so are the tables it did not list.
-  versions  one command per version, one per CPU at once, killed past
-            --time-limit-seconds:
+  versions  one command per version, one per CPU at once:
               price     `get partition-price`; a version with no live file,
                         or in an archive class, is then UP_TO_DATE
               download  `download` of the sample file into the version's

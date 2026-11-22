@@ -360,8 +360,8 @@ fn pqbench_time() -> u64 {
         .as_millis() as u64
 }
 
-/// `list partition-versions` takes a parent at any level, `-` for any id,
-/// and refuses a name that is not one.
+/// `list partition-versions` takes a parent at any level, and refuses a
+/// name that is not one.
 #[test]
 fn list_partition_versions_reads_under_a_parent() {
     let directory = tempfile::tempdir().unwrap();
@@ -384,13 +384,13 @@ fn list_partition_versions_reads_under_a_parent() {
     };
     let all = names(&[]);
     assert_eq!(names(&["catalogs/local"]), all);
-    let orders = names(&["catalogs/-/schemas/-/tables/orders"]);
+    let orders = names(&["catalogs/local/schemas/local/tables/orders"]);
     assert_eq!(orders.len(), 2);
     assert!(orders.iter().all(|name| name.contains("/tables/orders/")));
     assert_eq!(names(&[&orders[0]]), [orders[0].clone()]);
     assert_eq!(
-        names(&["catalogs/local/schemas/-/tables/-/partitions/day%3D1"]).len(),
-        2
+        names(&["catalogs/local/schemas/local/tables/events/partitions/day%3D1"]).len(),
+        1
     );
     assert!(names(&["catalogs/other"]).is_empty());
     let refused = pqbench()

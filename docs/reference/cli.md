@@ -631,8 +631,7 @@ columns; a `list tables` ref is refused.
 
 `list partition-versions [PARENT]` reads no catalog and no storage: it prints
 the daemon master's rows, one PartitionVersion per line in name order, all of
-them or those under a catalog, schema, table or partition name (`-` for any
-id).
+them or those under a catalog, schema, table or partition name.
 
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
@@ -760,7 +759,7 @@ List the daemon master's partition versions (`PARENT`, or all)
 
 ###### **Arguments:**
 
-* `<PARENT>` — only the versions under this catalog, schema, table or partition (`catalogs/…`; `-` for any id); every version without it
+* `<PARENT>` — only the versions under this catalog, schema, table or partition (`catalogs/…`); every version without it
 
 
 
@@ -884,8 +883,7 @@ and never waited for:
             --walk-period-seconds. A new version is PENDING; a listed table's
             versions it no longer finds are DELETED, and when every table was
             read, so are the tables it did not list.
-  versions  one command per version, one per CPU at once, killed past
-            --time-limit-seconds:
+  versions  one command per version, one per CPU at once:
               price     `get partition-price`; a version with no live file,
                         or in an archive class, is then UP_TO_DATE
               download  `download` of the sample file into the version's
@@ -951,7 +949,6 @@ Start the daemon in the background
 * `--walk-tables <FILE>` — walk the tables these Table records name instead of the metastore (e.g. local tables)
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
 * `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
-* `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
 
 
 
@@ -987,7 +984,6 @@ Serve leases in the foreground
 * `--walk-tables <FILE>` — walk the tables these Table records name instead of the metastore (e.g. local tables)
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
 * `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
-* `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
 
 
 

@@ -75,9 +75,6 @@ pub(crate) struct MasterArgs {
     /// the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
     #[arg(long, requires = "master")]
     low_network: bool,
-    /// kill a command on a version that runs longer, and count it as a failure
-    #[arg(long, requires = "master", value_name = "SECONDS")]
-    time_limit_seconds: Option<u64>,
 }
 
 impl MasterArgs {
@@ -86,7 +83,6 @@ impl MasterArgs {
         drive::Settings {
             walk_tables: self.walk_tables.as_deref().map(path::absolute),
             walk_period: self.walk_period_seconds.map(Duration::from_secs),
-            time_limit: self.time_limit_seconds.map(Duration::from_secs),
         }
     }
 
@@ -105,9 +101,6 @@ impl MasterArgs {
         }
         if self.low_network {
             arguments.push("--low-network".into());
-        }
-        if let Some(seconds) = self.time_limit_seconds {
-            arguments.extend(["--time-limit-seconds".into(), seconds.to_string().into()]);
         }
         arguments
     }

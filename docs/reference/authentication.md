@@ -208,7 +208,7 @@ command means for it.
   `download` (the partition's sample file into the version's directory),
   `bytemass` and `lint` (`bytemass --local` and `list suggestions --local` on
   that copy, which is deleted once the version is done). One command runs per
-  CPU at once; `--time-limit-seconds` kills one that runs longer. A version
+  CPU at once. A version
   with no live file, or whose files are in an archive class or tier, is
   `UP_TO_DATE` after its price. With `--low-network` no file is copied: after
   its price a version runs `bytemass` on the sample file in place, which reads
@@ -226,7 +226,7 @@ and the commands redo them.
 
 `pqbench list partition-versions [PARENT]` prints the map as `PartitionVersion`
 records, named `…/partitions/{partition}/versions/{etag}`: all of them, or those
-under a catalog, schema, table or partition name, with `-` for any id. The
+under a catalog, schema, table or partition name. The
 checkpoint is the same records, and `pqbench summarize partition-versions`
 totals them per catalog, schema and table as `PartitionStats` records.
 

@@ -118,12 +118,3 @@ pub(crate) fn poll(process_id: u32) -> Exit {
         }
     }
 }
-
-/// Kill the child `process_id`; the next poll reaps it.
-pub(crate) fn kill(process_id: u32) {
-    // SAFETY: a signal to a child this daemon started and has not reaped, so
-    // the id still names it.
-    unsafe {
-        libc::kill(process_id as i32, libc::SIGKILL);
-    }
-}

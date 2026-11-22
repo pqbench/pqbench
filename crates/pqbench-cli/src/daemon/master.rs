@@ -144,12 +144,10 @@ fn running_transition(
         .find(|transition| transition.running == state)
 }
 
-/// A transition running on a version: its process, when it started, and where its
-/// errors go.
+/// A transition running on a version: its process and where its errors go.
 pub(crate) struct Running {
     pub key: Key,
     pub process_id: u32,
-    pub start_time: u64,
     pub command: &'static [&'static str],
     pub stderr: PathBuf,
 }
@@ -227,8 +225,7 @@ impl Master {
     }
 
     /// The versions under `parent`, by reference, in key order: a catalog,
-    /// schema, table or partition name, with `-` for any id (AIP-159), or
-    /// every version when it is empty.
+    /// schema, table or partition name, or every version when it is empty.
     pub(crate) fn list(&self, parent: &str) -> Result<Vec<(&Key, &PartitionVersion)>, String> {
         let wanted: Vec<&str> = parent
             .split('/')
@@ -247,17 +244,18 @@ impl Master {
                 "{parent} is not a catalog, schema, table or partition name"
             ));
         }
-        let literal = wanted.iter().take_while(|segment| **segment != "-").count();
-        let prefix = wanted[..literal].join("/");
+        let prefix = wanted.join("/");
         let under = |name: &str| {
-            name.split('/')
-                .zip(&wanted)
-                .all(|(have, want)| *want == "-" || have == *want)
+            prefix.is_empty()
+                || name == prefix
+                || name
+                    .strip_prefix(&prefix)
+                    .is_some_and(|rest| rest.starts_with('/'))
         };
         Ok(self
             .rows
             .range((prefix.clone(), String::new())..)
-            .take_while(|((name, _), _)| name.starts_with(&prefix))
+            .take_while(|((name, _), _)| prefix.is_empty() || name.starts_with(&prefix))
             .filter(|((name, _), _)| under(name))
             .collect())
     }
@@ -498,7 +496,6 @@ impl Master {
                 Some(Running {
                     key: key.clone(),
                     process_id: row.process_id?,
-                    start_time: row.start_time?,
                     command: transition.command,
                     stderr: self
                         .result_dir(key)

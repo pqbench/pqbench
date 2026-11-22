@@ -11,7 +11,7 @@ use crate::CliError;
 #[derive(Args)]
 pub(crate) struct ListArgs {
     /// only the versions under this catalog, schema, table or partition
-    /// (`catalogs/…`; `-` for any id); every version without it
+    /// (`catalogs/…`); every version without it
     parent: Option<String>,
 }
 

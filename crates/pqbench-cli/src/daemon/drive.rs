@@ -43,8 +43,6 @@ pub(crate) struct Settings {
     /// How long after a walk the next one is due; `None` walks once, when the
     /// daemon starts.
     pub walk_period: Option<Duration>,
-    /// How long a transition's command may run before it is killed.
-    pub time_limit: Option<Duration>,
 }
 
 /// A walk in progress: its processes, output and error file.
@@ -116,34 +114,16 @@ impl Driver {
         self.checkpoint();
     }
 
-    /// Give the master each transition command that exited, and kill the ones past
-    /// the time limit.
+    /// Give the master each transition command that exited.
     fn finish_transitions(&mut self) {
         let now = master::now_ms();
         let runs = read(&self.master).runs();
         for run in runs {
-            let late = self
-                .settings
-                .time_limit
-                .filter(|limit| now.saturating_sub(run.start_time) > limit.as_millis() as u64);
-            match process::poll(run.process_id) {
-                Exit::Running => {
-                    if late.is_some() {
-                        process::kill(run.process_id);
-                    }
-                }
-                Exit::Exited(outcome) => {
-                    let outcome = outcome.map_err(|status| match late {
-                        Some(limit) => format!(
-                            "`pqbench {}` ran past the time limit of {} s",
-                            run.command.join(" "),
-                            limit.as_secs()
-                        ),
-                        None => command_error(&run, &status),
-                    });
-                    write(&self.master).finish(&run.key, outcome, now);
-                }
-            }
+            let Exit::Exited(outcome) = process::poll(run.process_id) else {
+                continue;
+            };
+            let outcome = outcome.map_err(|status| command_error(&run, &status));
+            write(&self.master).finish(&run.key, outcome, now);
         }
     }
 
