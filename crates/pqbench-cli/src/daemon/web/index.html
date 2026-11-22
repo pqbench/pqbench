@@ -201,10 +201,17 @@ async function viewPartition(name) {
         <p class="note">${(s.price.storage_classes ?? []).length > 1 ? "Two classes bound a lifecycle transition inside the partition." : (s.price.storage_classes ?? []).length ? "One class covers the partition." : "Not S3 objects: no class."}</p>` : `<div class="empty">${why[p.state] ?? "No price."}</div>`}</div>
       <div>${title("Suggestions", name)}${s.list_suggestions ? (s.list_suggestions.length ? `<table><tr><th>rule</th><th>column</th><th>remedy</th></tr>${s.list_suggestions.map(g => `<tr><td>${esc(g.rule)}</td><td class="mono">${esc(g.column)}</td><td>${esc(g.remedy)}</td></tr>`).join("")}</table>` : `<div class="empty">None.</div>`) : `<div class="empty">${why[p.state] ?? "No suggestions were listed: the version was done without a read."}</div>`}</div>
     </div>
-    ${title("Columns", name)}${columns.length ? `<table><tr><th>column</th><th>type</th><th class="n">in the sample file</th><th class="n">scaled to the partition</th><th>codec</th></tr>
-      ${columns.sort((a, b) => b.mass.compressed_bytes - a.mass.compressed_bytes).map(c => `<tr><td class="mono">${esc(leaf(c.name))}</td><td>${esc(c.physical_data_type)}</td><td class="n">${bytes(c.mass.compressed_bytes)}</td>
-        <td class="n">${bytes(fileBytes ? c.mass.compressed_bytes / fileBytes * p.size : null)}</td><td>${esc(c.mass.codec)}</td></tr>`).join("")}</table>
-      <p class="note">Measured in one file (${esc(blob?.writer ?? "")}); each column's share of it, times the partition's bytes.</p>` : `<div class="empty">${why[p.state] ?? "No columns: the version was done without a read (archive class, or no live file)."}</div>`}
+    ${title("Columns", name)}${columns.length ? `<table><tr><th>column</th><th>type</th><th>codec</th><th>dictionary</th><th class="n">values</th><th class="n">nulls</th><th class="n">compressed</th><th class="n">uncompressed</th><th class="n">ratio</th><th class="n">bytes/row</th><th class="n">of partition</th></tr>
+      ${columns.sort((a, b) => b.mass.compressed_bytes - a.mass.compressed_bytes).map(c => `<tr>
+        <td class="mono" title="${esc((c.mass.encodings ?? []).join(", "))}">${esc(leaf(c.name))}</td><td>${esc(c.physical_data_type)}</td><td>${esc(c.mass.codec)}</td>
+        <td>${c.mass.dictionary ? `yes, ${bytes(c.mass.dictionary_bytes)}${c.mass.dictionary_fraction ? ` (${(c.mass.dictionary_fraction * 100).toFixed(0)}% of values)` : ""}` : "no"}</td>
+        <td class="n">${(c.mass.value_count ?? 0).toLocaleString()}</td>
+        <td class="n">${(c.mass.null_count ?? 0).toLocaleString()}${c.mass.null_fraction ? ` (${(c.mass.null_fraction * 100).toFixed(1)}%)` : ""}</td>
+        <td class="n">${bytes(c.mass.compressed_bytes)}</td><td class="n">${bytes(c.mass.uncompressed_bytes)}</td>
+        <td class="n">${c.mass.compression_ratio ? c.mass.compression_ratio.toFixed(2) : "—"}</td>
+        <td class="n">${c.mass.bytes_per_row == null ? "—" : c.mass.bytes_per_row.toFixed(2)}</td>
+        <td class="n">${bytes(fileBytes ? c.mass.compressed_bytes / fileBytes * p.size : null)}</td></tr>`).join("")}</table>
+      <p class="note">Measured in one file — ${esc(blob?.writer ?? "unknown writer")}, ${(blob?.row_group_count ?? 1).toLocaleString()} row group(s), ${(blob?.column_count ?? columns.length).toLocaleString()} column(s), ${bytes(blob?.size_bytes)}; hover a column for its encodings. Each column's share of that file, times the partition's bytes.</p>` : `<div class="empty">${why[p.state] ?? "No columns: the version was done without a read (archive class, or no live file)."}</div>`}
     ${title("Files used", name)}
     <table><tr><th></th><th>path</th><th class="n">size</th><th>modified</th></tr>${fileRow("oldest", l.first_file)}${fileRow("newest", l.last_file)}${fileRow("sample", l.sample_file)}</table>
     ${raw(versions)}`;
