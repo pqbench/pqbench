@@ -35,9 +35,9 @@ pre { background:#26231f; color:#efe9df; padding:10px 12px; border-radius:6px; o
 <script>
 // Every number on the page is a field of a record from /v1/: a page of
 // partition versions, or one partition's versions with their results.
-const COLOR = { PENDING: "#c9a25a", PRICING: "#b98a3a", PRICED: "#7f8f3a", BYTEMASSING: "#5f8f5a", BYTEMASSED: "#3f7f5a", LINTING: "#2f6f5a", UP_TO_DATE: "#1f6f43", DELETED: "#a33" };
+const COLOR = { PENDING: "#c9a25a", PRICING: "#b98a3a", PRICED: "#8f8f3a", DOWNLOADING: "#6f8f4a", DOWNLOADED: "#5f8f5a", BYTEMASSING: "#4f8f5a", BYTEMASSED: "#3f7f5a", LINTING: "#2f6f5a", UP_TO_DATE: "#1f6f43", DELETED: "#a33" };
 const PAGE_SIZE = 100;
-const STATE_ORDER = ["PENDING", "PRICING", "PRICED", "BYTEMASSING", "BYTEMASSED", "LINTING", "UP_TO_DATE", "DELETED"];
+const STATE_ORDER = ["PENDING", "PRICING", "PRICED", "DOWNLOADING", "DOWNLOADED", "BYTEMASSING", "BYTEMASSED", "LINTING", "UP_TO_DATE", "DELETED"];
 
 const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const usd = v => v == null ? "—" : v === 0 ? "$0" : v > 0 && v < 0.01 ? "<$0.01" : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}k` : `$${v.toFixed(v < 10 ? 2 : 0)}`;
@@ -71,7 +71,7 @@ function crumbs(name) {
 // A stats record's parent: its name without `/partitionStats`.
 const parentOf = name => name.slice(0, -"/partitionStats".length);
 
-// A level's page: the stats job's totals under it, dearest first and then by
+// A level's page: the master's totals under it, dearest first and then by
 // size, and one row per catalog, schema or table.
 function states(counts) {
   return STATE_ORDER.filter(s => counts[s]).map(s => `${tag(s)} <span class="n">${counts[s].toLocaleString()}</span>`).join(" ");
@@ -84,7 +84,7 @@ async function viewStats(name) {
   if (!rows) return `<div class="empty">The stats could not be read.</div>`;
   const title = !name ? "Warehouse" : `${name.split("/").length === 2 ? "Schemas in " : "Tables in "}${esc(dotted(name))}`;
   if (!rows.length)
-    return `${name ? crumbs(name) : ""}<h1>${title}</h1><div class="empty">Nothing here yet. Run <span class="mono">pqbench job stats</span> if the totals are missing.</div>`;
+    return `${name ? crumbs(name) : ""}<h1>${title}</h1><div class="empty">Nothing here yet: the totals appear once the first walk is checkpointed.</div>`;
   return `${name ? crumbs(name) : ""}<h1>${title}</h1>
     <p class="sub">${rows.length} ${collection}; dearest first, then by size. Stock is the live partitions' monthly cost, summed over their cheapest and dearest class.</p>
     <table><tr><th>${collection === "catalogs" ? "catalog" : collection === "schemas" ? "schema" : "table"}</th><th class="n">partitions</th><th class="n">files</th><th class="n">bytes</th><th class="n">stock /mo</th><th>versions</th><th class="n">failed</th><th>newest file</th></tr>
@@ -156,7 +156,7 @@ async function viewPartition(name) {
   const blob = (s.bytemass ?? []).find(r => !r.name.includes("/columns/"));
   const columns = (s.bytemass ?? []).filter(r => r.name.includes("/columns/") && r.mass);
   const fileBytes = columns.reduce((a, c) => a + c.mass.compressed_bytes, 0);
-  const why = { PENDING: "Waits for the price job.", PRICING: "The price job is on it.", PRICED: "Waits for the bytemass job.", BYTEMASSING: "The bytemass job is on it.", DELETED: "The scan no longer finds this version." };
+  const why = { PENDING: "Waits for its price.", PRICING: "Being priced.", PRICED: "Waits for its sample file's download.", DOWNLOADING: "Its sample file is being downloaded.", DOWNLOADED: "Waits for its columns to be measured.", BYTEMASSING: "Its columns are being measured.", BYTEMASSED: "Waits for its suggestions.", LINTING: "Its suggestions are being listed.", DELETED: "A walk no longer finds this version." };
   return `${crumbs(name)}<h1>${esc(leaf(name))} ${tag(p.state)}</h1>
     <p class="sub">etag <span class="mono">${esc(p.etag)}</span> · found ${time(p.current.create_time)} · up to date ${time(s.up_to_date_time)} · versions before this one ${p.current.etag_change_count}</p>
     ${p.current.error ? `<div class="empty">Failed ${p.current.failure_count}×: <span class="mono">${esc(p.current.error)}</span></div>` : ""}
@@ -171,7 +171,7 @@ async function viewPartition(name) {
       <div>${title("Storage classes", name)}${s.price ? `<table><tr><th>class</th><th>tier</th><th class="n">$/GiB-month</th><th class="n">partition</th></tr>
         ${(s.price.storage_costs ?? []).map(c => `<tr><td>${esc(c.storage_class)}</td><td>${esc(c.access_tier ?? "")}</td><td class="n">${c.dollars_per_gibibyte_per_month}</td><td class="n">${usd(c.cost_per_month)}/mo</td></tr>`).join("")}</table>
         <p class="note">${(s.price.storage_classes ?? []).length > 1 ? "Two classes bound a lifecycle transition inside the partition." : (s.price.storage_classes ?? []).length ? "One class covers the partition." : "Not S3 objects: no class."}</p>` : `<div class="empty">${why[p.state] ?? "No price."}</div>`}</div>
-      <div>${title("Suggestions", name)}${s.list_suggestions ? (s.list_suggestions.length ? `<table><tr><th>rule</th><th>column</th><th>remedy</th></tr>${s.list_suggestions.map(g => `<tr><td>${esc(g.rule)}</td><td class="mono">${esc(g.column)}</td><td>${esc(g.remedy)}</td></tr>`).join("")}</table>` : `<div class="empty">None.</div>`) : `<div class="empty">${why[p.state] ?? "Waits for the lint job."}</div>`}</div>
+      <div>${title("Suggestions", name)}${s.list_suggestions ? (s.list_suggestions.length ? `<table><tr><th>rule</th><th>column</th><th>remedy</th></tr>${s.list_suggestions.map(g => `<tr><td>${esc(g.rule)}</td><td class="mono">${esc(g.column)}</td><td>${esc(g.remedy)}</td></tr>`).join("")}</table>` : `<div class="empty">None.</div>`) : `<div class="empty">${why[p.state] ?? "No suggestions were listed: the version was done without a read."}</div>`}</div>
     </div>
     ${title("Columns", name)}${columns.length ? `<table><tr><th>column</th><th>type</th><th class="n">in the sample file</th><th class="n">scaled to the partition</th><th>codec</th></tr>
       ${columns.sort((a, b) => b.mass.compressed_bytes - a.mass.compressed_bytes).map(c => `<tr><td class="mono">${esc(leaf(c.name))}</td><td>${esc(c.physical_data_type)}</td><td class="n">${bytes(c.mass.compressed_bytes)}</td>

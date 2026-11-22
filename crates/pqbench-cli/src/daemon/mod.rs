@@ -7,6 +7,7 @@
 //! read of local files names no endpoint and needs no daemon.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Args, Subcommand};
 
@@ -15,8 +16,10 @@ use pqbench::Workspace;
 use crate::CliError;
 
 mod client;
+mod drive;
 pub(crate) mod master;
 mod path;
+mod process;
 pub(crate) mod protocol;
 mod rate;
 mod serve;
@@ -54,15 +57,34 @@ struct StartArgs {
     master: MasterArgs,
 }
 
-/// The master: the partition map the jobs move versions through.
+/// The master: the map of partition versions, and what the daemon runs to
+/// move them.
 #[derive(Args, Clone)]
 pub(crate) struct MasterArgs {
-    /// also run the master: the partition map and the calls jobs make on it
+    /// also run the master: the partition versions and the commands that move them
     #[arg(long, requires = "store")]
     master: bool,
     /// the master's store: its checkpoint and results (with --master)
     #[arg(long, requires = "master", value_name = "DIR")]
     store: Option<PathBuf>,
+    /// walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
+    #[arg(long, requires = "master", value_name = "NAME", value_parser = walk_root)]
+    walk: Vec<String>,
+    /// walk the tables these Table records name, as they are (e.g. local tables)
+    #[arg(long, requires = "master", value_name = "FILE")]
+    walk_tables: Option<PathBuf>,
+    /// seconds from one walk to the next; without it the master walks once, when it starts
+    #[arg(long, requires = "master", value_name = "SECONDS")]
+    walk_period_seconds: Option<u64>,
+    /// run this step on the versions: price, download, bytemass or lint; repeatable
+    #[arg(long = "step", requires = "master", value_name = "STEP", value_parser = step_name)]
+    steps: Vec<String>,
+    /// the most step commands running at once
+    #[arg(long, requires = "master", default_value_t = 8)]
+    processes: usize,
+    /// kill a step command that runs longer, and count it as a failure
+    #[arg(long, requires = "master", value_name = "SECONDS")]
+    step_time_limit_seconds: Option<u64>,
     /// also serve the web app: the master's records and status page (with --master)
     #[arg(long, requires = "master")]
     web_ui: bool,
@@ -71,7 +93,84 @@ pub(crate) struct MasterArgs {
     listen: String,
 }
 
+/// A walk root: a catalog or a schema name.
+fn walk_root(value: &str) -> Result<String, String> {
+    let segments: Vec<&str> = value.trim_end_matches('/').split('/').collect();
+    match segments.as_slice() {
+        ["catalogs", catalog] | ["catalogs", catalog, "schemas", _]
+            if !catalog.is_empty() && segments.iter().all(|segment| !segment.is_empty()) =>
+        {
+            Ok(segments.join("/"))
+        }
+        _ => Err(format!(
+            "{value} is not a catalog or schema name (catalogs/C or catalogs/C/schemas/S)"
+        )),
+    }
+}
+
+/// A step's name.
+fn step_name(value: &str) -> Result<String, String> {
+    match master::STEPS.iter().find(|step| step.name == value) {
+        Some(step) => Ok(step.name.to_string()),
+        None => Err(format!(
+            "{value} is not a step: {}",
+            master::STEPS
+                .iter()
+                .map(|step| step.name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 impl MasterArgs {
+    /// What the driver runs.
+    fn settings(&self) -> drive::Settings {
+        drive::Settings {
+            walk: self.walk.clone(),
+            walk_tables: self.walk_tables.as_deref().map(path::absolute),
+            walk_period: self.walk_period_seconds.map(Duration::from_secs),
+            steps: master::STEPS
+                .iter()
+                .filter(|step| self.steps.iter().any(|name| name == step.name))
+                .collect(),
+            processes: self.processes.max(1),
+            time_limit: self.step_time_limit_seconds.map(Duration::from_secs),
+        }
+    }
+
+    /// The flags again, for the background daemon's command line.
+    pub(crate) fn arguments(&self) -> Vec<std::ffi::OsString> {
+        let mut arguments: Vec<std::ffi::OsString> = Vec::new();
+        let Some(store) = self.store() else {
+            return arguments;
+        };
+        arguments.extend(["--master".into(), "--store".into(), store.into()]);
+        for root in &self.walk {
+            arguments.extend(["--walk".into(), root.into()]);
+        }
+        if let Some(tables) = &self.walk_tables {
+            arguments.extend(["--walk-tables".into(), path::absolute(tables).into()]);
+        }
+        if let Some(seconds) = self.walk_period_seconds {
+            arguments.extend(["--walk-period-seconds".into(), seconds.to_string().into()]);
+        }
+        for step in &self.steps {
+            arguments.extend(["--step".into(), step.into()]);
+        }
+        arguments.extend(["--processes".into(), self.processes.to_string().into()]);
+        if let Some(seconds) = self.step_time_limit_seconds {
+            arguments.extend([
+                "--step-time-limit-seconds".into(),
+                seconds.to_string().into(),
+            ]);
+        }
+        if let Some(address) = self.web_ui() {
+            arguments.extend(["--web-ui".into(), "--listen".into(), address.into()]);
+        }
+        arguments
+    }
+
     /// The web app's address, when it runs.
     pub(crate) fn web_ui(&self) -> Option<&str> {
         (self.master && self.web_ui).then_some(self.listen.as_str())
@@ -119,14 +218,7 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
     let socket = path::socket_path(workspace.config());
     match &args.command {
         DaemonCommand::Start(args) => {
-            start::start(
-                workspace.config(),
-                &socket,
-                args.idle_seconds,
-                args.master.store().as_deref(),
-                args.master.web_ui(),
-            )
-            .await?;
+            start::start(workspace.config(), &socket, args.idle_seconds, &args.master).await?;
         }
         DaemonCommand::Stop => start::stop(&socket).await?,
         DaemonCommand::Status => start::status(&socket).await?,
@@ -134,7 +226,7 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
             let socket = args.socket.as_deref().map_or(socket, path::absolute);
             let session = Daemon::direct(workspace.clone());
             let master = match args.master.store() {
-                Some(store) => Some(std::sync::Arc::new(std::sync::Mutex::new(
+                Some(store) => Some(std::sync::Arc::new(std::sync::RwLock::new(
                     master::Master::open(&store)?,
                 ))),
                 None => None,
@@ -142,6 +234,13 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
             if let (Some(address), Some(master)) = (args.master.web_ui(), &master) {
                 let listener = web::bind(address).await?;
                 tokio::spawn(web::run(listener, std::sync::Arc::clone(master)));
+            }
+            if let Some(master) = &master {
+                drive::spawn(
+                    std::sync::Arc::clone(master),
+                    args.master.settings(),
+                    socket.clone(),
+                );
             }
             serve::run(session, master, socket, args.idle_seconds).await?;
         }

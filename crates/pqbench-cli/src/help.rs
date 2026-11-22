@@ -57,7 +57,7 @@ Documents:
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
   PartitionVersion       a partition at one etag in the master (list partition-versions)
-  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions, job stats)
+  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -348,43 +348,6 @@ See also:
   pqbench table-file --help        name a path as a table-file record
   pqbench list suggestions --help  read a copy with --local";
 
-pub const JOB_ABOUT: &str = "Move partition versions through the daemon's master";
-
-pub const JOB_LONG_ABOUT: &str = "\
-Run one job against the daemon's master (`pqbench daemon start --master --store
-DIR`). A job claims work from the master, runs one plain pqbench command per
-input with its standard output going to the path the master gives, and commits;
-the master renames the output into its store only while the version is still
-the job's. One instance of each job runs at a time; a time limit is the
-scheduler's.
-
-  scan      list each table's partitions into the master (Table records on
-            stdin, from `get table`); with --complete, the tables the input
-            does not name are deleted
-  price     price each pending version (`get partition-price`)
-  bytemass  measure each priced version's sample file (`bytemass`); a version
-            in an archive class, or with no live file, is done without a read
-  lint      list each measured version's storage suggestions (`list
-            suggestions`); the version is then UP_TO_DATE
-  purge     delete the results and rows of the versions the scan no longer
-            finds, keeping a partition's last complete version until a newer
-            one is done
-  stats     total the versions per catalog, schema and table into the file
-            the master names, for the web app (`list partition-versions |
-            summarize partition-versions`)
-
-`pqbench list partition-versions` prints the master's rows.";
-
-pub const JOB_AFTER: &str = "\
-Examples:
-  pqbench daemon start --master --store /var/lib/pqbench
-  echo '{\"name\":\"catalogs/main/schemas/sales\"}' | pqbench list tables | pqbench get table | timeout 3600 pqbench job scan
-
-See also:
-  pqbench daemon --help           the master and its store
-  pqbench list partitions --help  the command the scan runs
-  docs/reference/cli.md";
-
 pub const DAEMON_ABOUT: &str = "Own the catalog calls and cache storage leases";
 
 pub const DAEMON_LONG_ABOUT: &str = "\
@@ -405,14 +368,38 @@ table's lease. A command that needs the catalog and finds no daemon fails with a
 hint to start one; a read of local files needs none. Vended leases are session
 state and never ride a Table or TableFile document.
 
-With --master --store DIR the daemon also runs the master: one map of partition
-versions (a partition at one etag) that `pqbench job` processes move through
-their states, and the results the jobs' commands wrote, under DIR. Each call on
-the map is atomic, and the map is written whole to a checkpoint every 10
-seconds while it changes, and on stop; a crash loses at most the calls since
-the last checkpoint, which the jobs redo. With --web-ui it also serves the web
-app (--listen, default 127.0.0.1:8180): the master's partition versions as a
-sortable, paged list, and the records at GET /v1/{name}.";
+With --master --store DIR the daemon also runs the master. Its state is one
+map of partition versions (a partition at one etag); the work is plain pqbench
+commands the daemon runs as child processes, checked on a pass every 100 ms
+and never waited for:
+
+  walk      `list schemas | list tables | get table | list partitions` from
+            each --walk catalog or schema, and `list partitions` over the
+            --walk-tables records; once at start, then every
+            --walk-period-seconds. A new version is PENDING; a listed table's
+            versions it no longer finds are DELETED, and when every table was
+            read, so are the tables it did not list.
+  steps     each --step, one command per version, at most --processes at
+            once, killed past --step-time-limit-seconds:
+              price     `get partition-price`; a version with no live file,
+                        or in an archive class, is then UP_TO_DATE
+              download  `download` of the sample file into the version's
+                        directory
+              bytemass  `bytemass --local` on that copy
+              lint      `list suggestions --local` on it; then UP_TO_DATE
+            A failure puts the version back with its error; after two it
+            waits. A version waits at the first step that is off, so
+            `--step price` alone reads no file's data.
+  purge     DELETED versions and their results, except a partition's last
+            UP_TO_DATE version while its new one is in progress.
+  stats     `summarize partition-versions` over each checkpoint.
+
+The map is checkpointed to DIR/checkpoint.ndjson every 10 seconds while
+commands run, at once when none do, and on stop. A restart loads it and puts
+running versions back; the commands redo the rest. `pqbench list
+partition-versions` prints the map. With --web-ui the daemon also serves the
+web app (--listen, default 127.0.0.1:8180): the stats by catalog, schema and
+table, each table's partitions, and the records at GET /v1/{name}.";
 
 pub const DAEMON_AFTER: &str = "\
 Examples:
@@ -420,6 +407,9 @@ Examples:
   pqbench list tables | pqbench get table | pqbench list files | pqbench bytemass
   pqbench daemon status
   pqbench daemon stop
+  pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main \\
+    --walk-period-seconds 86400 --step price --step download --step bytemass \\
+    --step lint --web-ui
 
 See also:
   pqbench --help  catalog auth, PQB_* config

@@ -30,13 +30,6 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench list suggestions`↴](#pqbench-list-suggestions)
 * [`pqbench sample`↴](#pqbench-sample)
 * [`pqbench sample files`↴](#pqbench-sample-files)
-* [`pqbench job`↴](#pqbench-job)
-* [`pqbench job scan`↴](#pqbench-job-scan)
-* [`pqbench job price`↴](#pqbench-job-price)
-* [`pqbench job bytemass`↴](#pqbench-job-bytemass)
-* [`pqbench job lint`↴](#pqbench-job-lint)
-* [`pqbench job purge`↴](#pqbench-job-purge)
-* [`pqbench job stats`↴](#pqbench-job-stats)
 * [`pqbench daemon`↴](#pqbench-daemon)
 * [`pqbench daemon start`↴](#pqbench-daemon-start)
 * [`pqbench daemon stop`↴](#pqbench-daemon-stop)
@@ -104,7 +97,7 @@ Documents:
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
   PartitionVersion       a partition at one etag in the master (list partition-versions)
-  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions, job stats)
+  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -174,7 +167,6 @@ Format skills (read these when the input is Parquet or a table):
 * `download` — Copy a table file's bytes to a local path
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
-* `job` — Move partition versions through the daemon's master
 * `daemon` — Own the catalog calls and cache storage leases
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
 * `summarize` — Fold a stream into totals: column masses, or partition stats
@@ -843,133 +835,6 @@ Keep a rate of a table's files, by size
 
 
 
-## `pqbench job`
-
-Run one job against the daemon's master (`pqbench daemon start --master --store
-DIR`). A job claims work from the master, runs one plain pqbench command per
-input with its standard output going to the path the master gives, and commits;
-the master renames the output into its store only while the version is still
-the job's. One instance of each job runs at a time; a time limit is the
-scheduler's.
-
-```text
-  scan      list each table's partitions into the master (Table records on
-            stdin, from `get table`); with --complete, the tables the input
-            does not name are deleted
-  price     price each pending version (`get partition-price`)
-  bytemass  measure each priced version's sample file (`bytemass`); a version
-            in an archive class, or with no live file, is done without a read
-  lint      list each measured version's storage suggestions (`list
-            suggestions`); the version is then UP_TO_DATE
-  purge     delete the results and rows of the versions the scan no longer
-            finds, keeping a partition's last complete version until a newer
-            one is done
-  stats     total the versions per catalog, schema and table into the file
-            the master names, for the web app (`list partition-versions |
-            summarize partition-versions`)
-```
-
-`pqbench list partition-versions` prints the master's rows.
-
-**Usage:** `pqbench job <COMMAND>`
-
-```console no-run
-Examples:
-  pqbench daemon start --master --store /var/lib/pqbench
-  echo '{"name":"catalogs/main/schemas/sales"}' | pqbench list tables | pqbench get table | timeout 3600 pqbench job scan
-
-See also:
-  pqbench daemon --help           the master and its store
-  pqbench list partitions --help  the command the scan runs
-  docs/reference/cli.md
-```
-
-###### **Subcommands:**
-
-* `scan` — List each table's partitions into the master (Table records on stdin)
-* `price` — Price the pending versions (`get partition-price`)
-* `bytemass` — Measure each priced version's sample file (`bytemass`)
-* `lint` — List each measured version's storage suggestions (`list suggestions`)
-* `purge` — Delete the results and rows of the versions the scan no longer finds
-* `stats` — Total the versions per catalog, schema and table for the web app
-
-
-
-## `pqbench job scan`
-
-List each table's partitions into the master (Table records on stdin)
-
-**Usage:** `pqbench job scan [OPTIONS]`
-
-
-###### **Options:**
-
-* `--fan-out <FAN_OUT>` — tables listed at once
-
-  Default value: `4`
-* `--complete` — standard input is the whole catalog walk: the rows of every table it does not name are deleted
-
-
-
-## `pqbench job price`
-
-Price the pending versions (`get partition-price`)
-
-**Usage:** `pqbench job price [OPTIONS]`
-
-
-###### **Options:**
-
-* `--fan-out <FAN_OUT>` — versions in flight at once
-
-  Default value: `8`
-
-
-
-## `pqbench job bytemass`
-
-Measure each priced version's sample file (`bytemass`)
-
-**Usage:** `pqbench job bytemass [OPTIONS]`
-
-
-###### **Options:**
-
-* `--fan-out <FAN_OUT>` — versions in flight at once
-
-  Default value: `8`
-
-
-
-## `pqbench job lint`
-
-List each measured version's storage suggestions (`list suggestions`)
-
-**Usage:** `pqbench job lint [OPTIONS]`
-
-
-###### **Options:**
-
-* `--fan-out <FAN_OUT>` — versions in flight at once
-
-  Default value: `8`
-
-
-
-## `pqbench job purge`
-
-Delete the results and rows of the versions the scan no longer finds
-
-**Usage:** `pqbench job purge`
-
-
-## `pqbench job stats`
-
-Total the versions per catalog, schema and table for the web app
-
-**Usage:** `pqbench job stats`
-
-
 ## `pqbench daemon`
 
 Own every catalog request the walk makes and cache the storage lease each table
@@ -991,14 +856,40 @@ table's lease. A command that needs the catalog and finds no daemon fails with a
 hint to start one; a read of local files needs none. Vended leases are session
 state and never ride a Table or TableFile document.
 
-With --master --store DIR the daemon also runs the master: one map of partition
-versions (a partition at one etag) that `pqbench job` processes move through
-their states, and the results the jobs' commands wrote, under DIR. Each call on
-the map is atomic, and the map is written whole to a checkpoint every 10
-seconds while it changes, and on stop; a crash loses at most the calls since
-the last checkpoint, which the jobs redo. With --web-ui it also serves the web
-app (--listen, default 127.0.0.1:8180): the master's partition versions as a
-sortable, paged list, and the records at GET /v1/{name}.
+With --master --store DIR the daemon also runs the master. Its state is one
+map of partition versions (a partition at one etag); the work is plain pqbench
+commands the daemon runs as child processes, checked on a pass every 100 ms
+and never waited for:
+
+```text
+  walk      `list schemas | list tables | get table | list partitions` from
+            each --walk catalog or schema, and `list partitions` over the
+            --walk-tables records; once at start, then every
+            --walk-period-seconds. A new version is PENDING; a listed table's
+            versions it no longer finds are DELETED, and when every table was
+            read, so are the tables it did not list.
+  steps     each --step, one command per version, at most --processes at
+            once, killed past --step-time-limit-seconds:
+              price     `get partition-price`; a version with no live file,
+                        or in an archive class, is then UP_TO_DATE
+              download  `download` of the sample file into the version's
+                        directory
+              bytemass  `bytemass --local` on that copy
+              lint      `list suggestions --local` on it; then UP_TO_DATE
+            A failure puts the version back with its error; after two it
+            waits. A version waits at the first step that is off, so
+            `--step price` alone reads no file's data.
+  purge     DELETED versions and their results, except a partition's last
+            UP_TO_DATE version while its new one is in progress.
+  stats     `summarize partition-versions` over each checkpoint.
+```
+
+The map is checkpointed to DIR/checkpoint.ndjson every 10 seconds while
+commands run, at once when none do, and on stop. A restart loads it and puts
+running versions back; the commands redo the rest. `pqbench list
+partition-versions` prints the map. With --web-ui the daemon also serves the
+web app (--listen, default 127.0.0.1:8180): the stats by catalog, schema and
+table, each table's partitions, and the records at GET /v1/{name}.
 
 **Usage:** `pqbench daemon <COMMAND>`
 
@@ -1008,6 +899,9 @@ Examples:
   pqbench list tables | pqbench get table | pqbench list files | pqbench bytemass
   pqbench daemon status
   pqbench daemon stop
+  pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main \
+    --walk-period-seconds 86400 --step price --step download --step bytemass \
+    --step lint --web-ui
 
 See also:
   pqbench --help  catalog auth, PQB_* config
@@ -1035,8 +929,16 @@ Start the daemon in the background
 * `--idle-seconds <IDLE_SECONDS>` — seconds without a connection before the daemon exits
 
   Default value: `900`
-* `--master` — also run the master: the partition map and the calls jobs make on it
+* `--master` — also run the master: the partition versions and the commands that move them
 * `--store <DIR>` — the master's store: its checkpoint and results (with --master)
+* `--walk <NAME>` — walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
+* `--walk-tables <FILE>` — walk the tables these Table records name, as they are (e.g. local tables)
+* `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
+* `--step <STEP>` — run this step on the versions: price, download, bytemass or lint; repeatable
+* `--processes <PROCESSES>` — the most step commands running at once
+
+  Default value: `8`
+* `--step-time-limit-seconds <SECONDS>` — kill a step command that runs longer, and count it as a failure
 * `--web-ui` — also serve the web app: the master's records and status page (with --master)
 * `--listen <ADDR>` — the web app's address (with --web-ui)
 
@@ -1071,8 +973,16 @@ Serve leases in the foreground
 * `--idle-seconds <IDLE_SECONDS>` — seconds without a connection before the daemon exits; 0 serves until stopped
 
   Default value: `0`
-* `--master` — also run the master: the partition map and the calls jobs make on it
+* `--master` — also run the master: the partition versions and the commands that move them
 * `--store <DIR>` — the master's store: its checkpoint and results (with --master)
+* `--walk <NAME>` — walk this catalog or schema (`catalogs/C`, `catalogs/C/schemas/S`); repeatable
+* `--walk-tables <FILE>` — walk the tables these Table records name, as they are (e.g. local tables)
+* `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
+* `--step <STEP>` — run this step on the versions: price, download, bytemass or lint; repeatable
+* `--processes <PROCESSES>` — the most step commands running at once
+
+  Default value: `8`
+* `--step-time-limit-seconds <SECONDS>` — kill a step command that runs longer, and count it as a failure
 * `--web-ui` — also serve the web app: the master's records and status page (with --master)
 * `--listen <ADDR>` — the web app's address (with --web-ui)
 

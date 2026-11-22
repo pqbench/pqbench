@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::Resource;
 
 /// A partition at one etag and where it is in the pipeline: the master's
-/// record of it. A partition has a version per etag the scan found; the
-/// previous one is kept, `DELETED`, until it is purged.
+/// record of it, and the master's whole state. A partition has a version per
+/// etag a walk found; the previous one is kept, `DELETED`, until it is
+/// purged.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct PartitionVersion {
@@ -14,8 +15,12 @@ pub struct PartitionVersion {
     )]
     pub name: String,
     pub state: State,
-    /// When the scan found this version, milliseconds since the Unix epoch.
+    /// When a walk first found this version, milliseconds since the Unix
+    /// epoch.
     pub create_time: u64,
+    /// When a walk last found this version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_time: Option<u64>,
     /// When this version reached `UP_TO_DATE`.
     // aipnaming: allow(aip-140/prepositions)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,27 +53,40 @@ pub struct PartitionVersion {
     pub lowest_cost_per_month: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub highest_cost_per_month: Option<f64>,
+    /// While a step runs on this version: the process the master started,
+    /// the attempt its files are named by, and when it started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_time: Option<u64>,
 }
 
-/// Where a partition version is in the pipeline: each step's job takes a
-/// version from the state before it, through its own working state, to the
-/// state after it.
+/// Where a partition version is in the pipeline: each step takes a version
+/// from the state before it, through the step's running state, to the state
+/// after it.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum State {
-    /// The scan no longer finds this version; its results wait for purge.
+    /// A walk no longer finds this version; its results wait for purge.
     Deleted,
     /// Found, not processed yet.
     #[default]
     Pending,
     Pricing,
     Priced,
+    /// The version's sample file is being copied into its directory.
+    Downloading,
+    /// The sample file is on disk, for the steps that read its data.
+    Downloaded,
     Bytemassing,
     Bytemassed,
     Linting,
-    /// Every step done for this version.
+    /// Every step the version needs is done: a version with no live file,
+    /// or whose files need a restore, is done after its price.
     UpToDate,
 }

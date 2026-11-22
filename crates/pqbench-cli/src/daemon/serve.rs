@@ -1,7 +1,7 @@
 //! The daemon: one socket, one cache, one request per connection.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -14,14 +14,12 @@ use super::protocol::{Request, Response};
 use super::session::Daemon;
 
 /// The master, when the daemon runs one.
-pub(crate) type SharedMaster = Option<Arc<Mutex<Master>>>;
-
-/// How often the master's rows are checkpointed while they change: the most
-/// work a crash can cost.
-const CHECKPOINT_PERIOD: Duration = Duration::from_secs(10);
+pub(crate) type SharedMaster = Option<Arc<RwLock<Master>>>;
 
 /// Serve leases on `socket` until stopped, or until `idle_seconds` pass with
-/// no connection (`0` serves until stopped).
+/// no connection (`0` serves until stopped). A daemon running the master
+/// serves until stopped: its work does not come through the socket. On stop
+/// the master's map is checkpointed.
 pub(crate) async fn run(
     session: Daemon,
     master: SharedMaster,
@@ -34,19 +32,11 @@ pub(crate) async fn run(
     path::set_socket_mode(&socket)?;
 
     let shutdown = Arc::new(Notify::new());
-    let idle = (idle_seconds > 0).then_some(Duration::from_secs(idle_seconds));
-    let mut checkpoint = tokio::time::interval(CHECKPOINT_PERIOD);
+    let idle = (idle_seconds > 0 && master.is_none()).then_some(Duration::from_secs(idle_seconds));
     let result = loop {
         let accepted = accept(&listener, idle);
         tokio::select! {
             _ = shutdown.notified() => break Ok(()),
-            _ = checkpoint.tick() => {
-                if let Some(master) = &master {
-                    if let Err(error) = lock(master).checkpoint() {
-                        break Err(error);
-                    }
-                }
-            }
             result = accepted => match result {
                 Ok(Some(stream)) => {
                     let session = session.clone();
@@ -63,14 +53,14 @@ pub(crate) async fn run(
     };
     let _ = std::fs::remove_file(&socket);
     if let Some(master) = &master {
-        lock(master).checkpoint()?;
+        read_master(master).checkpoint()?;
     }
     result
 }
 
-fn lock(master: &Mutex<Master>) -> std::sync::MutexGuard<'_, Master> {
+fn read_master(master: &RwLock<Master>) -> std::sync::RwLockReadGuard<'_, Master> {
     master
-        .lock()
+        .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -111,30 +101,16 @@ async fn handle(
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
     if let Request::ListPartitionVersions { parent } = &request {
         let versions = match &master {
-            Some(master) => lock(master).records(parent),
+            Some(master) => read_master(master).records(parent),
             None => Err("the daemon runs no master; start it with --master".into()),
         };
         return write_versions(write, versions).await;
     }
 
-    let response = match &request {
-        Request::ScanPath { .. }
-        | Request::StatsPath
-        | Request::Stats
-        | Request::Scan { .. }
-        | Request::RetainTables { .. }
-        | Request::Claim { .. }
-        | Request::Commit { .. }
-        | Request::Revert { .. }
-        | Request::Purge => match &master {
-            Some(master) => answer(&request, &mut lock(master)),
-            None => Response {
-                error: Some("the daemon runs no master; start it with --master".into()),
-                ..Response::default()
-            },
-        },
-        _ => respond(&request, &session, &shutdown).await,
-    };
+    let mut response = respond(&request, &session, &shutdown).await;
+    if matches!(request, Request::Ping) {
+        response.master = master.is_some();
+    }
 
     let mut line = serde_json::to_string(&response)
         .map_err(|error| format!("cannot encode the answer: {error}"))?;
@@ -187,83 +163,6 @@ async fn write_versions(
         .map_err(|error| format!("cannot flush the versions: {error}"))
 }
 
-/// Answer one master call; it runs whole while the master is locked.
-fn answer(request: &Request, master: &mut Master) -> Response {
-    let count = |result: Result<usize, String>| match result {
-        Ok(count) => Response {
-            count: Some(count as u64),
-            ..Response::default()
-        },
-        Err(error) => Response {
-            error: Some(error),
-            ..Response::default()
-        },
-    };
-    match request {
-        Request::StatsPath => Response {
-            path: Some(master.stats_path().to_string_lossy().into_owned()),
-            ..Response::default()
-        },
-        Request::Stats => match master.commit_stats() {
-            Ok(()) => Response {
-                ok: true,
-                ..Response::default()
-            },
-            Err(error) => Response {
-                error: Some(error),
-                ..Response::default()
-            },
-        },
-        Request::ScanPath { table } => Response {
-            path: Some(master.scan_path(table).to_string_lossy().into_owned()),
-            ..Response::default()
-        },
-        Request::Scan { table } => count(master.scan(table)),
-        Request::RetainTables { tables } => count(master.retain_tables(tables)),
-        Request::Claim {
-            source,
-            target,
-            limit,
-        } => match master.claim(*source, *target, *limit) {
-            Ok(claims) => Response {
-                records: claims
-                    .into_iter()
-                    .filter_map(|claim| serde_json::to_value(claim).ok())
-                    .collect(),
-                ok: true,
-                ..Response::default()
-            },
-            Err(error) => Response {
-                error: Some(error),
-                ..Response::default()
-            },
-        },
-        Request::Commit {
-            name,
-            etag,
-            source,
-            target,
-            error,
-        } => count(
-            master
-                .commit(
-                    &(name.clone(), etag.clone()),
-                    *source,
-                    *target,
-                    error.clone(),
-                )
-                .map(usize::from),
-        ),
-        Request::Revert { state } => count(master.revert(*state)),
-        Request::Purge => count(master.purge()),
-        _ => Response {
-            error: Some("not a master call".into()),
-            ..Response::default()
-        },
-    }
-}
-
-/// Answer one request, recording a failure the reader reports per record.
 async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Response {
     match request {
         Request::Stop => {

@@ -1,26 +1,26 @@
-//! The master: one map of partition versions, kept in memory, and the calls
-//! that move them between states.
+//! The master: the map of partition versions, its whole state, and the
+//! transitions that move them.
 //!
-//! A row is a [`PartitionVersion`]: a partition at one etag; a change to a
-//! partition is a new row and the old one goes to `DELETED`. Every call is one atomic step: the master
-//! takes one call at a time, renames the files it names, and changes the
-//! rows. The map is the state: the daemon writes it whole to a checkpoint
-//! every few seconds while it changes, and on stop, and a restart loads the
-//! checkpoint. A crash loses the calls since the last checkpoint; the jobs
-//! redo that work, and a result they land again replaces the old one.
+//! The work is done by plain pqbench commands the daemon runs (`drive`); the
+//! master decides what runs next for a version and what a finished run means
+//! for it. A walk's listing makes versions and deletes the ones it no longer
+//! finds; each [`Step`] takes a version from the state before it, through the
+//! step's running state, to the state after it; purge drops what a walk
+//! deleted. Every change is a short update of the map; no command is waited
+//! for inside one.
 //!
 //! The store, which only the master writes:
 //!
 //! ```text
-//! {store}/master/checkpoint.ndjson  the rows, one PartitionVersion per line
-//! {store}/scan/{table}.ndjson       a scan job's listing of one table, before `scan`
-//! {store}/stats/{n}.ndjson          the stats job's totals, renamed in when done
-//! {store}/results/{partition}/{etag}/{output}.ndjson
+//! {store}/checkpoint.ndjson                  the map, one PartitionVersion per line
+//! {store}/stats.ndjson                       the stats of the last checkpoint
+//! {store}/walk/                              the running walk's input and output
+//! {store}/results/{partition}/{etag}/{file}  a version's results
 //! ```
 //!
-//! A job writes a command's standard output to a path the master gave it
-//! (`….tmp` next to the result, or the scan file) and the master renames it
-//! in, inside the commit, only while the row is still in the job's state.
+//! A step's command writes into its version's directory under the attempt's
+//! id (`{file}.{attempt}.tmp`, `{step}.{attempt}.err`); a success renames the
+//! output in, a failure deletes it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -30,46 +30,118 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) use pqbench::v1::partition_version::State;
 use pqbench::v1::PartitionVersion;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A version that failed this many times in one step is left out of claims.
+/// A version that failed this many times in one step is left where it is.
 const MAX_FAILURES: u64 = 2;
 
-/// The result a job in `state` writes, by the command that writes it.
-fn output(state: State) -> Option<&'static str> {
-    match state {
-        State::Pricing => Some("price"),
-        State::Bytemassing => Some("bytemass"),
-        State::Linting => Some("list-suggestions"),
-        _ => None,
-    }
-}
+/// Classes whose objects cannot be read without a restore, and the
+/// Intelligent-Tiering access tiers that cannot.
+const ARCHIVE_CLASSES: &[&str] = &["GLACIER", "DEEP_ARCHIVE"];
+const ARCHIVE_TIERS: &[&str] = &["ARCHIVE_ACCESS", "DEEP_ARCHIVE_ACCESS"];
 
-/// The state a version in the job state `state` goes back to when the job
-/// fails or dies.
-fn source(state: State) -> Option<State> {
-    match state {
-        State::Pricing => Some(State::Pending),
-        State::Bytemassing => Some(State::Priced),
-        State::Linting => Some(State::Bytemassed),
-        _ => None,
-    }
-}
-
-/// One version a claim handed to a job: its listing, and where to write the
-/// command's output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Claim {
-    pub name: String,
-    pub etag: String,
+/// What a step's command reads on standard input.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Input {
     /// The version's `list partitions` record.
-    pub partition: Value,
-    /// The version's other results so far, by output name.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub results: BTreeMap<String, Value>,
-    /// Where the job writes the command's standard output.
-    pub path: PathBuf,
+    Partition,
+    /// The partition's sample file, a TableFile record.
+    SampleFile,
+}
+
+/// One step: the command it runs on a version and the states it moves the
+/// version through.
+pub(crate) struct Step {
+    pub name: &'static str,
+    pub source: State,
+    pub running: State,
+    pub done: State,
+    pub command: &'static [&'static str],
+    pub input: Input,
+    /// The result file the run leaves in the version's directory.
+    pub output: &'static str,
+    /// Whether the command writes the result to standard output; otherwise it
+    /// is given `--output` and writes the file itself.
+    pub stdout: bool,
+    /// Whether the command reads the downloaded sample with `--local`.
+    pub local: bool,
+}
+
+/// The steps, in pipeline order.
+pub(crate) const STEPS: &[Step] = &[
+    Step {
+        name: "price",
+        source: State::Pending,
+        running: State::Pricing,
+        done: State::Priced,
+        command: &["get", "partition-price"],
+        input: Input::Partition,
+        output: "price.ndjson",
+        stdout: true,
+        local: false,
+    },
+    Step {
+        name: "download",
+        source: State::Priced,
+        running: State::Downloading,
+        done: State::Downloaded,
+        command: &["download"],
+        input: Input::SampleFile,
+        output: "sample.parquet",
+        stdout: false,
+        local: false,
+    },
+    Step {
+        name: "bytemass",
+        source: State::Downloaded,
+        running: State::Bytemassing,
+        done: State::Bytemassed,
+        command: &["bytemass"],
+        input: Input::SampleFile,
+        output: "bytemass.ndjson",
+        stdout: true,
+        local: true,
+    },
+    Step {
+        name: "lint",
+        source: State::Bytemassed,
+        running: State::Linting,
+        done: State::UpToDate,
+        command: &["list", "suggestions"],
+        input: Input::SampleFile,
+        output: "list-suggestions.ndjson",
+        stdout: true,
+        local: true,
+    },
+];
+
+/// The step a version in `state` is running, if any.
+fn running_step(state: State) -> Option<&'static Step> {
+    STEPS.iter().find(|step| step.running == state)
+}
+
+/// A step running on a version: its process, when it started, and where its
+/// errors go.
+pub(crate) struct Running {
+    pub key: Key,
+    pub process_id: u32,
+    pub start_time: u64,
+    pub command: &'static [&'static str],
+    pub stderr: PathBuf,
+}
+
+/// One run of a step the master wants started: the command line, what goes
+/// on its standard input, and where its output and error go.
+pub(crate) struct Run {
+    pub key: Key,
+    pub step: &'static Step,
+    pub attempt_id: String,
+    pub command_words: Vec<String>,
+    pub input: String,
+    pub input_path: PathBuf,
+    /// Where standard output goes; `None` discards it.
+    pub stdout: Option<PathBuf>,
+    pub stderr: PathBuf,
 }
 
 pub(crate) type Key = (String, String);
@@ -79,43 +151,52 @@ pub(crate) struct Master {
     /// The versions by partition and etag; a row's `name` is left empty, the
     /// key holds it, and [`version`] puts it back.
     rows: BTreeMap<Key, PartitionVersion>,
+    /// The rows a step is running on: an index of `rows`, not state.
+    running: BTreeSet<Key>,
     /// Whether the rows changed since the last checkpoint.
     changed: bool,
-    /// The stats job's current file, by number.
-    stats: Option<u64>,
+    /// Whether a version may be purgeable since the last purge.
+    purge_due: bool,
 }
 
 impl Master {
-    /// Open the store: load the checkpoint, then put back what a crash may
-    /// have left. Rows in a job state return to the
-    /// state before it (no job holds a claim across a master restart), and
-    /// temporary files and result directories without a row are deleted.
+    /// Open the store: load the checkpoint, then put back what a crash left.
+    /// The commands a version was running died with the old daemon, so the
+    /// version goes back to the state before its step; files of unfinished
+    /// attempts, and result directories no row names, are deleted.
     pub(crate) fn open(store: &Path) -> Result<Self, String> {
-        for directory in ["master", "scan", "stats", "results"] {
+        for directory in ["results", "walk"] {
             fs::create_dir_all(store.join(directory))
                 .map_err(|error| format!("cannot create {}: {error}", store.display()))?;
         }
         let mut master = Master {
             store: store.to_path_buf(),
-            rows: read_checkpoint(&store.join("master/checkpoint.ndjson"))?,
-            changed: false,
-            stats: newest_stats(&store.join("stats")),
+            rows: read_checkpoint(&store.join("checkpoint.ndjson"))?,
+            running: BTreeSet::new(),
+            changed: true,
+            purge_due: true,
         };
-        let leftover = master.stats_path();
-        let _ = fs::remove_file(leftover);
-        for state in [State::Pricing, State::Bytemassing, State::Linting] {
-            master.revert(state)?;
+        for row in master.rows.values_mut() {
+            if let Some(step) = running_step(row.state) {
+                row.state = step.source;
+            }
+            clear_attempt(row);
         }
-        let _ = fs::remove_dir_all(store.join("scan"));
-        fs::create_dir_all(store.join("scan")).map_err(|error| error.to_string())?;
+        let _ = fs::remove_dir_all(store.join("walk"));
+        fs::create_dir_all(store.join("walk")).map_err(|error| error.to_string())?;
+        let _ = fs::remove_file(store.join("stats.ndjson.tmp"));
         master.sweep()?;
-        master.checkpoint()?;
         Ok(master)
     }
 
     /// The directory the master keeps its checkpoint and results in.
     pub(crate) fn store(&self) -> &Path {
         &self.store
+    }
+
+    /// The stats file the web app serves, once the stats have run.
+    pub(crate) fn stats_file(&self) -> Option<PathBuf> {
+        Some(self.store.join("stats.ndjson")).filter(|path| path.exists())
     }
 
     /// The versions under `parent`, by reference, in key order: a catalog,
@@ -163,261 +244,241 @@ impl Master {
             .collect())
     }
 
-    /// The directory the stats job writes in.
-    fn stats_directory(&self) -> PathBuf {
-        self.store.join("stats")
+    /// When the newest walk found anything: the time a walk was last due
+    /// from.
+    pub(crate) fn last_list_time(&self) -> Option<u64> {
+        self.rows.values().filter_map(|row| row.list_time).max()
     }
 
-    /// The number of the stats file the next run writes.
-    fn next_stats(&self) -> u64 {
-        self.stats.map_or(1, |stats| stats + 1)
-    }
-
-    /// Where the stats job writes its next totals: a temporary file the
-    /// master renames in when the job commits.
-    pub(crate) fn stats_path(&self) -> PathBuf {
-        self.stats_directory()
-            .join(format!("{}.ndjson.tmp", self.next_stats()))
-    }
-
-    /// The stats file the web app serves, if the stats job has run.
-    pub(crate) fn stats_file(&self) -> Option<PathBuf> {
-        self.stats
-            .map(|stats| self.stats_directory().join(format!("{stats}.ndjson")))
-    }
-
-    /// Rename the stats job's file in and delete the previous one, so a
-    /// reader never sees a half-written set.
-    pub(crate) fn commit_stats(&mut self) -> Result<(), String> {
-        let temporary = self.stats_path();
-        if !temporary.exists() {
-            return Err("the stats job wrote no file".into());
+    /// Apply one line of a walk's listing, a Partition record: a version the
+    /// map lacks is a new `PENDING` row with its listing stored (its history
+    /// from the partition's newest version, its sizes and newest file's time
+    /// from the listing), a `DELETED` one found again is `PENDING`, and every
+    /// found version is stamped with the walk's time. Returns its key.
+    pub(crate) fn found(&mut self, line: &str, now: u64) -> Result<Key, String> {
+        let record: Value =
+            serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
+        let (Some(name), Some(etag)) = (record["name"].as_str(), record["etag"].as_str()) else {
+            return Err("a listing line has no name or etag".into());
+        };
+        if !valid_key(name, etag) {
+            return Err(format!("{name} at {etag} is not a partition version"));
         }
-        let next = self
-            .stats_directory()
-            .join(format!("{}.ndjson", self.next_stats()));
-        fs::rename(&temporary, &next)
-            .map_err(|error| format!("cannot rename {}: {error}", temporary.display()))?;
-        if let Some(current) = self.stats_file() {
-            let _ = fs::remove_file(current);
-        }
-        self.stats = Some(self.next_stats());
-        Ok(())
-    }
-
-    /// Where a scan job writes `table`'s `list partitions` output.
-    pub(crate) fn scan_path(&self, table: &str) -> PathBuf {
-        self.store
-            .join("scan")
-            .join(format!("{}.ndjson", escape(table)))
-    }
-
-    /// Apply one table's listing, the scan file the job wrote: a version the
-    /// listing names and the map lacks is a new `PENDING` row (its history
-    /// from the partition's newest version, its file count and sizes from the
-    /// listing, and its newest file's time), a `DELETED` one found again is
-    /// `PENDING`, and any other row of the table it does not name is
-    /// `DELETED`. Every found version's listing line is renamed in.
-    pub(crate) fn scan(&mut self, table: &str) -> Result<usize, String> {
-        let path = self.scan_path(table);
-        let text = fs::read_to_string(&path)
-            .map_err(|error| format!("cannot read the scan of {table}: {error}"))?;
-        let _ = fs::remove_file(&path);
-        let prefix = table_prefix(table);
-        let now = now_ms();
-        let mut found: BTreeSet<Key> = BTreeSet::new();
-        for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            let record: Value =
-                serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
-            let (Some(name), Some(etag)) = (record["name"].as_str(), record["etag"].as_str())
-            else {
-                return Err("a listing line has no name or etag".into());
-            };
-            if !name.starts_with(&prefix) || !valid_key(name, etag) {
-                return Err(format!("{name} at {etag} is not a partition of {table}"));
+        let key = (name.to_string(), etag.to_string());
+        match self.rows.get_mut(&key) {
+            Some(row) => {
+                if row.state == State::Deleted {
+                    row.state = State::Pending;
+                    row.failure_count = 0;
+                    row.error = None;
+                }
+                row.list_time = Some(now);
             }
-            let key = (name.to_string(), etag.to_string());
-            self.write_result(&key, "list-partitions", line)?;
-            let row = match self.rows.get(&key) {
-                Some(row) if row.state == State::Deleted => Some(PartitionVersion {
-                    state: State::Pending,
-                    failure_count: 0,
-                    error: None,
-                    ..row.clone()
-                }),
-                Some(_) => None,
-                None => Some(PartitionVersion {
+            None => {
+                self.write_result(&key, "list-partitions.ndjson", line)?;
+                let row = PartitionVersion {
+                    list_time: Some(now),
                     file_count: record["file_count"].as_u64().unwrap_or(0),
                     size_bytes: record["size_bytes"].as_u64().unwrap_or(0),
                     removed_size_bytes: record["removed_size_bytes"].as_u64(),
                     last_modification_time: record["last_file"]["modification_time"].as_u64(),
                     ..self.new_version(name, now)
-                }),
-            };
-            if let Some(row) = row {
-                self.rows.insert(key.clone(), row.clone());
+                };
+                self.rows.insert(key.clone(), row);
             }
-            found.insert(key);
-        }
-        let missing: Vec<Key> = self
-            .rows
-            .iter()
-            .filter(|((name, _), row)| name.starts_with(&prefix) && row.state != State::Deleted)
-            .map(|(key, _)| key.clone())
-            .filter(|key| !found.contains(key))
-            .collect();
-        for key in missing {
-            self.delete_version(&key);
         }
         self.changed = true;
-        Ok(found.len())
+        Ok(key)
     }
 
-    /// After a complete catalog walk: every row of a table not in `tables`
-    /// is `DELETED`.
-    pub(crate) fn retain_tables(&mut self, tables: &[String]) -> Result<usize, String> {
-        let prefixes: Vec<String> = tables.iter().map(|table| table_prefix(table)).collect();
+    /// After a table's listing: its live versions the listing did not name
+    /// are `DELETED`.
+    pub(crate) fn missing(&mut self, table: &str, found: &BTreeSet<Key>) {
+        let prefix = table_prefix(table);
+        let gone: Vec<Key> = self
+            .rows
+            .range((prefix.clone(), String::new())..)
+            .take_while(|((name, _), _)| name.starts_with(&prefix))
+            .filter(|(key, row)| row.state != State::Deleted && !found.contains(*key))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &gone {
+            self.delete_version(key);
+        }
+    }
+
+    /// After a walk that read every table: the live versions of the tables it
+    /// did not list are `DELETED`.
+    pub(crate) fn retain(&mut self, tables: &BTreeSet<String>) {
         let gone: Vec<Key> = self
             .rows
             .iter()
             .filter(|((name, _), row)| {
-                row.state != State::Deleted
-                    && !prefixes.iter().any(|prefix| name.starts_with(prefix))
+                row.state != State::Deleted && !tables.contains(parent_table(name))
             })
             .map(|(key, _)| key.clone())
             .collect();
         for key in &gone {
             self.delete_version(key);
         }
-        self.changed = true;
-        Ok(gone.len())
     }
 
-    /// Move up to `limit` rows from `from` to the job state `to` and hand
-    /// them out, each with its listing and the path for its output. A row
-    /// that failed [`MAX_FAILURES`] times stays where it is.
-    pub(crate) fn claim(
-        &mut self,
-        from: State,
-        to: State,
-        limit: usize,
-    ) -> Result<Vec<Claim>, String> {
-        if source(to) != Some(from) {
-            return Err(format!("cannot claim {from:?} into {to:?}"));
-        }
-        let output = output(to).expect("a job state has an output");
-        let keys: Vec<Key> = self
-            .rows
-            .iter()
-            .filter(|(_, row)| row.state == from && row.failure_count < MAX_FAILURES)
-            .take(limit)
-            .map(|(key, _)| key.clone())
-            .collect();
-        let mut claims = Vec::with_capacity(keys.len());
-        for key in keys {
-            let directory = self.result_dir(&key);
-            let mut results = BTreeMap::new();
-            for name in ["list-partitions", "price", "bytemass", "list-suggestions"] {
-                if let Ok(text) = fs::read_to_string(directory.join(format!("{name}.ndjson"))) {
-                    if let Some(Ok(value)) = text.lines().next().map(serde_json::from_str::<Value>)
-                    {
-                        results.insert(name.to_string(), value);
-                    }
+    /// The runs to start next: up to `limit` versions waiting for one of
+    /// `steps`, the later steps first, so a version in progress finishes
+    /// before a new one starts. A version that failed its step twice waits.
+    pub(crate) fn plan(&self, steps: &[&'static Step], limit: usize) -> Vec<Run> {
+        let mut runs = Vec::new();
+        for step in steps.iter().rev() {
+            for (key, row) in &self.rows {
+                if runs.len() >= limit {
+                    return runs;
+                }
+                if row.state != step.source || row.failure_count >= MAX_FAILURES {
+                    continue;
+                }
+                if let Some(run) = self.run(key, step) {
+                    runs.push(run);
                 }
             }
-            let Some(partition) = results.remove("list-partitions") else {
-                continue;
-            };
-            let row = self.rows.get_mut(&key).expect("the claimed key exists");
-            row.state = to;
-            claims.push(Claim {
-                path: directory.join(format!("{output}.ndjson.tmp")),
-                name: key.0,
-                etag: key.1,
-                partition,
-                results,
-            });
         }
-        self.changed = true;
-        Ok(claims)
+        runs
     }
 
-    /// Finish one claimed version. While the row is still in the job state
-    /// `from`, a success renames the job's output in (when it wrote one) and
-    /// moves the row to `to`; an error moves it back to the state before
-    /// `from` and counts the failure. Otherwise the call is dropped and the
-    /// output deleted. Returns whether it applied.
-    pub(crate) fn commit(
-        &mut self,
-        key: &Key,
-        from: State,
-        to: State,
-        error: Option<String>,
-    ) -> Result<bool, String> {
-        let output = output(from).ok_or_else(|| format!("{from:?} is not a job state"))?;
-        let temporary = self.result_dir(key).join(format!("{output}.ndjson.tmp"));
-        let current = self.rows.get(key).map(|row| row.state);
-        if current != Some(from) {
-            let _ = fs::remove_file(&temporary);
-            return Ok(false);
+    /// The run of `step` on one version: its command line and files.
+    fn run(&self, key: &Key, step: &'static Step) -> Option<Run> {
+        let directory = self.result_dir(key);
+        let listing = fs::read_to_string(directory.join("list-partitions.ndjson")).ok()?;
+        let input = match step.input {
+            Input::Partition => listing.trim().to_string(),
+            Input::SampleFile => {
+                let record: Value = serde_json::from_str(listing.trim()).ok()?;
+                record.get("sample_file")?.to_string()
+            }
+        };
+        let attempt_id = attempt_id();
+        let temporary = directory.join(format!("{}.{attempt_id}.tmp", step.output));
+        let mut command_words: Vec<String> = step.command.iter().map(|arg| (*arg).into()).collect();
+        if !step.stdout {
+            command_words.push("--output".into());
+            command_words.push(temporary.to_string_lossy().into_owned());
         }
-        let row = self.rows.get_mut(key).expect("the row exists");
-        match error {
-            None => {
-                if temporary.exists() {
-                    let target = temporary.with_extension("");
-                    fs::rename(&temporary, &target).map_err(|error| {
-                        format!("cannot rename {}: {error}", temporary.display())
-                    })?;
-                    if from == State::Pricing {
-                        (row.lowest_cost_per_month, row.highest_cost_per_month) =
-                            cost_bounds(&target);
+        if step.local {
+            command_words.push("--local".into());
+            command_words.push(
+                directory
+                    .join("sample.parquet")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        Some(Run {
+            key: key.clone(),
+            step,
+            input: input + "\n",
+            input_path: directory.join(format!("{}.{attempt_id}.in", step.name)),
+            stdout: step.stdout.then_some(temporary),
+            stderr: directory.join(format!("{}.{attempt_id}.err", step.name)),
+            command_words,
+            attempt_id,
+        })
+    }
+
+    /// A run started: the version is in the step's running state, with its
+    /// process, attempt and start time.
+    pub(crate) fn start(&mut self, run: &Run, process_id: u32, now: u64) {
+        let Some(row) = self.rows.get_mut(&run.key) else {
+            return;
+        };
+        row.state = run.step.running;
+        row.process_id = Some(process_id);
+        row.attempt_id = Some(run.attempt_id.clone());
+        row.start_time = Some(now);
+        self.running.insert(run.key.clone());
+        self.changed = true;
+    }
+
+    /// The versions a step is running on.
+    pub(crate) fn runs(&self) -> Vec<Running> {
+        self.running
+            .iter()
+            .filter_map(|key| {
+                let row = self.rows.get(key)?;
+                let step = running_step(row.state)?;
+                let attempt = row.attempt_id.as_deref()?;
+                Some(Running {
+                    key: key.clone(),
+                    process_id: row.process_id?,
+                    start_time: row.start_time?,
+                    command: step.command,
+                    stderr: self
+                        .result_dir(key)
+                        .join(format!("{}.{attempt}.err", step.name)),
+                })
+            })
+            .collect()
+    }
+
+    /// A run's process exited: `Ok` when it succeeded, else its error. A
+    /// success renames the output in and moves the version on: a price whose
+    /// partition has no live file, or whose files need a restore, ends the
+    /// version, since there is nothing to read; a failure puts the version
+    /// back with the error counted.
+    pub(crate) fn finish(&mut self, key: &Key, outcome: Result<(), String>, now: u64) {
+        self.running.remove(key);
+        let directory = self.result_dir(key);
+        let Some(row) = self.rows.get_mut(key) else {
+            return;
+        };
+        let (Some(step), Some(attempt)) = (running_step(row.state), row.attempt_id.clone()) else {
+            return;
+        };
+        let temporary = directory.join(format!("{}.{attempt}.tmp", step.output));
+        let landed = directory.join(step.output);
+        let _ = fs::remove_file(directory.join(format!("{}.{attempt}.in", step.name)));
+        let _ = fs::remove_file(directory.join(format!("{}.{attempt}.err", step.name)));
+        clear_attempt(row);
+        let outcome = outcome.and_then(|()| {
+            fs::rename(&temporary, &landed)
+                .map_err(|error| format!("the {} step left no output: {error}", step.name))
+        });
+        match outcome {
+            Ok(()) => {
+                let mut next = step.done;
+                if step.running == State::Pricing {
+                    (row.lowest_cost_per_month, row.highest_cost_per_month) = cost_bounds(&landed);
+                    if row.file_count == 0 || !readable(&landed) {
+                        next = State::UpToDate;
                     }
                 }
-                row.state = to;
+                row.state = next;
                 row.failure_count = 0;
                 row.error = None;
-                if to == State::UpToDate {
-                    row.up_to_date_time = Some(now_ms());
+                if next == State::UpToDate {
+                    row.up_to_date_time = Some(now);
+                    self.purge_due = true;
                 }
             }
-            Some(error) => {
+            Err(error) => {
                 let _ = fs::remove_file(&temporary);
-                row.state = source(from).expect("a job state has a source");
+                row.state = step.source;
                 row.failure_count += 1;
                 row.error = Some(error);
             }
         }
         self.changed = true;
-        Ok(true)
     }
 
-    /// Move every row in the job state `state` back to the state before it
-    /// and delete its temporary output: what a job does when it starts, since
-    /// with one instance at a time only a dead run can have left them.
-    pub(crate) fn revert(&mut self, state: State) -> Result<usize, String> {
-        let source = source(state).ok_or_else(|| format!("{state:?} is not a job state"))?;
-        let output = output(state).expect("a job state has an output");
-        let keys: Vec<Key> = self
-            .rows
-            .iter()
-            .filter(|(_, row)| row.state == state)
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in &keys {
-            let _ = fs::remove_file(self.result_dir(key).join(format!("{output}.ndjson.tmp")));
-            let row = self.rows.get_mut(key).expect("the key exists");
-            row.state = source;
+    /// Drop every `DELETED` version except a kept one, and return the result
+    /// directories to delete: a partition's newest version that reached
+    /// `UP_TO_DATE` stays while a newer version of it is live and not
+    /// `UP_TO_DATE` yet, so its complete results are shown until the new ones
+    /// replace them. Nothing is walked unless a version may have become
+    /// purgeable since the last purge.
+    pub(crate) fn purge(&mut self) -> Vec<PathBuf> {
+        if !self.purge_due {
+            return Vec::new();
         }
-        self.changed = true;
-        Ok(keys.len())
-    }
-
-    /// Delete every `DELETED` version's results and row, except a kept one:
-    /// a partition's newest version that reached `UP_TO_DATE` stays while a
-    /// newer version of it is live and not `UP_TO_DATE` yet, so the last
-    /// complete results are shown until the new ones replace them.
-    pub(crate) fn purge(&mut self) -> Result<usize, String> {
+        self.purge_due = false;
         let mut by_name: BTreeMap<&str, Vec<(&Key, &PartitionVersion)>> = BTreeMap::new();
         for (key, row) in &self.rows {
             by_name.entry(key.0.as_str()).or_default().push((key, row));
@@ -432,22 +493,26 @@ impl Master {
                     .map(|(key, _)| (*key).clone()),
             );
         }
+        let directories = purged.iter().map(|key| self.result_dir(key)).collect();
         for key in &purged {
-            remove_dir(&self.result_dir(key))?;
             self.rows.remove(key);
         }
-        self.changed = true;
-        Ok(purged.len())
+        if !purged.is_empty() {
+            self.changed = true;
+        }
+        directories
     }
 
-    /// Write every row to the checkpoint when they changed since the last
-    /// one: a temporary file, synced, then renamed over it.
-    pub(crate) fn checkpoint(&mut self) -> Result<(), String> {
-        if !self.changed && self.store.join("master/checkpoint.ndjson").exists() {
-            return Ok(());
-        }
-        let path = self.store.join("master/checkpoint.ndjson");
-        let temporary = path.with_extension("ndjson.new");
+    /// Whether the rows changed since the last call.
+    pub(crate) fn take_changed(&mut self) -> bool {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Write every row to the checkpoint: a temporary file, synced, then
+    /// renamed over it. Returns its path.
+    pub(crate) fn checkpoint(&self) -> Result<PathBuf, String> {
+        let path = self.store.join("checkpoint.ndjson");
+        let temporary = path.with_extension("ndjson.tmp");
         let write = || -> std::io::Result<()> {
             let mut file = BufWriter::new(File::create(&temporary)?);
             for (key, row) in &self.rows {
@@ -459,8 +524,7 @@ impl Master {
             fs::rename(&temporary, &path)
         };
         write().map_err(|error| format!("cannot write the checkpoint: {error}"))?;
-        self.changed = false;
-        Ok(())
+        Ok(path)
     }
 
     fn new_version(&self, name: &str, now: u64) -> PartitionVersion {
@@ -479,18 +543,18 @@ impl Master {
         }
     }
 
+    /// A version a walk no longer finds: a run on it is left to finish, and
+    /// its result is then dropped with the version.
     fn delete_version(&mut self, key: &Key) {
         let row = self.rows.get_mut(key).expect("the key exists");
-        if let Some(output) = output(row.state) {
-            let _ = fs::remove_file(
-                self.store
-                    .join("results")
-                    .join(&key.0)
-                    .join(&key.1)
-                    .join(format!("{output}.ndjson.tmp")),
-            );
+        if running_step(row.state).is_none() {
+            row.state = State::Deleted;
+        } else {
+            // The run's finish moves it on; the next walk deletes it then.
+            return;
         }
-        row.state = State::Deleted;
+        self.purge_due = true;
+        self.changed = true;
     }
 
     fn result_dir(&self, key: &Key) -> PathBuf {
@@ -502,15 +566,15 @@ impl Master {
         let directory = self.result_dir(key);
         fs::create_dir_all(&directory)
             .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-        let target = directory.join(format!("{output}.ndjson"));
-        let temporary = directory.join(format!("{output}.ndjson.tmp"));
+        let target = directory.join(output);
+        let temporary = directory.join(format!("{output}.tmp"));
         fs::write(&temporary, format!("{line}\n"))
             .and_then(|()| fs::rename(&temporary, &target))
             .map_err(|error| format!("cannot write {}: {error}", target.display()))
     }
 
-    /// Delete the result directories no row names, and temporary files left
-    /// beside any result.
+    /// Delete the result directories no row names, and the files unfinished
+    /// attempts left beside any result.
     fn sweep(&self) -> Result<(), String> {
         let results = self.store.join("results");
         for directory in version_dirs(&results) {
@@ -530,11 +594,10 @@ impl Master {
                 continue;
             }
             for file in fs::read_dir(&directory).into_iter().flatten().flatten() {
-                if file
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == "tmp")
-                {
+                let unfinished = file.path().extension().is_some_and(|extension| {
+                    extension == "tmp" || extension == "err" || extension == "in"
+                });
+                if unfinished {
                     let _ = fs::remove_file(file.path());
                 }
             }
@@ -543,13 +606,39 @@ impl Master {
     }
 }
 
+fn clear_attempt(row: &mut PartitionVersion) {
+    row.process_id = None;
+    row.attempt_id = None;
+    row.start_time = None;
+}
+
+/// A fresh attempt id: 64 random bits as hex.
+fn attempt_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u128(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos()),
+    );
+    format!("{:016x}", hasher.finish())
+}
+
+/// The table a partition name is under.
+fn parent_table(name: &str) -> &str {
+    name.split_once("/partitions/")
+        .map_or(name, |(table, _)| table)
+}
+
+/// The price a result file holds, if it holds one.
+fn read_price(price: &Path) -> Option<pqbench::v1::PartitionPrice> {
+    let text = fs::read_to_string(price).ok()?;
+    serde_json::from_str(text.lines().next()?).ok()
+}
+
 /// The cheapest and dearest monthly cost a price result names.
 fn cost_bounds(price: &Path) -> (Option<f64>, Option<f64>) {
-    let costs: Vec<f64> = fs::read_to_string(price)
-        .ok()
-        .and_then(|text| {
-            serde_json::from_str::<pqbench::v1::PartitionPrice>(text.lines().next()?).ok()
-        })
+    let costs: Vec<f64> = read_price(price)
         .map(|price| {
             price
                 .storage_costs
@@ -562,6 +651,23 @@ fn cost_bounds(price: &Path) -> (Option<f64>, Option<f64>) {
         costs.iter().copied().reduce(f64::min),
         costs.iter().copied().reduce(f64::max),
     )
+}
+
+/// Whether a price's files can be read without a restore: none is in an
+/// archive class or access tier. Files with no class (not S3 objects) are
+/// readable.
+fn readable(price: &Path) -> bool {
+    read_price(price).is_some_and(|price| {
+        let archived = |class: &str| ARCHIVE_CLASSES.contains(&class);
+        !price.storage_classes.iter().any(|class| archived(class))
+            && !price.storage_costs.iter().any(|cost| {
+                archived(&cost.storage_class)
+                    || cost
+                        .access_tier
+                        .as_deref()
+                        .is_some_and(|tier| ARCHIVE_TIERS.contains(&tier))
+            })
+    })
 }
 
 /// The newest version of one partition that reached `UP_TO_DATE`, while the
@@ -593,25 +699,12 @@ fn version_dirs(results: &Path) -> Vec<PathBuf> {
     level
 }
 
-fn remove_dir(directory: &Path) -> Result<(), String> {
+pub(crate) fn remove_dir(directory: &Path) -> Result<(), String> {
     match fs::remove_dir_all(directory) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("cannot delete {}: {error}", directory.display())),
     }
-}
-
-/// The number of the newest stats file, if the stats job has run.
-fn newest_stats(directory: &Path) -> Option<u64> {
-    fs::read_dir(directory)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|file| {
-            let name = file.file_name().to_string_lossy().into_owned();
-            name.strip_suffix(".ndjson")?.parse().ok()
-        })
-        .max()
 }
 
 fn read_checkpoint(path: &Path) -> Result<BTreeMap<Key, PartitionVersion>, String> {
@@ -646,6 +739,7 @@ pub(crate) fn version(key: &Key, row: &PartitionVersion) -> PartitionVersion {
 fn valid_key(name: &str, etag: &str) -> bool {
     let segments: Vec<&str> = name.split('/').collect();
     segments.len() == 8
+        && segments[6] == "partitions"
         && segments
             .iter()
             .all(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
@@ -657,12 +751,7 @@ fn table_prefix(table: &str) -> String {
     format!("{}/partitions/", table.trim_end_matches('/'))
 }
 
-/// A table name as one file name.
-fn escape(table: &str) -> String {
-    table.replace('%', "%25").replace('/', "%2F")
-}
-
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
@@ -673,64 +762,103 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
 
-    const TABLE: &str = "catalogs/c/schemas/s/tables/t";
+    const PARTITION: &str = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
 
-    fn scan(master: &mut Master, etag: &str) {
-        let line = serde_json::json!({"name": format!("{TABLE}/partitions/day%3D1"), "etag": etag});
-        fs::write(master.scan_path(TABLE), format!("{line}\n")).unwrap();
-        master.scan(TABLE).unwrap();
+    fn listing(etag: &str, file_count: u64) -> String {
+        serde_json::json!({
+            "name": PARTITION,
+            "etag": etag,
+            "file_count": file_count,
+            "sample_file": {"name": "catalogs/c/schemas/s/tables/t/files/a.parquet"},
+        })
+        .to_string()
     }
 
-    /// A job's output for a version the scan replaced meanwhile is dropped:
-    /// not renamed in, and its temporary file deleted.
-    #[test]
-    fn a_late_commit_for_a_replaced_version_is_dropped() {
+    /// Price one version with a result naming `class` and `tier`, and return
+    /// the state it lands in.
+    fn priced(file_count: u64, class: &str, tier: Option<&str>) -> State {
         let directory = tempfile::tempdir().unwrap();
         let mut master = Master::open(directory.path()).unwrap();
-        scan(&mut master, "aa");
-        let claim = master
-            .claim(State::Pending, State::Pricing, 10)
-            .unwrap()
-            .remove(0);
-        fs::write(&claim.path, "{}\n").unwrap();
-        scan(&mut master, "bb");
-        let key = (claim.name.clone(), claim.etag.clone());
-        assert!(!master
-            .commit(&key, State::Pricing, State::Priced, None)
-            .unwrap());
-        assert!(!claim.path.exists());
-        assert!(!claim.path.with_extension("").exists());
-        assert_eq!(master.rows[&key].state, State::Deleted);
+        let key = master.found(&listing("aa", file_count), 1).unwrap();
+        let run = master.plan(&[&STEPS[0]], 1).remove(0);
+        master.start(&run, 1, 2);
+        let price = serde_json::json!({
+            "name": format!("{PARTITION}/price"),
+            "storage_classes": [class],
+            "storage_costs": [{"storage_class": class, "access_tier": tier,
+                "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
+        });
+        fs::write(run.stdout.unwrap(), format!("{price}\n")).unwrap();
+        master.finish(&key, Ok(()), 3);
+        assert_eq!(master.rows[&key].highest_cost_per_month, Some(1.0));
+        master.rows[&key].state
     }
 
-    /// A restart returns the rows a job held at the last checkpoint to the
-    /// state before it, and deletes what the job had written.
+    /// A price ends the version when there is nothing to read: no live file,
+    /// or a class or access tier that needs a restore.
     #[test]
-    fn a_restart_returns_claimed_versions() {
+    fn a_price_ends_the_version_when_there_is_nothing_to_read() {
+        assert_eq!(priced(1, "STANDARD_IA", None), State::Priced);
+        assert_eq!(priced(1, "GLACIER_IR", None), State::Priced);
+        assert_eq!(priced(1, "GLACIER", None), State::UpToDate);
+        assert_eq!(priced(1, "DEEP_ARCHIVE", None), State::UpToDate);
+        assert_eq!(
+            priced(1, "INTELLIGENT_TIERING", Some("FREQUENT_ACCESS")),
+            State::Priced
+        );
+        assert_eq!(
+            priced(1, "INTELLIGENT_TIERING", Some("ARCHIVE_ACCESS")),
+            State::UpToDate
+        );
+        assert_eq!(priced(0, "STANDARD", None), State::UpToDate);
+    }
+
+    /// A failed run puts the version back with its error, and after two it
+    /// is not planned again.
+    #[test]
+    fn a_version_that_failed_twice_waits() {
         let directory = tempfile::tempdir().unwrap();
         let mut master = Master::open(directory.path()).unwrap();
-        scan(&mut master, "aa");
-        let claim = master
-            .claim(State::Pending, State::Pricing, 10)
-            .unwrap()
-            .remove(0);
-        fs::write(&claim.path, "{}\n").unwrap();
+        let key = master.found(&listing("aa", 1), 1).unwrap();
+        for attempt in 0..2 {
+            let run = master.plan(&[&STEPS[0]], 1).remove(0);
+            master.start(&run, 1, 2);
+            master.finish(&key, Err(format!("boom {attempt}")), 3);
+            assert_eq!(master.rows[&key].state, State::Pending);
+        }
+        assert_eq!(master.rows[&key].failure_count, 2);
+        assert_eq!(master.rows[&key].error.as_deref(), Some("boom 1"));
+        assert!(master.plan(&[&STEPS[0]], 1).is_empty());
+    }
+
+    /// A restart puts a running version back, and deletes its attempt's files.
+    #[test]
+    fn a_restart_puts_running_versions_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut master = Master::open(directory.path()).unwrap();
+        let key = master.found(&listing("aa", 1), 1).unwrap();
+        let run = master.plan(&[&STEPS[0]], 1).remove(0);
+        master.start(&run, 1, 2);
+        let output = run.stdout.clone().unwrap();
+        fs::write(&output, "{}\n").unwrap();
         master.checkpoint().unwrap();
         drop(master);
         let master = Master::open(directory.path()).unwrap();
-        let key = (claim.name, claim.etag);
         assert_eq!(master.rows[&key].state, State::Pending);
-        assert!(!claim.path.exists());
+        assert!(master.rows[&key].process_id.is_none());
+        assert!(!output.exists());
     }
 
     /// A listing line that would name a path outside the store is refused.
     #[test]
-    fn a_scan_refuses_a_name_that_leaves_the_store() {
+    fn a_listing_that_leaves_the_store_is_refused() {
         let directory = tempfile::tempdir().unwrap();
         let mut master = Master::open(directory.path()).unwrap();
-        let line = serde_json::json!({"name": format!("{TABLE}/partitions/.."), "etag": "aa"});
-        fs::write(master.scan_path(TABLE), format!("{line}\n")).unwrap();
-        assert!(master.scan(TABLE).is_err());
+        let line = serde_json::json!({
+            "name": "catalogs/c/schemas/s/tables/t/partitions/..",
+            "etag": "aa",
+        });
+        assert!(master.found(&line.to_string(), 1).is_err());
         assert!(master.records("").unwrap().is_empty());
     }
 }

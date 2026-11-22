@@ -324,34 +324,43 @@ message PartitionPrice {
 }
 
 // A partition at one etag and where it is in the pipeline: the daemon
-// master's record of it (`list partition-versions`). The scan makes a version
-// for each etag it finds; the previous one is kept, DELETED, until purge.
+// master's record of it (`list partition-versions`), and the master's whole
+// state. A walk makes a version for each etag it finds; the previous one is
+// kept, DELETED, until purge.
 message PartitionVersion {
   // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/versions/{version}
   // The version id is the partition's etag.
   string name = 1;
 
-  // Where a version is: each step's job takes it from the state before the
-  // step, through the step's own state, to the state after it.
+  // Where a version is: each step takes it from the state before the step,
+  // through the step's running state, to the state after it.
   enum State {
     STATE_UNSPECIFIED = 0;
-    // The scan no longer finds this version; its results wait for purge.
+    // A walk no longer finds this version; its results wait for purge.
     DELETED = 1;
     // Found, not processed yet.
     PENDING = 2;
     PRICING = 3;
     PRICED = 4;
-    BYTEMASSING = 5;
-    BYTEMASSED = 6;
-    LINTING = 7;
-    // Every step done for this version.
-    UP_TO_DATE = 8;
+    // The version's sample file is being copied into its directory.
+    DOWNLOADING = 5;
+    // The sample file is on disk, for the steps that read its data.
+    DOWNLOADED = 6;
+    BYTEMASSING = 7;
+    BYTEMASSED = 8;
+    LINTING = 9;
+    // Every step the version needs is done: a version with no live file, or
+    // whose files need a restore, is done after its price.
+    UP_TO_DATE = 10;
   }
 
   State state = 2;
 
-  // When the scan found this version.
+  // When a walk first found this version.
   int64 create_time = 3;
+
+  // When a walk last found this version.
+  optional int64 list_time = 15;
 
   // When this version reached UP_TO_DATE.
   optional int64 up_to_date_time = 4;
@@ -388,6 +397,14 @@ message PartitionVersion {
   optional double lowest_cost_per_month = 13;
 
   optional double highest_cost_per_month = 14;
+
+  // While a step runs on this version: the process the master started, the
+  // attempt its files are named by, and when it started.
+  optional uint32 process_id = 16;
+
+  optional string attempt_id = 17;
+
+  optional int64 start_time = 18;
 }
 
 // The totals of the partition versions under one catalog, schema or table,

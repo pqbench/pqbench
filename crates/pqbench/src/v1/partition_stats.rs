@@ -24,8 +24,8 @@ pub struct PartitionStats {
     /// The bytes removed from the logs but not vacuumed, where the logs
     /// report them.
     pub removed_size_bytes: u64,
-    /// The partitions with a monthly cost: the ones the price job priced
-    /// whose files have a storage class.
+    /// The partitions with a monthly cost: the priced ones whose files have a
+    /// storage class.
     pub priced_partition_count: u64,
     /// Those partitions' monthly cost, summed over their cheapest and their
     /// dearest class or access tier. Absent when none has a cost.

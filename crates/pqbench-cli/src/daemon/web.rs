@@ -4,7 +4,7 @@
 //!
 //! - `/v1/catalogs`, `/v1/catalogs/{c}/schemas`,
 //!   `/v1/catalogs/{c}/schemas/{s}/tables`, ids `-` for any (AIP-159): the
-//!   stats job's PartitionStats, dearest first and then by size;
+//!   master's PartitionStats, dearest first and then by size;
 //! - `/v1/{table}/partitions`: one page of the table's versions (AIP-158
 //!   `page_size`, `page_token`; AIP-132 `order_by`, dearest first by default
 //!   or `last_modification_time desc`), each its row with its listing and
@@ -12,12 +12,12 @@
 //! - `/v1/{partition}`: that partition's versions with every result, the
 //!   column masses and suggestions included.
 //!
-//! A level's page reads the stats job's file; a partitions page sorts the
+//! A level's page reads the master's stats file; a partitions page sorts the
 //! master's rows for the one table. Only a page's versions read their results
 //! from the store.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -45,7 +45,7 @@ pub(crate) async fn bind(address: &str) -> Result<TcpListener, String> {
 }
 
 /// Serve the web app until the process ends.
-pub(crate) async fn run(listener: TcpListener, master: Arc<Mutex<Master>>) {
+pub(crate) async fn run(listener: TcpListener, master: Arc<RwLock<Master>>) {
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             continue;
@@ -57,7 +57,7 @@ pub(crate) async fn run(listener: TcpListener, master: Arc<Mutex<Master>>) {
     }
 }
 
-async fn handle(mut stream: TcpStream, master: Arc<Mutex<Master>>) -> std::io::Result<()> {
+async fn handle(mut stream: TcpStream, master: Arc<RwLock<Master>>) -> std::io::Result<()> {
     let mut head = Vec::new();
     let mut buffer = [0u8; 2048];
     while !head.windows(4).any(|window| window == b"\r\n\r\n") && head.len() < HEAD_LIMIT {
@@ -112,7 +112,7 @@ async fn handle(mut stream: TcpStream, master: Arc<Mutex<Master>>) -> std::io::R
 
 /// What `name` names: a level's stats, a page of one table's versions, or
 /// one partition's versions. `None` when it names none of them.
-fn read(master: &Mutex<Master>, name: &str, query: &str) -> Result<Option<Value>, String> {
+fn read(master: &RwLock<Master>, name: &str, query: &str) -> Result<Option<Value>, String> {
     let segments: Vec<&str> = name.split('/').collect();
     if level(&segments) {
         return Ok(Some(Value::Array(stats(master, &segments)?)));
@@ -175,7 +175,7 @@ fn level(segments: &[&str]) -> bool {
 /// The stats the stats job wrote, the ones under the `segments` (which may
 /// hold `-`), dearest first and then by size: a level's page reads no
 /// versions.
-fn stats(master: &Mutex<Master>, segments: &[&str]) -> Result<Vec<Value>, String> {
+fn stats(master: &RwLock<Master>, segments: &[&str]) -> Result<Vec<Value>, String> {
     let file = lock(master).stats_file();
     let Some(file) = file else {
         return Ok(Vec::new());
@@ -301,9 +301,9 @@ impl Page {
     }
 }
 
-fn lock(master: &Mutex<Master>) -> std::sync::MutexGuard<'_, Master> {
+fn lock(master: &RwLock<Master>) -> std::sync::RwLockReadGuard<'_, Master> {
     master
-        .lock()
+        .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 

@@ -286,20 +286,6 @@ impl Daemon {
         }
     }
 
-    /// One call on the daemon's master; an error the master answers is an
-    /// error here.
-    pub(crate) async fn master(&self, request: &Request) -> Result<Response, CliError> {
-        let path = self.socket().ok_or_else(|| -> CliError {
-            "a job needs the daemon's master; run `pqbench daemon start --master --store DIR`"
-                .into()
-        })?;
-        let response = ask(path, request).await?;
-        match response.error {
-            Some(error) => Err(error.into()),
-            None => Ok(response),
-        }
-    }
-
     /// One listing call on the daemon's master: how many lines follow, and
     /// the lines.
     pub(crate) async fn master_list(

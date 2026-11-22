@@ -181,19 +181,51 @@ externally readable, or filter the refs first.
 
 ### The master
 
-`pqbench daemon start --master --store DIR` (or `serve`) also runs the master:
-one map of partition versions, a partition at one etag, and the results the
-jobs' commands wrote for each. The jobs are separate processes on a schedule
-(`pqbench job scan`, `job purge`, …): a job asks the master for work, runs one
-plain pqbench command per input with its standard output going to the path the
-master gives, and commits. The master renames that output into
-`DIR/results/{partition}/{etag}/` only while the version is still the job's, so
-a late or repeated run never overwrites newer work. Each call on the map is
-atomic. The map is the state: it is written whole to
-`DIR/master/checkpoint.ndjson` every 10 seconds while it changes, and on stop.
-A restart loads the checkpoint, returns work held by jobs to where it was, and
-deletes results no row names; a crash loses at most the calls since the last
-checkpoint, and the jobs and the next scan redo them.
+`pqbench daemon start --master --store DIR` (or `serve`) also runs the master.
+Its whole state is one map of partition versions (`PartitionVersion`, a
+partition at one etag). The work is plain pqbench commands, which the daemon
+runs as child processes and checks on a pass every 100 ms without waiting for
+any; the master decides what runs next for a version and what a finished
+command means for it.
+
+- **The walk** runs `list schemas | list tables | get table | list partitions`
+  from each `--walk` catalog or schema (`catalogs/main`,
+  `catalogs/main/schemas/sales`), and `list partitions` over the Table records
+  in `--walk-tables FILE` (for local tables). It runs once when the daemon
+  starts, then every `--walk-period-seconds`. A partition at a new etag is a
+  new `PENDING` version, and a listed table's versions the walk no longer
+  finds are `DELETED`. When every table was read, the versions of tables the
+  walk did not list are deleted too; a walk where a table failed deletes no
+  other table.
+- **The steps** run one command per version, each from the state before it to
+  the state after it: `price` (`get partition-price`), `download` (the
+  partition's sample file into the version's directory), `bytemass` and
+  `lint` (`bytemass --local` and `list suggestions --local` on that copy).
+  Each `--step NAME` turns one on, with at most `--processes` commands at once
+  and `--step-time-limit-seconds` before one is killed. A version with no live
+  file, or whose files are in an archive class or tier, is `UP_TO_DATE` after
+  its price. A failure puts the version back with the command's error; after
+  two it waits. A version waits at the first step that is off, so `--step
+  price` alone reads no file's data: the setting for a host with little
+  network.
+- **Purge** drops `DELETED` versions and their results, except a partition's
+  last `UP_TO_DATE` version while its newer one is in progress, so its
+  complete results are shown until the new ones replace them.
+- **The stats** are `summarize partition-versions` over each checkpoint, in
+  `DIR/stats.ndjson`.
+
+A command's output lands in `DIR/results/{partition}/{etag}/` under the
+attempt's id and is renamed into place when the command succeeds. The map is
+written whole to `DIR/checkpoint.ndjson` every 10 seconds while commands run,
+at once when none do, and on stop. A restart loads it and puts each running
+version back; a crash loses at most the changes since the last checkpoint,
+and the commands redo them.
+
+`pqbench list partition-versions [PARENT]` prints the map as `PartitionVersion`
+records, named `…/partitions/{partition}/versions/{etag}`: all of them, or those
+under a catalog, schema, table or partition name, with `-` for any id. The
+checkpoint is the same records, and `pqbench summarize partition-versions`
+totals them per catalog, schema and table as `PartitionStats` records.
 
 With `--web-ui` (and `--listen ADDR`, default `127.0.0.1:8180`) the daemon
 also serves the web app, read-only: the warehouse by catalog, schema and
@@ -201,9 +233,9 @@ table, then a table's partitions, then one partition's versions. `GET
 /v1/{name}` returns what a name names:
 
 - `/v1/catalogs`, `/v1/catalogs/{c}/schemas` and
-  `/v1/catalogs/{c}/schemas/{s}/tables` (`-` for any id) return the stats
-  job's `PartitionStats` records under that level, dearest first and then by
-  size. The page reads them; it sums and sorts nothing.
+  `/v1/catalogs/{c}/schemas/{s}/tables` (`-` for any id) return the
+  `PartitionStats` records under that level, dearest first and then by size.
+  The page reads them; it sums and sorts nothing.
 - A partitions collection (`{table}/partitions`) returns one page,
   `{"partitions", "next_page_token", "total_size"}`, taking `page_size` (100 by
   default, at most 1000), `page_token`, and `order_by`: `highest_cost_per_month
@@ -212,22 +244,9 @@ table, then a table's partitions, then one partition's versions. `GET
   listing and price.
 - One partition returns its versions with every result.
 
-`pqbench job stats` writes those totals: `list partition-versions | summarize
-partition-versions` into a temporary file the master renames in and serves. Run
-it after the other jobs, and as often as the page should be fresh.
-
-`pqbench list partition-versions [PARENT]` prints the master's rows as
-`PartitionVersion` records, named `…/partitions/{partition}/versions/{etag}`:
-all of them, or those under a catalog, schema, table or partition name, with
-`-` for any id. The checkpoint is the same records.
-`pqbench list partition-versions | pqbench summarize partition-versions`
-totals them per catalog, schema and table as `PartitionStats` records.
-
 ```console no-run
-$ pqbench daemon start --master --store /var/lib/pqbench --web-ui
-$ echo '{"name":"catalogs/main/schemas/sales"}' | pqbench list tables | pqbench get table | pqbench job scan --complete
+$ pqbench daemon start --master --store /var/lib/pqbench --walk catalogs/main --walk-period-seconds 86400 --step price --step download --step bytemass --step lint --web-ui
 $ pqbench list partition-versions catalogs/main/schemas/sales
-$ pqbench job stats
 ```
 
 ## Databricks-governed tables
