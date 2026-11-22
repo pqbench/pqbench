@@ -65,12 +65,17 @@ pub fn select(file: &v1::TableFile, rate: f64) -> Result<Option<f64>, Error> {
     Ok((hash_unit(&file.name) < inclusion).then_some(inclusion))
 }
 
-/// A value in `[0, 1)` from a name: FNV-1a, then the Murmur3 finalizer so
-/// names that differ in one suffix byte still scatter. Stable across toolchain
-/// versions, unlike the standard library's hasher.
+/// A value in `[0, 1)` from a name: [`hash`] scaled to its top 53 bits.
 fn hash_unit(name: &str) -> f64 {
+    (hash(&[name.as_bytes()]) >> 11) as f64 / HASH_UNITS
+}
+
+/// A 64-bit hash of the concatenated `parts`: FNV-1a, then the Murmur3
+/// finalizer so inputs that differ in one suffix byte still scatter. Stable
+/// across toolchain versions, unlike the standard library's hasher.
+pub(crate) fn hash(parts: &[&[u8]]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in name.as_bytes() {
+    for byte in parts.iter().flat_map(|part| part.iter()) {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
@@ -79,7 +84,7 @@ fn hash_unit(name: &str) -> f64 {
     hash ^= hash >> 33;
     hash = hash.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
     hash ^= hash >> 33;
-    (hash >> 11) as f64 / HASH_UNITS
+    hash
 }
 
 /// Errors sampling a table's files.
