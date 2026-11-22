@@ -268,3 +268,36 @@ fn a_stale_candidate_is_rejected_not_dropped() {
 
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// `download` copies a file, and the commands read the copy with `--local`
+/// while their records keep naming the original: the original is gone when
+/// they run.
+#[test]
+fn a_downloaded_copy_is_read_under_the_original_name() {
+    let directory = temporary("local");
+    let path = directory.join("data.parquet");
+    let copy = directory.join("copy.parquet");
+    let values: Vec<String> = (0..100_000).map(uuid).collect();
+    write_values(&path, &values, false, 0);
+    let record = crate::common::table_file(path.to_str().expect("utf-8 path"));
+    run(
+        &["download", "--output", copy.to_str().expect("utf-8 path")],
+        &record,
+    );
+    assert_eq!(std::fs::read(&copy).unwrap(), std::fs::read(&path).unwrap());
+    let expected = run(&["list", "suggestions"], &record);
+    std::fs::remove_file(&path).unwrap();
+
+    let local = copy.to_str().expect("utf-8 path");
+    let records = run(&["list", "suggestions", "--local", local], &record);
+    assert_eq!(records, expected);
+    let columns = run(&["bytemass", "--local", local], &record);
+    assert!(!columns.is_empty());
+    let blob = columns[0]["name"].as_str().unwrap();
+    assert!(blob.ends_with("data.parquet"), "{blob}");
+    let input: Vec<String> = records.iter().map(ToString::to_string).collect();
+    let measured = run(&["get", "suggestion", "--local", local], &input.join("\n"));
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+
+    let _ = std::fs::remove_dir_all(directory);
+}

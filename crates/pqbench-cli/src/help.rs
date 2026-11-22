@@ -330,6 +330,24 @@ covers the partition and two bound a transition inside it; a class that prices
 by access (INTELLIGENT_TIERING) lists each access sub-tier. A file that is not
 an S3 object has no class, and a partition with none has no cost.";
 
+pub const DOWNLOAD_ABOUT: &str = "Copy a table file's bytes to a local path";
+
+pub const DOWNLOAD_LONG_ABOUT: &str = "\
+Read one TableFile record on standard input (`list files` names them) and copy
+its blob to --output, in pieces, so a large file costs bounded memory and the
+blob is read once. `bytemass`, `list suggestions` and `get suggestion` read
+such a copy with --local and keep the record's blob name, so their records
+name the object, not the copy.";
+
+pub const DOWNLOAD_AFTER: &str = "\
+Examples:
+  pqbench table-file data.parquet | pqbench download --output copy.parquet
+  pqbench table-file data.parquet | pqbench list suggestions --local copy.parquet
+
+See also:
+  pqbench table-file --help        name a path as a table-file record
+  pqbench list suggestions --help  read a copy with --local";
+
 pub const JOB_ABOUT: &str = "Move partition versions through the daemon's master";
 
 pub const JOB_LONG_ABOUT: &str = "\

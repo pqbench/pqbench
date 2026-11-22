@@ -15,7 +15,7 @@ mod api;
 mod collection;
 mod remote;
 
-pub use api::{list_columns, measure_file, MeasuredFile};
+pub use api::{list_columns, measure_file, measure_local, MeasuredFile};
 
 use std::fmt;
 

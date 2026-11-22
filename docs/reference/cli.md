@@ -18,6 +18,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench get suggestion`↴](#pqbench-get-suggestion)
 * [`pqbench format`↴](#pqbench-format)
 * [`pqbench table-file`↴](#pqbench-table-file)
+* [`pqbench download`↴](#pqbench-download)
 * [`pqbench list`↴](#pqbench-list)
 * [`pqbench list catalogs`↴](#pqbench-list-catalogs)
 * [`pqbench list schemas`↴](#pqbench-list-schemas)
@@ -170,6 +171,7 @@ Format skills (read these when the input is Parquet or a table):
 * `get` — Read one resource of the walk
 * `format` — Render a stream as tables, or a summarize columns stream as HTML
 * `table-file` — Name storage paths as table-file records
+* `download` — Copy a table file's bytes to a local path
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
 * `job` — Move partition versions through the daemon's master
@@ -332,6 +334,7 @@ See also:
 * `--fan-out <FAN_OUT>` — files in flight at once
 
   Default value: `128`
+* `--local <PATH>` — read each footer from this file instead of the blob, keeping the record's name
 
 
 
@@ -497,6 +500,7 @@ Verify one column's potential suggestion (Suggestion refs on stdin)
 ###### **Options:**
 
 * `--rows <ROWS>` — leading rows to measure; defaults to the candidate's sample_row_count
+* `--local <PATH>` — read the file from this path instead of the blob, keeping the record's name
 
 
 
@@ -539,6 +543,32 @@ Name storage paths as table-file records
 ###### **Arguments:**
 
 * `<PATHS>` — Parquet paths or storage URIs
+
+
+
+## `pqbench download`
+
+Read one TableFile record on standard input (`list files` names them) and copy
+its blob to --output, in pieces, so a large file costs bounded memory and the
+blob is read once. `bytemass`, `list suggestions` and `get suggestion` read
+such a copy with --local and keep the record's blob name, so their records
+name the object, not the copy.
+
+**Usage:** `pqbench download --output <PATH>`
+
+```console no-run
+Examples:
+  pqbench table-file data.parquet | pqbench download --output copy.parquet
+  pqbench table-file data.parquet | pqbench list suggestions --local copy.parquet
+
+See also:
+  pqbench table-file --help        name a path as a table-file record
+  pqbench list suggestions --help  read a copy with --local
+```
+
+###### **Options:**
+
+* `--output <PATH>` — the file to write
 
 
 
@@ -738,6 +768,7 @@ List a file's columns and their byte masses (Table-file refs on stdin)
 * `--fan-out <FAN_OUT>` — files in flight at once
 
   Default value: `128`
+* `--local <PATH>` — read each footer from this file instead of the blob, keeping the record's name
 
 
 
@@ -753,6 +784,7 @@ List potential storage suggestions for each local blob (Table-file refs on stdin
 * `--rows <ROWS>` — leading rows to inspect
 
   Default value: `8192`
+* `--local <PATH>` — read each file from this path instead of the blob, keeping the record's name
 
 
 

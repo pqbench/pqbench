@@ -30,6 +30,21 @@ pub async fn measure_file(lake: &Lake, name: &str) -> Result<MeasuredFile, Error
     super::collection::measure_file(lake, name).await
 }
 
+/// Measure the blob `name` from a local copy of its bytes at `path`: the
+/// records name the blob, not the copy. The blob's storage class still comes
+/// from one HEAD.
+///
+/// # Errors
+/// Fails when `name` is not a blob name, the object cannot be read, or the
+/// local file's footer is not valid Parquet.
+pub async fn measure_local(
+    lake: &Lake,
+    name: &str,
+    path: &std::path::Path,
+) -> Result<MeasuredFile, Error> {
+    super::collection::measure_local(lake, name, path).await
+}
+
 /// List the columns of the blob `name`, each with its byte mass.
 ///
 /// Only the file's footer is read, never its data pages. The result is one

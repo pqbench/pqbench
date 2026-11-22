@@ -22,6 +22,37 @@ pub(super) async fn measure_file(lake: &Lake, name: &str) -> Result<MeasuredFile
     let uri = v1::name::blob_uri(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
     let (stat, mass) = read_input(lake, &uri).await?;
+    measured(name, stat, mass)
+}
+
+/// Measure the blob from a local copy: the footer comes from `path`, the
+/// storage facts from the object's HEAD.
+pub(super) async fn measure_local(
+    lake: &Lake,
+    name: &str,
+    path: &Path,
+) -> Result<MeasuredFile, Error> {
+    let uri = v1::name::blob_uri(name)
+        .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
+    let mass = read_file_masses(path)?;
+    let stat = if uri.contains("://") {
+        crate::third_party::object_store::open(lake, &uri)
+            .map_err(Error::Storage)?
+            .stat()
+            .await
+            .map_err(Error::Storage)?
+    } else {
+        ObjectStat {
+            size_bytes: mass.size_bytes,
+            identity: None,
+            storage_class: None,
+        }
+    };
+    measured(name, stat, mass)
+}
+
+/// A measured file from its storage facts and footer masses.
+fn measured(name: &str, stat: ObjectStat, mass: FileMass) -> Result<MeasuredFile, Error> {
     let row_group_count = mass.row_group_count as u64;
     let writer = mass.writer.clone();
     let columns = columns(name, mass)?;

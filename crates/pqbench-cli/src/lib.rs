@@ -102,6 +102,13 @@ enum Command {
     #[command(about = "Name storage paths as table-file records")]
     TableFile(table_file::TableFileArgs),
     #[command(
+        about = help::DOWNLOAD_ABOUT,
+        long_about = help::DOWNLOAD_LONG_ABOUT,
+        after_help = help::DOWNLOAD_AFTER,
+        after_long_help = help::DOWNLOAD_AFTER
+    )]
+    Download(file::download::DownloadArgs),
+    #[command(
         visible_alias = "ls",
         about = help::LIST_ABOUT,
         long_about = help::LIST_LONG_ABOUT,
@@ -210,6 +217,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Get(args) => get::run(&lake, &daemon, &args).await,
         Command::Format(args) => format::run(&args).await,
         Command::TableFile(args) => table_file::run(&args).await,
+        Command::Download(args) => file::download::run(&lake, &daemon, &args).await,
         Command::List(args) => list::run(&lake, &daemon, &args).await,
         Command::Sample(args) => sample::run(&args).await,
         Command::Job(args) => job::run(&daemon, &args).await,
@@ -232,6 +240,7 @@ impl Command {
             Command::Get(args) => args.name(),
             Command::Format(_) => "format",
             Command::TableFile(_) => "table-file",
+            Command::Download(_) => "download",
             Command::List(args) => args.name(),
             Command::Sample(args) => args.name(),
             Command::Job(args) => args.name(),

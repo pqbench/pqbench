@@ -9,14 +9,19 @@ use pqbench::{bytemass, v1};
 use crate::CliError;
 
 /// Measure one blob: its storage facts and columns, with no table context.
+/// With `local`, the footer is read from that file instead of the blob.
 ///
 /// # Errors
 /// Fails when the blob name is not a blob name or its footer cannot be read.
 pub(crate) async fn blob(
     lake: &pqbench::Lake,
     name: &str,
+    local: Option<&std::path::Path>,
 ) -> Result<bytemass::MeasuredFile, CliError> {
-    Ok(bytemass::measure_file(lake, name).await?)
+    match local {
+        Some(path) => Ok(bytemass::measure_local(lake, name, path).await?),
+        None => Ok(bytemass::measure_file(lake, name).await?),
+    }
 }
 
 /// Measure the file a table-file record names, enriched for the walk.
@@ -28,6 +33,7 @@ pub(crate) async fn table_file(
     lake: &pqbench::Lake,
     daemon: &crate::daemon::Daemon,
     file: &v1::TableFile,
+    local: Option<&std::path::Path>,
 ) -> Result<bytemass::MeasuredFile, CliError> {
     let name = file
         .blob
@@ -44,7 +50,7 @@ pub(crate) async fn table_file(
     let env = daemon.resolve_env(&table).await?;
     let credentials = v1::Credentials::from_env(&env);
     let lake = lake.with_lease(Some(&credentials));
-    let measured = blob(&lake, name).await?;
+    let measured = blob(&lake, name, local).await?;
     let mut blob = measured.blob;
     let mut columns = measured.columns;
     blob.sample_rate = file.sample_rate;
