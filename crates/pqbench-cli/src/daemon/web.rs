@@ -459,23 +459,35 @@ fn partition_page(master: &RwLock<Master>, partition: &str) -> Result<String, St
         ));
     }
     let listing = &view["list_partitions"];
-    let files: Vec<(String, Vec<String>)> = ["first_file", "last_file", "sample_file"]
-        .iter()
-        .filter_map(|field| listing.get(*field).filter(|file| file.is_object()))
-        .map(|file| {
-            (
-                String::new(),
-                vec![
-                    file["path"].as_str().unwrap_or_default().to_string(),
-                    size_text(file["size_bytes"].as_u64().unwrap_or(0)),
-                    when(file["modification_time"].as_u64()),
-                ],
-            )
-        })
-        .collect();
+    // Which file of the partition each is: the listing's oldest and newest,
+    // and the one `bytemass` measured.
+    let files: Vec<(String, Vec<String>)> = [
+        ("oldest", "first_file"),
+        ("newest", "last_file"),
+        ("measured", "sample_file"),
+    ]
+    .iter()
+    .filter_map(|(role, field)| {
+        listing
+            .get(*field)
+            .filter(|file| file.is_object())
+            .map(|file| (role, file))
+    })
+    .map(|(role, file)| {
+        (
+            String::new(),
+            vec![
+                (*role).to_string(),
+                file["path"].as_str().unwrap_or_default().to_string(),
+                size_text(file["size_bytes"].as_u64().unwrap_or(0)),
+                when(file["modification_time"].as_u64()),
+            ],
+        )
+    })
+    .collect();
     if !files.is_empty() {
         body.push('\n');
-        body.push_str(&ascii(&["file", "size", "modified"], files));
+        body.push_str(&ascii(&["file", "path", "size", "modified"], files));
     }
     Ok(body)
 }
