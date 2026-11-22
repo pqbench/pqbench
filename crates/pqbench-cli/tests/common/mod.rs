@@ -43,7 +43,8 @@ pub(crate) fn measured(path: &str) -> Output {
 /// with the command's own environment; it stops when dropped.
 pub(crate) struct TestDaemon {
     child: Option<std::process::Child>,
-    _directory: tempfile::TempDir,
+    #[allow(dead_code)]
+    directory: tempfile::TempDir,
 }
 
 impl Drop for TestDaemon {
@@ -58,7 +59,7 @@ impl Drop for TestDaemon {
 /// Start the daemon a catalog command needs and point `command` at it. A
 /// command whose environment names no endpoint (a local read, or a test of the
 /// missing endpoint) gets none.
-pub(crate) fn serve_for(command: &mut Command) -> TestDaemon {
+pub(crate) fn attach_daemon(command: &mut Command) -> TestDaemon {
     let directory = tempfile::tempdir().unwrap();
     let names_endpoint = command
         .get_envs()
@@ -66,7 +67,7 @@ pub(crate) fn serve_for(command: &mut Command) -> TestDaemon {
     if !names_endpoint {
         return TestDaemon {
             child: None,
-            _directory: directory,
+            directory,
         };
     }
     let socket = directory.path().join("d.sock");
@@ -93,6 +94,6 @@ pub(crate) fn serve_for(command: &mut Command) -> TestDaemon {
     command.env("PQB_DAEMON_SOCK", &socket);
     TestDaemon {
         child: Some(child),
-        _directory: directory,
+        directory,
     }
 }

@@ -326,6 +326,34 @@ See also:
   pqbench --help                  catalog auth, PQB_* config
   docs/reference/cli.md";
 
+pub const JOB_ABOUT: &str = "Move partition versions through the daemon's master";
+
+pub const JOB_LONG_ABOUT: &str = "\
+Run one job against the daemon's master (`pqbench daemon start --master --store
+DIR`). A job claims work from the master, runs one plain pqbench command per
+input with its standard output going to the path the master gives, and commits;
+the master renames the output into its store only while the version is still
+the job's. One instance of each job runs at a time; a time limit is the
+scheduler's.
+
+  scan  list each table's partitions into the master (Table records on stdin,
+        from `get table`); with --complete, the tables the input does not name
+        are deleted
+  purge delete the results and rows of the versions the scan no longer finds,
+        keeping a partition's last complete version until a newer one is done
+  list  print the master's partition versions (name, etag, state, times,
+        failures), one per line";
+
+pub const JOB_AFTER: &str = "\
+Examples:
+  pqbench daemon start --master --store /var/lib/pqbench
+  echo '{\"name\":\"catalogs/main/schemas/sales\"}' | pqbench list tables | pqbench get table | timeout 3600 pqbench job scan
+
+See also:
+  pqbench daemon --help           the master and its store
+  pqbench list partitions --help  the command the scan runs
+  docs/reference/cli.md";
+
 pub const DAEMON_ABOUT: &str = "Own the catalog calls and cache storage leases";
 
 pub const DAEMON_LONG_ABOUT: &str = "\
@@ -343,8 +371,14 @@ without an environment variable.
 daemon, which paces Unity at 15 requests a second, the catalog's per-endpoint
 ceiling; the storage levels (`list files`, `list columns`) ask it only for the
 table's lease. A command that needs the catalog and finds no daemon fails with a
-hint to start one; a read of local files needs none. Vended leases are session state and never ride a Table or
-TableFile document.";
+hint to start one; a read of local files needs none. Vended leases are session
+state and never ride a Table or TableFile document.
+
+With --master --store DIR the daemon also runs the master: one map of partition
+versions (a partition at one etag) that `pqbench job` processes move through
+their states, and the results the jobs' commands wrote, under DIR. Each call on
+the map is atomic and is appended to an edit log before it is answered; the
+full image is rewritten hourly or every million edits, and on stop.";
 
 pub const DAEMON_AFTER: &str = "\
 Examples:

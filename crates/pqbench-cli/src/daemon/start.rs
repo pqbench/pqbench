@@ -12,14 +12,26 @@ use super::path;
 use super::protocol::Request;
 
 /// Start a background daemon for this identity, or reuse the one already
-/// listening.
-pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> Result<(), String> {
+/// listening. With a `store` the daemon runs the master; one already running
+/// without it is refused rather than reused.
+pub(crate) async fn start(
+    config: &Config,
+    socket: &Path,
+    idle_seconds: u64,
+    store: Option<&Path>,
+) -> Result<(), String> {
     if client::ping(socket).await {
+        if store.is_some() && !runs_master(socket).await {
+            return Err(format!(
+                "a daemon without the master is running at {}; stop it first",
+                socket.display()
+            ));
+        }
         return Ok(());
     }
     path::prepare(socket)?;
 
-    let mut child = serve_command(config, socket, idle_seconds)?
+    let mut child = serve_command(config, socket, idle_seconds, store)?
         .spawn()
         .map_err(|error| format!("cannot start the daemon: {error}"))?;
 
@@ -36,7 +48,12 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
 
 /// The background daemon's command: this executable, serving `socket` with
 /// the resolved identity passed explicitly.
-fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Command, String> {
+fn serve_command(
+    config: &Config,
+    socket: &Path,
+    idle_seconds: u64,
+    store: Option<&Path>,
+) -> Result<Command, String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("cannot find the pqbench executable: {error}"))?;
     let mut command = Command::new(exe);
@@ -47,6 +64,9 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
         .arg(socket)
         .arg("--idle-seconds")
         .arg(idle_seconds.to_string());
+    if let Some(store) = store {
+        command.arg("--master").arg("--store").arg(store);
+    }
     // The child resolves the same identity from explicit environment values;
     // the token is never on its command line.
     for name in [
@@ -84,6 +104,16 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
         });
     }
     Ok(command)
+}
+
+/// Whether the daemon at `socket` runs the master.
+async fn runs_master(socket: &Path) -> bool {
+    let request = Request::Partitions {
+        table: Some(String::new()),
+    };
+    client::request(socket, &request)
+        .await
+        .is_ok_and(|response| response.error.is_none())
 }
 
 /// Stop the daemon listening at `socket`.

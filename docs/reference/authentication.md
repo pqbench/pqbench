@@ -179,6 +179,27 @@ A ref the catalog will not vend for is dropped with the cause on standard
 error, and that stage exits non-zero; run the walk over a catalog that is
 externally readable, or filter the refs first.
 
+### The master
+
+`pqbench daemon start --master --store DIR` (or `serve`) also runs the master:
+one map of partition versions, a partition at one etag, and the results the
+jobs' commands wrote for each. The jobs are separate processes on a schedule
+(`pqbench job scan`, `job purge`, …): a job asks the master for work, runs one
+plain pqbench command per input with its standard output going to the path the
+master gives, and commits. The master renames that output into
+`DIR/results/{partition}/{etag}/` only while the version is still the job's, so
+a late or repeated run never overwrites newer work. Each call on the map is
+atomic and appended to `DIR/master/edits.ndjson` before it is answered; the
+image `DIR/master/image.ndjson` is rewritten hourly or every million edits, and
+on stop. A restart loads the image, replays the edits, returns work held by
+jobs to where it was, and deletes results no row names.
+
+```console no-run
+$ pqbench daemon start --master --store /var/lib/pqbench
+$ echo '{"name":"catalogs/main/schemas/sales"}' | pqbench list tables | pqbench get table | pqbench job scan --complete
+$ pqbench job list
+```
+
 ## Databricks-governed tables
 
 A governed table has two access modes, and pqbench is the second one:

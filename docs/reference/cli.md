@@ -29,6 +29,10 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench sample files`↴](#pqbench-sample-files)
 * [`pqbench price`↴](#pqbench-price)
 * [`pqbench price partitions`↴](#pqbench-price-partitions)
+* [`pqbench job`↴](#pqbench-job)
+* [`pqbench job scan`↴](#pqbench-job-scan)
+* [`pqbench job purge`↴](#pqbench-job-purge)
+* [`pqbench job list`↴](#pqbench-job-list)
 * [`pqbench daemon`↴](#pqbench-daemon)
 * [`pqbench daemon start`↴](#pqbench-daemon-start)
 * [`pqbench daemon stop`↴](#pqbench-daemon-stop)
@@ -163,6 +167,7 @@ Format skills (read these when the input is Parquet or a table):
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
 * `price` — Price each partition at its files' storage classes
+* `job` — Move partition versions through the daemon's master
 * `daemon` — Own the catalog calls and cache storage leases
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
 * `summarize` — Estimate each table column's mass from a list columns stream
@@ -795,6 +800,82 @@ Price each partition at its files' storage classes (Partition records on stdin)
 
 
 
+## `pqbench job`
+
+Run one job against the daemon's master (`pqbench daemon start --master --store
+DIR`). A job claims work from the master, runs one plain pqbench command per
+input with its standard output going to the path the master gives, and commits;
+the master renames the output into its store only while the version is still
+the job's. One instance of each job runs at a time; a time limit is the
+scheduler's.
+
+```text
+  scan  list each table's partitions into the master (Table records on stdin,
+        from `get table`); with --complete, the tables the input does not name
+        are deleted
+  purge delete the results and rows of the versions the scan no longer finds,
+        keeping a partition's last complete version until a newer one is done
+  list  print the master's partition versions (name, etag, state, times,
+        failures), one per line
+```
+
+**Usage:** `pqbench job <COMMAND>`
+
+```console no-run
+Examples:
+  pqbench daemon start --master --store /var/lib/pqbench
+  echo '{"name":"catalogs/main/schemas/sales"}' | pqbench list tables | pqbench get table | timeout 3600 pqbench job scan
+
+See also:
+  pqbench daemon --help           the master and its store
+  pqbench list partitions --help  the command the scan runs
+  docs/reference/cli.md
+```
+
+###### **Subcommands:**
+
+* `scan` — List each table's partitions into the master (Table records on stdin)
+* `purge` — Delete the results and rows of the versions the scan no longer finds
+* `list` — Print the master's partition versions, one row per line
+
+
+
+## `pqbench job scan`
+
+List each table's partitions into the master (Table records on stdin)
+
+**Usage:** `pqbench job scan [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — tables listed at once
+
+  Default value: `4`
+* `--complete` — standard input is the whole catalog walk: the rows of every table it does not name are deleted
+
+
+
+## `pqbench job purge`
+
+Delete the results and rows of the versions the scan no longer finds
+
+**Usage:** `pqbench job purge`
+
+
+## `pqbench job list`
+
+Print the master's partition versions, one row per line
+
+**Usage:** `pqbench job list [OPTIONS]`
+
+
+###### **Options:**
+
+* `--table <TABLE>` — only this table's versions (`catalogs/…/tables/…`)
+
+
+
 ## `pqbench daemon`
 
 Own every catalog request the walk makes and cache the storage lease each table
@@ -813,8 +894,14 @@ without an environment variable.
 daemon, which paces Unity at 15 requests a second, the catalog's per-endpoint
 ceiling; the storage levels (`list files`, `list columns`) ask it only for the
 table's lease. A command that needs the catalog and finds no daemon fails with a
-hint to start one; a read of local files needs none. Vended leases are session state and never ride a Table or
-TableFile document.
+hint to start one; a read of local files needs none. Vended leases are session
+state and never ride a Table or TableFile document.
+
+With --master --store DIR the daemon also runs the master: one map of partition
+versions (a partition at one etag) that `pqbench job` processes move through
+their states, and the results the jobs' commands wrote, under DIR. Each call on
+the map is atomic and is appended to an edit log before it is answered; the
+full image is rewritten hourly or every million edits, and on stop.
 
 **Usage:** `pqbench daemon <COMMAND>`
 
@@ -851,6 +938,8 @@ Start the daemon in the background
 * `--idle-seconds <IDLE_SECONDS>` — seconds without a connection before the daemon exits
 
   Default value: `900`
+* `--master` — also run the master: the partition map and the calls jobs make on it
+* `--store <DIR>` — the master's store: its image, edit log, and results (with --master)
 
 
 
@@ -881,6 +970,8 @@ Serve leases in the foreground
 * `--idle-seconds <IDLE_SECONDS>` — seconds without a connection before the daemon exits; 0 serves until stopped
 
   Default value: `0`
+* `--master` — also run the master: the partition map and the calls jobs make on it
+* `--store <DIR>` — the master's store: its image, edit log, and results (with --master)
 
 
 

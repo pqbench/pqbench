@@ -55,7 +55,7 @@ fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let _daemon = crate::common::serve_for(&mut command);
+    let _daemon = crate::common::attach_daemon(&mut command);
     let mut child = command.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();
     child.wait_with_output().unwrap()

@@ -44,6 +44,9 @@ mod format_html;
 #[path = "help.rs"]
 mod help;
 
+#[path = "master.rs"]
+mod master;
+
 #[path = "metastore.rs"]
 mod metastore;
 

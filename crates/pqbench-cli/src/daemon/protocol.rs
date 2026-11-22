@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::master::State;
+
 /// A client's request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "op")]
@@ -33,6 +35,37 @@ pub(crate) enum Request {
         #[serde(skip_serializing_if = "Option::is_none")]
         record: Option<Value>,
     },
+    /// The master's rows, or one table's.
+    Partitions {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        table: Option<String>,
+    },
+    /// Where a scan job writes one table's listing.
+    ScanPath { table: String },
+    /// Apply the listing the scan job wrote for one table.
+    Scan { table: String },
+    /// After a complete walk: delete the rows of every other table.
+    RetainTables { tables: Vec<String> },
+    /// Hand out up to `limit` rows from `source`, moved to the job state
+    /// `target`.
+    Claim {
+        source: State,
+        target: State,
+        limit: usize,
+    },
+    /// Finish one claimed version.
+    Commit {
+        name: String,
+        etag: String,
+        source: State,
+        target: State,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Return every row in a job state to the state before it.
+    Revert { state: State },
+    /// Delete the results and rows of the deleted versions.
+    Purge,
 }
 
 /// The collection a `list` request enumerates.
@@ -141,6 +174,12 @@ pub(crate) struct Response {
     /// The answer to a ping or a stop.
     #[serde(skip_serializing_if = "is_false")]
     pub ok: bool,
+    /// A path the master hands to a job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// How many rows a master call moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
 }
 
 fn is_false(value: &bool) -> bool {

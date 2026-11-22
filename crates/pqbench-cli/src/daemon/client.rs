@@ -41,8 +41,9 @@ const CATALOG_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response, Error> {
     let timeout = match request {
-        Request::List { .. } | Request::Get { .. } => CATALOG_TIMEOUT,
         Request::Ping | Request::Stop | Request::Lease { .. } => LEASE_TIMEOUT,
+        // A catalog read, or a master call that writes one table's results.
+        _ => CATALOG_TIMEOUT,
     };
     exchange(path, request, timeout).await
 }

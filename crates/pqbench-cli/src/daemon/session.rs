@@ -220,9 +220,7 @@ impl Daemon {
         match request {
             Request::List { collection, parent } => self.list(*collection, parent.as_ref()).await,
             Request::Get { resource, record } => self.get(*resource, record.as_ref()).await,
-            Request::Ping | Request::Stop | Request::Lease { .. } => {
-                Err("not a catalog request".into())
-            }
+            _ => Err("not a catalog request".into()),
         }
     }
 
@@ -285,6 +283,28 @@ impl Daemon {
     async fn pace(&self) {
         if let Some(rate) = &self.rate {
             rate.wait().await;
+        }
+    }
+
+    /// One call on the daemon's master; an error the master answers is an
+    /// error here.
+    pub(crate) async fn master(&self, request: &Request) -> Result<Response, CliError> {
+        let path = self.socket().ok_or_else(|| -> CliError {
+            "a job needs the daemon's master; run `pqbench daemon start --master --store DIR`"
+                .into()
+        })?;
+        let response = ask(path, request).await?;
+        match response.error {
+            Some(error) => Err(error.into()),
+            None => Ok(response),
+        }
+    }
+
+    /// The daemon's socket, for a reader that asks one.
+    pub(crate) fn socket(&self) -> Option<&std::path::Path> {
+        match &self.vendor {
+            Vendor::Daemon { path, .. } => Some(path),
+            Vendor::Direct(_) => None,
         }
     }
 

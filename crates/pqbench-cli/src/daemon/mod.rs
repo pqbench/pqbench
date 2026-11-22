@@ -15,8 +15,9 @@ use pqbench::Workspace;
 use crate::CliError;
 
 mod client;
+pub(crate) mod master;
 mod path;
-mod protocol;
+pub(crate) mod protocol;
 mod rate;
 mod serve;
 mod session;
@@ -48,6 +49,28 @@ struct StartArgs {
     /// seconds without a connection before the daemon exits
     #[arg(long, default_value_t = 900)]
     idle_seconds: u64,
+    #[command(flatten)]
+    master: MasterArgs,
+}
+
+/// The master: the partition map the jobs move versions through.
+#[derive(Args, Clone)]
+pub(crate) struct MasterArgs {
+    /// also run the master: the partition map and the calls jobs make on it
+    #[arg(long, requires = "store")]
+    master: bool,
+    /// the master's store: its image, edit log, and results (with --master)
+    #[arg(long, requires = "master", value_name = "DIR")]
+    store: Option<PathBuf>,
+}
+
+impl MasterArgs {
+    /// The store, when the master runs.
+    pub(crate) fn store(&self) -> Option<PathBuf> {
+        self.master
+            .then(|| self.store.as_deref().map(path::absolute))
+            .flatten()
+    }
 }
 
 #[derive(Args)]
@@ -58,6 +81,8 @@ struct ServeArgs {
     /// seconds without a connection before the daemon exits; 0 serves until stopped
     #[arg(long, default_value_t = 0)]
     idle_seconds: u64,
+    #[command(flatten)]
+    master: MasterArgs,
 }
 
 impl DaemonArgs {
@@ -82,14 +107,26 @@ pub(crate) async fn run(workspace: &Workspace, args: &DaemonArgs) -> Result<(), 
     let socket = path::socket_path(workspace.config());
     match &args.command {
         DaemonCommand::Start(args) => {
-            start::start(workspace.config(), &socket, args.idle_seconds).await?;
+            start::start(
+                workspace.config(),
+                &socket,
+                args.idle_seconds,
+                args.master.store().as_deref(),
+            )
+            .await?;
         }
         DaemonCommand::Stop => start::stop(&socket).await?,
         DaemonCommand::Status => start::status(&socket).await?,
         DaemonCommand::Serve(args) => {
             let socket = args.socket.as_deref().map_or(socket, path::absolute);
             let session = Daemon::direct(workspace.clone());
-            serve::run(session, socket, args.idle_seconds).await?;
+            let master = match args.master.store() {
+                Some(store) => Some(std::sync::Arc::new(std::sync::Mutex::new(
+                    master::Master::open(&store)?,
+                ))),
+                None => None,
+            };
+            serve::run(session, master, socket, args.idle_seconds).await?;
         }
     }
     Ok(())
