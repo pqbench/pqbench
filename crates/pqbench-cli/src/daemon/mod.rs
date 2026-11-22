@@ -60,7 +60,7 @@ pub(crate) struct MasterArgs {
     /// also run the master: the partition map and the calls jobs make on it
     #[arg(long, requires = "store")]
     master: bool,
-    /// the master's store: its image, edit log, and results (with --master)
+    /// the master's store: its checkpoint and results (with --master)
     #[arg(long, requires = "master", value_name = "DIR")]
     store: Option<PathBuf>,
     /// also serve the web app: the master's records and status page (with --master)

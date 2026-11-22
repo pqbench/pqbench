@@ -189,10 +189,11 @@ plain pqbench command per input with its standard output going to the path the
 master gives, and commits. The master renames that output into
 `DIR/results/{partition}/{etag}/` only while the version is still the job's, so
 a late or repeated run never overwrites newer work. Each call on the map is
-atomic and appended to `DIR/master/edits.ndjson` before it is answered; the
-image `DIR/master/image.ndjson` is rewritten hourly or every million edits, and
-on stop. A restart loads the image, replays the edits, returns work held by
-jobs to where it was, and deletes results no row names.
+atomic. The map is the state: it is written whole to
+`DIR/master/checkpoint.ndjson` every 10 seconds while it changes, and on stop.
+A restart loads the checkpoint, returns work held by jobs to where it was, and
+deletes results no row names; a crash loses at most the calls since the last
+checkpoint, and the jobs and the next scan redo them.
 
 With `--web-ui` (and `--listen ADDR`, default `127.0.0.1:8180`) the daemon
 also serves the web app, read-only: the master's partition versions as a

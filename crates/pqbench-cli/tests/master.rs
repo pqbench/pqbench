@@ -287,10 +287,10 @@ fn the_rows_survive_a_restart() {
     assert_eq!(master.rows(), rows);
 }
 
-/// A daemon killed mid-life loses nothing it answered: the restart replays the
-/// edit log over the image.
+/// A daemon killed before its next checkpoint loses at most the calls since
+/// the last one: after a restart, the next scan finds the same versions.
 #[test]
-fn the_rows_survive_a_kill() {
+fn a_scan_after_a_kill_finds_the_same_versions() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     table(&root);
@@ -298,10 +298,20 @@ fn the_rows_survive_a_kill() {
     master.scan(&table_record("events", &root), false);
     commit(&root, 1, vec![add("day=1/c.parquet", "1", 300)]);
     master.scan(&table_record("events", &root), false);
-    let rows = master.rows();
+    let versions = |rows: Vec<Value>| -> Vec<(Value, Value)> {
+        let mut versions: Vec<(Value, Value)> = rows
+            .into_iter()
+            .filter(|row| row["state"] != "DELETED")
+            .map(|row| (row["name"].clone(), row["etag"].clone()))
+            .collect();
+        versions.sort_by_key(|version| version.0.to_string());
+        versions
+    };
+    let before = versions(master.rows());
     drop(master);
     let master = Master::start(directory.path());
-    assert_eq!(master.rows(), rows);
+    master.scan(&table_record("events", &root), false);
+    assert_eq!(versions(master.rows()), before);
 }
 
 /// A table whose files are real Parquet (one fixture file per partition), so

@@ -3,18 +3,17 @@
 //!
 //! A row is a partition at one etag; a change to a partition is a new row and
 //! the old one goes to `DELETED`. Every call is one atomic step: the master
-//! takes one call at a time, renames the files it names, changes the rows,
-//! and appends the changed rows to the edit log before it answers. The full
-//! image is rewritten every hour or every million edits, and on stop (HDFS
-//! keeps its namespace the same way); a restart loads the image and replays
-//! the edits after it.
+//! takes one call at a time, renames the files it names, and changes the
+//! rows. The map is the state: the daemon writes it whole to a checkpoint
+//! every few seconds while it changes, and on stop, and a restart loads the
+//! checkpoint. A crash loses the calls since the last checkpoint; the jobs
+//! redo that work, and a result they land again replaces the old one.
 //!
 //! The store, which only the master writes:
 //!
 //! ```text
-//! {store}/master/image.ndjson     the map at one edit: a {"seq"} line, then the rows
-//! {store}/master/edits.ndjson     the rows each later call changed
-//! {store}/scan/{table}.ndjson     a scan job's listing of one table, before `scan`
+//! {store}/master/checkpoint.ndjson  the rows, one per line
+//! {store}/scan/{table}.ndjson       a scan job's listing of one table, before `scan`
 //! {store}/results/{partition}/{etag}/{output}.ndjson
 //! ```
 //!
@@ -23,25 +22,19 @@
 //! in, inside the commit, only while the row is still in the job's state.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// How long the edit log may grow before the image is rewritten.
-const IMAGE_PERIOD: Duration = Duration::from_secs(3600);
-
-/// How many edits the log may hold before the image is rewritten.
-const IMAGE_EDITS: u64 = 1_000_000;
 
 /// A version that failed this many times in one step is left out of claims.
 const MAX_FAILURES: u64 = 2;
 
 /// Where a partition version is in the pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum State {
     /// The scan no longer finds this version; its results wait for purge.
@@ -109,6 +102,17 @@ pub(crate) struct Row {
     /// listing, when the log reports them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed_size_bytes: Option<u64>,
+    /// When the version's newest file was written, from its listing; absent
+    /// when the log records no per-file time (Iceberg).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modification_time: Option<u64>,
+    /// The version's monthly storage cost, from its price: the cheapest and
+    /// the dearest class or access tier it may be in. Absent until priced,
+    /// and for files with no storage class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lowest_cost_per_month: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highest_cost_per_month: Option<f64>,
 }
 
 /// A row with its key, as the store and the socket carry it.
@@ -135,30 +139,18 @@ pub(crate) struct Claim {
     pub path: PathBuf,
 }
 
-/// The rows one call changed, as one line of the edit log.
-#[derive(Default, Serialize, Deserialize)]
-struct Edit {
-    seq: u64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    set: Vec<Entry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    remove: Vec<(String, String)>,
-}
-
 pub(crate) type Key = (String, String);
 
 pub(crate) struct Master {
     store: PathBuf,
     rows: BTreeMap<Key, Row>,
-    edit_log: BufWriter<File>,
-    seq: u64,
-    image_seq: u64,
-    image_time: Instant,
+    /// Whether the rows changed since the last checkpoint.
+    changed: bool,
 }
 
 impl Master {
-    /// Open the store: load the image, replay the edits after it, then put
-    /// back what a crash may have left. Rows in a job state return to the
+    /// Open the store: load the checkpoint, then put back what a crash may
+    /// have left. Rows in a job state return to the
     /// state before it (no job holds a claim across a master restart), and
     /// temporary files and result directories without a row are deleted.
     pub(crate) fn open(store: &Path) -> Result<Self, String> {
@@ -166,20 +158,10 @@ impl Master {
             fs::create_dir_all(store.join(directory))
                 .map_err(|error| format!("cannot create {}: {error}", store.display()))?;
         }
-        let (mut rows, image_seq) = read_image(&store.join("master/image.ndjson"))?;
-        let seq = replay(&store.join("master/edits.ndjson"), image_seq, &mut rows)?;
-        let edits = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(store.join("master/edits.ndjson"))
-            .map_err(|error| format!("cannot open the edit log: {error}"))?;
         let mut master = Master {
             store: store.to_path_buf(),
-            rows,
-            edit_log: BufWriter::new(edits),
-            seq,
-            image_seq,
-            image_time: Instant::now(),
+            rows: read_checkpoint(&store.join("master/checkpoint.ndjson"))?,
+            changed: false,
         };
         for state in [State::Pricing, State::Bytemassing, State::Linting] {
             master.revert(state)?;
@@ -187,11 +169,11 @@ impl Master {
         let _ = fs::remove_dir_all(store.join("scan"));
         fs::create_dir_all(store.join("scan")).map_err(|error| error.to_string())?;
         master.sweep()?;
-        master.write_image()?;
+        master.checkpoint()?;
         Ok(master)
     }
 
-    /// The directory the master keeps its image, edits and results in.
+    /// The directory the master keeps its checkpoint and results in.
     pub(crate) fn store(&self) -> &Path {
         &self.store
     }
@@ -225,7 +207,7 @@ impl Master {
     /// Apply one table's listing, the scan file the job wrote: a version the
     /// listing names and the map lacks is a new `PENDING` row (its history
     /// from the partition's newest version, its file count and sizes from the
-    /// listing), a `DELETED` one found again is
+    /// listing, and its newest file's time), a `DELETED` one found again is
     /// `PENDING`, and any other row of the table it does not name is
     /// `DELETED`. Every found version's listing line is renamed in.
     pub(crate) fn scan(&mut self, table: &str) -> Result<usize, String> {
@@ -236,7 +218,6 @@ impl Master {
         let prefix = table_prefix(table);
         let now = now_ms();
         let mut found: BTreeSet<Key> = BTreeSet::new();
-        let mut edit = Edit::default();
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let record: Value =
                 serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
@@ -261,12 +242,12 @@ impl Master {
                     file_count: record["file_count"].as_u64().unwrap_or(0),
                     size_bytes: record["size_bytes"].as_u64().unwrap_or(0),
                     removed_size_bytes: record["removed_size_bytes"].as_u64(),
+                    last_modification_time: record["last_file"]["modification_time"].as_u64(),
                     ..self.new_version(name, now)
                 }),
             };
             if let Some(row) = row {
                 self.rows.insert(key.clone(), row.clone());
-                edit.set.push(entry(&key.0, &key.1, &row));
             }
             found.insert(key);
         }
@@ -278,9 +259,9 @@ impl Master {
             .filter(|key| !found.contains(key))
             .collect();
         for key in missing {
-            self.delete_version(&key, &mut edit);
+            self.delete_version(&key);
         }
-        self.log(edit)?;
+        self.changed = true;
         Ok(found.len())
     }
 
@@ -297,11 +278,10 @@ impl Master {
             })
             .map(|(key, _)| key.clone())
             .collect();
-        let mut edit = Edit::default();
         for key in &gone {
-            self.delete_version(key, &mut edit);
+            self.delete_version(key);
         }
-        self.log(edit)?;
+        self.changed = true;
         Ok(gone.len())
     }
 
@@ -326,7 +306,6 @@ impl Master {
             .map(|(key, _)| key.clone())
             .collect();
         let mut claims = Vec::with_capacity(keys.len());
-        let mut edit = Edit::default();
         for key in keys {
             let directory = self.result_dir(&key);
             let mut results = BTreeMap::new();
@@ -343,7 +322,6 @@ impl Master {
             };
             let row = self.rows.get_mut(&key).expect("the claimed key exists");
             row.state = to;
-            edit.set.push(entry(&key.0, &key.1, row));
             claims.push(Claim {
                 path: directory.join(format!("{output}.ndjson.tmp")),
                 name: key.0,
@@ -352,7 +330,7 @@ impl Master {
                 results,
             });
         }
-        self.log(edit)?;
+        self.changed = true;
         Ok(claims)
     }
 
@@ -385,6 +363,10 @@ impl Master {
                     fs::rename(&temporary, &target).map_err(|error| {
                         format!("cannot rename {}: {error}", temporary.display())
                     })?;
+                    if from == State::Pricing {
+                        (row.lowest_cost_per_month, row.highest_cost_per_month) =
+                            cost_bounds(&target);
+                    }
                 }
                 row.state = to;
                 row.failure_count = 0;
@@ -400,11 +382,7 @@ impl Master {
                 row.error = Some(error);
             }
         }
-        let edit = Edit {
-            set: vec![entry(&key.0, &key.1, row)],
-            ..Edit::default()
-        };
-        self.log(edit)?;
+        self.changed = true;
         Ok(true)
     }
 
@@ -422,14 +400,12 @@ impl Master {
             .filter(|(_, row)| row.state == state)
             .map(|(key, _)| key.clone())
             .collect();
-        let mut edit = Edit::default();
         for key in &keys {
             let _ = fs::remove_file(self.result_dir(key).join(format!("{output}.ndjson.tmp")));
             let row = self.rows.get_mut(key).expect("the key exists");
             row.state = source;
-            edit.set.push(entry(&key.0, &key.1, row));
         }
-        self.log(edit)?;
+        self.changed = true;
         Ok(keys.len())
     }
 
@@ -452,23 +428,34 @@ impl Master {
                     .map(|(key, _)| (*key).clone()),
             );
         }
-        let mut edit = Edit::default();
         for key in &purged {
             remove_dir(&self.result_dir(key))?;
             self.rows.remove(key);
-            edit.remove.push(key.clone());
         }
-        self.log(edit)?;
+        self.changed = true;
         Ok(purged.len())
     }
 
-    /// Write the image if the edit log is due, and on stop.
-    pub(crate) fn tick(&mut self, stopping: bool) -> Result<(), String> {
-        let due =
-            self.seq - self.image_seq >= IMAGE_EDITS || self.image_time.elapsed() >= IMAGE_PERIOD;
-        if self.seq > self.image_seq && (due || stopping) {
-            self.write_image()?;
+    /// Write every row to the checkpoint when they changed since the last
+    /// one: a temporary file, synced, then renamed over it.
+    pub(crate) fn checkpoint(&mut self) -> Result<(), String> {
+        if !self.changed && self.store.join("master/checkpoint.ndjson").exists() {
+            return Ok(());
         }
+        let path = self.store.join("master/checkpoint.ndjson");
+        let temporary = path.with_extension("ndjson.new");
+        let write = || -> std::io::Result<()> {
+            let mut file = BufWriter::new(File::create(&temporary)?);
+            for ((name, etag), row) in &self.rows {
+                serde_json::to_writer(&mut file, &entry(name, etag, row))?;
+                file.write_all(b"\n")?;
+            }
+            file.flush()?;
+            file.get_ref().sync_all()?;
+            fs::rename(&temporary, &path)
+        };
+        write().map_err(|error| format!("cannot write the checkpoint: {error}"))?;
+        self.changed = false;
         Ok(())
     }
 
@@ -490,10 +477,13 @@ impl Master {
             file_count: 0,
             size_bytes: 0,
             removed_size_bytes: None,
+            last_modification_time: None,
+            lowest_cost_per_month: None,
+            highest_cost_per_month: None,
         }
     }
 
-    fn delete_version(&mut self, key: &Key, edit: &mut Edit) {
+    fn delete_version(&mut self, key: &Key) {
         let row = self.rows.get_mut(key).expect("the key exists");
         if let Some(output) = row.state.output() {
             let _ = fs::remove_file(
@@ -505,7 +495,6 @@ impl Master {
             );
         }
         row.state = State::Deleted;
-        edit.set.push(entry(&key.0, &key.1, row));
     }
 
     fn result_dir(&self, key: &Key) -> PathBuf {
@@ -522,50 +511,6 @@ impl Master {
         fs::write(&temporary, format!("{line}\n"))
             .and_then(|()| fs::rename(&temporary, &target))
             .map_err(|error| format!("cannot write {}: {error}", target.display()))
-    }
-
-    /// Append one call's changes to the edit log and flush it to disk.
-    fn log(&mut self, mut edit: Edit) -> Result<(), String> {
-        if edit.set.is_empty() && edit.remove.is_empty() {
-            return Ok(());
-        }
-        self.seq += 1;
-        edit.seq = self.seq;
-        let mut line = serde_json::to_string(&edit).map_err(|error| error.to_string())?;
-        line.push('\n');
-        self.edit_log
-            .write_all(line.as_bytes())
-            .and_then(|()| self.edit_log.flush())
-            .and_then(|()| self.edit_log.get_ref().sync_data())
-            .map_err(|error| format!("cannot append to the edit log: {error}"))?;
-        self.tick(false)
-    }
-
-    /// Write the whole map as the image at the current edit, then empty the
-    /// edit log: a crash between the two replays nothing the image holds.
-    fn write_image(&mut self) -> Result<(), String> {
-        let path = self.store.join("master/image.ndjson");
-        let temporary = path.with_extension("ndjson.new");
-        let write = || -> std::io::Result<()> {
-            let mut file = BufWriter::new(File::create(&temporary)?);
-            serde_json::to_writer(&mut file, &serde_json::json!({ "seq": self.seq }))?;
-            file.write_all(b"\n")?;
-            for ((name, etag), row) in &self.rows {
-                serde_json::to_writer(&mut file, &entry(name, etag, row))?;
-                file.write_all(b"\n")?;
-            }
-            file.flush()?;
-            file.get_ref().sync_all()?;
-            fs::rename(&temporary, &path)
-        };
-        write().map_err(|error| format!("cannot write the image: {error}"))?;
-        self.edit_log
-            .get_ref()
-            .set_len(0)
-            .map_err(|error| format!("cannot truncate the edit log: {error}"))?;
-        self.image_seq = self.seq;
-        self.image_time = Instant::now();
-        Ok(())
     }
 
     /// Delete the result directories no row names, and temporary files left
@@ -600,6 +545,27 @@ impl Master {
         }
         Ok(())
     }
+}
+
+/// The cheapest and dearest monthly cost a price result names.
+fn cost_bounds(price: &Path) -> (Option<f64>, Option<f64>) {
+    let costs: Vec<f64> = fs::read_to_string(price)
+        .ok()
+        .and_then(|text| {
+            serde_json::from_str::<pqbench::v1::PartitionPrice>(text.lines().next()?).ok()
+        })
+        .map(|price| {
+            price
+                .storage_costs
+                .iter()
+                .map(|cost| cost.cost_per_month)
+                .collect()
+        })
+        .unwrap_or_default();
+    (
+        costs.iter().copied().reduce(f64::min),
+        costs.iter().copied().reduce(f64::max),
+    )
 }
 
 /// The newest version of one partition that reached `UP_TO_DATE`, while the
@@ -639,52 +605,17 @@ fn remove_dir(directory: &Path) -> Result<(), String> {
     }
 }
 
-fn read_image(path: &Path) -> Result<(BTreeMap<Key, Row>, u64), String> {
+fn read_checkpoint(path: &Path) -> Result<BTreeMap<Key, Row>, String> {
     let mut rows = BTreeMap::new();
     let Ok(file) = File::open(path) else {
-        return Ok((rows, 0));
-    };
-    let mut lines = BufReader::new(file).lines();
-    let seq = match lines.next() {
-        Some(line) => {
-            let header: Value = serde_json::from_str(&line.map_err(|error| error.to_string())?)
-                .map_err(|error| format!("bad image header: {error}"))?;
-            header["seq"].as_u64().unwrap_or(0)
-        }
-        None => 0,
-    };
-    for line in lines {
-        let entry: Entry = serde_json::from_str(&line.map_err(|error| error.to_string())?)
-            .map_err(|error| format!("bad image row: {error}"))?;
-        rows.insert((entry.name, entry.etag), entry.row);
-    }
-    Ok((rows, seq))
-}
-
-/// Apply the edits after `image_seq`; a torn last line (a crash mid-append)
-/// was never answered, so it is skipped.
-fn replay(path: &Path, image_seq: u64, rows: &mut BTreeMap<Key, Row>) -> Result<u64, String> {
-    let mut seq = image_seq;
-    let Ok(file) = File::open(path) else {
-        return Ok(seq);
+        return Ok(rows);
     };
     for line in BufReader::new(file).lines() {
-        let line = line.map_err(|error| error.to_string())?;
-        let Ok(edit) = serde_json::from_str::<Edit>(&line) else {
-            break;
-        };
-        if edit.seq <= image_seq {
-            continue;
-        }
-        for entry in edit.set {
-            rows.insert((entry.name, entry.etag), entry.row);
-        }
-        for key in edit.remove {
-            rows.remove(&key);
-        }
-        seq = edit.seq;
+        let entry: Entry = serde_json::from_str(&line.map_err(|error| error.to_string())?)
+            .map_err(|error| format!("bad checkpoint row: {error}"))?;
+        rows.insert((entry.name, entry.etag), entry.row);
     }
-    Ok(seq)
+    Ok(rows)
 }
 
 pub(crate) fn entry(name: &str, etag: &str, row: &Row) -> Entry {
@@ -757,8 +688,8 @@ mod tests {
         assert_eq!(master.rows[&key].state, State::Deleted);
     }
 
-    /// A restart returns the rows a job held to the state before it, and
-    /// deletes what the job had written.
+    /// A restart returns the rows a job held at the last checkpoint to the
+    /// state before it, and deletes what the job had written.
     #[test]
     fn a_restart_returns_claimed_versions() {
         let directory = tempfile::tempdir().unwrap();
@@ -769,6 +700,7 @@ mod tests {
             .unwrap()
             .remove(0);
         fs::write(&claim.path, "{}\n").unwrap();
+        master.checkpoint().unwrap();
         drop(master);
         let master = Master::open(directory.path()).unwrap();
         let key = (claim.name, claim.etag);

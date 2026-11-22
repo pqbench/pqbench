@@ -16,8 +16,9 @@ use super::session::Daemon;
 /// The master, when the daemon runs one.
 pub(crate) type SharedMaster = Option<Arc<Mutex<Master>>>;
 
-/// How often the master checks whether its image is due.
-const IMAGE_CHECK: Duration = Duration::from_secs(60);
+/// How often the master's rows are checkpointed while they change: the most
+/// work a crash can cost.
+const CHECKPOINT_PERIOD: Duration = Duration::from_secs(10);
 
 /// Serve leases on `socket` until stopped, or until `idle_seconds` pass with
 /// no connection (`0` serves until stopped).
@@ -34,14 +35,14 @@ pub(crate) async fn run(
 
     let shutdown = Arc::new(Notify::new());
     let idle = (idle_seconds > 0).then_some(Duration::from_secs(idle_seconds));
-    let mut image_check = tokio::time::interval(IMAGE_CHECK);
+    let mut checkpoint = tokio::time::interval(CHECKPOINT_PERIOD);
     let result = loop {
         let accepted = accept(&listener, idle);
         tokio::select! {
             _ = shutdown.notified() => break Ok(()),
-            _ = image_check.tick() => {
+            _ = checkpoint.tick() => {
                 if let Some(master) = &master {
-                    if let Err(error) = lock(master).tick(false) {
+                    if let Err(error) = lock(master).checkpoint() {
                         break Err(error);
                     }
                 }
@@ -62,7 +63,7 @@ pub(crate) async fn run(
     };
     let _ = std::fs::remove_file(&socket);
     if let Some(master) = &master {
-        lock(master).tick(true)?;
+        lock(master).checkpoint()?;
     }
     result
 }

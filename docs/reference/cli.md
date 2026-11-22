@@ -942,11 +942,11 @@ state and never ride a Table or TableFile document.
 With --master --store DIR the daemon also runs the master: one map of partition
 versions (a partition at one etag) that `pqbench job` processes move through
 their states, and the results the jobs' commands wrote, under DIR. Each call on
-the map is atomic and is appended to an edit log before it is answered; the
-full image is rewritten hourly or every million edits, and on stop. With
---web-ui it also serves the web app (--listen, default 127.0.0.1:8180): the
-master's partition versions as a sortable, paged list, and the records at GET
-/v1/{name}.
+the map is atomic, and the map is written whole to a checkpoint every 10
+seconds while it changes, and on stop; a crash loses at most the calls since
+the last checkpoint, which the jobs redo. With --web-ui it also serves the web
+app (--listen, default 127.0.0.1:8180): the master's partition versions as a
+sortable, paged list, and the records at GET /v1/{name}.
 
 **Usage:** `pqbench daemon <COMMAND>`
 
@@ -984,7 +984,7 @@ Start the daemon in the background
 
   Default value: `900`
 * `--master` — also run the master: the partition map and the calls jobs make on it
-* `--store <DIR>` — the master's store: its image, edit log, and results (with --master)
+* `--store <DIR>` — the master's store: its checkpoint and results (with --master)
 * `--web-ui` — also serve the web app: the master's records and status page (with --master)
 * `--listen <ADDR>` — the web app's address (with --web-ui)
 
@@ -1020,7 +1020,7 @@ Serve leases in the foreground
 
   Default value: `0`
 * `--master` — also run the master: the partition map and the calls jobs make on it
-* `--store <DIR>` — the master's store: its image, edit log, and results (with --master)
+* `--store <DIR>` — the master's store: its checkpoint and results (with --master)
 * `--web-ui` — also serve the web app: the master's records and status page (with --master)
 * `--listen <ADDR>` — the web app's address (with --web-ui)
 
