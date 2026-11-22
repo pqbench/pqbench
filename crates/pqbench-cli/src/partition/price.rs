@@ -1,4 +1,4 @@
-//! `price partitions`: each partition's storage classes and cost.
+//! `get partition-price`: each partition's storage classes and cost.
 
 use clap::Args;
 use futures_util::stream;
@@ -7,27 +7,28 @@ use pqbench::v1;
 use crate::source::{drive, flat_map};
 use crate::{parse, CliError};
 
-/// Arguments for `price partitions`.
+/// Arguments for `get partition-price`.
 #[derive(Args)]
-pub(crate) struct PartitionsArgs {
+pub(crate) struct PriceArgs {
     /// partitions in flight at once
     #[arg(long, default_value_t = 16)]
     fan_out: usize,
 }
 
-/// Price partitions: `list partitions | price partitions`.
+/// Read each partition's price: `list partitions | get partition-price`.
 ///
-/// Reads Partition records on standard input and writes one PartitionPrice
-/// per partition, in input order within the fan-out. Each partition costs up
-/// to three HEADs (its oldest, sample and newest file) under its table's
-/// lease. A partition that fails is reported and writes nothing; the others
-/// still do.
+/// `PartitionPrice` is the partition's singleton child (AIP-156), so the input
+/// is its parent: Partition records on standard input, which carry the files
+/// the price reads. Writes one PartitionPrice per partition, in input order
+/// within the fan-out. Each partition costs up to three HEADs (its oldest,
+/// sample and newest file) under its table's lease. A partition that fails is
+/// reported and writes nothing; the others still do.
 pub(crate) async fn run(
     lake: &pqbench::Lake,
     daemon: &crate::daemon::Daemon,
-    args: &PartitionsArgs,
+    args: &PriceArgs,
 ) -> Result<(), CliError> {
-    let parents = parse::parents::<v1::Partition>("price partitions").await?;
+    let parents = parse::parents::<v1::Partition>("get partition-price").await?;
     let lake = lake.clone();
     let daemon = daemon.clone();
     drive(flat_map(

@@ -42,9 +42,9 @@ fn head_server(
     (address, heads)
 }
 
-fn price_partitions(stdin: &str, endpoint: &str) -> std::process::Output {
+fn get_partition_price(stdin: &str, endpoint: &str) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pqbench"))
-        .args(["price", "partitions"])
+        .args(["get", "partition-price"])
         .env("AWS_ENDPOINT_URL", endpoint)
         .env("AWS_ENDPOINT", endpoint)
         .env("AWS_ALLOW_HTTP", "true")
@@ -108,7 +108,7 @@ fn records(output: &std::process::Output) -> Vec<Value> {
 /// One class on every file prices the partition and its removed bytes at it;
 /// a file named twice is HEADed once.
 #[test]
-fn price_partitions_prices_the_bytes_at_the_files_class() {
+fn get_partition_price_prices_the_bytes_at_the_files_class() {
     let (endpoint, heads) =
         head_server(&[("/lake/old.parquet", None), ("/lake/new.parquet", None)]);
     let stdin = partition(
@@ -121,7 +121,7 @@ fn price_partitions_prices_the_bytes_at_the_files_class() {
         10 * GIBIBYTE as u64,
         2 * GIBIBYTE as u64,
     );
-    let records = records(&price_partitions(&stdin, &endpoint));
+    let records = records(&get_partition_price(&stdin, &endpoint));
     assert_eq!(records.len(), 1);
     let price = &records[0];
     assert_eq!(
@@ -144,7 +144,7 @@ fn price_partitions_prices_the_bytes_at_the_files_class() {
 /// An older file in a colder class than a newer one is a lifecycle transition
 /// inside the partition: both classes, oldest first, each pricing the bytes.
 #[test]
-fn price_partitions_names_a_transition_inside_the_partition() {
+fn get_partition_price_names_a_transition_inside_the_partition() {
     let (endpoint, _) = head_server(&[
         ("/lake/old.parquet", Some("GLACIER_IR")),
         ("/lake/new.parquet", None),
@@ -159,7 +159,7 @@ fn price_partitions_names_a_transition_inside_the_partition() {
         GIBIBYTE as u64,
         0,
     );
-    let price = &records(&price_partitions(&stdin, &endpoint))[0];
+    let price = &records(&get_partition_price(&stdin, &endpoint))[0];
     assert_eq!(price["storage_classes"], json!(["GLACIER_IR", "STANDARD"]));
     let costs: Vec<f64> = price["storage_costs"]
         .as_array()
@@ -175,7 +175,7 @@ fn price_partitions_names_a_transition_inside_the_partition() {
 /// Local files have no storage class: no HEAD, no class, no cost, and the
 /// record still says which etag it priced.
 #[test]
-fn price_partitions_leaves_local_files_unpriced() {
+fn get_partition_price_leaves_local_files_unpriced() {
     let (endpoint, heads) = head_server(&[]);
     let stdin = partition(
         "day=1",
@@ -187,7 +187,7 @@ fn price_partitions_leaves_local_files_unpriced() {
         100,
         0,
     );
-    let price = &records(&price_partitions(&stdin, &endpoint))[0];
+    let price = &records(&get_partition_price(&stdin, &endpoint))[0];
     assert_eq!(price["partition_etag"], "00000000000000ab");
     assert!(price.get("storage_classes").is_none(), "{price}");
     assert!(price.get("storage_costs").is_none(), "{price}");
@@ -196,14 +196,14 @@ fn price_partitions_leaves_local_files_unpriced() {
 
 /// A HEAD that fails is reported under the partition; the others still price.
 #[test]
-fn price_partitions_keeps_the_partitions_that_price() {
+fn get_partition_price_keeps_the_partitions_that_price() {
     let (endpoint, _) = head_server(&[("/lake/new.parquet", None)]);
     let stdin = format!(
         "{}{}",
         partition("day=1", ["blobs/s3/lake%2Fgone.parquet"; 3], 1, 0),
         partition("day=2", ["blobs/s3/lake%2Fnew.parquet"; 3], 1, 0)
     );
-    let output = price_partitions(&stdin, &endpoint);
+    let output = get_partition_price(&stdin, &endpoint);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(stderr.contains("partitions/day%3D1"), "stderr: {stderr}");

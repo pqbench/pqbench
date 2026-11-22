@@ -298,8 +298,9 @@ message Partition {
   optional int64 removed_size_bytes = 13;
 }
 
-// A partition's storage price at one etag: the storage classes of the files
-// `price partitions` looked at, and what the partition's bytes cost in each.
+// A partition's storage price at one etag, the partition's singleton child
+// (AIP-156): the storage classes of the files `get partition-price` looked at,
+// and what the partition's bytes cost in each.
 message PartitionPrice {
   // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/price
   string name = 1;

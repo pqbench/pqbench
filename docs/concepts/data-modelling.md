@@ -61,6 +61,7 @@ A resource has at most one canonical parent, and a `List` must not require two
 | `Schema` | `Catalog` |
 | `Table` | `Schema` |
 | `TableFile`, `Partition`, `Commit` | `Table` |
+| `PartitionPrice` | `Partition` |
 | `Column` | `Blob` |
 | `ColumnProfile`, `Suggestion` | `Column` |
 
@@ -76,6 +77,11 @@ Two consequences:
   under the table: the snapshot's files that share those values, folded into
   totals, with references to three of them (`first_file`, `last_file`,
   `sample_file`).
+- A storage class is a `Blob` fact (`storage_class`), read from storage, not
+  from the log, so it is not a `Partition` field. A partition's price is its
+  singleton child (`…/partitions/{partition}/price`, AIP-156), read with `get`
+  from the partition's record: the classes of the three referenced files'
+  blobs, and the partition's bytes at each.
 - An analysis's parent is the **column**. A coarser scope is an aggregate, not a
   second parent: a file-level read uses the `-` wildcard id (AIP-159).
 

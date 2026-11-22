@@ -16,8 +16,8 @@ schema.
 | `Schema` | `catalogs/{catalog}/schemas/{schema}` | [`list schemas`](cli.md#pqbench-list-schemas), [`get schema`](cli.md#pqbench-get-schema) | `get schema`, `list tables` |
 | `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table) | `get table`, `list files`, `list partitions` |
 | `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass`, `list suggestions` |
-| `Partition` | `…/tables/{table}/partitions/{partition}` | [`list partitions`](cli.md#pqbench-list-partitions) | `price partitions` |
-| `PartitionPrice` | `…/partitions/{partition}/price` | [`price partitions`](cli.md#pqbench-price-partitions) | humans / scripts |
+| `Partition` | `…/tables/{table}/partitions/{partition}` | [`list partitions`](cli.md#pqbench-list-partitions) | `get partition-price` |
+| `PartitionPrice` | `…/partitions/{partition}/price` | [`get partition-price`](cli.md#pqbench-get-partition-price) | humans / scripts |
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |

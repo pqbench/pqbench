@@ -22,6 +22,9 @@ enum GetResource {
     Schema(crate::schema::NameArgs),
     /// Read one table's record (`CATALOG.SCHEMA.TABLE`)
     Table(crate::table::get::GetArgs),
+    /// Read each partition's storage classes and cost (Partition records on stdin)
+    #[command(long_about = crate::help::GET_PARTITION_PRICE_LONG_ABOUT)]
+    PartitionPrice(crate::partition::price::PriceArgs),
     /// Verify one column's potential suggestion (Suggestion refs on stdin)
     Suggestion(crate::lint::VerifyArgs),
 }
@@ -34,14 +37,18 @@ impl GetArgs {
             GetResource::Catalog(_) => "get catalog",
             GetResource::Schema(_) => "get schema",
             GetResource::Table(_) => "get table",
+            GetResource::PartitionPrice(_) => "get partition-price",
             GetResource::Suggestion(_) => "get suggestion",
         }
     }
 
     /// Whether the resource needs `PQB_ENDPOINT`. Suggestions measure a local
-    /// file, like `list suggestions`.
+    /// file, like `list suggestions`; a partition's price HEADs its files.
     pub(crate) fn requires_endpoint(&self) -> bool {
-        !matches!(&self.resource, GetResource::Suggestion(_))
+        !matches!(
+            &self.resource,
+            GetResource::Suggestion(_) | GetResource::PartitionPrice(_)
+        )
     }
 }
 
@@ -56,6 +63,7 @@ pub(crate) async fn run(
         GetResource::Catalog(args) => crate::catalog::get::run(daemon, args).await,
         GetResource::Schema(args) => crate::schema::get::run(daemon, args).await,
         GetResource::Table(args) => crate::table::get::run(daemon, args).await,
+        GetResource::PartitionPrice(args) => crate::partition::price::run(lake, daemon, args).await,
         GetResource::Suggestion(args) => crate::lint::verify(lake, args).await,
     }
 }

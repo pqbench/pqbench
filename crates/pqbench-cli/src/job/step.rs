@@ -39,7 +39,7 @@ pub(crate) const PRICE: Step = Step {
     source: State::Pending,
     target: State::Pricing,
     done: State::Priced,
-    command: &["price", "partitions"],
+    command: &["get", "partition-price"],
     input: partition_input,
 };
 

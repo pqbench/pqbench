@@ -12,7 +12,7 @@ compress them (lz, compression), what a Delta or Iceberg table's files hold
 (list files), and what a decoded row sample holds (profile).
 Commands compose on pipes: each writes a resource the next command reads.
 
-  get           → Metastore / Catalog / Schema / Table
+  get           → Metastore / Catalog / Schema / Table / PartitionPrice
                   one resource of the walk
   list          → Catalog / Schema / Table / TableFile / Column
                   a collection of the walk
@@ -55,7 +55,7 @@ Documents:
   Table                  a schema's tables (list tables) / one record (get table)
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
-  PartitionPrice         a partition's storage classes and cost (price partitions)
+  PartitionPrice         a partition's storage classes and cost (get partition-price)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -153,12 +153,18 @@ Read one resource of the walk, by type:
              properties), from a Schema ref
   table      one table's record (format, snapshot_version, declared_columns,
              partition_columns, properties), from a Table ref
+  partition-price
+             one partition's price, its singleton child: the storage classes
+             of its oldest, sample and newest files, and its bytes and removed
+             bytes at each class's S3 list price (us-east-1), from a Partition
+             record (from `list partitions`; no endpoint)
   suggestion one potential suggestion measured against its control, from a
              Suggestion ref (a local file, no endpoint)
 
 The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
 PQB_TABLE_FORMAT; the catalog resources need an endpoint, while `get
-suggestion` measures a local file. `get` reads the matching resource records
+suggestion` measures a local file and `get partition-price` HEADs the files a
+Partition record names. `get` reads the matching resource records
 on standard input — one per line — so it enriches a listing: `pqbench list
 catalogs | pqbench get catalog`. A JSON record names the resource: `echo
 '\"dbx_samples.nyctaxi\"' | pqbench get schema`.
@@ -186,6 +192,7 @@ Examples:
   echo '\"dbx_samples.nyctaxi\"' | pqbench list tables | pqbench get table
   pqbench list schemas | pqbench get schema
   pqbench list tables | pqbench get table
+  cat table.ndjson | pqbench list partitions | pqbench get partition-price
   pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
 
 See also:
@@ -302,12 +309,11 @@ See also:
   pqbench --help             catalog auth, PQB_* config
   docs/reference/cli.md";
 
-pub const PRICE_ABOUT: &str = "Price each partition at its files' storage classes";
-
-pub const PRICE_LONG_ABOUT: &str = "\
-Price partitions: read Partition records on standard input (from `list
-partitions`) and write one PartitionPrice per partition: the storage classes of
-its oldest, sample and newest files, and its bytes and removed bytes at each
+pub const GET_PARTITION_PRICE_LONG_ABOUT: &str = "\
+Read each partition's price: read Partition records on standard input (from
+`list partitions`) and write one PartitionPrice per partition, the partition's
+singleton child (`…/partitions/{partition}/price`): the storage classes of its
+oldest, sample and newest files, and its bytes and removed bytes at each
 class's S3 list price (us-east-1).
 
 Each partition costs up to three HEADs under its table's lease, nothing is read
@@ -316,15 +322,6 @@ omits the class for STANDARD. Lifecycle moves objects by age, so one class
 covers the partition and two bound a transition inside it; a class that prices
 by access (INTELLIGENT_TIERING) lists each access sub-tier. A file that is not
 an S3 object has no class, and a partition with none has no cost.";
-
-pub const PRICE_AFTER: &str = "\
-Examples:
-  cat table.ndjson | pqbench list partitions | pqbench price partitions
-
-See also:
-  pqbench list partitions --help  the records this command prices
-  pqbench --help                  catalog auth, PQB_* config
-  docs/reference/cli.md";
 
 pub const JOB_ABOUT: &str = "Move partition versions through the daemon's master";
 
@@ -339,7 +336,7 @@ scheduler's.
   scan      list each table's partitions into the master (Table records on
             stdin, from `get table`); with --complete, the tables the input
             does not name are deleted
-  price     price each pending version (`price partitions`)
+  price     price each pending version (`get partition-price`)
   bytemass  measure each priced version's sample file (`bytemass`); a version
             in an archive class, or with no live file, is done without a read
   lint      list each measured version's storage suggestions (`list

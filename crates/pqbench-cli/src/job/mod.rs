@@ -33,7 +33,7 @@ pub(crate) struct JobArgs {
 enum Job {
     /// List each table's partitions into the master (Table records on stdin)
     Scan(scan::ScanArgs),
-    /// Price the pending versions (`price partitions`)
+    /// Price the pending versions (`get partition-price`)
     Price(step::StepArgs),
     /// Measure each priced version's sample file (`bytemass`)
     Bytemass(step::StepArgs),

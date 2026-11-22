@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{Resource, StorageTierCost};
 
-/// A partition's storage price at one etag: the storage classes of the files
-/// `price partitions` looked at, and what the partition's bytes cost in each.
+/// A partition's storage price at one etag, the partition's singleton child
+/// (AIP-156): the storage classes of the files `get partition-price` looked
+/// at, and what the partition's bytes cost in each.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct PartitionPrice {

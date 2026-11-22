@@ -14,6 +14,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench get catalog`↴](#pqbench-get-catalog)
 * [`pqbench get schema`↴](#pqbench-get-schema)
 * [`pqbench get table`↴](#pqbench-get-table)
+* [`pqbench get partition-price`↴](#pqbench-get-partition-price)
 * [`pqbench get suggestion`↴](#pqbench-get-suggestion)
 * [`pqbench format`↴](#pqbench-format)
 * [`pqbench table-file`↴](#pqbench-table-file)
@@ -27,8 +28,6 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench list suggestions`↴](#pqbench-list-suggestions)
 * [`pqbench sample`↴](#pqbench-sample)
 * [`pqbench sample files`↴](#pqbench-sample-files)
-* [`pqbench price`↴](#pqbench-price)
-* [`pqbench price partitions`↴](#pqbench-price-partitions)
 * [`pqbench job`↴](#pqbench-job)
 * [`pqbench job scan`↴](#pqbench-job-scan)
 * [`pqbench job price`↴](#pqbench-job-price)
@@ -55,7 +54,7 @@ compress them (lz, compression), what a Delta or Iceberg table's files hold
 Commands compose on pipes: each writes a resource the next command reads.
 
 ```text
-  get           → Metastore / Catalog / Schema / Table
+  get           → Metastore / Catalog / Schema / Table / PartitionPrice
                   one resource of the walk
   list          → Catalog / Schema / Table / TableFile / Column
                   a collection of the walk
@@ -100,7 +99,7 @@ Documents:
   Table                  a schema's tables (list tables) / one record (get table)
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
-  PartitionPrice         a partition's storage classes and cost (price partitions)
+  PartitionPrice         a partition's storage classes and cost (get partition-price)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -169,7 +168,6 @@ Format skills (read these when the input is Parquet or a table):
 * `table-file` — Name storage paths as table-file records
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
-* `price` — Price each partition at its files' storage classes
 * `job` — Move partition versions through the daemon's master
 * `daemon` — Own the catalog calls and cache storage leases
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
@@ -344,13 +342,19 @@ Read one resource of the walk, by type:
              properties), from a Schema ref
   table      one table's record (format, snapshot_version, declared_columns,
              partition_columns, properties), from a Table ref
+  partition-price
+             one partition's price, its singleton child: the storage classes
+             of its oldest, sample and newest files, and its bytes and removed
+             bytes at each class's S3 list price (us-east-1), from a Partition
+             record (from `list partitions`; no endpoint)
   suggestion one potential suggestion measured against its control, from a
              Suggestion ref (a local file, no endpoint)
 ```
 
 The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
 PQB_TABLE_FORMAT; the catalog resources need an endpoint, while `get
-suggestion` measures a local file. `get` reads the matching resource records
+suggestion` measures a local file and `get partition-price` HEADs the files a
+Partition record names. `get` reads the matching resource records
 on standard input — one per line — so it enriches a listing: `pqbench list
 catalogs | pqbench get catalog`. A JSON record names the resource: `echo
 '"dbx_samples.nyctaxi"' | pqbench get schema`.
@@ -380,6 +384,7 @@ Examples:
   echo '"dbx_samples.nyctaxi"' | pqbench list tables | pqbench get table
   pqbench list schemas | pqbench get schema
   pqbench list tables | pqbench get table
+  cat table.ndjson | pqbench list partitions | pqbench get partition-price
   pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
 
 See also:
@@ -395,6 +400,7 @@ See also:
 * `catalog` — Read one catalog's record
 * `schema` — Read one schema's record (`CATALOG.SCHEMA`)
 * `table` — Read one table's record (`CATALOG.SCHEMA.TABLE`)
+* `partition-price` — Read each partition's storage classes and cost (Partition records on stdin)
 * `suggestion` — Verify one column's potential suggestion (Suggestion refs on stdin)
 
 
@@ -448,6 +454,32 @@ Read one table's record (`CATALOG.SCHEMA.TABLE`)
 * `--fan-out <FAN_OUT>` — tables in flight at once (default: cores) [env: PQB_TABLE_FAN_OUT]
 
   Default value: `the number of cores`
+
+
+
+## `pqbench get partition-price`
+
+Read each partition's price: read Partition records on standard input (from
+`list partitions`) and write one PartitionPrice per partition, the partition's
+singleton child (`…/partitions/{partition}/price`): the storage classes of its
+oldest, sample and newest files, and its bytes and removed bytes at each
+class's S3 list price (us-east-1).
+
+Each partition costs up to three HEADs under its table's lease, nothing is read
+from the files, and a HEAD does not count as Intelligent-Tiering access. S3
+omits the class for STANDARD. Lifecycle moves objects by age, so one class
+covers the partition and two bound a transition inside it; a class that prices
+by access (INTELLIGENT_TIERING) lists each access sub-tier. A file that is not
+an S3 object has no class, and a partition with none has no cost.
+
+**Usage:** `pqbench get partition-price [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — partitions in flight at once
+
+  Default value: `16`
 
 
 
@@ -756,53 +788,6 @@ Keep a rate of a table's files, by size
 
 
 
-## `pqbench price`
-
-Price partitions: read Partition records on standard input (from `list
-partitions`) and write one PartitionPrice per partition: the storage classes of
-its oldest, sample and newest files, and its bytes and removed bytes at each
-class's S3 list price (us-east-1).
-
-Each partition costs up to three HEADs under its table's lease, nothing is read
-from the files, and a HEAD does not count as Intelligent-Tiering access. S3
-omits the class for STANDARD. Lifecycle moves objects by age, so one class
-covers the partition and two bound a transition inside it; a class that prices
-by access (INTELLIGENT_TIERING) lists each access sub-tier. A file that is not
-an S3 object has no class, and a partition with none has no cost.
-
-**Usage:** `pqbench price <COMMAND>`
-
-```console no-run
-Examples:
-  cat table.ndjson | pqbench list partitions | pqbench price partitions
-
-See also:
-  pqbench list partitions --help  the records this command prices
-  pqbench --help                  catalog auth, PQB_* config
-  docs/reference/cli.md
-```
-
-###### **Subcommands:**
-
-* `partitions` — Price each partition at its files' storage classes (Partition records on stdin)
-
-
-
-## `pqbench price partitions`
-
-Price each partition at its files' storage classes (Partition records on stdin)
-
-**Usage:** `pqbench price partitions [OPTIONS]`
-
-
-###### **Options:**
-
-* `--fan-out <FAN_OUT>` — partitions in flight at once
-
-  Default value: `16`
-
-
-
 ## `pqbench job`
 
 Run one job against the daemon's master (`pqbench daemon start --master --store
@@ -816,7 +801,7 @@ scheduler's.
   scan      list each table's partitions into the master (Table records on
             stdin, from `get table`); with --complete, the tables the input
             does not name are deleted
-  price     price each pending version (`price partitions`)
+  price     price each pending version (`get partition-price`)
   bytemass  measure each priced version's sample file (`bytemass`); a version
             in an archive class, or with no live file, is done without a read
   lint      list each measured version's storage suggestions (`list
@@ -844,7 +829,7 @@ See also:
 ###### **Subcommands:**
 
 * `scan` — List each table's partitions into the master (Table records on stdin)
-* `price` — Price the pending versions (`price partitions`)
+* `price` — Price the pending versions (`get partition-price`)
 * `bytemass` — Measure each priced version's sample file (`bytemass`)
 * `lint` — List each measured version's storage suggestions (`list suggestions`)
 * `purge` — Delete the results and rows of the versions the scan no longer finds
@@ -870,7 +855,7 @@ List each table's partitions into the master (Table records on stdin)
 
 ## `pqbench job price`
 
-Price the pending versions (`price partitions`)
+Price the pending versions (`get partition-price`)
 
 **Usage:** `pqbench job price [OPTIONS]`
 
