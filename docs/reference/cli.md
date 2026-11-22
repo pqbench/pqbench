@@ -22,6 +22,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench list schemas`↴](#pqbench-list-schemas)
 * [`pqbench list tables`↴](#pqbench-list-tables)
 * [`pqbench list files`↴](#pqbench-list-files)
+* [`pqbench list partitions`↴](#pqbench-list-partitions)
 * [`pqbench list columns`↴](#pqbench-list-columns)
 * [`pqbench list suggestions`↴](#pqbench-list-suggestions)
 * [`pqbench sample`↴](#pqbench-sample)
@@ -89,6 +90,7 @@ Documents:
   Schema                 a catalog's schemas (list schemas) / one record (get schema)
   Table                  a schema's tables (list tables) / one record (get table)
   TableFile              one table file (list files, sample files, table-file)
+  Partition              one partition of a table's snapshot (list partitions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -504,6 +506,9 @@ List a collection of the walk, by name:
               line each — the record `get table` enriches
   files       a table's active files (Table refs on standard input), one
               TableFile line each
+  partitions  a table's partitions (Table records from `get table` on standard
+              input), one Partition line each: file count, bytes, records,
+              etag, and the oldest, newest and sample file
   columns     a file's columns and their byte masses (TableFile refs on
               standard input), one Column line each
   suggestions the storage each local blob's values may not need (TableFile refs
@@ -528,6 +533,13 @@ nothing is collected, so a table of any size costs one log batch plus one file.
 --last/--partition keep
 only the files the log dates in a window (e.g. 1m, 1h, 1d, 1w, or one UTC day), so a
 daily run reads the day's writes without walking what the table already held.
+
+`list partitions` reads each table's snapshot once, without per-column
+statistics, and writes one Partition per partition, sorted by name, once the
+table is read. It holds one running total per partition, never the files, and
+a table that fails writes nothing. A partition's name follows the table's
+partition column order, so the input is `get table` output, which names the
+columns; a `list tables` ref is refused.
 
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
@@ -570,6 +582,7 @@ See also:
 * `schemas` — List the schemas in a catalog (`CATALOG`)
 * `tables` — List the tables in a schema (`CATALOG.SCHEMA`)
 * `files` — List a table's active files (Table refs on stdin)
+* `partitions` — List a table's partitions (Table refs on stdin)
 * `columns` — List a file's columns and their byte masses (Table-file refs on stdin)
 * `suggestions` — List potential storage suggestions for each local blob (Table-file refs on stdin)
 
@@ -626,6 +639,21 @@ List a table's active files (Table refs on stdin)
   Default value: `64`
 * `--partition <DATE>` — read only files the log dates in one UTC day: an ISO date, YYYY-MM-DD; e.g. 2026-10-28
 * `--last <WINDOW>` — read only files the log dates in the last WINDOW, ending now: e.g. 1m, 1h, 1d, 1w
+
+
+
+## `pqbench list partitions`
+
+List a table's partitions (Table refs on stdin)
+
+**Usage:** `pqbench list partitions [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — tables in flight at once
+
+  Default value: `4`
 
 
 

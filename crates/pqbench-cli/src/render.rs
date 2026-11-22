@@ -119,6 +119,38 @@ impl Row for v1::TableFile {
     }
 }
 
+impl Row for v1::Partition {
+    const HEADER: &'static [&'static str] = &[
+        "partition",
+        "file_count",
+        "size_bytes",
+        "record_count",
+        "etag",
+    ];
+    const ALIGN: &[Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let partition = v1::Partition::parse_name(&self.name)
+            .map(|(_, _, _, partition)| partition)
+            .unwrap_or_else(|| self.name.clone());
+        vec![
+            partition,
+            self.file_count.to_string(),
+            self.size_bytes.to_string(),
+            self.record_count
+                .map(|count| count.to_string())
+                .unwrap_or_default(),
+            self.etag.clone(),
+        ]
+    }
+}
+
 impl Row for v1::Column {
     const HEADER: &'static [&'static str] = &[
         "column",

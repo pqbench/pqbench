@@ -24,6 +24,7 @@ mod lz;
 mod measure;
 mod metastore;
 mod parse;
+mod partition;
 mod profile;
 mod render;
 mod rows;

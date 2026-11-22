@@ -60,7 +60,7 @@ A resource has at most one canonical parent, and a `List` must not require two
 | `Catalog` | `Metastore` |
 | `Schema` | `Catalog` |
 | `Table` | `Schema` |
-| `TableFile`, `Commit` | `Table` |
+| `TableFile`, `Partition`, `Commit` | `Table` |
 | `Column` | `Blob` |
 | `ColumnProfile`, `Suggestion` | `Column` |
 
@@ -71,9 +71,11 @@ produces a column's mass with the column, so it has no name of its own.
 
 Two consequences:
 
-- A `TableFile`'s parent is the **table**. Partition values ride on the file
-  (its `partition_values` map), so a partition is a filter over the table's
-  files, not a resource of its own.
+- A `TableFile`'s parent is the **table**, not its partition. Partition values
+  ride on the file (its `partition_values` map). A `Partition` is a sibling
+  under the table: the snapshot's files that share those values, folded into
+  totals, with references to three of them (`first_file`, `last_file`,
+  `sample_file`).
 - An analysis's parent is the **column**. A coarser scope is an aggregate, not a
   second parent: a file-level read uses the `-` wildcard id (AIP-159).
 

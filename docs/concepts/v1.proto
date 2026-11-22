@@ -245,6 +245,46 @@ message TableFile {
   optional double sample_rate = 9;
 }
 
+// One partition of a table's snapshot: the active files that share its
+// partition values, folded into totals. An unpartitioned table has one.
+message Partition {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}
+  // `{partition}` is the Hive-style path of the values (`k=v/k2=v2`, in the
+  // table's partition column order; `/`, `=` and `%` in a key or value
+  // percent-escaped; a null value is `__HIVE_DEFAULT_PARTITION__`), URL-encoded
+  // to one segment. A table without partition columns has `unpartitioned`.
+  string name = 1;
+
+  // The log's partition values; a null value is JSON null.
+  map<string, google.protobuf.Value> partition_values = 2;
+
+  // Changes when a file is added to or removed from the partition: an
+  // order-independent hash of each file's path and size, 16 hex digits.
+  string etag = 3;
+
+  int64 file_count = 4;
+
+  // Sum of the files' sizes, as the log claims them.
+  int64 size_bytes = 5;
+
+  // Sum of the files' record counts; absent when a file has none.
+  optional int64 record_count = 6;
+
+  int64 smallest_file_size_bytes = 7;
+
+  int64 largest_file_size_bytes = 8;
+
+  // The oldest and newest file by the log's modification time (ties fall to
+  // the path). Absent when the log records no per-file time (Iceberg).
+  TableFile first_file = 9;
+
+  TableFile last_file = 10;
+
+  // The file a measurement reads for the partition: the one whose path and
+  // size hash lowest, so it stays the same while the partition holds it.
+  TableFile sample_file = 11;
+}
+
 // One commit of a table's log. The `{commit}` id segment is the log version, a
 // number (a valid URI path segment).
 message Commit {

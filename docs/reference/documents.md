@@ -14,8 +14,9 @@ schema.
 | `Metastore` | `metastores/{metastore}` | [`get metastore`](cli.md#pqbench-get-metastore) | humans / scripts |
 | `Catalog` | `catalogs/{catalog}` | [`list catalogs`](cli.md#pqbench-list-catalogs), [`get catalog`](cli.md#pqbench-get-catalog) | `get catalog`, `list schemas` |
 | `Schema` | `catalogs/{catalog}/schemas/{schema}` | [`list schemas`](cli.md#pqbench-list-schemas), [`get schema`](cli.md#pqbench-get-schema) | `get schema`, `list tables` |
-| `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table) | `get table`, `list files` |
+| `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table) | `get table`, `list files`, `list partitions` |
 | `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass`, `list suggestions` |
+| `Partition` | `…/tables/{table}/partitions/{partition}` | [`list partitions`](cli.md#pqbench-list-partitions) | humans / scripts |
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |
@@ -26,7 +27,7 @@ see [Profile](profile.md). The `Bytemass` value is nested in `Column.mass`; it
 has no resource name of its own.
 
 A resource's `name` is its identity. The collection segment (`catalogs`,
-`schemas`, `tables`, `files`, `blobs`, `columns`) names the type, so no resource
+`schemas`, `tables`, `files`, `partitions`, `blobs`, `columns`) names the type, so no resource
 carries a `kind` or a version of its own — the API version is the package's
 (`pqbench.v1`). A dotted FQN such as `dbx_samples.nyctaxi.trips` is an
 input-only lookup alias; the CLI translates it to the canonical path name.

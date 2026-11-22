@@ -47,6 +47,9 @@ mod help;
 #[path = "metastore.rs"]
 mod metastore;
 
+#[path = "partition.rs"]
+mod partition;
+
 #[path = "piping.rs"]
 mod piping;
 

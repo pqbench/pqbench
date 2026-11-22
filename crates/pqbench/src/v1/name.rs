@@ -43,6 +43,12 @@ pub fn table_file_name(table: &str, file: &str) -> String {
     format!("{table}/files/{}", encode(file))
 }
 
+/// `{table}/partitions/{partition}` — a partition under a known table name.
+#[must_use]
+pub fn partition_name(table: &str, partition: &str) -> String {
+    format!("{table}/partitions/{}", encode(partition))
+}
+
 /// `{table}/commits/{commit}` — a commit under a known table name.
 #[must_use]
 pub fn commit_name(table: &str, commit: &str) -> String {

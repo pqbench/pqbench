@@ -20,6 +20,7 @@ pub mod lint;
 pub mod lz;
 pub mod mass;
 pub mod metastore;
+pub mod partition;
 pub mod profile;
 pub mod report;
 pub mod schema;
