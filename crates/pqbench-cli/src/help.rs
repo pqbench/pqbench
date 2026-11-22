@@ -373,14 +373,12 @@ map of partition versions (a partition at one etag); the work is plain pqbench
 commands the daemon runs as child processes, checked on a pass every 100 ms
 and never waited for:
 
-  walk      one command per phase: `list catalogs`, `list schemas`, `list
-            tables`, then `get table` and `list partitions` in a stream per
-            CPU — the whole metastore, or `list partitions` over the
-            --walk-tables records instead. Once at start, then every
+  walk      `list catalogs | list schemas | list tables | get table | list
+            partitions`, the whole metastore, or `list partitions` over the
+            --walk-tables records instead; once at start, then every
             --walk-period-seconds. A new version is PENDING; a listed table's
-            versions it no longer finds are DELETED, the tables `list tables`
-            did not name are deleted too, and a table that cannot be read
-            keeps its versions.
+            versions it no longer finds are DELETED, and when every table was
+            read, so are the tables it did not list.
   versions  one command per version, one per CPU at once, killed past
             --time-limit-seconds:
               price     `get partition-price`; a version with no live file,

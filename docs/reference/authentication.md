@@ -200,11 +200,9 @@ command means for it.
   FILE instead (for local tables). It runs once when the daemon
   starts, then every `--walk-period-seconds`. A partition at a new etag is a
   new `PENDING` version, and a listed table's versions the walk no longer
-  finds are `DELETED`. The tables `list tables` did not name are deleted too;
-  a table that is listed but cannot be read keeps its versions. The walk is one
-  command per phase — `list catalogs`, `list schemas`, `list tables`, then
-  `get table` and `list partitions` in a stream per CPU — each reading the file
-  the phase before wrote.
+  finds are `DELETED`. When every table was read, the versions of tables the
+  walk did not list are deleted too; a walk where a table failed deletes no
+  other table, so a table that cannot be read keeps its versions.
 - **Each version** goes through one command at a time, each from the state
   before it to the state after it: `price` (`get partition-price`),
   `download` (the partition's sample file into the version's directory),
