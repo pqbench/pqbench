@@ -152,10 +152,12 @@ fn page(master: &RwLock<Master>, path: &str) -> Result<String, String> {
         0 => levels_page(master, &["catalogs"])?,
         1 if segments[0] == "partitions" => recent_page(master)?,
         2 => levels_page(master, &[segments[0], segments[1], "schemas"])?,
+        3 if segments[2] == "schemas" => levels_page(master, &segments)?,
         4 => levels_page(
             master,
             &[segments[0], segments[1], segments[2], segments[3], "tables"],
         )?,
+        5 if segments[4] == "tables" => levels_page(master, &segments)?,
         6 => partitions_page(master, name)?,
         8 => partition_page(master, name)?,
         _ => return Err(format!("no page for /{name}")),
