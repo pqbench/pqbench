@@ -73,13 +73,19 @@ SCRUBBED = [
 _WORK = tempfile.TemporaryDirectory(prefix="pqbench-e2e-")
 _SOCKET = os.path.join(_WORK.name, "daemon.sock")
 
-# The schemas `dbx_samples` answers with, from either dialect: neither lists
-# the schemas the catalog keeps for itself, like `information_schema`.
+# The schemas `dbx_samples` answers with over Iceberg REST.
 DBX_SAMPLES_SCHEMAS = [
     "bakehouse",
+    "information_schema",
     "nyctaxi",
     "tpch_sf1",
     "wanderbricks",
+]
+
+# The same, as the Unity dialect lists them: `list schemas` drops the schemas
+# the catalog keeps for itself, like `information_schema`.
+UNITY_DBX_SAMPLES_SCHEMAS = [
+    name for name in DBX_SAMPLES_SCHEMAS if name != "information_schema"
 ]
 
 # The catalogs `list catalogs` answers with: the ones a reader outside the
@@ -415,7 +421,7 @@ class LiveE2E(unittest.TestCase):
             self.assertEqual(resource(record), "schemas")
             self.assertEqual(fqn(record), f"dbx_samples.{resource_id(record)}")
             names.append(resource_id(record))
-        self.assertEqual(names, DBX_SAMPLES_SCHEMAS)
+        self.assertEqual(names, UNITY_DBX_SAMPLES_SCHEMAS)
 
     # `list schemas` and `list tables` on the external-location fixture: the
     # synthetic `events`/`sales`/`reference` (ten two-column tables each) and the
@@ -779,8 +785,12 @@ class LiveE2E(unittest.TestCase):
             self.assertEqual(resource(record), "schemas")
             self.assertIn(fqn(record).split(".")[0], names)
         self.assertEqual(
-            [resource_id(record) for record in records if fqn(record).startswith("dbx_samples.")],
-            DBX_SAMPLES_SCHEMAS,
+            [
+                resource_id(record)
+                for record in records
+                if fqn(record).startswith("pqbench_ext.")
+            ],
+            EXTERNAL_FIXTURE_SCHEMAS,
         )
 
     # `list schemas` reads the live catalog's namespaces through Iceberg REST.
