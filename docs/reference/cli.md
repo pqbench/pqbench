@@ -43,6 +43,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench profile`↴](#pqbench-profile)
 * [`pqbench summarize`↴](#pqbench-summarize)
 * [`pqbench summarize columns`↴](#pqbench-summarize-columns)
+* [`pqbench summarize partition-versions`↴](#pqbench-summarize-partition-versions)
 * [`pqbench skill`↴](#pqbench-skill)
 * [`pqbench setup`↴](#pqbench-setup)
 
@@ -101,6 +102,7 @@ Documents:
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
   PartitionVersion       a partition at one etag in the master (list partition-versions)
+  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -172,7 +174,7 @@ Format skills (read these when the input is Parquet or a table):
 * `job` — Move partition versions through the daemon's master
 * `daemon` — Own the catalog calls and cache storage leases
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
-* `summarize` — Estimate each table column's mass from a list columns stream
+* `summarize` — Fold a stream into totals: column masses, or partition stats
 * `skill` — Print a bundled agent skill (write / DDL / compression recipes)
 * `setup` — Print the walk's environment as shell exports to eval
 
@@ -1092,6 +1094,13 @@ Each additive field is divided by the record's `sample_rate`, so a
 it is a command document, not a resource. `pqbench format --html` draws the
 rows as a static HTML treemap.
 
+`summarize partition-versions` reads PartitionVersion records (`list
+partition-versions`) and writes one PartitionStats per catalog, schema and
+table, in name order, once the input ends: partitions, files, bytes, removed
+bytes, the summed cost bounds of the priced partitions, the newest file time,
+the versions by state, and the failed versions. It holds one total per
+catalog, schema and table, never the versions.
+
 **Usage:** `pqbench summarize <COMMAND>`
 
 ```console no-run
@@ -1099,6 +1108,7 @@ Examples:
   pqbench table-file data.parquet | pqbench list columns | pqbench summarize columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns
   pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format --html > report.html
+  pqbench list partition-versions | pqbench summarize partition-versions
 
 See also:
   pqbench list columns --help     produce the stream this command reduces
@@ -1109,6 +1119,7 @@ See also:
 ###### **Subcommands:**
 
 * `columns` — Estimate each table column's mass from a bytemass stream
+* `partition-versions` — Total the partition versions per catalog, schema and table
 
 
 
@@ -1123,6 +1134,13 @@ Estimate each table column's mass from a bytemass stream
 
 * `<INPUT>` — bytemass NDJSON stream, or `-` for standard input
 
+
+
+## `pqbench summarize partition-versions`
+
+Total the partition versions per catalog, schema and table
+
+**Usage:** `pqbench summarize partition-versions`
 
 
 ## `pqbench skill`

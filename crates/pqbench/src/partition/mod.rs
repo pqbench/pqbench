@@ -6,3 +6,4 @@
 
 pub mod list;
 pub mod price;
+pub mod stats;

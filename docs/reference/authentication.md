@@ -210,6 +210,8 @@ partition returns its versions with every result.
 `PartitionVersion` records, named `…/partitions/{partition}/versions/{etag}`:
 all of them, or those under a catalog, schema, table or partition name, with
 `-` for any id. The checkpoint is the same records.
+`pqbench list partition-versions | pqbench summarize partition-versions`
+totals them per catalog, schema and table as `PartitionStats` records.
 
 ```console no-run
 $ pqbench daemon start --master --store /var/lib/pqbench --web-ui

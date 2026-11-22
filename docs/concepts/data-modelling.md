@@ -62,6 +62,7 @@ A resource has at most one canonical parent, and a `List` must not require two
 | `Table` | `Schema` |
 | `TableFile`, `Partition`, `Commit` | `Table` |
 | `PartitionPrice`, `PartitionVersion` | `Partition` |
+| `PartitionStats` | `Catalog`, `Schema` or `Table` (one pattern each, AIP-122) |
 | `Column` | `Blob` |
 | `ColumnProfile`, `Suggestion` | `Column` |
 

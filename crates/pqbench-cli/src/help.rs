@@ -57,6 +57,7 @@ Documents:
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
   PartitionVersion       a partition at one etag in the master (list partition-versions)
+  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -403,7 +404,7 @@ See also:
   pqbench --help  catalog auth, PQB_* config
   docs/reference/authentication.md";
 
-pub const SUMMARIZE_ABOUT: &str = "Estimate each table column's mass from a list columns stream";
+pub const SUMMARIZE_ABOUT: &str = "Fold a stream into totals: column masses, or partition stats";
 
 pub const SUMMARIZE_LONG_ABOUT: &str = "\
 Read a `list columns` stream and write one `ColumnMass` row per table column: the
@@ -414,13 +415,21 @@ the distinct file count and storage classes, and the monthly S3 storage cost
 Each additive field is divided by the record's `sample_rate`, so a
 `sample files` stream estimates the table, not the sample. A row has no name:
 it is a command document, not a resource. `pqbench format --html` draws the
-rows as a static HTML treemap.";
+rows as a static HTML treemap.
+
+`summarize partition-versions` reads PartitionVersion records (`list
+partition-versions`) and writes one PartitionStats per catalog, schema and
+table, in name order, once the input ends: partitions, files, bytes, removed
+bytes, the summed cost bounds of the priced partitions, the newest file time,
+the versions by state, and the failed versions. It holds one total per
+catalog, schema and table, never the versions.";
 
 pub const SUMMARIZE_AFTER: &str = "\
 Examples:
   pqbench table-file data.parquet | pqbench list columns | pqbench summarize columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns
   pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format --html > report.html
+  pqbench list partition-versions | pqbench summarize partition-versions
 
 See also:
   pqbench list columns --help     produce the stream this command reduces

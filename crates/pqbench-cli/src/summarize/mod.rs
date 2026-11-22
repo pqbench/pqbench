@@ -5,6 +5,7 @@
 //! than a flag on `list`, because the output has a shape of its own.
 
 pub(crate) mod columns;
+pub(crate) mod partition_versions;
 
 use clap::{Args, Subcommand};
 
@@ -22,12 +23,15 @@ pub(crate) struct SummarizeArgs {
 enum SummarizeCollection {
     /// Estimate each table column's mass from a bytemass stream
     Columns(crate::summarize::columns::ColumnsArgs),
+    /// Total the partition versions per catalog, schema and table
+    PartitionVersions,
 }
 
 /// Summarize a collection: the walk's summary verb.
 pub(crate) async fn run(args: &SummarizeArgs) -> Result<(), CliError> {
     match &args.collection {
         SummarizeCollection::Columns(args) => crate::summarize::columns::run(args).await,
+        SummarizeCollection::PartitionVersions => crate::summarize::partition_versions::run().await,
     }
 }
 
@@ -36,6 +40,7 @@ impl SummarizeArgs {
     pub(crate) fn name(&self) -> &'static str {
         match self.collection {
             SummarizeCollection::Columns(_) => "summarize columns",
+            SummarizeCollection::PartitionVersions => "summarize partition-versions",
         }
     }
 }
