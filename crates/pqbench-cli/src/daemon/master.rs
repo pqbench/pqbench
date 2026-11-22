@@ -409,9 +409,14 @@ impl Master {
         purged
     }
 
-    /// Whether the rows changed since the last call.
-    pub(crate) fn take_changed(&mut self) -> bool {
-        std::mem::take(&mut self.changed)
+    /// Whether the rows changed since the last checkpoint.
+    pub(crate) fn changed(&self) -> bool {
+        self.changed
+    }
+
+    /// The rows are on disk.
+    pub(crate) fn checkpointed(&mut self) {
+        self.changed = false;
     }
 
     /// Versions a walk no longer finds are `DELETED`; one a run is on is left

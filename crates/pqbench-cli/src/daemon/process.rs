@@ -79,9 +79,9 @@ pub(crate) async fn pipeline(
     let mut stdin = Stdio::from(input);
     let mut output = Some(output);
     for (at, arguments) in stages.iter().enumerate() {
-        let stdout = match (at + 1 == stages.len(), output.take()) {
-            (true, Some(file)) => Stdio::from(file),
-            _ => Stdio::piped(),
+        let stdout = match at + 1 == stages.len() {
+            true => Stdio::from(output.take().expect("the last stage has the output")),
+            false => Stdio::piped(),
         };
         let started = error.try_clone().and_then(|stderr| {
             command(arguments, socket)

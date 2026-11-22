@@ -67,8 +67,10 @@ impl Store {
 
     /// The versions the last checkpoint holds; none before the first.
     pub(crate) fn read_checkpoint(&self) -> Result<Vec<PartitionVersion>, String> {
-        let Ok(file) = File::open(self.root.join("checkpoint.ndjson")) else {
-            return Ok(Vec::new());
+        let file = match File::open(self.root.join("checkpoint.ndjson")) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(format!("cannot read the checkpoint: {error}")),
         };
         BufReader::new(file)
             .lines()
@@ -151,8 +153,10 @@ impl Store {
             ("bytemass.ndjson", true),
             (LISTING, false),
         ] {
-            let Ok(text) = fs::read_to_string(directory.join(file)) else {
-                continue;
+            let text = match fs::read_to_string(directory.join(file)) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(format!("cannot read {file}: {error}")),
             };
             for line in text.lines().filter(|line| !line.trim().is_empty()) {
                 let record: Value = serde_json::from_str(line)
@@ -194,18 +198,7 @@ impl Store {
     /// no transition will read: what a crash left.
     pub(crate) fn sweep(&self, state: impl Fn(&Key) -> Option<State>) -> Result<(), String> {
         let results = self.root.join("results");
-        for directory in version_dirs(&results) {
-            let Ok(relative) = directory.strip_prefix(&results) else {
-                continue;
-            };
-            let name = |path: Option<&Path>| {
-                path.map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            };
-            let key = (
-                name(relative.parent()),
-                name(relative.file_name().map(Path::new)),
-            );
+        for (key, directory) in version_dirs(&results) {
             let state = match state(&key) {
                 Some(state) => state,
                 None => {
@@ -230,19 +223,41 @@ impl Store {
     }
 }
 
-/// The `{partition}/{etag}` directories under `results`: a partition name is
-/// eight segments (`catalogs/…/partitions/{id}`), then the etag.
-fn version_dirs(results: &Path) -> Vec<PathBuf> {
-    let mut level = vec![results.to_path_buf()];
-    for _ in 0..9 {
-        level = level
-            .iter()
-            .flat_map(|directory| fs::read_dir(directory).into_iter().flatten().flatten())
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect();
+/// The `{partition}/{etag}` directories under `results` and their keys: a
+/// partition name is eight segments (`catalogs/…/partitions/{id}`), then the
+/// etag.
+fn version_dirs(results: &Path) -> Vec<(Key, PathBuf)> {
+    let mut partitions = vec![results.to_path_buf()];
+    for _ in 0..8 {
+        partitions = children(&partitions);
     }
-    level
+    let mut versions = Vec::new();
+    for partition in partitions {
+        let name = partition
+            .strip_prefix(results)
+            .expect("a partition directory is under results")
+            .to_string_lossy()
+            .into_owned();
+        for directory in children(&[partition]) {
+            let etag = directory
+                .file_name()
+                .expect("a version directory has a name")
+                .to_string_lossy()
+                .into_owned();
+            versions.push(((name.clone(), etag), directory));
+        }
+    }
+    versions
+}
+
+/// The directories directly under each of `parents`.
+fn children(parents: &[PathBuf]) -> Vec<PathBuf> {
+    parents
+        .iter()
+        .flat_map(|parent| fs::read_dir(parent).into_iter().flatten().flatten())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect()
 }
 
 fn remove_dir(directory: &Path) -> Result<(), String> {
@@ -309,6 +324,36 @@ mod tests {
         for (key, _, kept) in &versions {
             assert_eq!(store.version_dir(key).join(SAMPLE).exists(), *kept);
         }
+    }
+
+    /// A checkpoint that exists but cannot be read fails the open: it is not
+    /// an empty map, and reading it as one would sweep every result away.
+    #[test]
+    fn an_unreadable_checkpoint_is_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        fs::create_dir(directory.path().join("checkpoint.ndjson")).unwrap();
+        assert!(store.read_checkpoint().is_err());
+        let missing = Store::open(&directory.path().join("elsewhere")).unwrap();
+        assert!(missing.read_checkpoint().unwrap().is_empty());
+    }
+
+    /// A result that exists but cannot be read fails, rather than passing as
+    /// one transition that has not written yet.
+    #[test]
+    fn an_unreadable_result_is_an_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let key = (
+            "catalogs/c/schemas/s/tables/t/partitions/day%3D1".to_string(),
+            "aa".to_string(),
+        );
+        store.write_listing(&key, "{}").unwrap();
+        fs::write(store.version_dir(&key).join("price.ndjson"), "{}\n").unwrap();
+        assert_eq!(store.read_results(&key).unwrap().len(), 2);
+        fs::remove_file(store.version_dir(&key).join("price.ndjson")).unwrap();
+        fs::create_dir(store.version_dir(&key).join("price.ndjson")).unwrap();
+        assert!(store.read_results(&key).is_err());
     }
 
     /// A trashed version is gone from its results and waits in the trash,

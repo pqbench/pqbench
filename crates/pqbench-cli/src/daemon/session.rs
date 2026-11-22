@@ -500,7 +500,7 @@ impl Cached {
         let margin = REFRESH_MARGIN.min(lifetime / 2);
         Cached::Vended {
             env: vended.env,
-            refresh_time: expire_time.checked_sub(margin).unwrap_or(now),
+            refresh_time: expire_time - margin,
             expire_time,
         }
     }

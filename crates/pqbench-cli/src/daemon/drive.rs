@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
@@ -214,11 +214,14 @@ impl Driver {
             .spawn(async move { process::pipeline(&stages, input, output, &error, &socket).await });
     }
 
-    /// Apply the walk's listing: each listed table's versions are found or
-    /// deleted, and when every command succeeded, the tables the walk did not
-    /// list are deleted too.
+    /// Apply the walk's listing: each listed table's versions are found, and
+    /// when every command succeeded, a version the listing does not name is
+    /// deleted. Only a complete listing can say a version is gone, so a failed
+    /// walk, or a listing that cannot be read, deletes nothing.
     fn finish_walk(&mut self, outcome: Result<(), String>) {
         let directory = self.store.walk_dir();
+        let listing = fs::read_to_string(directory.join("partitions.ndjson"))
+            .map_err(|error| format!("cannot read the walk's listing: {error}"));
         if let Err(error) = &outcome {
             let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
             eprintln!(
@@ -226,14 +229,18 @@ impl Driver {
                 process::tail(text.trim())
             );
         }
+        let listing = match listing {
+            Ok(listing) => listing,
+            Err(error) => {
+                eprintln!("pqbench daemon: the walk has no listing ({error})");
+                let _ = fs::remove_dir_all(&directory);
+                return;
+            }
+        };
         let now = master::now_ms();
         let mut found: BTreeMap<String, BTreeSet<Key>> = BTreeMap::new();
-        let lines = File::open(directory.join("partitions.ndjson"))
-            .map(|file| BufReader::new(file).lines().map_while(Result::ok))
-            .into_iter()
-            .flatten();
-        for line in lines.filter(|line| !line.trim().is_empty()) {
-            match self.found(&line, now) {
+        for line in listing.lines().filter(|line| !line.trim().is_empty()) {
+            match self.found(line, now) {
                 Ok(key) => {
                     let table = master::parent_table(&key.0).to_string();
                     found.entry(table).or_default().insert(key);
@@ -241,10 +248,12 @@ impl Driver {
                 Err(error) => eprintln!("pqbench daemon: walk: {error}"),
             }
         }
-        for (table, keys) in &found {
-            write(&self.master).missing(table, keys);
-        }
+        // A listing that stops early still names real versions; only a
+        // complete walk can say that one is gone.
         if outcome.is_ok() {
+            for (table, keys) in &found {
+                write(&self.master).missing(table, keys);
+            }
             let tables: BTreeSet<String> = found.into_keys().collect();
             write(&self.master).retain(&tables);
         }
@@ -277,12 +286,14 @@ impl Driver {
             return;
         }
         self.checkpoint_time = Instant::now();
-        if !write(&self.master).take_changed() {
+        if !read(&self.master).changed() {
             return;
         }
         if let Err(error) = self.store.write_checkpoint(read(&self.master).versions()) {
             eprintln!("pqbench daemon: {error}");
+            return;
         }
+        write(&self.master).checkpointed();
     }
 }
 
@@ -294,10 +305,14 @@ async fn work(store: &Store, run: &Run, socket: &Path) -> Outcome {
     let listing = store.read_listing(key)?;
     let input = match transition.input {
         Input::Partition => listing,
-        Input::SampleFile => serde_json::from_str::<Value>(&listing)
-            .ok()
-            .and_then(|record| record.get("sample_file").map(Value::to_string))
-            .ok_or_else(|| format!("the listing of {} names no sample file", key.0))?,
+        Input::SampleFile => {
+            let record: Value = serde_json::from_str(&listing)
+                .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
+            record
+                .get("sample_file")
+                .map(Value::to_string)
+                .ok_or_else(|| format!("the listing of {} names no sample file", key.0))?
+        }
     };
     let mut command: Vec<String> = transition
         .command
