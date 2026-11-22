@@ -56,7 +56,8 @@ Documents:
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
-  PartitionVersion       a partition at one etag in the master (list partition-versions)
+  PartitionVersion       a partition at one etag in the master (list partition-versions,
+                         get partition-version for its results)
   PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
@@ -393,16 +394,14 @@ and never waited for:
             with its error; after two it waits.
   purge     DELETED versions and their results, except a partition's last
             UP_TO_DATE version while its new one is in progress.
-  stats     `summarize partition-versions` over each checkpoint.
 
 The map is checkpointed to DIR/checkpoint.ndjson every 10 seconds while
 commands run, at once when none do, and on stop. A restart loads it and puts
 running versions back; the commands redo the rest. `pqbench list
-partition-versions` prints the map. With --web-ui the daemon also serves the
-web app (--listen, default 127.0.0.1:8180): one ASCII table per page, the
-same one `pqbench format` prints, from the catalogs down to a partition's
-versions with its price, columns and lint suggestions, every row a link; and
-the records at GET /v1/{name}.";
+partition-versions [PARENT]` prints the map, and `pqbench get
+partition-version NAME` prints one version's stored results (its price, its
+lint suggestions, its column masses and its listing), one record per line;
+NAME may be a version or a partition for its newest live version.";
 
 pub const DAEMON_AFTER: &str = "\
 Examples:
@@ -411,7 +410,8 @@ Examples:
   pqbench daemon status
   pqbench daemon stop
   pqbench daemon start --master --store /var/lib/pqbench \\
-    --walk-period-seconds 86400 --web-ui
+    --walk-period-seconds 86400
+  pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
 
 See also:
   pqbench --help  catalog auth, PQB_* config

@@ -14,6 +14,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench get catalog`↴](#pqbench-get-catalog)
 * [`pqbench get schema`↴](#pqbench-get-schema)
 * [`pqbench get table`↴](#pqbench-get-table)
+* [`pqbench get partition-version`↴](#pqbench-get-partition-version)
 * [`pqbench get partition-price`↴](#pqbench-get-partition-price)
 * [`pqbench get suggestion`↴](#pqbench-get-suggestion)
 * [`pqbench format`↴](#pqbench-format)
@@ -96,7 +97,8 @@ Documents:
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
-  PartitionVersion       a partition at one etag in the master (list partition-versions)
+  PartitionVersion       a partition at one etag in the master (list partition-versions,
+                         get partition-version for its results)
   PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
@@ -399,6 +401,7 @@ See also:
 * `catalog` — Read one catalog's record
 * `schema` — Read one schema's record (`CATALOG.SCHEMA`)
 * `table` — Read one table's record (`CATALOG.SCHEMA.TABLE`)
+* `partition-version` — Read one version's stored results (`name`, or a partition for its newest live version)
 * `partition-price` — Read each partition's storage classes and cost (Partition records on stdin)
 * `suggestion` — Verify one column's potential suggestion (Suggestion refs on stdin)
 
@@ -453,6 +456,19 @@ Read one table's record (`CATALOG.SCHEMA.TABLE`)
 * `--fan-out <FAN_OUT>` — tables in flight at once (default: cores) [env: PQB_TABLE_FAN_OUT]
 
   Default value: `the number of cores`
+
+
+
+## `pqbench get partition-version`
+
+Read one version's stored results (`name`, or a partition for its newest live version)
+
+**Usage:** `pqbench get partition-version <NAME>`
+
+
+###### **Arguments:**
+
+* `<NAME>` — a version (`catalogs/…/partitions/…/versions/{etag}`), or a partition for its newest live version
 
 
 
@@ -882,17 +898,15 @@ and never waited for:
             with its error; after two it waits.
   purge     DELETED versions and their results, except a partition's last
             UP_TO_DATE version while its new one is in progress.
-  stats     `summarize partition-versions` over each checkpoint.
 ```
 
 The map is checkpointed to DIR/checkpoint.ndjson every 10 seconds while
 commands run, at once when none do, and on stop. A restart loads it and puts
 running versions back; the commands redo the rest. `pqbench list
-partition-versions` prints the map. With --web-ui the daemon also serves the
-web app (--listen, default 127.0.0.1:8180): one ASCII table per page, the
-same one `pqbench format` prints, from the catalogs down to a partition's
-versions with its price, columns and lint suggestions, every row a link; and
-the records at GET /v1/{name}.
+partition-versions [PARENT]` prints the map, and `pqbench get
+partition-version NAME` prints one version's stored results (its price, its
+lint suggestions, its column masses and its listing), one record per line;
+NAME may be a version or a partition for its newest live version.
 
 **Usage:** `pqbench daemon <COMMAND>`
 
@@ -903,7 +917,8 @@ Examples:
   pqbench daemon status
   pqbench daemon stop
   pqbench daemon start --master --store /var/lib/pqbench \
-    --walk-period-seconds 86400 --web-ui
+    --walk-period-seconds 86400
+  pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
 
 See also:
   pqbench --help  catalog auth, PQB_* config
@@ -937,10 +952,6 @@ Start the daemon in the background
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
 * `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
 * `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
-* `--web-ui` — also serve the web app: the master's records and status page (with --master)
-* `--listen <ADDR>` — the web app's address (with --web-ui)
-
-  Default value: `127.0.0.1:8180`
 
 
 
@@ -977,10 +988,6 @@ Serve leases in the foreground
 * `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
 * `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
 * `--time-limit-seconds <SECONDS>` — kill a command on a version that runs longer, and count it as a failure
-* `--web-ui` — also serve the web app: the master's records and status page (with --master)
-* `--listen <ADDR>` — the web app's address (with --web-ui)
-
-  Default value: `127.0.0.1:8180`
 
 
 

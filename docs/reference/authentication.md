@@ -217,9 +217,6 @@ command means for it.
 - **Purge** drops `DELETED` versions and their results, except a partition's
   last `UP_TO_DATE` version while its newer one is in progress, so its
   complete results are shown until the new ones replace them.
-- **The stats** are `summarize partition-versions` over each checkpoint, in
-  `DIR/stats.ndjson`.
-
 A command's output lands in `DIR/results/{partition}/{etag}/` under the
 attempt's id and is renamed into place when the command succeeds. The map is
 written whole to `DIR/checkpoint.ndjson` every 10 seconds while commands run,
@@ -233,35 +230,16 @@ under a catalog, schema, table or partition name, with `-` for any id. The
 checkpoint is the same records, and `pqbench summarize partition-versions`
 totals them per catalog, schema and table as `PartitionStats` records.
 
-With `--web-ui` (and `--listen ADDR`, default `127.0.0.1:8180`) the daemon
-also serves the web app, read-only. Each page is one ASCII table, the same one
-`pqbench format` prints, and every row links to the resource it names: `/` is
-the catalogs, `/catalogs/{c}` their schemas, `…/tables/{t}` the table's
-partitions, `…/partitions/{p}` that partition's versions with its columns and
-files, `…/versions/{etag}` one version's results, and `/partitions` the
-master's map whole, newest found first. No script runs in the browser. A
-table's page names its partitions by their id, a partition's page names its
-versions by etag. A version's records are its price by storage class, its
-lint suggestions, its columns from `bytemass`, and the files its listing
-names; a partition's page shows the newest live version's.
-
-`GET /v1/{name}` returns what a name names, as JSON:
-
-- `/v1/catalogs`, `/v1/catalogs/{c}/schemas` and
-  `/v1/catalogs/{c}/schemas/{s}/tables` (`-` for any id) return the
-  `PartitionStats` records under that level, dearest first and then by size.
-  The page reads them; it sums and sorts nothing.
-- A partitions collection (`{table}/partitions`) returns one page,
-  `{"partitions", "next_page_token", "total_size"}`, taking `page_size` (100 by
-  default, at most 1000), `page_token`, and `order_by`: `highest_cost_per_month
-  desc` (the default) or `last_modification_time desc`. The daemon sorts the
-  master's rows for the one table, and only the page's versions read their
-  listing and price.
-- One partition returns its versions with every result.
+`pqbench get partition-version NAME` reads one version's stored results: its
+`PartitionPrice`, its lint `Suggestion`s, its column masses from `bytemass`,
+then its listing, one record per line. NAME is a version
+(`…/partitions/{partition}/versions/{etag}`), or a partition for its newest
+live version. A version with no results yet reports its state instead.
 
 ```console no-run
-$ pqbench daemon start --master --store /var/lib/pqbench --walk-period-seconds 86400 --web-ui
+$ pqbench daemon start --master --store /var/lib/pqbench --walk-period-seconds 86400
 $ pqbench list partition-versions catalogs/main/schemas/sales
+$ pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
 ```
 
 ## Databricks-governed tables

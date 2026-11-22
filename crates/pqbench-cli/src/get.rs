@@ -22,6 +22,8 @@ enum GetResource {
     Schema(crate::schema::NameArgs),
     /// Read one table's record (`CATALOG.SCHEMA.TABLE`)
     Table(crate::table::get::GetArgs),
+    /// Read one version's stored results (`name`, or a partition for its newest live version)
+    PartitionVersion(crate::partition::version::GetArgs),
     /// Read each partition's storage classes and cost (Partition records on stdin)
     #[command(long_about = crate::help::GET_PARTITION_PRICE_LONG_ABOUT)]
     PartitionPrice(crate::partition::price::PriceArgs),
@@ -37,6 +39,7 @@ impl GetArgs {
             GetResource::Catalog(_) => "get catalog",
             GetResource::Schema(_) => "get schema",
             GetResource::Table(_) => "get table",
+            GetResource::PartitionVersion(_) => "get partition-version",
             GetResource::PartitionPrice(_) => "get partition-price",
             GetResource::Suggestion(_) => "get suggestion",
         }
@@ -47,7 +50,9 @@ impl GetArgs {
     pub(crate) fn requires_endpoint(&self) -> bool {
         !matches!(
             &self.resource,
-            GetResource::Suggestion(_) | GetResource::PartitionPrice(_)
+            GetResource::Suggestion(_)
+                | GetResource::PartitionPrice(_)
+                | GetResource::PartitionVersion(_)
         )
     }
 }
@@ -63,6 +68,7 @@ pub(crate) async fn run(
         GetResource::Catalog(args) => crate::catalog::get::run(daemon, args).await,
         GetResource::Schema(args) => crate::schema::get::run(daemon, args).await,
         GetResource::Table(args) => crate::table::get::run(daemon, args).await,
+        GetResource::PartitionVersion(args) => crate::partition::version::get(daemon, args).await,
         GetResource::PartitionPrice(args) => crate::partition::price::run(lake, daemon, args).await,
         GetResource::Suggestion(args) => crate::lint::verify(lake, args).await,
     }

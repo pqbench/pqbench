@@ -13,7 +13,6 @@
 //!
 //! ```text
 //! {store}/checkpoint.ndjson                  the map, one PartitionVersion per line
-//! {store}/stats.ndjson                       the stats of the last checkpoint
 //! {store}/walk/                              the running walk's input and output
 //! {store}/results/{partition}/{etag}/{file}  a version's results
 //! ```
@@ -218,7 +217,6 @@ impl Master {
         }
         let _ = fs::remove_dir_all(store.join("walk"));
         fs::create_dir_all(store.join("walk")).map_err(|error| error.to_string())?;
-        let _ = fs::remove_file(store.join("stats.ndjson.tmp"));
         master.sweep()?;
         Ok(master)
     }
@@ -226,11 +224,6 @@ impl Master {
     /// The directory the master keeps its checkpoint and results in.
     pub(crate) fn store(&self) -> &Path {
         &self.store
-    }
-
-    /// The stats file the web app serves, once the stats have run.
-    pub(crate) fn stats_file(&self) -> Option<PathBuf> {
-        Some(self.store.join("stats.ndjson")).filter(|path| path.exists())
     }
 
     /// The versions under `parent`, by reference, in key order: a catalog,
@@ -276,6 +269,67 @@ impl Master {
             .into_iter()
             .map(|(key, row)| version(key, row))
             .collect())
+    }
+
+    /// One version's stored results, in the order its transitions wrote
+    /// them: its price, each suggestion, each column mass, then the listing.
+    /// `name` is a version, or a partition for its newest live version.
+    pub(crate) fn results(&self, name: &str) -> Result<Vec<Value>, String> {
+        if name.is_empty() {
+            return Err("a version or partition name is required".into());
+        }
+        let partition = match name.split_once("/versions/") {
+            Some((partition, _)) => partition.to_string(),
+            None => name.to_string(),
+        };
+        let mut rows = self.records(&partition)?;
+        if rows.is_empty() {
+            return Err(format!("no such partition: {name}"));
+        }
+        rows.sort_by_key(|row| std::cmp::Reverse(row.create_time));
+        let row = match name.split_once("/versions/") {
+            Some((_, etag)) => rows
+                .iter()
+                .find(|row| row.name.ends_with(&format!("/versions/{etag}")))
+                .ok_or_else(|| format!("no such version: {name}"))?,
+            None => rows
+                .iter()
+                .find(|row| row.state != State::Deleted)
+                .unwrap_or(&rows[0]),
+        };
+        let etag = row
+            .name
+            .rsplit_once("/versions/")
+            .map(|(_, etag)| etag.to_string())
+            .ok_or_else(|| format!("{} names no version", row.name))?;
+        let directory = self.result_dir(&(partition, etag));
+        let mut results = Vec::new();
+        for (file, all) in [
+            ("price.ndjson", false),
+            ("list-suggestions.ndjson", true),
+            ("bytemass.ndjson", true),
+            ("list-partitions.ndjson", false),
+        ] {
+            let Ok(text) = fs::read_to_string(directory.join(file)) else {
+                continue;
+            };
+            for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                let record: Value = serde_json::from_str(line)
+                    .map_err(|error| format!("bad result line in {file}: {error}"))?;
+                results.push(record);
+                if !all {
+                    break;
+                }
+            }
+        }
+        if results.is_empty() {
+            let state = serde_json::to_value(row.state)
+                .ok()
+                .and_then(|state| state.as_str().map(str::to_string))
+                .unwrap_or_default();
+            return Err(format!("{name} has no results yet ({state})"));
+        }
+        Ok(results)
     }
 
     /// When the newest walk found anything: the time a walk was last due

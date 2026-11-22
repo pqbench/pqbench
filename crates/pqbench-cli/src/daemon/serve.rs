@@ -109,7 +109,25 @@ async fn handle(
         return write_versions(write, versions).await;
     }
 
-    let mut response = respond(&request, &session, &shutdown).await;
+    let mut response = match &request {
+        Request::PartitionResults { name } => match &master {
+            Some(master) => match read_master(master).results(name) {
+                Ok(records) => Response {
+                    records,
+                    ..Response::default()
+                },
+                Err(error) => Response {
+                    error: Some(error),
+                    ..Response::default()
+                },
+            },
+            None => Response {
+                error: Some("the daemon runs no master; start it with --master".into()),
+                ..Response::default()
+            },
+        },
+        _ => respond(&request, &session, &shutdown).await,
+    };
     if matches!(request, Request::Ping) {
         response.master = master.is_some();
     }

@@ -19,7 +19,7 @@ schema.
 | `Partition` | `…/tables/{table}/partitions/{partition}` | [`list partitions`](cli.md#pqbench-list-partitions) | `get partition-price` |
 | `PartitionPrice` | `…/partitions/{partition}/price` | [`get partition-price`](cli.md#pqbench-get-partition-price) | humans / scripts |
 | `PartitionVersion` | `…/partitions/{partition}/versions/{etag}` | [`list partition-versions`](cli.md#pqbench-list-partition-versions) (the daemon's master) | `summarize partition-versions` |
-| `PartitionStats` | `{catalog, schema or table}/partitionStats` | [`summarize partition-versions`](cli.md#pqbench-summarize-partition-versions) (the daemon's master) | humans / scripts, the web app |
+| `PartitionStats` | `{catalog, schema or table}/partitionStats` | [`summarize partition-versions`](cli.md#pqbench-summarize-partition-versions) (the daemon's master) | humans / scripts |
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |

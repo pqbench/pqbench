@@ -37,6 +37,9 @@ pub(crate) enum Request {
     /// empty): the answer's `count` says how many lines follow it, one
     /// PartitionVersion each.
     ListPartitionVersions { parent: String },
+    /// One version's stored results under `name` (a version, or a partition
+    /// for its newest live version), in the answer's `records`.
+    PartitionResults { name: String },
 }
 
 /// The collection a `list` request enumerates.

@@ -298,10 +298,7 @@ impl Daemon {
         ),
         CliError,
     > {
-        let path = self.socket().ok_or_else(|| -> CliError {
-            "the master's records need its daemon; run `pqbench daemon start --master --store DIR`"
-                .into()
-        })?;
+        let path = self.master_socket()?;
         let (response, lines) = client::list(path, request)
             .await
             .map_err(|error| connect_error(path, error))?;
@@ -309,6 +306,27 @@ impl Daemon {
             Some(error) => Err(error.into()),
             None => Ok((response.count.unwrap_or(0), lines)),
         }
+    }
+
+    /// One version's stored results on the daemon's master: its price, its
+    /// suggestions, its column masses, then the listing.
+    pub(crate) async fn master_results(&self, request: &Request) -> Result<Vec<Value>, CliError> {
+        let path = self.master_socket()?;
+        let response = client::request(path, request)
+            .await
+            .map_err(|error| connect_error(path, error))?;
+        match response.error {
+            Some(error) => Err(error.into()),
+            None => Ok(response.records),
+        }
+    }
+
+    /// The socket of the daemon that runs the master.
+    fn master_socket(&self) -> Result<&std::path::Path, CliError> {
+        self.socket().ok_or_else(|| -> CliError {
+            "the master's records need its daemon; run `pqbench daemon start --master --store DIR`"
+                .into()
+        })
     }
 
     /// The daemon's socket, for a reader that asks one.

@@ -4,7 +4,7 @@
 //! One thread makes a pass every [`PASS_PERIOD`]. A pass checks the running
 //! commands without waiting on any, gives the master each finished one,
 //! starts what the master plans next, and starts a walk when one is due; it
-//! also purges, checkpoints, and refreshes the stats. Only the driver changes
+//! also purges and checkpoints. Only the driver changes
 //! the map, and each change takes the write lock for one short update.
 //!
 //! - **Versions**: one command per version (`get partition-price`,
@@ -14,12 +14,11 @@
 //!   list partitions`, the whole metastore, or `list partitions` over the
 //!   configured Table records instead; its listing makes and deletes
 //!   versions.
-//! - **Stats**: `summarize partition-versions` over each new checkpoint.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
@@ -56,11 +55,6 @@ struct Walk {
     error: PathBuf,
 }
 
-/// The stats run in progress.
-struct Stats {
-    process_id: u32,
-}
-
 struct Driver {
     master: Arc<RwLock<Master>>,
     settings: Settings,
@@ -72,9 +66,6 @@ struct Driver {
     /// When the last walk started, milliseconds since the Unix epoch.
     walk_time: Option<u64>,
     walked: bool,
-    stats: Option<Stats>,
-    /// The checkpoint the stats are due for, once the running stats finish.
-    stats_due: Option<PathBuf>,
     checkpoint_time: Instant,
 }
 
@@ -93,8 +84,6 @@ pub(crate) fn spawn(master: Arc<RwLock<Master>>, settings: Settings, socket: Pat
         walk: None,
         walk_time,
         walked: false,
-        stats: None,
-        stats_due: None,
         checkpoint_time: Instant::now(),
     };
     tokio::spawn(async move {
@@ -125,8 +114,6 @@ impl Driver {
         self.start_walk();
         self.start_transitions();
         self.checkpoint();
-        self.finish_stats();
-        self.start_stats();
     }
 
     /// Give the master each transition command that exited, and kill the ones past
@@ -319,7 +306,7 @@ impl Driver {
     }
 
     /// Checkpoint the map when it changed, once the period passed or nothing
-    /// runs, then refresh the stats from the new checkpoint.
+    /// runs.
     fn checkpoint(&mut self) {
         let idle = self.walk.is_none() && read(&self.master).runs().is_empty();
         if !idle && self.checkpoint_time.elapsed() < CHECKPOINT_PERIOD {
@@ -329,70 +316,8 @@ impl Driver {
         if !write(&self.master).take_changed() {
             return;
         }
-        match read(&self.master).checkpoint() {
-            Ok(path) => self.stats_due = Some(path),
-            Err(error) => eprintln!("pqbench daemon: {error}"),
-        }
-    }
-
-    /// Start the stats over the newest checkpoint, when none run.
-    fn start_stats(&mut self) {
-        if self.stats.is_some() {
-            return;
-        }
-        let Some(checkpoint) = self.stats_due.take() else {
-            return;
-        };
-        match self.stats_process(&checkpoint) {
-            Ok(stats) => self.stats = Some(stats),
-            Err(error) => eprintln!("pqbench daemon: cannot start the stats: {error}"),
-        }
-    }
-
-    /// `summarize partition-versions` over the checkpoint just written; the
-    /// open file keeps that checkpoint even when the next one replaces it.
-    fn stats_process(&self, checkpoint: &Path) -> std::io::Result<Stats> {
-        let error = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(self.store.join("stats.err"))?;
-        let process_ids = process::start_pipeline(
-            &[vec!["summarize".into(), "partition-versions".into()]],
-            File::open(checkpoint)?,
-            File::create(self.store.join("stats.ndjson.tmp"))?,
-            &error,
-            &self.socket,
-        )?;
-        Ok(Stats {
-            process_id: process_ids[0],
-        })
-    }
-
-    /// Rename the stats in once their run succeeded.
-    fn finish_stats(&mut self) {
-        let Some(stats) = &self.stats else {
-            return;
-        };
-        let Exit::Exited(outcome) = process::poll(stats.process_id) else {
-            return;
-        };
-        self.stats = None;
-        let temporary = self.store.join("stats.ndjson.tmp");
-        match outcome {
-            Ok(()) => {
-                if let Err(error) = fs::rename(&temporary, self.store.join("stats.ndjson")) {
-                    eprintln!("pqbench daemon: cannot rename the stats: {error}");
-                }
-            }
-            Err(status) => {
-                let text = fs::read_to_string(self.store.join("stats.err")).unwrap_or_default();
-                eprintln!(
-                    "pqbench daemon: the stats failed ({status}): {}",
-                    tail(text.trim())
-                );
-                let _ = fs::remove_file(temporary);
-            }
+        if let Err(error) = read(&self.master).checkpoint() {
+            eprintln!("pqbench daemon: {error}");
         }
     }
 }

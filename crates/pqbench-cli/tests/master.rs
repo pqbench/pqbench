@@ -2,7 +2,8 @@
 
 //! The daemon's master: it walks the tables it is given, runs the transitions on
 //! each partition version, purges what a walk no longer finds, and serves
-//! the versions to `list partition-versions` and the web app.
+//! the versions to `list partition-versions` and one version's results to
+//! `get partition-version`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -602,175 +603,51 @@ fn commands_go_on_after_the_executable_is_replaced() {
     );
 }
 
-/// One HTTP GET to the web app: the status code and the body.
-fn http_get(address: &str, path: &str) -> (u16, String) {
-    use std::io::Read;
-    let mut stream = std::net::TcpStream::connect(address).unwrap();
-    write!(stream, "GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
-    let (head, body) = response.split_once("\r\n\r\n").unwrap();
-    let status = head.split_whitespace().nth(1).unwrap().parse().unwrap();
-    (status, body.to_string())
-}
-
-/// Once the master has nothing to run, its stats are the fold of its
-/// versions, and the web app serves them and the versions by name.
+/// One version's stored results are readable by name: its price, its column
+/// masses and its listing, one record per line. A partition's name reads its
+/// newest live version.
 #[test]
-fn the_web_app_serves_the_stats_and_the_records() {
+fn one_version_reads_its_stored_results() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
-    let mut actions = readable_table(&root, &["1", "2"]);
-    std::fs::copy(
-        root.join("day=2/part-0.parquet"),
-        root.join("day=2/part-1.parquet"),
-    )
-    .unwrap();
-    let size = std::fs::metadata(root.join("day=2/part-1.parquet"))
-        .unwrap()
-        .len();
-    actions.push(add("day=2/part-1.parquet", "2", size));
+    let actions = readable_table(&root, &["1", "2"]);
     commit(&root, 0, actions);
     walk(directory.path(), &[("events", &root)]);
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let address = format!("127.0.0.1:{port}");
-    let master = Master::start(directory.path(), &["--web-ui", "--listen", &address]);
-    master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
+    let master = Master::start(directory.path(), &[]);
+    let rows =
+        master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
 
-    let versions = master.run(&["list", "partition-versions"], "");
-    let expected = master.run(
-        &["summarize", "partition-versions"],
-        &String::from_utf8(versions.stdout).unwrap(),
-    );
-    let expected = String::from_utf8(expected.stdout).unwrap();
-    let start = Instant::now();
-    while std::fs::read_to_string(master.store.join("stats.ndjson")).unwrap_or_default() != expected
-    {
-        assert!(start.elapsed() < Duration::from_secs(30), "no stats");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-
-    // The page is an ASCII table of the same records, one row per catalog,
-    // and every row links to the catalog it names.
-    let (status, page) = http_get(&address, "/");
-    assert_eq!(status, 200, "{page}");
-    assert!(page.contains("<pre>"), "{page}");
-    assert!(page.contains("catalogs/local"), "{page}");
-    assert!(page.contains("href=\"/catalogs/local\""), "{page}");
-    assert!(page.contains("partition"), "{page}");
-    let (status, schemas) = http_get(&address, "/catalogs/local");
-    assert_eq!(status, 200, "{schemas}");
-    assert!(
-        schemas.contains("catalogs/local/schemas/local"),
-        "{schemas}"
-    );
-    let (status, table) = http_get(&address, "/catalogs/local/schemas/local/tables/events");
-    assert_eq!(status, 200, "{table}");
-    assert!(table.contains("UP_TO_DATE"), "{table}");
-    // Rows link to the partition, never to a version: a version has no page.
-    assert!(
-        !table.contains("/versions/\""),
-        "a row links to a version: {table}"
-    );
-    // A level with no records is an empty table, not an error.
-    let (status, empty) = http_get(&address, "/catalogs/local/schemas/nope");
-    assert_eq!(status, 200, "{empty}");
-    let stats = |path: &str| -> Vec<Value> {
-        let (status, body) = http_get(&address, path);
-        assert_eq!(status, 200, "{body}");
-        serde_json::from_str(&body).unwrap()
+    let name = rows[0]["name"].as_str().unwrap();
+    let read = |name: &str| -> Vec<Value> {
+        let output = master.run(&["get", "partition-version", name], "");
+        output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect()
     };
-    let catalogs = stats("/v1/catalogs");
-    assert_eq!(catalogs[0]["name"], "catalogs/local/partitionStats");
-    assert_eq!(catalogs[0]["partition_count"], 2);
-    assert_eq!(catalogs[0]["size_bytes"], 3 * size);
-    let tables = stats("/v1/catalogs/-/schemas/-/tables");
+    let results = read(name);
+    // A local table's files are not S3 objects, so its price names the etag
+    // and prices nothing.
     assert_eq!(
-        tables[0]["name"],
-        "catalogs/local/schemas/local/tables/events/partitionStats"
+        results[0]["name"].as_str().unwrap(),
+        format!("{}/price", partition(&rows[0]))
     );
-    assert_eq!(tables[0]["version_counts"]["UP_TO_DATE"], 2);
-
-    let list = |query: &str| {
-        let (status, body) = http_get(
-            &address,
-            &format!("/v1/catalogs/local/schemas/local/tables/events/partitions?{query}"),
-        );
-        assert_eq!(status, 200, "{body}");
-        serde_json::from_str::<Value>(&body).unwrap()
-    };
-    let all = list("");
-    assert_eq!(all["total_size"], 2);
-    let pages = all["partitions"].as_array().unwrap();
-    assert!(pages.iter().all(|v| v["list_partitions"]["etag"] == etag(v)
-        && v["size_bytes"] == v["list_partitions"]["size_bytes"]));
-    assert!(pages.iter().all(|v| v.get("bytemass").is_none()));
-    let first = list("page_size=1");
-    let token = first["next_page_token"].as_str().unwrap();
-    let second = list(&format!("page_size=1&page_token={token}"));
-    assert_eq!(first["partitions"][0]["name"], pages[0]["name"]);
-    assert_eq!(second["partitions"][0]["name"], pages[1]["name"]);
-    assert_eq!(
-        list("order_by=last_modification_time+desc")["total_size"],
-        2
+    assert!(results[0]["partition_etag"].is_string(), "{results:#?}");
+    assert!(
+        results.iter().any(|r| r.get("rule").is_some()),
+        "{results:#?}"
     );
-    assert_eq!(
-        http_get(
-            &address,
-            "/v1/catalogs/local/schemas/local/tables/events/partitions?order_by=etag"
-        )
-        .0,
-        400
+    assert!(
+        results.iter().any(|r| r.get("mass").is_some()),
+        "{results:#?}"
     );
-    // The map whole: every version, the newest found first, one page at a
-    // time.
-    let (status, body) = http_get(&address, "/v1/partitions");
-    assert_eq!(status, 200, "{body}");
-    let all: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(all["total_size"], 2);
-    let recent = all["partitions"].as_array().unwrap();
-    assert_eq!(recent.len(), 2);
-    assert!(recent.iter().all(|v| v["name"]
-        .as_str()
-        .is_some_and(|name| name.contains("/versions/"))));
-    let first_page: Value =
-        serde_json::from_str(&http_get(&address, "/v1/partitions?page_size=1").1).unwrap();
-    assert_eq!(first_page["partitions"][0]["name"], recent[0]["name"]);
-    let token = first_page["next_page_token"].as_str().unwrap();
-    let second_page: Value = serde_json::from_str(
-        &http_get(
-            &address,
-            &format!("/v1/partitions?page_size=1&page_token={token}"),
-        )
-        .1,
-    )
-    .unwrap();
-    assert_eq!(second_page["partitions"][0]["name"], recent[1]["name"]);
+    assert!(
+        results.iter().any(|r| r.get("etag").is_some()),
+        "{results:#?}"
+    );
 
-    let name = partition(&pages[0]);
-    let (status, body) = http_get(&address, &format!("/v1/{name}"));
-    assert_eq!(status, 200);
-    let one: Vec<Value> = serde_json::from_str(&body).unwrap();
-    assert_eq!(one.len(), 1);
-    assert_eq!(one[0]["state"], "UP_TO_DATE");
-    assert!(one[0]["bytemass"]
-        .as_array()
-        .is_some_and(|lines| !lines.is_empty()));
-    assert!(one[0]["list_suggestions"].is_array());
-    assert_eq!(http_get(&address, "/v1/catalogs/local").0, 404);
-}
-
-/// The web app needs the master.
-#[test]
-fn the_web_app_requires_the_master() {
-    let output = pqbench()
-        .args(["daemon", "serve", "--web-ui"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--master"));
+    // The partition's name reads the same version's results.
+    assert_eq!(read(partition(&rows[0])), results);
 }
