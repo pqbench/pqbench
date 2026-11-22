@@ -336,7 +336,8 @@ message PartitionVersion {
   // through the transition's running state, to the state after it.
   enum State {
     STATE_UNSPECIFIED = 0;
-    // A walk no longer finds this version; its results wait for purge.
+    // No longer produced: a checkpoint from before the walk removed
+    // superseded versions may still name a deleted one.
     DELETED = 1;
     // Found, not processed yet.
     PENDING = 2;
@@ -362,8 +363,7 @@ message PartitionVersion {
   // When a walk last found this version.
   optional int64 list_time = 15;
 
-  // When this version reached UP_TO_DATE.
-  optional int64 up_to_date_time = 4;
+  reserved 4; // was up_to_date_time
 
   // The partition's first scan, carried from version to version.
   int64 first_listed_time = 5;

@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use super::Resource;
 
 /// A partition at one etag and where it is in the pipeline: the master's
-/// record of it, and the master's whole state. A partition has a version per
-/// etag a walk found; the previous one is kept, `DELETED`, until it is
-/// purged.
+/// record of it, and the master's whole state. A partition has one version in
+/// the map per etag the newest walk found; a version an etag change supersedes
+/// leaves the map and its results are deleted.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
 #[serde(default)]
 pub struct PartitionVersion {
@@ -21,10 +21,6 @@ pub struct PartitionVersion {
     /// When a walk last found this version.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub list_time: Option<u64>,
-    /// When this version reached `UP_TO_DATE`.
-    // aipnaming: allow(aip-140/prepositions)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub up_to_date_time: Option<u64>,
     /// The partition's first scan, carried from version to version.
     pub first_listed_time: u64,
     /// The partition's versions before this one.
@@ -64,7 +60,8 @@ pub struct PartitionVersion {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum State {
-    /// A walk no longer finds this version; its results wait for purge.
+    /// No longer produced: a checkpoint from before the walk removed
+    /// superseded versions may still name a deleted one.
     Deleted,
     /// Found, not processed yet.
     #[default]

@@ -198,10 +198,11 @@ version and what a finished command means for it.
   `--walk-tables FILE` it runs `list partitions` over the Table records in
   FILE instead (for local tables). It runs once when the daemon
   starts, then every `--walk-period-seconds`. A partition at a new etag is a
-  new `PENDING` version, and a listed table's versions the walk no longer
-  finds are `DELETED`. When every table was read, the versions of tables the
-  walk did not list are deleted too; a walk where a table failed deletes no
-  other table, so a table that cannot be read keeps its versions.
+  new `PENDING` version, and the etag it replaces leaves the map; so does a
+  listed table's version the walk no longer finds, and when every table was
+  read, the versions of the tables it did not list. Their results are renamed
+  under `DIR/deleted/` and removed from there. A walk where a table failed
+  deletes nothing: only a complete listing can say a version is gone.
 - **Each version** goes through one command at a time, each from the state
   before it to the state after it: `price` (`get partition-price`),
   `download` (the partition's sample file into the version's directory),
@@ -213,10 +214,6 @@ version and what a finished command means for it.
   its price a version runs `bytemass` on the sample file in place, which reads
   only the footer, and is then `UP_TO_DATE` without suggestions. A failure
   puts the version back with the command's error; after two it waits.
-- **Purge** drops `DELETED` versions, except a partition's last `UP_TO_DATE`
-  version while its newer one is in progress, so its complete results are
-  shown until the new ones replace them. Their results are renamed under
-  `DIR/deleted/` and removed from there.
 A command's output lands in `DIR/results/{partition}/{etag}/` through a
 temporary file and is renamed into place when the command succeeds. The map is
 written whole to `DIR/checkpoint.ndjson` every 5 minutes while commands run,

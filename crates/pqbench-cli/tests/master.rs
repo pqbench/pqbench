@@ -281,9 +281,9 @@ fn a_walk_adds_each_partition_once() {
 }
 
 /// A changed partition is a new version with the partition's history; the
-/// old one is deleted, and with no complete result to keep, purged.
+/// old one leaves the map and its results go.
 #[test]
-fn a_change_is_a_new_version_and_the_old_is_purged() {
+fn a_change_is_a_new_version_and_the_old_goes() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     table(&root);
@@ -431,7 +431,6 @@ fn the_transitions_take_each_version_up_to_date() {
     let rows =
         master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
     for row in &rows {
-        assert!(row["up_to_date_time"].is_u64());
         for output in ["price.ndjson", "bytemass.ndjson", "list-suggestions.ndjson"] {
             assert!(
                 result_file(&master, row, output).exists(),
@@ -496,11 +495,11 @@ fn remove(path: &str, day: &str, size: u64) -> Value {
     }})
 }
 
-/// While a changed partition's new version is in progress, the old version's
-/// complete results are kept; once a newer version is UP_TO_DATE, the old
-/// goes.
+/// A partition's old version goes as soon as a new etag is found, even when
+/// the new version cannot finish: the map never holds two versions of a
+/// partition.
 #[test]
-fn purge_keeps_the_last_complete_version_until_it_is_replaced() {
+fn an_etag_change_drops_the_old_version_at_once() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1"]));
@@ -521,22 +520,7 @@ fn purge_keeps_the_last_complete_version_until_it_is_replaced() {
             add("day=1/part-1.parquet", "1", size),
         ],
     );
-    let rows = master.wait(|rows| rows.iter().any(|row| row["failure_count"] == 2));
-    assert_eq!(rows.len(), 2);
-    let kept = rows.iter().find(|row| etag(row) == etag(&old)).unwrap();
-    assert_eq!(kept["state"], "DELETED");
-    assert!(result_file(&master, &old, "bytemass.ndjson").exists());
-
-    std::fs::copy(&fixture, root.join("day=1/part-2.parquet")).unwrap();
-    commit(
-        &root,
-        2,
-        vec![
-            remove("day=1/part-1.parquet", "1", size),
-            add("day=1/part-2.parquet", "1", size),
-        ],
-    );
-    let rows = master.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
+    let rows = master.wait(|rows| rows.len() == 1 && rows[0]["failure_count"] == 2);
     assert_ne!(etag(&rows[0]), etag(&old));
     assert!(!result_file(&master, &old, "bytemass.ndjson").exists());
 }

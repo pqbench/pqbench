@@ -143,6 +143,11 @@ impl Master {
         };
         let mut rows = BTreeMap::new();
         for mut row in versions {
+            // A checkpoint from before the walk removed superseded versions
+            // may name deleted ones; the sweep takes their results.
+            if row.state == State::Deleted {
+                continue;
+            }
             let key = row
                 .name
                 .rsplit_once("/versions/")
@@ -203,8 +208,7 @@ impl Master {
             .collect())
     }
 
-    /// One version by name: a version, or a partition for its newest live
-    /// version.
+    /// One version by name: a version, or a partition for its one version.
     pub(crate) fn version(&self, name: &str) -> Result<(Key, PartitionVersion), String> {
         if name.is_empty() {
             return Err("a version or partition name is required".into());
@@ -214,23 +218,12 @@ impl Master {
                 .rows
                 .get_key_value(&(partition.to_string(), etag.to_string()))
                 .ok_or_else(|| format!("no such version: {name}"))?,
-            None => {
-                let versions: Vec<_> = self
-                    .rows
-                    .range((name.to_string(), String::new())..)
-                    .take_while(|((other, _), _)| other == name)
-                    .collect();
-                let newest = |live: bool| {
-                    versions
-                        .iter()
-                        .filter(|(_, row)| !live || row.state != State::Deleted)
-                        .max_by_key(|(_, row)| row.create_time)
-                        .copied()
-                };
-                newest(true)
-                    .or_else(|| newest(false))
-                    .ok_or_else(|| format!("no such partition: {name}"))?
-            }
+            None => self
+                .rows
+                .range((name.to_string(), String::new())..)
+                .take_while(|((other, _), _)| other == name)
+                .max_by_key(|(_, row)| row.create_time)
+                .ok_or_else(|| format!("no such partition: {name}"))?,
         };
         Ok((found.0.clone(), named(found.0, found.1)))
     }
@@ -247,33 +240,44 @@ impl Master {
     }
 
     /// A walk found a version, with `listing` its Partition record: a version
-    /// the map lacks is a new `PENDING` row (its history from the partition's
-    /// newest version, its sizes and newest file's time from the listing), a
-    /// `DELETED` one found again is `PENDING`, and every found version is
-    /// stamped with the walk's time.
-    pub(crate) fn found(&mut self, key: &Key, listing: &Value, now: u64) {
+    /// the map lacks is a new `PENDING` row, with the partition's history from
+    /// its newest version, its sizes and newest file's time from the listing;
+    /// the versions of the partition it supersedes leave the map, and their
+    /// keys are returned. Every found version is stamped with the walk's time.
+    pub(crate) fn found(&mut self, key: &Key, listing: &Value, now: u64) -> Vec<Key> {
         self.changed = true;
         if let Some(row) = self.rows.get_mut(key) {
-            if row.state == State::Deleted {
-                row.state = State::Pending;
-                row.failure_count = 0;
-                row.error = None;
-            }
             row.list_time = Some(now);
-            return;
+            return Vec::new();
         }
-        let newest = self
+        let partition: Vec<(Key, u64, u64, u64)> = self
             .rows
             .range((key.0.clone(), String::new())..)
-            .take_while(|((other, _), _)| *other == key.0)
-            .map(|(_, row)| row)
-            .max_by_key(|row| row.create_time);
+            .take_while(|((name, _), _)| *name == key.0)
+            .map(|(key, row)| {
+                (
+                    key.clone(),
+                    row.first_listed_time,
+                    row.etag_change_count,
+                    row.create_time,
+                )
+            })
+            .collect();
+        let newest = partition
+            .iter()
+            .max_by_key(|(_, _, _, create_time)| *create_time);
+        let (first_listed_time, etag_change_count) =
+            newest.map_or((now, 0), |newest| (newest.1, newest.2 + 1));
+        let superseded: Vec<Key> = partition.into_iter().map(|(key, ..)| key).collect();
+        for key in &superseded {
+            self.rows.remove(key);
+        }
         let row = PartitionVersion {
             state: State::Pending,
             create_time: now,
             list_time: Some(now),
-            first_listed_time: newest.map_or(now, |row| row.first_listed_time),
-            etag_change_count: newest.map_or(0, |row| row.etag_change_count + 1),
+            first_listed_time,
+            etag_change_count,
             file_count: listing["file_count"].as_u64().unwrap_or(0),
             size_bytes: listing["size_bytes"].as_u64().unwrap_or(0),
             removed_size_bytes: listing["removed_size_bytes"].as_u64(),
@@ -281,11 +285,12 @@ impl Master {
             ..PartitionVersion::default()
         };
         self.rows.insert(key.clone(), row);
+        superseded
     }
 
-    /// After a table's listing: its live versions the listing did not name
-    /// are `DELETED`.
-    pub(crate) fn missing(&mut self, table: &str, found: &BTreeSet<Key>) {
+    /// After a table's listing: its versions the listing did not name leave
+    /// the map, and their keys are returned.
+    pub(crate) fn missing(&mut self, table: &str, found: &BTreeSet<Key>) -> Vec<Key> {
         let prefix = format!("{}/partitions/", table.trim_end_matches('/'));
         let gone: Vec<Key> = self
             .rows
@@ -294,19 +299,21 @@ impl Master {
             .filter(|(key, _)| !found.contains(*key))
             .map(|(key, _)| key.clone())
             .collect();
-        self.delete(&gone);
+        self.remove(&gone);
+        gone
     }
 
-    /// After a walk that read every table: the live versions of the tables it
-    /// did not list are `DELETED`.
-    pub(crate) fn retain(&mut self, tables: &BTreeSet<String>) {
+    /// After a walk that read every table: the versions of the tables it did
+    /// not list leave the map, and their keys are returned.
+    pub(crate) fn retain(&mut self, tables: &BTreeSet<String>) -> Vec<Key> {
         let gone: Vec<Key> = self
             .rows
             .keys()
             .filter(|(name, _)| !tables.contains(parent_table(name)))
             .cloned()
             .collect();
-        self.delete(&gone);
+        self.remove(&gone);
+        gone
     }
 
     /// Hand out up to `limit` runs, each version now in its transition's
@@ -344,7 +351,6 @@ impl Master {
         &mut self,
         key: &Key,
         outcome: Result<Option<PartitionPrice>, String>,
-        now: u64,
     ) -> Option<Conclusion> {
         let row = self.rows.get_mut(key)?;
         let transition = running_transition(self.transitions, row.state)?;
@@ -362,9 +368,6 @@ impl Master {
                         row.state = State::UpToDate;
                     }
                 }
-                if row.state == State::UpToDate {
-                    row.up_to_date_time = Some(now);
-                }
             }
             Err(error) => {
                 row.state = transition.source;
@@ -378,37 +381,6 @@ impl Master {
         })
     }
 
-    /// Drop the `DELETED` versions of the partitions under `prefix` (every
-    /// partition when it is empty) except a kept one, and return their keys:
-    /// a partition's newest version that reached `UP_TO_DATE` stays while a
-    /// newer version of it is live and not `UP_TO_DATE` yet, so its complete
-    /// results are shown until the new ones replace them.
-    pub(crate) fn purge(&mut self, prefix: &str) -> Vec<Key> {
-        let mut by_name: BTreeMap<&str, Vec<(&Key, &PartitionVersion)>> = BTreeMap::new();
-        let under = self
-            .rows
-            .range((prefix.to_string(), String::new())..)
-            .take_while(|((name, _), _)| name.starts_with(prefix));
-        for (key, row) in under {
-            by_name.entry(key.0.as_str()).or_default().push((key, row));
-        }
-        let mut purged = Vec::new();
-        for versions in by_name.values() {
-            let kept = kept_version(versions);
-            purged.extend(
-                versions
-                    .iter()
-                    .filter(|(key, row)| row.state == State::Deleted && Some(*key) != kept)
-                    .map(|(key, _)| (*key).clone()),
-            );
-        }
-        for key in &purged {
-            self.rows.remove(key);
-        }
-        self.changed |= !purged.is_empty();
-        purged
-    }
-
     /// Whether the rows changed since the last checkpoint.
     pub(crate) fn changed(&self) -> bool {
         self.changed
@@ -419,18 +391,12 @@ impl Master {
         self.changed = false;
     }
 
-    /// Versions a walk no longer finds are `DELETED`; one a run is on is left
-    /// to finish, and the next walk deletes it.
-    fn delete(&mut self, keys: &[Key]) {
+    /// Take versions out of the map. A run on one finishes into nothing.
+    fn remove(&mut self, keys: &[Key]) {
         for key in keys {
-            let row = self.rows.get_mut(key).expect("the key exists");
-            if row.state != State::Deleted
-                && running_transition(self.transitions, row.state).is_none()
-            {
-                row.state = State::Deleted;
-                self.changed = true;
-            }
+            self.rows.remove(key);
         }
+        self.changed |= !keys.is_empty();
     }
 }
 
@@ -504,20 +470,6 @@ fn archived(price: &PartitionPrice) -> bool {
         })
 }
 
-/// The newest version of one partition that reached `UP_TO_DATE`, while the
-/// partition has a newer live version that has not.
-fn kept_version<'a>(versions: &[(&'a Key, &PartitionVersion)]) -> Option<&'a Key> {
-    let (key, row) = versions
-        .iter()
-        .filter(|(_, row)| row.up_to_date_time.is_some())
-        .max_by_key(|(_, row)| row.create_time)?;
-    let replaced_later = versions.iter().any(|(_, other)| {
-        other.create_time > row.create_time
-            && !matches!(other.state, State::Deleted | State::UpToDate)
-    });
-    replaced_later.then_some(*key)
-}
-
 /// A row as the [`PartitionVersion`] it is, its name put back.
 fn named(key: &Key, row: &PartitionVersion) -> PartitionVersion {
     PartitionVersion {
@@ -561,7 +513,7 @@ mod tests {
                 "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
         }))
         .unwrap();
-        let conclusion = master.finish(&key, Ok(Some(price)), 3).unwrap();
+        let conclusion = master.finish(&key, Ok(Some(price))).unwrap();
         assert_eq!(master.rows[&key].highest_cost_per_month, Some(1.0));
         conclusion.state
     }
@@ -592,7 +544,7 @@ mod tests {
         let (mut master, key) = found(1);
         for attempt in 0..2 {
             assert_eq!(master.start(1).len(), 1);
-            let conclusion = master.finish(&key, Err(format!("boom {attempt}")), 3);
+            let conclusion = master.finish(&key, Err(format!("boom {attempt}")));
             assert_eq!(conclusion.map(|c| c.state), Some(State::Pending));
         }
         assert_eq!(master.rows[&key].failure_count, 2);

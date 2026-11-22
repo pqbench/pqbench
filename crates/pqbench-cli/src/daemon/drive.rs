@@ -3,9 +3,9 @@
 //!
 //! One task on the daemon's runtime awaits the running commands, gives the
 //! master each finished one, starts the runs the master hands out next, and
-//! starts a walk when one is due; it also purges and checkpoints. Only the
-//! driver changes the map, and each change takes the write lock for one
-//! short update.
+//! starts a walk when one is due; it also moves superseded results to the
+//! trash and checkpoints. Only the driver changes the map, and each change
+//! takes the write lock for one short update.
 //!
 //! - **Runs**: one command per version (`get partition-price`, `download`,
 //!   `bytemass`, `list suggestions`), one per CPU at once.
@@ -145,26 +145,21 @@ impl Driver {
     }
 
     /// Give the master a finished run. A version with no transition left to
-    /// read it drops its copy of the sample file, and the version a finished
-    /// one replaces can go.
+    /// read it drops its copy of the sample file.
     fn finish(&mut self, key: &Key, outcome: Outcome) {
-        let conclusion = write(&self.master).finish(key, outcome, master::now_ms());
-        let Some(conclusion) = conclusion else {
+        let Some(conclusion) = write(&self.master).finish(key, outcome) else {
             return;
         };
         if !conclusion.sample {
             self.store.remove_sample(key);
         }
-        if conclusion.state == State::UpToDate {
-            self.purge(&key.0);
-        }
     }
 
-    /// Purge the partitions under `prefix`: their rows go now, their results
-    /// move to the trash, which is emptied off the runtime.
-    fn purge(&mut self, prefix: &str) {
+    /// Move the results of the versions a walk dropped to the trash, and
+    /// empty it off the runtime.
+    fn trash(&mut self, keys: Vec<Key>) {
         let mut trashed = false;
-        for key in write(&self.master).purge(prefix) {
+        for key in keys {
             match self.store.trash(&key) {
                 Ok(()) => trashed = true,
                 Err(error) => eprintln!("pqbench daemon: {error}"),
@@ -239,11 +234,13 @@ impl Driver {
         };
         let now = master::now_ms();
         let mut found: BTreeMap<String, BTreeSet<Key>> = BTreeMap::new();
+        let mut dropped = Vec::new();
         for line in listing.lines().filter(|line| !line.trim().is_empty()) {
             match self.found(line, now) {
-                Ok(key) => {
+                Ok((key, superseded)) => {
                     let table = master::parent_table(&key.0).to_string();
                     found.entry(table).or_default().insert(key);
+                    dropped.extend(superseded);
                 }
                 Err(error) => eprintln!("pqbench daemon: walk: {error}"),
             }
@@ -252,18 +249,19 @@ impl Driver {
         // complete walk can say that one is gone.
         if outcome.is_ok() {
             for (table, keys) in &found {
-                write(&self.master).missing(table, keys);
+                dropped.extend(write(&self.master).missing(table, keys));
             }
             let tables: BTreeSet<String> = found.into_keys().collect();
-            write(&self.master).retain(&tables);
+            dropped.extend(write(&self.master).retain(&tables));
         }
-        self.purge("");
+        self.trash(dropped);
         let _ = fs::remove_dir_all(&directory);
     }
 
     /// One line of the walk's listing, a Partition record: a new version's
-    /// listing is stored before the master has the version.
-    fn found(&mut self, line: &str, now: u64) -> Result<Key, String> {
+    /// listing is stored before the master has the version. Returns the
+    /// version and the keys of the partition's versions it supersedes.
+    fn found(&mut self, line: &str, now: u64) -> Result<(Key, Vec<Key>), String> {
         let listing: Value =
             serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
         let (Some(name), Some(etag)) = (listing["name"].as_str(), listing["etag"].as_str()) else {
@@ -274,8 +272,8 @@ impl Driver {
         if read(&self.master).state(&key).is_none() {
             self.store.write_listing(&key, line)?;
         }
-        write(&self.master).found(&key, &listing, now);
-        Ok(key)
+        let superseded = write(&self.master).found(&key, &listing, now);
+        Ok((key, superseded))
     }
 
     /// Checkpoint the map when it changed, once the period passed or

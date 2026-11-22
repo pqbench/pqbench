@@ -375,9 +375,11 @@ commands the daemon runs as child processes and awaits:
   walk      `list catalogs | list schemas | list tables | get table | list
             partitions`, the whole metastore, or `list partitions` over the
             --walk-tables records instead; once at start, then every
-            --walk-period-seconds. A new version is PENDING; a listed table's
-            versions it no longer finds are DELETED, and when every table was
-            read, so are the tables it did not list.
+            --walk-period-seconds. A partition at a new etag is a new PENDING
+            version and the etag it replaces leaves the map; so does a listed
+            table's version the walk no longer finds, and when every table was
+            read, the versions of tables it did not list. Their results are
+            moved to DIR/deleted and removed.
   versions  one command per version, one per CPU at once:
               price     `get partition-price`; a version with no live file,
                         or in an archive class, is then UP_TO_DATE
@@ -389,10 +391,6 @@ commands the daemon runs as child processes and awaits:
             runs `bytemass` on the sample file in place (it reads only the
             footer) and is then UP_TO_DATE. A failure puts the version back
             with its error; after two it waits.
-  purge     DELETED versions, except a partition's last UP_TO_DATE version
-            while its new one is in progress; their results are moved to
-            DIR/deleted and removed.
-
 The map is checkpointed to DIR/checkpoint.ndjson every 5 minutes while
 commands run, at once when none do, and on stop. A restart loads it and puts
 running versions back; the commands redo the rest. `pqbench list
