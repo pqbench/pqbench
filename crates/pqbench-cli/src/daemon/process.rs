@@ -1,120 +1,136 @@
-//! The daemon's child processes: pqbench commands started and checked
-//! without waiting on them.
+//! The daemon's child processes: pqbench commands from the daemon's own
+//! executable, awaited on the daemon's runtime.
 //!
-//! A child dies with the daemon (`PR_SET_PDEATHSIG`), so a restart finds none
-//! of its predecessor's running. The daemon is a child's parent, so a
-//! non-blocking `waitpid` reaps it and reads its exit status; nothing is held
-//! while a command runs.
+//! A child dies with the daemon (`PR_SET_PDEATHSIG`) and with the task that
+//! awaits it (`kill_on_drop`), so a restart finds none of its predecessor's
+//! running, and no file a child was writing has a writer left.
 
-use std::fs::{File, OpenOptions};
-use std::io;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::fs::File;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 
-/// Where a child is.
-pub(crate) enum Exit {
-    Running,
-    /// It exited: `Ok` on success, else how it ended.
-    Exited(Result<(), String>),
-}
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
-/// The pqbench command `arguments` from the daemon's own executable, talking
-/// to the daemon on `socket`. `/proc/self/exe` is the image the daemon runs,
-/// so a binary replaced on disk (an upgrade, a rebuild) changes no command
-/// of a daemon that is still running the old one.
-fn command(arguments: &[String], socket: &Path) -> io::Result<Command> {
+/// The most of a failed command's standard error kept as its error.
+const ERROR_BYTES: usize = 2000;
+
+/// The pqbench command `arguments`, talking to the daemon on `socket`.
+/// `/proc/self/exe` is the image the daemon runs, so a binary replaced on
+/// disk (an upgrade, a rebuild) changes no command of a daemon that is still
+/// running the old one.
+fn command(arguments: &[String], socket: &Path) -> Command {
     let mut command = Command::new("/proc/self/exe");
-    command.args(arguments).env("PQB_DAEMON_SOCK", socket);
+    command
+        .args(arguments)
+        .env("PQB_DAEMON_SOCK", socket)
+        .kill_on_drop(true);
     // SAFETY: `prctl` is async-signal-safe, so it may run between fork and
     // exec.
     unsafe {
         command.pre_exec(|| {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
-                return Err(io::Error::last_os_error());
+                return Err(std::io::Error::last_os_error());
             }
             Ok(())
         });
     }
-    Ok(command)
+    command
 }
 
-/// Start one command: standard input from `input`, standard output to
-/// `output` (discarded when `None`), standard error appended to `error`.
-/// Returns its process id.
-pub(crate) fn start(
+/// Run one command with `input` on its standard input: its standard output
+/// when it succeeds, else its error.
+pub(crate) async fn run(
     arguments: &[String],
-    input: &Path,
-    output: Option<&Path>,
-    error: &Path,
+    input: &str,
     socket: &Path,
-) -> io::Result<u32> {
-    let stdout = match output {
-        Some(path) => Stdio::from(File::create(path)?),
-        None => Stdio::null(),
+) -> Result<Vec<u8>, String> {
+    let name = arguments.join(" ");
+    let mut child = command(arguments, socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot start `pqbench {name}`: {error}"))?;
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let write = async move {
+        // A command that exits before reading its input fails on its own.
+        let _ = stdin.write_all(input.as_bytes()).await;
     };
-    // Appended: a walk's phase writes several commands into one error file.
-    let error = OpenOptions::new().create(true).append(true).open(error)?;
-    let child = command(arguments, socket)?
-        .stdin(File::open(input)?)
-        .stdout(stdout)
-        .stderr(error)
-        .spawn()?;
-    Ok(child.id())
+    let (_, output) = tokio::join!(write, child.wait_with_output());
+    let output = output.map_err(|error| format!("`pqbench {name}` was lost: {error}"))?;
+    match output.status.success() {
+        true => Ok(output.stdout),
+        false => Err(failure(&name, output.status, &output.stderr)),
+    }
 }
 
-/// Start a pipeline of commands, each one's standard output the next one's
+/// Run a pipeline of commands, each one's standard output the next one's
 /// standard input: the first reads `input`, the last writes `output`, all
-/// write their errors to `error`. Returns their process ids.
-pub(crate) fn start_pipeline(
+/// write their errors to `error`. `Ok` when every stage succeeded.
+pub(crate) async fn pipeline(
     stages: &[Vec<String>],
     input: File,
     output: File,
     error: &File,
     socket: &Path,
-) -> io::Result<Vec<u32>> {
-    let mut process_ids = Vec::new();
+) -> Result<(), String> {
+    let mut children = Vec::new();
     let mut stdin = Stdio::from(input);
     let mut output = Some(output);
     for (at, arguments) in stages.iter().enumerate() {
-        let last = at + 1 == stages.len();
-        let stdout = match (last, output.take()) {
+        let stdout = match (at + 1 == stages.len(), output.take()) {
             (true, Some(file)) => Stdio::from(file),
             _ => Stdio::piped(),
         };
-        let mut child = command(arguments, socket)?
-            .stdin(stdin)
-            .stdout(stdout)
-            .stderr(error.try_clone()?)
-            .spawn()?;
-        process_ids.push(child.id());
+        let started = error.try_clone().and_then(|stderr| {
+            command(arguments, socket)
+                .stdin(stdin)
+                .stdout(stdout)
+                .stderr(stderr)
+                .spawn()
+        });
+        let mut child = started
+            .map_err(|error| format!("cannot start `pqbench {}`: {error}", arguments.join(" ")))?;
         stdin = match child.stdout.take() {
-            Some(pipe) => Stdio::from(pipe),
+            Some(pipe) => pipe.try_into().map_err(|error| format!("{error}"))?,
             None => Stdio::null(),
         };
+        children.push((arguments.join(" "), child));
     }
-    Ok(process_ids)
-}
-
-/// Whether the child `process_id` has exited, without waiting: reaping it
-/// reads its status.
-pub(crate) fn poll(process_id: u32) -> Exit {
-    let mut status = 0;
-    // SAFETY: waitpid writes the status into a local; WNOHANG never blocks.
-    let reaped = unsafe { libc::waitpid(process_id as i32, &mut status, libc::WNOHANG) };
-    match reaped {
-        0 => Exit::Running,
-        -1 => Exit::Exited(Err(format!(
-            "the process was lost: {}",
-            io::Error::last_os_error()
-        ))),
-        _ => {
-            let status = ExitStatus::from_raw(status);
-            Exit::Exited(if status.success() {
-                Ok(())
-            } else {
-                Err(status.to_string())
-            })
+    let mut failed = Vec::new();
+    for (name, mut child) in children {
+        match child.wait().await {
+            Ok(status) if status.success() => {}
+            Ok(status) => failed.push(format!("`pqbench {name}` {status}")),
+            Err(error) => failed.push(format!("`pqbench {name}` was lost: {error}")),
         }
     }
+    match failed.is_empty() {
+        true => Ok(()),
+        false => Err(failed.join("; ")),
+    }
+}
+
+/// A failed command's error: the end of its standard error, else how it
+/// ended.
+fn failure(name: &str, status: ExitStatus, stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let text = text.trim();
+    match text.is_empty() {
+        true => format!("`pqbench {name}` {status}"),
+        false => tail(text),
+    }
+}
+
+/// The last [`ERROR_BYTES`] of `text`.
+pub(crate) fn tail(text: &str) -> String {
+    if text.len() <= ERROR_BYTES {
+        return text.to_string();
+    }
+    let mut start = text.len() - ERROR_BYTES;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("…{}", &text[start..])
 }

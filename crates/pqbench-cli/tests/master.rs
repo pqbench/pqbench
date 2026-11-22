@@ -432,7 +432,6 @@ fn the_transitions_take_each_version_up_to_date() {
         master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
     for row in &rows {
         assert!(row["up_to_date_time"].is_u64());
-        assert!(row.get("process_id").is_none(), "{row}");
         for output in ["price.ndjson", "bytemass.ndjson", "list-suggestions.ndjson"] {
             assert!(
                 result_file(&master, row, output).exists(),

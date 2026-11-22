@@ -190,9 +190,8 @@ externally readable, or filter the refs first.
 `pqbench daemon start --master --store DIR` (or `serve`) also runs the master.
 Its whole state is one map of partition versions (`PartitionVersion`, a
 partition at one etag). The work is plain pqbench commands, which the daemon
-runs as child processes and checks on a pass every 100 ms without waiting for
-any; the master decides what runs next for a version and what a finished
-command means for it.
+runs as child processes and awaits; the master decides what runs next for a
+version and what a finished command means for it.
 
 - **The walk** runs `list catalogs | list schemas | list tables | get table |
   list partitions`: every table the endpoint's metastore shows. With

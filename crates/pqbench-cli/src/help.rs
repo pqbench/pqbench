@@ -370,8 +370,7 @@ state and never ride a Table or TableFile document.
 
 With --master --store DIR the daemon also runs the master. Its state is one
 map of partition versions (a partition at one etag); the work is plain pqbench
-commands the daemon runs as child processes, checked on a pass every 100 ms
-and never waited for:
+commands the daemon runs as child processes and awaits:
 
   walk      `list catalogs | list schemas | list tables | get table | list
             partitions`, the whole metastore, or `list partitions` over the

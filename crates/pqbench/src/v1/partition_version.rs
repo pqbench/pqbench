@@ -53,14 +53,6 @@ pub struct PartitionVersion {
     pub lowest_cost_per_month: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub highest_cost_per_month: Option<f64>,
-    /// While a command runs on this version: the process the master started,
-    /// the attempt its files are named by, and when it started.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub process_id: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attempt_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_time: Option<u64>,
 }
 
 /// Where a partition version is in the pipeline: each transition takes a

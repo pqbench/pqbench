@@ -397,14 +397,6 @@ message PartitionVersion {
   optional double lowest_cost_per_month = 13;
 
   optional double highest_cost_per_month = 14;
-
-  // While a command runs on this version: the process the master started, the
-  // attempt its files are named by, and when it started.
-  optional uint32 process_id = 16;
-
-  optional string attempt_id = 17;
-
-  optional int64 start_time = 18;
 }
 
 // The totals of the partition versions under one catalog, schema or table,

@@ -1,15 +1,14 @@
 //! The master's driver: runs pqbench commands for the master and hands it
 //! their results.
 //!
-//! One thread makes a pass every [`PASS_PERIOD`]. A pass checks the running
-//! commands without waiting on any, gives the master each finished one,
-//! starts what the master plans next, and starts a walk when one is due; it
-//! also purges and checkpoints. Only the driver changes
-//! the map, and each change takes the write lock for one short update.
+//! One task on the daemon's runtime awaits the running commands, gives the
+//! master each finished one, starts what the master plans next, and starts a
+//! walk when one is due; it also purges and checkpoints. Only the driver
+//! changes the map, and each change takes the write lock for one short
+//! update.
 //!
 //! - **Versions**: one command per version (`get partition-price`,
-//!   `download`, `bytemass`, `list suggestions`), one per CPU at once, each
-//!   killed past the time limit.
+//!   `download`, `bytemass`, `list suggestions`), one per CPU at once.
 //! - **The walk**: `list catalogs | list schemas | list tables | get table |
 //!   list partitions`, the whole metastore, or `list partitions` over the
 //!   configured Table records instead; its listing makes and deletes
@@ -18,23 +17,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
-use super::master::{self, Master};
-use super::process::{self, Exit};
+use tokio::task::JoinSet;
 
-/// How often the driver makes a pass.
-const PASS_PERIOD: Duration = Duration::from_millis(100);
+use super::master::{self, Key, Master};
+use super::process;
+
+/// How long the driver sleeps when no command finishes: when a walk falls
+/// due, and when a checkpoint does, are checked this often.
+const TICK: Duration = Duration::from_secs(1);
 
 /// How often the map is checkpointed while commands run and it changes: the
 /// most work a crash can cost. Once nothing runs, a change is checkpointed at
-/// the next pass.
+/// once.
 const CHECKPOINT_PERIOD: Duration = Duration::from_secs(10);
-
-/// The most of a failed command's standard error kept as its error.
-const ERROR_BYTES: usize = 2000;
 
 /// What the driver runs: the operator's settings.
 pub(crate) struct Settings {
@@ -45,14 +44,6 @@ pub(crate) struct Settings {
     pub walk_period: Option<Duration>,
 }
 
-/// A walk in progress: its processes, output and error file.
-struct Walk {
-    process_ids: Vec<u32>,
-    finished: Vec<Result<(), String>>,
-    output: PathBuf,
-    error: PathBuf,
-}
-
 struct Driver {
     master: Arc<RwLock<Master>>,
     settings: Settings,
@@ -60,16 +51,19 @@ struct Driver {
     commands: usize,
     socket: PathBuf,
     store: PathBuf,
-    walk: Option<Walk>,
+    /// The transition commands running, each ending in its version's key and
+    /// outcome.
+    running: JoinSet<(Key, Result<Vec<u8>, String>)>,
+    /// The walk, while it runs.
+    walk: JoinSet<Result<(), String>>,
     /// When the last walk started, milliseconds since the Unix epoch.
     walk_time: Option<u64>,
     walked: bool,
     checkpoint_time: Instant,
 }
 
-/// Start the driver on the daemon's runtime: one thread, like the rest of
-/// the daemon. A pass does short blocking file work (a checkpoint, a
-/// spawn), which the socket and the web app wait out.
+/// Start the driver on the daemon's runtime. A pass does short blocking file
+/// work (a checkpoint, a result), which the socket waits out.
 pub(crate) fn spawn(master: Arc<RwLock<Master>>, settings: Settings, socket: PathBuf) {
     let store = read(&master).store().to_path_buf();
     let walk_time = read(&master).last_list_time();
@@ -79,7 +73,8 @@ pub(crate) fn spawn(master: Arc<RwLock<Master>>, settings: Settings, socket: Pat
         commands: std::thread::available_parallelism().map_or(1, usize::from),
         socket,
         store,
-        walk: None,
+        running: JoinSet::new(),
+        walk: JoinSet::new(),
         walk_time,
         walked: false,
         checkpoint_time: Instant::now(),
@@ -87,7 +82,19 @@ pub(crate) fn spawn(master: Arc<RwLock<Master>>, settings: Settings, socket: Pat
     tokio::spawn(async move {
         loop {
             driver.pass();
-            tokio::time::sleep(PASS_PERIOD).await;
+            tokio::select! {
+                Some(done) = driver.running.join_next() => match done {
+                    Ok((key, outcome)) => {
+                        write(&driver.master).finish(&key, outcome, master::now_ms());
+                    }
+                    Err(error) => eprintln!("pqbench daemon: a command's task failed: {error}"),
+                },
+                Some(done) = driver.walk.join_next() => {
+                    let outcome = done.unwrap_or_else(|error| Err(error.to_string()));
+                    driver.finish_walk(outcome);
+                }
+                () = tokio::time::sleep(TICK) => {}
+            }
         }
     });
 }
@@ -106,66 +113,33 @@ fn write(master: &RwLock<Master>) -> RwLockWriteGuard<'_, Master> {
 
 impl Driver {
     fn pass(&mut self) {
-        self.finish_transitions();
-        self.finish_walk();
         self.purge();
         self.start_walk();
         self.start_transitions();
         self.checkpoint();
     }
 
-    /// Give the master each transition command that exited.
-    fn finish_transitions(&mut self) {
-        let now = master::now_ms();
-        let runs = read(&self.master).runs();
-        for run in runs {
-            let Exit::Exited(outcome) = process::poll(run.process_id) else {
-                continue;
-            };
-            let outcome = outcome.map_err(|status| command_error(&run, &status));
-            write(&self.master).finish(&run.key, outcome, now);
-        }
-    }
-
-    /// Start what the master plans next, while there are free processes.
+    /// Start what the master plans next, while there are free slots.
     fn start_transitions(&mut self) {
-        let running = read(&self.master).runs().len();
-        let free = self.commands.saturating_sub(running);
+        let free = self.commands.saturating_sub(self.running.len());
         if free == 0 {
             return;
         }
         let runs = read(&self.master).plan(free);
         for run in runs {
-            let started = fs::write(&run.input_path, &run.input).and_then(|()| {
-                process::start(
-                    &run.command_words,
-                    &run.input_path,
-                    run.stdout.as_deref(),
-                    &run.stderr,
-                    &self.socket,
-                )
+            write(&self.master).start(&run);
+            let socket = self.socket.clone();
+            self.running.spawn(async move {
+                let outcome = process::run(&run.command_words, &run.input, &socket).await;
+                (run.key, outcome)
             });
-            match started {
-                Ok(process_id) => write(&self.master).start(&run, process_id, master::now_ms()),
-                // Not the version's failure: the host could not start a
-                // process. It stays where it is, and the next pass tries
-                // again.
-                Err(error) => {
-                    let _ = fs::remove_file(&run.input_path);
-                    eprintln!(
-                        "pqbench daemon: cannot start `pqbench {}`: {error}",
-                        run.transition.command.join(" ")
-                    );
-                    return;
-                }
-            }
         }
     }
 
     /// Start a walk when none runs and one is due: the first since the
     /// daemon started, then one each walk period.
     fn start_walk(&mut self) {
-        if self.walk.is_some() {
+        if !self.walk.is_empty() {
             return;
         }
         let now = master::now_ms();
@@ -180,73 +154,36 @@ impl Driver {
         if !due {
             return;
         }
-        match self.walk_processes() {
-            Ok(walk) => self.walk = Some(walk),
-            Err(error) => eprintln!("pqbench daemon: cannot start the walk: {error}"),
-        }
         self.walked = true;
         self.walk_time = Some(now);
+        let opened = walk_files(&self.store, self.settings.walk_tables.as_deref());
+        let (stages, input, output, error) = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                eprintln!("pqbench daemon: cannot start the walk: {error}");
+                return;
+            }
+        };
+        let socket = self.socket.clone();
+        self.walk
+            .spawn(async move { process::pipeline(&stages, input, output, &error, &socket).await });
     }
 
-    /// The walk's pipeline: the whole metastore, from `list catalogs`, or
-    /// `list partitions` over the configured Table records instead.
-    fn walk_processes(&self) -> std::io::Result<Walk> {
+    /// Apply the walk's listing: each listed table's versions are found or
+    /// deleted, and when every command succeeded, the tables the walk did not
+    /// list are deleted too.
+    fn finish_walk(&mut self, outcome: Result<(), String>) {
         let directory = self.store.join("walk");
-        fs::create_dir_all(&directory)?;
-        let error_path = directory.join("walk.err");
-        let error = File::create(&error_path)?;
-        let stage = |words: &[&str]| words.iter().map(|word| (*word).to_string()).collect();
-        let (stages, input): (Vec<Vec<String>>, File) = match &self.settings.walk_tables {
-            Some(tables) => (vec![stage(&["list", "partitions"])], File::open(tables)?),
-            None => (
-                vec![
-                    stage(&["list", "catalogs"]),
-                    stage(&["list", "schemas"]),
-                    stage(&["list", "tables"]),
-                    stage(&["get", "table"]),
-                    stage(&["list", "partitions"]),
-                ],
-                File::open("/dev/null")?,
-            ),
-        };
-        let output = directory.join("partitions.ndjson");
-        let process_ids =
-            process::start_pipeline(&stages, input, File::create(&output)?, &error, &self.socket)?;
-        Ok(Walk {
-            process_ids,
-            finished: Vec::new(),
-            output,
-            error: error_path,
-        })
-    }
-
-    /// Once every process of the walk exited, apply its listing: each listed
-    /// table's versions are found or deleted, and when every process
-    /// succeeded, the tables the walk did not list are deleted too.
-    fn finish_walk(&mut self) {
-        let Some(walk) = &mut self.walk else {
-            return;
-        };
-        walk.process_ids
-            .retain(|process_id| match process::poll(*process_id) {
-                Exit::Running => true,
-                Exit::Exited(outcome) => {
-                    walk.finished.push(outcome);
-                    false
-                }
-            });
-        if !walk.process_ids.is_empty() {
-            return;
-        }
-        let walk = self.walk.take().expect("a walk runs");
-        let complete = walk.finished.iter().all(Result::is_ok);
-        if !complete {
-            let text = fs::read_to_string(&walk.error).unwrap_or_default();
-            eprintln!("pqbench daemon: the walk failed: {}", tail(text.trim()));
+        if let Err(error) = &outcome {
+            let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
+            eprintln!(
+                "pqbench daemon: the walk failed ({error}): {}",
+                process::tail(text.trim())
+            );
         }
         let now = master::now_ms();
-        let mut found: BTreeMap<String, BTreeSet<master::Key>> = BTreeMap::new();
-        let lines = File::open(&walk.output)
+        let mut found: BTreeMap<String, BTreeSet<Key>> = BTreeMap::new();
+        let lines = File::open(directory.join("partitions.ndjson"))
             .map(|file| BufReader::new(file).lines().map_while(Result::ok))
             .into_iter()
             .flatten();
@@ -268,11 +205,11 @@ impl Driver {
         for (table, keys) in &found {
             write(&self.master).missing(table, keys);
         }
-        if complete {
+        if outcome.is_ok() {
             let tables: BTreeSet<String> = found.into_keys().collect();
             write(&self.master).retain(&tables);
         }
-        let _ = fs::remove_dir_all(self.store.join("walk"));
+        let _ = fs::remove_dir_all(directory);
     }
 
     /// Drop what the walk deleted; the directories go after the lock.
@@ -288,7 +225,7 @@ impl Driver {
     /// Checkpoint the map when it changed, once the period passed or nothing
     /// runs.
     fn checkpoint(&mut self) {
-        let idle = self.walk.is_none() && read(&self.master).runs().is_empty();
+        let idle = self.walk.is_empty() && self.running.is_empty();
         if !idle && self.checkpoint_time.elapsed() < CHECKPOINT_PERIOD {
             return;
         }
@@ -302,24 +239,29 @@ impl Driver {
     }
 }
 
-/// A failed transition's error: the end of its standard error, else how it ended.
-fn command_error(run: &master::Running, status: &str) -> String {
-    let text = fs::read_to_string(&run.stderr).unwrap_or_default();
-    let text = text.trim();
-    match text.is_empty() {
-        true => format!("`pqbench {}` {status}", run.command.join(" ")),
-        false => tail(text),
-    }
-}
-
-/// The names of the tables a listing names.
-fn tail(text: &str) -> String {
-    if text.len() <= ERROR_BYTES {
-        return text.to_string();
-    }
-    let mut start = text.len() - ERROR_BYTES;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    format!("…{}", &text[start..])
+/// The walk's pipeline and its files: the whole metastore, from `list
+/// catalogs`, or `list partitions` over the configured Table records instead.
+fn walk_files(
+    store: &Path,
+    tables: Option<&Path>,
+) -> std::io::Result<(Vec<Vec<String>>, File, File, File)> {
+    let directory = store.join("walk");
+    fs::create_dir_all(&directory)?;
+    let stage = |words: &[&str]| words.iter().map(|word| (*word).to_string()).collect();
+    let (stages, input) = match tables {
+        Some(tables) => (vec![stage(&["list", "partitions"])], File::open(tables)?),
+        None => (
+            vec![
+                stage(&["list", "catalogs"]),
+                stage(&["list", "schemas"]),
+                stage(&["list", "tables"]),
+                stage(&["get", "table"]),
+                stage(&["list", "partitions"]),
+            ],
+            File::open("/dev/null")?,
+        ),
+    };
+    let output = File::create(directory.join("partitions.ndjson"))?;
+    let error = File::create(directory.join("walk.err"))?;
+    Ok((stages, input, output, error))
 }

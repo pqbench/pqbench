@@ -17,9 +17,8 @@
 //! {store}/results/{partition}/{etag}/{file}  a version's results
 //! ```
 //!
-//! A transition's command writes into its version's directory under the attempt's
-//! id (`{file}.{attempt}.tmp`, `{transition}.{attempt}.err`); a success renames the
-//! output in, a failure deletes it.
+//! A transition's output goes to `{file}.tmp` in its version's directory; a
+//! success renames it in, a failure deletes it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -144,26 +143,13 @@ fn running_transition(
         .find(|transition| transition.running == state)
 }
 
-/// A transition running on a version: its process and where its errors go.
-pub(crate) struct Running {
-    pub key: Key,
-    pub process_id: u32,
-    pub command: &'static [&'static str],
-    pub stderr: PathBuf,
-}
-
-/// One run of a transition the master wants started: the command line, what goes
-/// on its standard input, and where its output and error go.
+/// One run of a transition the master wants started: its command line and
+/// its standard input.
 pub(crate) struct Run {
     pub key: Key,
     pub transition: &'static Transition,
-    pub attempt_id: String,
     pub command_words: Vec<String>,
     pub input: String,
-    pub input_path: PathBuf,
-    /// Where standard output goes; `None` discards it.
-    pub stdout: Option<PathBuf>,
-    pub stderr: PathBuf,
 }
 
 pub(crate) type Key = (String, String);
@@ -176,8 +162,6 @@ pub(crate) struct Master {
     /// The versions by partition and etag; a row's `name` is left empty, the
     /// key holds it, and [`version`] puts it back.
     rows: BTreeMap<Key, PartitionVersion>,
-    /// The rows a transition is running on: an index of `rows`, not state.
-    running: BTreeSet<Key>,
     /// Whether the rows changed since the last checkpoint.
     changed: bool,
     /// Whether a version may be purgeable since the last purge.
@@ -187,8 +171,8 @@ pub(crate) struct Master {
 impl Master {
     /// Open the store: load the checkpoint, then put back what a crash left.
     /// The commands a version was running died with the old daemon, so the
-    /// version goes back to the state before its transition; files of unfinished
-    /// attempts, and result directories no row names, are deleted.
+    /// version goes back to the state before its transition; unfinished
+    /// outputs, and result directories no row names, are deleted.
     pub(crate) fn open(store: &Path, low_network: bool) -> Result<Self, String> {
         for directory in ["results", "walk"] {
             fs::create_dir_all(store.join(directory))
@@ -203,7 +187,6 @@ impl Master {
             store: store.to_path_buf(),
             transitions,
             rows: read_checkpoint(&store.join("checkpoint.ndjson"))?,
-            running: BTreeSet::new(),
             changed: true,
             purge_due: true,
         };
@@ -211,7 +194,6 @@ impl Master {
             if let Some(transition) = running_transition(transitions, row.state) {
                 row.state = transition.source;
             }
-            clear_attempt(row);
         }
         let _ = fs::remove_dir_all(store.join("walk"));
         fs::create_dir_all(store.join("walk")).map_err(|error| error.to_string())?;
@@ -431,7 +413,7 @@ impl Master {
         runs
     }
 
-    /// The run of `transition` on one version: its command line and files.
+    /// The run of `transition` on one version: its command line and input.
     fn run(&self, key: &Key, transition: &'static Transition) -> Option<Run> {
         let directory = self.result_dir(key);
         let listing = fs::read_to_string(directory.join("list-partitions.ndjson")).ok()?;
@@ -442,97 +424,62 @@ impl Master {
                 record.get("sample_file")?.to_string()
             }
         };
-        let attempt_id = attempt_id();
-        let temporary = directory.join(format!("{}.{attempt_id}.tmp", transition.output));
         let mut command_words: Vec<String> =
             transition.command.iter().map(|arg| (*arg).into()).collect();
         if !transition.stdout {
+            let temporary = directory.join(format!("{}.tmp", transition.output));
             command_words.push("--output".into());
             command_words.push(temporary.to_string_lossy().into_owned());
         }
         if transition.local {
+            let sample = directory.join("sample.parquet");
             command_words.push("--local".into());
-            command_words.push(
-                directory
-                    .join("sample.parquet")
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            command_words.push(sample.to_string_lossy().into_owned());
         }
         Some(Run {
             key: key.clone(),
             transition,
-            input: input + "\n",
-            input_path: directory.join(format!("{}.{attempt_id}.in", transition.name)),
-            stdout: transition.stdout.then_some(temporary),
-            stderr: directory.join(format!("{}.{attempt_id}.err", transition.name)),
             command_words,
-            attempt_id,
+            input: input + "\n",
         })
     }
 
-    /// A run started: the version is in the transition's running state, with its
-    /// process, attempt and start time.
-    pub(crate) fn start(&mut self, run: &Run, process_id: u32, now: u64) {
+    /// A run started: the version is in the transition's running state.
+    pub(crate) fn start(&mut self, run: &Run) {
         let Some(row) = self.rows.get_mut(&run.key) else {
             return;
         };
         row.state = run.transition.running;
-        row.process_id = Some(process_id);
-        row.attempt_id = Some(run.attempt_id.clone());
-        row.start_time = Some(now);
-        self.running.insert(run.key.clone());
         self.changed = true;
     }
 
-    /// The versions a transition is running on.
-    pub(crate) fn runs(&self) -> Vec<Running> {
-        self.running
-            .iter()
-            .filter_map(|key| {
-                let row = self.rows.get(key)?;
-                let transition = running_transition(self.transitions, row.state)?;
-                let attempt = row.attempt_id.as_deref()?;
-                Some(Running {
-                    key: key.clone(),
-                    process_id: row.process_id?,
-                    command: transition.command,
-                    stderr: self
-                        .result_dir(key)
-                        .join(format!("{}.{attempt}.err", transition.name)),
-                })
-            })
-            .collect()
-    }
-
-    /// A run's process exited: `Ok` when it succeeded, else its error. A
-    /// success renames the output in and moves the version on: a price whose
+    /// A run ended: its standard output when it succeeded, else its error. A
+    /// success lands the output and moves the version on: a price whose
     /// partition has no live file, or whose files need a restore, ends the
     /// version, since there is nothing to read, and a version that is done
     /// drops its copy of the sample file. A failure puts the version back
     /// with the error counted.
-    pub(crate) fn finish(&mut self, key: &Key, outcome: Result<(), String>, now: u64) {
-        self.running.remove(key);
+    pub(crate) fn finish(&mut self, key: &Key, outcome: Result<Vec<u8>, String>, now: u64) {
         let directory = self.result_dir(key);
         let transitions = self.transitions;
         let Some(row) = self.rows.get_mut(key) else {
             return;
         };
-        let (Some(transition), Some(attempt)) = (
-            running_transition(transitions, row.state),
-            row.attempt_id.clone(),
-        ) else {
+        let Some(transition) = running_transition(transitions, row.state) else {
             return;
         };
-        let temporary = directory.join(format!("{}.{attempt}.tmp", transition.output));
+        let temporary = directory.join(format!("{}.tmp", transition.output));
         let landed = directory.join(transition.output);
-        let _ = fs::remove_file(directory.join(format!("{}.{attempt}.in", transition.name)));
-        let _ = fs::remove_file(directory.join(format!("{}.{attempt}.err", transition.name)));
-        clear_attempt(row);
-        let outcome = outcome.and_then(|()| {
-            fs::rename(&temporary, &landed).map_err(|error| {
-                format!("the {} transition left no output: {error}", transition.name)
-            })
+        let outcome = outcome.and_then(|stdout| {
+            let written = match transition.stdout {
+                true => fs::write(&temporary, stdout),
+                false => Ok(()),
+            };
+            written
+                .and_then(|()| fs::rename(&temporary, &landed))
+                .map_err(|error| {
+                    format!("the {} transition left no output: {error}", transition.name)
+                })
         });
         match outcome {
             Ok(()) => {
@@ -670,8 +617,8 @@ impl Master {
             .map_err(|error| format!("cannot write {}: {error}", target.display()))
     }
 
-    /// Delete the result directories no row names, and the files unfinished
-    /// attempts left beside any result.
+    /// Delete the result directories no row names, and the outputs unfinished
+    /// runs left beside any result.
     fn sweep(&self) -> Result<(), String> {
         let results = self.store.join("results");
         for directory in version_dirs(&results) {
@@ -691,34 +638,17 @@ impl Master {
                 continue;
             }
             for file in fs::read_dir(&directory).into_iter().flatten().flatten() {
-                let unfinished = file.path().extension().is_some_and(|extension| {
-                    extension == "tmp" || extension == "err" || extension == "in"
-                });
-                if unfinished {
+                if file
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "tmp")
+                {
                     let _ = fs::remove_file(file.path());
                 }
             }
         }
         Ok(())
     }
-}
-
-fn clear_attempt(row: &mut PartitionVersion) {
-    row.process_id = None;
-    row.attempt_id = None;
-    row.start_time = None;
-}
-
-/// A fresh attempt id: 64 random bits as hex.
-fn attempt_id() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u128(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_nanos()),
-    );
-    format!("{:016x}", hasher.finish())
 }
 
 /// The table a partition name is under.
@@ -878,15 +808,14 @@ mod tests {
         let mut master = Master::open(directory.path(), false).unwrap();
         let key = master.found(&listing("aa", file_count), 1).unwrap();
         let run = master.plan(1).remove(0);
-        master.start(&run, 1, 2);
+        master.start(&run);
         let price = serde_json::json!({
             "name": format!("{PARTITION}/price"),
             "storage_classes": [class],
             "storage_costs": [{"storage_class": class, "access_tier": tier,
                 "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
         });
-        fs::write(run.stdout.unwrap(), format!("{price}\n")).unwrap();
-        master.finish(&key, Ok(()), 3);
+        master.finish(&key, Ok(format!("{price}\n").into_bytes()), 3);
         assert_eq!(master.rows[&key].highest_cost_per_month, Some(1.0));
         master.rows[&key].state
     }
@@ -919,7 +848,7 @@ mod tests {
         let key = master.found(&listing("aa", 1), 1).unwrap();
         for attempt in 0..2 {
             let run = master.plan(1).remove(0);
-            master.start(&run, 1, 2);
+            master.start(&run);
             master.finish(&key, Err(format!("boom {attempt}")), 3);
             assert_eq!(master.rows[&key].state, State::Pending);
         }
@@ -928,21 +857,20 @@ mod tests {
         assert!(master.plan(1).is_empty());
     }
 
-    /// A restart puts a running version back, and deletes its attempt's files.
+    /// A restart puts a running version back, and deletes what its run left.
     #[test]
     fn a_restart_puts_running_versions_back() {
         let directory = tempfile::tempdir().unwrap();
         let mut master = Master::open(directory.path(), false).unwrap();
         let key = master.found(&listing("aa", 1), 1).unwrap();
         let run = master.plan(1).remove(0);
-        master.start(&run, 1, 2);
-        let output = run.stdout.clone().unwrap();
+        master.start(&run);
+        let output = master.result_dir(&key).join("price.ndjson.tmp");
         fs::write(&output, "{}\n").unwrap();
         master.checkpoint().unwrap();
         drop(master);
         let master = Master::open(directory.path(), false).unwrap();
         assert_eq!(master.rows[&key].state, State::Pending);
-        assert!(master.rows[&key].process_id.is_none());
         assert!(!output.exists());
     }
 
