@@ -336,13 +336,19 @@ the master renames the output into its store only while the version is still
 the job's. One instance of each job runs at a time; a time limit is the
 scheduler's.
 
-  scan  list each table's partitions into the master (Table records on stdin,
-        from `get table`); with --complete, the tables the input does not name
-        are deleted
-  purge delete the results and rows of the versions the scan no longer finds,
-        keeping a partition's last complete version until a newer one is done
-  list  print the master's partition versions (name, etag, state, times,
-        failures), one per line";
+  scan      list each table's partitions into the master (Table records on
+            stdin, from `get table`); with --complete, the tables the input
+            does not name are deleted
+  price     price each pending version (`price partitions`)
+  bytemass  measure each priced version's sample file (`bytemass`); a version
+            in an archive class, or with no live file, is done without a read
+  lint      list each measured version's storage suggestions (`list
+            suggestions`); the version is then UP_TO_DATE
+  purge     delete the results and rows of the versions the scan no longer
+            finds, keeping a partition's last complete version until a newer
+            one is done
+  list      print the master's partition versions (name, etag, state, times,
+            failures), one per line";
 
 pub const JOB_AFTER: &str = "\
 Examples:

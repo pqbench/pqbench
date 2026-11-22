@@ -31,6 +31,9 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench price partitions`↴](#pqbench-price-partitions)
 * [`pqbench job`↴](#pqbench-job)
 * [`pqbench job scan`↴](#pqbench-job-scan)
+* [`pqbench job price`↴](#pqbench-job-price)
+* [`pqbench job bytemass`↴](#pqbench-job-bytemass)
+* [`pqbench job lint`↴](#pqbench-job-lint)
 * [`pqbench job purge`↴](#pqbench-job-purge)
 * [`pqbench job list`↴](#pqbench-job-list)
 * [`pqbench daemon`↴](#pqbench-daemon)
@@ -810,13 +813,19 @@ the job's. One instance of each job runs at a time; a time limit is the
 scheduler's.
 
 ```text
-  scan  list each table's partitions into the master (Table records on stdin,
-        from `get table`); with --complete, the tables the input does not name
-        are deleted
-  purge delete the results and rows of the versions the scan no longer finds,
-        keeping a partition's last complete version until a newer one is done
-  list  print the master's partition versions (name, etag, state, times,
-        failures), one per line
+  scan      list each table's partitions into the master (Table records on
+            stdin, from `get table`); with --complete, the tables the input
+            does not name are deleted
+  price     price each pending version (`price partitions`)
+  bytemass  measure each priced version's sample file (`bytemass`); a version
+            in an archive class, or with no live file, is done without a read
+  lint      list each measured version's storage suggestions (`list
+            suggestions`); the version is then UP_TO_DATE
+  purge     delete the results and rows of the versions the scan no longer
+            finds, keeping a partition's last complete version until a newer
+            one is done
+  list      print the master's partition versions (name, etag, state, times,
+            failures), one per line
 ```
 
 **Usage:** `pqbench job <COMMAND>`
@@ -835,6 +844,9 @@ See also:
 ###### **Subcommands:**
 
 * `scan` — List each table's partitions into the master (Table records on stdin)
+* `price` — Price the pending versions (`price partitions`)
+* `bytemass` — Measure each priced version's sample file (`bytemass`)
+* `lint` — List each measured version's storage suggestions (`list suggestions`)
 * `purge` — Delete the results and rows of the versions the scan no longer finds
 * `list` — Print the master's partition versions, one row per line
 
@@ -853,6 +865,51 @@ List each table's partitions into the master (Table records on stdin)
 
   Default value: `4`
 * `--complete` — standard input is the whole catalog walk: the rows of every table it does not name are deleted
+
+
+
+## `pqbench job price`
+
+Price the pending versions (`price partitions`)
+
+**Usage:** `pqbench job price [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — versions in flight at once
+
+  Default value: `8`
+
+
+
+## `pqbench job bytemass`
+
+Measure each priced version's sample file (`bytemass`)
+
+**Usage:** `pqbench job bytemass [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — versions in flight at once
+
+  Default value: `8`
+
+
+
+## `pqbench job lint`
+
+List each measured version's storage suggestions (`list suggestions`)
+
+**Usage:** `pqbench job lint [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — versions in flight at once
+
+  Default value: `8`
 
 
 

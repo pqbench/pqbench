@@ -298,3 +298,116 @@ fn the_rows_survive_a_kill() {
     let master = Master::start(directory.path());
     assert_eq!(master.rows(), rows);
 }
+
+/// A table whose files are real Parquet (one fixture file per partition), so
+/// the measuring steps have footers to read.
+fn readable_table(root: &Path, partitions: &[&str]) -> Vec<Value> {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/small_reddit_none.parquet"
+    );
+    let size = std::fs::metadata(fixture).unwrap().len();
+    let mut actions = vec![
+        json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}),
+        json!({"metaData": {
+            "id": "44444444-4444-4444-4444-444444444444",
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"day\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+            "partitionColumns": ["day"],
+            "configuration": {},
+            "createdTime": 0
+        }}),
+    ];
+    for day in partitions {
+        let path = format!("day={day}/part-0.parquet");
+        std::fs::create_dir_all(root.join(format!("day={day}"))).unwrap();
+        std::fs::copy(fixture, root.join(&path)).unwrap();
+        actions.push(add(&path, day, size));
+    }
+    actions
+}
+
+fn run_steps(master: &Master) {
+    for job in ["price", "bytemass", "lint"] {
+        master.run(&["job", job], "");
+    }
+}
+
+/// Price, bytemass and lint take each version to UP_TO_DATE, each command's
+/// output stored under the version.
+#[test]
+fn the_steps_take_each_version_up_to_date() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1", "2"]));
+    let master = Master::start(directory.path());
+    master.scan(&table_record("events", &root), false);
+    run_steps(&master);
+    let rows = master.rows();
+    assert_eq!(rows.len(), 2);
+    for row in &rows {
+        assert_eq!(row["state"], "UP_TO_DATE", "{row}");
+        assert!(row["up_to_date_time"].is_u64());
+        for output in ["price", "bytemass", "list-suggestions"] {
+            assert!(
+                result_file(&master, row, output).exists(),
+                "{output} for {row}"
+            );
+        }
+        let bytemass = std::fs::read_to_string(result_file(&master, row, "bytemass")).unwrap();
+        assert!(!bytemass.trim().is_empty());
+    }
+}
+
+/// While a changed partition's new version is processed, purge keeps the old
+/// version's complete results; once the new one is UP_TO_DATE, the old goes.
+#[test]
+fn purge_keeps_the_last_complete_version_until_it_is_replaced() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1"]));
+    let master = Master::start(directory.path());
+    let tables = table_record("events", &root);
+    master.scan(&tables, false);
+    run_steps(&master);
+    let old = master.rows().remove(0);
+    let fixture = root.join("day=1/part-0.parquet");
+    std::fs::copy(&fixture, root.join("day=1/part-1.parquet")).unwrap();
+    let size = std::fs::metadata(&fixture).unwrap().len();
+    commit(&root, 1, vec![add("day=1/part-1.parquet", "1", size)]);
+    master.scan(&tables, false);
+    master.run(&["job", "purge"], "");
+    let rows = master.rows();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(result_file(&master, &old, "bytemass").exists());
+    run_steps(&master);
+    master.run(&["job", "purge"], "");
+    let rows = master.rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_ne!(rows[0]["etag"], old["etag"]);
+    assert_eq!(rows[0]["state"], "UP_TO_DATE");
+    assert!(!result_file(&master, &old, "bytemass").exists());
+}
+
+/// A version whose command fails goes back with its error counted, and after
+/// two failures it is left out of claims, so the job ends.
+#[test]
+fn a_failing_version_is_left_after_two_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1"]));
+    std::fs::remove_file(root.join("day=1/part-0.parquet")).unwrap();
+    let master = Master::start(directory.path());
+    master.scan(&table_record("events", &root), false);
+    master.run(&["job", "price"], "");
+    let output = pqbench()
+        .args(["job", "bytemass"])
+        .env("PQB_DAEMON_SOCK", &master.socket)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let row = master.rows().remove(0);
+    assert_eq!(row["state"], "PRICED");
+    assert_eq!(row["failure_count"], 2);
+    assert!(row["error"].as_str().is_some_and(|error| !error.is_empty()));
+}

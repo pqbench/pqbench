@@ -693,3 +693,68 @@ fn now_ms() -> u64 {
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TABLE: &str = "catalogs/c/schemas/s/tables/t";
+
+    fn scan(master: &mut Master, etag: &str) {
+        let line = serde_json::json!({"name": format!("{TABLE}/partitions/day%3D1"), "etag": etag});
+        fs::write(master.scan_path(TABLE), format!("{line}\n")).unwrap();
+        master.scan(TABLE).unwrap();
+    }
+
+    /// A job's output for a version the scan replaced meanwhile is dropped:
+    /// not renamed in, and its temporary file deleted.
+    #[test]
+    fn a_late_commit_for_a_replaced_version_is_dropped() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut master = Master::open(directory.path()).unwrap();
+        scan(&mut master, "aa");
+        let claim = master
+            .claim(State::Pending, State::Pricing, 10)
+            .unwrap()
+            .remove(0);
+        fs::write(&claim.path, "{}\n").unwrap();
+        scan(&mut master, "bb");
+        let key = (claim.name.clone(), claim.etag.clone());
+        assert!(!master
+            .commit(&key, State::Pricing, State::Priced, None)
+            .unwrap());
+        assert!(!claim.path.exists());
+        assert!(!claim.path.with_extension("").exists());
+        assert_eq!(master.rows[&key].state, State::Deleted);
+    }
+
+    /// A restart returns the rows a job held to the state before it, and
+    /// deletes what the job had written.
+    #[test]
+    fn a_restart_returns_claimed_versions() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut master = Master::open(directory.path()).unwrap();
+        scan(&mut master, "aa");
+        let claim = master
+            .claim(State::Pending, State::Pricing, 10)
+            .unwrap()
+            .remove(0);
+        fs::write(&claim.path, "{}\n").unwrap();
+        drop(master);
+        let master = Master::open(directory.path()).unwrap();
+        let key = (claim.name, claim.etag);
+        assert_eq!(master.rows[&key].state, State::Pending);
+        assert!(!claim.path.exists());
+    }
+
+    /// A listing line that would name a path outside the store is refused.
+    #[test]
+    fn a_scan_refuses_a_name_that_leaves_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut master = Master::open(directory.path()).unwrap();
+        let line = serde_json::json!({"name": format!("{TABLE}/partitions/.."), "etag": "aa"});
+        fs::write(master.scan_path(TABLE), format!("{line}\n")).unwrap();
+        assert!(master.scan(TABLE).is_err());
+        assert!(master.list(None).is_empty());
+    }
+}

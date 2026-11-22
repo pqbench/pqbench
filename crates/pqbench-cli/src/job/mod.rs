@@ -8,6 +8,7 @@
 //! time limit is the scheduler's (`timeout 3600 pqbench job scan`).
 
 pub(crate) mod scan;
+mod step;
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
@@ -32,6 +33,12 @@ pub(crate) struct JobArgs {
 enum Job {
     /// List each table's partitions into the master (Table records on stdin)
     Scan(scan::ScanArgs),
+    /// Price the pending versions (`price partitions`)
+    Price(step::StepArgs),
+    /// Measure each priced version's sample file (`bytemass`)
+    Bytemass(step::StepArgs),
+    /// List each measured version's storage suggestions (`list suggestions`)
+    Lint(step::StepArgs),
     /// Delete the results and rows of the versions the scan no longer finds
     Purge,
     /// Print the master's partition versions, one row per line
@@ -50,6 +57,9 @@ pub(crate) struct ListArgs {
 pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &JobArgs) -> Result<(), CliError> {
     match &args.job {
         Job::Scan(args) => scan::run(daemon, args).await,
+        Job::Price(args) => step::run(daemon, &step::PRICE, args).await,
+        Job::Bytemass(args) => step::run(daemon, &step::BYTEMASS, args).await,
+        Job::Lint(args) => step::run(daemon, &step::LINT, args).await,
         Job::Purge => {
             let _lock = lock(daemon, "purge")?;
             daemon.master(&Request::Purge).await?;
@@ -75,6 +85,9 @@ impl JobArgs {
     pub(crate) fn name(&self) -> &'static str {
         match self.job {
             Job::Scan(_) => "job scan",
+            Job::Price(_) => "job price",
+            Job::Bytemass(_) => "job bytemass",
+            Job::Lint(_) => "job lint",
             Job::Purge => "job purge",
             Job::List(_) => "job list",
         }
@@ -103,9 +116,9 @@ fn lock(daemon: &crate::daemon::Daemon, job: &str) -> Result<File, CliError> {
 }
 
 /// Run `pqbench ARGS` once, with `input` on its standard input and its
-/// standard output written to `output`; its standard error passes through.
-/// The child dies with the job, so a job killed for its time limit leaves no
-/// command running. Blocking: call from `spawn_blocking`.
+/// standard output written to `output`. A failure is the command's standard
+/// error. The child dies with the job, so a job killed for its time limit
+/// leaves no command running. Blocking: call from `spawn_blocking`.
 fn run_command(args: &[&str], input: &str, output: &Path, socket: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
     let stdout = File::create(output)
@@ -116,7 +129,7 @@ fn run_command(args: &[&str], input: &str, output: &Path, socket: &Path) -> Resu
         .env("PQB_DAEMON_SOCK", socket)
         .stdin(Stdio::piped())
         .stdout(stdout)
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::piped());
     // SAFETY: `prctl` is async-signal-safe, so it may run between fork and
     // exec.
     unsafe {
@@ -134,6 +147,10 @@ fn run_command(args: &[&str], input: &str, output: &Path, socket: &Path) -> Resu
         .stdin
         .take()
         .map(|mut stdin| stdin.write_all(input.as_bytes()));
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+    }
     let status = child.wait().map_err(|error| error.to_string())?;
     if let Some(Err(error)) = written {
         return Err(format!("cannot write the command's input: {error}"));
@@ -141,6 +158,10 @@ fn run_command(args: &[&str], input: &str, output: &Path, socket: &Path) -> Resu
     if status.success() {
         Ok(())
     } else {
-        Err(format!("`pqbench {}` failed: {status}", args.join(" ")))
+        let stderr = stderr.trim();
+        Err(match stderr.is_empty() {
+            true => format!("`pqbench {}` failed: {status}", args.join(" ")),
+            false => stderr.to_string(),
+        })
     }
 }
