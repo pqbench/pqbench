@@ -216,12 +216,18 @@ fn dictionary_on_unique_strings_is_verified() {
 
     let measured = verified(&records);
     assert_eq!(measured[0]["verified"], true, "{measured:?}");
-    assert!(measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+    // The whole file is the sample now, and at this size the dictionary's
+    // saving is real but below the noise floor: a leading-rows sample used to
+    // overstate it.
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() > 0,
+        "{measured:?}"
+    );
     assert!(
         measured[0]["message"]
             .as_str()
             .unwrap()
-            .contains("smaller at"),
+            .contains("below the 64 KiB noise floor"),
         "{measured:?}"
     );
 
@@ -265,6 +271,44 @@ fn a_stale_candidate_is_rejected_not_dropped() {
             .contains("no longer detects"),
         "{measured:?}"
     );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// The sample is whole row groups: a three-group file reports all three, and
+/// `get suggestion` re-reads the same groups.
+#[test]
+fn a_sample_is_whole_row_groups() {
+    let directory = temporary("row-groups");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..30).map(uuid).collect();
+    write_values(&path, &values, false, 10);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["sample_row_count"], 30, "{records:?}");
+    assert_eq!(records[0]["sample_row_group_count"], 3, "{records:?}");
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["sample_row_count"], 30, "{measured:?}");
+    assert_eq!(measured[0]["sample_row_group_count"], 3, "{measured:?}");
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// A file smaller than the old row limit reports the rows it decoded, not the
+/// limit it asked for.
+#[test]
+fn a_small_file_reports_the_rows_it_decoded() {
+    let directory = temporary("small");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..8).map(uuid).collect();
+    write_values(&path, &values, false, 0);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["sample_row_count"], 8, "{records:?}");
+    assert_eq!(records[0]["sample_row_group_count"], 1, "{records:?}");
 
     let _ = std::fs::remove_dir_all(directory);
 }

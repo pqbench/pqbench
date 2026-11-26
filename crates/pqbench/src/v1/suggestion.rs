@@ -44,4 +44,8 @@ pub struct Suggestion {
     /// same values. Absent means the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_row_count: Option<u64>,
+    /// Leading whole row groups the detection sampled. `get suggestion`
+    /// re-reads them, so a verification measures the values `list` detected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_row_group_count: Option<u64>,
 }

@@ -14,9 +14,6 @@ use crate::CliError;
 /// Arguments for `list suggestions`.
 #[derive(Args)]
 pub(crate) struct SuggestionsArgs {
-    /// leading rows to inspect
-    #[arg(long, default_value_t = pqbench::lint::SAMPLE_ROWS)]
-    rows: usize,
     /// read each file from this path instead of the blob, keeping the
     /// record's name
     #[arg(long, value_name = "PATH")]
@@ -26,9 +23,6 @@ pub(crate) struct SuggestionsArgs {
 /// Arguments for `get suggestion`.
 #[derive(Args)]
 pub(crate) struct VerifyArgs {
-    /// leading rows to measure; defaults to the candidate's sample_row_count
-    #[arg(long)]
-    rows: Option<usize>,
     /// read the file from this path instead of the blob, keeping the
     /// record's name
     #[arg(long, value_name = "PATH")]
@@ -44,7 +38,6 @@ pub(crate) async fn run(
     let parents = parse::parents::<v1::TableFile>("list suggestions").await?;
     let lake = lake.clone();
     let daemon = daemon.clone();
-    let rows = args.rows;
     let local = args.local.clone();
     // One file at a time: decoding a sample is CPU-bound, so overlapping files
     // buys nothing and holds more samples in memory.
@@ -60,8 +53,7 @@ pub(crate) async fn run(
             let path = read_path(blob, local.as_deref())?;
             let measured =
                 crate::measure::table_file(&lake, &daemon, &file, local.as_deref()).await?;
-            let suggestions =
-                pqbench::lint::suggestions(&path, &measured.blob, &measured.columns, Some(rows))?;
+            let suggestions = pqbench::lint::suggestions(&path, &measured.blob, &measured.columns)?;
             Ok(stream::iter(suggestions.into_iter().map(Ok::<_, CliError>)))
         }
     });
@@ -73,7 +65,6 @@ pub(crate) async fn run(
 pub(crate) async fn verify(lake: &pqbench::Lake, args: &VerifyArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Suggestion>("get suggestion").await?;
     let lake = lake.clone();
-    let rows = args.rows;
     let local = args.local.clone();
     // One suggestion at a time: measuring re-encodes the sample, which is
     // CPU-bound, so overlap buys nothing.
@@ -108,7 +99,6 @@ pub(crate) async fn verify(lake: &pqbench::Lake, args: &VerifyArgs) -> Result<()
                 &measured.blob,
                 column,
                 &candidate,
-                rows,
             )?)
         }
     });

@@ -20,7 +20,9 @@ mod writer;
 use std::fmt;
 use std::path::Path;
 
-use crate::third_party::parquet::api::{read_leaf_sample, Error as ParquetError, Value};
+use crate::third_party::parquet::api::{
+    read_leaf_sample, Error as ParquetError, LeafSample, Value,
+};
 use crate::v1;
 
 use self::control::Measurement;
@@ -28,9 +30,6 @@ use self::writer::Writer;
 
 pub use dictionary::DICTIONARY_UNIQUE_RULE;
 pub use uuid::UUID_TEXT_RULE;
-
-/// Leading rows decoded to judge a column's values and price the rewrite.
-pub const SAMPLE_ROWS: usize = 8192;
 
 /// Wins smaller than this are noted as noise, not dropped.
 const NOISE_FLOOR_BYTES: u64 = 64 * 1024;
@@ -69,6 +68,22 @@ impl From<ParquetError> for Error {
     }
 }
 
+/// What a sample decoded: rows and the whole row groups they came from.
+#[derive(Clone, Copy, Default)]
+struct Coverage {
+    row_count: u64,
+    row_group_count: u64,
+}
+
+impl Coverage {
+    fn from_sample(sample: &LeafSample) -> Self {
+        Self {
+            row_count: sample.row_count,
+            row_group_count: sample.row_group_count,
+        }
+    }
+}
+
 /// One measured column and its decoded sample: what a rule detects and
 /// measures.
 pub(crate) struct ColumnSample<'a> {
@@ -78,7 +93,7 @@ pub(crate) struct ColumnSample<'a> {
     mass: &'a v1::Bytemass,
     cells: Vec<Option<&'a [u8]>>,
     writer: Option<&'a str>,
-    sample_rows: usize,
+    coverage: Coverage,
     text_bpv: f64,
 }
 
@@ -91,7 +106,7 @@ impl<'a> ColumnSample<'a> {
         column: &'a v1::Column,
         cells: Vec<Option<&'a [u8]>>,
         writer: Option<&'a str>,
-        sample_rows: usize,
+        coverage: Coverage,
     ) -> Option<Self> {
         let mass = column.mass.as_ref()?;
         let compressed_bytes = mass.compressed_bytes?;
@@ -117,7 +132,7 @@ impl<'a> ColumnSample<'a> {
             mass,
             cells,
             writer,
-            sample_rows,
+            coverage,
             text_bpv: compressed_bytes as f64 / non_null_values as f64,
         })
     }
@@ -154,7 +169,8 @@ impl<'a> ColumnSample<'a> {
             remedy: finding.remedy,
             verified: None,
             savings_bytes: None,
-            sample_row_count: Some(self.sample_rows as u64),
+            sample_row_count: Some(self.coverage.row_count),
+            sample_row_group_count: Some(self.coverage.row_group_count),
         }
     }
 }
@@ -198,7 +214,8 @@ fn rule(id: &str) -> Option<&'static Rule> {
 ///
 /// `blob` is the file's record, so each suggestion names the file the walk
 /// read, not the local path a caller may have copied it to. No rewrite is
-/// encoded here: `verify` does that.
+/// encoded here: `verify` does that. The sample is whole leading row groups,
+/// because a codec decision is made per column chunk.
 ///
 /// # Errors
 /// Fails when the sample cannot be read.
@@ -206,7 +223,6 @@ pub fn suggestions(
     path: &Path,
     blob: &v1::Blob,
     columns: &[v1::Column],
-    sample_rows: Option<usize>,
 ) -> Result<Vec<v1::Suggestion>, Error> {
     let targets: Vec<(&v1::Column, String)> = columns
         .iter()
@@ -225,20 +241,20 @@ pub fn suggestions(
     if targets.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = sample_rows.unwrap_or(SAMPLE_ROWS);
     let leaves: Vec<String> = targets.iter().map(|(_, leaf)| leaf.clone()).collect();
-    let decoded = read_leaf_sample(path, &leaves, Some(rows))?;
+    let decoded = read_leaf_sample(path, &leaves, None)?;
+    let coverage = Coverage::from_sample(&decoded);
     let mut suggestions = Vec::new();
 
     for (at, (column, leaf)) in targets.iter().enumerate() {
-        let cells: Vec<Option<&[u8]>> = decoded[at].iter().map(Option::as_deref).collect();
+        let cells: Vec<Option<&[u8]>> = decoded.columns[at].iter().map(Option::as_deref).collect();
         let Some(sample) = ColumnSample::new(
             &blob.name,
             leaf,
             column,
             cells,
             blob.writer.as_deref(),
-            rows,
+            coverage,
         ) else {
             continue;
         };
@@ -269,8 +285,9 @@ pub fn suggestions(
 
 /// Measure one potential suggestion against its control.
 ///
-/// The sample size is the caller's, else the record's `sample_row_count`, else
-/// [`SAMPLE_ROWS`]; so `list | get` measures the values `list` detected.
+/// The sample is the leading row groups the candidate's
+/// `sample_row_group_count` names, so `list | get` measures the same values
+/// `list` decoded. The record then carries the rows actually read.
 ///
 /// # Errors
 /// Fails when the sample cannot be read or the rule is unknown.
@@ -279,39 +296,36 @@ pub fn verify(
     blob: &v1::Blob,
     column: &v1::Column,
     candidate: &v1::Suggestion,
-    sample_rows: Option<usize>,
 ) -> Result<v1::Suggestion, Error> {
-    let rows = sample_rows
-        .or_else(|| {
-            candidate
-                .sample_row_count
-                .and_then(|count| usize::try_from(count).ok())
-        })
-        .unwrap_or(SAMPLE_ROWS);
     if column.max_repetition_level != Some(0) {
         return Ok(reject(
             candidate,
             blob,
-            rows,
+            None,
             "the column is repeated; suggestions measure scalar leaves only",
         ));
     }
     let leaf = candidate.column.clone();
-    let mut decoded = read_leaf_sample(path, std::slice::from_ref(&leaf), Some(rows))?;
-    let cells = decoded.pop().unwrap_or_default();
-    let cells: Vec<Option<&[u8]>> = cells.iter().map(Option::as_deref).collect();
+    let row_groups = candidate
+        .sample_row_group_count
+        .and_then(|count| usize::try_from(count).ok());
+    let decoded = read_leaf_sample(path, std::slice::from_ref(&leaf), row_groups)?;
+    let coverage = Coverage::from_sample(&decoded);
+    let cells: Vec<Option<&[u8]>> = decoded.columns.first().map_or_else(Vec::new, |cells| {
+        cells.iter().map(Option::as_deref).collect()
+    });
     let Some(sample) = ColumnSample::new(
         &blob.name,
         &leaf,
         column,
         cells,
         blob.writer.as_deref(),
-        rows,
+        coverage,
     ) else {
         return Ok(reject(
             candidate,
             blob,
-            rows,
+            Some(coverage),
             "the sample has no non-null value",
         ));
     };
@@ -322,7 +336,7 @@ pub fn verify(
         return Ok(reject(
             candidate,
             blob,
-            rows,
+            Some(coverage),
             "the rule no longer detects this column",
         ));
     };
@@ -335,7 +349,7 @@ pub fn verify(
     Ok(enriched(
         candidate,
         blob,
-        rows,
+        coverage,
         finding,
         measurement,
         compressed,
@@ -346,13 +360,16 @@ pub fn verify(
 fn reject(
     candidate: &v1::Suggestion,
     blob: &v1::Blob,
-    rows: usize,
+    coverage: Option<Coverage>,
     reason: &str,
 ) -> v1::Suggestion {
     let mut rejected = candidate.clone();
     rejected.writer = blob.writer.clone();
     rejected.size_bytes = blob.size_bytes;
-    rejected.sample_row_count = Some(rows as u64);
+    if let Some(coverage) = coverage {
+        rejected.sample_row_count = Some(coverage.row_count);
+        rejected.sample_row_group_count = Some(coverage.row_group_count);
+    }
     rejected.verified = Some(false);
     rejected.savings_bytes = None;
     rejected.message = format!("{}; {reason}", candidate.message);
@@ -363,7 +380,7 @@ fn reject(
 fn enriched(
     candidate: &v1::Suggestion,
     blob: &v1::Blob,
-    rows: usize,
+    coverage: Coverage,
     finding: Finding,
     measurement: Option<Measurement>,
     compressed_bytes: u64,
@@ -371,7 +388,8 @@ fn enriched(
     let mut enriched = candidate.clone();
     enriched.writer = blob.writer.clone();
     enriched.size_bytes = blob.size_bytes;
-    enriched.sample_row_count = Some(rows as u64);
+    enriched.sample_row_count = Some(coverage.row_count);
+    enriched.sample_row_group_count = Some(coverage.row_group_count);
     enriched.remedy = finding.remedy;
     let Some(measurement) = measurement else {
         enriched.verified = None;

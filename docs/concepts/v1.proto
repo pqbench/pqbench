@@ -627,9 +627,13 @@ message Suggestion {
   // only when `verified` is true.
   optional int64 savings_bytes = 9;
 
-  // Leading rows the detection sampled, so `get suggestion` measures the same
-  // values. Absent means the default.
+  // Rows the detection decoded, not the rows it asked for: the sample is
+  // whole leading row groups.
   optional int64 sample_row_count = 12;
+
+  // Leading whole row groups the detection decoded. `get suggestion`
+  // re-reads them, so the verification measures what the detection did.
+  optional int64 sample_row_group_count = 13;
 }
 
 // One frequent value in a column profile.

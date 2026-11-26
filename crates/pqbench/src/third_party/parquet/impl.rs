@@ -22,9 +22,14 @@ use parquet::record::Field;
 use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
-    Sample, TypedColumn, TypedSample, Value, WriteOptions,
+    ColumnChunk, ColumnMass, Error, FileMass, Kind, LeafSample, MetadataParser, Page, PageParser,
+    ParquetFile, Sample, TypedColumn, TypedSample, Value, WriteOptions,
 };
+
+/// Leading whole row groups are decoded until their compressed bytes reach
+/// this limit. One group is the smallest unit a codec decision can be made on,
+/// so a sample always includes at least one even when it exceeds the limit.
+const SAMPLE_BYTE_LIMIT: u64 = 8 * 1024 * 1024;
 
 /// The parquet-rs-backed page parser.
 pub struct ParquetRsParser;
@@ -108,14 +113,15 @@ fn field_text(field: &Field) -> Option<String> {
     }
 }
 
-/// Decode up to `max_rows` leading rows of the named leaf columns as bytes.
+/// Decode whole leading row groups of the named leaf columns as bytes.
 ///
-/// The result is one row of cells per requested column, in request order.
+/// A codec decision is made per column chunk, so the sample is a whole number
+/// of row groups: never a row cut inside one.
 pub(crate) fn read_leaf_sample(
     path: &Path,
     columns: &[String],
-    max_rows: Option<usize>,
-) -> Result<Vec<Vec<Option<Vec<u8>>>>, Error> {
+    row_groups: Option<usize>,
+) -> Result<LeafSample, Error> {
     let index: HashMap<&str, usize> = columns
         .iter()
         .enumerate()
@@ -123,9 +129,18 @@ pub(crate) fn read_leaf_sample(
         .collect();
     let file = std::fs::File::open(path).map_err(Error::Io)?;
     let reader = SerializedFileReader::new(file)?;
-    let mut sample: Vec<Vec<Option<Vec<u8>>>> = vec![Vec::new(); columns.len()];
-    for (rows, row) in reader.get_row_iter(None)?.enumerate() {
-        if max_rows.is_some_and(|max| rows >= max) {
+    let sampled = sampled_row_groups(reader.metadata(), row_groups);
+    let rows: usize = reader.metadata().row_groups()[..sampled]
+        .iter()
+        .map(|group| group.num_rows() as usize)
+        .sum();
+    let mut sample = LeafSample {
+        columns: vec![Vec::new(); columns.len()],
+        row_count: 0,
+        row_group_count: sampled as u64,
+    };
+    for (at, row) in reader.get_row_iter(None)?.enumerate() {
+        if at >= rows {
             break;
         }
         let row = row?;
@@ -133,11 +148,39 @@ pub(crate) fn read_leaf_sample(
         for (name, field) in row.get_column_iter() {
             collect_leaf(name, field, "", &index, &mut cells);
         }
-        for (value, column) in cells.into_iter().zip(sample.iter_mut()) {
+        for (value, column) in cells.into_iter().zip(sample.columns.iter_mut()) {
             column.push(value);
         }
+        sample.row_count += 1;
     }
     Ok(sample)
+}
+
+/// How many leading row groups a sample covers.
+///
+/// `row_groups` names a count, which a verification passes to read what a
+/// detection read; `None` takes whole groups until their compressed bytes
+/// reach [`SAMPLE_BYTE_LIMIT`]. A file with rows always contributes at least
+/// one group.
+fn sampled_row_groups(metadata: &ParquetMetaData, row_groups: Option<usize>) -> usize {
+    let available = metadata.num_row_groups();
+    if available == 0 {
+        return 0;
+    }
+    if let Some(count) = row_groups {
+        return count.min(available);
+    }
+    let mut bytes = 0_u64;
+    let mut count = 0;
+    for group in metadata.row_groups() {
+        let group_bytes = group.compressed_size() as u64;
+        if count > 0 && bytes + group_bytes > SAMPLE_BYTE_LIMIT {
+            break;
+        }
+        bytes += group_bytes;
+        count += 1;
+    }
+    count.max(1)
 }
 
 /// Walk one decoded field, filling the requested leaf paths.

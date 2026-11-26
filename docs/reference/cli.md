@@ -507,7 +507,6 @@ Verify one column's potential suggestion (Suggestion refs on stdin)
 
 ###### **Options:**
 
-* `--rows <ROWS>` — leading rows to measure; defaults to the candidate's sample_row_count
 * `--local <PATH>` — read the file from this path instead of the blob, keeping the record's name
 
 
@@ -788,9 +787,6 @@ List potential storage suggestions for each local blob (Table-file refs on stdin
 
 ###### **Options:**
 
-* `--rows <ROWS>` — leading rows to inspect
-
-  Default value: `8192`
 * `--local <PATH>` — read each file from this path instead of the blob, keeping the record's name
 
 
