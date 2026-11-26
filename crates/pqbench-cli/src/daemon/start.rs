@@ -1,5 +1,6 @@
 //! Starting, stopping, and checking the daemon.
 
+use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -84,10 +85,15 @@ fn serve_command(
     if let Some(token) = &config.token {
         command.env("PQB_TOKEN", token);
     }
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(socket.with_extension("log"))
+        .map_err(|error| format!("cannot open the daemon log: {error}"))?;
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::from(log));
     // A new session keeps the daemon alive when the shell that started it
     // closes the terminal.
     // SAFETY: `pre_exec` runs after fork and before exec, so the closure may

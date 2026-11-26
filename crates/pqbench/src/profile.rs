@@ -8,13 +8,19 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::path::Path;
 
 use glob::Pattern;
+use parquet::basic::Type as PhysicalType;
+use parquet::column::reader::{ColumnReader, ColumnReaderImpl};
+use parquet::data_type::DataType;
+use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
 use serde::Serialize;
 
-use crate::third_party::parquet::api::Sample;
+use crate::third_party::parquet::api::{Error as ParquetError, Sample};
 
-/// Errors from the profile layer: an empty sample or a bad column glob.
+/// Errors from the profile layer: an empty sample, bad column glob, or parquet
+/// read failure.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -24,6 +30,8 @@ pub enum Error {
     NoMatch(String),
     /// A column glob did not parse.
     Pattern(glob::PatternError),
+    /// Reading the Parquet file failed.
+    Parquet(ParquetError),
 }
 
 impl std::fmt::Display for Error {
@@ -32,6 +40,7 @@ impl std::fmt::Display for Error {
             Error::Empty => write!(f, "sample has no rows"),
             Error::NoMatch(columns) => write!(f, "no column matched: {columns}"),
             Error::Pattern(_) => write!(f, "bad glob"),
+            Error::Parquet(error) => write!(f, "{error}"),
         }
     }
 }
@@ -40,8 +49,15 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Pattern(error) => Some(error),
+            Error::Parquet(error) => Some(error),
             Error::Empty | Error::NoMatch(_) => None,
         }
+    }
+}
+
+impl From<ParquetError> for Error {
+    fn from(error: ParquetError) -> Self {
+        Self::Parquet(error)
     }
 }
 
@@ -64,7 +80,7 @@ impl Default for ProfileRequest {
 }
 
 /// One frequent value and how many times it occurred.
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct ValueCount {
     pub value: String,
     pub count: u64,
@@ -108,6 +124,100 @@ pub struct ColumnProfile {
 pub struct Profile {
     pub row_count: u64,
     pub columns: Vec<ColumnProfile>,
+}
+
+/// Compute a [`Profile`] directly from a local Parquet file, decoding only
+/// columns selected by `request.columns` up to `max_rows` leading rows.
+///
+/// Uses each column's Parquet physical type rather than inferring types from
+/// stringified values, and supports nested leaf paths (for example `a.b`).
+///
+/// # Errors
+/// Returns [`Error::Empty`] if the file has no rows, [`Error::NoMatch`] if
+/// `request.columns` matched nothing, [`Error::Pattern`] on an invalid glob, or
+/// [`Error::Parquet`] if the file cannot be read.
+pub fn profile_file(
+    path: &Path,
+    max_rows: Option<usize>,
+    request: &ProfileRequest,
+) -> Result<Profile, Error> {
+    let patterns = compile_patterns(&request.columns)?;
+    let file = std::fs::File::open(path).map_err(ParquetError::Io)?;
+    let reader =
+        SerializedFileReader::new(file).map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    let metadata = reader.metadata();
+    let total_rows: usize = metadata
+        .row_groups()
+        .iter()
+        .map(|group| usize::try_from(group.num_rows()).unwrap_or(0))
+        .sum();
+    if total_rows == 0 || max_rows == Some(0) {
+        return Err(Error::Empty);
+    }
+
+    let schema = metadata.file_metadata().schema_descr();
+    let selected: Vec<(usize, String, PhysicalType, i16, i16)> = schema
+        .columns()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, descr)| {
+            let name = descr.path().string();
+            let matches = patterns.is_empty() || patterns.iter().any(|p| p.matches(&name));
+            matches.then_some((
+                idx,
+                name,
+                descr.physical_type(),
+                descr.max_def_level(),
+                descr.max_rep_level(),
+            ))
+        })
+        .collect();
+    if !patterns.is_empty() && selected.is_empty() {
+        return Err(Error::NoMatch(request.columns.join(", ")));
+    }
+
+    let mut accumulators: Vec<ColumnAcc> = selected
+        .iter()
+        .map(|(_, name, physical, _, _)| ColumnAcc::new(name.clone(), *physical))
+        .collect();
+
+    let mut rows_read = 0usize;
+    for rg in 0..metadata.num_row_groups() {
+        let group = reader
+            .get_row_group(rg)
+            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+        let group_rows = usize::try_from(group.metadata().num_rows()).unwrap_or(0);
+        let take = match max_rows {
+            Some(limit) => limit.saturating_sub(rows_read).min(group_rows),
+            None => group_rows,
+        };
+        if take == 0 {
+            break;
+        }
+        for (slot, &(col_idx, _, _, max_def, max_rep)) in selected.iter().enumerate() {
+            stream_column(
+                group.as_ref(),
+                col_idx,
+                max_def,
+                max_rep,
+                take,
+                &mut accumulators[slot],
+            )?;
+        }
+        rows_read += take;
+        if max_rows.is_some_and(|limit| rows_read >= limit) {
+            break;
+        }
+    }
+
+    let columns = accumulators
+        .into_iter()
+        .map(|acc| acc.finish(request.top))
+        .collect();
+    Ok(Profile {
+        row_count: rows_read as u64,
+        columns,
+    })
 }
 
 /// Reduce a decoded sample into per-column facts.
@@ -225,19 +335,18 @@ fn shannon(counts: &HashMap<&str, u64>, total: usize) -> f64 {
     }
 }
 
-/// The numeric key of a value when the column kind is numeric, else `None`.
-fn numeric_key(kind: &str, value: &str) -> Option<f64> {
-    match kind {
-        "integer" => value.parse::<i64>().ok().map(|number| number as f64),
-        "number" => value.parse::<f64>().ok(),
-        _ => None,
-    }
-}
-
-/// Compare two values by kind: numerically for `integer`/`number`, else lexically.
+/// Compare two values by kind: exact `i64` for `integer`, `f64::total_cmp` for
+/// `number`, else lexically.
 fn compare(kind: &str, left: &str, right: &str) -> Ordering {
-    match (numeric_key(kind, left), numeric_key(kind, right)) {
-        (Some(left), Some(right)) => left.partial_cmp(&right).unwrap_or(Ordering::Equal),
+    match kind {
+        "integer" => match (left.parse::<i64>(), right.parse::<i64>()) {
+            (Ok(left), Ok(right)) => left.cmp(&right),
+            _ => left.cmp(right),
+        },
+        "number" => match (left.parse::<f64>(), right.parse::<f64>()) {
+            (Ok(left), Ok(right)) => left.total_cmp(&right),
+            _ => left.cmp(right),
+        },
         _ => left.cmp(right),
     }
 }
@@ -262,6 +371,9 @@ fn bounds(values: &[&str], kind: &str) -> (Option<String>, Option<String>) {
 
 /// The `top` values by count descending, then value ascending.
 fn top_values(counts: &HashMap<&str, u64>, top: u32) -> Vec<ValueCount> {
+    if top == 0 {
+        return Vec::new();
+    }
     let mut ordered: Vec<(&str, u64)> = counts
         .iter()
         .map(|(value, count)| (*value, *count))
@@ -370,6 +482,274 @@ fn monotonic(values: &[&str], kind: &str) -> &'static str {
     } else {
         "UNORDERED"
     }
+}
+
+/// Streaming per-column profile accumulator fed directly from a Parquet
+/// `ColumnReader`, avoiding materializing full row/column buffers.
+struct ColumnAcc {
+    column: String,
+    kind: &'static str,
+    value_count: u64,
+    null_count: u64,
+    counts: HashMap<String, u64>,
+    lengths: Vec<u64>,
+    lowest: Option<String>,
+    highest: Option<String>,
+    prev_cell: Option<Option<String>>,
+    runs: u64,
+    run_length: u64,
+    run_length_max: u64,
+    prev_non_null: Option<String>,
+    increasing: bool,
+    decreasing: bool,
+}
+
+impl ColumnAcc {
+    fn new(column: String, physical: PhysicalType) -> Self {
+        let kind = match physical {
+            PhysicalType::BOOLEAN => "boolean",
+            PhysicalType::INT32 | PhysicalType::INT64 => "integer",
+            PhysicalType::FLOAT | PhysicalType::DOUBLE => "number",
+            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY | PhysicalType::INT96 => {
+                "string"
+            }
+        };
+        Self {
+            column,
+            kind,
+            value_count: 0,
+            null_count: 0,
+            counts: HashMap::new(),
+            lengths: Vec::new(),
+            lowest: None,
+            highest: None,
+            prev_cell: None,
+            runs: 0,
+            run_length: 0,
+            run_length_max: 0,
+            prev_non_null: None,
+            increasing: true,
+            decreasing: true,
+        }
+    }
+
+    fn push_null(&mut self) {
+        self.value_count += 1;
+        self.null_count += 1;
+        self.push_run(None);
+    }
+
+    fn push_value(&mut self, value: String) {
+        self.value_count += 1;
+        self.lengths.push(value.len() as u64);
+        if self
+            .lowest
+            .as_deref()
+            .is_none_or(|cur| compare(self.kind, &value, cur) == Ordering::Less)
+        {
+            self.lowest = Some(value.clone());
+        }
+        if self
+            .highest
+            .as_deref()
+            .is_none_or(|cur| compare(self.kind, &value, cur) == Ordering::Greater)
+        {
+            self.highest = Some(value.clone());
+        }
+        if let Some(prev) = self.prev_non_null.as_deref() {
+            match compare(self.kind, prev, &value) {
+                Ordering::Greater => self.increasing = false,
+                Ordering::Less => self.decreasing = false,
+                Ordering::Equal => {}
+            }
+        }
+        self.prev_non_null = Some(value.clone());
+        self.push_run(Some(value.clone()));
+        *self.counts.entry(value).or_insert(0) += 1;
+    }
+
+    fn push_run(&mut self, cell: Option<String>) {
+        if self.prev_cell.as_ref() == Some(&cell) {
+            self.run_length += 1;
+        } else {
+            self.run_length = 1;
+            self.runs += 1;
+            self.prev_cell = Some(cell);
+        }
+        self.run_length_max = self.run_length_max.max(self.run_length);
+    }
+
+    fn finish(mut self, top: u32) -> ColumnProfile {
+        let non_null = self.value_count - self.null_count;
+        let ndv = self.counts.len() as u64;
+        let entropy = if non_null == 0 {
+            0.0
+        } else {
+            let total = non_null as f64;
+            let h: f64 = self
+                .counts
+                .values()
+                .map(|count| {
+                    let p = *count as f64 / total;
+                    -p * p.log2()
+                })
+                .sum();
+            if h == 0.0 {
+                0.0
+            } else {
+                h
+            }
+        };
+        let top_values = if top == 0 {
+            Vec::new()
+        } else {
+            let mut ordered: Vec<(String, u64)> = self.counts.into_iter().collect();
+            ordered.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+            ordered
+                .into_iter()
+                .take(top as usize)
+                .map(|(value, count)| ValueCount { value, count })
+                .collect()
+        };
+        self.lengths.sort_unstable();
+        let (length_mean, length_p50, length_p90, length_max) = length_stats(&self.lengths);
+        let (adjacent_equal_fraction, run_length_mean, run_length_max) = if self.value_count == 0 {
+            (0.0, 0.0, 0)
+        } else {
+            let adjacent = if self.value_count < 2 {
+                0.0
+            } else {
+                (self.value_count - self.runs) as f64 / (self.value_count - 1) as f64
+            };
+            (
+                adjacent,
+                self.value_count as f64 / self.runs as f64,
+                self.run_length_max,
+            )
+        };
+        let monotonic = if non_null <= 1 || (self.increasing && self.decreasing) {
+            "CONSTANT"
+        } else if self.increasing {
+            "INCREASING"
+        } else if self.decreasing {
+            "DECREASING"
+        } else {
+            "UNORDERED"
+        };
+        let physical_kind = if non_null == 0 { "empty" } else { self.kind };
+        ColumnProfile {
+            column: self.column,
+            physical_kind: physical_kind.to_string(),
+            num_values: self.value_count,
+            null_count: self.null_count,
+            null_fraction: ratio(self.null_count, self.value_count),
+            ndv,
+            ndv_ratio: ratio(ndv, non_null),
+            entropy,
+            top_values,
+            min_value: self.lowest,
+            max_value: self.highest,
+            length_mean,
+            length_p50,
+            length_p90,
+            length_max,
+            adjacent_equal_fraction,
+            run_length_mean,
+            run_length_max,
+            monotonic: monotonic.to_string(),
+        }
+    }
+}
+
+fn stream_column(
+    group: &dyn RowGroupReader,
+    col_idx: usize,
+    max_def: i16,
+    max_rep: i16,
+    rows: usize,
+    acc: &mut ColumnAcc,
+) -> Result<(), Error> {
+    let reader = group
+        .get_column_reader(col_idx)
+        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    match reader {
+        ColumnReader::BoolColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+        }
+        ColumnReader::Int32ColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+        }
+        ColumnReader::Int64ColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+        }
+        ColumnReader::Int96ColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+        }
+        ColumnReader::FloatColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+        }
+        ColumnReader::DoubleColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+        }
+        ColumnReader::ByteArrayColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| {
+                String::from_utf8_lossy(v.data()).into_owned()
+            })
+        }
+        ColumnReader::FixedLenByteArrayColumnReader(mut reader) => {
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| {
+                String::from_utf8_lossy(v.data()).into_owned()
+            })
+        }
+    }
+}
+
+fn feed_typed<T: DataType>(
+    reader: &mut ColumnReaderImpl<T>,
+    max_def: i16,
+    max_rep: i16,
+    rows: usize,
+    acc: &mut ColumnAcc,
+    mut format: impl FnMut(&T::T) -> String,
+) -> Result<(), Error> {
+    let mut remaining = rows;
+    let mut values = Vec::new();
+    let mut def_levels = Vec::new();
+    let mut rep_levels = Vec::new();
+    while remaining > 0 {
+        let batch = remaining.min(1024);
+        values.clear();
+        def_levels.clear();
+        rep_levels.clear();
+        let (records, _, levels) = reader
+            .read_records(
+                batch,
+                (max_def > 0).then_some(&mut def_levels),
+                (max_rep > 0).then_some(&mut rep_levels),
+                &mut values,
+            )
+            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+        if records == 0 && levels == 0 && values.is_empty() {
+            break;
+        }
+        if max_def == 0 {
+            for value in &values {
+                acc.push_value(format(value));
+            }
+        } else {
+            let mut at = 0;
+            for &def in &def_levels[..levels] {
+                if def == max_def {
+                    acc.push_value(format(&values[at]));
+                    at += 1;
+                } else {
+                    acc.push_null();
+                }
+            }
+        }
+        remaining = remaining.saturating_sub(records.max(1));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

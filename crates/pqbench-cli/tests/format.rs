@@ -143,3 +143,24 @@ fn mass_rows_render_as_a_column_mass_table() {
         "a nameless delta is not table data: {stdout}"
     );
 }
+
+#[test]
+fn diff_deltas_render_as_a_table() {
+    let diff = pqbench()
+        .args(["diff", parquet_fixture(), parquet_fixture()])
+        .output()
+        .unwrap();
+    assert!(
+        diff.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let stdout = format_stream(&diff.stdout);
+    assert!(stdout.contains("column"), "{stdout}");
+    assert!(stdout.contains("delta"), "{stdout}");
+    assert!(stdout.contains("text"), "{stdout}");
+    assert!(
+        !stdout.contains("\"delta_bytes\""),
+        "table must not carry NDJSON: {stdout}"
+    );
+}

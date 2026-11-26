@@ -44,18 +44,6 @@ pub struct Sample {
     pub rows: Vec<Vec<Option<String>>>,
 }
 
-/// A whole-row-group sample of named leaf columns.
-#[derive(Debug, Clone, Default)]
-pub struct LeafSample {
-    /// One row of cells per requested leaf column, in request order.
-    pub columns: Vec<Vec<Option<Vec<u8>>>>,
-    /// Rows decoded from the sampled row groups.
-    pub row_count: u64,
-    /// Leading row groups decoded; a sample is whole row groups, never part
-    /// of one.
-    pub row_group_count: u64,
-}
-
 /// The physical kind of a typed column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -298,28 +286,6 @@ pub fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error
 /// value fails.
 pub fn read_typed_sample(path: &Path, max_rows: Option<usize>) -> Result<TypedSample, Error> {
     super::r#impl::read_typed_sample(path, max_rows)
-}
-
-/// Read whole leading row groups of the named leaf columns as raw bytes.
-///
-/// `columns` are dotted leaf paths (`a.b`, `list.element`). The paths must not
-/// sit under a repeated group; a caller that wants a row-per-row sample reads
-/// scalar leaves only. The result carries one row of cells per requested
-/// column, in request order; a missing or null leaf is `None`. `row_groups`
-/// names how many leading groups to decode; `None` decodes whole groups up to
-/// a byte budget, and a file always contributes at least one. The result's
-/// [`LeafSample::row_count`] is the rows actually decoded, so a consumer never
-/// reports a request as evidence.
-///
-/// # Errors
-/// Returns [`Error`] if `path` is not a readable Parquet file or decoding a
-/// value fails.
-pub fn read_leaf_sample(
-    path: &Path,
-    columns: &[String],
-    row_groups: Option<usize>,
-) -> Result<LeafSample, Error> {
-    super::r#impl::read_leaf_sample(path, columns, row_groups)
 }
 
 /// Write typed columns and rows to an in-memory Parquet file.

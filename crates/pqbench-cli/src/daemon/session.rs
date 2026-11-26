@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use futures_util::stream::Stream;
+use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use futures_util::TryStreamExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -150,17 +150,52 @@ impl Daemon {
         }
     }
 
+    /// Stream the records a `list` request names directly from the catalog
+    /// without buffering the whole collection.
+    pub(crate) async fn stream_list<'a>(
+        &'a self,
+        collection: Collection,
+        parent: Option<&Value>,
+    ) -> Result<BoxStream<'a, Result<Value, CliError>>, CliError> {
+        self.pace().await;
+        match collection {
+            Collection::Catalogs => Ok(json_stream(pqbench::catalog::list::list(self.workspace()))),
+            Collection::Schemas => {
+                let catalog: v1::Catalog = record_value(parent, "list schemas")?;
+                let workspace = self.workspace();
+                Ok(stream::once(async move {
+                    Ok::<_, CliError>(json_stream(pqbench::schema::list::list(
+                        workspace, &catalog,
+                    )))
+                })
+                .try_flatten()
+                .boxed())
+            }
+            Collection::Tables => {
+                let schema: v1::Schema = record_value(parent, "list tables")?;
+                let workspace = self.workspace();
+                Ok(stream::once(async move {
+                    Ok::<_, CliError>(json_stream(pqbench::table::list::list(workspace, &schema)))
+                })
+                .try_flatten()
+                .boxed())
+            }
+        }
+    }
+
     /// The catalogs at the endpoint.
-    pub(crate) async fn list_catalogs(&self) -> Result<Vec<v1::Catalog>, CliError> {
-        self.fetch(&Request::catalogs()).await
+    pub(crate) async fn list_catalogs(
+        &self,
+    ) -> Result<BoxStream<'static, Result<v1::Catalog, CliError>>, CliError> {
+        self.stream_records(&Request::catalogs()).await
     }
 
     /// The schemas in `catalog`.
     pub(crate) async fn list_schemas(
         &self,
         catalog: &v1::Catalog,
-    ) -> Result<Vec<v1::Schema>, CliError> {
-        self.fetch(&Request::schemas(serde_json::to_value(catalog)?))
+    ) -> Result<BoxStream<'static, Result<v1::Schema, CliError>>, CliError> {
+        self.stream_records(&Request::schemas(serde_json::to_value(catalog)?))
             .await
     }
 
@@ -168,8 +203,8 @@ impl Daemon {
     pub(crate) async fn list_tables(
         &self,
         schema: &v1::Schema,
-    ) -> Result<Vec<v1::Table>, CliError> {
-        self.fetch(&Request::tables(serde_json::to_value(schema)?))
+    ) -> Result<BoxStream<'static, Result<v1::Table, CliError>>, CliError> {
+        self.stream_records(&Request::tables(serde_json::to_value(schema)?))
             .await
     }
 
@@ -196,7 +231,68 @@ impl Daemon {
             .await
     }
 
-    /// Decode the records a request answers with.
+    /// Stream decoded records for a `list` request.
+    async fn stream_records<T: DeserializeOwned + Send + 'static>(
+        &self,
+        request: &Request,
+    ) -> Result<BoxStream<'static, Result<T, CliError>>, CliError> {
+        match &self.vendor {
+            Vendor::Daemon { path, .. } => {
+                let lines = client::stream(path, request)
+                    .await
+                    .map_err(|error| connect_error(path, error))?;
+                let path = path.clone();
+                Ok(stream::try_unfold(lines, move |mut lines| {
+                    let path = path.clone();
+                    async move {
+                        let Some(line) = lines
+                            .next_line()
+                            .await
+                            .map_err(|error| connect_error(&path, client::Error::Connect(error)))?
+                        else {
+                            return Ok(None);
+                        };
+                        let frame: Response = serde_json::from_str(&line).map_err(|error| {
+                            CliError::from(format!("the daemon answered badly: {error}"))
+                        })?;
+                        if let Some(error) = frame.error {
+                            return Err(error.into());
+                        }
+                        if frame.ok {
+                            return Ok(None);
+                        }
+                        let Some(record) = frame.record else {
+                            return Err("the daemon answered an empty frame".into());
+                        };
+                        let value: T = serde_json::from_value(record).map_err(|error| {
+                            format!("the daemon answered a bad record: {error}")
+                        })?;
+                        Ok(Some((value, lines)))
+                    }
+                })
+                .boxed())
+            }
+            Vendor::Direct(_) => {
+                let Request::List { collection, parent } = request else {
+                    return Err("not a list request".into());
+                };
+                let rows: Vec<T> = self
+                    .stream_list(*collection, parent.as_ref())
+                    .await?
+                    .map(|item| {
+                        let value = item?;
+                        serde_json::from_value(value).map_err(|error| {
+                            CliError::from(format!("the daemon answered a bad record: {error}"))
+                        })
+                    })
+                    .try_collect()
+                    .await?;
+                Ok(stream::iter(rows.into_iter().map(Ok)).boxed())
+            }
+        }
+    }
+
+    /// Decode the records a `get` request answers with.
     async fn fetch<T: DeserializeOwned>(&self, request: &Request) -> Result<Vec<T>, CliError> {
         self.records(request)
             .await?
@@ -215,31 +311,11 @@ impl Daemon {
             .ok_or_else(|| "the daemon answered no record".into())
     }
 
-    /// Run a catalog request in this process.
+    /// Run a catalog `get` request in this process.
     async fn execute(&self, request: &Request) -> Result<Vec<Value>, CliError> {
         match request {
-            Request::List { collection, parent } => self.list(*collection, parent.as_ref()).await,
             Request::Get { resource, record } => self.get(*resource, record.as_ref()).await,
             _ => Err("not a catalog request".into()),
-        }
-    }
-
-    async fn list(
-        &self,
-        collection: Collection,
-        parent: Option<&Value>,
-    ) -> Result<Vec<Value>, CliError> {
-        self.pace().await;
-        match collection {
-            Collection::Catalogs => values(pqbench::catalog::list::list(self.workspace())).await,
-            Collection::Schemas => {
-                let catalog: v1::Catalog = record_value(parent, "list schemas")?;
-                values(pqbench::schema::list::list(self.workspace(), &catalog)).await
-            }
-            Collection::Tables => {
-                let schema: v1::Schema = record_value(parent, "list tables")?;
-                values(pqbench::table::list::list(self.workspace(), &schema)).await
-            }
         }
     }
 
@@ -568,16 +644,19 @@ fn record_value<T: DeserializeOwned>(record: Option<&Value>, request: &str) -> R
         .map_err(|error| format!("a {request} request carries a bad record: {error}").into())
 }
 
-/// Collect a library stream into the wire records the daemon answers with.
-async fn values<T, E>(rows: impl Stream<Item = Result<T, E>>) -> Result<Vec<Value>, CliError>
+/// Encode a library stream into JSON values without collecting it.
+fn json_stream<'a, T, E>(
+    rows: impl Stream<Item = Result<T, E>> + Send + 'a,
+) -> BoxStream<'a, Result<Value, CliError>>
 where
     T: Serialize,
     E: Into<CliError>,
 {
-    let rows = rows.try_collect::<Vec<_>>().await.map_err(Into::into)?;
-    rows.into_iter()
-        .map(|row| serde_json::to_value(row).map_err(Into::into))
-        .collect()
+    rows.map(|item| {
+        let row = item.map_err(Into::into)?;
+        serde_json::to_value(row).map_err(Into::into)
+    })
+    .boxed()
 }
 
 fn one_value<T: Serialize>(value: T) -> Result<Vec<Value>, CliError> {

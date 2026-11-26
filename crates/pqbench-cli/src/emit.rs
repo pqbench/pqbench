@@ -10,14 +10,16 @@
 //! Writes complete before the exit status is decided, so a partial run's output
 //! is never truncated by its own error.
 
+use std::ops::ControlFlow;
+
 use serde::Serialize;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::AsyncWriteExt;
 
 use crate::CliError;
 
 /// One command's NDJSON stream.
 pub(crate) struct Emitter {
-    pipe: BufWriter<tokio::io::Stdout>,
+    pipe: tokio::io::Stdout,
     closed: bool,
 }
 
@@ -25,22 +27,26 @@ impl Emitter {
     /// Open standard output.
     pub(crate) fn open() -> Self {
         Self {
-            pipe: BufWriter::new(tokio::io::stdout()),
+            pipe: tokio::io::stdout(),
             closed: false,
         }
     }
 
-    /// Write one record. A closed reader ends the stream, not the command.
-    pub(crate) async fn write(&mut self, value: &impl Serialize) -> Result<(), CliError> {
+    /// Write one record. Returns `Break(())` when the reader has closed
+    /// stdout so the caller can stop upstream work.
+    pub(crate) async fn write(
+        &mut self,
+        value: &impl Serialize,
+    ) -> Result<ControlFlow<()>, CliError> {
         if self.closed {
-            return Ok(());
+            return Ok(ControlFlow::Break(()));
         }
         match self.write_line(value).await {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(ControlFlow::Continue(())),
             Err(error) => {
                 if closed_pipe(&error) {
                     self.closed = true;
-                    Ok(())
+                    Ok(ControlFlow::Break(()))
                 } else {
                     Err(error)
                 }

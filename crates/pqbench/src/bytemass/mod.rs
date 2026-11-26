@@ -16,6 +16,7 @@ mod collection;
 mod remote;
 
 pub use api::{list_columns, measure_file, measure_local, MeasuredFile};
+pub(crate) use collection::measure_footer;
 
 use std::fmt;
 

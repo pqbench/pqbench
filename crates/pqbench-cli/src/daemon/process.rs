@@ -25,12 +25,16 @@ fn command(arguments: &[String], socket: &Path) -> Command {
         .args(arguments)
         .env("PQB_DAEMON_SOCK", socket)
         .kill_on_drop(true);
-    // SAFETY: `prctl` is async-signal-safe, so it may run between fork and
-    // exec.
+    let parent = unsafe { libc::getpid() };
+    // SAFETY: `prctl`, `getppid`, and `_exit` are async-signal-safe, so they
+    // may run between fork and exec.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
                 return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                libc::_exit(1);
             }
             Ok(())
         });

@@ -48,7 +48,7 @@ pub(crate) async fn run(
             crate::partition::version::run(daemon, args).await
         }
         ListCollection::Columns(args) => crate::bytemass::run(lake, daemon, args).await,
-        ListCollection::Suggestions(args) => crate::lint::run(lake, daemon, args).await,
+        ListCollection::Suggestions(args) => crate::lint::run(args).await,
     }
 }
 

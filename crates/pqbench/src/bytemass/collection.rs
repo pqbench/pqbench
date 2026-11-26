@@ -51,6 +51,19 @@ pub(super) async fn measure_local(
     measured(name, stat, mass)
 }
 
+/// Measure the blob from a local file without touching remote storage.
+pub(crate) fn measure_footer(name: &str, path: &Path) -> Result<MeasuredFile, Error> {
+    let _ = v1::name::blob_uri(name)
+        .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
+    let mass = read_file_masses(path)?;
+    let stat = ObjectStat {
+        size_bytes: mass.size_bytes,
+        identity: None,
+        storage_class: None,
+    };
+    measured(name, stat, mass)
+}
+
 /// A measured file from its storage facts and footer masses.
 fn measured(name: &str, stat: ObjectStat, mass: FileMass) -> Result<MeasuredFile, Error> {
     let row_group_count = mass.row_group_count as u64;

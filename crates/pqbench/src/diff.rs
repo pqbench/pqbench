@@ -1,7 +1,7 @@
 //! Compare compressed column bytes from two bytemass measurements.
 
 use crate::v1;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -31,7 +31,7 @@ impl std::error::Error for Error {}
 type Totals = BTreeMap<String, u64>;
 
 /// Byte totals and change for a physical column path or prefix.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDelta {
     pub column: String,
     pub left_bytes: Option<u64>,

@@ -1,7 +1,9 @@
 //! `control`: a rewrite measured against a control written by the same writer
-//! at the same codec and level.
+//! at the same codec and level, preserving sampled row-group boundaries.
 
-use crate::third_party::parquet::api::{Value, WriteOptions};
+use parquet::basic::{Compression, Encoding, GzipLevel, ZstdLevel};
+use parquet::data_type::ByteArray;
+
 use crate::v1;
 
 use super::price::price_bytes;
@@ -29,77 +31,72 @@ fn family(codec: Option<&str>) -> Option<&'static str> {
     })
 }
 
-/// The levels both arms run at. The footer's zstd level is a writer
-/// placeholder, not the level the file used, so test both ends; gzip records
-/// its level.
-fn levels(codec: Option<&str>) -> Vec<Option<i32>> {
-    match family(codec) {
-        Some("zstd") => vec![Some(1), Some(3)],
-        Some("gzip") => vec![Some(recorded_level(codec).unwrap_or(6))],
-        _ => vec![None],
-    }
-}
-
-fn recorded_level(codec: Option<&str>) -> Option<i32> {
-    let digits: String = codec?.chars().filter(char::is_ascii_digit).collect();
-    digits.parse().ok()
-}
-
-fn label(codec: Option<&str>, levels: &[Option<i32>]) -> String {
-    match family(codec) {
-        Some("zstd") => "zstd levels 1-3".to_string(),
-        Some("gzip") => format!(
-            "gzip level {}",
-            levels.first().copied().flatten().unwrap_or(6)
+/// The compressions both arms test. Parquet footers do not record compression
+/// levels, so zstd and gzip test a low-to-default bracket rather than trusting
+/// a placeholder level.
+fn compressions(codec: Option<&str>) -> Option<(Vec<Compression>, &'static str)> {
+    Some(match family(codec)? {
+        "uncompressed" => (vec![Compression::UNCOMPRESSED], "uncompressed"),
+        "snappy" => (vec![Compression::SNAPPY], "snappy"),
+        "lz4" => (vec![Compression::LZ4_RAW], "lz4"),
+        "zstd" => (
+            vec![
+                Compression::ZSTD(ZstdLevel::try_new(1).ok()?),
+                Compression::ZSTD(ZstdLevel::try_new(3).ok()?),
+            ],
+            "zstd levels 1-3",
         ),
-        Some(other) => other.to_string(),
-        None => "an unsupported codec".to_string(),
-    }
+        "gzip" => (
+            vec![
+                Compression::GZIP(GzipLevel::try_new(1).ok()?),
+                Compression::GZIP(GzipLevel::try_new(6).ok()?),
+            ],
+            "gzip levels 1-6",
+        ),
+        _ => return None,
+    })
 }
 
-/// The source column's own encoding, when the footer records one.
-pub(super) fn source_encoding(mass: &v1::Bytemass) -> Option<&'static str> {
+/// The source byte-array column's own encoding, when the footer records one.
+pub(super) fn source_encoding(mass: &v1::Bytemass) -> Option<Encoding> {
     let has = |name: &str| mass.encodings.iter().any(|encoding| encoding == name);
     if has("DELTA_LENGTH_BYTE_ARRAY") {
-        Some("delta_length")
+        Some(Encoding::DELTA_LENGTH_BYTE_ARRAY)
     } else if has("DELTA_BYTE_ARRAY") {
-        Some("delta_byte_array")
-    } else if has("DELTA_BINARY_PACKED") {
-        Some("delta")
-    } else if has("BYTE_STREAM_SPLIT") {
-        Some("byte_stream_split")
+        Some(Encoding::DELTA_BYTE_ARRAY)
     } else {
         None
     }
 }
 
-/// Encode `baseline_rows` with the source's own settings and `candidate_rows`
-/// with the proposed change, at the same codec and levels, and return the
-/// fraction saved. `None` when the writer cannot reproduce the source codec or
-/// the control encodes to nothing.
+/// Encode `baseline` with the source's own settings and `candidate` with the
+/// proposed change, at the same codec and levels, and return the fraction
+/// saved. `None` when the writer cannot reproduce the source codec or the
+/// control encodes to nothing.
 pub(super) fn compare(
     sample: &ColumnSample<'_>,
-    baseline_rows: &[Vec<Value>],
-    candidate_rows: &[Vec<Value>],
+    baseline: &[Vec<Option<ByteArray>>],
+    candidate: &[Vec<Option<ByteArray>>],
     dictionary: bool,
-    encoding: Option<&'static str>,
+    encoding: Option<Encoding>,
 ) -> Result<Option<Measurement>, Error> {
-    let codec = sample.mass.codec.as_deref();
-    let Some(family) = family(codec) else {
+    let Some((compressions, levels)) = compressions(sample.mass.codec.as_deref()) else {
         return Ok(None);
     };
-    let levels = levels(codec);
     let source_encoding = source_encoding(sample.mass);
     let mut ratio_low = f64::INFINITY;
     let mut ratio_high = f64::NEG_INFINITY;
-    for level in &levels {
-        let baseline = options(family, *level, sample.mass.dictionary, source_encoding);
-        let candidate = options(family, *level, dictionary, encoding);
-        let baseline_bytes = price_bytes(baseline_rows, &baseline)?;
+    for compression in compressions {
+        let baseline_bytes = price_bytes(
+            baseline,
+            compression,
+            sample.mass.dictionary,
+            source_encoding,
+        )?;
         if baseline_bytes == 0 {
             return Ok(None);
         }
-        let candidate_bytes = price_bytes(candidate_rows, &candidate)?;
+        let candidate_bytes = price_bytes(candidate, compression, dictionary, encoding)?;
         let ratio = (baseline_bytes as f64 - candidate_bytes as f64) / baseline_bytes as f64;
         ratio_low = ratio_low.min(ratio);
         ratio_high = ratio_high.max(ratio);
@@ -110,42 +107,27 @@ pub(super) fn compare(
     Ok(Some(Measurement {
         ratio_low,
         ratio_high,
-        levels: label(codec, &levels),
+        levels: levels.to_string(),
     }))
-}
-
-fn options(
-    family: &str,
-    level: Option<i32>,
-    dictionary: bool,
-    encoding: Option<&str>,
-) -> WriteOptions {
-    WriteOptions {
-        compression: family.to_string(),
-        level,
-        dictionary,
-        dictionary_bytes: None,
-        encoding: encoding.map(ToString::to_string),
-        page_size: None,
-        sorting_columns: Vec::new(),
-        row_group_size: 0,
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{family, levels, source_encoding};
+    use parquet::basic::Encoding;
+
+    use super::{compressions, family, source_encoding};
     use crate::v1::Bytemass;
 
     #[test]
-    fn codecs_and_levels_follow_the_footer() {
+    fn codecs_and_levels_bracket_unknown_footer_levels() {
+        assert_eq!(family(Some("ZSTD")), Some("zstd"));
         assert_eq!(family(Some("ZSTD(ZstdLevel(1))")), Some("zstd"));
-        assert_eq!(levels(Some("ZSTD(ZstdLevel(1))")), vec![Some(1), Some(3)]);
-        assert_eq!(family(Some("SNAPPY")), Some("snappy"));
-        assert_eq!(levels(Some("SNAPPY")), vec![None]);
-        assert_eq!(levels(Some("GZIP(GzipLevel(9))")), vec![Some(9)]);
-        assert_eq!(family(Some("BROTLI(BrotliLevel(1))")), None);
-        assert_eq!(family(None), None);
+        assert_eq!(compressions(Some("ZSTD")).unwrap().0.len(), 2);
+        assert_eq!(compressions(Some("GZIP")).unwrap().0.len(), 2);
+        assert_eq!(compressions(Some("GZIP(GzipLevel(9))")).unwrap().0.len(), 2);
+        assert_eq!(compressions(Some("SNAPPY")).unwrap().0.len(), 1);
+        assert!(compressions(Some("BROTLI")).is_none());
+        assert!(compressions(None).is_none());
     }
 
     #[test]
@@ -153,8 +135,11 @@ mod tests {
         let mut mass = Bytemass::default();
         assert_eq!(source_encoding(&mass), None);
         mass.encodings = vec!["PLAIN".into(), "DELTA_LENGTH_BYTE_ARRAY".into()];
-        assert_eq!(source_encoding(&mass), Some("delta_length"));
-        mass.encodings = vec!["DELTA_BINARY_PACKED".into()];
-        assert_eq!(source_encoding(&mass), Some("delta"));
+        assert_eq!(
+            source_encoding(&mass),
+            Some(Encoding::DELTA_LENGTH_BYTE_ARRAY)
+        );
+        mass.encodings = vec!["DELTA_BYTE_ARRAY".into()];
+        assert_eq!(source_encoding(&mass), Some(Encoding::DELTA_BYTE_ARRAY));
     }
 }

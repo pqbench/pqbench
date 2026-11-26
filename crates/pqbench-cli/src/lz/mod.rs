@@ -18,11 +18,16 @@ pub(crate) async fn run(args: &BenchArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open();
     let blob = pqbench::v1::name::blob_name(&args.file.display().to_string());
     for row in &report.rows {
-        emit.write(&crate::render::SweepRow {
-            name: format!("{blob}/codecs/{}-{}", row.codec, row.level),
-            row: row.clone(),
-        })
-        .await?;
+        if emit
+            .write(&crate::render::SweepRow {
+                name: format!("{blob}/codecs/{}-{}", row.codec, row.level),
+                row: row.clone(),
+            })
+            .await?
+            .is_break()
+        {
+            break;
+        }
     }
     emit.finish().await
 }

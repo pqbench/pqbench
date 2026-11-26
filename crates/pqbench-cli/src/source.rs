@@ -95,11 +95,6 @@ pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError>
 /// A command's records: each record, or the failure that replaced it.
 pub(crate) type Records<'a, B> = LocalBoxStream<'a, Result<B, CliError>>;
 
-/// A whole answer as a record stream: what a daemon request returned.
-pub(crate) fn rows<B: 'static>(rows: Vec<B>) -> Records<'static, B> {
-    stream::iter(rows.into_iter().map(Ok)).boxed_local()
-}
-
 /// `map` over batches of parents: one record per parent.
 pub(crate) fn map<'a, A, B, E, F, Fut>(
     parents: impl Stream<Item = Result<A, CliError>> + 'a,
@@ -237,7 +232,10 @@ where
                                     };
                                     futures_util::pin_mut!(stream);
                                     while let Some(row) = stream.next().await {
-                                        if sender.send(row.map_err(Into::into)).await.is_err() {
+                                        let row = row.map_err(|error| {
+                                            crate::error::context(&reference, error.into())
+                                        });
+                                        if sender.send(row).await.is_err() {
                                             return;
                                         }
                                     }
@@ -279,7 +277,11 @@ pub(crate) async fn drive<B: serde::Serialize>(rows: Records<'_, B>) -> Result<(
     let mut dropped = 0;
     while let Some(row) = rows.next().await {
         match row {
-            Ok(row) => emit.write(&row).await?,
+            Ok(row) => {
+                if emit.write(&row).await?.is_break() {
+                    break;
+                }
+            }
             Err(error) => {
                 crate::error::report(&error);
                 dropped += 1;

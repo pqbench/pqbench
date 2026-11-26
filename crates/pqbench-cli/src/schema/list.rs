@@ -1,7 +1,6 @@
 //! `list schemas`: the schemas in a catalog, one `Schema` line each.
 
 use clap::Args;
-use futures_util::stream;
 use pqbench::v1;
 
 use crate::parse;
@@ -24,12 +23,7 @@ pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &ListArgs) -> Resu
         args.fan_out,
         move |catalog: v1::Catalog| {
             let daemon = daemon.clone();
-            async move {
-                let rows = daemon.list_schemas(&catalog).await?;
-                Ok(stream::iter(
-                    rows.into_iter().map(Ok::<_, std::convert::Infallible>),
-                ))
-            }
+            async move { daemon.list_schemas(&catalog).await }
         },
     ))
     .await

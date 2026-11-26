@@ -139,9 +139,12 @@ pub(crate) struct Response {
     /// The catalog vended nothing; the reader keeps its ambient `AWS_*`.
     #[serde(skip_serializing_if = "is_false")]
     pub none: bool,
-    /// The records a `list` or `get` request read.
+    /// The records a `get` or `partition_results` request read.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub records: Vec<Value>,
+    /// One streamed record from a `list` request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<Value>,
     /// The call failed; the reader drops the ref with this cause.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

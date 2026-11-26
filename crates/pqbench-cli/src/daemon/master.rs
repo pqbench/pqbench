@@ -16,8 +16,12 @@ pub(crate) use pqbench::v1::partition_version::State;
 use pqbench::v1::{PartitionPrice, PartitionVersion};
 use serde_json::Value;
 
-/// A version that failed this many times in one transition is left where it is.
+/// Immediate retries before a version backs off.
 const MAX_FAILURES: u64 = 2;
+
+/// Initial backoff after [`MAX_FAILURES`] failures, doubling up to [`RETRY_MAX_MS`].
+const RETRY_BASE_MS: u64 = 60_000;
+const RETRY_MAX_MS: u64 = 60 * 60_000;
 
 /// Classes whose objects cannot be read without a restore, and the
 /// Intelligent-Tiering access tiers that cannot.
@@ -320,9 +324,13 @@ impl Master {
     /// Hand out up to `limit` runs, each version now in its transition's
     /// running state: the later transitions first, so a version in progress
     /// finishes before a new one starts, and within a transition the newest
-    /// data first, then the biggest partition. A version that failed its
-    /// transition twice waits.
+    /// data first, then the biggest partition. A version in backoff waits
+    /// until `retry_time`.
     pub(crate) fn start(&mut self, limit: usize) -> Vec<Run> {
+        self.start_timed(limit, now_ms())
+    }
+
+    pub(crate) fn start_timed(&mut self, limit: usize, now: u64) -> Vec<Run> {
         let mut runs = Vec::new();
         let transitions = self.transitions;
         for transition in transitions.iter().rev() {
@@ -334,7 +342,8 @@ impl Master {
                 .rows
                 .iter()
                 .filter(|(_, row)| {
-                    row.state == transition.source && row.failure_count < MAX_FAILURES
+                    row.state == transition.source
+                        && row.retry_time.is_none_or(|until| now >= until)
                 })
                 .map(|(key, _)| key)
                 .collect();
@@ -382,6 +391,15 @@ impl Master {
         key: &Key,
         outcome: Result<Option<PartitionPrice>, String>,
     ) -> Option<Conclusion> {
+        self.finish_timed(key, outcome, now_ms())
+    }
+
+    pub(crate) fn finish_timed(
+        &mut self,
+        key: &Key,
+        outcome: Result<Option<PartitionPrice>, String>,
+        now: u64,
+    ) -> Option<Conclusion> {
         let row = self.rows.get_mut(key)?;
         let transition = running_transition(self.transitions, row.state)?;
         self.changed = true;
@@ -390,6 +408,7 @@ impl Master {
                 row.state = transition.done;
                 row.failure_count = 0;
                 row.error = None;
+                row.retry_time = None;
                 if let Some(price) = price {
                     let costs = price.storage_costs.iter().map(|cost| cost.cost_per_month);
                     row.lowest_cost_per_month = costs.clone().reduce(f64::min);
@@ -403,6 +422,16 @@ impl Master {
                 row.state = transition.source;
                 row.failure_count += 1;
                 row.error = Some(error);
+                if row.failure_count >= MAX_FAILURES {
+                    let shift = (row.failure_count - MAX_FAILURES).min(6) as u32;
+                    let delay = RETRY_BASE_MS
+                        .saturating_mul(1_u64 << shift)
+                        .min(RETRY_MAX_MS);
+                    row.retry_time = Some(now.saturating_add(delay));
+                    if needs_sample(row.state) {
+                        row.state = State::Priced;
+                    }
+                }
             }
         }
         Some(Conclusion {
@@ -440,7 +469,7 @@ pub(crate) struct Conclusion {
 }
 
 fn master_needs_sample(row: &PartitionVersion) -> bool {
-    row.failure_count < MAX_FAILURES && needs_sample(row.state)
+    row.retry_time.is_none() && needs_sample(row.state)
 }
 
 /// Whether a version in `state` reads its copy of the sample file: from the
@@ -595,18 +624,20 @@ mod tests {
     }
 
     /// A failed run puts the version back with its error, and after two it
-    /// is not handed out again.
+    /// waits for its backoff window before retrying.
     #[test]
     fn a_version_that_failed_twice_waits() {
         let (mut master, key) = found(1);
+        let t0 = 1_000_000;
         for attempt in 0..2 {
-            assert_eq!(master.start(1).len(), 1);
-            let conclusion = master.finish(&key, Err(format!("boom {attempt}")));
+            assert_eq!(master.start_timed(1, t0).len(), 1);
+            let conclusion = master.finish_timed(&key, Err(format!("boom {attempt}")), t0);
             assert_eq!(conclusion.map(|c| c.state), Some(State::Pending));
         }
         assert_eq!(master.rows[&key].failure_count, 2);
         assert_eq!(master.rows[&key].error.as_deref(), Some("boom 1"));
-        assert!(master.start(1).is_empty());
+        assert!(master.start_timed(1, t0 + RETRY_BASE_MS - 1).is_empty());
+        assert_eq!(master.start_timed(1, t0 + RETRY_BASE_MS).len(), 1);
     }
 
     /// A restart puts a running version back to the state before its

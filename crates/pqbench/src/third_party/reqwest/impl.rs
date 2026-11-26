@@ -20,7 +20,7 @@ impl Http {
     pub(crate) fn new(request_timeout: Option<Duration>) -> Result<Self, Error> {
         let mut builder = Client::builder();
         if let Some(timeout) = request_timeout {
-            builder = builder.timeout(timeout);
+            builder = builder.connect_timeout(timeout).read_timeout(timeout);
         }
         let client = builder
             .build()

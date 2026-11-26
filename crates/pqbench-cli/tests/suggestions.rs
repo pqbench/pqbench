@@ -216,18 +216,17 @@ fn dictionary_on_unique_strings_is_verified() {
 
     let measured = verified(&records);
     assert_eq!(measured[0]["verified"], true, "{measured:?}");
-    // The whole file is the sample now, and at this size the dictionary's
-    // saving is real but below the noise floor: a leading-rows sample used to
-    // overstate it.
+    // Preserving the 10 row groups of 20,000 rows keeps each group's dictionary
+    // active in the control, showing the real >64 KiB saving from disabling it.
     assert!(
-        measured[0]["savings_bytes"].as_u64().unwrap() > 0,
+        measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024,
         "{measured:?}"
     );
     assert!(
         measured[0]["message"]
             .as_str()
             .unwrap()
-            .contains("below the 64 KiB noise floor"),
+            .contains("smaller at zstd"),
         "{measured:?}"
     );
 
@@ -341,6 +340,35 @@ fn a_downloaded_copy_is_read_under_the_original_name() {
     assert!(blob.ends_with("data.parquet"), "{blob}");
     let input: Vec<String> = records.iter().map(ToString::to_string).collect();
     let measured = run(&["get", "suggestion", "--local", local], &input.join("\n"));
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn a_remote_blob_with_a_local_copy_verifies_without_network() {
+    let directory = temporary("remote-local");
+    let copy = directory.join("copy.parquet");
+    let values: Vec<String> = (0..100_000).map(uuid).collect();
+    write_values(&copy, &values, false, 0);
+
+    let blob = pqbench::v1::name::blob("s3", "example-bucket/prefix/data.parquet");
+    let remote_record = serde_json::json!({
+        "name": "catalogs/demo/schemas/s/tables/t/files/f1",
+        "blob": blob,
+    })
+    .to_string();
+    let local = copy.to_str().expect("utf-8 path");
+    let records = run(&["list", "suggestions", "--local", local], &remote_record);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(
+        records[0]["name"].as_str().unwrap().starts_with(&blob),
+        "{records:?}"
+    );
+    let measured = run(
+        &["get", "suggestion", "--local", local],
+        &records[0].to_string(),
+    );
     assert_eq!(measured[0]["verified"], true, "{measured:?}");
 
     let _ = std::fs::remove_dir_all(directory);

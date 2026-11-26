@@ -89,3 +89,74 @@ fn profile_rejects_a_bad_rows_method() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--rows"), "{stderr}");
 }
+
+#[test]
+fn profile_preserves_physical_types_exact_i64_order_and_v1_round_trip() {
+    use pqbench::third_party::parquet::api::{
+        write_parquet, Kind, TypedColumn, Value, WriteOptions,
+    };
+
+    let dir = std::env::temp_dir().join(format!("pqbench-profile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("types.parquet");
+
+    let columns = [
+        TypedColumn {
+            name: "zip".into(),
+            kind: Kind::Bytes,
+        },
+        TypedColumn {
+            name: "big_id".into(),
+            kind: Kind::Integer,
+        },
+    ];
+    let rows = vec![
+        vec![
+            Value::Bytes(b"00123".to_vec()),
+            Value::Integer(9_007_199_254_740_993),
+        ],
+        vec![
+            Value::Bytes(b"00042".to_vec()),
+            Value::Integer(9_007_199_254_740_992),
+        ],
+    ];
+    let options = WriteOptions {
+        compression: "uncompressed".into(),
+        level: None,
+        dictionary: false,
+        dictionary_bytes: None,
+        encoding: None,
+        page_size: None,
+        sorting_columns: Vec::new(),
+        row_group_size: 0,
+    };
+    let bytes = write_parquet(&columns, &rows, &options).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+
+    let output = pqbench()
+        .args(["profile", path.to_str().unwrap(), "--top", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records = ndjson(&output.stdout);
+    assert_eq!(records.len(), 2, "{records:?}");
+    let profiles: Vec<pqbench::v1::ColumnProfile> = records
+        .iter()
+        .map(|record| serde_json::from_value(record.clone()).expect("v1::ColumnProfile round-trip"))
+        .collect();
+    assert_eq!(profiles[0].column, "zip");
+    assert_eq!(profiles[0].physical_kind, "string");
+    assert!(profiles[0].top_values.is_empty());
+    assert_eq!(profiles[1].column, "big_id");
+    assert_eq!(profiles[1].physical_kind, "integer");
+    assert_eq!(profiles[1].min_value.as_deref(), Some("9007199254740992"));
+    assert_eq!(profiles[1].max_value.as_deref(), Some("9007199254740993"));
+    assert_eq!(profiles[1].monotonic, "DECREASING");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

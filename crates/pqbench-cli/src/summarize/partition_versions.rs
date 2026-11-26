@@ -22,7 +22,9 @@ pub(crate) async fn run() -> Result<(), CliError> {
     }
     let mut out = Emitter::open();
     for stats in summary.into_stats() {
-        out.write(&stats).await?;
+        if out.write(&stats).await?.is_break() {
+            break;
+        }
     }
     out.finish().await
 }

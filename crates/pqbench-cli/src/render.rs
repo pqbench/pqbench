@@ -578,3 +578,41 @@ impl Row for ProfileRow {
         ]
     }
 }
+
+impl Row for pqbench::diff::ColumnDelta {
+    const HEADER: &'static [&'static str] = &[
+        "column",
+        "left",
+        "right",
+        "delta",
+        "change %",
+        "left/val",
+        "right/val",
+    ];
+    const ALIGN: &[Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        vec![
+            self.column.clone(),
+            self.left_bytes
+                .map_or_else(String::new, |bytes| bytes.to_string()),
+            self.right_bytes
+                .map_or_else(String::new, |bytes| bytes.to_string()),
+            format!("{:+}", self.delta_bytes),
+            self.change_percent
+                .map_or_else(String::new, |percent| format!("{percent:+.1}%")),
+            self.left_bytes_per_value
+                .map_or_else(String::new, |bpv| format!("{bpv:.2}")),
+            self.right_bytes_per_value
+                .map_or_else(String::new, |bpv| format!("{bpv:.2}")),
+        ]
+    }
+}

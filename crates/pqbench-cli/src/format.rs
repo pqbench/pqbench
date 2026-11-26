@@ -14,7 +14,7 @@
 
 use clap::Args;
 use futures_util::StreamExt;
-use pqbench::{mass, v1};
+use pqbench::{diff, mass, v1};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -46,6 +46,8 @@ enum Class {
     Profile,
     /// A summarized table column: no name, recognized by its shape.
     Mass,
+    /// A `diff` column delta: no name, recognized by its shape.
+    Delta,
     /// A record with no curated columns, grouped by its key set.
     Other(String),
 }
@@ -136,7 +138,15 @@ fn section(sections: &mut Vec<(Class, Section)>, class: Class) -> &mut Section {
 /// of a summarized column.
 fn classify(record: &Value) -> Option<Class> {
     let Some(name) = record.get("name").and_then(Value::as_str) else {
-        return mass::ColumnMass::from_document(record).map(|_| Class::Mass);
+        if mass::ColumnMass::from_document(record).is_some() {
+            return Some(Class::Mass);
+        }
+        if record.get("delta_bytes").is_some()
+            && serde_json::from_value::<diff::ColumnDelta>(record.clone()).is_ok()
+        {
+            return Some(Class::Delta);
+        }
+        return None;
     };
     Some(if v1::Column::parse_name(name).is_some() {
         Class::Column
@@ -196,6 +206,7 @@ enum Section {
     CompressionColumn(Vec<render::ColumnSweepRow>),
     Profile(Vec<render::ProfileRow>),
     Mass(Vec<mass::ColumnMass>),
+    Delta(Vec<diff::ColumnDelta>),
     Other(Vec<Value>),
 }
 
@@ -214,6 +225,7 @@ impl Section {
             Class::CompressionColumn => Self::CompressionColumn(Vec::new()),
             Class::Profile => Self::Profile(Vec::new()),
             Class::Mass => Self::Mass(Vec::new()),
+            Class::Delta => Self::Delta(Vec::new()),
             Class::Other(_) => Self::Other(Vec::new()),
         }
     }
@@ -236,6 +248,7 @@ impl Section {
                 rows.extend(mass::ColumnMass::from_document(&record));
                 None
             }
+            Self::Delta(rows) => push_typed(rows, record),
             Self::Other(rows) => {
                 rows.push(record);
                 None
@@ -263,6 +276,7 @@ impl Section {
             Self::CompressionColumn(rows) => render::render(rows),
             Self::Profile(rows) => render::render(rows),
             Self::Mass(rows) => render::render(rows),
+            Self::Delta(rows) => render::render(rows),
             Self::Other(rows) => render::render_values(rows),
         }
     }

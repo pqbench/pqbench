@@ -1,7 +1,6 @@
 //! `list tables`: the tables in a schema, one `Table` line each.
 
 use clap::Args;
-use futures_util::stream;
 use pqbench::v1;
 
 use crate::parse;
@@ -24,12 +23,7 @@ pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &ListArgs) -> Resu
         args.fan_out,
         move |schema: v1::Schema| {
             let daemon = daemon.clone();
-            async move {
-                let rows = daemon.list_tables(&schema).await?;
-                Ok(stream::iter(
-                    rows.into_iter().map(Ok::<_, std::convert::Infallible>),
-                ))
-            }
+            async move { daemon.list_tables(&schema).await }
         },
     ))
     .await

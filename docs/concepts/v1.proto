@@ -371,12 +371,15 @@ message PartitionVersion {
   // The partition's versions before this one.
   int64 etag_change_count = 6;
 
-  // Failures of the current transition on this version; a version that
-  // failed twice waits.
+  // Failures of the current transition on this version; after repeated
+  // failures the version backs off until `retry_time`.
   int64 failure_count = 7;
 
   // The last failure's error.
   optional string error = 8;
+
+  // Earliest time (epoch ms) to retry after repeated failures.
+  optional int64 retry_time = 16;
 
   // The version's files and bytes, from its listing.
   int64 file_count = 9;

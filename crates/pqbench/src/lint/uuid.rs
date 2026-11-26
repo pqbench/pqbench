@@ -1,6 +1,6 @@
 //! `uuid-text`: canonical UUID text priced as 16-byte binary.
 
-use crate::third_party::parquet::api::Value;
+use parquet::data_type::ByteArray;
 
 use super::control::{self, Measurement};
 use super::{ColumnSample, Error, Finding};
@@ -11,18 +11,13 @@ pub const UUID_TEXT_RULE: &str = "uuid-text";
 /// The finding this column earns when every sampled non-null value is a
 /// canonical UUID. The control prices the same values as 16-byte binary.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
-    let uuids: Vec<Option<[u8; 16]>> = sample
-        .cells
-        .iter()
-        .map(|cell| match *cell {
-            Some(bytes) => parse_uuid(bytes).map(Some),
-            None => Some(None),
-        })
-        .collect::<Option<_>>()?;
-    let annotated = uuids
-        .iter()
-        .flatten()
-        .all(|bytes| (1..=8).contains(&(bytes[6] >> 4)) && (8..=11).contains(&(bytes[8] >> 4)));
+    let mut annotated = true;
+    for bytes in sample.groups.iter().flatten().flatten() {
+        let uuid = parse_uuid(bytes.data())?;
+        if !((1..=8).contains(&(uuid[6] >> 4)) && (8..=11).contains(&(uuid[8] >> 4))) {
+            annotated = false;
+        }
+    }
     Some(Finding {
         message: format!("UUID text at {:.2} B/value", sample.text_bpv),
         remedy: if annotated {
@@ -37,18 +32,25 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
 /// Price the text arm against the binary arm, both written by the same writer
 /// at the file's codec and level.
 fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
-    let rows: Option<Vec<Vec<Value>>> = sample
-        .cells
+    let binary: Option<Vec<Vec<Option<ByteArray>>>> = sample
+        .groups
         .iter()
-        .map(|cell| match *cell {
-            Some(bytes) => parse_uuid(bytes).map(|uuid| vec![Value::Bytes(uuid.to_vec())]),
-            None => Some(vec![Value::Null]),
+        .map(|cells| {
+            cells
+                .iter()
+                .map(|cell| match cell {
+                    Some(bytes) => {
+                        parse_uuid(bytes.data()).map(|uuid| Some(ByteArray::from(uuid.as_slice())))
+                    }
+                    None => Some(None),
+                })
+                .collect()
         })
         .collect();
-    let Some(rows) = rows else {
+    let Some(binary) = binary else {
         return Ok(None);
     };
-    control::compare(sample, &sample.text_rows(), &rows, false, None)
+    control::compare(sample, sample.groups, &binary, false, None)
 }
 
 /// Parse canonical 36-byte UUID text into its 16 big-endian bytes.

@@ -4,7 +4,6 @@
 //! crate exposes is [`super::api::default_parser`]. Tool code never
 //! imports `parquet` directly.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,14 +21,9 @@ use parquet::record::Field;
 use parquet::schema::types::{ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, Kind, LeafSample, MetadataParser, Page, PageParser,
-    ParquetFile, Sample, TypedColumn, TypedSample, Value, WriteOptions,
+    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
+    Sample, TypedColumn, TypedSample, Value, WriteOptions,
 };
-
-/// Leading whole row groups are decoded until their compressed bytes reach
-/// this limit. One group is the smallest unit a codec decision can be made on,
-/// so a sample always includes at least one even when it exceeds the limit.
-const SAMPLE_BYTE_LIMIT: u64 = 8 * 1024 * 1024;
 
 /// The parquet-rs-backed page parser.
 pub struct ParquetRsParser;
@@ -110,110 +104,6 @@ fn field_text(field: &Field) -> Option<String> {
         Field::Str(value) => Some(value.clone()),
         Field::Bytes(value) => Some(String::from_utf8_lossy(value.data()).into_owned()),
         other => Some(other.to_string()),
-    }
-}
-
-/// Decode whole leading row groups of the named leaf columns as bytes.
-///
-/// A codec decision is made per column chunk, so the sample is a whole number
-/// of row groups: never a row cut inside one.
-pub(crate) fn read_leaf_sample(
-    path: &Path,
-    columns: &[String],
-    row_groups: Option<usize>,
-) -> Result<LeafSample, Error> {
-    let index: HashMap<&str, usize> = columns
-        .iter()
-        .enumerate()
-        .map(|(at, column)| (column.as_str(), at))
-        .collect();
-    let file = std::fs::File::open(path).map_err(Error::Io)?;
-    let reader = SerializedFileReader::new(file)?;
-    let sampled = sampled_row_groups(reader.metadata(), row_groups);
-    let rows: usize = reader.metadata().row_groups()[..sampled]
-        .iter()
-        .map(|group| group.num_rows() as usize)
-        .sum();
-    let mut sample = LeafSample {
-        columns: vec![Vec::new(); columns.len()],
-        row_count: 0,
-        row_group_count: sampled as u64,
-    };
-    for (at, row) in reader.get_row_iter(None)?.enumerate() {
-        if at >= rows {
-            break;
-        }
-        let row = row?;
-        let mut cells = vec![None; columns.len()];
-        for (name, field) in row.get_column_iter() {
-            collect_leaf(name, field, "", &index, &mut cells);
-        }
-        for (value, column) in cells.into_iter().zip(sample.columns.iter_mut()) {
-            column.push(value);
-        }
-        sample.row_count += 1;
-    }
-    Ok(sample)
-}
-
-/// How many leading row groups a sample covers.
-///
-/// `row_groups` names a count, which a verification passes to read what a
-/// detection read; `None` takes whole groups until their compressed bytes
-/// reach [`SAMPLE_BYTE_LIMIT`]. A file with rows always contributes at least
-/// one group.
-fn sampled_row_groups(metadata: &ParquetMetaData, row_groups: Option<usize>) -> usize {
-    let available = metadata.num_row_groups();
-    if available == 0 {
-        return 0;
-    }
-    if let Some(count) = row_groups {
-        return count.min(available);
-    }
-    let mut bytes = 0_u64;
-    let mut count = 0;
-    for group in metadata.row_groups() {
-        let group_bytes = group.compressed_size() as u64;
-        if count > 0 && bytes + group_bytes > SAMPLE_BYTE_LIMIT {
-            break;
-        }
-        bytes += group_bytes;
-        count += 1;
-    }
-    count.max(1)
-}
-
-/// Walk one decoded field, filling the requested leaf paths.
-fn collect_leaf(
-    name: &str,
-    field: &Field,
-    prefix: &str,
-    index: &HashMap<&str, usize>,
-    cells: &mut [Option<Vec<u8>>],
-) {
-    let path = if prefix.is_empty() {
-        name.to_string()
-    } else {
-        format!("{prefix}.{name}")
-    };
-    match field {
-        Field::Group(row) => {
-            for (child, field) in row.get_column_iter() {
-                collect_leaf(child, field, &path, index, cells);
-            }
-        }
-        Field::Str(value) => {
-            if let Some(&at) = index.get(path.as_str()) {
-                cells[at] = Some(value.as_bytes().to_vec());
-            }
-        }
-        Field::Bytes(value) => {
-            if let Some(&at) = index.get(path.as_str()) {
-                cells[at] = Some(value.data().to_vec());
-            }
-        }
-        Field::Null | Field::ListInternal(_) | Field::MapInternal(_) => {}
-        _ => {}
     }
 }
 
@@ -622,7 +512,7 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
                 max_repetition_level: u16::try_from(descriptor.max_rep_level()).unwrap_or(0),
                 compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
                 uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
-                codec: meta.compression().to_string(),
+                codec: codec_name(meta.compression()).to_string(),
                 encodings: meta.encodings().map(|e| e.to_string()).collect(),
                 data_encodings: meta.page_encoding_stats_mask().map(|mask| {
                     mask.encodings()
@@ -650,6 +540,21 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
         row_count,
         row_group_count: metadata.row_groups().len(),
         columns,
+    }
+}
+
+/// The Parquet codec family name without parquet-rs's default level placeholders
+/// (Parquet footers do not record compression levels).
+fn codec_name(compression: Compression) -> &'static str {
+    match compression {
+        Compression::UNCOMPRESSED => "UNCOMPRESSED",
+        Compression::SNAPPY => "SNAPPY",
+        Compression::GZIP(_) => "GZIP",
+        Compression::LZO => "LZO",
+        Compression::BROTLI(_) => "BROTLI",
+        Compression::LZ4 => "LZ4",
+        Compression::ZSTD(_) => "ZSTD",
+        Compression::LZ4_RAW => "LZ4_RAW",
     }
 }
 

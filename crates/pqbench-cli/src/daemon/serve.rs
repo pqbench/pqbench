@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
@@ -130,6 +131,9 @@ async fn handle(
         };
         return write_versions(write, versions).await;
     }
+    if let Request::List { collection, parent } = &request {
+        return write_stream(write, &session, *collection, parent.as_ref()).await;
+    }
 
     let mut response = match &request {
         Request::PartitionResults { name } => match &master {
@@ -166,6 +170,77 @@ async fn handle(
         .await
         .map_err(|error| format!("cannot flush the answer: {error}"))?;
     Ok(())
+}
+
+/// Stream one `Request::List` response as `{"record":...}` lines, ending with
+/// `{"ok":true}` or `{"error":"..."}`.
+async fn write_stream(
+    mut write: tokio::net::unix::OwnedWriteHalf,
+    session: &Daemon,
+    collection: super::protocol::Collection,
+    parent: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    let mut rows = match session.stream_list(collection, parent).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            return write_frame(
+                &mut write,
+                &Response {
+                    error: Some(crate::error::error_chain(error.as_ref())),
+                    ..Response::default()
+                },
+            )
+            .await;
+        }
+    };
+    while let Some(item) = rows.next().await {
+        match item {
+            Ok(record) => {
+                write_frame(
+                    &mut write,
+                    &Response {
+                        record: Some(record),
+                        ..Response::default()
+                    },
+                )
+                .await?;
+            }
+            Err(error) => {
+                return write_frame(
+                    &mut write,
+                    &Response {
+                        error: Some(crate::error::error_chain(error.as_ref())),
+                        ..Response::default()
+                    },
+                )
+                .await;
+            }
+        }
+    }
+    write_frame(
+        &mut write,
+        &Response {
+            ok: true,
+            ..Response::default()
+        },
+    )
+    .await
+}
+
+async fn write_frame(
+    write: &mut tokio::net::unix::OwnedWriteHalf,
+    frame: &Response,
+) -> Result<(), String> {
+    let mut line = serde_json::to_vec(frame).map_err(|error| error.to_string())?;
+    line.push(b'\n');
+    write
+        .write_all(&line)
+        .await
+        .map_err(|error| format!("cannot write the stream: {error}"))?;
+    write
+        .flush()
+        .await
+        .map_err(|error| format!("cannot flush the stream: {error}"))
 }
 
 /// Answer a `ListPartitionVersions`: the count, then one line per version,
@@ -233,7 +308,7 @@ async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Resp
                 ..Response::default()
             },
         },
-        Request::List { .. } | Request::Get { .. } => match session.records(request).await {
+        Request::Get { .. } => match session.records(request).await {
             Ok(records) => Response {
                 records,
                 ..Response::default()

@@ -45,26 +45,27 @@ impl WindowArgs {
 
 /// Parse a window: a positive integer and a unit (`m`, `h`, `d`, `w`).
 pub(crate) fn parse_window(flag: &str, value: &str) -> Result<i64, CliError> {
-    let (number, unit) = value.split_at(
-        value
-            .len()
-            .checked_sub(1)
-            .ok_or_else(|| CliError::from(format!("{flag} is empty")))?,
-    );
+    let mut chars = value.chars();
+    let unit = chars
+        .next_back()
+        .ok_or_else(|| CliError::from(format!("{flag} is empty")))?;
+    let number = chars.as_str();
     let count: i64 = number
         .parse()
         .map_err(|_| CliError::from(format!("{flag} `{value}` needs a number and a unit")))?;
     if count <= 0 {
         return Err(format!("{flag} must be positive: {value}").into());
     }
-    let millis = match unit {
-        "m" => 60_000,
-        "h" => 3_600_000,
-        "d" => 86_400_000,
-        "w" => 604_800_000,
+    let millis: i64 = match unit {
+        'm' => 60_000,
+        'h' => 3_600_000,
+        'd' => 86_400_000,
+        'w' => 604_800_000,
         _ => return Err(format!("{flag} unit must be m, h, d, or w: {value}").into()),
     };
-    Ok(count * millis)
+    count
+        .checked_mul(millis)
+        .ok_or_else(|| CliError::from(format!("{flag} is out of range: {value}")))
 }
 
 /// Parse `--last`: a positive window, in milliseconds.
@@ -110,8 +111,10 @@ fn parse_day(value: &str) -> Result<u64, CliError> {
     }
     let days = civil_days(year, month, day);
     let millis = u64::try_from(days)
-        .map_err(|_| CliError::from(format!("--partition predates the Unix epoch: {value}")))?;
-    Ok(millis * 86_400_000)
+        .ok()
+        .and_then(|days| days.checked_mul(86_400_000))
+        .ok_or_else(|| CliError::from(format!("--partition predates the Unix epoch: {value}")))?;
+    Ok(millis)
 }
 
 /// The days in `month` of `year`, Gregorian.
@@ -140,7 +143,7 @@ fn civil_days(year: i64, month: u32, day: u32) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::civil_days;
+    use super::{civil_days, parse_window};
 
     #[test]
     fn a_day_counts_from_the_epoch() {
@@ -149,5 +152,14 @@ mod tests {
         assert_eq!(civil_days(2026, 10, 28), 20_754);
         assert_eq!(civil_days(1969, 12, 31), -1);
         assert_eq!(civil_days(2000, 2, 29), 11_016);
+    }
+
+    #[test]
+    fn malformed_and_overflowing_windows_error_without_panicking() {
+        assert!(parse_window("--last", "").is_err());
+        assert!(parse_window("--last", "1💥").is_err());
+        assert!(parse_window("--last", "9223372036854775807h").is_err());
+        assert!(parse_window("--last", "0h").is_err());
+        assert_eq!(parse_window("--last", "2h").unwrap(), 7_200_000);
     }
 }

@@ -10,6 +10,6 @@ pub(crate) async fn run(
 ) -> Result<(), CliError> {
     let metastore = daemon.get_metastore().await?;
     let mut emit = Emitter::open();
-    emit.write(&metastore).await?;
+    let _ = emit.write(&metastore).await?;
     emit.finish().await
 }

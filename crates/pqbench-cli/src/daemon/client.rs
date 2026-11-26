@@ -80,6 +80,19 @@ async fn open(
     Ok((response, reader))
 }
 
+/// Send a streaming `request` and return the line reader for its response frames.
+pub(crate) async fn stream(
+    path: &Path,
+    request: &Request,
+) -> Result<Lines<BufReader<UnixStream>>, Error> {
+    let mut stream = bounded(CATALOG_TIMEOUT, UnixStream::connect(path)).await?;
+    let line = serde_json::to_vec(request).map_err(|error| Error::Protocol(error.to_string()))?;
+    bounded(CATALOG_TIMEOUT, stream.write_all(&line)).await?;
+    bounded(CATALOG_TIMEOUT, stream.write_all(b"\n")).await?;
+    bounded(CATALOG_TIMEOUT, stream.flush()).await?;
+    Ok(BufReader::new(stream).lines())
+}
+
 /// Send a listing `request`: its answer, and the lines that follow it, as
 /// many as the answer's `count`.
 pub(crate) async fn list(

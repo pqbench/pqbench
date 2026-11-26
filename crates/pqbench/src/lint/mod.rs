@@ -17,12 +17,16 @@ mod price;
 mod uuid;
 mod writer;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::third_party::parquet::api::{
-    read_leaf_sample, Error as ParquetError, LeafSample, Value,
-};
+use parquet::column::reader::{ColumnReader, ColumnReaderImpl};
+use parquet::data_type::{ByteArray, DataType};
+use parquet::file::metadata::ParquetMetaData;
+use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
+
+use crate::third_party::parquet::api::Error as ParquetError;
 use crate::v1;
 
 use self::control::Measurement;
@@ -34,6 +38,10 @@ pub use uuid::UUID_TEXT_RULE;
 /// Wins smaller than this are noted as noise, not dropped.
 const NOISE_FLOOR_BYTES: u64 = 64 * 1024;
 
+/// Leading whole row groups are decoded until the target columns' compressed
+/// bytes reach this limit; at least one group is always decoded.
+const SAMPLE_BYTE_LIMIT: u64 = 8 * 1024 * 1024;
+
 /// Errors from the lint layer.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -42,6 +50,8 @@ pub enum Error {
     Parquet(ParquetError),
     /// A suggestion named a rule this build does not have.
     Rule(String),
+    /// The input record was invalid or did not match the file.
+    Invalid(String),
 }
 
 impl fmt::Display for Error {
@@ -49,6 +59,7 @@ impl fmt::Display for Error {
         match self {
             Self::Parquet(_) => write!(f, "the parquet layer failed"),
             Self::Rule(rule) => write!(f, "unknown suggestion rule `{rule}`"),
+            Self::Invalid(message) => write!(f, "{message}"),
         }
     }
 }
@@ -57,7 +68,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Parquet(error) => Some(error),
-            Self::Rule(_) => None,
+            Self::Rule(_) | Self::Invalid(_) => None,
         }
     }
 }
@@ -68,6 +79,12 @@ impl From<ParquetError> for Error {
     }
 }
 
+impl From<crate::bytemass::Error> for Error {
+    fn from(error: crate::bytemass::Error) -> Self {
+        Self::Invalid(error.to_string())
+    }
+}
+
 /// What a sample decoded: rows and the whole row groups they came from.
 #[derive(Clone, Copy, Default)]
 struct Coverage {
@@ -75,13 +92,13 @@ struct Coverage {
     row_group_count: u64,
 }
 
-impl Coverage {
-    fn from_sample(sample: &LeafSample) -> Self {
-        Self {
-            row_count: sample.row_count,
-            row_group_count: sample.row_group_count,
-        }
-    }
+/// Decoded whole-row-group chunks for the requested scalar leaf columns.
+struct DecodedLeaves {
+    /// Per requested column: one `Vec<Option<ByteArray>>` per sampled row group.
+    columns: Vec<Vec<Vec<Option<ByteArray>>>>,
+    /// Compressed bytes of each requested column across the sampled row groups.
+    compressed_bytes: Vec<u64>,
+    coverage: Coverage,
 }
 
 /// One measured column and its decoded sample: what a rule detects and
@@ -91,7 +108,8 @@ pub(crate) struct ColumnSample<'a> {
     leaf: &'a str,
     column: &'a v1::Column,
     mass: &'a v1::Bytemass,
-    cells: Vec<Option<&'a [u8]>>,
+    /// One slice per sampled row group, preserving chunk boundaries.
+    groups: &'a [Vec<Option<ByteArray>>],
     writer: Option<&'a str>,
     coverage: Coverage,
     text_bpv: f64,
@@ -104,50 +122,48 @@ impl<'a> ColumnSample<'a> {
         blob: &'a str,
         leaf: &'a str,
         column: &'a v1::Column,
-        cells: Vec<Option<&'a [u8]>>,
+        groups: &'a [Vec<Option<ByteArray>>],
+        sampled_compressed_bytes: u64,
         writer: Option<&'a str>,
         coverage: Coverage,
     ) -> Option<Self> {
         let mass = column.mass.as_ref()?;
-        let compressed_bytes = mass.compressed_bytes?;
-        let value_count = mass.value_count?;
-        let non_null = cells.iter().filter(|cell| cell.is_some()).count() as u64;
+        let non_null: u64 = groups
+            .iter()
+            .flat_map(|cells| cells.iter())
+            .filter(|cell| cell.is_some())
+            .count() as u64;
         if non_null == 0 {
             return None;
         }
-        let non_null_values = match mass.null_count {
-            Some(nulls) => value_count.saturating_sub(nulls),
-            None => {
-                let fraction = non_null as f64 / cells.len().max(1) as f64;
-                (value_count as f64 * fraction).round() as u64
+        let text_bpv = if sampled_compressed_bytes > 0 {
+            sampled_compressed_bytes as f64 / non_null as f64
+        } else {
+            let compressed_bytes = mass.compressed_bytes?;
+            let value_count = mass.value_count?;
+            let non_null_values = match mass.null_count {
+                Some(nulls) => value_count.saturating_sub(nulls),
+                None => {
+                    let total: usize = groups.iter().map(Vec::len).sum();
+                    let fraction = non_null as f64 / total.max(1) as f64;
+                    (value_count as f64 * fraction).round() as u64
+                }
+            };
+            if non_null_values == 0 {
+                return None;
             }
+            compressed_bytes as f64 / non_null_values as f64
         };
-        if non_null_values == 0 {
-            return None;
-        }
         Some(Self {
             blob,
             leaf,
             column,
             mass,
-            cells,
+            groups,
             writer,
             coverage,
-            text_bpv: compressed_bytes as f64 / non_null_values as f64,
+            text_bpv,
         })
-    }
-
-    /// The values as one nullable byte column: the control's text arm.
-    fn text_rows(&self) -> Vec<Vec<Value>> {
-        self.cells
-            .iter()
-            .map(|cell| {
-                vec![match *cell {
-                    Some(bytes) => Value::Bytes(bytes.to_vec()),
-                    None => Value::Null,
-                }]
-            })
-            .collect()
     }
 
     /// The writer this file came from, as the rules' remedies need it.
@@ -210,20 +226,30 @@ fn rule(id: &str) -> Option<&'static Rule> {
     RULES.iter().find(|rule| rule.id == id)
 }
 
-/// Lint one local Parquet file's measured columns into potential suggestions.
+/// Lint one local Parquet file into potential suggestions.
 ///
-/// `blob` is the file's record, so each suggestion names the file the walk
-/// read, not the local path a caller may have copied it to. No rewrite is
-/// encoded here: `verify` does that. The sample is whole leading row groups,
-/// because a codec decision is made per column chunk.
+/// `file` carries the table file's identity and blob name, so each suggestion
+/// names the blob the walk read, not the local path a caller may have copied it
+/// to. No rewrite is encoded here: `verify` does that. The sample is whole
+/// leading row groups, because a codec decision is made per column chunk.
 ///
 /// # Errors
-/// Fails when the sample cannot be read.
-pub fn suggestions(
-    path: &Path,
-    blob: &v1::Blob,
-    columns: &[v1::Column],
-) -> Result<Vec<v1::Suggestion>, Error> {
+/// Fails when `file` has no blob name or the file cannot be read.
+pub fn suggestions(path: &Path, file: &v1::TableFile) -> Result<Vec<v1::Suggestion>, Error> {
+    let blob_name = file
+        .blob
+        .as_deref()
+        .ok_or_else(|| Error::Invalid("a table-file record needs a blob to read".into()))?;
+    let mut measured = crate::bytemass::measure_footer(blob_name, path)?;
+    let table = v1::TableFile::parse_name(&file.name)
+        .map(|(catalog, schema, table, _)| v1::name::table(&catalog, &schema, &table));
+    for column in &mut measured.columns {
+        column.table = table.clone();
+        column.sample_rate = file.sample_rate;
+        column.size_bytes = measured.blob.size_bytes;
+    }
+    let blob = &measured.blob;
+    let columns = &measured.columns;
     let targets: Vec<(&v1::Column, String)> = columns
         .iter()
         .filter(|column| {
@@ -242,17 +268,17 @@ pub fn suggestions(
         return Ok(Vec::new());
     }
     let leaves: Vec<String> = targets.iter().map(|(_, leaf)| leaf.clone()).collect();
-    let decoded = read_leaf_sample(path, &leaves, None)?;
-    let coverage = Coverage::from_sample(&decoded);
+    let decoded = decode_leaves(path, &leaves, None)?;
+    let coverage = decoded.coverage;
     let mut suggestions = Vec::new();
 
     for (at, (column, leaf)) in targets.iter().enumerate() {
-        let cells: Vec<Option<&[u8]>> = decoded.columns[at].iter().map(Option::as_deref).collect();
         let Some(sample) = ColumnSample::new(
             &blob.name,
             leaf,
             column,
-            cells,
+            &decoded.columns[at],
+            decoded.compressed_bytes[at],
             blob.writer.as_deref(),
             coverage,
         ) else {
@@ -290,13 +316,28 @@ pub fn suggestions(
 /// `list` decoded. The record then carries the rows actually read.
 ///
 /// # Errors
-/// Fails when the sample cannot be read or the rule is unknown.
-pub fn verify(
-    path: &Path,
-    blob: &v1::Blob,
-    column: &v1::Column,
-    candidate: &v1::Suggestion,
-) -> Result<v1::Suggestion, Error> {
+/// Fails when the suggestion is invalid, the sample cannot be read, or the rule
+/// is unknown.
+pub fn verify(path: &Path, candidate: &v1::Suggestion) -> Result<v1::Suggestion, Error> {
+    let (service, locator, column_name, rule_id) = v1::Suggestion::parse_name(&candidate.name)
+        .ok_or_else(|| Error::Invalid(format!("not a suggestion name: {}", candidate.name)))?;
+    if candidate.column != column_name || candidate.rule != rule_id {
+        return Err(Error::Invalid(format!(
+            "the suggestion name names `{column_name}` / `{rule_id}`, its fields say `{}` / `{}`",
+            candidate.column, candidate.rule
+        )));
+    }
+    let blob_name = v1::name::blob(&service, &locator);
+    let measured = crate::bytemass::measure_footer(&blob_name, path)?;
+    let blob = &measured.blob;
+    let column = measured
+        .columns
+        .iter()
+        .find(|measured| {
+            v1::Column::parse_name(&measured.name)
+                .is_some_and(|(_, _, leaf)| leaf == candidate.column)
+        })
+        .ok_or_else(|| Error::Invalid(format!("the file has no column `{}`", candidate.column)))?;
     if column.max_repetition_level != Some(0) {
         return Ok(reject(
             candidate,
@@ -309,16 +350,16 @@ pub fn verify(
     let row_groups = candidate
         .sample_row_group_count
         .and_then(|count| usize::try_from(count).ok());
-    let decoded = read_leaf_sample(path, std::slice::from_ref(&leaf), row_groups)?;
-    let coverage = Coverage::from_sample(&decoded);
-    let cells: Vec<Option<&[u8]>> = decoded.columns.first().map_or_else(Vec::new, |cells| {
-        cells.iter().map(Option::as_deref).collect()
-    });
+    let decoded = decode_leaves(path, std::slice::from_ref(&leaf), row_groups)?;
+    let coverage = decoded.coverage;
+    let groups = decoded.columns.first().map_or(&[][..], Vec::as_slice);
+    let sampled_bytes = decoded.compressed_bytes.first().copied().unwrap_or(0);
     let Some(sample) = ColumnSample::new(
         &blob.name,
         &leaf,
         column,
-        cells,
+        groups,
+        sampled_bytes,
         blob.writer.as_deref(),
         coverage,
     ) else {
@@ -463,4 +504,165 @@ fn percent(value: f64) -> String {
     } else {
         format!("{value:.0}")
     }
+}
+
+/// Decode whole leading row groups of the requested scalar byte leaf columns
+/// directly from their column chunks; unselected columns are never decoded.
+fn decode_leaves(
+    path: &Path,
+    leaves: &[String],
+    row_groups: Option<usize>,
+) -> Result<DecodedLeaves, Error> {
+    let file = std::fs::File::open(path).map_err(ParquetError::Io)?;
+    let reader =
+        SerializedFileReader::new(file).map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    let metadata = reader.metadata();
+    let schema = metadata.file_metadata().schema_descr();
+    let leaf_index: HashMap<String, usize> = schema
+        .columns()
+        .iter()
+        .enumerate()
+        .filter(|(_, descr)| descr.max_rep_level() == 0)
+        .map(|(at, descr)| (descr.path().string(), at))
+        .collect();
+    let targets: Vec<Option<usize>> = leaves
+        .iter()
+        .map(|name| leaf_index.get(name).copied())
+        .collect();
+    let target_indices: Vec<usize> = targets.iter().flatten().copied().collect();
+    let sampled = sampled_row_groups(metadata, &target_indices, row_groups);
+
+    let mut columns: Vec<Vec<Vec<Option<ByteArray>>>> = (0..leaves.len())
+        .map(|_| Vec::with_capacity(sampled))
+        .collect();
+    let mut compressed_bytes = vec![0_u64; leaves.len()];
+    let mut row_count = 0_u64;
+
+    for rg in 0..sampled {
+        let group = reader
+            .get_row_group(rg)
+            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+        let group_rows = usize::try_from(group.metadata().num_rows()).unwrap_or(0);
+        row_count += group_rows as u64;
+        for (slot, col_idx) in targets.iter().enumerate() {
+            let Some(col_idx) = *col_idx else {
+                columns[slot].push(vec![None; group_rows]);
+                continue;
+            };
+            let meta = group.metadata().column(col_idx);
+            compressed_bytes[slot] += u64::try_from(meta.compressed_size()).unwrap_or(0);
+            let max_def = schema.column(col_idx).max_def_level();
+            let cells = decode_bytes_chunk(group.as_ref(), col_idx, max_def, group_rows)?;
+            columns[slot].push(cells);
+        }
+    }
+
+    Ok(DecodedLeaves {
+        columns,
+        compressed_bytes,
+        coverage: Coverage {
+            row_count,
+            row_group_count: sampled as u64,
+        },
+    })
+}
+
+/// How many leading row groups to sample: `row_groups` when given, else whole
+/// groups until the target columns' compressed bytes reach
+/// [`SAMPLE_BYTE_LIMIT`] (always at least one group).
+fn sampled_row_groups(
+    metadata: &ParquetMetaData,
+    target_indices: &[usize],
+    row_groups: Option<usize>,
+) -> usize {
+    let available = metadata.num_row_groups();
+    if available == 0 {
+        return 0;
+    }
+    if let Some(count) = row_groups {
+        return count.min(available);
+    }
+    let mut bytes = 0_u64;
+    let mut count = 0;
+    for group in metadata.row_groups() {
+        let group_bytes: u64 = if target_indices.is_empty() {
+            u64::try_from(group.compressed_size()).unwrap_or(0)
+        } else {
+            target_indices
+                .iter()
+                .map(|&col| u64::try_from(group.column(col).compressed_size()).unwrap_or(0))
+                .sum()
+        };
+        if count > 0 && bytes + group_bytes > SAMPLE_BYTE_LIMIT {
+            break;
+        }
+        bytes += group_bytes;
+        count += 1;
+    }
+    count.max(1)
+}
+
+fn decode_bytes_chunk(
+    group: &dyn RowGroupReader,
+    col_idx: usize,
+    max_def: i16,
+    rows: usize,
+) -> Result<Vec<Option<ByteArray>>, Error> {
+    let reader = group
+        .get_column_reader(col_idx)
+        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    match reader {
+        ColumnReader::ByteArrayColumnReader(mut reader) => {
+            decode_typed(&mut reader, max_def, rows, |value| value.clone())
+        }
+        ColumnReader::FixedLenByteArrayColumnReader(mut reader) => {
+            decode_typed(&mut reader, max_def, rows, |value| {
+                ByteArray::from(value.data())
+            })
+        }
+        _ => Ok(vec![None; rows]),
+    }
+}
+
+fn decode_typed<T: DataType>(
+    reader: &mut ColumnReaderImpl<T>,
+    max_def: i16,
+    rows: usize,
+    mut to_bytes: impl FnMut(&T::T) -> ByteArray,
+) -> Result<Vec<Option<ByteArray>>, Error> {
+    let mut out = Vec::with_capacity(rows);
+    let mut remaining = rows;
+    let mut values = Vec::new();
+    let mut def_levels = Vec::new();
+    while remaining > 0 {
+        let batch = remaining.min(1024);
+        values.clear();
+        def_levels.clear();
+        let (records, _, levels) = reader
+            .read_records(
+                batch,
+                (max_def > 0).then_some(&mut def_levels),
+                None,
+                &mut values,
+            )
+            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+        if records == 0 && levels == 0 && values.is_empty() {
+            break;
+        }
+        if max_def == 0 {
+            out.extend(values.iter().map(|v| Some(to_bytes(v))));
+        } else {
+            let mut at = 0;
+            for &def in &def_levels[..levels] {
+                if def == max_def {
+                    out.push(Some(to_bytes(&values[at])));
+                    at += 1;
+                } else {
+                    out.push(None);
+                }
+            }
+        }
+        remaining = remaining.saturating_sub(records.max(1));
+    }
+    Ok(out)
 }

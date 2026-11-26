@@ -30,6 +30,9 @@ pub struct PartitionVersion {
     /// The last failure's error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Earliest time (epoch ms) to retry after repeated failures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_time: Option<u64>,
     /// The version's files, from its listing.
     pub file_count: u64,
     /// The version's bytes, from its listing.

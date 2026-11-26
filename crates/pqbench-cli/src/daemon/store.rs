@@ -13,9 +13,11 @@
 //! renamed under `deleted/`, so dropping it from the map is one syscall, and
 //! emptied later.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use pqbench::v1::partition_version::State;
 use pqbench::v1::PartitionVersion;
@@ -33,14 +35,21 @@ pub(crate) const SAMPLE: &str = "sample.parquet";
 #[derive(Clone)]
 pub(crate) struct Store {
     root: PathBuf,
+    /// Exclusive process-lifetime lock on `{root}/store.lock`.
+    #[allow(dead_code)]
+    lock: Arc<File>,
 }
 
 impl Store {
-    /// Open the store at `root`: create it, and delete the walk's directory
-    /// and the trash a previous run left.
+    /// Open the store at `root`: acquire exclusive ownership first, then
+    /// delete the walk's directory and the trash a previous run left.
     pub(crate) fn open(root: &Path) -> Result<Self, String> {
+        fs::create_dir_all(root)
+            .map_err(|error| format!("cannot create {}: {error}", root.display()))?;
+        let lock = acquire_lock(root)?;
         let store = Store {
             root: root.to_path_buf(),
+            lock: Arc::new(lock),
         };
         remove_dir(&store.walk_dir())?;
         store.empty_trash()?;
@@ -260,6 +269,27 @@ fn children(parents: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Acquire an exclusive non-blocking OS lock on `{root}/store.lock`.
+fn acquire_lock(root: &Path) -> Result<File, String> {
+    let path = root.join("store.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    // SAFETY: `flock` on an open file descriptor is safe.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == -1 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            return Err(format!("store {} is already in use", root.display()));
+        }
+        return Err(format!("cannot lock {}: {error}", path.display()));
+    }
+    Ok(file)
+}
+
 fn remove_dir(directory: &Path) -> Result<(), String> {
     match fs::remove_dir_all(directory) {
         Ok(()) => Ok(()),
@@ -370,7 +400,22 @@ mod tests {
         store.trash(&key).unwrap();
         assert!(!store.version_dir(&key).exists());
         assert!(store.trash_dir().join(&key.0).join(&key.1).exists());
+        drop(store);
         let store = Store::open(directory.path()).unwrap();
         assert!(!store.trash_dir().exists());
+    }
+
+    /// A second open on the same store is rejected before touching its files,
+    /// and dropping the first owner releases it.
+    #[test]
+    fn a_store_has_one_owner_at_a_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        fs::create_dir_all(store.walk_dir()).unwrap();
+        fs::write(store.walk_dir().join("active"), "ok").unwrap();
+        assert!(Store::open(directory.path()).is_err());
+        assert!(store.walk_dir().join("active").exists());
+        drop(store);
+        assert!(Store::open(directory.path()).is_ok());
     }
 }

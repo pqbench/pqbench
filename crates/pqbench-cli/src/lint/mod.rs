@@ -30,20 +30,12 @@ pub(crate) struct VerifyArgs {
 }
 
 /// Emit each table file's potential suggestions as its record arrives.
-pub(crate) async fn run(
-    lake: &pqbench::Lake,
-    daemon: &crate::daemon::Daemon,
-    args: &SuggestionsArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(args: &SuggestionsArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::TableFile>("list suggestions").await?;
-    let lake = lake.clone();
-    let daemon = daemon.clone();
     let local = args.local.clone();
     // One file at a time: decoding a sample is CPU-bound, so overlapping files
     // buys nothing and holds more samples in memory.
     let records = flat_map(parents, 1, move |file: v1::TableFile| {
-        let lake = lake.clone();
-        let daemon = daemon.clone();
         let local = local.clone();
         async move {
             let blob = file
@@ -51,9 +43,7 @@ pub(crate) async fn run(
                 .as_deref()
                 .ok_or("a table-file record needs a blob to read")?;
             let path = read_path(blob, local.as_deref())?;
-            let measured =
-                crate::measure::table_file(&lake, &daemon, &file, local.as_deref()).await?;
-            let suggestions = pqbench::lint::suggestions(&path, &measured.blob, &measured.columns)?;
+            let suggestions = pqbench::lint::suggestions(&path, &file)?;
             Ok(stream::iter(suggestions.into_iter().map(Ok::<_, CliError>)))
         }
     });
@@ -62,44 +52,19 @@ pub(crate) async fn run(
 
 /// Measure each potential suggestion and emit the same record enriched with
 /// the control's verdict.
-pub(crate) async fn verify(lake: &pqbench::Lake, args: &VerifyArgs) -> Result<(), CliError> {
+pub(crate) async fn verify(args: &VerifyArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Suggestion>("get suggestion").await?;
-    let lake = lake.clone();
     let local = args.local.clone();
     // One suggestion at a time: measuring re-encodes the sample, which is
     // CPU-bound, so overlap buys nothing.
     let records = map(parents, 1, move |candidate: v1::Suggestion| {
-        let lake = lake.clone();
         let local = local.clone();
         async move {
-            let (service, locator, column, rule) = v1::Suggestion::parse_name(&candidate.name)
+            let (service, locator, _, _) = v1::Suggestion::parse_name(&candidate.name)
                 .ok_or_else(|| format!("not a suggestion name: {}", candidate.name))?;
-            if candidate.column != column || candidate.rule != rule {
-                return Err::<v1::Suggestion, CliError>(
-                    format!(
-                        "the suggestion name names `{column}` / `{rule}`, its fields say `{}` / `{}`",
-                        candidate.column, candidate.rule
-                    )
-                    .into(),
-                );
-            }
             let blob = v1::name::blob(&service, &locator);
             let path = read_path(&blob, local.as_deref())?;
-            let measured = crate::measure::blob(&lake, &blob, local.as_deref()).await?;
-            let column = measured
-                .columns
-                .iter()
-                .find(|measured| {
-                    v1::Column::parse_name(&measured.name)
-                        .is_some_and(|(_, _, leaf)| leaf == candidate.column)
-                })
-                .ok_or_else(|| format!("the file has no column `{}`", candidate.column))?;
-            Ok(pqbench::lint::verify(
-                &path,
-                &measured.blob,
-                column,
-                &candidate,
-            )?)
+            Ok::<_, CliError>(pqbench::lint::verify(&path, &candidate)?)
         }
     });
     drive(records).await
