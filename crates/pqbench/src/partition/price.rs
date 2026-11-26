@@ -78,10 +78,11 @@ pub async fn price(lake: &Lake, partition: &v1::Partition) -> Result<v1::Partiti
         name: format!("{}/price", partition.name),
         partition_etag: partition.etag.clone(),
         storage_costs: costs(&storage_classes, partition.size_bytes),
-        removed_storage_costs: costs(
-            &storage_classes,
-            partition.removed_size_bytes.unwrap_or_default(),
-        ),
+        removed_storage_costs: partition
+            .removed_size_bytes
+            .filter(|bytes| *bytes > 0)
+            .map(|bytes| costs(&storage_classes, bytes))
+            .unwrap_or_default(),
         storage_classes,
     })
 }
@@ -91,11 +92,8 @@ fn object_storage_blob(blob: &str) -> bool {
 }
 
 /// `size_bytes` at each class's list prices; a class without a price adds
-/// nothing, and no bytes cost nothing.
+/// nothing, and no bytes cost nothing at every class that has a price.
 fn costs(storage_classes: &[String], size_bytes: u64) -> Vec<v1::StorageTierCost> {
-    if size_bytes == 0 {
-        return Vec::new();
-    }
     let gibibytes = size_bytes as f64 / GIBIBYTE;
     storage_classes
         .iter()
@@ -109,4 +107,40 @@ fn costs(storage_classes: &[String], size_bytes: u64) -> Vec<v1::StorageTierCost
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::costs;
+
+    /// A partition with no bytes has a price too: zero at every class, so it
+    /// counts as priced rather than unknown.
+    #[test]
+    fn no_bytes_cost_nothing_at_every_class() {
+        let classes = ["STANDARD".to_string(), "GLACIER".to_string()];
+        let costs = costs(&classes, 0);
+        assert!(!costs.is_empty());
+        for cost in &costs {
+            assert_eq!(cost.cost_per_month, 0.0, "{cost:?}");
+        }
+        assert_eq!(
+            costs
+                .iter()
+                .map(|cost| cost.storage_class.as_str())
+                .collect::<Vec<_>>(),
+            ["STANDARD", "GLACIER"]
+        );
+    }
+
+    /// Bytes are priced by the gibibyte at each class's list price.
+    #[test]
+    fn bytes_are_priced_at_each_class() {
+        let costs = costs(&["STANDARD".to_string()], 1024 * 1024 * 1024);
+        assert_eq!(costs.len(), 1);
+        assert!(costs[0].cost_per_month > 0.0, "{costs:?}");
+        assert_eq!(
+            costs[0].cost_per_month,
+            costs[0].dollars_per_gibibyte_per_month
+        );
+    }
 }
