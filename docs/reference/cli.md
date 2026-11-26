@@ -880,7 +880,8 @@ commands the daemon runs as child processes and awaits:
             table's version the walk no longer finds, and when every table was
             read, the versions of tables it did not list. Their results are
             moved to DIR/deleted and removed.
-  versions  one command per version, one per CPU at once:
+  versions  one command per version, one per CPU at once, taking the newest
+            data first and then the largest partition:
               price     `get partition-price`; a version with no live file,
                         or in an archive class, is then UP_TO_DATE
               download  `download` of the sample file into the version's

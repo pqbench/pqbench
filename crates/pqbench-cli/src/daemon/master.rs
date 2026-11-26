@@ -8,6 +8,7 @@
 //! drops what a walk deleted. The driver runs the commands and keeps the
 //! files (`drive`, `store`); every call here is a short update of the map.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -318,27 +319,56 @@ impl Master {
 
     /// Hand out up to `limit` runs, each version now in its transition's
     /// running state: the later transitions first, so a version in progress
-    /// finishes before a new one starts. A version that failed its
+    /// finishes before a new one starts, and within a transition the newest
+    /// data first, then the biggest partition. A version that failed its
     /// transition twice waits.
     pub(crate) fn start(&mut self, limit: usize) -> Vec<Run> {
         let mut runs = Vec::new();
         let transitions = self.transitions;
         for transition in transitions.iter().rev() {
-            for (key, row) in &mut self.rows {
-                if runs.len() >= limit {
-                    break;
-                }
-                if row.state == transition.source && row.failure_count < MAX_FAILURES {
-                    row.state = transition.running;
-                    runs.push(Run {
-                        key: key.clone(),
-                        transition,
-                    });
-                }
+            let free = limit.saturating_sub(runs.len());
+            if free == 0 {
+                break;
+            }
+            let mut ready: Vec<&Key> = self
+                .rows
+                .iter()
+                .filter(|(_, row)| {
+                    row.state == transition.source && row.failure_count < MAX_FAILURES
+                })
+                .map(|(key, _)| key)
+                .collect();
+            // Only the runs that fit matter, so select them without ordering
+            // every ready version; a large map is the normal case after a walk.
+            if ready.len() > free {
+                ready.select_nth_unstable_by(free, |left, right| self.priority(left, right));
+                ready.truncate(free);
+            }
+            ready.sort_by(|left, right| self.priority(left, right));
+            let chosen: Vec<Key> = ready.into_iter().cloned().collect();
+            for key in chosen {
+                let row = self.rows.get_mut(&key).expect("a chosen key is in the map");
+                row.state = transition.running;
+                runs.push(Run { key, transition });
             }
         }
         self.changed |= !runs.is_empty();
         runs
+    }
+
+    /// The order a transition's ready versions are scheduled in: the newest
+    /// data first, then the largest partition, then the name.
+    fn priority(&self, left: &Key, right: &Key) -> Ordering {
+        let freshness = |key: &Key| {
+            let row = &self.rows[key];
+            row.last_modification_time
+                .or(row.list_time)
+                .unwrap_or_default()
+        };
+        freshness(right)
+            .cmp(&freshness(left))
+            .then_with(|| self.rows[right].size_bytes.cmp(&self.rows[left].size_bytes))
+            .then_with(|| left.cmp(right))
     }
 
     /// A run ended: `Ok` with its price when it priced the version, `Ok` with
@@ -535,6 +565,33 @@ mod tests {
             State::UpToDate
         );
         assert_eq!(priced(0, "STANDARD", None), State::UpToDate);
+    }
+
+    /// A transition takes the newest data first, then the biggest partition.
+    #[test]
+    fn a_transition_schedules_recent_and_biggest_first() {
+        let mut master = Master::new(Vec::new(), false).unwrap();
+        let now = 10_000;
+        let mut found = |day: &str, modified: u64, size: u64| {
+            let name = format!("catalogs/c/schemas/s/tables/t/partitions/day%3D{day}");
+            let key = key(&name, "aa").unwrap();
+            master.found(
+                &key,
+                &serde_json::json!({
+                    "file_count": 1,
+                    "size_bytes": size,
+                    "last_file": {"modification_time": modified},
+                }),
+                now,
+            );
+            key
+        };
+        let old_big = found("1", 1_000, 500);
+        let new_small = found("2", 9_000, 10);
+        let new_big = found("3", 9_000, 900);
+        let middle = found("4", 5_000, 100);
+        let scheduled: Vec<Key> = master.start(4).into_iter().map(|run| run.key).collect();
+        assert_eq!(scheduled, vec![new_big, new_small, middle, old_big]);
     }
 
     /// A failed run puts the version back with its error, and after two it
