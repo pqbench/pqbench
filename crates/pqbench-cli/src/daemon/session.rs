@@ -250,7 +250,10 @@ impl Daemon {
                             .await
                             .map_err(|error| connect_error(&path, client::Error::Connect(error)))?
                         else {
-                            return Ok(None);
+                            return Err(
+                                "the daemon closed the connection before finishing the stream"
+                                    .into(),
+                            );
                         };
                         let frame: Response = serde_json::from_str(&line).map_err(|error| {
                             CliError::from(format!("the daemon answered badly: {error}"))
@@ -276,18 +279,33 @@ impl Daemon {
                 let Request::List { collection, parent } = request else {
                     return Err("not a list request".into());
                 };
-                let rows: Vec<T> = self
-                    .stream_list(*collection, parent.as_ref())
-                    .await?
-                    .map(|item| {
-                        let value = item?;
-                        serde_json::from_value(value).map_err(|error| {
-                            CliError::from(format!("the daemon answered a bad record: {error}"))
-                        })
-                    })
-                    .try_collect()
-                    .await?;
-                Ok(stream::iter(rows.into_iter().map(Ok)).boxed())
+                let (tx, rx) = tokio::sync::mpsc::channel(64);
+                let daemon = self.clone();
+                let collection = *collection;
+                let parent = parent.clone();
+                tokio::spawn(async move {
+                    let mut rows = match daemon.stream_list(collection, parent.as_ref()).await {
+                        Ok(rows) => rows,
+                        Err(error) => {
+                            let _ = tx.send(Err(error)).await;
+                            return;
+                        }
+                    };
+                    while let Some(item) = rows.next().await {
+                        let decoded = item.and_then(|value| {
+                            serde_json::from_value(value).map_err(|error| {
+                                CliError::from(format!("the daemon answered a bad record: {error}"))
+                            })
+                        });
+                        if tx.send(decoded).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                Ok(stream::unfold(rx, |mut rx| async move {
+                    rx.recv().await.map(|item| (item, rx))
+                })
+                .boxed())
             }
         }
     }

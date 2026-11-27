@@ -22,16 +22,16 @@ pub(super) fn price_bytes(
     dictionary: bool,
     encoding: Option<Encoding>,
 ) -> Result<u64, Error> {
-    let field = Type::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
-        .with_repetition(Repetition::OPTIONAL)
-        .build()
-        .map(Arc::new)
-        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
-    let schema = Type::group_type_builder("schema")
-        .with_fields(vec![field])
-        .build()
-        .map(Arc::new)
-        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    let field = Arc::new(
+        Type::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()?,
+    );
+    let schema = Arc::new(
+        Type::group_type_builder("schema")
+            .with_fields(vec![field])
+            .build()?,
+    );
 
     let mut builder = WriterProperties::builder()
         .set_compression(compression)
@@ -42,18 +42,14 @@ pub(super) fn price_bytes(
     let properties = Arc::new(builder.build());
 
     let mut out = Vec::new();
-    let mut writer = SerializedFileWriter::new(&mut out, schema, properties)
-        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    let mut writer = SerializedFileWriter::new(&mut out, schema, properties)?;
     for cells in groups {
         if cells.is_empty() {
             continue;
         }
-        let mut group = writer
-            .next_row_group()
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+        let mut group = writer.next_row_group()?;
         let mut column = group
-            .next_column()
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?
+            .next_column()?
             .ok_or_else(|| ParquetError::Invalid("writer ran out of columns".into()))?;
         let mut values = Vec::with_capacity(cells.len());
         let mut def = Vec::with_capacity(cells.len());
@@ -68,18 +64,11 @@ pub(super) fn price_bytes(
         }
         column
             .typed::<ByteArrayType>()
-            .write_batch(&values, Some(&def), None)
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
-        column
-            .close()
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
-        group
-            .close()
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+            .write_batch(&values, Some(&def), None)?;
+        column.close()?;
+        group.close()?;
     }
-    let meta = writer
-        .close()
-        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    let meta = writer.close()?;
     let bytes = meta
         .row_groups()
         .iter()

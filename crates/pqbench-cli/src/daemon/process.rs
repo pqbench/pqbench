@@ -25,7 +25,7 @@ fn command(arguments: &[String], socket: &Path) -> Command {
         .args(arguments)
         .env("PQB_DAEMON_SOCK", socket)
         .kill_on_drop(true);
-    let parent = unsafe { libc::getpid() };
+    let parent = std::process::id() as libc::pid_t;
     // SAFETY: `prctl`, `getppid`, and `_exit` are async-signal-safe, so they
     // may run between fork and exec.
     unsafe {

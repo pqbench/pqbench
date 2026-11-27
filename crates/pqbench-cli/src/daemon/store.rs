@@ -13,9 +13,8 @@
 //! renamed under `deleted/`, so dropping it from the map is one syscall, and
 //! emptied later.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -279,15 +278,11 @@ fn acquire_lock(root: &Path) -> Result<File, String> {
         .truncate(false)
         .open(&path)
         .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
-    // SAFETY: `flock` on an open file descriptor is safe.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == -1 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::WouldBlock {
-            return Err(format!("store {} is already in use", root.display()));
-        }
-        return Err(format!("cannot lock {}: {error}", path.display()));
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(format!("store {} is already in use", root.display())),
+        Err(TryLockError::Error(error)) => Err(format!("cannot lock {}: {error}", path.display())),
     }
-    Ok(file)
 }
 
 fn remove_dir(directory: &Path) -> Result<(), String> {

@@ -79,6 +79,12 @@ impl From<ParquetError> for Error {
     }
 }
 
+impl From<parquet::errors::ParquetError> for Error {
+    fn from(error: parquet::errors::ParquetError) -> Self {
+        Self::Parquet(ParquetError::Parquet(Box::new(error)))
+    }
+}
+
 impl From<crate::bytemass::Error> for Error {
     fn from(error: crate::bytemass::Error) -> Self {
         Self::Invalid(error.to_string())
@@ -514,8 +520,7 @@ fn decode_leaves(
     row_groups: Option<usize>,
 ) -> Result<DecodedLeaves, Error> {
     let file = std::fs::File::open(path).map_err(ParquetError::Io)?;
-    let reader =
-        SerializedFileReader::new(file).map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    let reader = SerializedFileReader::new(file)?;
     let metadata = reader.metadata();
     let schema = metadata.file_metadata().schema_descr();
     let leaf_index: HashMap<String, usize> = schema
@@ -539,9 +544,7 @@ fn decode_leaves(
     let mut row_count = 0_u64;
 
     for rg in 0..sampled {
-        let group = reader
-            .get_row_group(rg)
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+        let group = reader.get_row_group(rg)?;
         let group_rows = usize::try_from(group.metadata().num_rows()).unwrap_or(0);
         row_count += group_rows as u64;
         for (slot, col_idx) in targets.iter().enumerate() {
@@ -608,10 +611,7 @@ fn decode_bytes_chunk(
     max_def: i16,
     rows: usize,
 ) -> Result<Vec<Option<ByteArray>>, Error> {
-    let reader = group
-        .get_column_reader(col_idx)
-        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
-    match reader {
+    match group.get_column_reader(col_idx)? {
         ColumnReader::ByteArrayColumnReader(mut reader) => {
             decode_typed(&mut reader, max_def, rows, |value| value.clone())
         }
@@ -638,15 +638,14 @@ fn decode_typed<T: DataType>(
         let batch = remaining.min(1024);
         values.clear();
         def_levels.clear();
-        let (records, _, levels) = reader
-            .read_records(
-                batch,
-                (max_def > 0).then_some(&mut def_levels),
-                None,
-                &mut values,
-            )
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
-        if records == 0 && levels == 0 && values.is_empty() {
+        let (_, _, levels) = reader.read_records(
+            batch,
+            (max_def > 0).then_some(&mut def_levels),
+            None,
+            &mut values,
+        )?;
+        let consumed = if max_def > 0 { levels } else { values.len() };
+        if consumed == 0 {
             break;
         }
         if max_def == 0 {
@@ -662,7 +661,7 @@ fn decode_typed<T: DataType>(
                 }
             }
         }
-        remaining = remaining.saturating_sub(records.max(1));
+        remaining = remaining.saturating_sub(consumed);
     }
     Ok(out)
 }

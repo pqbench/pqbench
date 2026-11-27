@@ -23,7 +23,7 @@ pub struct ColumnProfile {
     pub null_fraction: f64,
     /// Distinct non-null values among the sampled values.
     pub ndv: u64,
-    /// `ndv / non_null_count`.
+    /// `ndv / num_values`.
     pub ndv_ratio: f64,
     /// Shannon entropy, in bits.
     pub entropy: f64,

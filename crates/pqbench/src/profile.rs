@@ -61,6 +61,12 @@ impl From<ParquetError> for Error {
     }
 }
 
+impl From<parquet::errors::ParquetError> for Error {
+    fn from(error: parquet::errors::ParquetError) -> Self {
+        Self::Parquet(ParquetError::Parquet(Box::new(error)))
+    }
+}
+
 /// Which columns to profile and how many top values to keep.
 #[derive(Debug, Clone)]
 pub struct ProfileRequest {
@@ -143,8 +149,7 @@ pub fn profile_file(
 ) -> Result<Profile, Error> {
     let patterns = compile_patterns(&request.columns)?;
     let file = std::fs::File::open(path).map_err(ParquetError::Io)?;
-    let reader =
-        SerializedFileReader::new(file).map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+    let reader = SerializedFileReader::new(file)?;
     let metadata = reader.metadata();
     let total_rows: usize = metadata
         .row_groups()
@@ -178,14 +183,12 @@ pub fn profile_file(
 
     let mut accumulators: Vec<ColumnAcc> = selected
         .iter()
-        .map(|(_, name, physical, _, _)| ColumnAcc::new(name.clone(), *physical))
+        .map(|(_, name, physical, _, _)| ColumnAcc::new(name.clone(), physical_kind(*physical)))
         .collect();
 
     let mut rows_read = 0usize;
     for rg in 0..metadata.num_row_groups() {
-        let group = reader
-            .get_row_group(rg)
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
+        let group = reader.get_row_group(rg)?;
         let group_rows = usize::try_from(group.metadata().num_rows()).unwrap_or(0);
         let take = match max_rows {
             Some(limit) => limit.saturating_sub(rows_read).min(group_rows),
@@ -235,12 +238,20 @@ pub fn profile(sample: &Sample, request: &ProfileRequest) -> Result<Profile, Err
         if !patterns.is_empty() && !patterns.iter().any(|pattern| pattern.matches(name)) {
             continue;
         }
-        let cells: Vec<Option<String>> = sample
+        let non_null: Vec<&str> = sample
             .rows
             .iter()
-            .map(|row| row.get(index).cloned().flatten())
+            .filter_map(|row| row.get(index).and_then(|cell| cell.as_deref()))
             .collect();
-        columns.push(column_profile(name, &cells, request.top));
+        let kind = infer_kind(&non_null);
+        let mut acc = ColumnAcc::new(name.clone(), kind);
+        for row in &sample.rows {
+            match row.get(index).and_then(|cell| cell.as_deref()) {
+                Some(text) => acc.push_parsed(text),
+                None => acc.push_null(),
+            }
+        }
+        columns.push(acc.finish(request.top));
     }
     if !patterns.is_empty() && columns.is_empty() {
         return Err(Error::NoMatch(request.columns.join(", ")));
@@ -259,53 +270,6 @@ fn compile_patterns(patterns: &[String]) -> Result<Vec<Pattern>, Error> {
         .collect()
 }
 
-/// Build one column's facts from its sampled cells.
-fn column_profile(column: &str, cells: &[Option<String>], top: u32) -> ColumnProfile {
-    let num_values = cells.len() as u64;
-    let null_count = cells.iter().filter(|cell| cell.is_none()).count() as u64;
-    let values: Vec<&str> = cells.iter().filter_map(|cell| cell.as_deref()).collect();
-
-    let mut counts: HashMap<&str, u64> = HashMap::new();
-    for value in &values {
-        *counts.entry(value).or_insert(0) += 1;
-    }
-    let non_null = values.len();
-    let ndv = counts.len() as u64;
-    let entropy = shannon(&counts, non_null);
-    let top_values = top_values(&counts, top);
-
-    let kind = physical_kind(&values);
-    let (min_value, max_value) = bounds(&values, kind);
-
-    let mut lengths: Vec<u64> = values.iter().map(|value| value.len() as u64).collect();
-    lengths.sort_unstable();
-    let (length_mean, length_p50, length_p90, length_max) = length_stats(&lengths);
-
-    let (adjacent_equal_fraction, run_length_mean, run_length_max) = run_stats(cells);
-
-    ColumnProfile {
-        column: column.to_string(),
-        physical_kind: kind.to_string(),
-        num_values,
-        null_count,
-        null_fraction: ratio(null_count, num_values),
-        ndv,
-        ndv_ratio: ratio(ndv, num_values),
-        entropy,
-        top_values,
-        min_value,
-        max_value,
-        length_mean,
-        length_p50,
-        length_p90,
-        length_max,
-        adjacent_equal_fraction,
-        run_length_mean,
-        run_length_max,
-        monotonic: monotonic(&values, kind).to_string(),
-    }
-}
-
 /// `numerator / denominator` as `f64`, or `0.0` when `denominator` is zero.
 fn ratio(numerator: u64, denominator: u64) -> f64 {
     if denominator == 0 {
@@ -315,98 +279,32 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
     }
 }
 
-/// Shannon entropy in bits over the value frequencies.
-fn shannon(counts: &HashMap<&str, u64>, total: usize) -> f64 {
-    if total == 0 {
-        return 0.0;
-    }
-    let total = total as f64;
-    let entropy: f64 = counts
-        .values()
-        .map(|count| {
-            let p = *count as f64 / total;
-            -p * p.log2()
-        })
-        .sum();
-    if entropy == 0.0 {
-        0.0
-    } else {
-        entropy
-    }
-}
-
-/// Compare two values by kind: exact `i64` for `integer`, `f64::total_cmp` for
-/// `number`, else lexically.
-fn compare(kind: &str, left: &str, right: &str) -> Ordering {
-    match kind {
-        "integer" => match (left.parse::<i64>(), right.parse::<i64>()) {
-            (Ok(left), Ok(right)) => left.cmp(&right),
-            _ => left.cmp(right),
-        },
-        "number" => match (left.parse::<f64>(), right.parse::<f64>()) {
-            (Ok(left), Ok(right)) => left.total_cmp(&right),
-            _ => left.cmp(right),
-        },
-        _ => left.cmp(right),
-    }
-}
-
-/// The minimum and maximum non-null values, numeric-aware for numeric kinds.
-fn bounds(values: &[&str], kind: &str) -> (Option<String>, Option<String>) {
-    let mut min: Option<&str> = None;
-    let mut max: Option<&str> = None;
-    for value in values {
-        if min.is_none_or(|current| compare(kind, value, current) == Ordering::Less) {
-            min = Some(value);
-        }
-        if max.is_none_or(|current| compare(kind, value, current) == Ordering::Greater) {
-            max = Some(value);
+/// The profile kind for a Parquet physical type.
+fn physical_kind(physical: PhysicalType) -> &'static str {
+    match physical {
+        PhysicalType::BOOLEAN => "boolean",
+        PhysicalType::INT32 | PhysicalType::INT64 => "integer",
+        PhysicalType::FLOAT | PhysicalType::DOUBLE => "number",
+        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY | PhysicalType::INT96 => {
+            "string"
         }
     }
-    (
-        min.map(std::string::ToString::to_string),
-        max.map(std::string::ToString::to_string),
-    )
 }
 
-/// The `top` values by count descending, then value ascending.
-fn top_values(counts: &HashMap<&str, u64>, top: u32) -> Vec<ValueCount> {
-    if top == 0 {
-        return Vec::new();
-    }
-    let mut ordered: Vec<(&str, u64)> = counts
-        .iter()
-        .map(|(value, count)| (*value, *count))
-        .collect();
-    ordered.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
-    ordered
-        .into_iter()
-        .take(top as usize)
-        .map(|(value, count)| ValueCount {
-            value: value.to_string(),
-            count,
-        })
-        .collect()
-}
-
-/// The inferred kind of a column from its stringified non-null values.
-fn physical_kind(values: &[&str]) -> &'static str {
+/// Infer a kind from stringified values (used only by [`profile`] on untyped
+/// [`Sample`] inputs).
+fn infer_kind(values: &[&str]) -> &'static str {
     if values.is_empty() {
-        return "empty";
+        "empty"
+    } else if values.iter().all(|v| *v == "true" || *v == "false") {
+        "boolean"
+    } else if values.iter().all(|v| v.parse::<i64>().is_ok()) {
+        "integer"
+    } else if values.iter().all(|v| v.parse::<f64>().is_ok()) {
+        "number"
+    } else {
+        "string"
     }
-    if values
-        .iter()
-        .all(|value| *value == "true" || *value == "false")
-    {
-        return "boolean";
-    }
-    if values.iter().all(|value| value.parse::<i64>().is_ok()) {
-        return "integer";
-    }
-    if values.iter().all(|value| value.parse::<f64>().is_ok()) {
-        return "number";
-    }
-    "string"
 }
 
 /// Mean, p50, p90, and max of the (sorted) string byte lengths.
@@ -415,77 +313,55 @@ fn length_stats(sorted: &[u64]) -> (Option<f64>, Option<u64>, Option<u64>, Optio
         return (None, None, None, None);
     }
     let mean = sorted.iter().sum::<u64>() as f64 / sorted.len() as f64;
+    let percentile = |fraction: f64| {
+        let rank = (fraction * sorted.len() as f64).ceil() as usize;
+        sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+    };
     (
         Some(mean),
-        Some(percentile(sorted, 0.5)),
-        Some(percentile(sorted, 0.9)),
+        Some(percentile(0.5)),
+        Some(percentile(0.9)),
         Some(*sorted.last().unwrap()),
     )
 }
 
-/// Nearest-rank percentile over a sorted, non-empty slice.
-fn percentile(sorted: &[u64], fraction: f64) -> u64 {
-    let rank = (fraction * sorted.len() as f64).ceil() as usize;
-    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+/// Typed sort key for bounds and monotonicity checks: exact `i64` for integers,
+/// `f64::total_cmp` for floats, lexical for text/booleans.
+#[derive(Clone)]
+enum OrderKey {
+    Integer(i64),
+    Number(f64),
+    Text(String),
 }
 
-/// `(adjacent_equal_fraction, mean_run_length, max_run_length)` over cells.
-///
-/// Nulls count as a value: two adjacent nulls are equal.
-fn run_stats(cells: &[Option<String>]) -> (f64, f64, u64) {
-    if cells.is_empty() {
-        return (0.0, 0.0, 0);
-    }
-    let mut runs = 0u64;
-    let mut run_length = 0u64;
-    let mut run_length_max = 0u64;
-    let mut previous: Option<&Option<String>> = None;
-    for cell in cells {
-        if previous == Some(cell) {
-            run_length += 1;
-        } else {
-            run_length = 1;
-            runs += 1;
+impl OrderKey {
+    fn cmp_key(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Self::Integer(a), Self::Integer(b)) => a.cmp(b),
+            (Self::Number(a), Self::Number(b)) => a.total_cmp(b),
+            (Self::Text(a), Self::Text(b)) => a.cmp(b),
+            _ => Ordering::Equal,
         }
-        run_length_max = run_length_max.max(run_length);
-        previous = Some(cell);
     }
-    let adjacent_equal_fraction = if cells.len() < 2 {
-        0.0
-    } else {
-        (cells.len() as u64 - runs) as f64 / (cells.len() as u64 - 1) as f64
-    };
-    (
-        adjacent_equal_fraction,
-        cells.len() as f64 / runs as f64,
-        run_length_max,
-    )
-}
 
-/// Classify the non-null values' order, ignoring nulls.
-fn monotonic(values: &[&str], kind: &str) -> &'static str {
-    if values.len() <= 1 {
-        return "CONSTANT";
+    fn cmp_str(&self, other: &str) -> Ordering {
+        match self {
+            Self::Text(a) => a.as_str().cmp(other),
+            _ => Ordering::Equal,
+        }
     }
-    let increasing = values
-        .windows(2)
-        .all(|pair| compare(kind, pair[0], pair[1]) != Ordering::Greater);
-    let decreasing = values
-        .windows(2)
-        .all(|pair| compare(kind, pair[0], pair[1]) != Ordering::Less);
-    if increasing && decreasing {
-        "CONSTANT"
-    } else if increasing {
-        "INCREASING"
-    } else if decreasing {
-        "DECREASING"
-    } else {
-        "UNORDERED"
+
+    fn into_string(self) -> String {
+        match self {
+            Self::Integer(v) => v.to_string(),
+            Self::Number(v) => v.to_string(),
+            Self::Text(v) => v,
+        }
     }
 }
 
-/// Streaming per-column profile accumulator fed directly from a Parquet
-/// `ColumnReader`, avoiding materializing full row/column buffers.
+/// Streaming per-column profile accumulator shared by [`profile`] and
+/// [`profile_file`].
 struct ColumnAcc {
     column: String,
     kind: &'static str,
@@ -493,27 +369,19 @@ struct ColumnAcc {
     null_count: u64,
     counts: HashMap<String, u64>,
     lengths: Vec<u64>,
-    lowest: Option<String>,
-    highest: Option<String>,
+    lowest: Option<OrderKey>,
+    highest: Option<OrderKey>,
     prev_cell: Option<Option<String>>,
     runs: u64,
     run_length: u64,
     run_length_max: u64,
-    prev_non_null: Option<String>,
+    prev_key: Option<OrderKey>,
     increasing: bool,
     decreasing: bool,
 }
 
 impl ColumnAcc {
-    fn new(column: String, physical: PhysicalType) -> Self {
-        let kind = match physical {
-            PhysicalType::BOOLEAN => "boolean",
-            PhysicalType::INT32 | PhysicalType::INT64 => "integer",
-            PhysicalType::FLOAT | PhysicalType::DOUBLE => "number",
-            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY | PhysicalType::INT96 => {
-                "string"
-            }
-        };
+    fn new(column: String, kind: &'static str) -> Self {
         Self {
             column,
             kind,
@@ -527,7 +395,7 @@ impl ColumnAcc {
             runs: 0,
             run_length: 0,
             run_length_max: 0,
-            prev_non_null: None,
+            prev_key: None,
             increasing: true,
             decreasing: true,
         }
@@ -539,42 +407,104 @@ impl ColumnAcc {
         self.push_run(None);
     }
 
-    fn push_value(&mut self, value: String) {
+    fn push_parsed(&mut self, text: &str) {
+        match self.kind {
+            "integer" => {
+                if let Ok(value) = text.parse::<i64>() {
+                    self.push_key(text, OrderKey::Integer(value));
+                } else {
+                    self.push_text(text);
+                }
+            }
+            "number" => {
+                if let Ok(value) = text.parse::<f64>() {
+                    self.push_key(text, OrderKey::Number(value));
+                } else {
+                    self.push_text(text);
+                }
+            }
+            _ => self.push_text(text),
+        }
+    }
+
+    fn push_text(&mut self, text: &str) {
         self.value_count += 1;
-        self.lengths.push(value.len() as u64);
+        self.lengths.push(text.len() as u64);
         if self
             .lowest
-            .as_deref()
-            .is_none_or(|cur| compare(self.kind, &value, cur) == Ordering::Less)
+            .as_ref()
+            .is_none_or(|cur| cur.cmp_str(text) == Ordering::Greater)
         {
-            self.lowest = Some(value.clone());
+            self.lowest = Some(OrderKey::Text(text.to_string()));
         }
         if self
             .highest
-            .as_deref()
-            .is_none_or(|cur| compare(self.kind, &value, cur) == Ordering::Greater)
+            .as_ref()
+            .is_none_or(|cur| cur.cmp_str(text) == Ordering::Less)
         {
-            self.highest = Some(value.clone());
+            self.highest = Some(OrderKey::Text(text.to_string()));
         }
-        if let Some(prev) = self.prev_non_null.as_deref() {
-            match compare(self.kind, prev, &value) {
+        if let Some(prev) = &self.prev_key {
+            match prev.cmp_str(text) {
                 Ordering::Greater => self.increasing = false,
                 Ordering::Less => self.decreasing = false,
                 Ordering::Equal => {}
             }
         }
-        self.prev_non_null = Some(value.clone());
-        self.push_run(Some(value.clone()));
-        *self.counts.entry(value).or_insert(0) += 1;
+        if self
+            .prev_key
+            .as_ref()
+            .is_none_or(|prev| prev.cmp_str(text) != Ordering::Equal)
+        {
+            self.prev_key = Some(OrderKey::Text(text.to_string()));
+        }
+        self.record_cell(text);
     }
 
-    fn push_run(&mut self, cell: Option<String>) {
-        if self.prev_cell.as_ref() == Some(&cell) {
+    fn push_key(&mut self, text: &str, key: OrderKey) {
+        self.value_count += 1;
+        self.lengths.push(text.len() as u64);
+        if self
+            .lowest
+            .as_ref()
+            .is_none_or(|cur| key.cmp_key(cur) == Ordering::Less)
+        {
+            self.lowest = Some(key.clone());
+        }
+        if self
+            .highest
+            .as_ref()
+            .is_none_or(|cur| key.cmp_key(cur) == Ordering::Greater)
+        {
+            self.highest = Some(key.clone());
+        }
+        if let Some(prev) = &self.prev_key {
+            match prev.cmp_key(&key) {
+                Ordering::Greater => self.increasing = false,
+                Ordering::Less => self.decreasing = false,
+                Ordering::Equal => {}
+            }
+        }
+        self.prev_key = Some(key);
+        self.record_cell(text);
+    }
+
+    fn record_cell(&mut self, text: &str) {
+        self.push_run(Some(text));
+        if let Some(count) = self.counts.get_mut(text) {
+            *count += 1;
+        } else {
+            self.counts.insert(text.to_string(), 1);
+        }
+    }
+
+    fn push_run(&mut self, cell: Option<&str>) {
+        if self.prev_cell.as_ref().map(|prev| prev.as_deref()) == Some(cell) {
             self.run_length += 1;
         } else {
             self.run_length = 1;
             self.runs += 1;
-            self.prev_cell = Some(cell);
+            self.prev_cell = Some(cell.map(str::to_owned));
         }
         self.run_length_max = self.run_length_max.max(self.run_length);
     }
@@ -644,11 +574,11 @@ impl ColumnAcc {
             null_count: self.null_count,
             null_fraction: ratio(self.null_count, self.value_count),
             ndv,
-            ndv_ratio: ratio(ndv, non_null),
+            ndv_ratio: ratio(ndv, self.value_count),
             entropy,
             top_values,
-            min_value: self.lowest,
-            max_value: self.highest,
+            min_value: self.lowest.map(OrderKey::into_string),
+            max_value: self.highest.map(OrderKey::into_string),
             length_mean,
             length_p50,
             length_p90,
@@ -669,36 +599,45 @@ fn stream_column(
     rows: usize,
     acc: &mut ColumnAcc,
 ) -> Result<(), Error> {
-    let reader = group
-        .get_column_reader(col_idx)
-        .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
-    match reader {
+    match group.get_column_reader(col_idx)? {
         ColumnReader::BoolColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, &v| {
+                acc.push_text(if v { "true" } else { "false" });
+            })
         }
         ColumnReader::Int32ColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, &v| {
+                acc.push_key(&v.to_string(), OrderKey::Integer(i64::from(v)));
+            })
         }
         ColumnReader::Int64ColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, &v| {
+                acc.push_key(&v.to_string(), OrderKey::Integer(v));
+            })
         }
         ColumnReader::Int96ColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, v| {
+                acc.push_text(&v.to_string());
+            })
         }
         ColumnReader::FloatColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, &v| {
+                acc.push_key(&v.to_string(), OrderKey::Number(f64::from(v)));
+            })
         }
         ColumnReader::DoubleColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| v.to_string())
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, &v| {
+                acc.push_key(&v.to_string(), OrderKey::Number(v));
+            })
         }
         ColumnReader::ByteArrayColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| {
-                String::from_utf8_lossy(v.data()).into_owned()
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, v| {
+                acc.push_text(&String::from_utf8_lossy(v.data()));
             })
         }
         ColumnReader::FixedLenByteArrayColumnReader(mut reader) => {
-            feed_typed(&mut reader, max_def, max_rep, rows, acc, |v| {
-                String::from_utf8_lossy(v.data()).into_owned()
+            feed_typed(&mut reader, max_def, max_rep, rows, acc, |acc, v| {
+                acc.push_text(&String::from_utf8_lossy(v.data()));
             })
         }
     }
@@ -710,7 +649,7 @@ fn feed_typed<T: DataType>(
     max_rep: i16,
     rows: usize,
     acc: &mut ColumnAcc,
-    mut format: impl FnMut(&T::T) -> String,
+    mut push: impl FnMut(&mut ColumnAcc, &T::T),
 ) -> Result<(), Error> {
     let mut remaining = rows;
     let mut values = Vec::new();
@@ -721,33 +660,38 @@ fn feed_typed<T: DataType>(
         values.clear();
         def_levels.clear();
         rep_levels.clear();
-        let (records, _, levels) = reader
-            .read_records(
-                batch,
-                (max_def > 0).then_some(&mut def_levels),
-                (max_rep > 0).then_some(&mut rep_levels),
-                &mut values,
-            )
-            .map_err(|error| ParquetError::Parquet(Box::new(error)))?;
-        if records == 0 && levels == 0 && values.is_empty() {
+        let (records, _, levels) = reader.read_records(
+            batch,
+            (max_def > 0).then_some(&mut def_levels),
+            (max_rep > 0).then_some(&mut rep_levels),
+            &mut values,
+        )?;
+        let consumed = if max_rep > 0 {
+            records
+        } else if max_def > 0 {
+            levels
+        } else {
+            values.len()
+        };
+        if consumed == 0 {
             break;
         }
         if max_def == 0 {
             for value in &values {
-                acc.push_value(format(value));
+                push(acc, value);
             }
         } else {
             let mut at = 0;
             for &def in &def_levels[..levels] {
                 if def == max_def {
-                    acc.push_value(format(&values[at]));
+                    push(acc, &values[at]);
                     at += 1;
                 } else {
                     acc.push_null();
                 }
             }
         }
-        remaining = remaining.saturating_sub(records.max(1));
+        remaining = remaining.saturating_sub(consumed);
     }
     Ok(())
 }
