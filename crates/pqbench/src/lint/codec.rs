@@ -65,8 +65,8 @@ fn zstd_measurement(chunk_bytes: u64, pages: &[ChunkPage]) -> Result<Option<Meas
     }
     if data_pages.len() > 1 {
         let page = representative_page(&data_pages);
-        if let Some(compressed_bytes) = page.compressed_bytes.filter(|bytes| *bytes > 0) {
-            return Ok(saving(compressed_bytes, &zstd_bytes(&page.payload)?));
+        if let Some(compressed_page_size) = page.compressed_page_size.filter(|bytes| *bytes > 0) {
+            return Ok(saving(compressed_page_size, &zstd_bytes(&page.payload)?));
         }
     }
     let mut candidates = [0_u64; LEVELS.len()];
@@ -105,15 +105,15 @@ fn zstd_bytes(payload: &[u8]) -> Result<[u64; LEVELS.len()], Error> {
     Ok(bytes)
 }
 
-/// The fraction of `compressed_bytes` the candidates save: the largest candidate
+/// The fraction of the stored bytes the candidates save: the largest candidate
 /// is the worst level, the smallest the best.
-fn saving(compressed_bytes: u64, candidates: &[u64; LEVELS.len()]) -> Option<Measurement> {
-    if compressed_bytes == 0 {
+fn saving(stored_bytes: u64, candidates: &[u64; LEVELS.len()]) -> Option<Measurement> {
+    if stored_bytes == 0 {
         return None;
     }
-    let largest = candidates.iter().copied().max().unwrap_or(compressed_bytes);
-    let smallest = candidates.iter().copied().min().unwrap_or(compressed_bytes);
-    let baseline = compressed_bytes as f64;
+    let largest = candidates.iter().copied().max().unwrap_or(stored_bytes);
+    let smallest = candidates.iter().copied().min().unwrap_or(stored_bytes);
+    let baseline = stored_bytes as f64;
     Some(Measurement {
         ratio_low: (baseline - largest as f64) / baseline,
         ratio_high: (baseline - smallest as f64) / baseline,
@@ -167,6 +167,8 @@ fn remedy(writer: Writer, leaf: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{detect, remedy, zstd_measurement};
+    use parquet::basic::Encoding;
+
     use crate::lint::decode::ChunkPage;
     use crate::lint::writer::Writer;
     use crate::lint::ColumnSample;
@@ -184,10 +186,11 @@ mod tests {
 
     /// A data page with the bytes it occupies on disk, as an offset index would
     /// record them.
-    fn page(payload: Vec<u8>, compressed_bytes: Option<u64>) -> ChunkPage {
+    fn page(payload: Vec<u8>, compressed_page_size: Option<u64>) -> ChunkPage {
         ChunkPage {
             payload,
-            compressed_bytes,
+            compressed_page_size,
+            encoding: Encoding::PLAIN,
             data: true,
         }
     }

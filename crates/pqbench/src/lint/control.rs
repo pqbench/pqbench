@@ -2,11 +2,10 @@
 //! at the same codec and level, preserving the sample's row-group boundary.
 
 use parquet::basic::{Compression, Encoding, GzipLevel, ZstdLevel};
-use parquet::data_type::ByteArray;
 
 use crate::v1;
 
-use super::price::{price_bytes, Settings};
+use super::price::{price, Settings, Values};
 use super::{ColumnSample, Error};
 
 /// A rewrite's measured advantage over its control, as a fraction of the
@@ -57,12 +56,19 @@ fn compressions(codec: Option<&str>) -> Option<(Vec<Compression>, &'static str)>
     })
 }
 
+/// Whether a chunk records `encoding` anywhere in its encoding set.
+///
+/// A chunk's set always lists `PLAIN` for its dictionary page, so this answers
+/// "did the writer use this encoding", not "do the data pages use it".
+pub(super) fn records(mass: &v1::Bytemass, encoding: Encoding) -> bool {
+    mass.encodings.contains(&encoding.to_string())
+}
+
 /// The source byte-array column's own encoding, when the footer records one.
 pub(super) fn source_encoding(mass: &v1::Bytemass) -> Option<Encoding> {
-    let has = |name: &str| mass.encodings.iter().any(|encoding| encoding == name);
-    if has("DELTA_LENGTH_BYTE_ARRAY") {
+    if records(mass, Encoding::DELTA_LENGTH_BYTE_ARRAY) {
         Some(Encoding::DELTA_LENGTH_BYTE_ARRAY)
-    } else if has("DELTA_BYTE_ARRAY") {
+    } else if records(mass, Encoding::DELTA_BYTE_ARRAY) {
         Some(Encoding::DELTA_BYTE_ARRAY)
     } else {
         None
@@ -71,7 +77,7 @@ pub(super) fn source_encoding(mass: &v1::Bytemass) -> Option<Encoding> {
 
 /// One arm of a controlled pair: the values to encode and how to encode them.
 pub(super) struct Arm<'a> {
-    pub(super) cells: &'a [Option<ByteArray>],
+    pub(super) values: Values<'a>,
     pub(super) settings: Settings,
 }
 
@@ -85,8 +91,8 @@ pub(super) fn compare(
     candidate: &Arm<'_>,
 ) -> Result<Option<Measurement>, Error> {
     measure_arms(sample, |compression| {
-        let baseline_bytes = price_bytes(baseline.cells, compression, baseline.settings)?;
-        let candidate_bytes = price_bytes(candidate.cells, compression, candidate.settings)?;
+        let baseline_bytes = price(baseline.values, compression, baseline.settings)?;
+        let candidate_bytes = price(candidate.values, compression, candidate.settings)?;
         Ok(Some((baseline_bytes, candidate_bytes)))
     })
 }
@@ -128,7 +134,7 @@ pub(super) fn measure_arms(
 mod tests {
     use parquet::basic::Encoding;
 
-    use super::{compressions, family, source_encoding};
+    use super::{compressions, family, records, source_encoding};
     use crate::v1::Bytemass;
 
     #[test]
@@ -147,6 +153,7 @@ mod tests {
     fn a_recorded_encoding_is_the_control() {
         let mut mass = Bytemass::default();
         assert_eq!(source_encoding(&mass), None);
+        assert!(!records(&mass, Encoding::DELTA_BINARY_PACKED));
         mass.encodings = vec!["PLAIN".into(), "DELTA_LENGTH_BYTE_ARRAY".into()];
         assert_eq!(
             source_encoding(&mass),
@@ -154,5 +161,8 @@ mod tests {
         );
         mass.encodings = vec!["DELTA_BYTE_ARRAY".into()];
         assert_eq!(source_encoding(&mass), Some(Encoding::DELTA_BYTE_ARRAY));
+        mass.encodings = vec!["PLAIN".into(), "DELTA_BINARY_PACKED".into()];
+        assert!(records(&mass, Encoding::DELTA_BINARY_PACKED));
+        assert_eq!(source_encoding(&mass), None);
     }
 }

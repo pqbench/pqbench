@@ -104,6 +104,9 @@ pub(crate) fn write_parquet(
     if let Some(page_size) = options.page_size {
         builder = builder.set_data_page_size_limit(page_size);
     }
+    if let Some(length) = options.stats_truncate_length {
+        builder = builder.set_statistics_truncate_length(Some(length));
+    }
     if !options.sorting_columns.is_empty() {
         let sorting = options
             .sorting_columns

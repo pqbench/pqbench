@@ -87,6 +87,9 @@ pub struct WriteOptions {
     pub encoding: Option<String>,
     /// Data page size limit, when set.
     pub page_size: Option<usize>,
+    /// The longest `min_value`/`max_value` a column chunk records; `None`
+    /// keeps the writer's own default (64 bytes).
+    pub stats_truncate_length: Option<usize>,
     /// Column names to record as the file's sorting columns.
     pub sorting_columns: Vec<String>,
     /// Rows per row group; 0 writes every row into one group.
@@ -366,6 +369,7 @@ mod tests {
             dictionary_bytes: None,
             encoding: None,
             page_size: None,
+            stats_truncate_length: None,
             sorting_columns: Vec::new(),
             row_group_size: 8,
         };

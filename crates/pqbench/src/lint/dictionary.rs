@@ -1,12 +1,20 @@
 //! `dictionary-unique`: a dictionary page on nearly-unique values, priced
 //! against the same writer with the dictionary off. `dictionary-missing`: the
 //! same values written without a dictionary, priced with one on.
+//!
+//! Both rules cover every physical type a dictionary can pay on — `BYTE_ARRAY`,
+//! `FIXED_LEN_BYTE_ARRAY`, `INT32`, `INT64`, `FLOAT`, and `DOUBLE` — because a
+//! dictionary is a per-chunk value table whatever the values' width. The
+//! pricing arms write each type at its own physical width, so a numeric column
+//! is compared as numbers, not as bytes.
+
+use parquet::basic::Encoding;
+use parquet::file::properties::WriterVersion;
 
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
-use super::decode::unique_fraction;
-use super::price::{PhysicalShape, Settings};
+use super::price::{Settings, Values};
 use super::writer::Writer;
 use super::{ColumnSample, Error, Finding};
 
@@ -24,19 +32,26 @@ const UNIQUE_FRACTION: f64 = 0.5;
 /// sampled non-null values are distinct within the chunk.
 const REPEATED_FRACTION: f64 = 0.1;
 
+/// The fewest sampled non-null values a dictionary decision rests on. A chunk
+/// with a handful of values has no repetition for a dictionary page to
+/// amortize over, so the page alone would decide the comparison and every such
+/// chunk would earn the same, degenerate finding.
+const MINIMUM_VALUES: usize = 32;
+
 /// The finding this column earns when its own chunk carries a dictionary page
 /// and the values are nearly unique.
 pub(super) fn detect_unique(sample: &ColumnSample<'_>) -> Option<Finding> {
-    if !sample.byte_leaf()
+    if !dictionary_leaf(sample)
         || !sample.chunk_has_dictionary
-        || unique_fraction(sample.cells) < UNIQUE_FRACTION
+        || sample.distinct_fraction() < UNIQUE_FRACTION
     {
         return None;
     }
     let leaf = sample.leaf;
     Some(Finding {
         message: format!(
-            "a dictionary on nearly-unique values at {:.2} B/value",
+            "a dictionary on nearly-unique {} values at {:.2} B/value",
+            sample.physical(),
             sample.text_bpv
         ),
         remedy: unique_remedy(sample.writer_kind(), leaf),
@@ -48,18 +63,19 @@ pub(super) fn detect_unique(sample: &ColumnSample<'_>) -> Option<Finding> {
 /// The finding this column earns when its own chunk has no dictionary page and
 /// the values repeat enough for one to pay.
 pub(super) fn detect_missing(sample: &ColumnSample<'_>) -> Option<Finding> {
-    if !sample.byte_leaf() || sample.chunk_has_dictionary {
+    if !dictionary_leaf(sample) || sample.chunk_has_dictionary {
         return None;
     }
-    let fraction = unique_fraction(sample.cells);
+    let fraction = sample.distinct_fraction();
     if fraction >= REPEATED_FRACTION {
         return None;
     }
     let leaf = sample.leaf;
     Some(Finding {
         message: format!(
-            "only {:.1}% of sampled values are distinct at {:.2} B/value",
+            "only {:.1}% of sampled {} values are distinct at {:.2} B/value",
             fraction * 100.0,
+            sample.physical(),
             sample.text_bpv
         ),
         remedy: missing_remedy(sample.writer_kind(), leaf),
@@ -68,41 +84,72 @@ pub(super) fn detect_missing(sample: &ColumnSample<'_>) -> Option<Finding> {
     })
 }
 
+/// Whether the leaf is a physical type a dictionary can pay on, over enough
+/// values for the comparison to mean anything. A `BOOLEAN` leaf is not: Parquet
+/// has no dictionary for one, and parquet-rs writes `RLE` whatever the settings
+/// say.
+fn dictionary_leaf(sample: &ColumnSample<'_>) -> bool {
+    matches!(
+        sample.physical(),
+        "BYTE_ARRAY" | "FIXED_LEN_BYTE_ARRAY" | "INT32" | "INT64" | "FLOAT" | "DOUBLE"
+    ) && sample.values().is_some()
+        && sample.sampled_values() >= MINIMUM_VALUES
+}
+
 /// Price the dictionary arm against the same values with the dictionary off,
 /// both written by the same writer at the file's codec and level.
 fn measure_unique(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
-    let baseline = sheet(sample, sample.chunk_has_dictionary);
-    let candidate = sheet(sample, false);
+    let (Some(baseline), Some(candidate)) = (sheet(sample, true), sheet(sample, false)) else {
+        return Ok(None);
+    };
     control::compare(sample, &baseline, &candidate)
 }
 
 /// Price the same values without a dictionary against the same values with
 /// one, both written by the same writer at the file's codec and level.
 fn measure_missing(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
-    let baseline = sheet(sample, false);
-    let candidate = sheet(sample, true);
+    let (Some(baseline), Some(candidate)) = (sheet(sample, false), sheet(sample, true)) else {
+        return Ok(None);
+    };
     control::compare(sample, &baseline, &candidate)
 }
 
 /// One arm over the sample's values, with the dictionary on or off.
-fn sheet<'a>(sample: &ColumnSample<'a>, dictionary: bool) -> Arm<'a> {
-    Arm {
-        cells: sample.cells,
+///
+/// A `FIXED_LEN_BYTE_ARRAY` leaf writes both arms under the 2.0 page version:
+/// parquet-rs mirrors parquet-mr in having no `FIXED_LEN_BYTE_ARRAY` dictionary
+/// under the 1.0 version, so a v1 pair would silently compare PLAIN against
+/// PLAIN.
+fn sheet<'a>(sample: &ColumnSample<'a>, dictionary: bool) -> Option<Arm<'a>> {
+    let values = sample.values()?;
+    let version = match values {
+        Values::FixedLen(..) => WriterVersion::PARQUET_2_0,
+        _ => WriterVersion::PARQUET_1_0,
+    };
+    let encoding = if dictionary {
+        None
+    } else {
+        match (control::source_encoding(sample.mass), version) {
+            // A v2 writer chooses DELTA_BYTE_ARRAY for a fixed-length leaf when
+            // no encoding is named; the source's PLAIN pages are reproduced
+            // explicitly so the pair differs only in the dictionary.
+            (None, WriterVersion::PARQUET_2_0) => Some(Encoding::PLAIN),
+            (recorded, _) => recorded,
+        }
+    };
+    Some(Arm {
+        values,
         settings: Settings {
-            shape: PhysicalShape::ByteArray,
             dictionary,
             dictionary_page_size_limit: if dictionary {
                 sample.dictionary_page_size_limit()
             } else {
                 None
             },
-            encoding: if dictionary {
-                None
-            } else {
-                control::source_encoding(sample.mass)
-            },
+            encoding,
+            version,
         },
-    }
+    })
 }
 
 /// The settings that disable one column's dictionary, one per engine.
@@ -121,6 +168,10 @@ fn unique_remedies(leaf: &str) -> Vec<v1::Remedy> {
             format!("set_column_dictionary_enabled({leaf:?}, false)"),
         ),
         v1::Remedy::new("iceberg", "write.parquet.dict-size-bytes=8192"),
+        v1::Remedy::new(
+            "duckdb",
+            "no per-column switch: DuckDB enables the dictionary itself when it pays",
+        ),
     ]
 }
 
@@ -137,6 +188,10 @@ fn missing_remedies(leaf: &str) -> Vec<v1::Remedy> {
             format!("set_column_dictionary_enabled({leaf:?}, true)"),
         ),
         v1::Remedy::new("iceberg", "write.parquet.dict-size-bytes=2097152"),
+        v1::Remedy::new(
+            "duckdb",
+            "no per-column switch: DuckDB enables the dictionary itself when it pays",
+        ),
     ]
 }
 
@@ -181,11 +236,11 @@ mod tests {
     use crate::lint::ColumnSample;
     use crate::v1;
 
-    fn column() -> v1::Column {
+    fn column(physical_data_type: &str, codec: &str) -> v1::Column {
         v1::Column {
-            physical_data_type: Some("BYTE_ARRAY".into()),
+            physical_data_type: Some(physical_data_type.into()),
             mass: Some(v1::Bytemass {
-                codec: Some("ZSTD".into()),
+                codec: Some(codec.into()),
                 ..v1::Bytemass::default()
             }),
             ..v1::Column::default()
@@ -223,7 +278,7 @@ mod tests {
     /// The rule reads the sample chunk's own dictionary page, not any chunk's.
     #[test]
     fn a_chunk_without_a_dictionary_page_is_not_a_candidate() {
-        let column = column();
+        let column = column("BYTE_ARRAY", "ZSTD");
         let values: Vec<String> = (0..100).map(|value| format!("value-{value}")).collect();
         let cells = cells(&values);
 
@@ -265,13 +320,131 @@ mod tests {
         );
     }
 
+    /// A chunk of a handful of values is no dictionary candidate either way:
+    /// there is no repetition to amortize a page over, so the page alone would
+    /// decide the comparison.
+    #[test]
+    fn a_handful_of_values_is_not_a_dictionary_candidate() {
+        let column = column("INT64", "UNCOMPRESSED");
+        let few: Vec<Option<i64>> = (0..8).map(|value| Some(i64::from(value))).collect();
+
+        let with_dictionary = ColumnSample::for_test_int64(&column, &few, true);
+        assert!(detect_unique(&with_dictionary).is_none());
+
+        let repeated: Vec<Option<i64>> = (0..8).map(|value| Some(value % 2)).collect();
+        let without_dictionary = ColumnSample::for_test_int64(&column, &repeated, false);
+        assert!(detect_missing(&without_dictionary).is_none());
+    }
+
     /// Nearly-unique values are not a candidate for a dictionary.
     #[test]
     fn nearly_unique_values_do_not_earn_a_dictionary() {
-        let column = column();
+        let column = column("BYTE_ARRAY", "ZSTD");
         let values: Vec<String> = (0..500).map(|value| format!("value-{value}")).collect();
         let cells = cells(&values);
         let sample = ColumnSample::for_test(&column, &cells, false);
         assert!(detect_missing(&sample).is_none());
+    }
+
+    /// An `INT64` column of a few repeated values earns a dictionary, and the
+    /// control prices it as numbers rather than as text.
+    #[test]
+    fn repeated_integers_earn_a_dictionary() {
+        let column = v1::Column {
+            physical_data_type: Some("INT64".into()),
+            mass: Some(v1::Bytemass {
+                codec: Some("UNCOMPRESSED".into()),
+                compressed_bytes: Some(160_000),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
+        };
+        let values: Vec<Option<i64>> = (0..10_000).map(|value| Some(value % 50)).collect();
+        let sample = ColumnSample::for_test_int64(&column, &values, false);
+
+        assert!(detect_missing(&sample).is_some());
+        let measurement = measure_missing(&sample)
+            .expect("measure")
+            .expect("uncompressed");
+        assert!(
+            measurement.ratio_low > 0.5,
+            "a dictionary on 50 distinct integers saves most of eight bytes a value, got {}",
+            measurement.ratio_low
+        );
+    }
+
+    /// A `DOUBLE` dictionary on nearly-unique values costs more than it saves,
+    /// so the rule detects it and the control proves removing it pays.
+    #[test]
+    fn a_dictionary_on_unique_doubles_is_priced_as_removable() {
+        let column = column("DOUBLE", "UNCOMPRESSED");
+        let values: Vec<Option<f64>> = (0..2_000).map(|value| Some(value as f64 * 1.5)).collect();
+        let sample = ColumnSample::for_test_double(&column, &values, true);
+
+        assert!(detect_unique(&sample).is_some());
+        let measurement = super::measure_unique(&sample)
+            .expect("measure")
+            .expect("uncompressed");
+        assert!(
+            measurement.ratio_low > 0.0,
+            "a dictionary of 2,000 doubles must cost more than the values, got {}",
+            measurement.ratio_low
+        );
+    }
+
+    /// A `FLOAT` column of a few repeated values earns a dictionary at its own
+    /// four-byte width.
+    #[test]
+    fn repeated_floats_earn_a_dictionary() {
+        let column = v1::Column {
+            physical_data_type: Some("FLOAT".into()),
+            mass: Some(v1::Bytemass {
+                codec: Some("UNCOMPRESSED".into()),
+                compressed_bytes: Some(160_000),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
+        };
+        let values: Vec<Option<f32>> = (0..10_000).map(|value| Some((value % 50) as f32)).collect();
+        let sample = ColumnSample::for_test_float(&column, &values, false);
+
+        assert!(detect_missing(&sample).is_some());
+        let measurement = measure_missing(&sample)
+            .expect("measure")
+            .expect("uncompressed");
+        assert!(
+            measurement.ratio_low > 0.5,
+            "a dictionary on 50 distinct floats saves most of four bytes a value, got {}",
+            measurement.ratio_low
+        );
+    }
+
+    /// A `FIXED_LEN_BYTE_ARRAY` dictionary pays on repeated values, and the
+    /// control writes v2 pages so the dictionary exists at all.
+    #[test]
+    fn repeated_fixed_length_values_earn_a_dictionary() {
+        let column = v1::Column {
+            physical_data_type: Some("FIXED_LEN_BYTE_ARRAY".into()),
+            mass: Some(v1::Bytemass {
+                codec: Some("UNCOMPRESSED".into()),
+                compressed_bytes: Some(160_000),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
+        };
+        let values: Vec<Option<ByteArray>> = (0..2_000)
+            .map(|value| Some(ByteArray::from(vec![(value % 16) as u8; 16])))
+            .collect();
+        let sample = ColumnSample::for_test(&column, &values, false);
+
+        assert!(detect_missing(&sample).is_some());
+        let measurement = measure_missing(&sample)
+            .expect("measure")
+            .expect("uncompressed");
+        assert!(
+            measurement.ratio_low > 0.5,
+            "16 distinct values in 2,000 rows must dictionary-encode, got {}",
+            measurement.ratio_low
+        );
     }
 }

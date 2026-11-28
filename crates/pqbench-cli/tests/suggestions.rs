@@ -1,4 +1,5 @@
-//! Blackbox tests for `list suggestions`' UUID rule.
+//! Blackbox tests for the column rules `list suggestions` detects and
+//! `get suggestion` measures.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -45,28 +46,60 @@ fn temporary(name: &str) -> PathBuf {
     directory
 }
 
-/// Write a one-column text file, compressed with zstd.
-fn write_values(path: &Path, values: &[String], dictionary: bool, row_group_size: usize) {
-    let rows: Vec<Vec<Value>> = values
-        .iter()
-        .map(|value| vec![Value::Bytes(value.as_bytes().to_vec())])
-        .collect();
-    let columns = [TypedColumn {
-        name: "id".into(),
-        kind: Kind::Bytes,
-    }];
-    let options = WriteOptions {
+/// The writer settings a fixture is written with: zstd at the common default,
+/// with the dictionary and statistics settings a test needs.
+fn options(dictionary: bool) -> WriteOptions {
+    WriteOptions {
         compression: "zstd".into(),
         level: Some(3),
         dictionary,
         dictionary_bytes: None,
         encoding: None,
         page_size: None,
+        stats_truncate_length: None,
         sorting_columns: Vec::new(),
-        row_group_size,
-    };
-    let bytes = write_parquet(&columns, &rows, &options).expect("write fixture");
+        row_group_size: 0,
+    }
+}
+
+/// Write one `id` column of `rows` and return the file's path.
+fn write_column(path: &Path, column: TypedColumn, rows: &[Vec<Value>], options: WriteOptions) {
+    let bytes = write_parquet(&[column], rows, &options).expect("write fixture");
     std::fs::write(path, bytes).expect("write fixture file");
+}
+
+/// Write a one-column text file, compressed with zstd.
+fn write_values(path: &Path, values: &[String], dictionary: bool, row_group_size: usize) {
+    let rows: Vec<Vec<Value>> = values
+        .iter()
+        .map(|value| vec![Value::Bytes(value.as_bytes().to_vec())])
+        .collect();
+    let column = TypedColumn {
+        name: "id".into(),
+        kind: Kind::Bytes,
+    };
+    let options = WriteOptions {
+        row_group_size,
+        ..options(dictionary)
+    };
+    write_column(path, column, &rows, options);
+}
+
+/// Write a one-column integer file, compressed with zstd.
+fn write_integers(path: &Path, values: &[i64], dictionary: bool) {
+    let rows: Vec<Vec<Value>> = values
+        .iter()
+        .map(|value| vec![Value::Integer(*value)])
+        .collect();
+    write_column(
+        path,
+        TypedColumn {
+            name: "id".into(),
+            kind: Kind::Integer,
+        },
+        &rows,
+        options(dictionary),
+    );
 }
 
 /// Run a command with an NDJSON standard input and return its NDJSON output.
@@ -468,6 +501,349 @@ fn a_remote_blob_with_a_local_copy_verifies_without_network() {
         &records[0].to_string(),
     );
     assert_eq!(measured[0]["verified"], true, "{measured:?}");
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Dense sequential integers without Delta binary packing are a candidate, and
+/// the controlled rewrite confirms the saving.
+#[test]
+fn dense_integers_earn_delta_binary_packing() {
+    let directory = temporary("delta-integer");
+    let path = directory.join("data.parquet");
+    let values: Vec<i64> = (0..200_000).collect();
+    write_integers(&path, &values, false);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "delta-integer", "{records:?}");
+    assert_eq!(records[0]["column"], "id");
+    assert!(
+        records[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("DELTA_BINARY_PACKED"),
+        "{records:?}"
+    );
+    let remedies = records[0]["remedies"].as_array().expect("remedies");
+    assert!(
+        remedies
+            .iter()
+            .any(|remedy| remedy["engine"] == "parquet-rs"
+                && remedy["setting"]
+                    .as_str()
+                    .unwrap()
+                    .contains("DELTA_BINARY_PACKED")),
+        "{records:?}"
+    );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024,
+        "{measured:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Dense integers written with a dictionary that overflowed prefer packed
+/// deltas: the larger win covers the encoding, not just the dictionary.
+#[test]
+fn a_dictionary_on_dense_integers_prefers_delta_packing() {
+    let directory = temporary("delta-integer-dictionary");
+    let path = directory.join("data.parquet");
+    let values: Vec<i64> = (0..200_000).collect();
+    write_integers(&path, &values, true);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "delta-integer", "{records:?}");
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024,
+        "{measured:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Random integers have no win to make, so the rule must not claim one.
+#[test]
+fn random_integers_are_not_delta_encoded() {
+    let directory = temporary("delta-integer-random");
+    let path = directory.join("data.parquet");
+    let values: Vec<i64> = (0..200_000).map(|value| mix(value).cast_signed()).collect();
+    write_integers(&path, &values, false);
+
+    let records = suggestions(&path);
+    assert!(
+        records
+            .iter()
+            .all(|record| record["rule"] != "delta-integer"),
+        "{records:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Repeated integers without a dictionary are a candidate for one, and the
+/// control prices the dictionary on integers rather than on text.
+#[test]
+fn repeated_integers_earn_a_dictionary() {
+    let directory = temporary("dictionary-integer");
+    let path = directory.join("data.parquet");
+    // 1,000 distinct values with no byte pattern: PLAIN cannot compress them,
+    // a dictionary's indices can.
+    let distinct: Vec<i64> = (0..1_000u64).map(|value| mix(value) as i64).collect();
+    let values: Vec<i64> = (0..400_000).map(|value| distinct[value % 1_000]).collect();
+    write_integers(&path, &values, false);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "dictionary-missing", "{records:?}");
+    assert!(
+        records[0]["message"].as_str().unwrap().contains("INT64"),
+        "{records:?}"
+    );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024,
+        "{measured:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// A chunk that outgrew its dictionary page and fell back to PLAIN is priced
+/// three ways, and the winner is the one reported.
+#[test]
+fn a_dictionary_fallback_is_priced() {
+    let directory = temporary("dictionary-fallback");
+    let path = directory.join("data.parquet");
+    // 1,000 distinct incompressible values over 200,000 rows: the chunk keeps a
+    // dictionary page while overflowing it, the values repeat too much for the
+    // dictionary rules to claim them, and raising the limit pays.
+    let distinct: Vec<String> = (0..1_000u64)
+        .map(|value| format!("{:016x}{:016x}", mix(value), mix(value ^ 7)))
+        .collect();
+    let values: Vec<String> = (0..200_000)
+        .map(|value| distinct[value % 1_000].clone())
+        .collect();
+    let rows: Vec<Vec<Value>> = values
+        .iter()
+        .map(|value| vec![Value::Bytes(value.as_bytes().to_vec())])
+        .collect();
+    let options = WriteOptions {
+        dictionary_bytes: Some(1_024),
+        ..options(true)
+    };
+    write_column(
+        &path,
+        TypedColumn {
+            name: "id".into(),
+            kind: Kind::Bytes,
+        },
+        &rows,
+        options,
+    );
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "dictionary-fallback", "{records:?}");
+    assert!(
+        records[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fell back to PLAIN"),
+        "{records:?}"
+    );
+    let remedies = records[0]["remedies"].as_array().expect("remedies");
+    assert!(
+        remedies.iter().any(|remedy| remedy["engine"] == "pyarrow"
+            && remedy["setting"]
+                .as_str()
+                .unwrap()
+                .contains("dictionary_pagesize_limit")),
+        "{records:?}"
+    );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024,
+        "{measured:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// A dictionary that never fell back is not a fallback candidate.
+#[test]
+fn a_dictionary_without_a_fallback_is_not_reported() {
+    let directory = temporary("dictionary-no-fallback");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..100_000)
+        .map(|value| format!("prefix-{:06}", value % 60_000))
+        .collect();
+    write_values(&path, &values, true, 0);
+
+    let records = suggestions(&path);
+    assert!(
+        records
+            .iter()
+            .all(|record| record["rule"] != "dictionary-fallback"),
+        "{records:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Untruncated footer bounds are priced by arithmetic on the footer's own
+/// bytes, with no re-encode.
+#[test]
+fn untruncated_statistics_are_priced() {
+    let directory = temporary("stats-truncated");
+    let path = directory.join("data.parquet");
+    // A few repeated long values: the chunk keeps a dictionary, and each bound
+    // is far longer than the 64-byte truncation length.
+    let values: Vec<String> = (0..100_000)
+        .map(|value| format!("{}-{}", "a".repeat(300), value % 8))
+        .collect();
+    let rows: Vec<Vec<Value>> = values
+        .iter()
+        .map(|value| vec![Value::Bytes(value.as_bytes().to_vec())])
+        .collect();
+    let options = WriteOptions {
+        // A writer with no truncation length, as Arrow C++ writes them.
+        stats_truncate_length: Some(1 << 20),
+        ..options(true)
+    };
+    write_column(
+        &path,
+        TypedColumn {
+            name: "id".into(),
+            kind: Kind::Bytes,
+        },
+        &rows,
+        options,
+    );
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "stats-truncated", "{records:?}");
+    assert!(
+        records[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("above the 64-byte truncation length"),
+        "{records:?}"
+    );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() > 0,
+        "{measured:?}"
+    );
+    assert!(
+        measured[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("footer's recorded bounds"),
+        "{measured:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Truncated footer bounds are no candidate: the writer already stopped at the
+/// 64-byte length.
+#[test]
+fn truncated_statistics_are_not_reported() {
+    let directory = temporary("stats-truncated-default");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..100_000)
+        .map(|value| format!("{}-{}", "a".repeat(300), value % 8))
+        .collect();
+    write_values(&path, &values, true, 0);
+
+    let records = suggestions(&path);
+    assert!(
+        records
+            .iter()
+            .all(|record| record["rule"] != "stats-truncated"),
+        "{records:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// ISO-8601 timestamp text is a candidate for a microsecond `INT64`, and the
+/// controlled rewrite confirms the saving.
+#[test]
+fn timestamp_text_earns_microsecond_integers() {
+    let directory = temporary("text-timestamp");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..200_000)
+        .map(|value| {
+            let seconds = 1_700_000_000 + value;
+            format!(
+                "2023-11-14T{:02}:{:02}:{:02}.{:03}Z",
+                seconds / 3_600 % 24,
+                seconds / 60 % 60,
+                seconds % 60,
+                value % 1_000
+            )
+        })
+        .collect();
+    write_values(&path, &values, false, 0);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "text-timestamp", "{records:?}");
+    assert!(
+        records[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("ISO-8601 timestamp text"),
+        "{records:?}"
+    );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024);
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Text that is not entirely timestamps never earns the timestamp rule.
+#[test]
+fn mixed_text_is_not_a_timestamp_column() {
+    let directory = temporary("text-not-timestamp");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..100_000)
+        .map(|value| {
+            if value % 1_000 == 0 {
+                format!("not-a-timestamp-{value}")
+            } else {
+                format!("2023-11-14T12:00:{:02}Z", value % 60)
+            }
+        })
+        .collect();
+    write_values(&path, &values, false, 0);
+
+    let records = suggestions(&path);
+    assert!(
+        records
+            .iter()
+            .all(|record| record["rule"] != "text-timestamp"),
+        "{records:?}"
+    );
 
     let _ = std::fs::remove_dir_all(directory);
 }

@@ -260,11 +260,12 @@ one is running, and local tables need none.
   that copy), then `verify` (`get suggestion --local` on the potential
   suggestions, while the copy is still there; the two partition rules that need
   no file — `tombstones` and `small-files` — are added to the same record set).
-  The six column rules (`codec-zstd`, `uuid-text`, `int96-timestamp`,
-  `dictionary-unique`, `dictionary-missing`, `delta-text-encoding`) each name
+  The ten column rules (`uuid-text`, `int96-timestamp`, `text-timestamp`,
+  `codec-zstd`, `dictionary-unique`, `dictionary-missing`, `delta-integer`,
+  `delta-text-encoding`, `dictionary-fallback`, `stats-truncated`) each name
   their change in every engine pqbench knows, so the driver records one
   suggestion per rule with the `remedies` for spark, pyarrow, parquet-rs, Delta,
-  and Iceberg. One command runs per CPU at once,
+  Iceberg, and DuckDB. One command runs per CPU at once,
   taking the newest data first and then the largest partition. A version
   with no live file, or whose files are in an archive class or tier, is
   `UP_TO_DATE` after its price. With `--low-network` no file is copied: after

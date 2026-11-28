@@ -128,6 +128,7 @@ fn profile_preserves_physical_types_exact_i64_order_and_v1_round_trip() {
         dictionary_bytes: None,
         encoding: None,
         page_size: None,
+        stats_truncate_length: None,
         sorting_columns: Vec::new(),
         row_group_size: 0,
     };

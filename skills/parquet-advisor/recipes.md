@@ -223,7 +223,7 @@ sorting_columns      = chosen sort
 ## Recipe: store device_id as bytes not uuid-string
 - Aim: storage
 - Evidence: get suggestion device_id rule=uuid-text verified=true, savings_bytes=…
-  (a binary-rewrite estimate measured on the first 8192 rows); bytemass
+  (a binary-rewrite estimate measured on one representative row group); bytemass
   device_id 13% of table (source: footer)
 - Write / ingest: parse UUID to 16 bytes at ingest
 - Table DDL: BINARY(16) / UUID native type, not STRING

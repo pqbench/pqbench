@@ -31,11 +31,11 @@ $ pqb skill parquet-advisor recipes | head -1
 | L0 footer | `pqb table-file FILE | pqb bytemass` | per column: compressed/uncompressed bytes, codec, data encoding, dictionary bytes, value count, null fraction, first/last value, bytes per value, bytes per row, compression ratio | cheap (footer only) |
 | Table files | `cat TABLE.ndjson \| pqb ls files` | the table's active files (path, blob, size) | cheap (log only) |
 | L1 columns | `pqb profile FILE --rows first:8192` | physical kind, nulls, NDV, entropy, top values, min/max, string lengths, runs, monotonicity | decode |
-| L1 suggestions | `pqb table-file FILE \| pqb list suggestions \| pqb get suggestion` | per column: rule, message, remedy, verified, savings_bytes — a potential rewrite, then its controlled estimate (binary UUIDs, dictionary off) on the first 8192 rows | decode |
+| L1 suggestions | `pqb table-file FILE \| pqb list suggestions \| pqb get suggestion` | per column: rule, message, remedy, verified, savings_bytes — a potential rewrite, then its controlled estimate (a dictionary, a Delta encoding, zstd, a narrower type) on one representative row group | decode |
 
 Not in the CLI (do not invent measurements): ALP encoding, page/min/max
 overlap, JSON-explode rewrites, pairwise/locality measures, and pattern
-detection beyond the UUID rule (`json`, …).
+detection beyond the UUID and timestamp rules (`json`, …).
 
 Keep these separate: **fact** (measured) → **hypothesis** → **recipe** (only
 once the change is measured in the target writer, or clearly labeled

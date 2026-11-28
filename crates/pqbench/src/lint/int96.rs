@@ -4,13 +4,14 @@
 use parquet::basic::Encoding;
 use parquet::column::reader::ColumnReader;
 use parquet::data_type::{ByteArray, Int96};
+use parquet::file::properties::WriterVersion;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
 use crate::third_party::parquet::api::Error as ParquetError;
 use crate::v1;
 
 use super::control::{self, Measurement};
-use super::price::{price_bytes, price_int64, Int64Settings, PhysicalShape, Settings};
+use super::price::{price, Settings, Values};
 use super::writer::Writer;
 use super::{ColumnSample, Error, Finding};
 
@@ -61,22 +62,39 @@ fn measure_priced(
     micros_cells: &[Option<i64>],
     sample: &ColumnSample<'_>,
 ) -> Result<Option<Measurement>, Error> {
+    // The source is a `FIXED_LEN_BYTE_ARRAY(12)` leaf. A dictionary on one
+    // exists only under the 2.0 page version, so both arms write v2 pages when
+    // the source had a dictionary, and the pair stays like for like.
+    let version = if sample.chunk_has_dictionary {
+        WriterVersion::PARQUET_2_0
+    } else {
+        WriterVersion::PARQUET_1_0
+    };
     let baseline = Settings {
-        shape: PhysicalShape::FixedLen(INT96_BYTES),
         dictionary: sample.chunk_has_dictionary,
         dictionary_page_size_limit: sample.dictionary_page_size_limit(),
-        encoding: control::source_encoding(sample.mass),
+        encoding: match (control::source_encoding(sample.mass), version) {
+            (None, WriterVersion::PARQUET_2_0) => Some(Encoding::PLAIN),
+            (recorded, _) => recorded,
+        },
+        version,
     };
     control::measure_arms(sample, |compression| {
-        let baseline_bytes = price_bytes(int96_cells, compression, baseline)?;
+        let baseline_bytes = price(
+            Values::FixedLen(INT96_BYTES, int96_cells),
+            compression,
+            baseline,
+        )?;
         let mut candidate_bytes = u64::MAX;
         for encoding in [Encoding::PLAIN, Encoding::DELTA_BINARY_PACKED] {
-            let bytes = price_int64(
-                micros_cells,
+            let bytes = price(
+                Values::Int64(micros_cells),
                 compression,
-                Int64Settings {
+                Settings {
                     dictionary: false,
+                    dictionary_page_size_limit: None,
                     encoding: Some(encoding),
+                    version: WriterVersion::PARQUET_1_0,
                 },
             )?;
             candidate_bytes = candidate_bytes.min(bytes);

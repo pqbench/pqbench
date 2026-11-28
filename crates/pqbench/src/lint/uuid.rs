@@ -1,11 +1,12 @@
 //! `uuid-text`: canonical UUID text priced as 16-byte binary.
 
 use parquet::data_type::ByteArray;
+use parquet::file::properties::WriterVersion;
 
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
-use super::price::{PhysicalShape, Settings};
+use super::price::{Settings, Values};
 use super::{ColumnSample, Error, Finding};
 
 /// The rule id a suggestion carries.
@@ -18,11 +19,11 @@ const UUID_BYTES: i32 = 16;
 /// The finding this column earns when every sampled non-null value is a
 /// canonical UUID. The control prices the same values as 16-byte binary.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
-    if !sample.byte_leaf() {
+    if !sample.byte_array() {
         return None;
     }
     let mut annotated = true;
-    for bytes in sample.cells.iter().flatten() {
+    for bytes in sample.cells().iter().flatten() {
         let uuid = parse_uuid(bytes.data())?;
         if !((1..=8).contains(&(uuid[6] >> 4)) && (8..=11).contains(&(uuid[8] >> 4))) {
             annotated = false;
@@ -66,8 +67,8 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
 /// 16 bytes, so a `BYTE_ARRAY` column would pay a 4-byte length prefix the
 /// remedy's `BINARY(16)` type does not.
 fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
-    let mut binary = Vec::with_capacity(sample.cells.len());
-    for cell in sample.cells {
+    let mut binary = Vec::with_capacity(sample.cells().len());
+    for cell in sample.cells() {
         match cell {
             Some(bytes) => match parse_uuid(bytes.data()) {
                 Some(uuid) => binary.push(Some(ByteArray::from(uuid.to_vec()))),
@@ -77,21 +78,23 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         }
     }
     let baseline = Arm {
-        cells: sample.cells,
+        values: sample
+            .values()
+            .ok_or_else(|| Error::Invalid("the sample's byte cells were not decoded".into()))?,
         settings: Settings {
-            shape: PhysicalShape::ByteArray,
             dictionary: sample.chunk_has_dictionary,
             dictionary_page_size_limit: sample.dictionary_page_size_limit(),
             encoding: control::source_encoding(sample.mass),
+            version: WriterVersion::PARQUET_1_0,
         },
     };
     let candidate = Arm {
-        cells: &binary,
+        values: Values::FixedLen(UUID_BYTES, &binary),
         settings: Settings {
-            shape: PhysicalShape::FixedLen(UUID_BYTES),
             dictionary: false,
             dictionary_page_size_limit: None,
             encoding: None,
+            version: WriterVersion::PARQUET_1_0,
         },
     };
     control::compare(sample, &baseline, &candidate)
@@ -132,6 +135,7 @@ mod tests {
 
     fn column() -> v1::Column {
         v1::Column {
+            physical_data_type: Some("BYTE_ARRAY".into()),
             mass: Some(v1::Bytemass {
                 codec: Some("UNCOMPRESSED".into()),
                 ..v1::Bytemass::default()

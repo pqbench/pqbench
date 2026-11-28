@@ -198,17 +198,28 @@ text              codec-zstd  -                  compression={text: 'zstd'}, com
 username_encoded  codec-zstd  -                  compression={username_encoded: 'zstd'}, compression_level={username_encoded: 3}  uncompressed at 148.73 B/value
 ```
 
-Six rules read one column's chunk; the first that detects a column wins, so a
+Ten rules read one column's chunk; the first that detects a column wins, so a
 column's bytes are never priced twice:
 
 | Rule | What it finds | Remedy |
 | --- | --- | --- |
-| `codec-zstd` | a chunk stored uncompressed, snappy, or gzip | write the column with zstd |
 | `uuid-text` | canonical UUID text, 36 bytes for 16 of data | write it as `BINARY(16)` |
 | `int96-timestamp` | the deprecated INT96 timestamp | write an `INT64` microsecond timestamp |
+| `text-timestamp` | every value is ISO-8601 timestamp text | write a microsecond `INT64` timestamp |
+| `codec-zstd` | a chunk stored uncompressed, snappy, or gzip | write the column with zstd |
+| `delta-integer` | dense or monotone integers without `DELTA_BINARY_PACKED` | write the column Delta binary packed (page v2) |
 | `dictionary-unique` | a dictionary page on nearly unique values | write the column without a dictionary |
 | `dictionary-missing` | repeated values written without a dictionary | write the column with one |
-| `delta-text-encoding` | nearly-unique text without a dictionary | write Delta-length byte arrays (page v2) |
+| `delta-text-encoding` | nearly-unique text without a dictionary | write Delta byte/length arrays (page v2) |
+| `dictionary-fallback` | a dictionary that fell back to `PLAIN` data pages | raise the dictionary page size limit, or turn the dictionary off |
+| `stats-truncated` | footer `min_value`/`max_value` past 64 bytes | truncate statistics at 64 bytes |
+
+`dictionary-unique`, `dictionary-missing`, and `dictionary-fallback` cover every
+physical type a dictionary can pay on — byte arrays, fixed-length byte arrays,
+`INT32`, `INT64`, `FLOAT`, and `DOUBLE` — and `dictionary-fallback` prices three
+arms at the file's own codec, keeping the smaller of a raised limit and no
+dictionary. `stats-truncated` needs no re-encode: a footer's bounds are the
+writer's own bytes, so the bytes past the truncation length are exact.
 
 Two more decide from `list partitions` totals, so they read no file and hold
 for partitions a host never copies:

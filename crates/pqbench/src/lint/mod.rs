@@ -15,8 +15,14 @@
 //! count is closest to the file's average. A codec decision is made per column
 //! chunk, so one average-sized chunk prices the file without an arbitrary byte
 //! or row cap, and a short leading or trailing group never stands in for the
-//! rest. Only the byte rules decode values; a codec suggestion rereads the
-//! chunk's own pages, so a numeric column is never decoded to price it.
+//! rest. The decode reads the values of every physical type a rule re-encodes,
+//! `BOOLEAN` and `INT96` excepted: `BOOLEAN` has no rule, and the `INT96` rule
+//! reads its own timestamps. A codec suggestion rereads the chunk's own pages.
+//!
+//! `stats-truncated` is the one rule that can prove its saving arithmetically
+//! instead of by a re-encode: a footer's `min_value` and `max_value` are the
+//! writer's own bytes, so the bytes above the 64-byte truncation length are
+//! exact without reading a page.
 //!
 //! Two rules read no file at all: `tombstones` and `small-files` decide from
 //! the totals `list partitions` folded, so they hold for every partition,
@@ -26,15 +32,21 @@
 mod codec;
 mod control;
 mod decode;
+mod delta_integer;
 mod delta_text;
 mod dictionary;
+mod dictionary_fallback;
 mod int96;
 mod partition;
 mod price;
+mod stats;
+mod text_timestamp;
 mod uuid;
 mod writer;
 
+use std::collections::HashSet;
 use std::fmt;
+use std::hash::Hash;
 use std::path::Path;
 
 use parquet::data_type::ByteArray;
@@ -43,14 +55,19 @@ use crate::third_party::parquet::api::Error as ParquetError;
 use crate::v1;
 
 use self::control::Measurement;
-use self::decode::{decode_leaves, Coverage, DecodedLeaves};
+use self::decode::{decode_leaves, pages_fell_back, Coverage, DecodedLeaves};
+use self::price::Values;
 use self::writer::Writer;
 
 pub use codec::CODEC_ZSTD_RULE;
+pub use delta_integer::DELTA_INTEGER_RULE;
 pub use delta_text::DELTA_TEXT_ENCODING_RULE;
 pub use dictionary::{DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE};
+pub use dictionary_fallback::DICTIONARY_FALLBACK_RULE;
 pub use int96::INT96_TIMESTAMP_RULE;
 pub use partition::{partition_suggestions, SMALL_FILES_RULE, TOMBSTONES_RULE};
+pub use stats::STATS_TRUNCATED_RULE;
+pub use text_timestamp::TEXT_TIMESTAMP_RULE;
 pub use uuid::UUID_TEXT_RULE;
 
 /// Wins smaller than this are noted as noise, not dropped.
@@ -129,9 +146,17 @@ pub(crate) struct ColumnSample<'a> {
     row_group: usize,
     /// The sample's leaf index in that file's schema.
     column_index: usize,
-    /// The representative row group's whole chunk, one cell per row; empty for
-    /// a non-byte leaf.
-    cells: &'a [Option<ByteArray>],
+    /// The representative row group's whole chunk, one cell per row, in the
+    /// vector of the leaf's physical type; every vector is empty for a leaf no
+    /// rule re-encodes (`BOOLEAN`, `INT96`). A byte leaf fills `bytes`, a
+    /// `FIXED_LEN_BYTE_ARRAY` one too, and each numeric leaf its own.
+    bytes: &'a [Option<ByteArray>],
+    int32_values: &'a [Option<i32>],
+    int64_values: &'a [Option<i64>],
+    float_values: &'a [Option<f32>],
+    double_values: &'a [Option<f64>],
+    /// A `FIXED_LEN_BYTE_ARRAY` leaf's value width.
+    fixed_len: Option<i32>,
     /// The sample chunk's real on-disk compressed bytes.
     chunk_compressed_bytes: u64,
     /// The sample chunk wrote a dictionary page.
@@ -140,8 +165,11 @@ pub(crate) struct ColumnSample<'a> {
     /// page.
     chunk_dictionary_page_size: Option<usize>,
     /// The sample chunk's data pages include PLAIN beside a dictionary
-    /// encoding.
-    chunk_fell_back: bool,
+    /// encoding; `None` when the footer records no page encoding stats.
+    chunk_fell_back: Option<bool>,
+    /// Bytes the sample chunk's recorded `min_value` and `max_value` hold
+    /// beyond the 64-byte truncation length.
+    stats_excess_bytes: u64,
     writer: Option<&'a str>,
     coverage: Coverage,
     text_bpv: f64,
@@ -173,10 +201,20 @@ impl<'a> ColumnSample<'a> {
             let value_count = mass.value_count?;
             let non_null_values = match mass.null_count {
                 Some(nulls) => value_count.saturating_sub(nulls),
-                None if chunk.cells.is_empty() => value_count,
                 None => {
-                    let fraction = non_null as f64 / chunk.cells.len().max(1) as f64;
-                    (value_count as f64 * fraction).round() as u64
+                    let rows = chunk
+                        .bytes
+                        .len()
+                        .max(chunk.int32_values.len())
+                        .max(chunk.int64_values.len())
+                        .max(chunk.float_values.len())
+                        .max(chunk.double_values.len());
+                    if rows == 0 {
+                        value_count
+                    } else {
+                        let fraction = non_null as f64 / rows as f64;
+                        (value_count as f64 * fraction).round() as u64
+                    }
                 }
             };
             if non_null_values == 0 {
@@ -192,11 +230,17 @@ impl<'a> ColumnSample<'a> {
             path,
             row_group: decoded.row_group,
             column_index: chunk.column_index,
-            cells: chunk.cells.as_slice(),
+            bytes: chunk.bytes.as_slice(),
+            int32_values: chunk.int32_values.as_slice(),
+            int64_values: chunk.int64_values.as_slice(),
+            float_values: chunk.float_values.as_slice(),
+            double_values: chunk.double_values.as_slice(),
+            fixed_len: chunk.fixed_len,
             chunk_compressed_bytes,
             chunk_has_dictionary: chunk.dictionary.present,
             chunk_dictionary_page_size: chunk.dictionary.page_size,
             chunk_fell_back: chunk.dictionary.fell_back,
+            stats_excess_bytes: chunk.stats_excess_bytes,
             writer,
             coverage: decoded.coverage,
             text_bpv,
@@ -209,13 +253,117 @@ impl<'a> ColumnSample<'a> {
         self.column.physical_data_type.as_deref() == Some("BYTE_ARRAY")
     }
 
-    /// Whether the leaf is a byte leaf (`BYTE_ARRAY` or
-    /// `FIXED_LEN_BYTE_ARRAY`), the physical types the byte rules decode.
-    fn byte_leaf(&self) -> bool {
-        matches!(
-            self.column.physical_data_type.as_deref(),
-            Some("BYTE_ARRAY" | "FIXED_LEN_BYTE_ARRAY")
+    /// The leaf's physical type, as the footer spells it.
+    fn physical(&self) -> &str {
+        self.column
+            .physical_data_type
+            .as_deref()
+            .unwrap_or_default()
+    }
+
+    /// The values one arm writes, in the leaf's physical shape. `None` for a
+    /// leaf no rule re-encodes, so a rule that needs values never prices one.
+    fn values(&self) -> Option<Values<'a>> {
+        match self.physical() {
+            "BYTE_ARRAY" if !self.bytes.is_empty() => Some(Values::Bytes(self.bytes)),
+            "FIXED_LEN_BYTE_ARRAY" if !self.bytes.is_empty() => self
+                .fixed_len
+                .map(|width| Values::FixedLen(width, self.bytes)),
+            "INT32" if !self.int32_values.is_empty() => Some(Values::Int32(self.int32_values)),
+            "INT64" if !self.int64_values.is_empty() => Some(Values::Int64(self.int64_values)),
+            "FLOAT" if !self.float_values.is_empty() => Some(Values::Float(self.float_values)),
+            "DOUBLE" if !self.double_values.is_empty() => Some(Values::Double(self.double_values)),
+            _ => None,
+        }
+    }
+
+    /// The decoded byte cells: a byte leaf's values, as the text rules read
+    /// them.
+    fn cells(&self) -> &'a [Option<ByteArray>] {
+        self.bytes
+    }
+
+    /// The leaf's values as `i64`, for the integer rules: an `INT32` widens.
+    fn integers(&self) -> Option<Vec<Option<i64>>> {
+        if !self.int32_values.is_empty() {
+            Some(
+                self.int32_values
+                    .iter()
+                    .map(|cell| cell.map(i64::from))
+                    .collect(),
+            )
+        } else if !self.int64_values.is_empty() {
+            Some(self.int64_values.to_vec())
+        } else {
+            None
+        }
+    }
+
+    /// The non-null values the sample decoded, in the one vector the leaf's
+    /// physical type fills; 0 for a leaf no rule re-encodes.
+    fn sampled_values(&self) -> usize {
+        [
+            self.bytes.iter().filter(|cell| cell.is_some()).count(),
+            self.int32_values
+                .iter()
+                .filter(|cell| cell.is_some())
+                .count(),
+            self.int64_values
+                .iter()
+                .filter(|cell| cell.is_some())
+                .count(),
+            self.float_values
+                .iter()
+                .filter(|cell| cell.is_some())
+                .count(),
+            self.double_values
+                .iter()
+                .filter(|cell| cell.is_some())
+                .count(),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+    }
+
+    /// The fraction of sampled non-null values that are distinct within the
+    /// chunk (Parquet builds one dictionary per row-group column chunk).
+    fn distinct_fraction(&self) -> f64 {
+        if !self.bytes.is_empty() {
+            distinct_share(
+                self.bytes
+                    .iter()
+                    .map(|cell| cell.as_ref().map(ByteArray::data)),
+            )
+        } else if !self.int32_values.is_empty() {
+            distinct_share(self.int32_values.iter().map(Option::as_ref))
+        } else if !self.int64_values.is_empty() {
+            distinct_share(self.int64_values.iter().map(Option::as_ref))
+        } else if !self.float_values.is_empty() {
+            // Two NaNs are one value and `-0.0` equals `0.0` at the physical
+            // width, so the bits are what a dictionary would hold.
+            distinct_share(self.float_values.iter().map(|cell| cell.map(f32::to_bits)))
+        } else if !self.double_values.is_empty() {
+            distinct_share(self.double_values.iter().map(|cell| cell.map(f64::to_bits)))
+        } else {
+            0.0
+        }
+    }
+
+    /// Whether the sample chunk's own data pages fell back to PLAIN beside a
+    /// dictionary. The footer's page encoding stats answer without a page read;
+    /// a footer that counts no page encodings leaves it to the page headers.
+    fn fell_back(&self) -> bool {
+        if let Some(fell_back) = self.chunk_fell_back {
+            return fell_back;
+        }
+        pages_fell_back(
+            self.path,
+            self.row_group,
+            self.column_index,
+            self.chunk_has_dictionary,
         )
+        .unwrap_or(false)
     }
 
     /// The dictionary page size limit that reproduces the sample chunk's own
@@ -226,7 +374,7 @@ impl<'a> ColumnSample<'a> {
     /// page it had written by then approximates. `None` keeps parquet-rs's
     /// 1 MiB default.
     fn dictionary_page_size_limit(&self) -> Option<usize> {
-        match (self.chunk_has_dictionary, self.chunk_fell_back) {
+        match (self.chunk_has_dictionary, self.fell_back()) {
             (true, false) => Some(usize::MAX),
             (true, true) => self.chunk_dictionary_page_size.filter(|bytes| *bytes > 0),
             (false, _) => None,
@@ -238,15 +386,75 @@ impl<'a> ColumnSample<'a> {
         Writer::classify(self.writer)
     }
 
-    /// A sample over one chunk, for the rules' unit tests.
+    /// A sample over one chunk of a byte leaf, for the rules' unit tests.
     #[cfg(test)]
     pub(crate) fn for_test(
         column: &'a v1::Column,
         cells: &'a [Option<ByteArray>],
         chunk_has_dictionary: bool,
     ) -> Self {
+        let mut sample = Self::build(column, cells.len() as u64);
+        sample.bytes = cells;
+        sample.chunk_has_dictionary = chunk_has_dictionary;
+        sample
+    }
+
+    /// A sample over one chunk of an `INT32` leaf, for the rules' unit tests.
+    #[cfg(test)]
+    pub(crate) fn for_test_int32(
+        column: &'a v1::Column,
+        cells: &'a [Option<i32>],
+        chunk_has_dictionary: bool,
+    ) -> Self {
+        let mut sample = Self::build(column, cells.len() as u64);
+        sample.int32_values = cells;
+        sample.chunk_has_dictionary = chunk_has_dictionary;
+        sample
+    }
+
+    /// A sample over one chunk of an `INT64` leaf, for the rules' unit tests.
+    #[cfg(test)]
+    pub(crate) fn for_test_int64(
+        column: &'a v1::Column,
+        cells: &'a [Option<i64>],
+        chunk_has_dictionary: bool,
+    ) -> Self {
+        let mut sample = Self::build(column, cells.len() as u64);
+        sample.int64_values = cells;
+        sample.chunk_has_dictionary = chunk_has_dictionary;
+        sample
+    }
+
+    /// A sample over one chunk of a `FLOAT` leaf, for the rules' unit tests.
+    #[cfg(test)]
+    pub(crate) fn for_test_float(
+        column: &'a v1::Column,
+        cells: &'a [Option<f32>],
+        chunk_has_dictionary: bool,
+    ) -> Self {
+        let mut sample = Self::build(column, cells.len() as u64);
+        sample.float_values = cells;
+        sample.chunk_has_dictionary = chunk_has_dictionary;
+        sample
+    }
+
+    /// A sample over one chunk of a `DOUBLE` leaf, for the rules' unit tests.
+    #[cfg(test)]
+    pub(crate) fn for_test_double(
+        column: &'a v1::Column,
+        cells: &'a [Option<f64>],
+        chunk_has_dictionary: bool,
+    ) -> Self {
+        let mut sample = Self::build(column, cells.len() as u64);
+        sample.double_values = cells;
+        sample.chunk_has_dictionary = chunk_has_dictionary;
+        sample
+    }
+
+    /// A test sample's shared fields: no file, one chunk, parquet-rs's writer.
+    #[cfg(test)]
+    fn build(column: &'a v1::Column, rows: u64) -> Self {
         let mass = column.mass.as_ref().expect("a sample column has a mass");
-        let non_null = cells.iter().filter(|cell| cell.is_some()).count().max(1) as u64;
         let chunk_compressed_bytes = mass.compressed_bytes.unwrap_or(0);
         Self {
             blob: "blobs/s3/example-bucket/data.parquet",
@@ -256,18 +464,53 @@ impl<'a> ColumnSample<'a> {
             path: Path::new(""),
             row_group: 0,
             column_index: 0,
-            cells,
+            bytes: &[],
+            int32_values: &[],
+            int64_values: &[],
+            float_values: &[],
+            double_values: &[],
+            fixed_len: column
+                .physical_data_type
+                .as_deref()
+                .filter(|physical| *physical == "FIXED_LEN_BYTE_ARRAY")
+                .map(|_| 16),
             chunk_compressed_bytes,
-            chunk_has_dictionary,
+            chunk_has_dictionary: false,
             chunk_dictionary_page_size: None,
-            chunk_fell_back: false,
+            chunk_fell_back: Some(false),
+            stats_excess_bytes: 0,
             writer: Some("parquet-rs version 59.3.2"),
             coverage: Coverage {
-                row_count: cells.len() as u64,
+                row_count: rows,
                 row_group_count: 1,
             },
-            text_bpv: chunk_compressed_bytes as f64 / non_null as f64,
+            text_bpv: chunk_compressed_bytes as f64 / rows.max(1) as f64,
         }
+    }
+
+    /// The same test sample, with a chunk that wrote a dictionary page of
+    /// `page_size` bytes and fell back to `PLAIN` data pages.
+    #[cfg(test)]
+    pub(crate) fn with_dictionary_page(mut self, page_size: usize) -> Self {
+        self.chunk_has_dictionary = true;
+        self.chunk_dictionary_page_size = Some(page_size);
+        self.chunk_fell_back = Some(true);
+        self
+    }
+
+    /// The same test sample, with a chunk whose recorded bounds hold
+    /// `bytes` past the truncation length.
+    #[cfg(test)]
+    pub(crate) fn with_stats_excess(mut self, bytes: u64) -> Self {
+        self.stats_excess_bytes = bytes;
+        self
+    }
+
+    /// The same test sample, with a chunk the footer prices at `bytes`.
+    #[cfg(test)]
+    pub(crate) fn with_chunk_compressed_bytes(mut self, bytes: u64) -> Self {
+        self.chunk_compressed_bytes = bytes;
+        self
     }
 
     /// One potential suggestion, on the column's own name and context.
@@ -302,6 +545,18 @@ pub(crate) struct Finding {
     pub(crate) measure: Measure,
 }
 
+/// The fraction of non-null values that are distinct.
+fn distinct_share<T: Eq + Hash>(values: impl Iterator<Item = Option<T>>) -> f64 {
+    let mut distinct = HashSet::new();
+    let mut total = 0usize;
+    for value in values {
+        let Some(value) = value else { continue };
+        total += 1;
+        distinct.insert(value);
+    }
+    distinct.len() as f64 / total.max(1) as f64
+}
+
 /// A rule's setting for `engine`, from its remedy table: empty when the engine
 /// has none.
 pub(crate) fn setting(remedies: &[v1::Remedy], engine: &str) -> String {
@@ -327,7 +582,13 @@ pub(crate) struct Rule {
 /// `codec-zstd` outranks the encoding rules because its win is the larger one:
 /// a snappy or uncompressed file's 35-60% codec upgrade must not be masked by a
 /// 0-1% dictionary or Delta encoding tweak. A zstd file never reaches it, so
-/// its columns fall through to the encoding rules.
+/// its columns fall through to the encoding rules. The rules that change a
+/// column's type (`uuid-text`, `text-timestamp`) outrank it, because a value
+/// shrunk to a sixteenth of its bytes beats any codec; `stats-truncated` comes
+/// last, because its few hundred footer bytes are the smallest win a column can
+/// have. `delta-integer` outranks the dictionary rules because a dense integer
+/// column's dictionary is only present when it overflowed, and packed deltas it
+/// never uses are the larger win.
 pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: UUID_TEXT_RULE,
@@ -338,8 +599,16 @@ pub(crate) const RULES: &[Rule] = &[
         detect: int96::detect,
     },
     Rule {
+        id: TEXT_TIMESTAMP_RULE,
+        detect: text_timestamp::detect,
+    },
+    Rule {
         id: CODEC_ZSTD_RULE,
         detect: codec::detect,
+    },
+    Rule {
+        id: DELTA_INTEGER_RULE,
+        detect: delta_integer::detect,
     },
     Rule {
         id: DICTIONARY_UNIQUE_RULE,
@@ -352,6 +621,14 @@ pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: DELTA_TEXT_ENCODING_RULE,
         detect: delta_text::detect,
+    },
+    Rule {
+        id: DICTIONARY_FALLBACK_RULE,
+        detect: dictionary_fallback::detect,
+    },
+    Rule {
+        id: STATS_TRUNCATED_RULE,
+        detect: stats::detect,
     },
 ];
 
@@ -654,8 +931,9 @@ mod tests {
     use parquet::data_type::ByteArray;
 
     use super::{
-        rule, ColumnSample, CODEC_ZSTD_RULE, DELTA_TEXT_ENCODING_RULE, DICTIONARY_MISSING_RULE,
-        DICTIONARY_UNIQUE_RULE, INT96_TIMESTAMP_RULE, UUID_TEXT_RULE,
+        rule, ColumnSample, CODEC_ZSTD_RULE, DELTA_INTEGER_RULE, DELTA_TEXT_ENCODING_RULE,
+        DICTIONARY_FALLBACK_RULE, DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE,
+        INT96_TIMESTAMP_RULE, STATS_TRUNCATED_RULE, TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
     };
     use crate::v1;
 
@@ -783,7 +1061,47 @@ mod tests {
             &mut engines,
         );
 
-        for engine in ["spark", "pyarrow", "parquet-rs", "delta", "iceberg"] {
+        let dense_column = typed_column("INT64", "ZSTD");
+        let dense: Vec<Option<i64>> = (0..100).map(|value| Some(i64::from(value))).collect();
+        check(
+            DELTA_INTEGER_RULE,
+            &ColumnSample::for_test_int64(&dense_column, &dense, false),
+            &mut engines,
+        );
+
+        check(
+            DICTIONARY_FALLBACK_RULE,
+            &ColumnSample::for_test(&unique_column, &distinct_cells, true)
+                .with_dictionary_page(4_096),
+            &mut engines,
+        );
+
+        check(
+            STATS_TRUNCATED_RULE,
+            &ColumnSample::for_test(&unique_column, &distinct_cells, false)
+                .with_chunk_compressed_bytes(100_000)
+                .with_stats_excess(1_024),
+            &mut engines,
+        );
+
+        let stamps: Vec<String> = (0..100)
+            .map(|value| format!("2024-02-29T12:34:{:02}Z", value % 60))
+            .collect();
+        let stamp_cells = cells(&stamps);
+        check(
+            TEXT_TIMESTAMP_RULE,
+            &ColumnSample::for_test(&unique_column, &stamp_cells, false),
+            &mut engines,
+        );
+
+        for engine in [
+            "spark",
+            "pyarrow",
+            "parquet-rs",
+            "delta",
+            "iceberg",
+            "duckdb",
+        ] {
             assert!(engines.contains(engine), "no rule remedies {engine}");
         }
     }

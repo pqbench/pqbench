@@ -1,25 +1,32 @@
 //! `lint::decode`: the raw Parquet mechanism behind a lint sample.
 //!
 //! This module reads one file's footer and its representative row group; it
-//! decodes cells only for a byte leaf, and page-reading rules reread the raw
-//! pages from here. It decides nothing about what a column should be: the
-//! rules ([`super::RULES`]) and the suggestion policy ([`super::suggestions`],
-//! [`super::verify`]) work on the sample this module reports.
+//! decodes cells for every physical type a rule prices, and page-reading rules
+//! reread the raw pages from here. It decides nothing about what a column
+//! should be: the rules ([`super::RULES`]) and the suggestion policy
+//! ([`super::suggestions`], [`super::verify`]) work on the sample this module
+//! reports.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use parquet::basic::Encoding;
 use parquet::column::reader::{ColumnReader, ColumnReaderImpl};
-use parquet::data_type::{ByteArray, DataType};
+use parquet::data_type::{ByteArray, DataType, FixedLenByteArrayType};
 use parquet::file::metadata::{
     ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
 };
 use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
+use parquet::file::statistics::Statistics;
+use parquet::schema::types::ColumnDescriptor;
 
 use crate::third_party::parquet::api::Error as ParquetError;
 
 use super::Error;
+
+/// The bytes of a chunk's recorded `min_value` and `max_value` beyond the
+/// 64-byte length every writer that truncates statistics uses.
+const STATISTICS_TRUNCATE_LENGTH: u64 = 64;
 
 /// What a sample decoded: rows and the whole row groups they came from.
 #[derive(Clone, Copy, Default)]
@@ -36,16 +43,21 @@ pub(super) struct ChunkDictionary {
     /// Bytes from the dictionary page offset to the first data page.
     pub(super) page_size: Option<usize>,
     /// The chunk's data pages include PLAIN beside a dictionary encoding, so
-    /// its writer fell back to PLAIN.
-    pub(super) fell_back: bool,
+    /// its writer fell back to PLAIN. `None` when the footer records no page
+    /// encoding stats: the page headers then have to say.
+    pub(super) fell_back: Option<bool>,
 }
 
 /// One requested column's representative row group chunk.
 #[derive(Default)]
 pub(super) struct DecodedColumn {
-    /// One cell per row of the group; `None` where the column is null. Empty
-    /// for a non-byte leaf, whose rules read the footer or the raw pages.
-    pub(super) cells: Vec<Option<ByteArray>>,
+    /// One cell per row of the group; `None` where the column is null. Only the
+    /// vector of the leaf's physical type is filled.
+    pub(super) bytes: Vec<Option<ByteArray>>,
+    pub(super) int32_values: Vec<Option<i32>>,
+    pub(super) int64_values: Vec<Option<i64>>,
+    pub(super) float_values: Vec<Option<f32>>,
+    pub(super) double_values: Vec<Option<f64>>,
     /// Non-null values in the chunk, exact when the cells were decoded and
     /// from the footer statistics otherwise.
     pub(super) non_null_value_count: u64,
@@ -55,6 +67,50 @@ pub(super) struct DecodedColumn {
     pub(super) dictionary: ChunkDictionary,
     /// The chunk's leaf index in the file schema.
     pub(super) column_index: usize,
+    /// A `FIXED_LEN_BYTE_ARRAY` leaf's value width.
+    pub(super) fixed_len: Option<i32>,
+    /// Bytes the chunk's recorded `min_value` and `max_value` hold beyond the
+    /// 64-byte truncation length.
+    pub(super) stats_excess_bytes: u64,
+}
+
+impl DecodedColumn {
+    /// The non-null values the decoded cells hold.
+    fn decoded_non_null(&self) -> Option<u64> {
+        if !self.bytes.is_empty() {
+            Some(self.bytes.iter().filter(|cell| cell.is_some()).count() as u64)
+        } else if !self.int32_values.is_empty() {
+            Some(
+                self.int32_values
+                    .iter()
+                    .filter(|cell| cell.is_some())
+                    .count() as u64,
+            )
+        } else if !self.int64_values.is_empty() {
+            Some(
+                self.int64_values
+                    .iter()
+                    .filter(|cell| cell.is_some())
+                    .count() as u64,
+            )
+        } else if !self.float_values.is_empty() {
+            Some(
+                self.float_values
+                    .iter()
+                    .filter(|cell| cell.is_some())
+                    .count() as u64,
+            )
+        } else if !self.double_values.is_empty() {
+            Some(
+                self.double_values
+                    .iter()
+                    .filter(|cell| cell.is_some())
+                    .count() as u64,
+            )
+        } else {
+            None
+        }
+    }
 }
 
 /// The representative row group's whole chunks for the requested scalar leaves.
@@ -67,9 +123,9 @@ pub(super) struct DecodedLeaves {
 }
 
 /// Decode the file's one representative row group for the requested scalar
-/// leaf columns, directly from their column chunks. Values are decoded only for
-/// a byte leaf; any other leaf carries its footer counts, and a page-reading
-/// rule rereads its raw pages. Unselected columns are never read.
+/// leaf columns, directly from their column chunks. Values are decoded for
+/// every physical type a rule prices (`BOOLEAN` and `INT96` excluded: no rule
+/// re-encodes them from this sample). Unselected columns are never read.
 pub(super) fn decode_leaves(path: &Path, leaves: &[String]) -> Result<DecodedLeaves, Error> {
     let file = std::fs::File::open(path).map_err(ParquetError::Io)?;
     let reader = SerializedFileReader::new(file)?;
@@ -99,25 +155,16 @@ pub(super) fn decode_leaves(path: &Path, leaves: &[String]) -> Result<DecodedLea
         };
         let meta = group.metadata().column(col_idx);
         let descr = schema.column(col_idx);
-        // Only the byte rules decode cells; every other rule reads the footer
-        // or the raw pages, so a numeric column is never decoded here.
-        let cells = if byte_physical_type(descr.physical_type()) {
-            decode_bytes_chunk(group.as_ref(), col_idx, descr.max_def_level(), row_count)?
-        } else {
-            Vec::new()
-        };
-        let non_null_value_count = if cells.is_empty() {
-            chunk_non_null(meta)
-        } else {
-            cells.iter().filter(|cell| cell.is_some()).count() as u64
-        };
-        columns.push(DecodedColumn {
-            cells,
-            non_null_value_count,
-            compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
-            dictionary: chunk_dictionary(meta),
-            column_index: col_idx,
-        });
+        let mut column = decode_values(group.as_ref(), col_idx, &descr, row_count)?;
+        column.non_null_value_count = column
+            .decoded_non_null()
+            .unwrap_or_else(|| chunk_non_null(meta));
+        column.compressed_bytes = u64::try_from(meta.compressed_size()).unwrap_or(0);
+        column.dictionary = chunk_dictionary(meta);
+        column.column_index = col_idx;
+        column.fixed_len = fixed_len(&descr);
+        column.stats_excess_bytes = stats_excess_bytes(meta);
+        columns.push(column);
     }
     Ok(DecodedLeaves {
         columns,
@@ -129,12 +176,12 @@ pub(super) fn decode_leaves(path: &Path, leaves: &[String]) -> Result<DecodedLea
     })
 }
 
-/// Whether a physical type is a byte leaf: the types the byte rules decode.
-fn byte_physical_type(physical: parquet::basic::Type) -> bool {
-    matches!(
-        physical,
-        parquet::basic::Type::BYTE_ARRAY | parquet::basic::Type::FIXED_LEN_BYTE_ARRAY
-    )
+/// A `FIXED_LEN_BYTE_ARRAY` leaf's value width.
+fn fixed_len(descr: &ColumnDescriptor) -> Option<i32> {
+    match descr.physical_type() {
+        parquet::basic::Type::FIXED_LEN_BYTE_ARRAY => Some(descr.type_length()),
+        _ => None,
+    }
 }
 
 /// The non-null values a chunk's footer records: its value count less the null
@@ -146,6 +193,34 @@ fn chunk_non_null(meta: &ColumnChunkMetaData) -> u64 {
         .and_then(|statistics| statistics.null_count_opt())
         .unwrap_or(0);
     values.saturating_sub(nulls)
+}
+
+/// The bytes a chunk's recorded `min_value` and `max_value` hold beyond the
+/// 64-byte length a truncating writer stops at.
+///
+/// Only variable- and fixed-length statistics can grow: an `INT32`, `INT64`,
+/// `FLOAT`, or `DOUBLE` bound is its fixed physical width. A footer without
+/// both bounds has nothing to truncate, so it reports none.
+fn stats_excess_bytes(meta: &ColumnChunkMetaData) -> u64 {
+    let Some(statistics) = meta.statistics() else {
+        return 0;
+    };
+    let bounded = match statistics {
+        Statistics::ByteArray(stats) => stats.min_bytes_opt().zip(stats.max_bytes_opt()),
+        Statistics::FixedLenByteArray(stats) => stats.min_bytes_opt().zip(stats.max_bytes_opt()),
+        _ => None,
+    };
+    let Some((min, max)) = bounded else {
+        return 0;
+    };
+    excess(min.len()).saturating_add(excess(max.len()))
+}
+
+/// The bytes a bound of this length holds beyond the truncation length.
+fn excess(len: usize) -> u64 {
+    u64::try_from(len)
+        .unwrap_or(u64::MAX)
+        .saturating_sub(STATISTICS_TRUNCATE_LENGTH)
 }
 
 /// The row group whose row count is closest to the file's average, breaking
@@ -184,60 +259,117 @@ fn chunk_dictionary(meta: &ColumnChunkMetaData) -> ChunkDictionary {
     // A dictionary page's values are PLAIN-encoded, so a chunk's whole encoding
     // set always lists PLAIN beside its dictionary encoding; only the data
     // pages' encodings tell a falling-back chunk from a dictionary-encoded one.
-    // A footer without page encoding stats cannot say, so it stays a dictionary
-    // chunk: the control then prices a dictionary the source might not have
-    // used, understating the win rather than overstating it.
-    let data_encodings: Vec<Encoding> = meta
-        .page_encoding_stats_mask()
-        .map(|mask| mask.encodings().collect())
-        .unwrap_or_default();
-    let plain = data_encodings.contains(&Encoding::PLAIN);
-    let dictionary_encoding = data_encodings.iter().any(|encoding| {
-        matches!(
-            encoding,
-            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
-        )
+    // A footer that counts no page encodings leaves that to the page headers,
+    // which [`pages_fell_back`] reads.
+    let fell_back = meta.page_encoding_stats_mask().map(|mask| {
+        let plain = mask.is_set(Encoding::PLAIN);
+        let dictionary =
+            mask.is_set(Encoding::RLE_DICTIONARY) || mask.is_set(Encoding::PLAIN_DICTIONARY);
+        plain && dictionary
     });
     ChunkDictionary {
         present: dictionary_page_offset.is_some(),
         page_size: dictionary_page_offset
             .filter(|offset| data_page_offset > *offset)
             .and_then(|offset| usize::try_from(data_page_offset - offset).ok()),
-        fell_back: plain && dictionary_encoding,
+        fell_back,
     }
 }
 
-fn decode_bytes_chunk(
+/// Decode one chunk's cells into the vector of the leaf's physical type.
+fn decode_values(
     group: &dyn RowGroupReader,
     col_idx: usize,
-    max_def: i16,
+    descr: &ColumnDescriptor,
     rows: usize,
-) -> Result<Vec<Option<ByteArray>>, Error> {
+) -> Result<DecodedColumn, Error> {
+    let max_def = descr.max_def_level();
+    let mut column = DecodedColumn::default();
     match group.get_column_reader(col_idx)? {
         ColumnReader::ByteArrayColumnReader(mut reader) => {
-            decode_typed(&mut reader, max_def, rows, |value| value.clone())
+            column.bytes = decode_typed(&mut reader, max_def, rows)?;
         }
         ColumnReader::FixedLenByteArrayColumnReader(mut reader) => {
-            decode_typed(&mut reader, max_def, rows, |value| {
-                ByteArray::from(value.data())
-            })
+            column.bytes = decode_typed::<FixedLenByteArrayType>(&mut reader, max_def, rows)?
+                .into_iter()
+                .map(|cell| cell.map(|value| ByteArray::from(value.data().to_vec())))
+                .collect();
         }
-        _ => Err(Error::Invalid(format!(
-            "column {col_idx} is not a BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY leaf; \
-             the byte rules decode only those"
-        ))),
+        ColumnReader::Int32ColumnReader(mut reader) => {
+            column.int32_values = decode_typed(&mut reader, max_def, rows)?;
+        }
+        ColumnReader::Int64ColumnReader(mut reader) => {
+            column.int64_values = decode_typed(&mut reader, max_def, rows)?;
+        }
+        ColumnReader::FloatColumnReader(mut reader) => {
+            column.float_values = decode_typed(&mut reader, max_def, rows)?;
+        }
+        ColumnReader::DoubleColumnReader(mut reader) => {
+            column.double_values = decode_typed(&mut reader, max_def, rows)?;
+        }
+        // A boolean leaf has no rule, and an INT96 leaf's rule reads its own
+        // timestamps: neither is decoded here.
+        ColumnReader::BoolColumnReader(_) | ColumnReader::Int96ColumnReader(_) => {}
     }
+    Ok(column)
+}
+
+/// Read `rows` records as one cell each, a null where the definition level is
+/// below the leaf's maximum.
+fn decode_typed<T: DataType>(
+    reader: &mut ColumnReaderImpl<T>,
+    max_def: i16,
+    rows: usize,
+) -> Result<Vec<Option<T::T>>, Error> {
+    let mut out = Vec::with_capacity(rows);
+    let mut remaining = rows;
+    let mut values = Vec::new();
+    let mut def_levels = Vec::new();
+    while remaining > 0 {
+        let batch = remaining.min(1024);
+        values.clear();
+        def_levels.clear();
+        let (_, _, levels) = reader.read_records(
+            batch,
+            (max_def > 0).then_some(&mut def_levels),
+            None,
+            &mut values,
+        )?;
+        let consumed = if max_def > 0 { levels } else { values.len() };
+        if consumed == 0 {
+            break;
+        }
+        if max_def == 0 {
+            out.extend(values.iter().map(|value| Some(value.clone())));
+        } else {
+            let mut at = 0;
+            for &def in &def_levels[..levels] {
+                if def == max_def {
+                    out.push(Some(values[at].clone()));
+                    at += 1;
+                } else {
+                    out.push(None);
+                }
+            }
+        }
+        remaining = remaining.saturating_sub(consumed);
+    }
+    Ok(out)
 }
 
 /// One page of a column chunk, read from the file's bytes: the payload a codec
-/// compresses, and, when the file records an offset index, the bytes the page
-/// occupies on disk.
+/// compresses, the encoding its values use, and, when the file records an
+/// offset index, the bytes the page occupies on disk.
 pub(crate) struct ChunkPage {
     /// The page's uncompressed payload: exactly the bytes a codec compresses.
     pub(crate) payload: Vec<u8>,
-    /// The page's on-disk bytes, page header included; `None` when the file
+    /// The page's on-disk size, page header included; `None` when the file
     /// records no offset index.
-    pub(crate) compressed_bytes: Option<u64>,
+    pub(crate) compressed_page_size: Option<u64>,
+    /// The encoding the page's values use. A dictionary page's values are
+    /// `PLAIN`; a data page's encoding is what tells a writer's fallback from a
+    /// dictionary-encoded chunk.
+    pub(crate) encoding: Encoding,
     /// The page holds values: a data page, not the chunk's dictionary page.
     pub(crate) data: bool,
 }
@@ -261,7 +393,7 @@ pub(crate) fn chunk_pages(
         let page = page?;
         let data = page.is_data_page();
         // The offset index lists the chunk's data pages only, in file order.
-        let compressed_bytes = if data {
+        let compressed_page_size = if data {
             let bytes = recorded_bytes.get(data_at).copied().flatten();
             data_at += 1;
             bytes
@@ -270,11 +402,41 @@ pub(crate) fn chunk_pages(
         };
         read_pages.push(ChunkPage {
             payload: page.buffer().to_vec(),
-            compressed_bytes,
+            compressed_page_size,
+            encoding: page.encoding(),
             data,
         });
     }
     Ok(read_pages)
+}
+
+/// Whether a chunk's own data pages fell back to `PLAIN` beside a dictionary,
+/// when the footer records no page encoding stats to say so.
+///
+/// A chunk with a dictionary page whose data pages include both a dictionary
+/// encoding and `PLAIN` fell back; a chunk whose data pages use only the
+/// dictionary encoding did not. `None` when the chunk has no dictionary page or
+/// its pages cannot be read.
+pub(super) fn pages_fell_back(
+    path: &Path,
+    row_group: usize,
+    column_index: usize,
+    has_dictionary: bool,
+) -> Option<bool> {
+    if !has_dictionary {
+        return Some(false);
+    }
+    let pages = chunk_pages(path, row_group, column_index).ok()?;
+    let mut plain = false;
+    let mut dictionary = false;
+    for page in pages.iter().filter(|page| page.data) {
+        match page.encoding {
+            Encoding::PLAIN => plain = true,
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => dictionary = true,
+            _ => {}
+        }
+    }
+    Some(plain && dictionary)
 }
 
 /// The sample chunk's data pages' on-disk bytes, page header included, as the
@@ -324,60 +486,6 @@ fn chunk_page_compressed_bytes(
         .collect())
 }
 
-/// The fraction of sampled non-null values that are distinct within the chunk
-/// (Parquet builds one dictionary per row-group column chunk).
-pub(crate) fn unique_fraction(cells: &[Option<ByteArray>]) -> f64 {
-    let mut distinct: HashSet<&[u8]> = HashSet::new();
-    let mut non_null_total = 0usize;
-    for bytes in cells.iter().flatten() {
-        non_null_total += 1;
-        distinct.insert(bytes.data());
-    }
-    distinct.len() as f64 / non_null_total.max(1) as f64
-}
-
-fn decode_typed<T: DataType>(
-    reader: &mut ColumnReaderImpl<T>,
-    max_def: i16,
-    rows: usize,
-    mut to_bytes: impl FnMut(&T::T) -> ByteArray,
-) -> Result<Vec<Option<ByteArray>>, Error> {
-    let mut out = Vec::with_capacity(rows);
-    let mut remaining = rows;
-    let mut values = Vec::new();
-    let mut def_levels = Vec::new();
-    while remaining > 0 {
-        let batch = remaining.min(1024);
-        values.clear();
-        def_levels.clear();
-        let (_, _, levels) = reader.read_records(
-            batch,
-            (max_def > 0).then_some(&mut def_levels),
-            None,
-            &mut values,
-        )?;
-        let consumed = if max_def > 0 { levels } else { values.len() };
-        if consumed == 0 {
-            break;
-        }
-        if max_def == 0 {
-            out.extend(values.iter().map(|v| Some(to_bytes(v))));
-        } else {
-            let mut at = 0;
-            for &def in &def_levels[..levels] {
-                if def == max_def {
-                    out.push(Some(to_bytes(&values[at])));
-                    at += 1;
-                } else {
-                    out.push(None);
-                }
-            }
-        }
-        remaining = remaining.saturating_sub(consumed);
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -385,7 +493,7 @@ mod tests {
     use parquet::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
     use parquet::schema::types::{SchemaDescriptor, Type};
 
-    use super::representative_row_group;
+    use super::{excess, representative_row_group};
 
     /// A footer with these row-group row counts and no columns.
     fn metadata(rows_per_group: &[i64]) -> ParquetMetaData {
@@ -418,5 +526,15 @@ mod tests {
     #[test]
     fn equal_groups_pick_the_first() {
         assert_eq!(representative_row_group(&metadata(&[7, 7, 7, 7])), Some(0));
+    }
+
+    /// A bound within the truncation length is no bloat, and one beyond it
+    /// counts only the bytes past the length.
+    #[test]
+    fn only_the_bytes_beyond_the_truncation_length_are_excess() {
+        assert_eq!(excess(0), 0);
+        assert_eq!(excess(64), 0);
+        assert_eq!(excess(65), 1);
+        assert_eq!(excess(1_024), 960);
     }
 }
