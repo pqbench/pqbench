@@ -5,8 +5,8 @@
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
+use super::decode::unique_fraction;
 use super::price::{PhysicalShape, Settings};
-use super::unique_fraction;
 use super::writer::Writer;
 use super::{ColumnSample, Error, Finding};
 

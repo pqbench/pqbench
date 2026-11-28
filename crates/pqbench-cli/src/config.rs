@@ -116,16 +116,19 @@ fn read_profiles() -> Result<BTreeMap<String, Layer>, CliError> {
     parse_profiles(&text)
 }
 
-/// The config file's path: `PQB_CONFIG_FILE`, else `~/.pqbenchrc`.
+/// The config file's path: `PQB_CONFIG_FILE`, else `PQB_CONFIG`, else
+/// `~/.pqbenchrc`. The driver reads the same file the same way.
 fn config_path() -> Option<PathBuf> {
-    std::env::var_os("PQB_CONFIG_FILE")
-        .map(PathBuf::from)
+    ["PQB_CONFIG_FILE", "PQB_CONFIG"]
+        .iter()
+        .find_map(|name| std::env::var_os(name).map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".pqbenchrc")))
 }
 
 /// One `[profile]` table per profile, each with `endpoint`, `token`,
 /// `table_format`, and the service principal's `client-id`/`client-secret`
-/// keys, with `#` comments (INI).
+/// keys, with `#` comments (INI). A key's hyphen and underscore spellings are
+/// the same key, as they are in the driver's run-control reader.
 fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
     let mut profiles: BTreeMap<String, Layer> = BTreeMap::new();
     let mut profile: Option<String> = None;
@@ -152,12 +155,12 @@ fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
             continue;
         };
         let layer = profiles.entry(name).or_default();
-        match key.trim() {
+        match key.trim().replace('_', "-").as_str() {
             "endpoint" => layer.endpoint = Some(value),
             "token" => layer.token = Some(value),
-            "client-id" | "client_id" => layer.client_id = Some(value),
-            "client-secret" | "client_secret" => layer.client_secret = Some(Secret::new(value)),
-            "table_format" => {
+            "client-id" => layer.client_id = Some(value),
+            "client-secret" => layer.client_secret = Some(Secret::new(value)),
+            "table-format" => {
                 layer.dialect =
                     Some(parse_dialect(&value).map_err(|error| format!("~/.pqbenchrc: {error}"))?);
             }

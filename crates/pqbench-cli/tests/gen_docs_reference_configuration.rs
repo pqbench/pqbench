@@ -6,7 +6,7 @@ use crate::support;
 #[rustfmt::skip]
 #[test]
 fn environment() {
-    // environment, from line 81
-    support::run("PQB_CONFIG_FILE=examples/pqbenchrc pqb setup --profile iceberg", 82, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='iceberg'", "export AWS_EC2_METADATA_DISABLED='true'"]));
-    support::run("PQB_CONFIG_FILE=examples/pqbenchrc PQB_TABLE_FORMAT=unity pqb setup --profile iceberg", 87, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='unity'", "export AWS_EC2_METADATA_DISABLED='true'"]));
+    // environment, from line 83
+    support::run("PQB_CONFIG_FILE=examples/pqbenchrc pqb setup --profile iceberg", 84, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='iceberg'", "export AWS_EC2_METADATA_DISABLED='true'"]));
+    support::run("PQB_CONFIG_FILE=examples/pqbenchrc PQB_TABLE_FORMAT=unity pqb setup --profile iceberg", 89, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='unity'", "export AWS_EC2_METADATA_DISABLED='true'"]));
 }

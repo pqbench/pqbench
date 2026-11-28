@@ -14,7 +14,8 @@ use deltalake::logstore::object_store::path::Path as ObjectPath;
 use deltalake::logstore::object_store::{ObjectStore, ObjectStoreExt};
 use deltalake::logstore::{commit_uri_from_version, LogStore, LogStoreRef};
 use deltalake::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::stream::{self, Stream};
+use futures::{StreamExt, TryStreamExt};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -236,8 +237,8 @@ pub(super) async fn stream_commits(
     // A commit the log does not date has no time to contribute, and one the
     // listing named that a read no longer finds has nothing left to read, so
     // neither is yielded.
-    let batches = commit_batches(versions.into_iter().rev());
-    Ok(futures::stream::iter(batches)
+    Ok(futures::stream::iter(versions.into_iter().rev())
+        .chunks(commit_read_width())
         .then(move |chunk| {
             let store = store.clone();
             async move {
@@ -298,8 +299,8 @@ pub(super) async fn stream_files(
     // Version order is the log's order, and a batch keeps it while bounding how
     // many commits are in flight at once; a commit's files are yielded as a
     // group once its own read lands.
-    let batches = commit_batches(versions);
-    Ok(futures::stream::iter(batches)
+    Ok(futures::stream::iter(versions)
+        .chunks(commit_read_width())
         .then(move |chunk| {
             let store = store.clone();
             let uri = uri.clone();
@@ -411,7 +412,8 @@ fn commit_file_version(name: &str) -> Option<u64> {
 /// How many commit reads one walk keeps in flight: the store's own concurrency,
 /// as delta-rs takes it for its own commit stream. Unbounded, every read's body
 /// is resident at once — a million-commit log would be gigabytes — and windowed
-/// it is flat in the log.
+/// it is flat in the log. A batch is the unit the consumer drives: the next one
+/// is not started until it asks for it.
 fn commit_read_width() -> usize {
     std::thread::available_parallelism()
         .map(|count| count.get())
@@ -419,16 +421,20 @@ fn commit_read_width() -> usize {
         * 4
 }
 
-/// The versions to read together, in the order given: `commit_read_width()` of
-/// them per batch, so a walk costs the log's latency once per batch rather than
-/// once per commit. A batch is the unit the consumer drives — the next one is
-/// not started until it asks for it.
-fn commit_batches(versions: impl IntoIterator<Item = u64>) -> Vec<Vec<u64>> {
-    let versions: Vec<u64> = versions.into_iter().collect();
-    versions
-        .chunks(commit_read_width())
-        .map(<[u64]>::to_vec)
-        .collect()
+/// The items a task sends over `channel`, in order: `poll_fn` polls the
+/// receiver and `try_flatten` yields each sent batch's items, so the sender's
+/// drop ends the stream and a sent error is one `Err` item.
+fn channel_stream<T, I>(
+    mut receiver: tokio::sync::mpsc::Receiver<Result<I, Error>>,
+) -> impl Stream<Item = Result<T, Error>> + Send + 'static
+where
+    I: IntoIterator<Item = Result<T, Error>> + Send + 'static,
+    I::IntoIter: Send,
+    T: Send + 'static,
+{
+    stream::poll_fn(move |context| receiver.poll_recv(context))
+        .map_ok(stream::iter)
+        .try_flatten()
 }
 
 /// How far into a commit file to read for its head, in stages: `commitInfo` is a
@@ -651,36 +657,25 @@ pub(super) async fn stream_active_files(
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
         let mut files = snapshot.file_views(store.as_ref(), None);
-        loop {
-            let file = match files.try_next().await.map_err(delta_error) {
+        let outcome = loop {
+            let file = match files.try_next().await {
                 Ok(Some(file)) => file,
-                Ok(None) => break,
-                Err(error) => {
-                    let _ = sender.send(Err(error)).await;
-                    break;
-                }
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(delta_error(error)),
             };
             let file = match data_file(&root, &table_url, &file, file_stats) {
                 Ok(file) => file,
-                Err(error) => {
-                    let _ = sender.send(Err(error)).await;
-                    break;
-                }
+                Err(error) => break Err(error),
             };
-            if sender.send(Ok(file)).await.is_err() {
-                break;
+            if sender.send(Ok(std::iter::once(Ok(file)))).await.is_err() {
+                break Ok(());
             }
+        };
+        if let Err(error) = outcome {
+            let _ = sender.send(Err(error)).await;
         }
     });
-    Ok(
-        futures_util::stream::try_unfold(receiver, |mut receiver| async move {
-            match receiver.recv().await {
-                Some(file) => Ok(Some((file?, receiver))),
-                None => Ok(None),
-            }
-        })
-        .boxed(),
-    )
+    Ok(channel_stream(receiver).boxed())
 }
 
 /// The snapshot's `remove` actions, one batch at a time: the kernel reads the
@@ -711,7 +706,7 @@ pub(super) async fn stream_removed_files(
     let schema = Arc::new(
         StructType::try_new([StructField::nullable("remove", remove)]).map_err(kernel_error)?,
     );
-    let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Vec<v1::TableFile>, Error>>(2);
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
     tokio::task::spawn_blocking(move || {
         let read = || -> Result<(), Error> {
             let mut builder = delta_kernel::Snapshot::builder_for(root);
@@ -729,10 +724,8 @@ pub(super) async fn stream_removed_files(
                     actions,
                 )
                 .map_err(kernel_error)?;
-                if sender
-                    .blocking_send(Ok(removed_files(data.record_batch())?))
-                    .is_err()
-                {
+                let files = removed_files(data.record_batch())?.into_iter().map(Ok);
+                if sender.blocking_send(Ok(files)).is_err() {
                     break;
                 }
             }
@@ -744,22 +737,7 @@ pub(super) async fn stream_removed_files(
     });
     // The kernel hands over a batch at a time; the stream yields them one file
     // at a time, holding only the batch it is working through.
-    let pending: std::vec::IntoIter<v1::TableFile> = Vec::new().into_iter();
-    Ok(futures_util::stream::try_unfold(
-        (receiver, pending),
-        |(mut receiver, mut pending)| async move {
-            loop {
-                if let Some(file) = pending.next() {
-                    return Ok(Some((file, (receiver, pending))));
-                }
-                let Some(files) = receiver.recv().await else {
-                    return Ok(None);
-                };
-                pending = files?.into_iter();
-            }
-        },
-    )
-    .boxed())
+    Ok(channel_stream(receiver).boxed())
 }
 
 /// The removed files in one batch of `remove` actions; other rows are null.

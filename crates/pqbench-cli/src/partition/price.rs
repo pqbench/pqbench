@@ -1,10 +1,9 @@
 //! `get partition-price`: each partition's storage classes and cost.
 
 use clap::Args;
-use futures_util::stream;
 use pqbench::v1;
 
-use crate::source::{drive, flat_map};
+use crate::source::{drive, map};
 use crate::{parse, CliError};
 
 /// Arguments for `get partition-price`.
@@ -29,7 +28,7 @@ pub(crate) async fn run(
     args: &PriceArgs,
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Partition>("get partition-price").await?;
-    drive(flat_map(
+    drive(map(
         parents,
         args.fan_out,
         move |partition: v1::Partition| async move {
@@ -40,10 +39,9 @@ pub(crate) async fn run(
             let env = daemon.resolve_env(&table).await?;
             let credentials = v1::Credentials::from_env(&env);
             let lake = lake.with_lease(Some(&credentials));
-            let price = pqbench::partition::price::price(&lake, &partition)
+            pqbench::partition::price::price(&lake, &partition)
                 .await
-                .map_err(|error| crate::error::context(&reference, error))?;
-            Ok(stream::iter([Ok::<_, CliError>(price)]))
+                .map_err(|error| crate::error::context(&reference, error))
         },
     ))
     .await

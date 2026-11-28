@@ -10,8 +10,9 @@ use crate::codecs::Codec;
 use crate::v1;
 
 use super::control::{self, Measurement};
+use super::decode::{chunk_pages, ChunkPage};
 use super::writer::Writer;
-use super::{ChunkPage, ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding};
 
 /// The rule id a suggestion carries.
 pub const CODEC_ZSTD_RULE: &str = "codec-zstd";
@@ -45,7 +46,7 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
 /// Recompress the sample chunk's representative data page with zstd levels 1
 /// and 3 and price the result against the bytes that page occupies on disk.
 fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
-    let pages = super::chunk_pages(sample)?;
+    let pages = chunk_pages(sample.path, sample.row_group, sample.column_index)?;
     zstd_measurement(sample.chunk_compressed_bytes, &pages)
 }
 
@@ -166,8 +167,9 @@ fn remedy(writer: Writer, leaf: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{detect, remedy, zstd_measurement};
+    use crate::lint::decode::ChunkPage;
     use crate::lint::writer::Writer;
-    use crate::lint::{ChunkPage, ColumnSample};
+    use crate::lint::ColumnSample;
     use crate::v1;
 
     fn column(codec: &str) -> v1::Column {

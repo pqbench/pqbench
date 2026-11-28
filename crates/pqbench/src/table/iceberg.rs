@@ -8,10 +8,11 @@
 //! enforce the `iceberg` and `aws` features at runtime, so this module compiles
 //! in every configuration and fails only when a read needs a disabled one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
-use futures_util::{Stream, StreamExt, TryStreamExt};
+use futures_util::stream::{self, Stream};
+use futures_util::{StreamExt, TryStreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
@@ -103,7 +104,7 @@ fn ancestry_log(
                 }],
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
 }
 
 /// Attach the snapshot's added and deleted files to its log commit.
@@ -319,7 +320,7 @@ pub(super) async fn stream_commits(
             actions: Vec::new(),
         });
     }
-    Ok(futures_util::stream::iter(commits.into_iter().map(Ok)))
+    Ok(stream::iter(commits.into_iter().map(Ok)))
 }
 
 /// Stream the files the selected snapshot's manifests name.
@@ -343,32 +344,29 @@ pub(super) async fn stream_files(
         _ => info.files,
     };
     // `data_file` already resolved each blob and normalized its relative path.
-    Ok(futures_util::stream::iter(files.into_iter().map(Ok)))
+    Ok(stream::iter(files.into_iter().map(Ok)))
 }
 
 fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> Vec<&'a Snapshot> {
     let Some(selected) = selected else {
         return Vec::new();
     };
-    let mut chain = Vec::new();
-    let mut current = Some(selected.snapshot_id);
-    let mut seen = std::collections::BTreeSet::new();
-    while let Some(id) = current {
-        if !seen.insert(id) {
-            break;
-        }
-        let Some(snapshot) = metadata
-            .snapshots
-            .iter()
-            .find(|snapshot| snapshot.snapshot_id == id)
-        else {
-            break;
-        };
-        chain.push(snapshot);
-        current = snapshot.parent_snapshot_id.filter(|parent| *parent != -1);
-    }
-    chain.reverse();
-    chain
+    let mut seen = BTreeSet::new();
+    let newest_first: Vec<&Snapshot> = std::iter::successors(Some(selected), |snapshot| {
+        snapshot
+            .parent_snapshot_id
+            .filter(|parent| *parent != -1)
+            .and_then(|id| {
+                metadata
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.snapshot_id == id)
+            })
+    })
+    // A parent cycle would otherwise repeat the snapshots it names.
+    .take_while(|snapshot| seen.insert(snapshot.snapshot_id))
+    .collect();
+    newest_first.into_iter().rev().collect()
 }
 
 async fn resolve_metadata_location(lake: &Lake, uri: &str) -> Result<String, Error> {
@@ -492,17 +490,18 @@ async fn active_files(
     table_location: &str,
     manifest_list: &str,
 ) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
-    let mut files = Vec::new();
-    let mut deletes = Vec::new();
     let root = table_root(table_location)?;
-    let mut entries = active_entries(
+    let entries: Vec<Entry> = active_entries(
         lake.clone(),
         table_location.to_owned(),
         manifest_list.to_owned(),
     )
     .await?
-    .boxed();
-    while let Some(entry) = entries.try_next().await? {
+    .try_collect()
+    .await?;
+    let mut files = Vec::with_capacity(entries.len());
+    let mut deletes = Vec::new();
+    for entry in entries {
         match entry {
             Entry::Data(file) => files.push(file),
             Entry::Delete(path) => {
@@ -521,9 +520,9 @@ async fn active_files(
 
 /// One entry the active manifests name.
 ///
-/// The walk holds one entry at a time, so the data variant's size is the
-/// walk's state, not a per-file cost; a `Box` would add an allocation to every
-/// file to save a few hundred bytes of stack.
+/// A manifest's entries are built together, so the data variant's size is one
+/// manifest's cost, not the walk's state; a `Box` would add an allocation to
+/// every file to save a few hundred bytes of stack.
 #[allow(clippy::large_enum_variant)]
 enum Entry {
     /// A data file to measure.
@@ -532,16 +531,25 @@ enum Entry {
     Delete(String),
 }
 
-/// One position in a manifest walk: the manifest list is read once, then one
-/// manifest at a time as the walk reaches it.
-struct ManifestWalk {
-    lake: Lake,
-    root: TableRoot,
-    manifests: std::vec::IntoIter<ManifestFile>,
-    entries: std::vec::IntoIter<ManifestEntry>,
-    /// The content of the manifest whose entries are being walked; no manifest
-    /// is walked until the list is read.
+/// One manifest entry as an active entry, or `None` when the entry is deleted.
+fn active_entry(
+    root: &TableRoot,
     manifest_content: i32,
+    entry: ManifestEntry,
+) -> Option<Result<Entry, Error>> {
+    if entry.status == STATUS_DELETED {
+        return None;
+    }
+    let content = if manifest_content == MANIFEST_DELETES && entry.data_file.content == CONTENT_DATA
+    {
+        MANIFEST_DELETES
+    } else {
+        entry.data_file.content
+    };
+    if content != CONTENT_DATA {
+        return Some(Ok(Entry::Delete(entry.data_file.file_path)));
+    }
+    Some(data_file(root, entry).map(Entry::Data))
 }
 
 /// Stream the active manifests' entries, without collecting them.
@@ -557,45 +565,22 @@ async fn active_entries(
     let root = table_root(&table_location)?;
     let bytes = read_location(&lake, &manifest_list).await?;
     let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
-    let walk = ManifestWalk {
-        lake,
-        root,
-        manifests: manifests.into_iter(),
-        entries: Vec::new().into_iter(),
-        manifest_content: CONTENT_DATA,
-    };
-    Ok(futures_util::stream::try_unfold(
-        walk,
-        |mut walk| async move {
-            loop {
-                if let Some(entry) = walk.entries.next() {
-                    if entry.status == STATUS_DELETED {
-                        continue;
-                    }
-                    let content = if walk.manifest_content == MANIFEST_DELETES
-                        && entry.data_file.content == CONTENT_DATA
-                    {
-                        MANIFEST_DELETES
-                    } else {
-                        entry.data_file.content
-                    };
-                    if content != CONTENT_DATA {
-                        return Ok(Some((Entry::Delete(entry.data_file.file_path), walk)));
-                    }
-                    let file = data_file(&walk.root, entry)?;
-                    return Ok(Some((Entry::Data(file), walk)));
-                }
-                let Some(manifest) = walk.manifests.next() else {
-                    return Ok(None);
-                };
-                let bytes = read_location(&walk.lake, &manifest.manifest_path).await?;
-                walk.entries = read_avro::<ManifestEntry>(&bytes, "manifest")
-                    .map_err(Error::Avro)?
-                    .into_iter();
-                walk.manifest_content = manifest.content;
+    Ok(stream::iter(manifests)
+        .then(move |manifest| {
+            let lake = lake.clone();
+            let root = root.clone();
+            async move {
+                let bytes = read_location(&lake, &manifest.manifest_path).await?;
+                let entries: Vec<ManifestEntry> =
+                    read_avro(&bytes, "manifest").map_err(Error::Avro)?;
+                Ok(entries
+                    .into_iter()
+                    .filter_map(|entry| active_entry(&root, manifest.content, entry))
+                    .collect::<Vec<_>>())
             }
-        },
-    ))
+        })
+        .map_ok(stream::iter)
+        .try_flatten())
 }
 
 /// Stream the selected snapshot's active files, without collecting them.
@@ -610,7 +595,7 @@ pub(super) async fn stream_active_files(
     let location = metadata.location.clone();
     let requested = request.snapshot_version.map(create_i64).transpose()?;
     let Some(snapshot) = select_snapshot(&metadata, requested)? else {
-        return Ok(futures_util::stream::empty().boxed());
+        return Ok(stream::empty().boxed());
     };
     let manifest_list = snapshot.manifest_list.clone();
     Ok(active_entries(lake.clone(), location, manifest_list)
@@ -647,6 +632,7 @@ fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<v1::TableFile, Er
     })
 }
 
+#[derive(Clone)]
 enum TableRoot {
     Local(PathBuf),
     Object(Url),

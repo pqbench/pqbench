@@ -32,9 +32,9 @@ pub(crate) fn api_root(endpoint: &str) -> String {
     }
 }
 
-/// The Iceberg REST base, whether or not the endpoint has a trailing slash.
-pub(crate) fn iceberg_root(endpoint: &str) -> String {
-    endpoint.trim_end_matches('/').to_string()
+/// The Iceberg REST base: the endpoint without its trailing slash.
+pub(crate) fn iceberg_root(endpoint: &str) -> &str {
+    endpoint.trim_end_matches('/')
 }
 
 /// The Unity REST root of an endpoint of either dialect: an Iceberg REST

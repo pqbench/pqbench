@@ -13,6 +13,7 @@ use std::fmt;
 use std::future::Future;
 
 use futures_util::stream::{self, Stream};
+use futures_util::TryStreamExt;
 use serde::de::DeserializeOwned;
 
 use crate::third_party::reqwest::{Error as TransportError, Request, Response};
@@ -144,40 +145,22 @@ where
     F: FnMut(Option<Token>) -> Fut,
     Fut: Future<Output = Result<Page<T, Token>, E>>,
 {
-    let walk = Walk {
-        page_token: first_page_token,
-        last_page: false,
-        rows: Vec::new().into_iter(),
-    };
     stream::try_unfold(
-        (walk, fetch_page),
-        |(mut walk, mut fetch_page)| async move {
-            loop {
-                if let Some(row) = walk.rows.next() {
-                    return Ok(Some((row, (walk, fetch_page))));
-                }
-                if walk.last_page {
-                    return Ok(None);
-                }
-                let page = fetch_page(walk.page_token.take()).await?;
-                walk.last_page = page.next_page_token.is_none();
-                walk.page_token = page.next_page_token;
-                walk.rows = page.rows.into_iter();
-            }
+        (Some(first_page_token), fetch_page),
+        |(page_token, mut fetch_page)| async move {
+            let Some(page_token) = page_token else {
+                return Ok(None);
+            };
+            let page = fetch_page(page_token).await?;
+            // The next state is the token the page named; a last page names
+            // none, which ends the walk.
+            let rows = page.rows.into_iter().map(Ok).collect::<Vec<_>>();
+            let next = page.next_page_token.map(Some);
+            Ok(Some((rows, (next, fetch_page))))
         },
     )
-}
-
-/// Where a [`paginate`] walk stands: the token of the page still to fetch, and
-/// the rows of the page just fetched that are not yielded yet.
-struct Walk<T, Token> {
-    /// The page token to fetch next; `None` before the first page, and on the
-    /// last page while its rows are still being yielded.
-    page_token: Option<Token>,
-    /// Set once the endpoint's last page has been read.
-    last_page: bool,
-    /// The rows of the page just fetched.
-    rows: std::vec::IntoIter<T>,
+    .map_ok(stream::iter)
+    .try_flatten()
 }
 
 #[cfg(test)]

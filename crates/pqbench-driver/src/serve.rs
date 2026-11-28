@@ -56,15 +56,18 @@ pub(crate) async fn run(
     socket: PathBuf,
     driver: Task,
 ) -> Result<(), String> {
+    // Listen for the signals before the socket exists: a supervisor may signal
+    // as soon as it sees the socket, and a signal that lands before the handler
+    // is installed would kill the process with no checkpoint and no cleanup.
+    let mut interrupt = signal(SignalKind::interrupt())
+        .map_err(|error| format!("cannot listen for SIGINT: {error}"))?;
+    let mut terminate = signal(SignalKind::terminate())
+        .map_err(|error| format!("cannot listen for SIGTERM: {error}"))?;
     socket::prepare(&socket, "driver")?;
     let listener = UnixListener::bind(&socket)
         .map_err(|error| format!("cannot bind {}: {error}", socket.display()))?;
     socket::set_socket_mode(&socket)?;
 
-    let mut interrupt = signal(SignalKind::interrupt())
-        .map_err(|error| format!("cannot listen for SIGINT: {error}"))?;
-    let mut terminate = signal(SignalKind::terminate())
-        .map_err(|error| format!("cannot listen for SIGTERM: {error}"))?;
     let shutdown = Arc::new(Notify::new());
     let result = loop {
         tokio::select! {

@@ -11,7 +11,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use futures_util::stream::{Stream, StreamExt};
+use futures_util::stream::Stream;
+use futures_util::TryStreamExt;
 use serde::Deserialize;
 
 use crate::price::{object_storage, storage_prices, GIBIBYTE};
@@ -158,13 +159,15 @@ pub async fn summarize_columns<S, E>(columns: S) -> Result<Vec<ColumnMass>, Summ
 where
     S: Stream<Item = Result<v1::Column, E>>,
 {
-    futures_util::pin_mut!(columns);
-    let mut summary = ColumnSummary::new();
-    while let Some(column) = columns.next().await {
-        summary
-            .add_column(&column.map_err(SummarizeError::Stream)?)
-            .map_err(SummarizeError::Summary)?;
-    }
+    let summary = columns
+        .map_err(SummarizeError::Stream)
+        .try_fold(ColumnSummary::new(), |mut summary, column| async move {
+            summary
+                .add_column(&column)
+                .map_err(SummarizeError::Summary)?;
+            Ok(summary)
+        })
+        .await?;
     summary.into_rows().map_err(SummarizeError::Summary)
 }
 

@@ -4,11 +4,15 @@
 //! client that knows the store finds the driver without an environment
 //! variable. `PQB_DRIVER_SOCK` overrides it for a sidecar or a test.
 
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// The environment variable that names the driver's socket.
 pub const ENV: &str = "PQB_DRIVER_SOCK";
+
+/// Linux's `sun_path` holds 108 bytes; keep a margin for the NUL and a rename.
+const SOCKET_PATH_LIMIT: usize = 100;
 
 /// The socket `PQB_DRIVER_SOCK` names, if it is set.
 pub fn from_env() -> Option<PathBuf> {
@@ -38,6 +42,7 @@ pub fn resolve(socket: Option<&Path>, store: Option<&Path>) -> Result<PathBuf, S
 /// `label` names the listener in the messages; the daemon and the driver share
 /// the security rules and differ only in what they call themselves.
 pub fn prepare(socket: &Path, label: &str) -> Result<(), String> {
+    check_length(socket)?;
     let dir = socket
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -72,6 +77,20 @@ pub fn absolute(path: &Path) -> PathBuf {
 pub fn set_socket_mode(socket: &Path) -> Result<(), String> {
     std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600))
         .map_err(|error| format!("cannot set {} to 0600: {error}", socket.display()))
+}
+
+/// Check the path fits a socket address, so a deep `--store` path fails with a
+/// hint rather than the OS's raw `bind` error.
+fn check_length(socket: &Path) -> Result<(), String> {
+    let length = socket.as_os_str().as_bytes().len();
+    if length < SOCKET_PATH_LIMIT {
+        return Ok(());
+    }
+    Err(format!(
+        "the socket path {} is {length} bytes; a Unix socket path must be under \
+         {SOCKET_PATH_LIMIT} bytes (use a shallower --store directory, or set {ENV})",
+        socket.display()
+    ))
 }
 
 fn ensure_dir(dir: &Path) -> Result<(), String> {
@@ -131,5 +150,16 @@ mod tests {
         let path = default_path(Path::new("store"));
         assert!(path.is_absolute());
         assert_eq!(path.file_name().unwrap(), "driver.sock");
+    }
+
+    /// A path too deep for `sun_path` is refused with the limit and the ways to
+    /// shorten it, before the OS sees it.
+    #[test]
+    fn a_socket_path_that_does_not_fit_sun_path_is_refused() {
+        let deep = PathBuf::from(format!("/tmp/{}/driver.sock", "d".repeat(200)));
+        let error = prepare(&deep, "driver").unwrap_err();
+        assert!(error.contains("Unix socket path"), "{error}");
+        assert!(error.contains("--store"), "{error}");
+        assert!(error.contains(ENV), "{error}");
     }
 }

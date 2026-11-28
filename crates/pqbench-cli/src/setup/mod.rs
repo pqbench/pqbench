@@ -65,8 +65,7 @@ pub(crate) async fn run(workspace: &Workspace, args: &SetupArgs) -> Result<(), C
         export(&mut out, "AWS_REGION", region);
     }
     export(&mut out, "AWS_EC2_METADATA_DISABLED", "true");
-    print!("{out}");
-    Ok(())
+    crate::render::write(&out).await
 }
 
 /// A value with the surrounding whitespace trimmed; blank is nothing.

@@ -70,6 +70,7 @@ pub(crate) fn read() -> Result<RunControl, String> {
 }
 
 /// The file's path: `PQB_CONFIG_FILE`, else `PQB_CONFIG`, else `~/.pqbenchrc`.
+/// The commands read the same file the same way.
 fn path() -> Option<PathBuf> {
     ["PQB_CONFIG_FILE", "PQB_CONFIG"]
         .iter()
@@ -78,7 +79,7 @@ fn path() -> Option<PathBuf> {
 }
 
 /// The driver's settings from the `profile` section (or `[DEFAULT]`) of the
-/// INI `text`.
+/// INI `text`. A key's hyphen and underscore spellings are the same key.
 fn parse(text: &str, profile: Option<&str>) -> Result<RunControl, String> {
     let wanted = profile.unwrap_or(DEFAULT_SECTION);
     let mut run_control = RunControl::default();
@@ -107,14 +108,14 @@ fn parse(text: &str, profile: Option<&str>) -> Result<RunControl, String> {
         if value.is_empty() {
             continue;
         }
-        match key.trim() {
-            "checkpoint-codec" | "checkpoint_codec" => {
+        match key.trim().replace('_', "-").as_str() {
+            "checkpoint-codec" => {
                 run_control.checkpoint_codec =
                     CheckpointCodec::from_name(&value).ok_or_else(|| {
                         format!("checkpoint-codec expects `none`, `zstd`, or `lz4`, got {value:?}")
                     })?;
             }
-            "step-timeout" | "step_timeout" => {
+            "step-timeout" => {
                 run_control.step_timeout = Duration::from_secs(seconds(&value)?);
             }
             _ => {}

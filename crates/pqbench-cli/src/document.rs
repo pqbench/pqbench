@@ -74,18 +74,13 @@ fn stdin_records() -> impl Stream<Item = Result<Record, CliError>> {
         lines: Lines<BufReader<Stdin>>,
         buffer: String,
         empty: bool,
-        done: bool,
     }
     let state = State {
         lines: BufReader::new(tokio::io::stdin()).lines(),
         buffer: String::new(),
         empty: true,
-        done: false,
     };
     stream::try_unfold(state, |mut state| async move {
-        if state.done {
-            return Ok(None);
-        }
         loop {
             match state.lines.next_line().await? {
                 Some(line) => {
@@ -102,7 +97,6 @@ fn stdin_records() -> impl Stream<Item = Result<Record, CliError>> {
                     }
                 }
                 None => {
-                    state.done = true;
                     if !state.buffer.trim().is_empty() {
                         return Err("incomplete document".into());
                     }

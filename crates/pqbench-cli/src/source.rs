@@ -22,7 +22,6 @@
 //! straggler per batch, and a read's timeout running while the sink stalls.
 
 use std::future::Future;
-use std::pin::Pin;
 
 use futures_util::future::join_all;
 use futures_util::stream::{self, LocalBoxStream, Stream, StreamExt};
@@ -131,7 +130,6 @@ where
     F: Fn(A) -> Fut + Clone + 'a,
     Fut: Future<Output = Result<Option<B>, E>> + 'a,
 {
-    let parents: Pin<Box<dyn Stream<Item = Result<A, CliError>> + 'a>> = Box::pin(parents);
     parents
         .chunks(fan_out.max(1))
         .then(move |batch| {
@@ -149,8 +147,9 @@ where
         .boxed_local()
 }
 
-/// Read one batch of parents to completion. A parent that failed to parse is
-/// reported with the batch's other failures, before its records.
+/// Read one batch of parents to completion: each parent's read is one future,
+/// and a parent that failed to parse is its own failed item. The batch's rows
+/// are joined in input order.
 async fn read_batch<A, B, E, F, Fut>(
     batch: Vec<Result<A, CliError>>,
     read: F,
@@ -161,25 +160,17 @@ where
     F: Fn(A) -> Fut + Clone,
     Fut: Future<Output = Result<Option<B>, E>>,
 {
-    let mut errors = Vec::new();
-    let mut reads = Vec::with_capacity(batch.len());
-    for record in batch {
-        match record {
-            Ok(parent) => {
-                let reference = parent.name().to_owned();
-                let read = read.clone();
-                reads.push(async move {
-                    read(parent)
-                        .await
-                        .map_err(move |cause| crate::error::context(&reference, cause))
-                });
-            }
-            Err(error) => errors.push(Err(error)),
+    let reads = batch.into_iter().map(|record| {
+        let read = read.clone();
+        async move {
+            let parent = record?;
+            let reference = parent.name().to_owned();
+            read(parent)
+                .await
+                .map_err(|cause| crate::error::context(&reference, cause))
         }
-    }
-    let mut rows: Vec<Result<Option<B>, CliError>> = errors;
-    rows.extend(join_all(reads).await);
-    rows
+    });
+    join_all(reads).await
 }
 
 /// `flatMap` with `fan_out` streams in flight: a parent becomes its stream,

@@ -53,10 +53,11 @@ pub async fn price(lake: &Lake, partition: &v1::Partition) -> Result<v1::Partiti
         &partition.sample_file,
         &partition.last_file,
     ] {
-        let blob = file.as_ref().and_then(|file| file.blob.as_deref());
-        if let Some(blob) = blob.filter(|blob| object_storage_blob(blob) && !blobs.contains(blob)) {
-            blobs.push(blob);
-        }
+        blobs.extend(
+            file.as_ref()
+                .and_then(|file| file.blob.as_deref())
+                .filter(|blob| object_storage_blob(blob) && !blobs.contains(blob)),
+        );
     }
     let heads = try_join_all(blobs.into_iter().map(|name| async move {
         crate::blob::get(lake, name)

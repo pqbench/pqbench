@@ -34,7 +34,8 @@ table_format  = unity
 A profile may name a service principal's `client-id` and `client-secret`
 (`client_id`/`client_secret` are the same keys) instead of a bearer; see
 [Service principal](authentication.md#service-principal-oauth-m2m). A static
-`token` wins when a profile carries both.
+`token` wins when a profile carries both. Any key takes either spelling: its
+hyphens and underscores name the same key (`table-format` is `table_format`).
 
 Two profiles over one workspace let a run switch dialect with `--profile`. The
 profile is chosen by `--profile` or `PQB_PROFILE`; without either, `pqbench`
@@ -47,7 +48,8 @@ The file holds a bearer, so keep it readable only by its owner:
 $ chmod 600 ~/.pqbenchrc
 ```
 
-Set `PQB_CONFIG_FILE` to read a different file. The repository's
+Set `PQB_CONFIG_FILE` (or `PQB_CONFIG`) to read a different file, as the driver
+does. The repository's
 `examples/pqbenchrc` is a committed copy of the file above with a placeholder
 bearer, so the layering can be tried without a workspace.
 
