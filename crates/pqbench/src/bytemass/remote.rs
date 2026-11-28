@@ -15,8 +15,10 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 
 /// How much of the object tail one GET asks for. It must cover the trailer and
 /// the serialized footer for the read to stay one request; a footer larger than
-/// this falls back to a second range GET.
-const FOOTER_WINDOW: u64 = 64 * 1024;
+/// this falls back to a second range GET. A wide table (150–500 columns) easily
+/// needs more than 64 KiB of footer, and 256 KiB still keeps a small object's
+/// only read small because the range is clamped to the object's size.
+const FOOTER_WINDOW: u64 = 256 * 1024;
 
 /// Read an individual Parquet object's byte masses from a URI.
 ///

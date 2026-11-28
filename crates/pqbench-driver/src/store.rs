@@ -268,14 +268,21 @@ impl Store {
         Ok(())
     }
 
-    /// Store a new version's listing.
+    /// Store a new version's listing: a temporary file, synced, then renamed
+    /// over the listing, so a power loss after the rename cannot leave an
+    /// empty one.
     pub(crate) fn write_listing(&self, key: &Key, line: &str) -> Result<(), String> {
         let directory = self.version_dir(key);
         fs::create_dir_all(&directory)
             .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-        fs::write(self.temporary(key, LISTING), format!("{line}\n"))
-            .and_then(|()| fs::rename(self.temporary(key, LISTING), directory.join(LISTING)))
-            .map_err(|error| format!("cannot store the listing of {}: {error}", key.0))
+        let temporary = self.temporary(key, LISTING);
+        let write = || -> std::io::Result<()> {
+            let mut file = File::create(&temporary)?;
+            file.write_all(format!("{line}\n").as_bytes())?;
+            file.sync_all()?;
+            fs::rename(&temporary, directory.join(LISTING))
+        };
+        write().map_err(|error| format!("cannot store the listing of {}: {error}", key.0))
     }
 
     pub(crate) fn read_listing(&self, key: &Key) -> Result<String, String> {
@@ -290,7 +297,9 @@ impl Store {
     }
 
     /// Land a run's `output`: `stdout` when the run wrote its result there,
-    /// else the file it wrote at [`Store::temporary`].
+    /// else the file it wrote at [`Store::temporary`]. The temporary file is
+    /// synced before the rename, so a power loss right after it cannot leave a
+    /// zero-byte landed result.
     pub(crate) fn land(
         &self,
         key: &Key,
@@ -298,10 +307,15 @@ impl Store {
         stdout: Option<&[u8]>,
     ) -> Result<(), String> {
         let temporary = self.temporary(key, output);
-        stdout
-            .map_or(Ok(()), |bytes| fs::write(&temporary, bytes))
-            .and_then(|()| fs::rename(&temporary, self.version_dir(key).join(output)))
-            .map_err(|error| format!("cannot store {output}: {error}"))
+        let land = || -> std::io::Result<()> {
+            if let Some(bytes) = stdout {
+                let mut file = File::create(&temporary)?;
+                file.write_all(bytes)?;
+            }
+            File::open(&temporary)?.sync_all()?;
+            fs::rename(&temporary, self.version_dir(key).join(output))
+        };
+        land().map_err(|error| format!("cannot store {output}: {error}"))
     }
 
     /// Drop what a failed run left of `output`.

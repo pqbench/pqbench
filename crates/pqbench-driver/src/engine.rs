@@ -490,6 +490,7 @@ impl Engine {
                     let delay = RETRY_BASE_MS
                         .saturating_mul(1_u64 << shift)
                         .min(RETRY_MAX_MS);
+                    let delay = jitter_ms(delay, key, row.failure_count).min(RETRY_MAX_MS);
                     row.retry_time = Some(now.saturating_add(delay));
                     if needs_sample(row.state) {
                         row.state = State::Priced;
@@ -640,6 +641,31 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// A deterministic spread of at most ±25% on a retry delay: the hash of the
+/// version and its failure count. Two versions that failed in the same tick
+/// therefore retry at different times, so an outage that fails a whole walk
+/// does not come back as a synchronized retry storm (Tail at Scale).
+fn jitter_ms(delay: u64, key: &Key, failures: u64) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET;
+    for byte in key
+        .0
+        .as_bytes()
+        .iter()
+        .chain(key.1.as_bytes())
+        .chain(failures.to_le_bytes().iter())
+    {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    let spread = delay / 4;
+    if spread == 0 {
+        return delay;
+    }
+    delay - spread + hash % (2 * spread + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,7 +811,7 @@ mod tests {
     }
 
     /// A failed run puts the version back with its error, and after two it
-    /// waits for its backoff window before retrying.
+    /// waits for its (jittered) backoff window before retrying.
     #[test]
     fn a_version_that_failed_twice_waits() {
         let (mut engine, key) = found(1);
@@ -797,8 +823,31 @@ mod tests {
         }
         assert_eq!(engine.rows[&key].failure_count, 2);
         assert_eq!(engine.rows[&key].error.as_deref(), Some("boom 1"));
-        assert!(engine.start_timed(1, t0 + RETRY_BASE_MS - 1).is_empty());
-        assert_eq!(engine.start_timed(1, t0 + RETRY_BASE_MS).len(), 1);
+        let retry_time = engine.rows[&key].retry_time.expect("the version waits");
+        assert!(
+            retry_time >= t0 + RETRY_BASE_MS * 3 / 4 && retry_time <= t0 + RETRY_BASE_MS * 5 / 4,
+            "the backoff was {retry_time} ms"
+        );
+        assert!(engine.start_timed(1, retry_time - 1).is_empty());
+        assert_eq!(engine.start_timed(1, retry_time).len(), 1);
+    }
+
+    /// Two versions that fail in the same tick back off to different times, so
+    /// one outage does not bring every retry back at once; the same version and
+    /// failure count always gets the same delay.
+    #[test]
+    fn a_failure_that_spreads_retries_is_deterministic() {
+        let left: Key = key(PARTITION, "aa").unwrap();
+        let right: Key = key(PARTITION, "bb").unwrap();
+        let delays: Vec<u64> = [&left, &right]
+            .into_iter()
+            .map(|key| jitter_ms(RETRY_BASE_MS, key, MAX_FAILURES))
+            .collect();
+        assert_ne!(delays[0], delays[1], "both versions retry together");
+        assert_eq!(delays[0], jitter_ms(RETRY_BASE_MS, &left, MAX_FAILURES));
+        for delay in delays {
+            assert!((RETRY_BASE_MS * 3 / 4..=RETRY_BASE_MS * 5 / 4).contains(&delay));
+        }
     }
 
     /// A restart puts a running version back to the state before its
@@ -877,5 +926,237 @@ mod tests {
         assert!(key("catalogs/c/schemas/s/tables/t/partitions/..", "aa").is_none());
         assert!(key(PARTITION, "../x").is_none());
         assert!(key(PARTITION, "aa").is_some());
+    }
+
+    /// A deterministic pseudo-random sequence: enough variety to reach every
+    /// transition, and the same run on every machine when a test fails.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn new(seed: u64) -> Self {
+            Self(seed)
+        }
+
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+
+        fn pick(&mut self, bound: u64) -> u64 {
+            self.next() % bound
+        }
+    }
+
+    fn running(state: State) -> bool {
+        TRANSITIONS
+            .iter()
+            .any(|transition| transition.running == state)
+    }
+
+    /// Whether `state` is a state a version can reach from `previous` in one
+    /// step: no transition may skip a state or go backwards except through the
+    /// failure/reset edge back to its source.
+    fn follows_an_edge(previous: State, state: State) -> bool {
+        if previous == state {
+            return true;
+        }
+        TRANSITIONS.iter().any(|transition| {
+            (previous == transition.source && state == transition.running)
+                || (previous == transition.running
+                    && (state == transition.done
+                        || state == transition.source
+                        || state == State::Priced
+                        || state == State::UpToDate))
+        })
+    }
+
+    /// IronFleet-style state-machine safety: a seeded sequence of every
+    /// transition the engine has, with its invariants checked after every
+    /// step.
+    ///
+    /// The invariants are that the map holds exactly the versions the walk
+    /// found (none lost, none duplicated), every state change follows an edge
+    /// of the transition graph, `reset_running` leaves no version running, and
+    /// every backoff stays inside its bounds.
+    #[test]
+    fn the_map_keeps_its_invariants_under_a_seeded_transition_sequence() {
+        let tables = [
+            "catalogs/c/schemas/s/tables/t",
+            "catalogs/c/schemas/s/tables/u",
+        ];
+        let etags = ["aa", "bb", "cc"];
+        let mut sequence = Lcg::new(0x5eed);
+        let mut engine = Engine::new(Vec::new(), false).unwrap();
+        // The versions the walk found: the reference the map is checked against.
+        let mut expected: BTreeMap<Key, ()> = BTreeMap::new();
+        let mut previous: BTreeMap<Key, State> = BTreeMap::new();
+        let mut now = 1_000_000_u64;
+        // How often each transition ran, so a sequence that silently skipped
+        // one could not pass by checking nothing.
+        let mut ran = [0_u64; 6];
+
+        for step in 0..600 {
+            now += 1_000;
+            let op = sequence.pick(6) as usize;
+            ran[op] += 1;
+            match op {
+                // A walk found a version: the newest etag supersedes the old.
+                0 => {
+                    let table = tables[sequence.pick(tables.len() as u64) as usize];
+                    let day = sequence.pick(3);
+                    let name = format!("{table}/partitions/day%3D{day}");
+                    let etag = etags[sequence.pick(etags.len() as u64) as usize];
+                    let key = key(&name, etag).unwrap();
+                    let listing = Partition {
+                        file_count: sequence.pick(2),
+                        ..Partition::default()
+                    };
+                    let superseded = engine.found(&key, &listing, now);
+                    for key in superseded {
+                        expected.remove(&key);
+                    }
+                    expected.insert(key, ());
+                }
+                // The driver hands out runs.
+                1 => {
+                    let limit = 1 + sequence.pick(4) as usize;
+                    engine.start_timed(limit, now);
+                }
+                // A run ends, either way.
+                2 => {
+                    let running: Vec<Key> = engine
+                        .rows
+                        .iter()
+                        .filter(|(_, row)| running(row.state))
+                        .map(|(key, _)| key.clone())
+                        .collect();
+                    if running.is_empty() {
+                        continue;
+                    }
+                    let key = running[sequence.pick(running.len() as u64) as usize].clone();
+                    let price = (engine.rows[&key].state == State::Pricing).then(|| {
+                        serde_json::from_value(serde_json::json!({
+                            "name": format!("{}/versions/{}", key.0, key.1),
+                            "partition_etag": key.1,
+                            "storage_classes": ["STANDARD"],
+                            "storage_costs": [{"storage_class": "STANDARD",
+                                "dollars_per_gibibyte_per_month": 0.023,
+                                "cost_per_month": 1.0}],
+                        }))
+                        .unwrap()
+                    });
+                    let outcome = if sequence.pick(3) == 0 {
+                        Err(format!("boom {step}"))
+                    } else {
+                        Ok(price)
+                    };
+                    let failed = outcome.is_err();
+                    engine.finish_timed(&key, outcome, now);
+                    if failed && engine.rows[&key].failure_count >= MAX_FAILURES {
+                        let wait = engine.rows[&key]
+                            .retry_time
+                            .expect("a backed-off version waits");
+                        let delay = wait - now;
+                        assert!(
+                            (RETRY_BASE_MS * 3 / 4..=RETRY_MAX_MS).contains(&delay),
+                            "step {step}: a backoff of {delay} ms is outside its bounds"
+                        );
+                    }
+                }
+                // A table's listing no longer names some of its versions.
+                3 => {
+                    let table = tables[sequence.pick(tables.len() as u64) as usize];
+                    let under: Vec<Key> = engine
+                        .rows
+                        .keys()
+                        .filter(|(name, _)| name.starts_with(&format!("{table}/partitions/")))
+                        .cloned()
+                        .collect();
+                    let found: BTreeSet<Key> = under
+                        .into_iter()
+                        .filter(|_| sequence.pick(2) == 1)
+                        .collect();
+                    let purged = engine.missing(table, &found);
+                    for key in purged {
+                        expected.remove(&key);
+                    }
+                }
+                // A walk lists only some tables: the rest are purged.
+                4 => {
+                    let listed: BTreeSet<String> = tables
+                        .iter()
+                        .filter(|_| sequence.pick(2) == 1)
+                        .map(|table| table.to_string())
+                        .collect();
+                    for key in engine.retain(&listed) {
+                        expected.remove(&key);
+                    }
+                }
+                // A stop, then a restart from the checkpoint.
+                _ => {
+                    engine.reset_running();
+                    for row in engine.rows.values() {
+                        assert!(
+                            !running(row.state),
+                            "step {step}: a reset left a version in {}",
+                            row.state
+                        );
+                    }
+                    previous = engine
+                        .rows
+                        .iter()
+                        .map(|(key, row)| (key.clone(), row.state))
+                        .collect();
+                    let versions: Vec<_> = engine.versions().collect();
+                    engine = Engine::new(versions, false).unwrap();
+                }
+            }
+
+            // No version lost or duplicated: the map is exactly what the walk
+            // found, once each.
+            let keys: BTreeSet<&Key> = engine.rows.keys().collect();
+            let wanted: BTreeSet<&Key> = expected.keys().collect();
+            assert_eq!(
+                keys, wanted,
+                "step {step}: the map lost or gained a version"
+            );
+            let names: BTreeSet<String> = engine.versions().map(|row| row.name).collect();
+            assert_eq!(
+                names.len(),
+                engine.rows.len(),
+                "step {step}: a version is duplicated"
+            );
+
+            // Every state change follows an edge of the transition graph.
+            for (key, row) in &engine.rows {
+                if let Some(state) = previous.get(key) {
+                    assert!(
+                        follows_an_edge(*state, row.state),
+                        "step {step}: {} went from {} to {}",
+                        key.0,
+                        state,
+                        row.state
+                    );
+                }
+                let backed_off = row.failure_count >= MAX_FAILURES;
+                assert_eq!(
+                    backed_off,
+                    row.retry_time.is_some(),
+                    "step {step}: a failure count and its backoff disagree"
+                );
+            }
+            previous = engine
+                .rows
+                .iter()
+                .map(|(key, row)| (key.clone(), row.state))
+                .collect();
+        }
+
+        for (op, count) in ran.into_iter().enumerate() {
+            assert!(count > 0, "the sequence never ran transition {op}");
+        }
     }
 }

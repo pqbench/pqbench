@@ -75,14 +75,6 @@ fn table_file(table: &str, uri: &str, size: Option<u64>) -> serde_json::Value {
     file
 }
 
-fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
-    stdout
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
-        .collect()
-}
-
 fn ndjson(stdout: &[u8]) -> Vec<serde_json::Value> {
     stdout
         .split(|byte| *byte == b'\n')
@@ -291,7 +283,7 @@ fn bytemass_measures_mixed_table_ids() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     let blobs = records
         .iter()
         .filter(|record| {
@@ -402,7 +394,7 @@ fn read_unity_table(dir: &std::path::Path, columns: serde_json::Value) -> serde_
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let mut records = ndjson_records(&output.stdout);
+    let mut records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
     records.remove(0)
 }
@@ -601,7 +593,7 @@ fn table_get_reads_an_iceberg_rest_table() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
     let record = &records[0];
     assert_eq!(
@@ -664,7 +656,7 @@ fn table_get_falls_back_to_delta_when_load_table_declines() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0]["format"], "TABLE_FORMAT_DELTA");
     assert_eq!(records[0]["uri"], dir.path().to_string_lossy().as_ref());
@@ -691,7 +683,7 @@ fn table_get_reads_an_iceberg_namespace_with_dots() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     assert_eq!(
         records[0]["name"],
         "catalogs/dbx_samples/schemas/ns.one/tables/trips"
@@ -725,7 +717,7 @@ fn table_get_reads_a_table_ref_stream() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     let mut names: Vec<&str> = records
         .iter()
         .map(|record| record["name"].as_str().unwrap())

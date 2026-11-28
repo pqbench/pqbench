@@ -362,11 +362,12 @@ fn a_walk_purges_the_tables_it_does_not_list() {
     // `events` is listed but its log is gone: its versions stay.
     std::fs::remove_dir_all(events.join("_delta_log")).unwrap();
     let rewritten = pqbench_time();
+    // The wait ends only after a walk that could not read the log finished, so
+    // a wrong purge would already have happened; no extra sleep is needed.
     driver.wait(|rows| {
         rows.iter()
             .any(|row| row["list_time"].as_u64().unwrap_or(0) > rewritten + 200)
     });
-    std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
         driver.rows().len(),
         4,
@@ -380,9 +381,20 @@ fn a_walk_purges_the_tables_it_does_not_list() {
         .iter()
         .all(|row| row["name"].as_str().unwrap().contains("/tables/orders/")));
 
-    // No table listing at all: nothing is purged.
+    // No table listing at all: a walk still runs and purges nothing.
     std::fs::remove_file(directory.path().join("tables.ndjson")).unwrap();
-    std::thread::sleep(Duration::from_millis(400));
+    let before = driver_status(&driver)["last_walk_time"]
+        .as_u64()
+        .unwrap_or(0);
+    let start = Instant::now();
+    loop {
+        let status = driver_status(&driver);
+        if status["last_walk_time"].as_u64().unwrap_or(0) > before {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(30), "{status}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(driver.rows().len(), 2);
 }
 
@@ -931,13 +943,18 @@ fn a_low_network_still_persists_the_partition_suggestions() {
 /// `SIGTERM` are the two a supervisor sends.
 #[test]
 fn a_signal_stops_the_driver_cleanly() {
-    for signal in [libc::SIGTERM, libc::SIGINT] {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("events");
-        commit(&root, 0, readable_table(&root, &["1", "2"]));
-        walk(directory.path(), &[("events", &root)]);
-        let socket = directory.path().join("d.sock");
-        let store = directory.path().join("store");
+    // The table and its walk are the slow part, and both signals exercise the
+    // same shutdown path, so the setup is shared: the second driver resumes
+    // from the checkpoint the first one left.
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1", "2"]));
+    walk(directory.path(), &[("events", &root)]);
+    for (index, signal) in [libc::SIGTERM, libc::SIGINT].into_iter().enumerate() {
+        // A store per signal, so the checkpoint really is the one this run
+        // wrote.
+        let store = directory.path().join(format!("store-{index}"));
+        let socket = directory.path().join(format!("signal-{index}.sock"));
         let mut child = driver()
             .args(["serve", "--store"])
             .arg(&store)

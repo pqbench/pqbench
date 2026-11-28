@@ -7,38 +7,70 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
+use tokio::time::timeout;
 
 use super::path;
 use super::protocol::{Request, Response};
 use super::session::Daemon;
 
+/// The most connections the daemon answers at once. A connection is one
+/// request, so this is also the most requests in flight; a burst beyond it
+/// waits in the listener's backlog instead of becoming a task each.
+const MAX_CONNECTIONS: usize = 256;
+
+/// How long one connection may take to send its request and read its answer.
+/// A stalled client would otherwise hold a task and its file descriptor
+/// forever, which is how a daemon runs out of both.
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Serve leases and catalog GETs on `socket` until stopped, or until
 /// `idle_seconds` pass with no connection (`0` serves until stopped).
 pub(crate) async fn run(session: Daemon, socket: PathBuf, idle_seconds: u64) -> Result<(), String> {
+    // Listen for the signals before the socket exists: a supervisor may signal
+    // as soon as it sees the socket, and a signal that lands before the handler
+    // is installed would kill the daemon with its socket file left behind.
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .map_err(|error| format!("cannot listen for SIGINT: {error}"))?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| format!("cannot listen for SIGTERM: {error}"))?;
     path::prepare(&socket)?;
     let listener = UnixListener::bind(&socket)
         .map_err(|error| format!("cannot bind {}: {error}", socket.display()))?;
     path::set_socket_mode(&socket)?;
 
     let shutdown = Arc::new(Notify::new());
+    let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let idle = (idle_seconds > 0).then_some(Duration::from_secs(idle_seconds));
     let result = loop {
         let accepted = accept(&listener, idle);
-        tokio::select! {
+        let stream = tokio::select! {
             _ = shutdown.notified() => break Ok(()),
+            _ = interrupt.recv() => break Ok(()),
+            _ = terminate.recv() => break Ok(()),
             result = accepted => match result {
-                Ok(Some(stream)) => {
-                    let session = session.clone();
-                    let shutdown = Arc::clone(&shutdown);
-                    tokio::spawn(async move {
-                        let _ = handle(stream, session, shutdown).await;
-                    });
-                }
+                Ok(Some(stream)) => stream,
                 Ok(None) => break Ok(()),
                 Err(error) => break Err(error),
-            }
-        }
+            },
+        };
+        // Take a connection slot before spawning, so a burst cannot turn into
+        // an unbounded number of tasks each holding a descriptor.
+        let permit = tokio::select! {
+            _ = shutdown.notified() => break Ok(()),
+            _ = interrupt.recv() => break Ok(()),
+            _ = terminate.recv() => break Ok(()),
+            permit = Arc::clone(&connections).acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => break Ok(()),
+            },
+        };
+        let session = session.clone();
+        let shutdown = Arc::clone(&shutdown);
+        tokio::spawn(async move {
+            let _permit = permit;
+            let _ = timeout(CONNECTION_TIMEOUT, handle(stream, session, shutdown)).await;
+        });
     };
     let _ = std::fs::remove_file(&socket);
     result
@@ -132,11 +164,18 @@ async fn answer(session: &Daemon, url: &str) -> Response {
         }
     };
     match pqbench::http::fetch(&workspace, url).await {
-        Ok(answer) => Response {
-            status: Some(answer.status),
-            body: Some(answer.body),
-            ..Response::default()
-        },
+        Ok(answer) => {
+            // A throttled catalog holds the whole daemon's pacer, not just this
+            // request, so the next walk does not ask again immediately.
+            if answer.status == 429 {
+                session.backoff(answer.retry_delay).await;
+            }
+            Response {
+                status: Some(answer.status),
+                body: Some(answer.body),
+                ..Response::default()
+            }
+        }
         Err(error) => failure(&error),
     }
 }

@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::Mutex as AsyncMutex;
@@ -50,6 +50,17 @@ const AMBIENT_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// How long a failed vending call is remembered.
 const FAILED_TTL: Duration = Duration::from_secs(30);
+
+/// The most leases one session remembers. A walk over a large metastore can
+/// name more tables than memory should hold, so the cache stays bounded and
+/// evicts the entry that would expire first.
+const MAX_ENTRIES: usize = 4096;
+
+/// The most per-table vend locks one session remembers. A finished table's
+/// lock is only weakly held, so it leaves the map as soon as no caller holds
+/// it; this bound is the backstop for a long walk that never lets the map
+/// shrink on its own.
+const MAX_INFLIGHT: usize = 1024;
 
 /// The bearer a session serves: a service principal's token, minted on first
 /// use and refreshed before it expires. Clones share one cache, so every
@@ -121,7 +132,11 @@ pub(crate) struct Daemon {
     entries: Arc<Mutex<BTreeMap<String, Cached>>>,
     /// One async lock per table, so a burst of files from the same table
     /// makes one vending call, not one per in-flight file.
-    inflight: Arc<Mutex<BTreeMap<String, Arc<AsyncMutex<()>>>>>,
+    ///
+    /// The locks are weak: a table whose vend finished drops its lock as soon
+    /// as every waiter lets go, so a long walk does not accumulate one mutex
+    /// per table it ever named.
+    inflight: Arc<Mutex<BTreeMap<String, Weak<AsyncMutex<()>>>>>,
     /// Whether a failed vend is remembered. The daemon does not remember one:
     /// a walk retry must reach the catalog again. A reader does, so a table's
     /// files do not each retry the same failure.
@@ -230,6 +245,14 @@ impl Daemon {
         }
     }
 
+    /// Hold the daemon's Unity slot after the catalog answered HTTP `429`: the
+    /// catalog's `Retry-After`, or a default backoff when it named none.
+    pub(crate) async fn backoff(&self, retry_delay: Option<Duration>) {
+        if let Some(rate) = &self.rate {
+            rate.backoff(retry_delay).await;
+        }
+    }
+
     /// The `AWS_*` options to read `table` with; empty means ambient.
     pub(crate) async fn resolve_env(
         &self,
@@ -251,9 +274,19 @@ impl Daemon {
             return cached.result();
         }
         // Serialize vends per table: a `list columns` over one table can have
-        // many files in flight, and they all need the same lease.
+        // many files in flight, and they all need the same lease. A lease past
+        // its refresh time is still valid, so when another task is already
+        // refreshing this table, serve it rather than queue behind it
+        // (stale-while-revalidate).
+        let stale = self.stale(table);
         let lock = self.lock(table);
-        let _guard = lock.lock().await;
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => match stale {
+                Some(stale) => return stale.result(),
+                None => lock.lock().await,
+            },
+        };
         if let Some(cached) = self.lookup(table) {
             return cached.result();
         }
@@ -284,17 +317,26 @@ impl Daemon {
         }
     }
 
-    /// The per-table vend lock. The entry stays; one small mutex per table
-    /// walked is cheaper than removing it under racing waiters.
+    /// The per-table vend lock: the live one when a caller still holds it, a
+    /// new one otherwise. Locks whose last holder went away are pruned here
+    /// once the map grows past [`MAX_INFLIGHT`].
     fn lock(&self, table: &str) -> Arc<AsyncMutex<()>> {
-        self.inflight
+        let mut inflight = self
+            .inflight
             .lock()
-            .expect("the lease in-flight lock is not poisoned")
-            .entry(table.to_string())
-            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-            .clone()
+            .expect("the lease in-flight lock is not poisoned");
+        if let Some(lock) = inflight.get(table).and_then(Weak::upgrade) {
+            return lock;
+        }
+        if inflight.len() > MAX_INFLIGHT {
+            inflight.retain(|_, lock| lock.strong_count() > 0);
+        }
+        let lock = Arc::new(AsyncMutex::new(()));
+        inflight.insert(table.to_string(), Arc::downgrade(&lock));
+        lock
     }
 
+    /// The cached lease while it may still be sent: before its refresh time.
     fn lookup(&self, table: &str) -> Option<Cached> {
         let now = Instant::now();
         self.entries
@@ -305,11 +347,42 @@ impl Daemon {
             .cloned()
     }
 
-    fn put(&self, table: &str, cached: Cached) {
+    /// The cached lease past its refresh time but before its expiry: still
+    /// valid to send, so a caller can serve it while another caller refreshes
+    /// the same table.
+    fn stale(&self, table: &str) -> Option<Cached> {
+        let now = Instant::now();
         self.entries
             .lock()
             .expect("the lease cache lock is not poisoned")
-            .insert(table.to_string(), cached);
+            .get(table)
+            .filter(|cached| !cached.fresh(now) && cached.usable(now))
+            .cloned()
+    }
+
+    /// Remember a lease. The cache is capped: expired entries go first, then
+    /// the entry closest to expiry, so a walk that names every table of a
+    /// large metastore still holds the leases it is most likely to reuse.
+    fn put(&self, table: &str, cached: Cached) {
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("the lease cache lock is not poisoned");
+        if entries.len() >= MAX_ENTRIES {
+            let now = Instant::now();
+            entries.retain(|_, cached| cached.usable(now));
+            while entries.len() >= MAX_ENTRIES {
+                let Some(earliest) = entries
+                    .iter()
+                    .min_by_key(|(_, cached)| cached.expire_time())
+                    .map(|(table, _)| table.clone())
+                else {
+                    break;
+                };
+                entries.remove(&earliest);
+            }
+        }
+        entries.insert(table.to_string(), cached);
     }
 }
 
@@ -450,6 +523,24 @@ impl Cached {
         }
     }
 
+    /// Whether the entry may still be served. A lease past its refresh time is
+    /// still unexpired, so a caller can use it while another refreshes it.
+    fn usable(&self, now: Instant) -> bool {
+        match self {
+            Cached::Vended { expire_time, .. } => now < *expire_time,
+            Cached::Ambient { .. } | Cached::Failed { .. } => self.fresh(now),
+        }
+    }
+
+    /// When the entry stops being servable: what the bounded cache evicts by.
+    fn expire_time(&self) -> Instant {
+        match self {
+            Cached::Vended { expire_time, .. }
+            | Cached::Ambient { expire_time }
+            | Cached::Failed { expire_time, .. } => *expire_time,
+        }
+    }
+
     fn result(&self) -> Result<Option<Vended>, CliError> {
         match self {
             Cached::Vended {
@@ -571,5 +662,132 @@ mod tests {
         assert!(cached.fresh(now + Duration::from_secs(4 * 60)));
         assert!(!cached.fresh(now + Duration::from_secs(6 * 60)));
         assert!(cached.result().expect("ambient is not a failure").is_none());
+    }
+
+    /// A session for the tests below: a direct vendor with no catalog to ask.
+    fn session() -> Daemon {
+        Daemon::new(
+            Vendor::Direct(
+                pqbench::Workspace::new(pqbench::Config {
+                    endpoint: "http://127.0.0.1:1".into(),
+                    ..pqbench::Config::default()
+                })
+                .expect("the workspace builds"),
+            ),
+            true,
+            None,
+        )
+    }
+
+    fn cached_lease(refresh_time: Instant, expire_time: Instant) -> Cached {
+        Cached::Vended {
+            env: BTreeMap::from([("AWS_ACCESS_KEY_ID".to_string(), "stale".to_string())]),
+            refresh_time,
+            expire_time,
+        }
+    }
+
+    /// The lease cache is bounded: a walk that names more tables than the cap
+    /// remembers at most the cap, and keeps the leases that expire last.
+    #[test]
+    fn the_lease_cache_is_bounded() {
+        let session = session();
+        let now = Instant::now();
+        for index in 0..(MAX_ENTRIES * 2) {
+            // Later tables expire later, so eviction must drop the earliest.
+            let expiry = now + Duration::from_secs(60 + index as u64);
+            session.put(
+                &format!("table-{index}"),
+                cached_lease(expiry - Duration::from_secs(1), expiry),
+            );
+        }
+        let entries = session.entries.lock().expect("the lease cache lock");
+        assert_eq!(entries.len(), MAX_ENTRIES);
+        assert!(
+            !entries.contains_key("table-0"),
+            "the earliest expiry stayed"
+        );
+        assert!(entries.contains_key(&format!("table-{}", MAX_ENTRIES * 2 - 1)));
+    }
+
+    /// Expired entries are pruned before the cap evicts a live one: a walk
+    /// that keeps naming new tables does not throw away leases it still needs.
+    #[test]
+    fn expired_entries_are_pruned_before_a_live_one_is_evicted() {
+        let session = session();
+        let now = Instant::now();
+        for index in 0..MAX_ENTRIES {
+            session.put(
+                &format!("expired-{index}"),
+                Cached::Ambient {
+                    expire_time: now - Duration::from_secs(1),
+                },
+            );
+        }
+        session.put(
+            "live",
+            Cached::Ambient {
+                expire_time: now + Duration::from_secs(60),
+            },
+        );
+        let entries = session.entries.lock().expect("the lease cache lock");
+        assert_eq!(entries.len(), 1);
+        assert!(entries.contains_key("live"));
+    }
+
+    /// A finished table's lock is only weakly held, so the in-flight map does
+    /// not grow with the number of tables a walk ever named.
+    #[test]
+    fn the_inflight_map_forgets_finished_locks() {
+        let session = session();
+        for index in 0..(MAX_INFLIGHT * 4) {
+            // The lock is dropped at the end of the iteration, so the entry is
+            // dead and the map is pruned instead of growing.
+            let _ = session.lock(&format!("table-{index}"));
+        }
+        let inflight = session.inflight.lock().expect("the lease in-flight lock");
+        assert!(
+            inflight.len() <= MAX_INFLIGHT + 1,
+            "the in-flight map grew to {}",
+            inflight.len()
+        );
+    }
+
+    /// A lock a caller still holds is not pruned, and the next caller for that
+    /// table gets the same lock.
+    #[test]
+    fn a_held_lock_is_shared() {
+        let session = session();
+        let first = session.lock("table");
+        let second = session.lock("table");
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    /// A lease past its refresh time but before its expiry is served at once
+    /// while another task is already refreshing the table: no caller queues
+    /// behind a refresh it can skip.
+    #[tokio::test]
+    async fn a_stale_lease_is_served_while_another_task_refreshes() {
+        let session = session();
+        let now = Instant::now();
+        session.put(
+            "table",
+            cached_lease(now - Duration::from_secs(1), now + Duration::from_secs(60)),
+        );
+        // Another task holds the table's refresh lock.
+        let lock = session.lock("table");
+        let _refreshing = lock.try_lock().expect("nobody holds the lock yet");
+
+        let started = Instant::now();
+        let vended = session
+            .resolve_vended("table")
+            .await
+            .expect("the stale lease is still valid")
+            .expect("the stale lease is a vended lease");
+        assert_eq!(vended.env["AWS_ACCESS_KEY_ID"], "stale");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the caller waited for the refresh instead of serving the stale lease"
+        );
     }
 }

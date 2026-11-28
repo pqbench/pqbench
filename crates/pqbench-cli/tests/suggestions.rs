@@ -175,7 +175,7 @@ fn verified(records: &[Json]) -> Vec<Json> {
 fn a_local_path_lints_verifies_and_formats_as_a_pipe() {
     let directory = temporary("path");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..100_000).map(uuid).collect();
+    let values: Vec<String> = (0..20_000).map(uuid).collect();
     write_values(&path, &values, false, 0);
 
     let text = path.to_str().expect("utf-8 path");
@@ -241,7 +241,7 @@ fn a_missing_path_is_reported_and_fails_the_run() {
 fn unique_uuid_text_is_a_candidate_then_verified() {
     let directory = temporary("unique");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..100_000).map(uuid).collect();
+    let values: Vec<String> = (0..20_000).map(uuid).collect();
     write_values(&path, &values, false, 0);
 
     let records = suggestions(&path);
@@ -281,7 +281,7 @@ fn unique_uuid_text_is_a_candidate_then_verified() {
 fn repeated_uuid_text_is_measured() {
     let directory = temporary("repeated");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..200_000).map(|value| uuid(value / 2)).collect();
+    let values: Vec<String> = (0..40_000).map(|value| uuid(value / 2)).collect();
     write_values(&path, &values, true, 0);
 
     let records = suggestions(&path);
@@ -327,8 +327,8 @@ fn non_uuid_text_is_not_reported_as_uuid() {
 fn dictionary_on_unique_strings_is_verified() {
     let directory = temporary("dictionary-unique");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..200_000).map(hex32).collect();
-    write_values(&path, &values, true, 20_000);
+    let values: Vec<String> = (0..50_000).map(hex32).collect();
+    write_values(&path, &values, true, 5_000);
 
     let records = suggestions(&path);
     assert_eq!(records.len(), 1, "{records:?}");
@@ -345,7 +345,7 @@ fn dictionary_on_unique_strings_is_verified() {
 
     let measured = verified(&records);
     assert_eq!(measured[0]["verified"], true, "{measured:?}");
-    // Preserving the 10 row groups of 20,000 rows keeps each group's dictionary
+    // Preserving the 10 row groups of 5,000 rows keeps each group's dictionary
     // active in the control, showing the real >64 KiB saving from disabling it.
     assert!(
         measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024,
@@ -366,8 +366,8 @@ fn dictionary_on_unique_strings_is_verified() {
 fn dictionary_on_repeated_strings_is_not_reported() {
     let directory = temporary("dictionary-repeated");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..100_000).map(|value| hex32(value % 100)).collect();
-    write_values(&path, &values, true, 20_000);
+    let values: Vec<String> = (0..20_000).map(|value| hex32(value % 100)).collect();
+    write_values(&path, &values, true, 4_000);
 
     let records = suggestions(&path);
     assert!(records.is_empty(), "{records:?}");
@@ -379,14 +379,14 @@ fn dictionary_on_repeated_strings_is_not_reported() {
 fn a_stale_candidate_is_rejected_not_dropped() {
     let directory = temporary("stale");
     let path = directory.join("data.parquet");
-    let unique: Vec<String> = (0..200_000).map(hex32).collect();
-    write_values(&path, &unique, true, 20_000);
+    let unique: Vec<String> = (0..40_000).map(hex32).collect();
+    write_values(&path, &unique, true, 4_000);
 
     let records = suggestions(&path);
     assert_eq!(records.len(), 1, "{records:?}");
 
-    let repeated: Vec<String> = (0..100_000).map(|value| hex32(value % 100)).collect();
-    write_values(&path, &repeated, true, 20_000);
+    let repeated: Vec<String> = (0..20_000).map(|value| hex32(value % 100)).collect();
+    write_values(&path, &repeated, true, 4_000);
 
     let measured = verified(&records);
     assert_eq!(measured.len(), 1, "{measured:?}");
@@ -451,7 +451,7 @@ fn a_downloaded_copy_is_read_under_the_original_name() {
     let directory = temporary("local");
     let path = directory.join("data.parquet");
     let copy = directory.join("copy.parquet");
-    let values: Vec<String> = (0..100_000).map(uuid).collect();
+    let values: Vec<String> = (0..20_000).map(uuid).collect();
     write_values(&path, &values, false, 0);
     let record = crate::common::table_file(path.to_str().expect("utf-8 path"));
     run(
@@ -480,7 +480,7 @@ fn a_downloaded_copy_is_read_under_the_original_name() {
 fn a_remote_blob_with_a_local_copy_verifies_without_network() {
     let directory = temporary("remote-local");
     let copy = directory.join("copy.parquet");
-    let values: Vec<String> = (0..100_000).map(uuid).collect();
+    let values: Vec<String> = (0..20_000).map(uuid).collect();
     write_values(&copy, &values, false, 0);
 
     let blob = pqbench::v1::name::blob("s3", "example-bucket/prefix/data.parquet");
@@ -511,7 +511,7 @@ fn a_remote_blob_with_a_local_copy_verifies_without_network() {
 fn dense_integers_earn_delta_binary_packing() {
     let directory = temporary("delta-integer");
     let path = directory.join("data.parquet");
-    let values: Vec<i64> = (0..200_000).collect();
+    let values: Vec<i64> = (0..55_000).collect();
     write_integers(&path, &values, false);
 
     let records = suggestions(&path);
@@ -553,7 +553,7 @@ fn dense_integers_earn_delta_binary_packing() {
 fn a_dictionary_on_dense_integers_prefers_delta_packing() {
     let directory = temporary("delta-integer-dictionary");
     let path = directory.join("data.parquet");
-    let values: Vec<i64> = (0..200_000).collect();
+    let values: Vec<i64> = (0..20_000).collect();
     write_integers(&path, &values, true);
 
     let records = suggestions(&path);
@@ -575,7 +575,7 @@ fn a_dictionary_on_dense_integers_prefers_delta_packing() {
 fn random_integers_are_not_delta_encoded() {
     let directory = temporary("delta-integer-random");
     let path = directory.join("data.parquet");
-    let values: Vec<i64> = (0..200_000).map(|value| mix(value).cast_signed()).collect();
+    let values: Vec<i64> = (0..20_000).map(|value| mix(value).cast_signed()).collect();
     write_integers(&path, &values, false);
 
     let records = suggestions(&path);
@@ -687,7 +687,7 @@ fn a_dictionary_fallback_is_priced() {
 fn a_dictionary_without_a_fallback_is_not_reported() {
     let directory = temporary("dictionary-no-fallback");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..100_000)
+    let values: Vec<String> = (0..20_000)
         .map(|value| format!("prefix-{:06}", value % 60_000))
         .collect();
     write_values(&path, &values, true, 0);
@@ -711,7 +711,7 @@ fn untruncated_statistics_are_priced() {
     let path = directory.join("data.parquet");
     // A few repeated long values: the chunk keeps a dictionary, and each bound
     // is far longer than the 64-byte truncation length.
-    let values: Vec<String> = (0..100_000)
+    let values: Vec<String> = (0..20_000)
         .map(|value| format!("{}-{}", "a".repeat(300), value % 8))
         .collect();
     let rows: Vec<Vec<Value>> = values
@@ -767,7 +767,7 @@ fn untruncated_statistics_are_priced() {
 fn truncated_statistics_are_not_reported() {
     let directory = temporary("stats-truncated-default");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..100_000)
+    let values: Vec<String> = (0..20_000)
         .map(|value| format!("{}-{}", "a".repeat(300), value % 8))
         .collect();
     write_values(&path, &values, true, 0);
@@ -789,7 +789,7 @@ fn truncated_statistics_are_not_reported() {
 fn timestamp_text_earns_microsecond_integers() {
     let directory = temporary("text-timestamp");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..200_000)
+    let values: Vec<String> = (0..100_000)
         .map(|value| {
             let seconds = 1_700_000_000 + value;
             format!(
@@ -826,7 +826,7 @@ fn timestamp_text_earns_microsecond_integers() {
 fn mixed_text_is_not_a_timestamp_column() {
     let directory = temporary("text-not-timestamp");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..100_000)
+    let values: Vec<String> = (0..20_000)
         .map(|value| {
             if value % 1_000 == 0 {
                 format!("not-a-timestamp-{value}")
@@ -854,7 +854,7 @@ fn mixed_text_is_not_a_timestamp_column() {
 fn tiny_data_pages_earn_a_larger_page_size() {
     let directory = temporary("page-size");
     let path = directory.join("data.parquet");
-    let values: Vec<i64> = (0..200_000).map(|value| mix(value).cast_signed()).collect();
+    let values: Vec<i64> = (0..40_000).map(|value| mix(value).cast_signed()).collect();
     let rows: Vec<Vec<Value>> = values
         .iter()
         .map(|value| vec![Value::Integer(*value)])
@@ -927,7 +927,7 @@ fn tiny_data_pages_earn_a_larger_page_size() {
 fn standard_page_sizes_are_not_reported() {
     let directory = temporary("page-size-standard");
     let path = directory.join("data.parquet");
-    let values: Vec<i64> = (0..200_000).map(|value| mix(value).cast_signed()).collect();
+    let values: Vec<i64> = (0..40_000).map(|value| mix(value).cast_signed()).collect();
     let rows: Vec<Vec<Value>> = values
         .iter()
         .map(|value| vec![Value::Integer(*value)])

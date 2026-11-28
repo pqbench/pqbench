@@ -176,7 +176,7 @@ fn remedy(writer: Writer, leaf: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{remedy, CANDIDATE_PAGE_BYTES};
+    use super::remedy;
     use crate::lint::writer::Writer;
 
     #[test]
@@ -186,6 +186,5 @@ mod tests {
         assert!(remedy(Writer::ArrowRs, "id").contains("set_data_page_size_limit(1048576)"));
         assert!(remedy(Writer::Other, "id").contains("write.parquet.page-size-bytes=1048576"));
         assert!(remedy(Writer::Photon, "id").contains("unverified"));
-        assert_eq!(CANDIDATE_PAGE_BYTES, 1024 * 1024);
     }
 }

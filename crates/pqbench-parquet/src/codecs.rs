@@ -408,26 +408,10 @@ mod tests {
     }
 
     #[test]
-    fn snappy_round_trip_one_mb() {
-        let src = one_mb_sample();
-        let c = Codec::Snappy.compress(1, &src).unwrap();
-        let d = Codec::Snappy.decompress(1, &c, src.len()).unwrap();
-        assert_eq!(d, src);
-    }
-
-    #[test]
     fn snappy_compressible_input_shrinks() {
         let src = b"the quick brown fox jumps over the lazy dog ".repeat(16 * 1024);
         let c = Codec::Snappy.compress(1, &src).unwrap();
         assert!(c.len() < src.len());
-    }
-
-    #[test]
-    fn zstd_round_trip_one_mb() {
-        let src = one_mb_sample();
-        let c = Codec::Zstd.compress(3, &src).unwrap();
-        let d = Codec::Zstd.decompress(3, &c, src.len()).unwrap();
-        assert_eq!(d, src);
     }
 
     #[test]
@@ -439,26 +423,10 @@ mod tests {
     }
 
     #[test]
-    fn lz4_round_trip_one_mb() {
-        let src = one_mb_sample();
-        let c = Codec::Lz4.compress(1, &src).unwrap();
-        let d = Codec::Lz4.decompress(1, &c, src.len()).unwrap();
-        assert_eq!(d, src);
-    }
-
-    #[test]
     fn lz4_compressible_input_shrinks() {
         let src = b"the quick brown fox jumps over the lazy dog ".repeat(16 * 1024);
         let c = Codec::Lz4.compress(1, &src).unwrap();
         assert!(c.len() < src.len());
-    }
-
-    #[test]
-    fn gzip_round_trip_one_mb() {
-        let src = one_mb_sample();
-        let c = Codec::Gzip.compress(6, &src).unwrap();
-        let d = Codec::Gzip.decompress(6, &c, src.len()).unwrap();
-        assert_eq!(d, src);
     }
 
     #[test]

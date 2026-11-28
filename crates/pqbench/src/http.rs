@@ -11,6 +11,7 @@
 
 use std::fmt;
 use std::future::Future;
+use std::time::Duration;
 
 use futures_util::stream::{self, Stream};
 use futures_util::TryStreamExt;
@@ -98,6 +99,10 @@ pub struct Answer {
     pub status: u16,
     /// The body, lossily decoded.
     pub body: String,
+    /// How long a throttled answer asks the caller to wait, from its
+    /// `Retry-After` header (the delta-seconds form; the HTTP-date form is
+    /// ignored, since it needs a clock the answer may not share).
+    pub retry_delay: Option<Duration>,
 }
 
 /// Send one GET with the workspace's own bearer and report the answer as the
@@ -118,7 +123,17 @@ pub async fn fetch(workspace: &Workspace, url: &str) -> Result<Answer, Error> {
     Ok(Answer {
         status: response.status,
         body: String::from_utf8_lossy(&response.bytes).into_owned(),
+        retry_delay: parse_retry_delay(&response.headers),
     })
+}
+
+/// The hold a `Retry-After` header names, in its delta-seconds form.
+fn parse_retry_delay(headers: &[(String, String)]) -> Option<Duration> {
+    headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
 }
 
 /// The rows one page of a paginated listing reports, and the token that names
@@ -198,5 +213,25 @@ mod tests {
                 .await
                 .expect_err("a 403 is a failure");
         assert!(matches!(error, Error::Status { status: 403, .. }));
+    }
+
+    /// A throttled answer's `Retry-After` header is read case-insensitively,
+    /// and its HTTP-date form is ignored rather than guessed at.
+    #[test]
+    fn a_retry_header_is_delta_seconds() {
+        let headers = |name: &str, value: &str| vec![(name.to_string(), value.to_string())];
+        assert_eq!(
+            parse_retry_delay(&headers("Retry-After", " 12 ")),
+            Some(Duration::from_secs(12))
+        );
+        assert_eq!(
+            parse_retry_delay(&headers("retry-after", "0")),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(parse_retry_delay(&headers("Retry-After", "soon")), None);
+        assert_eq!(
+            parse_retry_delay(&headers("Retry-After", "Wed, 21 Oct 2015 07:28:00 GMT")),
+            None
+        );
     }
 }

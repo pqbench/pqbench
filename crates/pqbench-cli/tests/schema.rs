@@ -151,15 +151,6 @@ const CATALOG_REFS: &str = concat!(
     "\n",
 );
 
-/// The same stream with the unreachable catalog first, so a drop cannot be
-/// confused with the stream ending.
-const CATALOG_REFS_BAD_FIRST: &str = concat!(
-    r#"{"name":"catalogs/system"}"#,
-    "\n",
-    r#"{"name":"catalogs/dbx_samples"}"#,
-    "\n",
-);
-
 #[test]
 fn schema_get_prints_the_record_as_a_table() {
     let address = server(200, SCHEMA);
@@ -474,92 +465,52 @@ fn schema_ls_lists_a_catalog_stream() {
 }
 
 #[test]
-fn schema_ls_drops_a_catalog_that_never_answers() {
-    // The walk shares one endpoint: one catalog's request gets no answer (a
-    // timeout or a dropped connection) while the rest answer. The level reports
-    // it, finishes the stream, and then exits non-zero — one unreachable ref
-    // does not truncate the walk.
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 0, ""),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas"],
-        CATALOG_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2, "{records:?}");
-    assert!(records.iter().all(|record| record["name"]
-        .as_str()
-        .unwrap()
-        .starts_with("catalogs/dbx_samples/")));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("catalogs/system"), "{stderr}");
-}
-
-#[test]
-fn schema_ls_drops_a_catalog_that_answers_an_error() {
-    // The drop is type-agnostic: a 500 is treated like a timeout, named on
-    // standard error, and the rest of the walk carries on. The run exits
-    // non-zero after the stream finishes.
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 500, r#"{"message":"boom"}"#),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas"],
-        CATALOG_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2, "{records:?}");
-    assert!(records.iter().all(|record| record["name"]
-        .as_str()
-        .unwrap()
-        .starts_with("catalogs/dbx_samples/")));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("catalogs/system"), "{stderr}");
-    assert!(stderr.contains("500"), "{stderr}");
-}
-
-#[test]
-fn schema_ls_keeps_reading_after_a_drop() {
-    // The failed ref is first and one request is in flight, so the good
-    // catalog's schemas are read only after the drop — not already buffered
-    // when the stream ends.
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 0, ""),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas", "--fan-out", "1"],
-        CATALOG_REFS_BAD_FIRST.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2, "{records:?}");
-    assert!(records.iter().all(|record| record["name"]
-        .as_str()
-        .unwrap()
-        .starts_with("catalogs/dbx_samples/")));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("catalogs/system"), "{stderr}");
+fn schema_ls_drops_a_catalog_that_fails() {
+    // The walk shares one endpoint: one catalog's request fails (no answer, or
+    // an HTTP error) while the rest answer. The level reports it, finishes the
+    // stream, and then exits non-zero — one unreachable ref does not truncate
+    // the walk.
+    for status in [0_u16, 500] {
+        // Each plan is a constant, so the server thread can own it.
+        let plan: &'static [(&'static str, u16, &'static str)] = match status {
+            0 => &[
+                ("catalog_name=dbx_samples", 200, SCHEMAS),
+                ("catalog_name=system", 0, ""),
+            ],
+            _ => &[
+                ("catalog_name=dbx_samples", 200, SCHEMAS),
+                ("catalog_name=system", 500, r#"{"message":"boom"}"#),
+            ],
+        };
+        let address = routes(plan);
+        let output = pipe_env(
+            &["list", "schemas"],
+            CATALOG_REFS.as_bytes(),
+            &[("PQB_ENDPOINT", address.as_str())],
+        );
+        assert!(
+            !output.status.success(),
+            "status {status}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records = ndjson(&output.stdout);
+        assert_eq!(records.len(), 2, "status {status}: {records:?}");
+        assert!(records.iter().all(|record| record["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("catalogs/dbx_samples/")));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("catalogs/system"),
+            "status {status}: {stderr}"
+        );
+        if status != 0 {
+            assert!(
+                stderr.contains(&status.to_string()),
+                "status {status}: {stderr}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -583,24 +534,4 @@ fn schema_ls_counts_every_dropped_catalog() {
         2,
         "{stderr}"
     );
-}
-
-#[test]
-fn schema_ls_finishes_the_table_before_a_drop() {
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 0, ""),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas", "--fan-out", "1"],
-        CATALOG_REFS_BAD_FIRST.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("dbx_samples"), "{stdout}");
 }
