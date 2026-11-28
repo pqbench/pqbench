@@ -1,7 +1,8 @@
 //! Starting, stopping, and checking the daemon.
 
+use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -27,6 +28,16 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
         if client::ping(socket).await {
             return Ok(());
         }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("cannot check the daemon: {error}"))?
+        {
+            return Err(format!(
+                "the daemon exited ({status}) before serving {}; see {}",
+                socket.display(),
+                log_path(socket).display()
+            ));
+        }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let _ = child.kill();
@@ -48,13 +59,17 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
         .arg("--idle-seconds")
         .arg(idle_seconds.to_string());
     // The child resolves the same identity from explicit environment values;
-    // the token is never on its command line.
+    // no credential is ever on its command line.
     for name in [
         "PQB_DAEMON_SOCK",
         "PQB_PROFILE",
         "PQB_TOKEN",
+        "PQB_CLIENT_ID",
+        "PQB_CLIENT_SECRET",
         "DATABRICKS_HOST",
         "DATABRICKS_TOKEN",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
     ] {
         command.env_remove(name);
     }
@@ -66,10 +81,23 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
     if let Some(token) = &config.token {
         command.env("PQB_TOKEN", token);
     }
+    // A service principal mints and refreshes its own bearer, so the daemon's
+    // identity is the client credentials rather than a token.
+    if let Some(client_id) = &config.client_id {
+        command.env("PQB_CLIENT_ID", client_id);
+    }
+    if let Some(client_secret) = &config.client_secret {
+        command.env("PQB_CLIENT_SECRET", client_secret.expose());
+    }
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path(socket))
+        .map_err(|error| format!("cannot open the daemon log: {error}"))?;
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
+        .stderr(Stdio::from(log));
     // A new session keeps the daemon alive when the shell that started it
     // closes the terminal.
     // SAFETY: `pre_exec` runs after fork and before exec, so the closure may
@@ -86,9 +114,15 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
     Ok(command)
 }
 
+/// The daemon's log: beside its socket, so a failure is written down where the
+/// error that reports it can point.
+fn log_path(socket: &Path) -> PathBuf {
+    socket.with_extension("log")
+}
+
 /// Stop the daemon listening at `socket`.
 pub(crate) async fn stop(socket: &Path) -> Result<(), String> {
-    match client::request(socket, &Request::stop()).await {
+    match client::request(socket, &Request::Stop).await {
         Ok(_) => {}
         Err(client::Error::Connect(_)) => {
             return Err("the daemon is not running".into());

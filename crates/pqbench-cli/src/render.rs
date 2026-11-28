@@ -119,6 +119,81 @@ impl Row for v1::TableFile {
     }
 }
 
+impl Row for v1::Partition {
+    const HEADER: &'static [&'static str] = &[
+        "partition",
+        "file_count",
+        "size_bytes",
+        "record_count",
+        "removed_size_bytes",
+        "etag",
+    ];
+    const ALIGN: &[Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Left,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        let partition = v1::Partition::parse_name(&self.name)
+            .map(|(_, _, _, partition)| partition)
+            .unwrap_or_else(|| self.name.clone());
+        vec![
+            partition,
+            self.file_count.to_string(),
+            self.size_bytes.to_string(),
+            self.record_count
+                .map(|count| count.to_string())
+                .unwrap_or_default(),
+            self.removed_size_bytes
+                .map(|size| size.to_string())
+                .unwrap_or_default(),
+            self.etag.clone(),
+        ]
+    }
+}
+
+impl Row for v1::PartitionPrice {
+    const HEADER: &'static [&'static str] = &[
+        "partition",
+        "storage_classes",
+        "cost_per_month",
+        "removed_cost_per_month",
+    ];
+    const ALIGN: &[Align] = &[Align::Left, Align::Left, Align::Right, Align::Right];
+
+    fn cells(&self) -> Vec<String> {
+        let partition = v1::PartitionPrice::parse_name(&self.name)
+            .map(|(_, _, _, partition)| partition)
+            .unwrap_or_else(|| self.name.clone());
+        vec![
+            partition,
+            self.storage_classes.join(","),
+            cost_range(&self.storage_costs),
+            cost_range(&self.removed_storage_costs),
+        ]
+    }
+}
+
+/// The span of candidate monthly costs, `first` or `first..last` dollars.
+fn cost_range(costs: &[v1::StorageTierCost]) -> String {
+    let mut prices = costs.iter().map(|cost| cost.cost_per_month);
+    let Some(first) = prices.next() else {
+        return String::new();
+    };
+    let (first, last) = prices.fold((first, first), |(low, high), price| {
+        (low.min(price), high.max(price))
+    });
+    if first == last {
+        format!("{first:.2}")
+    } else {
+        format!("{first:.2}..{last:.2}")
+    }
+}
+
 impl Row for v1::Column {
     const HEADER: &'static [&'static str] = &[
         "column",
@@ -172,6 +247,57 @@ impl Row for v1::Column {
                 .unwrap_or(0)
                 .to_string(),
         ]
+    }
+}
+
+impl Row for v1::Suggestion {
+    const HEADER: &'static [&'static str] =
+        &["COLUMN", "RULE", "VERIFIED", "SAVINGS", "REMEDY", "MESSAGE"];
+    const ALIGN: &[Align] = &[
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Left,
+        Align::Left,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        vec![
+            self.column.clone(),
+            self.rule.clone(),
+            verdict(self.verified).to_string(),
+            self.savings_bytes.map_or_else(String::new, bytes),
+            self.remedy.clone(),
+            self.message.clone(),
+        ]
+    }
+}
+
+/// The control's verdict: `yes` when the rewrite confirmed a saving, `no` when
+/// it measured none, and `-` while the suggestion is only potential.
+fn verdict(verified: Option<bool>) -> &'static str {
+    match verified {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "-",
+    }
+}
+
+/// A byte count in the largest unit that keeps it above one.
+fn bytes(value: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let value = value as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{value:.0} B")
     }
 }
 
@@ -284,22 +410,10 @@ fn summarize_encodings<'a>(encodings: impl IntoIterator<Item = &'a str>) -> Stri
         .join("+")
 }
 
-/// One table from records of a single curated type.
-pub(crate) fn render<T: Row>(rows: &[T]) -> String {
-    if rows.is_empty() {
-        return String::new();
-    }
-    render_cells(
-        T::HEADER,
-        T::ALIGN,
-        &rows.iter().map(Row::cells).collect::<Vec<_>>(),
-    )
-}
-
 /// One table from records with no curated renderer: their keys, in order.
 ///
 /// Numbers right-align; everything else left-aligns.
-pub(crate) fn render_values(rows: &[Value]) -> String {
+pub(crate) fn table_values(rows: &[Value]) -> String {
     let Some(first) = rows.first().and_then(Value::as_object) else {
         return String::new();
     };
@@ -321,7 +435,7 @@ pub(crate) fn render_values(rows: &[Value]) -> String {
         .iter()
         .map(|row| header.iter().map(|key| cell(row.get(*key))).collect())
         .collect();
-    render_cells(&header, &align, &cells)
+    table_cells(&header, &align, &cells)
 }
 
 /// One JSON value as a table cell.
@@ -333,7 +447,12 @@ fn cell(value: Option<&Value>) -> String {
     }
 }
 
-fn render_cells(header: &[&str], align: &[Align], rows: &[Vec<String>]) -> String {
+/// One table from pre-rendered cells: the header, a rule, then one line per
+/// row. An empty table says nothing.
+pub(crate) fn table_cells(header: &[&str], align: &[Align], rows: &[Vec<String>]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
     let mut widths: Vec<usize> = header.iter().map(|text| text.chars().count()).collect();
     for row in rows {
         for (width, cell) in widths.iter_mut().zip(row) {
@@ -500,6 +619,44 @@ impl Row for ProfileRow {
             self.profile.num_values.to_string(),
             self.profile.null_count.to_string(),
             self.profile.ndv.to_string(),
+        ]
+    }
+}
+
+impl Row for pqbench::diff::ColumnDelta {
+    const HEADER: &'static [&'static str] = &[
+        "column",
+        "left",
+        "right",
+        "delta",
+        "change %",
+        "left/val",
+        "right/val",
+    ];
+    const ALIGN: &[Align] = &[
+        Align::Left,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+        Align::Right,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        vec![
+            self.column.clone(),
+            self.left_bytes
+                .map_or_else(String::new, |bytes| bytes.to_string()),
+            self.right_bytes
+                .map_or_else(String::new, |bytes| bytes.to_string()),
+            format!("{:+}", self.delta_bytes),
+            self.change_percent
+                .map_or_else(String::new, |percent| format!("{percent:+.1}%")),
+            self.left_bytes_per_value
+                .map_or_else(String::new, |bpv| format!("{bpv:.2}")),
+            self.right_bytes_per_value
+                .map_or_else(String::new, |bpv| format!("{bpv:.2}")),
         ]
     }
 }

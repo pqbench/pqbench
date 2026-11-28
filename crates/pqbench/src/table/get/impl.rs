@@ -63,6 +63,8 @@ struct UnityRecord {
     columns: Vec<UnityColumn>,
     #[serde(default)]
     properties: Option<BTreeMap<String, String>>,
+    #[serde(default, rename = "created_at")]
+    create_time: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -137,6 +139,7 @@ async fn load_record(
 
 /// Merge the catalog's declared columns and properties over the log's.
 fn merge_catalog(mut info: TableInfo, record: UnityRecord) -> TableInfo {
+    info.create_time = info.create_time.or(record.create_time);
     if !record.columns.is_empty() {
         info.columns = record
             .columns
@@ -159,6 +162,9 @@ fn merge_catalog(mut info: TableInfo, record: UnityRecord) -> TableInfo {
             info.iceberg_properties
                 .extend(record.properties.unwrap_or_default());
         }
+        // `TableFormat` is `#[non_exhaustive]`: a format this build does not
+        // know has no property set to merge into.
+        _ => {}
     }
     info
 }

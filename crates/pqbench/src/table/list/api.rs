@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use futures_util::stream::{self, Stream, TryStreamExt};
+use futures_util::stream::Stream;
 
 pub use crate::v1::{Schema, Table};
 
@@ -41,7 +41,9 @@ impl std::error::Error for Error {
     }
 }
 
-/// List the tables in the schema `schema` names, at the workspace's endpoint.
+/// List the tables in the schema `schema` names, at the workspace's endpoint,
+/// page by page: a page's tables are in name order and are yielded before the
+/// next page is read.
 ///
 /// Unity pages carry a storage location; Iceberg REST lists identifiers only,
 /// so `uri` is unset there until `pqbench get table` resolves it. The stream
@@ -51,11 +53,5 @@ pub fn list<'a>(
     workspace: &'a Workspace,
     schema: &Schema,
 ) -> impl Stream<Item = Result<Table, Error>> + 'a {
-    let name = schema.name.clone();
-    stream::once(async move {
-        super::r#impl::list(workspace, &name)
-            .await
-            .map(|rows| stream::iter(rows.into_iter().map(Ok)))
-    })
-    .try_flatten()
+    super::r#impl::list(workspace, schema.name.clone())
 }

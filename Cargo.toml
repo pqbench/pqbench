@@ -8,8 +8,11 @@ members = [
     "crates/docsgen",
     "crates/pqbench",
     "crates/pqbench-derive",
+    "crates/pqbench-model-v1",
+    "crates/pqbench-parquet",
     "crates/pqbench-resource",
     "crates/pqbench-cli",
+    "crates/pqbench-driver",
 ]
 default-members = [
     "crates/aipnaming",
@@ -19,8 +22,11 @@ default-members = [
     "crates/docsgen",
     "crates/pqbench",
     "crates/pqbench-derive",
+    "crates/pqbench-model-v1",
+    "crates/pqbench-parquet",
     "crates/pqbench-resource",
     "crates/pqbench-cli",
+    "crates/pqbench-driver",
 ]
 
 [workspace.package]
@@ -33,8 +39,17 @@ repository = "https://github.com/pqbench/pqbench"
 
 [workspace.dependencies]
 aipnaming = { version = "0.0.12", path = "crates/aipnaming" }
+# Already in the graph through `parquet` 59: the RFC 4648 codec and the civil
+# calendar, reused instead of a second parser. `default-features = false` keeps
+# chrono to the date and time values the rules read, with no clock or time zone
+# database.
+base64 = "0.23"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 docscheck = { version = "0.0.12", path = "crates/docscheck" }
 pqbench = { version = "0.0.12", path = "crates/pqbench" }
+pqbench-model-v1 = { version = "0.0.12", path = "crates/pqbench-model-v1" }
+pqbench-parquet = { version = "0.0.12", path = "crates/pqbench-parquet" }
+pqbench-driver = { version = "0.0.12", path = "crates/pqbench-driver" }
 
 [profile.dev]
 opt-level = 0

@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use futures_util::stream::{self, Stream, TryStreamExt};
+use futures_util::stream::Stream;
 
 pub use crate::config::Dialect as TableFormat;
 pub use crate::v1::{Catalog, Schema};
@@ -43,7 +43,8 @@ impl std::error::Error for Error {
 }
 
 /// List the schemas in the catalog `catalog` names, at the workspace's
-/// endpoint.
+/// endpoint, page by page: a page's schemas are in name order and are yielded
+/// before the next page is read.
 ///
 /// The stream owns the catalog name, so it borrows the workspace and nothing
 /// else; a failure listing a page is an `Err` item, so the records read before
@@ -52,11 +53,5 @@ pub fn list<'a>(
     workspace: &'a Workspace,
     catalog: &Catalog,
 ) -> impl Stream<Item = Result<Schema, Error>> + 'a {
-    let name = catalog.name.clone();
-    stream::once(async move {
-        super::r#impl::list(workspace, &name)
-            .await
-            .map(|rows| stream::iter(rows.into_iter().map(Ok)))
-    })
-    .try_flatten()
+    super::r#impl::list(workspace, catalog.name.clone())
 }

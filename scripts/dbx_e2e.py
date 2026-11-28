@@ -31,8 +31,10 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -71,7 +73,7 @@ SCRUBBED = [
 _WORK = tempfile.TemporaryDirectory(prefix="pqbench-e2e-")
 _SOCKET = os.path.join(_WORK.name, "daemon.sock")
 
-# The schemas `dbx_samples` answers with, from either dialect.
+# The schemas `dbx_samples` answers with over Iceberg REST.
 DBX_SAMPLES_SCHEMAS = [
     "bakehouse",
     "information_schema",
@@ -79,6 +81,17 @@ DBX_SAMPLES_SCHEMAS = [
     "tpch_sf1",
     "wanderbricks",
 ]
+
+# The same, as the Unity dialect lists them: `list schemas` drops the schemas
+# the catalog keeps for itself, like `information_schema`.
+UNITY_DBX_SAMPLES_SCHEMAS = [
+    name for name in DBX_SAMPLES_SCHEMAS if name != "information_schema"
+]
+
+# The catalogs `list catalogs` answers with: the ones a reader outside the
+# workspace's compute can open. `dbx_samples`, `samples` and `workspace` are on
+# Databricks default storage, and `system` is the system catalog.
+EXTERNAL_CATALOGS = ["pqbench_ext"]
 
 # The `pqbench_ext` schemas the e2e service principal can see, sorted: the
 # synthetic `events`/`sales`/`reference` plus the real sample data copied
@@ -89,7 +102,6 @@ EXTERNAL_FIXTURE_SCHEMAS = [
     "clickbench",
     "events",
     "healthverity",
-    "information_schema",
     "nyctaxi",
     "reference",
     "sales",
@@ -119,8 +131,9 @@ def scrub_environment() -> None:
     """Give every child the tests' environment, not the caller's.
 
     The daemon socket is pinned too, so no test can attach to a developer's
-    daemon. Each `run`/`pipeline` adds its own context on top; the base stays
-    read-only, so test cases can run concurrently.
+    daemon; each run then starts its own (`daemon`). Each `run`/`pipeline`
+    adds its own context on top; the base stays read-only, so test cases can
+    run concurrently.
     """
     for name in SCRUBBED:
         local.env.pop(name, None)
@@ -132,24 +145,45 @@ def scrub_environment() -> None:
     local.env["AWS_METADATA_ENDPOINT"] = "http://127.0.0.1:1"
 
 
-def fresh_socket() -> None:
-    """Do not attach to a developer's daemon at the pinned path."""
-    try:
-        os.unlink(_SOCKET)
-    except FileNotFoundError:
-        pass
-
-
 scrub_environment()
+
+
+@contextlib.contextmanager
+def daemon(env: dict[str, str] | None):
+    """A `pqbench daemon serve` for one run, on a private socket and with the
+    run's environment; yields the environment that points the run at it.
+
+    Every catalog call goes through a daemon, so each run gets its own: runs
+    stay independent and can go concurrently. A daemon that cannot start (no
+    endpoint) is skipped, and the run reports what it would without one.
+    """
+    directory = tempfile.mkdtemp(dir=_WORK.name)
+    socket = os.path.join(directory, "d.sock")
+    merged = {**local.env.getdict(), **(env or {})}
+    process = subprocess.Popen(
+        [PQ_BENCH, "daemon", "serve", "--socket", socket],
+        env=merged,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 10
+    while not os.path.exists(socket) and process.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    try:
+        yield {**(env or {}), "PQB_DAEMON_SOCK": socket}
+    finally:
+        process.terminate()
+        process.wait()
 
 
 def run(args: list[str], stdin: str | None = None, env: dict[str, str] | None = None):
     """Run pqbench and return `(status, stdout, stderr)`."""
-    fresh_socket()
     command = local[PQ_BENCH][args]
-    if stdin is None:
+    if stdin is not None:
+        command = command << stdin
+    with daemon(env) as env:
         return command.run(retcode=None, env=env)
-    return (command << stdin).run(retcode=None, env=env)
 
 
 def pipeline(
@@ -167,7 +201,6 @@ def pipeline(
     `stdin` feeds the first stage only.
     """
     tees = tees or []
-    fresh_socket()
     commands = []
     for index, args in enumerate(stages):
         command = local[PQ_BENCH][args]
@@ -179,7 +212,8 @@ def pipeline(
     combined = commands[0]
     for command in commands[1:]:
         combined = combined | command
-    return combined.run(retcode=None, env=env)
+    with daemon(env) as env:
+        return combined.run(retcode=None, env=env)
 
 
 def ndjson(text: str) -> list[dict]:
@@ -321,7 +355,8 @@ class LiveE2E(unittest.TestCase):
         self.assertTrue(records[0]["cloud_provider"])
         self.assertTrue(records[0]["region"])
 
-    # `list catalogs` lists the live catalogs, sorted by name.
+    # `list catalogs` lists the catalogs a reader outside compute can open,
+    # sorted by name.
     def test_catalog_ls_lists_the_live_catalogs(self):
         host = self.require_host()
         token = self.require_token(host)
@@ -331,9 +366,12 @@ class LiveE2E(unittest.TestCase):
             self.assertEqual(resource(record), "catalogs")
         self.assertEqual(
             [resource_id(record) for record in records],
-            ["dbx_samples", "pqbench_ext", "samples", "system", "workspace"],
+            EXTERNAL_CATALOGS,
         )
-        self.assertEqual(len(ndjson(self.assert_ok(["list", "catalogs"], env=env))), 5)
+        self.assertEqual(
+            len(ndjson(self.assert_ok(["list", "catalogs"], env=env))),
+            len(EXTERNAL_CATALOGS),
+        )
 
     # The live metastore walk is a streaming shell pipeline driven from Python
     # (`scripts/walk_metastore.py`): `list catalogs | list schemas | list tables`
@@ -344,12 +382,12 @@ class LiveE2E(unittest.TestCase):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "walk_metastore.py")
         env = source(host, token)
         env.update({"PQB_CONFIG_FILE": "/dev/null"})
-        fresh_socket()
-        status, out, err = (
-            local[sys.executable][script, "--pqbench", PQ_BENCH, "--fan-out", "64"]
-        ).run(retcode=None, env=env)
+        with daemon(env) as env:
+            status, out, err = (
+                local[sys.executable][script, "--pqbench", PQ_BENCH, "--fan-out", "64"]
+            ).run(retcode=None, env=env)
         self.assertEqual(status, 0, f"walk stderr: {err}")
-        self.assertIn("walk: 5 catalogs,", out, "the walk did not finish")
+        self.assertIn("walk: 1 catalog,", out, "the walk did not finish")
         print(out, end="")
 
     # `get catalog` reads the live catalog.
@@ -383,7 +421,7 @@ class LiveE2E(unittest.TestCase):
             self.assertEqual(resource(record), "schemas")
             self.assertEqual(fqn(record), f"dbx_samples.{resource_id(record)}")
             names.append(resource_id(record))
-        self.assertEqual(names, DBX_SAMPLES_SCHEMAS)
+        self.assertEqual(names, UNITY_DBX_SAMPLES_SCHEMAS)
 
     # `list schemas` and `list tables` on the external-location fixture: the
     # synthetic `events`/`sales`/`reference` (ten two-column tables each) and the
@@ -729,12 +767,12 @@ class LiveE2E(unittest.TestCase):
 
         catalogs = self.assert_ok(["list", "catalogs"], env=env)
         names = [resource_id(record) for record in ndjson(catalogs)]
-        self.assertEqual(names, ["dbx_samples", "pqbench_ext", "samples", "system", "workspace"])
+        self.assertEqual(names, EXTERNAL_CATALOGS)
 
         status, info, err = pipeline([["list", "catalogs"], ["get", "catalog"]], env)
         self.assertEqual(status, 0, f"get catalog stderr: {err}")
         records = ndjson(info)
-        self.assertEqual(len(records), 5)
+        self.assertEqual(len(records), len(EXTERNAL_CATALOGS))
         for record in records:
             self.assertEqual(resource(record), "catalogs")
             self.assertIn(resource_id(record), names)
@@ -747,8 +785,12 @@ class LiveE2E(unittest.TestCase):
             self.assertEqual(resource(record), "schemas")
             self.assertIn(fqn(record).split(".")[0], names)
         self.assertEqual(
-            [resource_id(record) for record in records if fqn(record).startswith("dbx_samples.")],
-            DBX_SAMPLES_SCHEMAS,
+            [
+                resource_id(record)
+                for record in records
+                if fqn(record).startswith("pqbench_ext.")
+            ],
+            EXTERNAL_FIXTURE_SCHEMAS,
         )
 
     # `list schemas` reads the live catalog's namespaces through Iceberg REST.

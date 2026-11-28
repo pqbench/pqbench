@@ -16,6 +16,11 @@ iceberg_location="s3://lakehouse/iceberg"
 vended_env="local/lakehouse/vended.env"
 iceberg_meta="$root/docker/e2e-lakehouse/iceberg/metadata-location"
 pqbench_bin="${CARGO_TARGET_DIR:-$root/target}/debug/pqbench"
+# Every catalog call goes through a daemon; the walk's runs one on a private
+# socket, restarted with each walk environment.
+daemon_dir=$(mktemp -d)
+export PQB_DAEMON_SOCK="$daemon_dir/d.sock"
+trap '"$pqbench_bin" daemon stop > /dev/null 2>&1 || true; rm -rf "$daemon_dir"' EXIT
 
 ensure_pqbench() {
     [ -x "$pqbench_bin" ] || $CARGO build -p pqbench-cli --features delta-s3,iceberg-s3
@@ -71,7 +76,8 @@ wait_http() {
 # Set the walk's environment: the catalog endpoint and dialect (PQB_*) and the
 # object-store options (AWS_*), all read from the environment. An empty
 # endpoint, dialect, or key is unset, so a stage that resolves a vended lease
-# carries no storage key.
+# carries no storage key. The daemon restarts under the new environment, since
+# it makes the walk's catalog calls and `get table` reads.
 walk_env() {
     local endpoint=$1 dialect=$2 key=$3 secret=$4 token=${5:-}
     if [ -n "$endpoint" ]; then export PQB_ENDPOINT="$endpoint"; else unset PQB_ENDPOINT; fi
@@ -82,6 +88,8 @@ walk_env() {
     if [ -n "$key" ]; then export AWS_ACCESS_KEY_ID="$key"; else unset AWS_ACCESS_KEY_ID; fi
     if [ -n "$secret" ]; then export AWS_SECRET_ACCESS_KEY="$secret"; else unset AWS_SECRET_ACCESS_KEY; fi
     if [ -n "$token" ]; then export AWS_SESSION_TOKEN="$token"; else unset AWS_SESSION_TOKEN; fi
+    "$pqbench_bin" daemon stop > /dev/null 2>&1 || true
+    if [ -n "$endpoint" ]; then "$pqbench_bin" daemon start; fi
 }
 
 up() {

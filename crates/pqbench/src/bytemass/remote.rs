@@ -15,8 +15,10 @@ const PARQUET_FOOTER_SIZE: u64 = 8;
 
 /// How much of the object tail one GET asks for. It must cover the trailer and
 /// the serialized footer for the read to stay one request; a footer larger than
-/// this falls back to a second range GET.
-const FOOTER_WINDOW: u64 = 64 * 1024;
+/// this falls back to a second range GET. A wide table (150–500 columns) easily
+/// needs more than 64 KiB of footer, and 256 KiB still keeps a small object's
+/// only read small because the range is clamped to the object's size.
+const FOOTER_WINDOW: u64 = 256 * 1024;
 
 /// Read an individual Parquet object's byte masses from a URI.
 ///
@@ -29,6 +31,17 @@ const FOOTER_WINDOW: u64 = 64 * 1024;
 pub(super) async fn read_remote(lake: &Lake, uri: &str) -> Result<(ObjectStat, FileMass), Error> {
     let reader = object_store::open(lake, uri).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
+    let service = uri.split("://").next().unwrap_or_default();
+    if stat.restore_required(service) {
+        return Err(storage_error(object_store::Error::Archived {
+            uri: uri.to_string(),
+            storage_class: stat
+                .storage_class
+                .clone()
+                .or_else(|| stat.archive_status.clone()),
+            restore_ongoing: stat.restore_ongoing,
+        }));
+    }
     let size = stat.size_bytes;
     if size < PARQUET_FOOTER_SIZE {
         return Err(Error::Invalid(format!(
@@ -125,7 +138,7 @@ fn footer_layout(
 }
 
 fn storage_error(error: object_store::Error) -> Error {
-    Error::Storage(error)
+    Error::Storage(Box::new(error))
 }
 
 #[cfg(test)]

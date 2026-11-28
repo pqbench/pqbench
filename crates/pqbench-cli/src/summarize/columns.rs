@@ -40,7 +40,9 @@ pub(crate) async fn run(args: &ColumnsArgs) -> Result<(), CliError> {
     }
     let mut out = Emitter::open();
     for row in &rows {
-        out.write(row).await?;
+        if out.write(row).await?.is_break() {
+            break;
+        }
     }
     out.finish().await
 }

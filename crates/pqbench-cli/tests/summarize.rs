@@ -215,3 +215,96 @@ fn summarize_columns_rejects_a_column_measured_twice_in_one_file() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("twice"), "{stderr}");
 }
+
+fn version(table: &str, partition: &str, etag: &str, fields: serde_json::Value) -> String {
+    let mut record = serde_json::json!({
+        "name": format!("catalogs/c/schemas/s/tables/{table}/partitions/{partition}/versions/{etag}"),
+    });
+    record
+        .as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+    format!("{record}\n")
+}
+
+/// Every version counts as a partition and adds up; an unpriced one adds no
+/// cost; each catalog comes before its schemas and each schema before its
+/// tables.
+#[test]
+fn summarize_partition_versions_totals_each_level() {
+    let input = [
+        version(
+            "a",
+            "day%3D1",
+            "01",
+            serde_json::json!({"state": "UP_TO_DATE", "file_count": 2, "size_bytes": 100,
+                "removed_size_bytes": 10, "last_modification_time": 5,
+                "lowest_cost_per_month": 1.0, "highest_cost_per_month": 3.0}),
+        ),
+        version(
+            "a",
+            "day%3D2",
+            "03",
+            serde_json::json!({"state": "PENDING", "file_count": 1, "size_bytes": 50,
+                "last_modification_time": 7, "failure_count": 1, "error": "boom"}),
+        ),
+        version(
+            "b",
+            "day%3D1",
+            "04",
+            serde_json::json!({"state": "PRICED", "file_count": 1, "size_bytes": 20,
+                "lowest_cost_per_month": 0.5, "highest_cost_per_month": 0.5}),
+        ),
+    ]
+    .concat();
+    let output = pipe(&["summarize", "partition-versions"], input.as_bytes());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rows = read_rows(&output);
+    let names: Vec<&str> = rows
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "catalogs/c/partitionStats",
+            "catalogs/c/schemas/s/partitionStats",
+            "catalogs/c/schemas/s/tables/a/partitionStats",
+            "catalogs/c/schemas/s/tables/b/partitionStats",
+        ]
+    );
+    let table_a = &rows[2];
+    assert_eq!(table_a["partition_count"], 2);
+    assert_eq!(table_a["file_count"], 3);
+    assert_eq!(table_a["size_bytes"], 150);
+    assert_eq!(table_a["removed_size_bytes"], 10);
+    assert_eq!(table_a["priced_partition_count"], 1);
+    assert_eq!(table_a["lowest_cost_per_month"], 1.0);
+    assert_eq!(table_a["highest_cost_per_month"], 3.0);
+    assert_eq!(table_a["last_modification_time"], 7);
+    assert_eq!(
+        table_a["version_counts"],
+        serde_json::json!({"PENDING": 1, "UP_TO_DATE": 1})
+    );
+    assert_eq!(table_a["failed_version_count"], 1);
+    let catalog = &rows[0];
+    assert_eq!(catalog["partition_count"], 3);
+    assert_eq!(catalog["size_bytes"], 170);
+    assert_eq!(catalog["highest_cost_per_month"], 3.5);
+    assert_eq!(catalog["lowest_cost_per_month"], 1.5);
+    assert!(rows[3].get("last_modification_time").is_none());
+}
+
+/// A record that is not a partition version fails the run.
+#[test]
+fn summarize_partition_versions_refuses_another_record() {
+    let output = pipe(
+        &["summarize", "partition-versions"],
+        b"{\"name\":\"catalogs/c/schemas/s/tables/a/partitions/day%3D1\"}\n",
+    );
+    assert!(!output.status.success());
+}

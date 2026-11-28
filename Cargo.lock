@@ -2923,41 +2923,44 @@ name = "pqbench"
 version = "0.0.12"
 dependencies = [
  "apache-avro",
- "async-stream",
  "async-trait",
+ "base64 0.23.1",
+ "buoyant_kernel",
  "bytes",
+ "chrono",
  "deltalake",
- "flate2",
  "futures",
  "futures-util",
  "glob",
- "lz4",
  "object_store",
  "parquet",
- "pqbench-resource",
+ "percent-encoding",
+ "pqbench-model-v1",
+ "pqbench-parquet",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "snappy_src",
  "tempfile",
  "tokio",
  "url",
- "zstd",
 ]
 
 [[package]]
 name = "pqbench-cli"
 version = "0.0.12"
 dependencies = [
+ "chrono",
  "clap",
  "futures-util",
  "libc",
  "lz4",
  "pqbench",
+ "pqbench-driver",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -2967,6 +2970,48 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "pqbench-driver"
+version = "0.0.12"
+dependencies = [
+ "clap",
+ "libc",
+ "pqbench-model-v1",
+ "pqbench-parquet",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "pqbench-model-v1"
+version = "0.0.12"
+dependencies = [
+ "pqbench-resource",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pqbench-parquet"
+version = "0.0.12"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "flate2",
+ "futures-util",
+ "glob",
+ "lz4",
+ "parquet",
+ "pqbench-model-v1",
+ "serde",
+ "serde_json",
+ "snappy_src",
+ "zstd",
 ]
 
 [[package]]

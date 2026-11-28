@@ -10,6 +10,17 @@ use parquet::schema::parser::parse_message_type;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
+/// A committed Parquet fixture: the sample file each end-to-end test reads.
+///
+/// The bytes are Parquet and nothing else, so they live with the crate that
+/// reads them (`pqbench-parquet`), which is also the crate whose unit tests
+/// assert on page and footer structure.
+pub fn fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../pqbench-parquet/tests/fixtures")
+        .join(name)
+}
+
 pub fn write_parquet(path: &Path, rows: i64) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let schema = Arc::new(parse_message_type("message data { REQUIRED INT64 id; }").unwrap());
@@ -117,7 +128,7 @@ pub fn metadata(configuration: Value) -> Value {
         ]}).to_string(),
         "partitionColumns": ["part"],
         "configuration": configuration,
-        "createdTime": 0
+        "createdTime": 1_760_000_000_000i64
     }})
 }
 

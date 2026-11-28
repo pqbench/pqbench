@@ -38,6 +38,7 @@ so the walk is one bash pipeline.
 ```console no-run
 $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
+$ pqb setup --check
 $ pqb daemon start
 $ pqb ls catalogs \
     | pqb ls schemas \
@@ -55,11 +56,20 @@ Read it left to right:
   catalog. A live endpoint rate-limits its REST calls, so the daemon that the
   next bullet starts owns those requests and paces Unity at 15/s, the catalog's
   per-endpoint ceiling.
+- `setup --check` is the preflight: it reports the resolved configuration, the
+  credential, and the endpoint's answer to the walk's first level as three
+  `ok`/`fail` lines and exits non-zero on a failure, so a misconfigured run
+  fails before it starts.
+- With no static token, a Databricks service principal authenticates with
+  `PQB_CLIENT_ID` and `PQB_CLIENT_SECRET`: the daemon mints the OAuth M2M
+  bearer, holds it, and mints the next one five minutes before it expires.
+  Neither the secret nor the bearer is printed. See
+  [Authentication](https://pqbench.github.io/pqbench/reference/authentication/).
 - `daemon start` runs one daemon for the walk. It makes every catalog request
   and caches the storage lease each table is read under, serving both to every
   stage, so the catalog vends each table once rather than once per command.
-  Without a daemon each stage makes its own catalog call; the leases are held
-  in memory and never appear in a document.
+  A stage that needs the catalog and finds no daemon fails with a hint to
+  start one; the leases are held in memory and never appear in a document.
 - `get table` enriches each ref with its format and snapshot; the Delta log is
   read with `without_files()`, so the read is O(1) in files. `list files` then
   resolves each snapshot and writes its active files, one `TableFile` per line.
@@ -173,6 +183,74 @@ c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511        
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/guides/demo/).
 
+### list suggestions
+
+The storage a file's values do not need. One suggestion per column the file's
+footer and a representative row group make plausible, each with the change that
+recovers the bytes:
+
+```console run
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb list suggestions | pqb fmt
+COLUMN            RULE        VERIFIED  SAVINGS  REMEDY                                                                               MESSAGE
+----------------  ----------  --------  -------  -----------------------------------------------------------------------------------  ------------------------------
+url_encoded       codec-zstd  -                  compression={'url_encoded': 'zstd'}, compression_level={'url_encoded': 3}            uncompressed at 302.37 B/value
+text              codec-zstd  -                  compression={'text': 'zstd'}, compression_level={'text': 3}                          uncompressed at 247.86 B/value
+username_encoded  codec-zstd  -                  compression={'username_encoded': 'zstd'}, compression_level={'username_encoded': 3}  uncompressed at 148.73 B/value
+```
+
+Twelve rules read one column's chunk; the first that detects a column wins, so
+a column's bytes are never priced twice:
+
+| Rule | What it finds | Remedy |
+| --- | --- | --- |
+| `uuid-text` | canonical UUID text, 36 bytes for 16 of data | write it as `BINARY(16)` |
+| `base64-text` | Base64 text of binary payloads, four characters per three bytes | decode it to a binary column |
+| `int96-timestamp` | the deprecated INT96 timestamp | write an `INT64` microsecond timestamp |
+| `text-timestamp` | every value is ISO-8601 timestamp text | write a microsecond `INT64` timestamp |
+| `codec-zstd` | a chunk stored uncompressed, snappy, or gzip | write the column with zstd |
+| `page-size` | many tiny data pages from a low page-size limit | write it with the standard 1 MiB page size |
+| `delta-integer` | dense or monotone integers without `DELTA_BINARY_PACKED` | write the column Delta binary packed (page v2) |
+| `dictionary-unique` | a dictionary page on nearly unique values | write the column without a dictionary |
+| `dictionary-missing` | repeated values written without a dictionary | write the column with one |
+| `delta-text-encoding` | nearly-unique text without a dictionary | write Delta byte/length arrays (page v2) |
+| `dictionary-fallback` | a dictionary that fell back to `PLAIN` data pages | raise the dictionary page size limit, or turn the dictionary off |
+| `stats-truncated` | footer `min_value`/`max_value` past 64 bytes | truncate statistics at 64 bytes |
+
+`dictionary-unique`, `dictionary-missing`, and `dictionary-fallback` cover every
+physical type a dictionary can pay on — byte arrays, fixed-length byte arrays,
+`INT32`, `INT64`, `FLOAT`, and `DOUBLE` — and `dictionary-fallback` prices three
+arms at the file's own codec, keeping the smaller of a raised limit and no
+dictionary. `page-size` is measured as a controlled pair: the source's own
+effective page size against the standard 1 MiB, at the file's codec and
+encoding. `base64-text` reads only values that are canonical Base64 of binary
+bytes: a UUID, a hex digest, and a word all use Base64 characters without being
+one, and a decoded payload that is mostly printable is a text column, not a
+binary one. `stats-truncated` needs no re-encode: a footer's bounds are the
+writer's own bytes, so the bytes past the truncation length are exact.
+
+`uuid-text`, `base64-text`, `text-timestamp`, `delta-integer`,
+`delta-text-encoding`, the dictionary rules, and `page-size` decode and
+re-encode a leaf's values, so they measure scalar leaves only. `codec-zstd` and
+`stats-truncated` read page headers, page bytes, and footer facts, so they
+measure any leaf, nested `list<struct>` columns included.
+
+Two more decide from `list partitions` totals, so they read no file and hold
+for partitions a host never copies:
+
+| Rule | What it finds | Remedy |
+| --- | --- | --- |
+| `tombstones` | Delta's removed files the log still holds | `VACUUM` (Delta), expire snapshots (Iceberg) |
+| `small-files` | many small files in one partition | `OPTIMIZE` (Delta), `rewrite_data_files` (Iceberg), a coalesce before write |
+
+A suggestion's `remedy` is the setting in the detected writer's own terms —
+parquet-mr takes per-column keys, pyarrow and parquet-rs write options, Photon
+forwards them unverified — and `remedies` carries the same change for every
+engine pqbench knows: `spark`, `pyarrow`, `parquet-rs`, `delta`, `iceberg`.
+So a table compacted by any of them has its setting without a second lookup.
+`get suggestion` re-writes the sample under the remedy's control and marks the
+suggestion `verified` with the bytes it saves; `list suggestions` only names
+the candidates.
+
 ### list files
 
 List a table's active files — the files its snapshot holds now.
@@ -243,6 +321,32 @@ $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb 
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.
+
+## The driver
+
+`pqbench-driver` keeps a map of partition versions — a partition at one etag —
+and drives each one through price, download, bytemass, lint, and verify with the
+plain `pqbench` commands, one per CPU, newest data first. Its walk re-lists the
+catalog every `--walk-period-seconds`, so a partition whose etag moved is
+measured again and a version the walk no longer finds leaves the map. State is
+checkpointed under `--store DIR`, results land in `DIR/results/`, and
+`pqbench list partition-versions` / `pqbench get partition-version` read it back
+over the driver's own socket:
+
+```console no-run
+$ pqbench-driver start --store /var/lib/pqbench --walk-period-seconds 86400
+$ export PQB_DRIVER_SOCK=/var/lib/pqbench/driver.sock
+$ pqbench list partition-versions catalogs/main/schemas/sales
+$ pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
+$ pqbench-driver status
+$ pqbench-driver stop --store /var/lib/pqbench
+```
+
+One operator setting — `step-timeout` — changes rarely enough to live only in
+`~/.pqbenchrc`; see
+[Configuration](https://pqbench.github.io/pqbench/reference/configuration/#driver-settings).
+The catalog daemon is independent: the driver's commands talk to it when one is
+running, and local tables need none.
 
 ## Documentation
 

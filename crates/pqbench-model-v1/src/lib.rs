@@ -1,0 +1,81 @@
+//! The pqbench wire types, and the one home for resource names.
+//!
+//! Each resource lives in its own module, so a change to one touches one
+//! file.
+//!
+//! One definition per resource and value, so a command and the CLI share a
+//! type instead of each declaring its own. The CLI forwards these as-is (it
+//! renders the human table for them); the library's commands return them.
+//!
+//! These are ordinary Rust types first: a value that can be absent is an
+//! `Option`, a quantity is unsigned, an enum has no "unspecified" sentinel
+//! (absence is `None`), and a collection is a `Vec`/`BTreeMap`. The modelling
+//! rules are `docs/concepts/data-modelling.md` and the wire contract is
+//! `docs/concepts/v1.proto`; where a wire idiom (a zero-value variant, an
+//! `int64`, a prefixed enum value) is not the Rust idiom, Rust wins and the
+//! wire keeps the spelling via `serde`.
+//!
+//! [`name`] is the one place a name format lives, so changing it (say, to a
+//! URN) is a one-module change.
+//!
+//! The crate is the wire model and nothing else: `serde`, `serde_json`, and
+//! the `Resource` derive. It reads no file and speaks to no service, so a
+//! consumer that only builds or reads records (the driver's state, the CLI's
+//! render) compiles in under a second. `pqbench` re-exports it as
+//! `pqbench::v1`.
+
+extern crate self as pqbench_model_v1;
+
+mod blob;
+mod bytemass;
+mod catalog;
+mod catalog_type;
+mod column;
+mod column_profile;
+mod commit;
+mod compression_report;
+mod credentials;
+mod declared_column;
+mod experiment_trial;
+mod file_stats;
+mod log_action;
+mod metastore;
+pub mod name;
+mod partition;
+mod partition_price;
+mod partition_stats;
+pub mod partition_version;
+mod schema;
+mod storage_tier_cost;
+mod suggestion;
+mod table;
+mod table_file;
+mod table_format;
+mod value_count;
+
+pub use blob::Blob;
+pub use bytemass::Bytemass;
+pub use catalog::Catalog;
+pub use catalog_type::CatalogType;
+pub use column::Column;
+pub use column_profile::ColumnProfile;
+pub use commit::Commit;
+pub use compression_report::CompressionReport;
+pub use credentials::Credentials;
+pub use declared_column::DeclaredColumn;
+pub use experiment_trial::ExperimentTrial;
+pub use file_stats::FileStats;
+pub use log_action::LogAction;
+pub use metastore::Metastore;
+pub use partition::Partition;
+pub use partition_price::PartitionPrice;
+pub use partition_stats::PartitionStats;
+pub use partition_version::PartitionVersion;
+pub use pqbench_resource::Resource;
+pub use schema::Schema;
+pub use storage_tier_cost::StorageTierCost;
+pub use suggestion::{Remedy, Suggestion};
+pub use table::Table;
+pub use table_file::TableFile;
+pub use table_format::TableFormat;
+pub use value_count::ValueCount;

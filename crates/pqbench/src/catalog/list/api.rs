@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use futures_util::stream::{self, Stream, TryStreamExt};
+use futures_util::stream::Stream;
 
 pub use crate::v1::Catalog;
 
@@ -39,15 +39,11 @@ impl std::error::Error for Error {
     }
 }
 
-/// List the catalogs at the workspace's endpoint, in name order.
+/// List the catalogs at the workspace's endpoint, page by page: a page's
+/// catalogs are in name order and are yielded before the next page is read.
 ///
 /// The stream borrows the workspace and nothing else; a failure listing a page
 /// is an `Err` item, so the records read before it stand.
 pub fn list(workspace: &Workspace) -> impl Stream<Item = Result<Catalog, Error>> + '_ {
-    stream::once(async move {
-        super::r#impl::list(workspace)
-            .await
-            .map(|rows| stream::iter(rows.into_iter().map(Ok)))
-    })
-    .try_flatten()
+    super::r#impl::list(workspace)
 }

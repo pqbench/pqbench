@@ -14,6 +14,10 @@ pub(crate) struct BytemassArgs {
     /// files in flight at once
     #[arg(long, default_value_t = 128)]
     fan_out: usize,
+    /// read each footer from this file instead of the blob, keeping the
+    /// record's name
+    #[arg(long, value_name = "PATH")]
+    local: Option<std::path::PathBuf>,
 }
 
 /// List each table file's columns as its record arrives.
@@ -23,20 +27,19 @@ pub(crate) async fn run(
     args: &BytemassArgs,
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::TableFile>("list columns").await?;
-    let lake = lake.clone();
-    let daemon = daemon.clone();
-    let rows = flat_map(parents, args.fan_out, move |file: v1::TableFile| {
-        let lake = lake.clone();
-        let daemon = daemon.clone();
-        async move {
-            let measured = crate::measure::table_file(&lake, &daemon, &file).await?;
+    let local = args.local.as_deref();
+    let rows = flat_map(
+        parents,
+        args.fan_out,
+        move |file: v1::TableFile| async move {
+            let measured = crate::measure::table_file(lake, daemon, &file, local).await?;
             Ok(stream::iter(
                 rows(measured.blob, measured.columns)
                     .into_iter()
                     .map(Ok::<_, CliError>),
             ))
-        }
-    });
+        },
+    );
     drive(rows).await
 }
 

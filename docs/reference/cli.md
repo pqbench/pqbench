@@ -14,14 +14,19 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench get catalog`↴](#pqbench-get-catalog)
 * [`pqbench get schema`↴](#pqbench-get-schema)
 * [`pqbench get table`↴](#pqbench-get-table)
+* [`pqbench get partition-version`↴](#pqbench-get-partition-version)
+* [`pqbench get partition-price`↴](#pqbench-get-partition-price)
 * [`pqbench get suggestion`↴](#pqbench-get-suggestion)
 * [`pqbench format`↴](#pqbench-format)
 * [`pqbench table-file`↴](#pqbench-table-file)
+* [`pqbench download`↴](#pqbench-download)
 * [`pqbench list`↴](#pqbench-list)
 * [`pqbench list catalogs`↴](#pqbench-list-catalogs)
 * [`pqbench list schemas`↴](#pqbench-list-schemas)
 * [`pqbench list tables`↴](#pqbench-list-tables)
 * [`pqbench list files`↴](#pqbench-list-files)
+* [`pqbench list partitions`↴](#pqbench-list-partitions)
+* [`pqbench list partition-versions`↴](#pqbench-list-partition-versions)
 * [`pqbench list columns`↴](#pqbench-list-columns)
 * [`pqbench list suggestions`↴](#pqbench-list-suggestions)
 * [`pqbench sample`↴](#pqbench-sample)
@@ -34,6 +39,7 @@ This document contains the help content for the `pqbench` command-line program.
 * [`pqbench profile`↴](#pqbench-profile)
 * [`pqbench summarize`↴](#pqbench-summarize)
 * [`pqbench summarize columns`↴](#pqbench-summarize-columns)
+* [`pqbench summarize partition-versions`↴](#pqbench-summarize-partition-versions)
 * [`pqbench skill`↴](#pqbench-skill)
 * [`pqbench setup`↴](#pqbench-setup)
 
@@ -45,7 +51,7 @@ compress them (lz, compression), what a Delta or Iceberg table's files hold
 Commands compose on pipes: each writes a resource the next command reads.
 
 ```text
-  get           → Metastore / Catalog / Schema / Table
+  get           → Metastore / Catalog / Schema / Table / PartitionPrice
                   one resource of the walk
   list          → Catalog / Schema / Table / TableFile / Column
                   a collection of the walk
@@ -89,6 +95,11 @@ Documents:
   Schema                 a catalog's schemas (list schemas) / one record (get schema)
   Table                  a schema's tables (list tables) / one record (get table)
   TableFile              one table file (list files, sample files, table-file)
+  Partition              one partition of a table's snapshot (list partitions)
+  PartitionPrice         a partition's storage classes and cost (get partition-price)
+  PartitionVersion       a partition at one etag in the driver (list partition-versions,
+                         get partition-version for its results)
+  PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
   Column                 one file column and its byte mass (list columns)
   ColumnMass             one table column's estimated mass (summarize columns)
@@ -155,11 +166,12 @@ Format skills (read these when the input is Parquet or a table):
 * `get` — Read one resource of the walk
 * `format` — Render a stream as tables, or a summarize columns stream as HTML
 * `table-file` — Name storage paths as table-file records
+* `download` — Copy a table file's bytes to a local path
 * `list` — List a collection of the walk
 * `sample` — Keep a rate of a table's files, by size
 * `daemon` — Own the catalog calls and cache storage leases
 * `profile` — Per-column facts from a decoded row sample (nulls, NDV, entropy, runs)
-* `summarize` — Estimate each table column's mass from a list columns stream
+* `summarize` — Fold a stream into totals: column masses, or partition stats
 * `skill` — Print a bundled agent skill (write / DDL / compression recipes)
 * `setup` — Print the walk's environment as shell exports to eval
 
@@ -168,6 +180,8 @@ Format skills (read these when the input is Parquet or a table):
 * `--profile <NAME>` — the `~/.pqbenchrc` profile to run under [env: PQB_PROFILE]
 * `--endpoint <URL>` — workspace URL; overrides the profile [env: PQB_ENDPOINT]
 * `--token <TOKEN>` — bearer token; overrides the profile [env: PQB_TOKEN]
+* `--client-id <ID>` — service-principal OAuth client id; mints the bearer when no token is set [env: PQB_CLIENT_ID]
+* `--client-secret <SECRET>` — service-principal OAuth client secret [env: PQB_CLIENT_SECRET]
 * `--table-format <FORMAT>` — catalog dialect: unity (the default) or iceberg [env: PQB_TABLE_FORMAT]
 
 
@@ -316,6 +330,7 @@ See also:
 * `--fan-out <FAN_OUT>` — files in flight at once
 
   Default value: `128`
+* `--local <PATH>` — read each footer from this file instead of the blob, keeping the record's name
 
 
 
@@ -330,13 +345,19 @@ Read one resource of the walk, by type:
              properties), from a Schema ref
   table      one table's record (format, snapshot_version, declared_columns,
              partition_columns, properties), from a Table ref
+  partition-price
+             one partition's price, its singleton child: the storage classes
+             of its oldest, sample and newest files, and its bytes and removed
+             bytes at each class's S3 list price (us-east-1), from a Partition
+             record (from `list partitions`; no endpoint)
   suggestion one potential suggestion measured against its control, from a
              Suggestion ref (a local file, no endpoint)
 ```
 
 The endpoint, bearer, and dialect come from PQB_ENDPOINT / PQB_TOKEN /
 PQB_TABLE_FORMAT; the catalog resources need an endpoint, while `get
-suggestion` measures a local file. `get` reads the matching resource records
+suggestion` measures a local file and `get partition-price` HEADs the files a
+Partition record names. `get` reads the matching resource records
 on standard input — one per line — so it enriches a listing: `pqbench list
 catalogs | pqbench get catalog`. A JSON record names the resource: `echo
 '"dbx_samples.nyctaxi"' | pqbench get schema`.
@@ -366,6 +387,7 @@ Examples:
   echo '"dbx_samples.nyctaxi"' | pqbench list tables | pqbench get table
   pqbench list schemas | pqbench get schema
   pqbench list tables | pqbench get table
+  cat table.ndjson | pqbench list partitions | pqbench get partition-price
   pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
 
 See also:
@@ -381,6 +403,8 @@ See also:
 * `catalog` — Read one catalog's record
 * `schema` — Read one schema's record (`CATALOG.SCHEMA`)
 * `table` — Read one table's record (`CATALOG.SCHEMA.TABLE`)
+* `partition-version` — Read one version's stored results (`name`, or a partition for its newest live version)
+* `partition-price` — Read each partition's storage classes and cost (Partition records on stdin)
 * `suggestion` — Verify one column's potential suggestion (Suggestion refs on stdin)
 
 
@@ -437,6 +461,45 @@ Read one table's record (`CATALOG.SCHEMA.TABLE`)
 
 
 
+## `pqbench get partition-version`
+
+Read one version's stored results (`name`, or a partition for its newest live version)
+
+**Usage:** `pqbench get partition-version <NAME>`
+
+
+###### **Arguments:**
+
+* `<NAME>` — a version (`catalogs/…/partitions/…/versions/{etag}`), or a partition for its newest live version
+
+
+
+## `pqbench get partition-price`
+
+Read each partition's price: read Partition records on standard input (from
+`list partitions`) and write one PartitionPrice per partition, the partition's
+singleton child (`…/partitions/{partition}/price`): the storage classes of its
+oldest, sample and newest files, and its bytes and removed bytes at each
+class's S3 list price (us-east-1).
+
+Each partition costs up to three HEADs under its table's lease, nothing is read
+from the files, and a HEAD does not count as Intelligent-Tiering access. S3
+omits the class for STANDARD. Lifecycle moves objects by age, so one class
+covers the partition and two bound a transition inside it; a class that prices
+by access (INTELLIGENT_TIERING) lists each access sub-tier. A file that is not
+an S3 object has no class, and a partition with none has no cost.
+
+**Usage:** `pqbench get partition-price [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — partitions in flight at once
+
+  Default value: `16`
+
+
+
 ## `pqbench get suggestion`
 
 Verify one column's potential suggestion (Suggestion refs on stdin)
@@ -446,7 +509,7 @@ Verify one column's potential suggestion (Suggestion refs on stdin)
 
 ###### **Options:**
 
-* `--rows <ROWS>` — leading rows to measure; defaults to the candidate's sample_row_count
+* `--local <PATH>` — read the file from this path instead of the blob, keeping the record's name
 
 
 
@@ -492,6 +555,32 @@ Name storage paths as table-file records
 
 
 
+## `pqbench download`
+
+Read one TableFile record on standard input (`list files` names them) and copy
+its blob to --output, in pieces, so a large file costs bounded memory and the
+blob is read once. `bytemass`, `list suggestions` and `get suggestion` read
+such a copy with --local and keep the record's blob name, so their records
+name the object, not the copy.
+
+**Usage:** `pqbench download --output <PATH>`
+
+```console no-run
+Examples:
+  pqbench table-file data.parquet | pqbench download --output copy.parquet
+  pqbench table-file data.parquet | pqbench list suggestions --local copy.parquet
+
+See also:
+  pqbench table-file --help        name a path as a table-file record
+  pqbench list suggestions --help  read a copy with --local
+```
+
+###### **Options:**
+
+* `--output <PATH>` — the file to write
+
+
+
 ## `pqbench list`
 
 List a collection of the walk, by name:
@@ -504,11 +593,14 @@ List a collection of the walk, by name:
               line each — the record `get table` enriches
   files       a table's active files (Table refs on standard input), one
               TableFile line each
+  partitions  a table's partitions (Table records from `get table` on standard
+              input), one Partition line each: file count, bytes, records,
+              removed bytes, etag, and the oldest, newest and sample file
   columns     a file's columns and their byte masses (TableFile refs on
               standard input), one Column line each
-  suggestions the storage each local blob's values may not need (TableFile refs
-              on standard input), one Suggestion line each; `get suggestion`
-              measures them
+  suggestions the storage each local blob's values may not need (PATHs, or
+              TableFile refs on standard input), one Suggestion line each;
+              `get suggestion` measures them
 ```
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
@@ -528,6 +620,22 @@ nothing is collected, so a table of any size costs one log batch plus one file.
 --last/--partition keep
 only the files the log dates in a window (e.g. 1m, 1h, 1d, 1w, or one UTC day), so a
 daily run reads the day's writes without walking what the table already held.
+
+`list partitions` reads each table's snapshot once, without per-column
+statistics, and writes one Partition per partition, sorted by name, once the
+table is read. It holds one running total per partition, never the files, and
+a table that fails writes nothing. Removed files (Delta tombstones a vacuum
+has not deleted) are read first, a path hash and a size each, and counted in
+their partition unless an active file still holds the path. A partition's name follows the table's
+partition column order, so the input is `get table` output, which names the
+columns; a `list tables` ref is refused.
+
+`list partition-versions [PARENT]` reads no catalog and no storage: it prints
+pqbench-driver's rows, one PartitionVersion per line in name order, all of
+them or those under a catalog, schema, table or partition name. `get
+partition-version NAME` reads one version's stored results. Both talk to
+`pqbench-driver`, a separate process whose socket `PQB_DRIVER_SOCK` names;
+start it with `pqbench-driver start --store DIR`.
 
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
@@ -556,6 +664,8 @@ Examples:
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench list columns
   pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
+  pqbench list suggestions data.parquet | pqbench get suggestion | pqbench format
+  pqbench list partition-versions | pqbench summarize partition-versions
 
 See also:
   pqbench get --help          read one resource
@@ -570,8 +680,10 @@ See also:
 * `schemas` — List the schemas in a catalog (`CATALOG`)
 * `tables` — List the tables in a schema (`CATALOG.SCHEMA`)
 * `files` — List a table's active files (Table refs on stdin)
+* `partitions` — List a table's partitions (Table refs on stdin)
+* `partition-versions` — List the driver's partition versions (`PARENT`, or all)
 * `columns` — List a file's columns and their byte masses (Table-file refs on stdin)
-* `suggestions` — List potential storage suggestions for each local blob (Table-file refs on stdin)
+* `suggestions` — List potential storage suggestions for each local blob (PATHs, or Table-file refs on stdin)
 
 
 
@@ -629,6 +741,34 @@ List a table's active files (Table refs on stdin)
 
 
 
+## `pqbench list partitions`
+
+List a table's partitions (Table refs on stdin)
+
+**Usage:** `pqbench list partitions [OPTIONS]`
+
+
+###### **Options:**
+
+* `--fan-out <FAN_OUT>` — tables in flight at once
+
+  Default value: `4`
+
+
+
+## `pqbench list partition-versions`
+
+List the driver's partition versions (`PARENT`, or all)
+
+**Usage:** `pqbench list partition-versions [PARENT]`
+
+
+###### **Arguments:**
+
+* `<PARENT>` — only the versions under this catalog, schema, table or partition (`catalogs/…`); every version without it
+
+
+
 ## `pqbench list columns`
 
 List a file's columns and their byte masses (Table-file refs on stdin)
@@ -641,21 +781,24 @@ List a file's columns and their byte masses (Table-file refs on stdin)
 * `--fan-out <FAN_OUT>` — files in flight at once
 
   Default value: `128`
+* `--local <PATH>` — read each footer from this file instead of the blob, keeping the record's name
 
 
 
 ## `pqbench list suggestions`
 
-List potential storage suggestions for each local blob (Table-file refs on stdin)
+List potential storage suggestions for each local blob (PATHs, or Table-file refs on stdin)
 
-**Usage:** `pqbench list suggestions [OPTIONS]`
+**Usage:** `pqbench list suggestions [OPTIONS] [PATH]...`
 
+
+###### **Arguments:**
+
+* `<PATH>` — local parquet files to lint, when there is no table-file stream to read; each path becomes the table-file record a `table-file` stage would name
 
 ###### **Options:**
 
-* `--rows <ROWS>` — leading rows to inspect
-
-  Default value: `8192`
+* `--local <PATH>` — read each file from this path instead of the blob, keeping the record's name
 
 
 
@@ -731,9 +874,9 @@ without an environment variable.
 `list catalogs`, `list schemas`, `list tables`, and every `get` level ask the
 daemon, which paces Unity at 15 requests a second, the catalog's per-endpoint
 ceiling; the storage levels (`list files`, `list columns`) ask it only for the
-table's lease. Without a running daemon each command makes its own catalog call
-and paces nothing. Vended leases are session state and never ride a Table or
-TableFile document.
+table's lease. A command that needs the catalog and finds no daemon fails with a
+hint to start one; a read of local files needs none. Vended leases are session
+state and never ride a Table or TableFile document.
 
 **Usage:** `pqbench daemon <COMMAND>`
 
@@ -754,7 +897,7 @@ See also:
 * `start` — Start the daemon in the background
 * `stop` — Stop the daemon
 * `status` — Report whether the daemon is running
-* `serve` — Serve leases in the foreground
+* `serve` — Serve leases and catalog GETs in the foreground
 
 
 
@@ -789,7 +932,7 @@ Report whether the daemon is running
 
 ## `pqbench daemon serve`
 
-Serve leases in the foreground
+Serve leases and catalog GETs in the foreground
 
 **Usage:** `pqbench daemon serve [OPTIONS]`
 
@@ -861,6 +1004,13 @@ Each additive field is divided by the record's `sample_rate`, so a
 it is a command document, not a resource. `pqbench format --html` draws the
 rows as a static HTML treemap.
 
+`summarize partition-versions` reads PartitionVersion records (`list
+partition-versions`) and writes one PartitionStats per catalog, schema and
+table, in name order, once the input ends: partitions, files, bytes, removed
+bytes, the summed cost bounds of the priced partitions, the newest file time,
+the versions by state, and the failed versions. It holds one total per
+catalog, schema and table, never the versions.
+
 **Usage:** `pqbench summarize <COMMAND>`
 
 ```console no-run
@@ -868,6 +1018,7 @@ Examples:
   pqbench table-file data.parquet | pqbench list columns | pqbench summarize columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns | pqbench summarize columns
   pqbench list files | pqbench list columns | pqbench summarize columns | pqbench format --html > report.html
+  pqbench list partition-versions | pqbench summarize partition-versions
 
 See also:
   pqbench list columns --help     produce the stream this command reduces
@@ -878,6 +1029,7 @@ See also:
 ###### **Subcommands:**
 
 * `columns` — Estimate each table column's mass from a bytemass stream
+* `partition-versions` — Total the partition versions per catalog, schema and table
 
 
 
@@ -892,6 +1044,13 @@ Estimate each table column's mass from a bytemass stream
 
 * `<INPUT>` — bytemass NDJSON stream, or `-` for standard input
 
+
+
+## `pqbench summarize partition-versions`
+
+Total the partition versions per catalog, schema and table
+
+**Usage:** `pqbench summarize partition-versions`
 
 
 ## `pqbench skill`
@@ -943,7 +1102,10 @@ the caller to evaluate:
 ```
 
 The endpoint and token resolve the way the Databricks SDKs do: the flag, then
-PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A notebook
+PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A workspace
+with a service principal's client id and secret and no token exports a bearer
+minted for this run; the secret itself is never printed, so a daemon that
+refreshes the token reads the credentials from the configuration. A notebook
 kernel's dbutils context is not visible to a subprocess, so a notebook sets
 DATABRICKS_* from it first. AWS_REGION comes from the flag or AWS_REGION (a
 vended lease carries no region); AWS_EC2_METADATA_DISABLED=true keeps the AWS
@@ -952,9 +1114,15 @@ SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
 ```text
   endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
   token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
+  client    --client-id / --client-secret | PQB_CLIENT_ID / PQB_CLIENT_SECRET
   format    --table-format | PQB_TABLE_FORMAT (unity default)
   region    --region   | AWS_REGION
 ```
+
+With --check, setup prints no exports: it reports the resolved configuration,
+the credential (minting a service principal's token), and the endpoint's answer
+to the walk's first listing level, one line each, and exits non-zero when any
+check failed.
 
 **Usage:** `pqbench setup [OPTIONS]`
 
@@ -962,6 +1130,7 @@ SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
 Examples:
   eval "$(pqbench setup --endpoint https://… --token dapi-… --region us-east-1)"
   DATABRICKS_HOST=https://… DATABRICKS_TOKEN=dapi-… eval "$(pqbench setup)"
+  pqbench setup --check
   pqbench setup --table-format iceberg --region us-west-2
 
 See also:
@@ -974,6 +1143,7 @@ See also:
 ###### **Options:**
 
 * `--region <REGION>` — bucket region [env: AWS_REGION]
+* `--check` — check the configuration, the credentials, and the endpoint instead of printing exports
 
 
 

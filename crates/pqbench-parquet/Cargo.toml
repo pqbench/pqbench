@@ -1,0 +1,31 @@
+[package]
+name = "pqbench-parquet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Local Parquet analysis for pqbench: footer masses, page compression, lint rules, column profiles."
+
+[dependencies]
+# The codecs the wrappers in `third_party` are built on. `snappy_src` compiles
+# snappy.cc; see `.cargo/config.toml` for the flags.
+snappy_src = "0.2.5"
+zstd = "0.13"
+lz4 = "1"
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+glob = "0.3"
+# `parquet` reads a footer or a sample from an in-memory buffer.
+bytes = "1"
+# Codecs are enabled so `profile_file` can decode compressed pages; without
+# them parquet-rs fails at runtime (`Disabled feature at compile time`).
+parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+# Base64 text and timestamp text are read with the crates `parquet` already
+# builds: the rules decode and date values, they do not spell them.
+base64 = { workspace = true }
+chrono = { workspace = true }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+pqbench-model-v1 = { workspace = true }

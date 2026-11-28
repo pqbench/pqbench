@@ -2,15 +2,15 @@
 //!
 //! The table format is declared by the caller (`PQB_TABLE_FORMAT`). Unity
 //! serves `/tables?catalog_name=&schema_name=` pages, each entry carrying
-//! `full_name` and `storage_location`, so a ref is complete in one page.
+//! `full_name`, `table_type` and `storage_location`, so a ref is complete in
+//! one page. A view is not a table: it has no files, so it is not listed.
 //! Iceberg REST lists `{endpoint}/namespaces/{namespace}/tables` identifiers
 //! only; the ref carries its name and no storage URI, so `pqbench get table`
 //! derives the `loadTable` URL and reads the metadata inline. No config probe
-//! runs. A view carries no location: the ref keeps its `uri` unset, and the
-//! storage-reading stage that later asks for a lease reports the refusal. The
-//! URLs, the page shapes, and the pagination are this command's; the transport
-//! is the third-party facade.
+//! runs. The URLs, the page shapes, and the pagination are this command's;
+//! the transport is the third-party facade.
 
+use futures_util::stream::{self, Stream, StreamExt};
 use serde::Deserialize;
 
 use super::api::{Error, Schema, Table};
@@ -38,8 +38,14 @@ struct UnityTable {
     #[serde(default)]
     full_name: Option<String>,
     #[serde(default)]
+    table_type: Option<String>,
+    #[serde(default)]
     storage_location: Option<String>,
 }
+
+/// The table types that hold no files: a view reads tables when it is
+/// queried, so it has no storage to measure.
+const VIEW_TYPES: &[&str] = &["VIEW", "MATERIALIZED_VIEW", "METRIC_VIEW"];
 
 /// One page of Iceberg REST `GET /v1/{prefix}/namespaces/{namespace}/tables`.
 #[derive(Deserialize)]
@@ -57,40 +63,74 @@ struct Identifier {
     name: String,
 }
 
-pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Table>, Error> {
-    let (catalog, schema) = Schema::parse_name(name)
-        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/…/schemas/… name")))?;
-    let mut tables = match workspace.config().dialect {
-        TableFormat::Unity => unity_tables(workspace, &catalog, &schema).await?,
-        TableFormat::Iceberg => iceberg_tables(workspace, &catalog, &schema).await?,
+/// List the tables the schema `name` names, page by page: a page's tables are
+/// yielded, in name order, before the next page is fetched.
+pub(crate) fn list<'a>(
+    workspace: &'a Workspace,
+    name: String,
+) -> impl Stream<Item = Result<Table, Error>> + 'a {
+    let Some((catalog, schema)) = Schema::parse_name(&name) else {
+        let error = Error::Name(format!("{name} is not a catalogs/…/schemas/… name"));
+        return stream::iter([Err::<Table, Error>(error)]).left_stream();
     };
-    tables.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(tables)
+    pages(workspace, catalog, schema).right_stream()
 }
 
-async fn unity_tables(
+/// The schema's tables, one page at a time.
+fn pages<'a>(
+    workspace: &'a Workspace,
+    catalog: String,
+    schema: String,
+) -> impl Stream<Item = Result<Table, Error>> + 'a {
+    crate::http::paginate(None::<String>, move |page_token| {
+        let catalog = catalog.clone();
+        let schema = schema.clone();
+        async move { fetch_page(workspace, &catalog, &schema, page_token.as_deref()).await }
+    })
+}
+
+/// Fetch one page of the schema's tables; `None` is the first page.
+async fn fetch_page(
     workspace: &Workspace,
     catalog: &str,
     schema: &str,
-) -> Result<Vec<Table>, Error> {
+    page_token: Option<&str>,
+) -> Result<crate::http::Page<Table, String>, Error> {
+    let mut page = match workspace.config().dialect {
+        TableFormat::Unity => unity_page(workspace, catalog, schema, page_token).await?,
+        TableFormat::Iceberg => iceberg_page(workspace, catalog, schema, page_token).await?,
+    };
+    page.rows.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(page)
+}
+
+/// Fetch one page of Unity `GET /tables`.
+async fn unity_page(
+    workspace: &Workspace,
+    catalog: &str,
+    schema: &str,
+    page_token: Option<&str>,
+) -> Result<crate::http::Page<Table, String>, Error> {
     let root = dialect::api_root(workspace.config().endpoint.as_str());
-    let mut tables = Vec::new();
-    let mut page_token: Option<String> = None;
-    loop {
-        let url = unity_tables_url(&root, catalog, schema, page_token.as_deref());
-        let page: UnityPage =
-            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
-                .await
-                .map_err(Error::Http)?;
-        for entry in page.tables {
-            tables.push(unity_table(catalog, schema, entry)?);
-        }
-        match page.next_page_token {
-            Some(next) if !next.is_empty() => page_token = Some(next),
-            _ => break,
+    let url = unity_tables_url(&root, catalog, schema, page_token);
+    let page: UnityPage =
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::Http)?;
+    let mut rows = Vec::with_capacity(page.tables.len());
+    for entry in page.tables {
+        let view = entry
+            .table_type
+            .as_deref()
+            .is_some_and(|kind| VIEW_TYPES.contains(&kind));
+        if !view {
+            rows.push(unity_table(catalog, schema, entry)?);
         }
     }
-    Ok(tables)
+    Ok(crate::http::Page {
+        rows,
+        next_page_token: page.next_page_token.filter(|token| !token.is_empty()),
+    })
 }
 
 /// The `/tables` page URL, with the page token appended when there is one.
@@ -128,48 +168,46 @@ fn unity_table(catalog: &str, schema: &str, entry: UnityTable) -> Result<Table, 
     })
 }
 
-async fn iceberg_tables(
+/// Fetch one page of Iceberg REST `GET …/namespaces/{namespace}/tables`.
+async fn iceberg_page(
     workspace: &Workspace,
     catalog: &str,
     schema: &str,
-) -> Result<Vec<Table>, Error> {
+    page_token: Option<&str>,
+) -> Result<crate::http::Page<Table, String>, Error> {
     let base = dialect::iceberg_root(workspace.config().endpoint.as_str());
     let namespace = dialect::iceberg_namespace(schema);
-    let mut tables = Vec::new();
-    let mut page_token: Option<String> = None;
-    loop {
-        let url = match &page_token {
-            Some(page_token) => format!(
-                "{base}/namespaces/{namespace}/tables?pageToken={}",
-                dialect::encode(page_token)
-            ),
-            None => format!("{base}/namespaces/{namespace}/tables"),
+    let url = match page_token {
+        Some(page_token) => format!(
+            "{base}/namespaces/{namespace}/tables?pageToken={}",
+            dialect::encode(page_token)
+        ),
+        None => format!("{base}/namespaces/{namespace}/tables"),
+    };
+    let page: IdentifiersPage =
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::Http)?;
+    let mut rows = Vec::with_capacity(page.identifiers.len());
+    for identifier in page.identifiers {
+        if identifier.name.is_empty() {
+            return Err(Error::Malformed(
+                "the endpoint listed a nameless table".to_string(),
+            ));
+        }
+        let namespace = if identifier.namespaces.is_empty() {
+            schema.to_string()
+        } else {
+            identifier.namespaces.join(".")
         };
-        let page: IdentifiersPage =
-            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
-                .await
-                .map_err(Error::Http)?;
-        for identifier in page.identifiers {
-            if identifier.name.is_empty() {
-                return Err(Error::Malformed(
-                    "the endpoint listed a nameless table".to_string(),
-                ));
-            }
-            let namespace = if identifier.namespaces.is_empty() {
-                schema.to_string()
-            } else {
-                identifier.namespaces.join(".")
-            };
-            tables.push(Table {
-                name: crate::v1::name::table(catalog, &namespace, &identifier.name),
-                display_name: Some(identifier.name),
-                ..Table::default()
-            });
-        }
-        match page.next_page_token {
-            Some(next) if !next.is_empty() => page_token = Some(next),
-            _ => break,
-        }
+        rows.push(Table {
+            name: crate::v1::name::table(catalog, &namespace, &identifier.name),
+            display_name: Some(identifier.name),
+            ..Table::default()
+        });
     }
-    Ok(tables)
+    Ok(crate::http::Page {
+        rows,
+        next_page_token: page.next_page_token.filter(|token| !token.is_empty()),
+    })
 }

@@ -21,21 +21,17 @@ default = []
 # reqwest signs a HEAD to read `x-amz-storage-class`, which object_store drops.
 aws = ["dep:object_store", "object_store/aws", "dep:async-trait"]
 # Delta snapshot resolution requires Rust 1.94.1 or newer.
-delta = ["dep:deltalake", "dep:futures", "dep:async-stream"]
+delta = ["dep:deltalake", "dep:delta_kernel", "dep:percent-encoding", "dep:futures", "dep:tokio"]
 delta-s3 = ["delta", "deltalake/s3", "aws"]
 # Iceberg snapshot planning reads metadata JSON and Avro manifests.
-iceberg = ["dep:apache-avro", "dep:async-stream"]
+iceberg = ["dep:apache-avro"]
 iceberg-s3 = ["iceberg", "aws"]
-
 [dependencies]
-snappy_src = "0.2.5"
-zstd = "0.13"
-lz4 = "1"
-flate2 = { version = "1", default-features = false, features = ["zlib"] }
+# The local half: footers, codecs, lint, profile. Kept behind this one
+# dependency so a change to a lint rule does not rebuild the AWS SDK.
+pqbench-parquet = { workspace = true }
+pqbench-model-v1 = { workspace = true }
 glob = "0.3"
-# Codecs are enabled so `read_sample` can decode compressed files; without
-# them parquet-rs fails at runtime (`Disabled feature at compile time`).
-parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
 # Native roots only: the OS certificate store, where internal/private CAs live.
 # `rustls-tls-native-roots` also brings the rustls backend and the ring
 # provider, so the client still has TLS without `aws` (object_store is what
@@ -44,14 +40,23 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 async-trait = { version = "0.1", optional = true }
 bytes = "1"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+# `raw_value` keeps a pass-through record as the bytes it was read from, so a
+# stream read from the store and written to a client is never parsed to a tree.
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+# The OAuth header's Base64 and the S3 backend's HTTP dates come from the crates
+# `parquet` already builds, not a second parser.
+base64 = { workspace = true }
+chrono = { workspace = true }
 deltalake = { version = "1.0", default-features = false, features = ["rustls"], optional = true }
+# The kernel delta-rs is built on, with the same version and features, so it
+# adds no build: its log segment reads the snapshot's `remove` actions, which
+# delta-rs exposes without their partition values.
+delta_kernel = { package = "buoyant_kernel", version = "=0.28.1", features = ["arrow-59", "internal-api"], optional = true }
+percent-encoding = { version = "2", optional = true }
+# The kernel reads on a blocking thread and hands batches over a channel.
+tokio = { version = "1", features = ["rt", "sync"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
-# A stream that owns the reader it borrows: the loaders below build one
-# generator instead of a self-referential struct or a forwarding channel.
-async-stream = { version = "0.3", optional = true }
-pqbench-resource = { path = "../pqbench-resource" }
 url = "2"
 # Must match delta-rs's ObjectStore trait version: stores cross that internal
 # boundary. Keep the pin until delta-rs upgrades its dependency.
@@ -60,4 +65,8 @@ apache-avro = { version = "0.17", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# The tests write a footer or a sample with parquet-rs itself: a second writer,
+# so a measured number is not this crate's own arithmetic. Same features as
+# `pqbench-parquet`, which is where the writer would otherwise live.
+parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
 tokio = { version = "1", features = ["rt", "macros"] }

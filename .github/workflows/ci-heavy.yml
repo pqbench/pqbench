@@ -51,11 +51,30 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: make lint CARGO_FEATURES=--all-features
 
+  # macOS builds a release artifact, and some of the workspace (a process
+  # spawn, a socket) is platform-specific: a `cargo check` here catches a
+  # build break before release packaging does, without the test matrix's cost.
+  macos-check:
+    name: macOS check
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-check
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo check --workspace --all-targets --all-features
+
   # Drafts run only the lightweight workflow; this one runs on non-draft PRs.
-  # `cargo test` builds as it goes, so there is no separate build step. A leg
-  # per feature set catches feature-gating bugs, and `--include-ignored` turns
-  # on the network e2e (redset, gated on `aws`) on the aws/all-features legs.
-  # default and all-features also run on arm64; fmt/clippy are arch-independent.
+  # `make test` builds the workspace's binaries first, then runs every test
+  # target. A leg per feature set catches feature-gating bugs, and
+  # `--include-ignored` turns on the network e2e (redset, gated on `aws`) on
+  # the aws/all-features legs. default and all-features also run on arm64;
+  # fmt/clippy are arch-independent.
   test:
     name: Test (${{ matrix.features || 'default' }}, ${{ matrix.arch }})
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -230,7 +249,7 @@ jobs:
   ci-heavy:
     name: Heavy gate
     if: always()
-    needs: [clippy, test, python, lakehouse-stand, dbx-metastore-e2e, dbx-walk]
+    needs: [clippy, macos-check, test, python, lakehouse-stand, dbx-metastore-e2e, dbx-walk]
     runs-on: ubuntu-24.04
     steps:
       - name: Fail if a heavy job did not succeed

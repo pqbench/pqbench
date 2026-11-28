@@ -5,11 +5,11 @@ use crate::emit::Emitter;
 use crate::CliError;
 
 pub(crate) async fn run(
-    daemon: &crate::daemon::Daemon,
+    workspace: &pqbench::Workspace,
     _args: &OutputArgs,
 ) -> Result<(), CliError> {
-    let metastore = daemon.get_metastore().await?;
+    let metastore = pqbench::metastore::get::get(workspace).await?;
     let mut emit = Emitter::open();
-    emit.write(&metastore).await?;
+    let _ = emit.write(&metastore).await?;
     emit.finish().await
 }

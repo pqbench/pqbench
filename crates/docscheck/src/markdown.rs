@@ -69,35 +69,35 @@ impl Extract<'_> {
     ///
     /// tree-sitter nests a heading and everything under it in a `section`, so a
     /// heading applies to every block until the next heading at the same or a
-    /// shallower level; the recursion passes the latest heading down.
-    fn walk_tagged(&mut self, node: Node, heading: Option<String>) {
+    /// shallower level; the recursion passes the latest heading down, borrowed
+    /// from the section's own text so a sibling block needs no copy.
+    fn walk_tagged(&mut self, node: Node, heading: Option<&str>) {
         let mut cursor = node.walk();
         let mut children: Vec<Node> = node.children(&mut cursor).collect();
 
         // A heading is the first child of the `section` it opens; it names that
         // section and every block under it until a sibling heading replaces it.
-        let mut current = heading;
-        if node.kind() == "section" {
-            if let Some(title) = children
-                .first()
-                .and_then(|child| heading_text(*child, self.source))
-            {
-                current = Some(title);
-            }
-        }
+        let title = (node.kind() == "section")
+            .then(|| {
+                children
+                    .first()
+                    .and_then(|child| heading_text(*child, self.source))
+            })
+            .flatten();
+        let current = title.as_deref().or(heading);
 
         for child in children.drain(..) {
             if child.kind() == "section" {
-                self.walk_tagged(child, current.clone());
+                self.walk_tagged(child, current);
             } else if child.kind() == "fenced_code_block" {
-                self.record(child, current.clone());
+                self.record(child, current);
             } else {
-                self.walk_tagged(child, current.clone());
+                self.walk_tagged(child, current);
             }
         }
     }
 
-    fn record(&mut self, block: Node, heading: Option<String>) {
+    fn record(&mut self, block: Node, heading: Option<&str>) {
         let mut cursor = block.walk();
         let children: Vec<Node> = block.children(&mut cursor).collect();
         let opening = children
@@ -123,7 +123,7 @@ impl Extract<'_> {
             body_line: content.map_or(opening.start_position().row + 2, |node| {
                 node.start_position().row + 1
             }),
-            heading,
+            heading: heading.map(str::to_owned),
         });
     }
 

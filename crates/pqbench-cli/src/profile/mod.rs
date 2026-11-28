@@ -2,7 +2,6 @@
 
 use clap::Args;
 use pqbench::profile::{self, ProfileRequest};
-use pqbench::third_party::parquet::api::read_sample;
 
 use crate::emit::Emitter;
 use crate::rows::{parse_rows, RowLimit};
@@ -35,17 +34,21 @@ pub(crate) async fn run(args: &ProfileArgs) -> Result<(), CliError> {
         top: args.top,
     };
     let mut emit = Emitter::open();
-    for input in &args.inputs {
-        let sample = read_sample(std::path::Path::new(input), max_rows)?;
-        let report = profile::profile(&sample, &request)?;
+    'inputs: for input in &args.inputs {
+        let report = profile::profile_file(std::path::Path::new(input), max_rows, &request)?;
         let blob = pqbench::v1::name::blob_name(input);
         for column in &report.columns {
-            emit.write(&crate::render::ProfileRow {
-                name: format!("{blob}/columns/{}/profile", column.column),
-                id: input.clone(),
-                profile: column.clone(),
-            })
-            .await?;
+            if emit
+                .write(&crate::render::ProfileRow {
+                    name: format!("{blob}/columns/{}/profile", column.column),
+                    id: input.clone(),
+                    profile: column.clone(),
+                })
+                .await?
+                .is_break()
+            {
+                break 'inputs;
+            }
         }
     }
     emit.finish().await

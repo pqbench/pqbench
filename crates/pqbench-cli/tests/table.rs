@@ -48,14 +48,15 @@ fn table(records: &[u8]) -> String {
 
 /// pqbench with extra environment: the walk's context can come from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
-    let mut child = pqbench()
+    let mut command = pqbench();
+    command
         .args(args)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let _daemon = crate::common::attach_daemon(&mut command);
+    let mut child = command.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();
     child.wait_with_output().unwrap()
 }
@@ -72,14 +73,6 @@ fn table_file(table: &str, uri: &str, size: Option<u64>) -> serde_json::Value {
         file["size_bytes"] = json!(size);
     }
     file
-}
-
-fn ndjson_records(stdout: &[u8]) -> Vec<serde_json::Value> {
-    stdout
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-        .map(|line| serde_json::from_slice(line).expect("ndjson line"))
-        .collect()
 }
 
 fn ndjson(stdout: &[u8]) -> Vec<serde_json::Value> {
@@ -290,7 +283,7 @@ fn bytemass_measures_mixed_table_ids() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     let blobs = records
         .iter()
         .filter(|record| {
@@ -357,7 +350,6 @@ fn write_delta_table(dir: &std::path::Path, schema: serde_json::Value) {
 }
 
 /// The columns a Unity table for the Delta fixture declares.
-#[cfg(feature = "delta")]
 fn unity_columns() -> serde_json::Value {
     json!([
         {"name": "id", "type_name": "LONG", "type_text": "long", "nullable": true},
@@ -381,7 +373,8 @@ fn unity_table_record(location: &std::path::Path, columns: serde_json::Value) ->
         "data_source_format": "DELTA",
         "storage_location": location.to_string_lossy(),
         "columns": columns,
-        "properties": {"owner": "data"}
+        "properties": {"owner": "data"},
+        "created_at": 1_600_000_000_000u64
     })
     .to_string()
 }
@@ -401,9 +394,52 @@ fn read_unity_table(dir: &std::path::Path, columns: serde_json::Value) -> serde_
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let mut records = ndjson_records(&output.stdout);
+    let mut records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
     records.remove(0)
+}
+
+/// A table the catalog marks `TABLE_DB_STORAGE`: its files are unreadable
+/// outside the workspace's compute, so no lease can be minted and the read
+/// never starts. The credential route answers 500, so a fallback to it would
+/// show as a different error.
+#[test]
+fn get_table_refuses_default_storage_at_once() {
+    let record = json!({
+        "name": "reviews",
+        "catalog_name": "dbx_samples",
+        "schema_name": "bakehouse",
+        "data_source_format": "DELTA",
+        "storage_location": "s3://dbstorage-prod-example/uc/x/__unitystorage/catalogs/c/tables/t",
+        "table_id": "11111111-1111-1111-1111-111111111111",
+        "securable_kind": "TABLE_DB_STORAGE",
+        "columns": unity_columns(),
+        "properties": {},
+        "created_at": 1_600_000_000_000u64
+    })
+    .to_string();
+    let address = routes_owned(vec![
+        ("/temporary-table-credentials", 500, "{}".to_string()),
+        ("/tables/", 200, record),
+    ]);
+    let started = std::time::Instant::now();
+    let output = pipe_env(
+        &["get", "table"],
+        &parent("catalogs/dbx_samples/schemas/bakehouse/tables/reviews"),
+        &[("PQB_ENDPOINT", address.as_str())],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.stdout.is_empty(), "the table was read");
+    assert!(stderr.contains("TABLE_DB_STORAGE"), "{stderr}");
+    assert!(
+        !stderr.contains("temporary-table-credentials") && !stderr.contains("500"),
+        "it asked for credentials anyway: {stderr}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "it waited: {:?}",
+        started.elapsed()
+    );
 }
 
 /// An Iceberg REST `loadTable` record with the metadata JSON inline. The
@@ -443,6 +479,7 @@ fn table_get_reads_a_unity_table() {
     );
     assert_eq!(record["format"], "TABLE_FORMAT_DELTA");
     assert_eq!(record["snapshot_version"], 0);
+    assert_eq!(record["create_time"], 1_700_000_000_000u64);
     assert_eq!(record["uri"], dir.path().to_string_lossy().as_ref());
     let columns: Vec<&str> = record["declared_columns"]
         .as_array()
@@ -454,6 +491,21 @@ fn table_get_reads_a_unity_table() {
     assert_eq!(record["properties"]["owner"], "data");
     assert_eq!(record["properties"]["delta.appendOnly"], "false");
     assert!(record.get("iceberg_properties").is_none(), "{record:?}");
+}
+
+/// A log without `metaData.createdTime` takes the catalog's `created_at`.
+#[cfg(feature = "delta")]
+#[test]
+fn table_get_takes_the_catalog_create_time_without_the_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    delta_table(dir.path());
+    let commit = dir.path().join("_delta_log/00000000000000000000.json");
+    let text = std::fs::read_to_string(&commit).unwrap();
+    let text = text.replace(r#""createdTime":1700000000000,"#, "");
+    assert!(!text.contains("createdTime"), "{text}");
+    std::fs::write(&commit, text).unwrap();
+    let record = read_unity_table(dir.path(), unity_columns());
+    assert_eq!(record["create_time"], 1_600_000_000_000u64);
 }
 
 /// Spark writes a bare `NULL` as a `void` column. Delta leaves the type
@@ -541,7 +593,7 @@ fn table_get_reads_an_iceberg_rest_table() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1);
     let record = &records[0];
     assert_eq!(
@@ -604,7 +656,7 @@ fn table_get_falls_back_to_delta_when_load_table_declines() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(records[0]["format"], "TABLE_FORMAT_DELTA");
     assert_eq!(records[0]["uri"], dir.path().to_string_lossy().as_ref());
@@ -631,7 +683,7 @@ fn table_get_reads_an_iceberg_namespace_with_dots() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     assert_eq!(
         records[0]["name"],
         "catalogs/dbx_samples/schemas/ns.one/tables/trips"
@@ -665,7 +717,7 @@ fn table_get_reads_a_table_ref_stream() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let records = ndjson_records(&output.stdout);
+    let records = ndjson(&output.stdout);
     let mut names: Vec<&str> = records
         .iter()
         .map(|record| record["name"].as_str().unwrap())
@@ -745,8 +797,9 @@ fn table_ls_prints_the_tables_as_a_table() {
         "{stdout}"
     );
     assert!(stdout.contains("s3://bucket/trips"), "{stdout}");
+    // A view is not a table: it has no files, so `list tables` drops it.
     assert!(
-        stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/recent"),
+        !stdout.contains("catalogs/dbx_samples/schemas/nyctaxi/tables/recent"),
         "{stdout}"
     );
 }
@@ -765,18 +818,12 @@ fn table_ls_streams_table_refs() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2);
-    // Sorted by name: the view (`recent`) precedes the table (`trips`).
+    assert_eq!(records.len(), 1);
     assert_eq!(
         records[0]["name"],
-        "catalogs/dbx_samples/schemas/nyctaxi/tables/recent"
-    );
-    assert!(records[0].get("uri").is_none(), "{}", records[0]);
-    assert_eq!(
-        records[1]["name"],
         "catalogs/dbx_samples/schemas/nyctaxi/tables/trips"
     );
-    assert_eq!(records[1]["uri"], "s3://bucket/trips");
+    assert_eq!(records[0]["uri"], "s3://bucket/trips");
 }
 
 #[test]
@@ -848,15 +895,17 @@ fn table_ls_reads_a_schema_stream() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), 2);
     assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
+/// The refs' requests overlap: the reply takes longer than the daemon's
+/// Unity pace (15/s), so a second request starts while the first waits.
 #[test]
 fn table_ls_multiplexes_its_refs() {
     let (address, peak) = overlapping_routes(
         &[("/tables", 200, TABLES)],
-        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(200),
     );
     let output = pipe_env(
         &["list", "tables"],
@@ -868,7 +917,7 @@ fn table_ls_multiplexes_its_refs() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(ndjson(&output.stdout).len(), 4);
+    assert_eq!(ndjson(&output.stdout).len(), 2);
     assert!(
         peak.load(std::sync::atomic::Ordering::SeqCst) >= 2,
         "the two refs' requests did not overlap"

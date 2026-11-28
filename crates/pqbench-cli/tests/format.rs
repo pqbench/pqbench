@@ -143,3 +143,62 @@ fn mass_rows_render_as_a_column_mass_table() {
         "a nameless delta is not table data: {stdout}"
     );
 }
+
+#[test]
+fn diff_deltas_render_as_a_table() {
+    let diff = pqbench()
+        .args(["diff", parquet_fixture(), parquet_fixture()])
+        .output()
+        .unwrap();
+    assert!(
+        diff.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let stdout = format_stream(&diff.stdout);
+    assert!(stdout.contains("column"), "{stdout}");
+    assert!(stdout.contains("delta"), "{stdout}");
+    assert!(stdout.contains("text"), "{stdout}");
+    assert!(
+        !stdout.contains("\"delta_bytes\""),
+        "table must not carry NDJSON: {stdout}"
+    );
+}
+
+#[test]
+fn suggestions_render_as_one_curated_table() {
+    fn row<'a>(table: &'a str, column: &str) -> Vec<&'a str> {
+        table
+            .lines()
+            .find(|line| line.starts_with(column))
+            .unwrap_or_else(|| panic!("{column} row in {table}"))
+            .split_whitespace()
+            .collect()
+    }
+
+    let document = concat!(
+        r#"{"name":"blobs/s3/bucket%2Forders.parquet/columns/tags/suggestions/dictionary","rule":"dictionary","column":"tags","message":"dictionary on plain strings costs more","remedy":"disable the dictionary"}"#,
+        "\n",
+        r#"{"name":"blobs/s3/bucket%2Forders.parquet/columns/id/suggestions/int96","rule":"int96","column":"id","message":"int96 timestamps cost twice the bytes","remedy":"rewrite as int64","verified":true,"savings_bytes":65536}"#,
+        "\n",
+        r#"{"name":"blobs/s3/bucket%2Forders.parquet/columns/note/suggestions/dictionary","rule":"dictionary","column":"note","message":"dictionary on unique strings","remedy":"disable the dictionary","verified":false}"#,
+        "\n",
+    );
+    let stdout = format_stream(document.as_bytes());
+    assert_eq!(
+        stdout.matches("COLUMN").count(),
+        1,
+        "unverified, verified, and refuted suggestions are one table: {stdout}"
+    );
+    for header in ["RULE", "VERIFIED", "SAVINGS", "REMEDY", "MESSAGE"] {
+        assert!(stdout.contains(header), "{header} header: {stdout}");
+    }
+    assert!(
+        !stdout.contains("savings_bytes"),
+        "the curated table, not a generic one: {stdout}"
+    );
+    assert_eq!(row(&stdout, "tags")[2], "-", "unverified: {stdout}");
+    assert_eq!(row(&stdout, "id")[2], "yes", "verified: {stdout}");
+    assert_eq!(row(&stdout, "id")[3..5], ["64.0", "KiB"], "{stdout}");
+    assert_eq!(row(&stdout, "note")[2], "no", "refuted: {stdout}");
+}

@@ -42,7 +42,7 @@ pub fn ndjson_outputs(blocks: &[Block]) -> Vec<NdjsonStep> {
             if let Some(output) = first_record(&step) {
                 found.push(NdjsonStep {
                     line: step.line,
-                    output: output.clone(),
+                    output: output.to_owned(),
                 });
             }
         }
@@ -51,6 +51,9 @@ pub fn ndjson_outputs(blocks: &[Block]) -> Vec<NdjsonStep> {
 }
 
 /// The first documented NDJSON line of a step, if any.
-fn first_record(step: &Step) -> Option<&String> {
-    step.expected.iter().find(|line| is_ndjson(line))
+fn first_record(step: &Step) -> Option<&str> {
+    step.expected
+        .iter()
+        .find(|line| is_ndjson(line))
+        .map(String::as_str)
 }

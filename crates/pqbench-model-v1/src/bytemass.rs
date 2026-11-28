@@ -1,0 +1,95 @@
+use serde::{Deserialize, Serialize};
+
+/// A column's byte mass (the footer's `ColumnMetaData`), folded over the
+/// column's chunks. A value on [`Column`](super::Column), not a resource.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Bytemass {
+    /// The leaf column's logical type, as the Parquet spec names it (`STRING`,
+    /// `DECIMAL(10,2)`, `TIMESTAMP(MICROS,UTC)`, …), when the footer records
+    /// one. It comes from the footer's schema, not its page reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_type: Option<String>,
+    /// On-disk (compressed) bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed_bytes: Option<u64>,
+    /// Encoded bytes before compression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncompressed_bytes: Option<u64>,
+    /// The file's serialized footer and its eight-byte trailer, in bytes: the
+    /// metadata the file pays for once, repeated here so a column carries its
+    /// file's overhead. It costs no extra read: it is the footer's own length.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub footer_bytes: u64,
+    /// The file's bytes outside every column chunk: footer, page indexes, bloom
+    /// filters, key-value metadata, and any other object bytes no chunk
+    /// accounts for. A file fact, repeated on each of its columns.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unaccounted_bytes: u64,
+    /// The compression codec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    /// Encodings listed on the column chunks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub encodings: Vec<String>,
+    /// Encodings used by the data pages, when the writer recorded them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_encodings: Option<Vec<String>>,
+    /// The chunk is dictionary-encoded: a dictionary page offset, dictionary
+    /// data pages, or a dictionary encoding in the chunk's encoding set. A
+    /// writer that omits the offset (parquet-mr 1.8.3) still sets this.
+    #[serde(default)]
+    pub dictionary: bool,
+    /// Bytes from the dictionary page offset to the first data page, when a
+    /// dictionary page is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_bytes: Option<u64>,
+    /// Data pages the footer counts as `PLAIN`-encoded, when it counts pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plain_data_page_count: Option<u64>,
+    /// Data pages the footer counts as dictionary-encoded, when it counts pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_data_page_count: Option<u64>,
+    /// Every chunk carries a page index (a column index and an offset index),
+    /// so the column can be pruned at page granularity.
+    #[serde(default)]
+    pub page_index: bool,
+    /// Variable-length value bytes before encoding, when the writer recorded them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unencoded_bytes: Option<u64>,
+    /// Values in the column (including nulls).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_count: Option<u64>,
+    /// Footer `null_count`, when statistics exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub null_count: Option<u64>,
+    /// Footer `distinct_count`, when statistics exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distinct_count: Option<u64>,
+    /// Footer first value, when statistics exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_value: Option<String>,
+    /// Footer last value, when statistics exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_value: Option<String>,
+    /// Compressed bytes divided by [`Self::value_count`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_value: Option<f64>,
+    /// Compressed bytes divided by the file's row count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_per_row: Option<f64>,
+    /// Uncompressed divided by compressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression_ratio: Option<f64>,
+    /// [`Self::null_count`] divided by [`Self::value_count`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub null_fraction: Option<f64>,
+    /// [`Self::dictionary_bytes`] divided by [`Self::compressed_bytes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_fraction: Option<f64>,
+}
+
+/// Whether a count or a size is absent, so the wire form keeps omitting it.
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}

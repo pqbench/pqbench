@@ -26,11 +26,15 @@ pub fn has_runnable(blocks: &[Block]) -> bool {
 pub fn generate(source_name: &str, blocks: &[Block]) -> String {
     let mut tests = Vec::new();
     let mut used = BTreeSet::new();
+    // A test gated on a cargo feature does not exist without that feature, so
+    // the support import is unused when every test in the document is gated.
+    let mut any_ungated = false;
     for block in blocks {
         let steps = block_steps(block);
         if steps.is_empty() {
             continue;
         }
+        any_ungated |= block.info.options.is_empty();
         let name = unique_name(block, &mut used);
         tests.push(render_test(&name, block.line, &steps, &block.info.options));
     }
@@ -40,6 +44,9 @@ pub fn generate(source_name: &str, blocks: &[Block]) -> String {
     out.push_str(source_name);
     out.push_str(".\n");
     out.push_str("// Do not edit by hand: edit the Markdown and re-run the sync.\n\n");
+    if !any_ungated {
+        out.push_str("#[allow(unused_imports)]\n");
+    }
     out.push_str("use crate::support;\n\n");
     if tests.is_empty() {
         out.push_str("// No runnable blocks in this document.\n");

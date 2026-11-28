@@ -1,0 +1,206 @@
+//! The partition-version state driver for pqbench: a process of its own, with
+//! its own socket and its own store.
+//!
+//! The engine holds the map of partition versions, and the driver runs the
+//! pqbench commands that move them (`get partition-price`, `download`,
+//! `bytemass`, `list suggestions`, `get suggestion`), walking the tables on a
+//! period. A client reads the map, one version's results, the map's state and
+//! the measured suggestions over [`protocol`] on the socket [`socket`] names;
+//! [`client`] is that side.
+//!
+//! The commands themselves talk to the catalog daemon, not to the driver, so
+//! a driver without a daemon still answers for the map it has.
+//!
+//! One setting is the operator's and changes rarely — the per-step timeout —
+//! so it lives in the run-control file the commands read (`~/.pqbenchrc`, or
+//! `PQB_CONFIG_FILE`), not on the command line: see [`run_control`].
+
+pub mod client;
+pub mod protocol;
+pub mod socket;
+
+mod drive;
+mod engine;
+mod process;
+mod run_control;
+mod serve;
+mod start;
+mod store;
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::time::Duration;
+
+use clap::{Args, Parser, Subcommand};
+
+use drive::Settings;
+
+/// The driver: the engine's map of partition versions, and the commands that
+/// move them.
+#[derive(Parser)]
+#[command(
+    name = "pqbench-driver",
+    version,
+    about = "Partition-version state driver for pqbench."
+)]
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Start the driver in the background
+    Start(RunArgs),
+    /// Serve the driver in the foreground
+    Serve(RunArgs),
+    /// Stop the driver
+    Stop(TargetArgs),
+    /// Report the driver's state as JSON
+    Status(TargetArgs),
+    /// List a collection the driver holds
+    List(ListArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ListArgs {
+    #[command(subcommand)]
+    collection: ListCollection,
+}
+
+/// The collection a `list` enumerates.
+#[derive(Subcommand)]
+enum ListCollection {
+    /// List the suggestions the driver measured (`PARENT`, or all)
+    Suggestions(SuggestionListArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct SuggestionListArgs {
+    /// only the versions under this catalog, schema, table or partition
+    /// (`catalogs/…`); every version without it
+    parent: Option<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct RunArgs {
+    /// the driver's store: its checkpoint, results, and default socket
+    #[arg(long, value_name = "DIR")]
+    pub store: PathBuf,
+    /// the driver's socket (default: the store's driver.sock)
+    #[arg(long, env = "PQB_DRIVER_SOCK", value_name = "PATH")]
+    pub socket: Option<PathBuf>,
+    /// the daemon socket the worker commands talk to
+    #[arg(long, value_name = "PATH")]
+    pub daemon_socket: Option<PathBuf>,
+    /// the pqbench binary the worker commands run (default: the one beside this executable)
+    #[arg(long, value_name = "BIN")]
+    pub pqbench: Option<PathBuf>,
+    /// walk the tables these Table records name instead of the metastore (e.g. local tables)
+    #[arg(long, value_name = "FILE")]
+    pub walk_tables: Option<PathBuf>,
+    /// seconds from one walk to the next; without it the driver walks once, when it starts
+    #[arg(long, value_name = "SECONDS")]
+    pub walk_period_seconds: Option<u64>,
+    /// the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
+    #[arg(long)]
+    pub low_network: bool,
+}
+
+impl RunArgs {
+    /// The store, absolute so a detached driver resolves it from any working
+    /// directory.
+    fn store(&self) -> PathBuf {
+        socket::absolute(&self.store)
+    }
+
+    /// What the driver runs.
+    fn settings(&self) -> Settings {
+        Settings {
+            walk_tables: self.walk_tables.as_deref().map(socket::absolute),
+            walk_period: self.walk_period_seconds.map(Duration::from_secs),
+        }
+    }
+}
+
+#[derive(Args)]
+pub(crate) struct TargetArgs {
+    /// the driver's socket (default: PQB_DRIVER_SOCK, else the store's driver.sock)
+    #[arg(long, env = "PQB_DRIVER_SOCK", value_name = "PATH")]
+    pub socket: Option<PathBuf>,
+    /// the driver's store, for the socket beside it
+    #[arg(long, value_name = "DIR")]
+    pub store: Option<PathBuf>,
+}
+
+/// Run the command line: the driver's command, or the error that stopped it.
+pub async fn run() -> ExitCode {
+    let cli = Cli::parse();
+    let result = match &cli.command {
+        Command::Start(args) => start::start(args).await,
+        Command::Serve(args) => serve::serve(args).await,
+        Command::Stop(args) => start::stop(args).await,
+        Command::Status(args) => start::status(args).await,
+        Command::List(ListArgs {
+            collection: ListCollection::Suggestions(args),
+        }) => start::list_suggestions(args.parent.as_deref()).await,
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("pqbench-driver: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    /// The flags the background driver is started with are the flags it
+    /// accepts: a round-trip through the parser.
+    #[test]
+    fn the_run_flags_parse_from_the_start_command_line() {
+        let arguments: Vec<OsString> = [
+            "pqbench-driver",
+            "serve",
+            "--store",
+            "/tmp/store",
+            "--socket",
+            "/tmp/driver.sock",
+            "--daemon-socket",
+            "/tmp/daemon.sock",
+            "--pqbench",
+            "/tmp/pqbench",
+            "--walk-tables",
+            "/tmp/tables.ndjson",
+            "--walk-period-seconds",
+            "60",
+            "--low-network",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        let cli = Cli::try_parse_from(arguments).expect("the documented flags parse");
+        let Command::Serve(args) = cli.command else {
+            panic!("serve is a subcommand");
+        };
+        assert_eq!(args.store, PathBuf::from("/tmp/store"));
+        assert_eq!(args.socket.as_deref(), Some(Path::new("/tmp/driver.sock")));
+        assert_eq!(
+            args.daemon_socket.as_deref(),
+            Some(Path::new("/tmp/daemon.sock"))
+        );
+        assert_eq!(args.pqbench.as_deref(), Some(Path::new("/tmp/pqbench")));
+        assert_eq!(
+            args.walk_tables.as_deref(),
+            Some(Path::new("/tmp/tables.ndjson"))
+        );
+        assert_eq!(args.walk_period_seconds, Some(60));
+        assert_eq!(args.settings().walk_period, Some(Duration::from_secs(60)));
+        assert!(args.low_network);
+    }
+}

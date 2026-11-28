@@ -1,15 +1,16 @@
 //! One line of JSON each way between a reader and the daemon.
 //!
-//! The protocol is deliberately tiny: the daemon owns every catalog request,
-//! so a reader either asks for a table's lease or for the catalog records a
-//! command would have fetched itself. The daemon answers with the `AWS_*`
-//! options and their expiry, with the catalog's records, or with the error the
-//! catalog gave. No version, no method names, no RPC.
+//! The protocol is deliberately tiny and mirrors the two things only the daemon
+//! can do: it owns the vended storage leases, so a reader asks for a table's
+//! lease; and it owns the catalog identity and its pacing, so a reader asks it
+//! to send one HTTP GET. Everything else — the URLs, the pages, the JSON — is
+//! the reader's, so no catalog verb is repeated here. The daemon answers with
+//! the `AWS_*` options and their expiry, with a GET's status and body, or with
+//! the error the request gave. No version, no method names, no RPC.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// A client's request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,100 +22,20 @@ pub(crate) enum Request {
     Stop,
     /// The lease of one table.
     Lease { table: String },
-    /// A `list` level: its collection and the parent record it descends from.
-    List {
-        collection: Collection,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        parent: Option<Value>,
-    },
-    /// a `get` level: its resource and the parent record it enriches.
-    Get {
-        resource: Resource,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        record: Option<Value>,
-    },
-}
-
-/// The collection a `list` request enumerates.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Collection {
-    Catalogs,
-    Schemas,
-    Tables,
-}
-
-/// The resource a `get` request reads.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Resource {
-    Metastore,
-    Catalog,
-    Schema,
-    Table,
+    /// One catalog GET, sent under the daemon's own identity.
+    HttpGet { url: String },
 }
 
 impl Request {
-    pub(crate) fn lease(table: impl Into<String>) -> Self {
+    pub(crate) fn lease(table: &str) -> Self {
         Self::Lease {
-            table: table.into(),
+            table: table.to_string(),
         }
     }
 
-    pub(crate) fn ping() -> Self {
-        Self::Ping
-    }
-
-    pub(crate) fn stop() -> Self {
-        Self::Stop
-    }
-
-    pub(crate) fn catalogs() -> Self {
-        Self::List {
-            collection: Collection::Catalogs,
-            parent: None,
-        }
-    }
-
-    pub(crate) fn schemas(parent: Value) -> Self {
-        Self::List {
-            collection: Collection::Schemas,
-            parent: Some(parent),
-        }
-    }
-
-    pub(crate) fn tables(parent: Value) -> Self {
-        Self::List {
-            collection: Collection::Tables,
-            parent: Some(parent),
-        }
-    }
-
-    pub(crate) fn metastore() -> Self {
-        Self::Get {
-            resource: Resource::Metastore,
-            record: None,
-        }
-    }
-
-    pub(crate) fn catalog(record: Value) -> Self {
-        Self::Get {
-            resource: Resource::Catalog,
-            record: Some(record),
-        }
-    }
-
-    pub(crate) fn schema(record: Value) -> Self {
-        Self::Get {
-            resource: Resource::Schema,
-            record: Some(record),
-        }
-    }
-
-    pub(crate) fn table(record: Value) -> Self {
-        Self::Get {
-            resource: Resource::Table,
-            record: Some(record),
+    pub(crate) fn http_get(url: &str) -> Self {
+        Self::HttpGet {
+            url: url.to_string(),
         }
     }
 }
@@ -132,9 +53,12 @@ pub(crate) struct Response {
     /// The catalog vended nothing; the reader keeps its ambient `AWS_*`.
     #[serde(skip_serializing_if = "is_false")]
     pub none: bool,
-    /// The records a `list` or `get` request read.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub records: Vec<Value>,
+    /// The status a `http_get` request was answered with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// The body a `http_get` request was answered with, lossily decoded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
     /// The call failed; the reader drops the ref with this cause.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

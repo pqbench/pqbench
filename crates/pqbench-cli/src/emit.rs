@@ -1,23 +1,27 @@
 //! Output: one NDJSON line per record on standard output.
 //!
-//! A record is serialized into one line and awaited into tokio's buffered
-//! stdout, so a write yields to the runtime rather than parking the thread the
-//! walk runs on. A consumer that stops reading applies backpressure at the
-//! await, and the requests already in flight behind it can still complete — or
-//! time out — on the same runtime. One record is resident at a time, and the
-//! buffer reaches the pipe when it fills and when the command finishes.
+//! Each record is serialized into a reused line buffer and written directly to
+//! tokio's stdout without a user-space `BufWriter`, so a closed reader
+//! (`BrokenPipe`) surfaces immediately on write and lets the caller cancel
+//! upstream work via [`ControlFlow::Break`].
 //!
 //! Writes complete before the exit status is decided, so a partial run's output
 //! is never truncated by its own error.
 
+use std::io::ErrorKind;
+use std::ops::ControlFlow;
+
 use serde::Serialize;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::AsyncWriteExt;
 
 use crate::CliError;
 
 /// One command's NDJSON stream.
 pub(crate) struct Emitter {
-    pipe: BufWriter<tokio::io::Stdout>,
+    pipe: tokio::io::Stdout,
+    /// The bytes of the line being written, reused: a record costs no
+    /// allocation of its own.
+    bytes: Vec<u8>,
     closed: bool,
 }
 
@@ -25,53 +29,42 @@ impl Emitter {
     /// Open standard output.
     pub(crate) fn open() -> Self {
         Self {
-            pipe: BufWriter::new(tokio::io::stdout()),
+            pipe: tokio::io::stdout(),
+            bytes: Vec::new(),
             closed: false,
         }
     }
 
-    /// Write one record. A closed reader ends the stream, not the command.
-    pub(crate) async fn write(&mut self, value: &impl Serialize) -> Result<(), CliError> {
+    /// Write one record. Returns `Break(())` when the reader has closed
+    /// stdout so the caller can stop upstream work.
+    pub(crate) async fn write(
+        &mut self,
+        value: &impl Serialize,
+    ) -> Result<ControlFlow<()>, CliError> {
         if self.closed {
-            return Ok(());
+            return Ok(ControlFlow::Break(()));
         }
-        match self.write_line(value).await {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                if closed_pipe(&error) {
-                    self.closed = true;
-                    Ok(())
-                } else {
-                    Err(error)
-                }
-            }
-        }
-    }
-
-    /// One record's line, written once it is serialized.
-    async fn write_line(&mut self, value: &impl Serialize) -> Result<(), CliError> {
-        let mut line = serde_json::to_string(value)
+        self.bytes.clear();
+        serde_json::to_writer(&mut self.bytes, value)
             .map_err(|error| format!("cannot serialize output: {error}"))?;
-        line.push('\n');
-        self.pipe.write_all(line.as_bytes()).await?;
-        Ok(())
+        self.bytes.push(b'\n');
+        match self.pipe.write_all(&self.bytes).await {
+            Ok(()) => Ok(ControlFlow::Continue(())),
+            Err(error) if error.kind() == ErrorKind::BrokenPipe => {
+                self.closed = true;
+                Ok(ControlFlow::Break(()))
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
-    /// Flush what is buffered.
+    /// Flush standard output.
     pub(crate) async fn finish(mut self) -> Result<(), CliError> {
         // A reader that has gone away has nothing left to flush.
-        if let Err(error) = self.pipe.flush().await {
-            let error: CliError = error.into();
-            if !closed_pipe(&error) {
-                return Err(error);
-            }
+        match self.pipe.flush().await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == ErrorKind::BrokenPipe => Ok(()),
+            Err(error) => Err(error.into()),
         }
-        Ok(())
     }
-}
-
-fn closed_pipe(error: &CliError) -> bool {
-    error
-        .downcast_ref::<std::io::Error>()
-        .is_some_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe)
 }

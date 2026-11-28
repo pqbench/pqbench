@@ -23,7 +23,7 @@ pub(crate) async fn run(args: &TableFileArgs) -> Result<(), CliError> {
 }
 
 /// The table-file a path names: its file id, and its blob.
-fn table_file(path: &str) -> v1::TableFile {
+pub(crate) fn table_file(path: &str) -> v1::TableFile {
     let file = path
         .rsplit('/')
         .find(|segment| !segment.is_empty())

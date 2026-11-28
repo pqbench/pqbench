@@ -5,7 +5,7 @@
 //! borrowing the caller's, which its kernel can panic on after a failed load.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use deltalake::kernel::scalars::ScalarExt;
@@ -14,14 +14,14 @@ use deltalake::logstore::object_store::path::Path as ObjectPath;
 use deltalake::logstore::object_store::{ObjectStore, ObjectStoreExt};
 use deltalake::logstore::{commit_uri_from_version, LogStore, LogStoreRef};
 use deltalake::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::stream::{self, Stream};
+use futures::{StreamExt, TryStreamExt};
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use url::Url;
 
-use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, Error, LoadRequest, PartitionMass,
-    TableInfo,
-};
+use crate::table::{relative_data_path, Error, LoadRequest, PartitionMass, TableInfo};
 use crate::v1;
 use crate::Lake;
 
@@ -45,6 +45,7 @@ pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo
     );
     info.columns = meta.columns;
     info.delta_properties = meta.properties;
+    info.create_time = meta.create_time;
     if !request.require_files {
         return Ok(info);
     }
@@ -140,6 +141,7 @@ fn shared_store(lake: &Lake, url: &Url) -> Result<Option<Arc<dyn deltalake::Obje
 
 struct SnapshotMeta {
     version: u64,
+    create_time: Option<u64>,
     partition_columns: Vec<String>,
     columns: Vec<v1::DeclaredColumn>,
     properties: BTreeMap<String, String>,
@@ -148,6 +150,10 @@ struct SnapshotMeta {
 fn snapshot_meta(snapshot: &Snapshot) -> SnapshotMeta {
     SnapshotMeta {
         version: snapshot.version(),
+        create_time: snapshot
+            .metadata()
+            .created_time()
+            .and_then(|time| u64::try_from(time).ok()),
         partition_columns: snapshot.metadata().partition_columns().to_vec(),
         columns: snapshot
             .schema()
@@ -233,8 +239,8 @@ pub(super) async fn stream_commits(
     // A commit the log does not date has no time to contribute, and one the
     // listing named that a read no longer finds has nothing left to read, so
     // neither is yielded.
-    let batches = commit_batches(versions.into_iter().rev());
-    Ok(futures::stream::iter(batches)
+    Ok(futures::stream::iter(versions.into_iter().rev())
+        .chunks(commit_read_width())
         .then(move |chunk| {
             let store = store.clone();
             async move {
@@ -295,8 +301,8 @@ pub(super) async fn stream_files(
     // Version order is the log's order, and a batch keeps it while bounding how
     // many commits are in flight at once; a commit's files are yielded as a
     // group once its own read lands.
-    let batches = commit_batches(versions);
-    Ok(futures::stream::iter(batches)
+    Ok(futures::stream::iter(versions)
+        .chunks(commit_read_width())
         .then(move |chunk| {
             let store = store.clone();
             let uri = uri.clone();
@@ -408,7 +414,8 @@ fn commit_file_version(name: &str) -> Option<u64> {
 /// How many commit reads one walk keeps in flight: the store's own concurrency,
 /// as delta-rs takes it for its own commit stream. Unbounded, every read's body
 /// is resident at once — a million-commit log would be gigabytes — and windowed
-/// it is flat in the log.
+/// it is flat in the log. A batch is the unit the consumer drives: the next one
+/// is not started until it asks for it.
 fn commit_read_width() -> usize {
     std::thread::available_parallelism()
         .map(|count| count.get())
@@ -416,16 +423,20 @@ fn commit_read_width() -> usize {
         * 4
 }
 
-/// The versions to read together, in the order given: `commit_read_width()` of
-/// them per batch, so a walk costs the log's latency once per batch rather than
-/// once per commit. A batch is the unit the consumer drives — the next one is
-/// not started until it asks for it.
-fn commit_batches(versions: impl IntoIterator<Item = u64>) -> Vec<Vec<u64>> {
-    let versions: Vec<u64> = versions.into_iter().collect();
-    versions
-        .chunks(commit_read_width())
-        .map(<[u64]>::to_vec)
-        .collect()
+/// The items a task sends over `channel`, in order: `poll_fn` polls the
+/// receiver and `try_flatten` yields each sent batch's items, so the sender's
+/// drop ends the stream and a sent error is one `Err` item.
+fn channel_stream<T, I>(
+    mut receiver: tokio::sync::mpsc::Receiver<Result<I, Error>>,
+) -> impl Stream<Item = Result<T, Error>> + Send + 'static
+where
+    I: IntoIterator<Item = Result<T, Error>> + Send + 'static,
+    I::IntoIter: Send,
+    T: Send + 'static,
+{
+    stream::poll_fn(move |context| receiver.poll_recv(context))
+        .map_ok(stream::iter)
+        .try_flatten()
 }
 
 /// How far into a commit file to read for its head, in stages: `commitInfo` is a
@@ -480,15 +491,18 @@ async fn commit_head(store: &LogStoreRef, version: u64) -> Result<CommitHead, Er
 /// long commit are not parsed. A read that stops mid-line — a prefix, or a log
 /// that does not end in a newline — simply holds no `commitInfo` yet.
 fn parse_commit_info(bytes: &[u8]) -> Option<Value> {
+    /// What a line has to hold to be the commit's own action.
+    const MARKER: &[u8] = br#""commitInfo""#;
     for line in bytes.split(|byte| *byte == b'\n') {
-        let line = String::from_utf8_lossy(line);
-        if !line.contains("\"commitInfo\"") {
+        // The marker is looked for in the bytes: decoding every line of a long
+        // commit to text to reject it would cost more than the parse.
+        if !line.windows(MARKER.len()).any(|window| window == MARKER) {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+        let Ok(Action::CommitInfo(info)) = serde_json::from_slice::<Action>(line) else {
             continue;
         };
-        return value.get("commitInfo").cloned();
+        return Some(info);
     }
     None
 }
@@ -507,25 +521,19 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
     let mut commit_time = None;
     let mut commit_info = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let value: serde_json::Value = serde_json::from_str(line).map_err(Error::Json)?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| Error::Invalid(format!("commit {version} action is not an object")))?;
-        let (kind, body) = object
-            .iter()
-            .next()
-            .ok_or_else(|| Error::Invalid(format!("commit {version} action is empty")))?;
-        if kind == "commitInfo" && commit_info.is_none() {
-            commit_info = Some(body.clone());
-            commit_time = body.get("timestamp").and_then(serde_json::Value::as_i64);
+        let action: Action = serde_json::from_slice(line.as_bytes())
+            .map_err(|error| Error::Invalid(format!("commit {version}: {error}")))?;
+        if let Action::CommitInfo(info) = &action {
+            if commit_info.is_none() {
+                commit_time = info.get("timestamp").and_then(Value::as_i64);
+                commit_info = Some(info.clone());
+            }
         }
+        let body = action.body();
         actions.push(v1::LogAction {
-            kind: Some(kind.clone()),
-            path: body
-                .get("path")
-                .and_then(|path| path.as_str())
-                .map(str::to_owned),
-            size_bytes: body.get("size").and_then(serde_json::Value::as_u64),
+            kind: Some(action.kind().to_owned()),
+            path: body.and_then(|body| body.path.clone()),
+            size_bytes: body.and_then(|body| body.size),
         });
     }
     Ok(ParsedCommit {
@@ -533,6 +541,123 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
         commit_time,
         commit_info,
     })
+}
+
+/// One action of a commit file.
+///
+/// Delta writes one action per line and the line's one key names the kind. The
+/// protocol fixes the kinds this reader knows, so they are typed variants; a
+/// kind a future protocol adds (a checkpoint's `checkpointMetadata`, a
+/// sidecar's metadata) keeps its own name in [`Action::Unknown`] rather than
+/// failing the commit, so `list commits` stays forward-compatible and the
+/// action's kind survives.
+#[derive(Debug)]
+enum Action {
+    /// A file the commit wrote.
+    Add(ActionBody),
+    /// A file the commit removed.
+    Remove(ActionBody),
+    /// A change-data-capture file the commit wrote.
+    Cdc(ActionBody),
+    /// The table's metadata: the snapshot describes it already.
+    Metadata(IgnoredAny),
+    /// The table's protocol: the snapshot describes it already.
+    Protocol(IgnoredAny),
+    /// A transaction identifier.
+    Txn(IgnoredAny),
+    /// The commit's own record: its time, and what the writer reports.
+    CommitInfo(Value),
+    /// A domain's metadata.
+    DomainMetadata(IgnoredAny),
+    /// A checkpoint's sidecar file.
+    Sidecar(ActionBody),
+    /// An action this reader does not know, under the kind the log spelled.
+    Unknown(String),
+}
+
+impl<'de> Deserialize<'de> for Action {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ActionVisitor;
+
+        impl<'de> Visitor<'de> for ActionVisitor {
+            type Value = Action;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a Delta log action")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Action, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let Some(kind) = map.next_key::<String>()? else {
+                    return Err(serde::de::Error::custom("a Delta log action has no kind"));
+                };
+                let action = match kind.as_str() {
+                    "add" => Action::Add(map.next_value()?),
+                    "remove" => Action::Remove(map.next_value()?),
+                    "cdc" => Action::Cdc(map.next_value()?),
+                    "metaData" => Action::Metadata(map.next_value()?),
+                    "protocol" => Action::Protocol(map.next_value()?),
+                    "txn" => Action::Txn(map.next_value()?),
+                    "commitInfo" => Action::CommitInfo(map.next_value()?),
+                    "domainMetadata" => Action::DomainMetadata(map.next_value()?),
+                    "sidecar" => Action::Sidecar(map.next_value()?),
+                    _ => {
+                        let _: IgnoredAny = map.next_value()?;
+                        Action::Unknown(kind)
+                    }
+                };
+                // An action line is one entry; anything after it is not part of
+                // the action and is skipped.
+                while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+                Ok(action)
+            }
+        }
+
+        deserializer.deserialize_map(ActionVisitor)
+    }
+}
+
+impl Action {
+    /// The kind as the log spells it.
+    fn kind(&self) -> &str {
+        match self {
+            Self::Add(_) => "add",
+            Self::Remove(_) => "remove",
+            Self::Cdc(_) => "cdc",
+            Self::Metadata(_) => "metaData",
+            Self::Protocol(_) => "protocol",
+            Self::Txn(_) => "txn",
+            Self::CommitInfo(_) => "commitInfo",
+            Self::DomainMetadata(_) => "domainMetadata",
+            Self::Sidecar(_) => "sidecar",
+            Self::Unknown(kind) => kind,
+        }
+    }
+
+    /// The action's body, when its kind has one a log record reads.
+    fn body(&self) -> Option<&ActionBody> {
+        match self {
+            Self::Add(body) | Self::Remove(body) | Self::Cdc(body) | Self::Sidecar(body) => {
+                Some(body)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The part of an action's body a log record keeps.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionBody {
+    /// The data path the action names, when it names one.
+    path: Option<String>,
+    /// The size the action declares, when it declares one.
+    size: Option<u64>,
 }
 
 /// Resolve every active data file to a path `bytemass` can read, collecting
@@ -554,6 +679,74 @@ async fn active_files(
     Ok((active, finish_partition_masses(totals)))
 }
 
+/// Fold one active file into its partition's running totals.
+fn add_partition_total(
+    groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+    file: &v1::TableFile,
+) -> Result<(), Error> {
+    let entry = groups
+        .entry(file.partition_values.clone())
+        .or_insert(PartitionTotals {
+            file_count: 0,
+            size: 0,
+            num_records: Some(0),
+        });
+    entry.file_count += 1;
+    entry.size = entry
+        .size
+        .checked_add(file.size_bytes.unwrap_or(0))
+        .ok_or_else(|| Error::Overflow {
+            file: file.name.clone(),
+            kind: "byte",
+        })?;
+    entry.num_records =
+        match (entry.num_records, file.stats.as_ref()) {
+            (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(
+                || Error::Overflow {
+                    file: file.name.clone(),
+                    kind: "record",
+                },
+            )?),
+            _ => None,
+        };
+    Ok(())
+}
+
+/// One `PartitionMass` per partition's running totals, in partition order.
+fn finish_partition_masses(
+    groups: BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+) -> Vec<PartitionMass> {
+    groups
+        .into_iter()
+        .map(|(values, totals)| PartitionMass {
+            values,
+            file_count: totals.file_count,
+            size: totals.size,
+            bytes_per_row: totals
+                .num_records
+                .and_then(|records| bytes_per_row(totals.size, records)),
+            num_records: totals.num_records,
+        })
+        .collect()
+}
+
+/// The running totals of one partition's active files.
+struct PartitionTotals {
+    file_count: usize,
+    size: u64,
+    // aipnaming: allow(aip-141/count-suffix)
+    num_records: Option<u64>,
+}
+
+/// Bytes per row, or `None` for a file that records no rows.
+fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
+    if num_records == 0 {
+        None
+    } else {
+        Some(size as f64 / num_records as f64)
+    }
+}
+
 /// Stream the snapshot's active files, newest first, without collecting them.
 ///
 /// The read is the lazy snapshot's own scan, not a `DeltaTable`: the table
@@ -564,8 +757,8 @@ async fn active_files(
 /// here where [`load`] (the materialized path) omits them.
 ///
 /// The stream owns the snapshot and the store it reads from: `file_views`
-/// borrows the snapshot, so the generator is the one thing that can hold both.
-/// Each file is dropped as soon as the caller asks for the next.
+/// borrows the snapshot, so one task owns both and hands each file over a
+/// one-slot channel, running at most one file ahead of the caller.
 pub(super) async fn stream_active_files(
     lake: &Lake,
     request: &LoadRequest,
@@ -577,13 +770,142 @@ pub(super) async fn stream_active_files(
     let table_url = store.root_url().clone();
     let root = local_table_root(&table_url)?;
     let file_stats = request.file_stats;
-    Ok(async_stream::try_stream! {
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
         let mut files = snapshot.file_views(store.as_ref(), None);
-        while let Some(file) = files.try_next().await.map_err(delta_error)? {
-            yield data_file(&root, &table_url, &file, file_stats)?;
+        let outcome = loop {
+            let file = match files.try_next().await {
+                Ok(Some(file)) => file,
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(delta_error(error)),
+            };
+            let file = match data_file(&root, &table_url, &file, file_stats) {
+                Ok(file) => file,
+                Err(error) => break Err(error),
+            };
+            if sender.send(Ok(std::iter::once(Ok(file)))).await.is_err() {
+                break Ok(());
+            }
+        };
+        if let Err(error) = outcome {
+            let _ = sender.send(Err(error)).await;
         }
+    });
+    Ok(channel_stream(receiver).boxed())
+}
+
+/// The snapshot's `remove` actions, one batch at a time: the kernel reads the
+/// log segment (checkpoint and commits) on a blocking thread, projected to the
+/// three fields a removed file needs, and hands each batch over a channel.
+pub(super) async fn stream_removed_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<crate::table::FileStream<'static>, Error> {
+    use delta_kernel::schema::{DataType, MapType, StructField, StructType};
+
+    let store = open_store(lake, request)?;
+    let engine = store.engine(None);
+    let mut root = store.root_url().clone();
+    if !root.path().ends_with('/') {
+        root.set_path(&format!("{}/", root.path()));
     }
-    .boxed())
+    let version = request.snapshot_version;
+    let remove = StructType::try_new([
+        StructField::not_null("path", DataType::STRING),
+        StructField::nullable(
+            "partitionValues",
+            MapType::new(DataType::STRING, DataType::STRING, true),
+        ),
+        StructField::nullable("size", DataType::LONG),
+    ])
+    .map_err(kernel_error)?;
+    let schema = Arc::new(
+        StructType::try_new([StructField::nullable("remove", remove)]).map_err(kernel_error)?,
+    );
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    tokio::task::spawn_blocking(move || {
+        let read = || -> Result<(), Error> {
+            let mut builder = delta_kernel::Snapshot::builder_for(root);
+            if let Some(version) = version {
+                builder = builder.at_version(version);
+            }
+            let snapshot = builder.build(engine.as_ref()).map_err(kernel_error)?;
+            let batches = snapshot
+                .log_segment()
+                .read_actions(engine.as_ref(), schema)
+                .map_err(kernel_error)?;
+            for batch in batches {
+                let actions = batch.map_err(kernel_error)?.actions;
+                let data = delta_kernel::engine::arrow_data::ArrowEngineData::try_from_engine_data(
+                    actions,
+                )
+                .map_err(kernel_error)?;
+                let files = removed_files(data.record_batch())?.into_iter().map(Ok);
+                if sender.blocking_send(Ok(files)).is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        };
+        if let Err(error) = read() {
+            let _ = sender.blocking_send(Err(error));
+        }
+    });
+    // The kernel hands over a batch at a time; the stream yields them one file
+    // at a time, holding only the batch it is working through.
+    Ok(channel_stream(receiver).boxed())
+}
+
+/// The removed files in one batch of `remove` actions; other rows are null.
+fn removed_files(
+    batch: &deltalake::arrow::array::RecordBatch,
+) -> Result<Vec<v1::TableFile>, Error> {
+    use deltalake::arrow::array::{Array, AsArray};
+    use deltalake::arrow::datatypes::Int64Type;
+
+    let invalid = || Error::Invalid("the log's remove actions have an unexpected shape".into());
+    let remove = batch.column(0).as_struct_opt().ok_or_else(invalid)?;
+    let paths = remove
+        .column(0)
+        .as_string_opt::<i32>()
+        .ok_or_else(invalid)?;
+    let values = remove.column(1).as_map_opt().ok_or_else(invalid)?;
+    let sizes = remove
+        .column(2)
+        .as_primitive_opt::<Int64Type>()
+        .ok_or_else(invalid)?;
+    let keys = values.keys().as_string_opt::<i32>().ok_or_else(invalid)?;
+    let entries = values.values().as_string_opt::<i32>().ok_or_else(invalid)?;
+    let mut files = Vec::new();
+    for row in 0..remove.len() {
+        if remove.is_null(row) {
+            continue;
+        }
+        let path = percent_encoding::percent_decode_str(paths.value(row))
+            .decode_utf8_lossy()
+            .into_owned();
+        let mut partition_values = BTreeMap::new();
+        if !values.is_null(row) {
+            for entry in values.value_offsets()[row]..values.value_offsets()[row + 1] {
+                let entry = entry as usize;
+                let value = (!entries.is_null(entry)).then(|| entries.value(entry).to_string());
+                partition_values.insert(keys.value(entry).to_string(), value);
+            }
+        }
+        files.push(v1::TableFile {
+            path,
+            size_bytes: (!sizes.is_null(row))
+                .then(|| u64::try_from(sizes.value(row)).ok())
+                .flatten(),
+            partition_values,
+            ..v1::TableFile::default()
+        });
+    }
+    Ok(files)
+}
+
+fn kernel_error(error: delta_kernel::Error) -> Error {
+    Error::Snapshot(Box::new(error))
 }
 
 /// The table's local filesystem root, when it is a `file://` table.
@@ -612,15 +934,23 @@ fn data_file(
         Some(root) => local_uri(root, &relative)?,
         None => object_uri(table_url, &relative)?,
     };
-    let mut stats = file_stats(file.stats());
+    // Without the per-column maps, the record count comes from the parsed
+    // stats column; `stats()` would render each row back to JSON to parse it.
+    let record_count = if keep_stats {
+        None
+    } else {
+        file.num_records()
+            .and_then(|count| u64::try_from(count).ok())
+    };
+    let mut stats = match record_count {
+        Some(record_count) => Some(v1::FileStats {
+            record_count,
+            ..v1::FileStats::default()
+        }),
+        None => file_stats(file.stats(), keep_stats),
+    };
     if let Some(stats) = stats.as_mut() {
         stats.bytes_per_row = bytes_per_row(size, stats.record_count);
-        if !keep_stats {
-            stats.first_values.clear();
-            stats.last_values.clear();
-            stats.null_count.clear();
-            stats.tight_bounds = None;
-        }
     }
     Ok(v1::TableFile {
         blob: Some(v1::name::blob_name(&uri)),
@@ -652,21 +982,42 @@ fn partition_values(file: &deltalake::kernel::LogicalFileView) -> BTreeMap<Strin
         .collect()
 }
 
-/// Parse `add.stats`. Nested `nullCount` objects are flattened to dotted
-/// keys. A malformed stats blob is omitted rather than failing the table.
-fn file_stats(raw: Option<String>) -> Option<v1::FileStats> {
-    let raw = raw?;
-    let value: Value = serde_json::from_str(&raw).ok()?;
+/// Parse `add.stats` into the facts `keep_stats` asks for: the record count
+/// always, and the per-column maps only when the caller keeps them. Nested
+/// `nullCount` objects are flattened to dotted keys. A malformed stats blob is
+/// omitted rather than failing the table.
+fn file_stats(raw: Option<String>, keep_stats: bool) -> Option<v1::FileStats> {
+    // The blob is the log's own bytes: parse it where it lies rather than
+    // through a copy.
+    let raw = raw?.into_bytes();
+    if !keep_stats {
+        // Only the count is kept, so read only the count: a full value tree for
+        // a stats blob would hold every bound just to drop it.
+        let counted: CountOnly = serde_json::from_slice(&raw).ok()?;
+        return Some(v1::FileStats {
+            record_count: counted.record_count,
+            ..v1::FileStats::default()
+        });
+    }
+    let value: Value = serde_json::from_slice(&raw).ok()?;
     let object = value.as_object()?;
-    let num_records = object.get("numRecords").and_then(Value::as_u64)?;
+    let record_count = object.get("numRecords").and_then(Value::as_u64)?;
     Some(v1::FileStats {
-        record_count: num_records,
+        record_count,
         bytes_per_row: None,
         first_values: stat_object(object, "minValues"),
         last_values: stat_object(object, "maxValues"),
         null_count: flatten_null_counts(object.get("nullCount")),
         tight_bounds: object.get("tightBounds").and_then(Value::as_bool),
     })
+}
+
+/// The one field a stats blob is read for when the per-column maps are not
+/// kept.
+#[derive(Deserialize)]
+struct CountOnly {
+    #[serde(rename = "numRecords")]
+    record_count: u64,
 }
 
 fn stat_object(object: &Map<String, Value>, key: &str) -> BTreeMap<String, Value> {
@@ -708,21 +1059,6 @@ fn flatten_counts(value: Option<&Value>, prefix: &str, out: &mut BTreeMap<String
     }
 }
 
-/// A data path that stays inside the table: empty, absolute, or URI paths
-/// are rejected here, once, for both local and object adapters.
-fn relative_data_path(relative: &str) -> Result<&Path, Error> {
-    let path = Path::new(relative);
-    if relative.is_empty()
-        || relative.contains("://")
-        || !path.components().all(|c| matches!(c, Component::Normal(_)))
-    {
-        return Err(Error::Invalid(format!(
-            "only relative data paths inside the table are supported: {relative}"
-        )));
-    }
-    Ok(path)
-}
-
 fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {
     relative_data_path(relative)?;
     let mut directory = base.clone();
@@ -741,4 +1077,59 @@ fn local_uri(root: &Path, relative: &str) -> Result<String, Error> {
 
 fn delta_error(error: deltalake::DeltaTableError) -> Error {
     Error::Snapshot(Box::new(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_stats, parse_commit, Action};
+
+    /// A future protocol's action keeps its own kind instead of failing the
+    /// commit, while a known action stays typed.
+    #[test]
+    fn an_unknown_action_keeps_its_kind() {
+        let line = br#"{"checkpointMetadata":{"version":3,"tags":{}}}"#;
+        let action: Action = serde_json::from_slice(line).expect("an unknown action parses");
+        assert_eq!(action.kind(), "checkpointMetadata");
+        assert!(action.body().is_none());
+
+        let commit = parse_commit(line, 7).expect("the commit parses");
+        assert_eq!(commit.actions.len(), 1);
+        assert_eq!(
+            commit.actions[0].kind.as_deref(),
+            Some("checkpointMetadata")
+        );
+        assert!(commit.actions[0].path.is_none());
+
+        let add = parse_commit(br#"{"add":{"path":"a.parquet","size":12}}"#, 8)
+            .expect("a known action parses");
+        assert_eq!(add.actions[0].kind.as_deref(), Some("add"));
+        assert_eq!(add.actions[0].path.as_deref(), Some("a.parquet"));
+        assert_eq!(add.actions[0].size_bytes, Some(12));
+    }
+
+    /// The record count is read without building the full stats tree when the
+    /// per-column maps are not kept, and the maps are read when they are.
+    #[test]
+    fn file_stats_reads_only_what_the_caller_keeps() {
+        let raw = Some(
+            r#"{"numRecords":3,"minValues":{"name":"alice"},"maxValues":{"name":"carol"},
+                "nullCount":{"name":0},"tightBounds":true}"#
+                .to_string(),
+        );
+        let counted = file_stats(raw.clone(), false).expect("the count parses");
+        assert_eq!(counted.record_count, 3);
+        assert!(counted.first_values.is_empty());
+        assert!(counted.last_values.is_empty());
+        assert!(counted.null_count.is_empty());
+
+        let kept = file_stats(raw, true).expect("the stats parse");
+        assert_eq!(kept.record_count, 3);
+        assert_eq!(kept.first_values["name"], "alice");
+        assert_eq!(kept.last_values["name"], "carol");
+        assert_eq!(kept.null_count["name"], 0);
+        assert_eq!(kept.tight_bounds, Some(true));
+
+        assert!(file_stats(Some("not json".to_string()), false).is_none());
+        assert!(file_stats(None, true).is_none());
+    }
 }

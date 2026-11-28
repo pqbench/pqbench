@@ -1,4 +1,4 @@
-//! The client side of the lease socket: one request, one response.
+//! The client side of the daemon socket: one request, one answer.
 
 use std::fmt;
 use std::future::Future;
@@ -31,29 +31,23 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// How long a lease exchange may take: a reader falls back to vending
-/// directly when the daemon is slow or gone.
-const LEASE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a ping, a stop, or a lease may take before the reader reports the
+/// daemon as gone. A lease waits its turn in the daemon, which paces vends at
+/// the catalog's ceiling, so a walk with a stream per CPU queues dozens ahead
+/// of the last one; the wait is the daemon's, not a hung connection.
+const LEASE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long a catalog exchange may take: the daemon is doing the endpoint
-/// and storage read the reader would have done itself.
+/// How long a catalog GET may take: the daemon is sending the request the
+/// reader would have sent, and it queues behind the walk's other requests at
+/// the catalog's ceiling.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response, Error> {
     let timeout = match request {
-        Request::List { .. } | Request::Get { .. } => CATALOG_TIMEOUT,
+        Request::HttpGet { .. } => CATALOG_TIMEOUT,
         Request::Ping | Request::Stop | Request::Lease { .. } => LEASE_TIMEOUT,
     };
-    exchange(path, request, timeout).await
-}
-
-async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<Response, Error> {
-    let mut stream = bounded(timeout, UnixStream::connect(path)).await?;
-    let line = serde_json::to_vec(request).map_err(|error| Error::Protocol(error.to_string()))?;
-    bounded(timeout, stream.write_all(&line)).await?;
-    bounded(timeout, stream.write_all(b"\n")).await?;
-    bounded(timeout, stream.flush()).await?;
-
+    let stream = send(path, request, timeout).await?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     bounded(timeout, reader.read_line(&mut line)).await?;
@@ -63,6 +57,17 @@ async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<R
         ));
     }
     serde_json::from_str(&line).map_err(|error| Error::Protocol(error.to_string()))
+}
+
+/// Write `request` as one line on a fresh connection, ready for the answer.
+async fn send(path: &Path, request: &Request, timeout: Duration) -> Result<UnixStream, Error> {
+    let mut stream = bounded(timeout, UnixStream::connect(path)).await?;
+    let mut line =
+        serde_json::to_vec(request).map_err(|error| Error::Protocol(error.to_string()))?;
+    line.push(b'\n');
+    bounded(timeout, stream.write_all(&line)).await?;
+    bounded(timeout, stream.flush()).await?;
+    Ok(stream)
 }
 
 /// One socket operation, bounded by the exchange's timeout.
@@ -86,7 +91,7 @@ fn timed_out() -> Error {
 /// Whether a daemon is listening at `path`.
 pub(crate) async fn ping(path: &Path) -> bool {
     matches!(
-        request(path, &Request::ping()).await,
+        request(path, &Request::Ping).await,
         Ok(Response { ok: true, .. })
     )
 }

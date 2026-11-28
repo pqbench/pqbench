@@ -10,11 +10,7 @@ use pqbench::codecs::Codec;
 use pqbench::lz::{lz, render_json, render_text, LzRequest};
 use pqbench::stats::Mode;
 
-fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
+use crate::support::fixture;
 
 fn request(file: PathBuf) -> LzRequest {
     LzRequest {

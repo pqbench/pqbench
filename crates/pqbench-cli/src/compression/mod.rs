@@ -31,21 +31,31 @@ pub(crate) async fn run(args: &CompressionArgs) -> Result<(), CliError> {
     let mut emit = Emitter::open();
     let blob = pqbench::v1::name::blob_name(&args.bench.file.display().to_string());
     for row in &report.rows {
-        emit.write(&crate::render::SweepRow {
-            name: format!("{blob}/compression/{}-{}", row.codec, row.level),
-            row: row.clone(),
-        })
-        .await?;
+        if emit
+            .write(&crate::render::SweepRow {
+                name: format!("{blob}/compression/{}-{}", row.codec, row.level),
+                row: row.clone(),
+            })
+            .await?
+            .is_break()
+        {
+            return emit.finish().await;
+        }
     }
     for row in &report.columns {
-        emit.write(&crate::render::ColumnSweepRow {
-            name: format!(
-                "{blob}/compression/{}-{}/columns/{}",
-                row.codec, row.level, row.column
-            ),
-            row: row.clone(),
-        })
-        .await?;
+        if emit
+            .write(&crate::render::ColumnSweepRow {
+                name: format!(
+                    "{blob}/compression/{}-{}/columns/{}",
+                    row.codec, row.level, row.column
+                ),
+                row: row.clone(),
+            })
+            .await?
+            .is_break()
+        {
+            break;
+        }
     }
     emit.finish().await
 }

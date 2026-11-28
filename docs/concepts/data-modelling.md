@@ -55,12 +55,31 @@ response, such as a `ReportRow` or a `ColumnMass`.
 A resource has at most one canonical parent, and a `List` must not require two
 (AIP-124).
 
+```mermaid
+graph TD
+    Metastore --> Catalog
+    Catalog --> Schema
+    Schema --> Table
+    Table --> TableFile
+    Table --> Partition
+    Table --> Commit
+    TableFile --> Blob
+    Partition --> PartitionPrice
+    Partition --> PartitionVersion
+    Partition --> Suggestion
+    Blob --> Column
+    Column --> ColumnProfile
+    Column --> Suggestion
+```
+
 | resource | canonical parent |
 | --- | --- |
 | `Catalog` | `Metastore` |
 | `Schema` | `Catalog` |
 | `Table` | `Schema` |
-| `TableFile`, `Commit` | `Table` |
+| `TableFile`, `Partition`, `Commit` | `Table` |
+| `PartitionPrice`, `PartitionVersion` | `Partition` |
+| `PartitionStats` | `Catalog`, `Schema` or `Table` (one pattern each, AIP-122) |
 | `Column` | `Blob` |
 | `ColumnProfile`, `Suggestion` | `Column` |
 
@@ -71,9 +90,16 @@ produces a column's mass with the column, so it has no name of its own.
 
 Two consequences:
 
-- A `TableFile`'s parent is the **table**. Partition values ride on the file
-  (its `partition_values` map), so a partition is a filter over the table's
-  files, not a resource of its own.
+- A `TableFile`'s parent is the **table**, not its partition. Partition values
+  ride on the file (its `partition_values` map). A `Partition` is a sibling
+  under the table: the snapshot's files that share those values, folded into
+  totals, with references to three of them (`first_file`, `last_file`,
+  `sample_file`).
+- A storage class is a `Blob` fact (`storage_class`), read from storage, not
+  from the log, so it is not a `Partition` field. A partition's price is its
+  singleton child (`…/partitions/{partition}/price`, AIP-156), read with `get`
+  from the partition's record: the classes of the three referenced files'
+  blobs, and the partition's bytes at each.
 - An analysis's parent is the **column**. A coarser scope is an aggregate, not a
   second parent: a file-level read uses the `-` wildcard id (AIP-159).
 

@@ -18,14 +18,15 @@ fn pipe_stdin(args: &[&str], stdin: &[u8]) -> std::process::Output {
 
 /// pqbench with extra environment: the walk's context comes from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
-    let mut child = pqbench()
+    let mut command = pqbench();
+    command
         .args(args)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let _daemon = crate::common::attach_daemon(&mut command);
+    let mut child = command.spawn().unwrap();
     let _ = child.stdin.take().unwrap().write_all(stdin);
     child.wait_with_output().unwrap()
 }
@@ -143,7 +144,7 @@ const CATALOGS: &str = r#"{"catalogs":[{"name":"dbx_samples","catalog_type":"MAN
 
 const PAGES: [&str; 2] = [
     r#"{"catalogs":[{"name":"dbx_samples","catalog_type":"MANAGED_CATALOG"}],"next_page_token":"page-2"}"#,
-    r#"{"catalogs":[{"name":"samples","catalog_type":"SYSTEM_CATALOG"},{"name":"workspace","catalog_type":"MANAGED_CATALOG"}]}"#,
+    r#"{"catalogs":[{"name":"samples","catalog_type":"SYSTEM_CATALOG"},{"name":"workspace","catalog_type":"MANAGED_CATALOG","securable_kind":"CATALOG_DB_STORAGE"},{"name":"pqbench_ext","catalog_type":"MANAGED_CATALOG","securable_kind":"CATALOG_STANDARD"}]}"#,
 ];
 
 /// The walk's config: `PQB_ENDPOINT` names the endpoint.
@@ -290,10 +291,9 @@ fn catalog_ls_streams_one_catalog_per_line() {
         String::from_utf8_lossy(&output.stderr)
     );
     let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 1);
     assert_eq!(records[0]["name"], "catalogs/dbx_samples");
     assert_eq!(records[0]["catalog_type"], "CATALOG_TYPE_MANAGED");
-    assert_eq!(records[1]["name"], "catalogs/system");
     assert!(records[0].get("kind").is_none(), "{}", records[0]);
 }
 
@@ -311,14 +311,8 @@ fn catalog_ls_follows_the_next_page_token() {
         .iter()
         .filter_map(|record| record["name"].as_str())
         .collect();
-    assert_eq!(
-        names,
-        [
-            "catalogs/dbx_samples",
-            "catalogs/samples",
-            "catalogs/workspace"
-        ]
-    );
+    // The system catalog and the default-storage catalog are not listed.
+    assert_eq!(names, ["catalogs/dbx_samples", "catalogs/pqbench_ext"]);
 }
 
 #[test]
@@ -348,7 +342,7 @@ fn catalog_ls_reads_the_endpoint_from_the_environment() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["catalogs/dbx_samples", "catalogs/system"]);
+    assert_eq!(names, ["catalogs/dbx_samples"]);
 }
 
 #[test]
@@ -365,5 +359,5 @@ fn catalog_ls_reads_a_metastore_stream() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(ndjson(&output.stdout).len(), 2);
+    assert_eq!(ndjson(&output.stdout).len(), 1);
 }

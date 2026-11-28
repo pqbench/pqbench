@@ -25,7 +25,8 @@ pub(crate) fn run(args: &SkillArgs) -> Result<(), CliError> {
 }
 
 fn list() -> Result<(), CliError> {
-    let mut out = std::io::stdout();
+    let mut out = std::io::stdout().lock();
+    let mut line = Vec::new();
     for item in skill::skills() {
         let record = SkillRecord {
             kind: "pqbench.skill",
@@ -34,19 +35,39 @@ fn list() -> Result<(), CliError> {
             description: item.description,
             documents: document_names(item),
         };
-        writeln!(out, "{}", serde_json::to_string(&record)?)?;
+        // The record is written where it will be output: one reused buffer, no
+        // string of its own.
+        line.clear();
+        serde_json::to_writer(&mut line, &record)?;
+        line.push(b'\n');
+        closed_pipe(out.write_all(&line))?;
     }
     Ok(())
 }
 
 fn show(name: &str, document: &str) -> Result<(), CliError> {
     let markdown = skill::document(name, document)?;
-    let mut out = std::io::stdout();
+    let mut out = std::io::stdout().lock();
+    closed_pipe(write_markdown(&mut out, markdown))
+}
+
+/// Write the document, ending it with a newline when it has none.
+fn write_markdown(out: &mut impl Write, markdown: &str) -> std::io::Result<()> {
     out.write_all(markdown.as_bytes())?;
     if !markdown.ends_with('\n') {
         out.write_all(b"\n")?;
     }
     Ok(())
+}
+
+/// A reader that went away (`| head`) is not a failure, the way every other
+/// command treats it.
+fn closed_pipe(written: std::io::Result<()>) -> Result<(), CliError> {
+    match written {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn document_names(skill: &Skill) -> Vec<&'static str> {

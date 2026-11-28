@@ -14,8 +14,12 @@ schema.
 | `Metastore` | `metastores/{metastore}` | [`get metastore`](cli.md#pqbench-get-metastore) | humans / scripts |
 | `Catalog` | `catalogs/{catalog}` | [`list catalogs`](cli.md#pqbench-list-catalogs), [`get catalog`](cli.md#pqbench-get-catalog) | `get catalog`, `list schemas` |
 | `Schema` | `catalogs/{catalog}/schemas/{schema}` | [`list schemas`](cli.md#pqbench-list-schemas), [`get schema`](cli.md#pqbench-get-schema) | `get schema`, `list tables` |
-| `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table) | `get table`, `list files` |
+| `Table` | `catalogs/{catalog}/schemas/{schema}/tables/{table}` | [`list tables`](cli.md#pqbench-list-tables), [`get table`](cli.md#pqbench-get-table) | `get table`, `list files`, `list partitions` |
 | `TableFile` | `…/tables/{table}/files/{file}` | [`list files`](cli.md#pqbench-list-files), [`sample files`](cli.md#pqbench-sample-files), [`table-file`](cli.md#pqbench-table-file) | `sample files`, `bytemass`, `list suggestions` |
+| `Partition` | `…/tables/{table}/partitions/{partition}` | [`list partitions`](cli.md#pqbench-list-partitions) | `get partition-price` |
+| `PartitionPrice` | `…/partitions/{partition}/price` | [`get partition-price`](cli.md#pqbench-get-partition-price) | humans / scripts |
+| `PartitionVersion` | `…/partitions/{partition}/versions/{etag}` | [`list partition-versions`](cli.md#pqbench-list-partition-versions) (`pqbench-driver`) | `summarize partition-versions` |
+| `PartitionStats` | `{catalog, schema or table}/partitionStats` | [`summarize partition-versions`](cli.md#pqbench-summarize-partition-versions) (`pqbench-driver`) | humans / scripts |
 | `Blob` | `blobs/{service}/{locator}` | [`bytemass`](cli.md#pqbench-bytemass) | `diff` |
 | `Column` | `blobs/{service}/{locator}/columns/{column}` | [`bytemass`](cli.md#pqbench-bytemass) | `summarize columns`, `diff` |
 | `ColumnProfile` | `blobs/{service}/{locator}/columns/{column}/profile` | [`profile`](profile.md) | humans / scripts |
@@ -23,10 +27,16 @@ schema.
 
 `profile` adds the CLI's `id` (the input path) to each `ColumnProfile` row;
 see [Profile](profile.md). The `Bytemass` value is nested in `Column.mass`; it
-has no resource name of its own.
+has no resource name of its own. Besides the column chunk's own bytes, it
+carries the file's metadata accounting, which costs no extra read:
+`footer_bytes` (the serialized footer plus its eight-byte trailer, from the
+footer's own length) and `unaccounted_bytes` (the object's size less the sum of
+its chunks: footer, page indexes, bloom filters, key-value metadata). Both are
+file facts, so every column of a file carries the same pair, and a fold over
+sampled files weights them like the other additive quantities.
 
 A resource's `name` is its identity. The collection segment (`catalogs`,
-`schemas`, `tables`, `files`, `blobs`, `columns`) names the type, so no resource
+`schemas`, `tables`, `files`, `partitions`, `blobs`, `columns`) names the type, so no resource
 carries a `kind` or a version of its own — the API version is the package's
 (`pqbench.v1`). A dotted FQN such as `dbx_samples.nyctaxi.trips` is an
 input-only lookup alias; the CLI translates it to the canonical path name.
@@ -41,7 +51,7 @@ Some commands emit a document that is not a resource: it has no addressable
 | `ReportRow` | [`lz`](cli.md#pqbench-lz), [`compression`](cli.md#pqbench-compression) | `name`, `codec`, `level`, `compress_estimate`, `decompress_estimate`, `compressed_bytes`, `uncompressed_bytes`, `ratio` |
 | `ColumnRow` | [`compression --per-column`](cli.md#pqbench-compression) | `ReportRow` fields plus `column` |
 | `ColumnDelta` | [`diff`](diff.md) | `column`, `left_bytes`, `right_bytes`, `delta_bytes`, `change_percent`, `left_values`, `right_values`, `left_bytes_per_value`, `right_bytes_per_value` |
-| `ColumnMass` | [`summarize columns`](cli.md#pqbench-summarize-columns) | `table`, `column`, `compressed_bytes`, `uncompressed_bytes`, `value_count`, `bytes_per_value`, `compression_ratio`, `file_count`, `storage_classes`, `storage_costs` |
+| `ColumnMass` | [`summarize columns`](cli.md#pqbench-summarize-columns) | `table`, `column`, `compressed_bytes`, `uncompressed_bytes`, `footer_bytes`, `unaccounted_bytes`, `value_count`, `bytes_per_value`, `compression_ratio`, `file_count`, `storage_classes`, `storage_costs` |
 | `Skill` | [`skill`](skill.md) (no arguments) | `kind: "pqbench.skill"`, `version`, `name`, `description`, `documents` |
 
 `ColumnDelta` has no `name`, so `pqb fmt` cannot place it in a table; pipe it
@@ -67,6 +77,10 @@ label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
 the pipe above hides it to show the table. A file is kept with probability
 `rate × size / 256 MiB`, capped at one, drawn from a hash of its name: the
 same record always makes the same decision. A 256 MiB file is kept at
+`get partition-price` sets `restore_required` when a sampled file is in an S3
+archive class or tier without a completed restore; a HEAD-only price still
+works, and a command that would read the body fails early instead.
+
 `--rate` (the default keeps about one in a hundred), a 1 GiB file four times
 as often. The decision
 needs only the record's name and size, which the log already carries, so the
@@ -82,7 +96,8 @@ the same way. `bytemass` also records the footer's `created_by` as the blob's
 file's writer can actually change; `get suggestion` writes only the verdict
 (`verified`, `savings_bytes`). Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
-`uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
+`uncompressed_bytes`, `footer_bytes`, `unaccounted_bytes`, `dictionary_bytes`,
+`unencoded_bytes`, `value_count`,
 `null_count`, `row_group_count`, a `Suggestion`'s `savings_bytes` — and
 recompute the ratios (`bytes_per_value`,
 `bytes_per_row`, `compression_ratio`, `null_fraction`, `dictionary_fraction`)

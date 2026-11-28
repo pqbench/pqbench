@@ -58,6 +58,15 @@ pub enum Error {
     Option(String),
     /// A response was missing a required field.
     Invalid(String),
+    /// The object is in an archive class or tier and needs a restore first.
+    Archived {
+        /// The object's URI.
+        uri: String,
+        /// The storage class or archive tier HEAD reported.
+        storage_class: Option<String>,
+        /// Whether a restore is running but has not finished.
+        restore_ongoing: bool,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -74,6 +83,24 @@ impl std::fmt::Display for Error {
             Error::Transport(_) => write!(f, "the object-store transport failed"),
             Error::Option(key) => write!(f, "unknown object store option `{key}`"),
             Error::Invalid(message) => write!(f, "{message}"),
+            Error::Archived {
+                uri,
+                storage_class,
+                restore_ongoing,
+            } => {
+                let class = storage_class.as_deref().unwrap_or("an archive tier");
+                if *restore_ongoing {
+                    write!(
+                        f,
+                        "object {uri} is in {class}; its restore is still running, so it cannot be read yet"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "object {uri} is in {class} and must be restored before it can be read"
+                    )
+                }
+            }
         }
     }
 }
@@ -91,12 +118,14 @@ impl std::error::Error for Error {
             | Error::Poisoned
             | Error::NoMatch(_)
             | Error::Option(_)
-            | Error::Invalid(_) => None,
+            | Error::Invalid(_)
+            | Error::Archived { .. } => None,
         }
     }
 }
 
 /// What one object lookup reports before any bytes are read.
+#[derive(Debug, Clone, Default)]
 pub struct ObjectStat {
     /// Object size in bytes.
     pub size_bytes: u64,
@@ -105,6 +134,51 @@ pub struct ObjectStat {
     /// Storage class or tier (`STANDARD_IA`, `GLACIER`, …), when HEAD reports
     /// one. S3 omits the header for `STANDARD`.
     pub storage_class: Option<String>,
+    /// The Intelligent-Tiering archive tier HEAD reports
+    /// (`x-amz-archive-status`): `ARCHIVE_ACCESS` or `DEEP_ARCHIVE_ACCESS`.
+    pub archive_status: Option<String>,
+    /// Whether `x-amz-restore` reports a restore still in progress.
+    pub restore_ongoing: bool,
+    /// When a completed restore ends, milliseconds since the Unix epoch.
+    pub restore_expiry_time: Option<u64>,
+    /// Whether `x-amz-restore` reported `ongoing-request="false"`, even when it
+    /// named no expiry.
+    pub restore_completed: bool,
+}
+
+impl ObjectStat {
+    /// Whether reading this object needs a restore first, for `service`.
+    ///
+    /// S3 archives an object in `GLACIER` or `DEEP_ARCHIVE`, or in an
+    /// Intelligent-Tiering archive access tier; a completed restore makes it
+    /// readable again, while `GLACIER_IR` is always readable. GCS `ARCHIVE` is
+    /// online (millisecond retrieval), so it never needs a restore. An unknown
+    /// or absent class fails open: the storage read decides.
+    #[must_use]
+    pub fn restore_required(&self, service: &str) -> bool {
+        match service {
+            "s3" | "s3a" => self.s3_restore_required(),
+            _ => false,
+        }
+    }
+
+    fn s3_restore_required(&self) -> bool {
+        let archived_class = self
+            .storage_class
+            .as_deref()
+            .is_some_and(|class| matches!(class, "GLACIER" | "DEEP_ARCHIVE"));
+        let archive_tier = self
+            .archive_status
+            .as_deref()
+            .is_some_and(|tier| matches!(tier, "ARCHIVE_ACCESS" | "DEEP_ARCHIVE_ACCESS"));
+        if !archived_class && !archive_tier {
+            return false;
+        }
+        if self.restore_ongoing {
+            return true;
+        }
+        !(self.restore_completed || self.restore_expiry_time.is_some())
+    }
 }
 
 /// A remote backend. Implemented by the private `impl` module over the
@@ -163,6 +237,10 @@ impl ObjectReader {
                     size_bytes: metadata.len(),
                     identity: None,
                     storage_class: None,
+                    archive_status: None,
+                    restore_ongoing: false,
+                    restore_expiry_time: None,
+                    restore_completed: false,
                 })
             }
             ObjectSource::Remote(remote) => remote.stat().await,
@@ -318,6 +396,17 @@ async fn copy_remote(lake: &Lake, uri: &str, dest: &Path) -> Result<u64, Error> 
 
     let reader = open(lake, uri)?;
     let stat = reader.stat().await?;
+    let service = uri.split("://").next().unwrap_or_default();
+    if stat.restore_required(service) {
+        return Err(Error::Archived {
+            uri: uri.to_string(),
+            storage_class: stat
+                .storage_class
+                .clone()
+                .or_else(|| stat.archive_status.clone()),
+            restore_ongoing: stat.restore_ongoing,
+        });
+    }
     let size = stat.size_bytes;
     let identity = stat.identity.as_deref();
     let mut file = std::fs::File::create(dest).map_err(|error| Error::Io {
@@ -427,5 +516,108 @@ impl KeyPattern {
                 ..Default::default()
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::ops::Range;
+    use std::pin::Pin;
+
+    use super::{Error, ObjectReader, ObjectStat, Remote};
+
+    /// A remote whose HEAD answers one fixed stat.
+    struct FakeRemote(ObjectStat);
+
+    impl Remote for FakeRemote {
+        fn exists<'a>(&'a self) -> Pin<Box<dyn Future<Output = Result<bool, Error>> + Send + 'a>> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn stat<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<ObjectStat, Error>> + Send + 'a>> {
+            Box::pin(async { Ok(self.0.clone()) })
+        }
+
+        fn read_range<'a>(
+            &'a self,
+            _range: Range<u64>,
+            _identity: Option<String>,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, Error>> + Send + 'a>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    fn stat(class: &str, archive_status: Option<&str>) -> ObjectStat {
+        ObjectStat {
+            storage_class: Some(class.to_string()),
+            archive_status: archive_status.map(str::to_string),
+            ..ObjectStat::default()
+        }
+    }
+
+    /// S3 blocks Glacier and Deep Archive, and an Intelligent-Tiering archive
+    /// access tier, but never Glacier Instant Retrieval: its bytes are online.
+    #[test]
+    fn s3_blocks_archive_classes_and_tiers_only() {
+        assert!(stat("GLACIER", None).restore_required("s3"));
+        assert!(stat("DEEP_ARCHIVE", None).restore_required("s3"));
+        assert!(stat("INTELLIGENT_TIERING", Some("ARCHIVE_ACCESS")).restore_required("s3"));
+        assert!(stat("INTELLIGENT_TIERING", Some("DEEP_ARCHIVE_ACCESS")).restore_required("s3"));
+        assert!(!stat("GLACIER_IR", None).restore_required("s3"));
+        assert!(!stat("INTELLIGENT_TIERING", Some("ARCHIVE_INSTANT_ACCESS")).restore_required("s3"));
+        assert!(!stat("STANDARD", None).restore_required("s3"));
+        assert!(!ObjectStat::default().restore_required("s3"));
+    }
+
+    /// A completed restore makes an archive object readable; an in-progress
+    /// one leaves it blocked.
+    #[test]
+    fn a_completed_restore_unblocks_an_archive_object() {
+        let mut restored = stat("GLACIER", None);
+        restored.restore_completed = true;
+        assert!(!restored.restore_required("s3"));
+
+        let mut expiring = stat("DEEP_ARCHIVE", None);
+        expiring.restore_expiry_time = Some(1_700_000_000_000);
+        assert!(!expiring.restore_required("s3"));
+
+        let mut ongoing = stat("GLACIER", None);
+        ongoing.restore_ongoing = true;
+        assert!(ongoing.restore_required("s3"));
+    }
+
+    /// GCS Archive is online (millisecond retrieval), so it is never blocked,
+    /// and an unknown class fails open.
+    #[test]
+    fn gcs_archive_and_unknown_classes_are_readable() {
+        assert!(!stat("ARCHIVE", None).restore_required("gs"));
+        assert!(!stat("ARCHIVE", None).restore_required("gcs"));
+        assert!(!stat("SOMETHING_NEW", None).restore_required("s3"));
+    }
+
+    /// The stat an `ObjectReader` reports is what the predicate sees: a fake
+    /// remote's Glacier object is an archive read, and its Glacier IR one is
+    /// not.
+    #[tokio::test]
+    async fn an_object_reader_reports_the_archive_fact() {
+        let glacier = ObjectReader::from_remote(Box::new(FakeRemote(stat("GLACIER", None))));
+        assert!(glacier.stat().await.unwrap().restore_required("s3"));
+        let instant = ObjectReader::from_remote(Box::new(FakeRemote(stat("GLACIER_IR", None))));
+        assert!(!instant.stat().await.unwrap().restore_required("s3"));
+    }
+
+    #[test]
+    fn an_archive_error_names_the_class_and_the_restore() {
+        let error = Error::Archived {
+            uri: "s3://bucket/key.parquet".to_string(),
+            storage_class: Some("GLACIER".to_string()),
+            restore_ongoing: false,
+        };
+        let message = error.to_string();
+        assert!(message.contains("GLACIER"), "{message}");
+        assert!(message.contains("restored"), "{message}");
     }
 }

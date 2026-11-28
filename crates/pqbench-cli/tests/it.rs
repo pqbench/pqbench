@@ -44,8 +44,17 @@ mod format_html;
 #[path = "help.rs"]
 mod help;
 
+#[path = "driver.rs"]
+mod driver;
+
 #[path = "metastore.rs"]
 mod metastore;
+
+#[path = "partition.rs"]
+mod partition;
+
+#[path = "partition_price.rs"]
+mod partition_price;
 
 #[path = "piping.rs"]
 mod piping;
@@ -58,6 +67,9 @@ mod sample;
 
 #[path = "schema.rs"]
 mod schema;
+
+#[path = "setup.rs"]
+mod setup;
 
 #[path = "skill.rs"]
 mod skill;

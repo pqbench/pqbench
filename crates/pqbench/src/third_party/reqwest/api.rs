@@ -52,7 +52,7 @@ pub struct Request {
     pub method: Method,
     /// The bearer credential, when the endpoint needs one.
     pub bearer: Option<String>,
-    /// The JSON body; `Some` sends a POST, `None` sends the method as is.
+    /// The request body; `Some` sends a POST, `None` sends the method as is.
     pub body: Option<String>,
     /// Extra request headers, applied over the defaults.
     pub headers: Vec<(String, String)>,
@@ -70,7 +70,8 @@ impl Request {
         }
     }
 
-    /// A POST request: the URL, an optional bearer, and a JSON body.
+    /// A POST request: the URL, an optional bearer, and a body. The body is
+    /// sent as JSON unless a `Content-Type` header names another type.
     pub fn post(url: impl Into<String>, bearer: Option<String>, body: impl Into<String>) -> Self {
         Self {
             url: url.into(),

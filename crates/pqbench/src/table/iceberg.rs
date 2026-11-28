@@ -1,0 +1,854 @@
+//! Iceberg metadata loader: the only module that reads Iceberg metadata.
+//!
+//! [`load`] reads the metadata JSON and Avro manifests and returns a
+//! [`TableInfo`]. It does not measure Parquet footers; pipe the document to
+//! `bytemass`. Delete files are named in the log and omitted from `files`.
+//!
+//! Nothing here is behind a `#[cfg]`: the Avro reader and the object store
+//! enforce the `iceberg` and `aws` features at runtime, so this module compiles
+//! in every configuration and fails only when a read needs a disabled one.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
+
+use futures_util::stream::{self, Stream};
+use futures_util::{StreamExt, TryStreamExt};
+use serde::Deserialize;
+use serde_json::Value;
+use url::Url;
+
+use crate::table::{is_local, join_uri, local_path, relative_data_path};
+use crate::third_party::avro::read_avro;
+use crate::third_party::object_store;
+use crate::v1;
+use crate::Lake;
+
+use super::{Error, LoadRequest, TableInfo};
+
+/// Load the current or requested Iceberg snapshot into a table record.
+///
+/// `request.uri` is a table root (`metadata/version-hint.text` or
+/// `metadata/*.metadata.json`) or a metadata JSON path/URI. Run inside a Tokio
+/// runtime.
+///
+/// # Errors
+/// Fails for invalid metadata, missing snapshots, non-Parquet data files, or
+/// data paths outside the table location.
+pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
+    let metadata = read_metadata(lake, &request.uri).await?;
+    let requested = request.snapshot_version.map(create_i64).transpose()?;
+    let selected = select_snapshot(&metadata, requested)?;
+    let snapshot_version = selected
+        .as_ref()
+        .map(|snapshot| create_u64(snapshot.snapshot_id))
+        .transpose()?
+        .unwrap_or(0);
+    let (files, deletes) = match selected {
+        Some(snapshot) if request.require_files => {
+            active_files(lake, &metadata.location, &snapshot.manifest_list).await?
+        }
+        _ => (Vec::new(), Vec::new()),
+    };
+    let mut log = if request.require_files {
+        ancestry_log(&metadata, selected, &v1::name::local_table(&request.uri))?
+    } else {
+        Vec::new()
+    };
+    attach_actions(&mut log, snapshot_version, &files, &deletes);
+    let mut info = TableInfo::new(
+        v1::TableFormat::Iceberg,
+        request.uri.clone(),
+        snapshot_version,
+        partition_columns(&metadata),
+        log,
+        files,
+    );
+    info.columns = columns(&metadata);
+    info.iceberg_properties = metadata.properties.clone();
+    Ok(info)
+}
+
+/// Resolve, read, parse, and validate the table's metadata JSON.
+async fn read_metadata(lake: &Lake, uri: &str) -> Result<TableMetadata, Error> {
+    let metadata_location = resolve_metadata_location(lake, uri).await?;
+    let metadata_bytes = read_location(lake, &metadata_location).await?;
+    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
+    if metadata.format_version != 1 && metadata.format_version != 2 {
+        return Err(Error::Invalid(format!(
+            "unsupported Iceberg format version: {}",
+            metadata.format_version
+        )));
+    }
+    Ok(metadata)
+}
+
+/// The selected snapshot's ancestry as log commits, one action per snapshot.
+fn ancestry_log(
+    metadata: &TableMetadata,
+    selected: Option<&Snapshot>,
+    table: &str,
+) -> Result<Vec<v1::Commit>, Error> {
+    ancestry(metadata, selected)
+        .into_iter()
+        .map(|snapshot| {
+            let version = create_u64(snapshot.snapshot_id)?;
+            Ok(v1::Commit {
+                name: v1::name::commit_name(table, &version.to_string()),
+                version,
+                commit_time: snapshot.snapshot_time,
+                commit_info: None,
+                actions: vec![v1::LogAction {
+                    kind: Some("snapshot".into()),
+                    path: Some(snapshot.manifest_list.clone()),
+                    size_bytes: None,
+                }],
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+}
+
+/// Attach the snapshot's added and deleted files to its log commit.
+fn attach_actions(
+    log: &mut [v1::Commit],
+    version: u64,
+    files: &[v1::TableFile],
+    deletes: &[String],
+) {
+    let Some(commit) = log.iter_mut().find(|commit| commit.version == version) else {
+        return;
+    };
+    for file in files {
+        commit.actions.push(v1::LogAction {
+            kind: Some("add".into()),
+            path: Some(file.path.clone()),
+            size_bytes: file.size_bytes,
+        });
+    }
+    for path in deletes {
+        commit.actions.push(v1::LogAction {
+            kind: Some("delete".into()),
+            path: Some(path.clone()),
+            size_bytes: None,
+        });
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TableMetadata {
+    #[serde(rename = "format-version")]
+    format_version: i32,
+    location: String,
+    #[serde(rename = "current-snapshot-id", default)]
+    current_snapshot_id: Option<i64>,
+    #[serde(rename = "current-schema-id", default)]
+    current_schema_id: i32,
+    #[serde(rename = "default-spec-id", default)]
+    default_spec_id: i32,
+    #[serde(rename = "partition-specs", default)]
+    partition_specs: Vec<PartitionSpec>,
+    #[serde(default)]
+    schemas: Vec<Schema>,
+    #[serde(default)]
+    properties: BTreeMap<String, String>,
+    #[serde(default)]
+    snapshots: Vec<Snapshot>,
+}
+
+/// One Iceberg schema; the current one carries the table's columns.
+#[derive(Debug, Deserialize)]
+struct Schema {
+    #[serde(rename = "schema-id")]
+    schema_id: i32,
+    #[serde(default)]
+    fields: Vec<Field>,
+}
+
+/// One top-level Iceberg schema field.
+#[derive(Debug, Deserialize)]
+struct Field {
+    name: String,
+    #[serde(rename = "type")]
+    data_type: Value,
+    #[serde(default)]
+    required: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PartitionSpec {
+    #[serde(rename = "spec-id")]
+    spec_id: i32,
+    #[serde(default)]
+    fields: Vec<PartitionField>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PartitionField {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Snapshot {
+    #[serde(rename = "snapshot-id")]
+    snapshot_id: i64,
+    #[serde(rename = "parent-snapshot-id", default)]
+    parent_snapshot_id: Option<i64>,
+    #[serde(rename = "manifest-list")]
+    manifest_list: String,
+    #[serde(rename = "timestamp-ms", default)]
+    snapshot_time: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestFile {
+    manifest_path: String,
+    #[serde(default)]
+    content: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManifestEntry {
+    status: i32,
+    data_file: DataFile,
+}
+
+#[derive(Debug, Deserialize)]
+struct DataFile {
+    #[serde(default)]
+    content: i32,
+    file_path: String,
+    file_format: String,
+    #[serde(rename = "file_size_in_bytes")]
+    file_size_bytes: i64,
+}
+
+const STATUS_DELETED: i32 = 2;
+const CONTENT_DATA: i32 = 0;
+const MANIFEST_DELETES: i32 = 1;
+
+fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
+    metadata
+        .partition_specs
+        .iter()
+        .find(|spec| spec.spec_id == metadata.default_spec_id)
+        .or_else(|| metadata.partition_specs.first())
+        .map(|spec| spec.fields.iter().map(|field| field.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// The columns of the current schema; the first schema when none is marked.
+fn columns(metadata: &TableMetadata) -> Vec<v1::DeclaredColumn> {
+    metadata
+        .schemas
+        .iter()
+        .find(|schema| schema.schema_id == metadata.current_schema_id)
+        .or_else(|| metadata.schemas.first())
+        .map(|schema| {
+            schema
+                .fields
+                .iter()
+                .map(|field| v1::DeclaredColumn {
+                    column: field.name.clone(),
+                    data_type: super::non_empty(&type_name(&field.data_type)),
+                    nullable: !field.required,
+                    position: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A primitive type is its name; a nested type stays the format's JSON form.
+fn type_name(value: &Value) -> String {
+    match value {
+        Value::String(name) => name.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn select_snapshot(
+    metadata: &TableMetadata,
+    requested: Option<i64>,
+) -> Result<Option<&Snapshot>, Error> {
+    let snapshot_id = match requested {
+        Some(snapshot_id) => snapshot_id,
+        None => match metadata.current_snapshot_id.filter(|id| *id != -1) {
+            Some(snapshot_id) => snapshot_id,
+            None => return Ok(None),
+        },
+    };
+    metadata
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.snapshot_id == snapshot_id)
+        .map(Some)
+        .ok_or_else(|| Error::Invalid(format!("Iceberg snapshot does not exist: {snapshot_id}")))
+}
+
+/// Visit the table's snapshots, newest first, without collecting them.
+///
+/// The metadata JSON carries the snapshot ancestry, so no manifest or data file
+/// is read.
+///
+/// Iceberg's history is the selected snapshot's ancestry — a list the metadata
+/// JSON already fixes — so the read resolves it and streams it in order.
+pub(super) async fn stream_commits(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
+    let metadata_location = resolve_metadata_location(lake, &request.uri).await?;
+    let metadata_bytes = read_location(lake, &metadata_location).await?;
+    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
+    if metadata.format_version != 1 && metadata.format_version != 2 {
+        return Err(Error::Invalid(format!(
+            "unsupported Iceberg format version: {}",
+            metadata.format_version
+        )));
+    }
+    let requested = request.snapshot_version.map(create_i64).transpose()?;
+    let selected = select_snapshot(&metadata, requested)?;
+    // `ancestry` walks from the selected snapshot back through its parents, so
+    // the newest snapshot comes first.
+    let mut commits = Vec::new();
+    let table = v1::name::local_table(&request.uri);
+    for snapshot in ancestry(&metadata, selected) {
+        let version = create_u64(snapshot.snapshot_id)?;
+        commits.push(v1::Commit {
+            name: v1::name::commit_name(&table, &version.to_string()),
+            version,
+            commit_time: snapshot.snapshot_time,
+            commit_info: None,
+            actions: Vec::new(),
+        });
+    }
+    Ok(stream::iter(commits.into_iter().map(Ok)))
+}
+
+/// Stream the files the selected snapshot's manifests name.
+///
+/// An Iceberg snapshot attaches its files only when it is resolved, and this read
+/// resolves one snapshot — the requested one, or the latest — so the files are
+/// that snapshot's. A request that names commits and does not name that snapshot
+/// yields none: what an older snapshot added is a separate manifest read.
+///
+/// Each file carries the size the manifest declares, which `bytemass`
+/// cross-checks against the footer.
+pub(super) async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<v1::TableFile, Error>>, Error> {
+    let mut request = request.clone();
+    request.require_files = true;
+    let info = load(lake, &request).await?;
+    let files = match request.commit_versions.as_ref() {
+        Some(named) if !named.contains(&info.snapshot_version) => Vec::new(),
+        _ => info.files,
+    };
+    // `data_file` already resolved each blob and normalized its relative path.
+    Ok(stream::iter(files.into_iter().map(Ok)))
+}
+
+fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> Vec<&'a Snapshot> {
+    let Some(selected) = selected else {
+        return Vec::new();
+    };
+    let mut seen = BTreeSet::new();
+    let newest_first: Vec<&Snapshot> = std::iter::successors(Some(selected), |snapshot| {
+        snapshot
+            .parent_snapshot_id
+            .filter(|parent| *parent != -1)
+            .and_then(|id| {
+                metadata
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.snapshot_id == id)
+            })
+    })
+    // A parent cycle would otherwise repeat the snapshots it names.
+    .take_while(|snapshot| seen.insert(snapshot.snapshot_id))
+    .collect();
+    newest_first.into_iter().rev().collect()
+}
+
+async fn resolve_metadata_location(lake: &Lake, uri: &str) -> Result<String, Error> {
+    if is_metadata_json(uri) {
+        return Ok(uri.to_string());
+    }
+    if is_local(uri) {
+        return local_metadata(&local_path(uri)?);
+    }
+    let hint = join_uri(uri, "metadata/version-hint.text")?;
+    let bytes = read_location(lake, &hint).await?;
+    let version = parse_hint_version(&String::from_utf8_lossy(&bytes))?;
+    for name in hint_names(version) {
+        let candidate = join_uri(uri, &format!("metadata/{name}"))?;
+        if object_exists(lake, &candidate).await? {
+            return Ok(candidate);
+        }
+    }
+    Err(Error::Invalid(format!(
+        "cannot resolve Iceberg metadata for version {version}; pass the metadata JSON location"
+    )))
+}
+
+fn local_metadata(root: &Path) -> Result<String, Error> {
+    if root.is_file() {
+        return Ok(root.to_string_lossy().into_owned());
+    }
+    let metadata = root.join("metadata");
+    match hint_metadata(&metadata)? {
+        Some(found) => Ok(found),
+        None => newest_metadata(&metadata),
+    }
+}
+
+/// Resolve the metadata JSON named by `version-hint.text`, when the directory
+/// has one.
+fn hint_metadata(metadata: &Path) -> Result<Option<String>, Error> {
+    let hint_path = metadata.join("version-hint.text");
+    if !hint_path.is_file() {
+        return Ok(None);
+    }
+    let hint = std::fs::read_to_string(&hint_path).map_err(|e| Error::Io {
+        path: hint_path.display().to_string(),
+        source: e,
+    })?;
+    let version = parse_hint_version(&hint)?;
+    for name in hint_names(version) {
+        let candidate = metadata.join(name);
+        if candidate.is_file() {
+            return Ok(Some(candidate.to_string_lossy().into_owned()));
+        }
+    }
+    Err(Error::Invalid(format!(
+        "version-hint.text is {version} but no matching metadata JSON is in {}",
+        metadata.display()
+    )))
+}
+
+/// The newest metadata JSON in the directory, by leading version.
+fn newest_metadata(metadata: &Path) -> Result<String, Error> {
+    let entries = std::fs::read_dir(metadata).map_err(|e| Error::Io {
+        path: metadata.display().to_string(),
+        source: e,
+    })?;
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| Error::Io {
+            path: metadata.display().to_string(),
+            source: e,
+        })?;
+        let name = entry.file_name();
+        let Some(version) = metadata_json_version(&name.to_string_lossy()) else {
+            continue;
+        };
+        found.push((version, entry.path()));
+    }
+    found.sort_by_key(|(version, _)| *version);
+    found
+        .pop()
+        .map(|(_, path)| path.to_string_lossy().into_owned())
+        .ok_or_else(|| {
+            Error::Invalid(format!(
+                "no Iceberg metadata JSON in {}",
+                metadata.display()
+            ))
+        })
+}
+
+fn parse_hint_version(hint: &str) -> Result<u64, Error> {
+    let hint = hint.trim();
+    if hint.is_empty() || hint.contains(['/', '\\']) || hint.contains("..") {
+        return Err(Error::Invalid(format!("invalid version-hint.text: {hint}")));
+    }
+    hint.parse::<u64>()
+        .map_err(|_| Error::Invalid(format!("version-hint.text is not a version: {hint}")))
+}
+
+fn hint_names(version: u64) -> [String; 3] {
+    [
+        format!("{version}.metadata.json"),
+        format!("v{version}.metadata.json"),
+        format!("{version:05}.metadata.json"),
+    ]
+}
+
+fn metadata_json_version(name: &str) -> Option<u64> {
+    let stem = name.strip_suffix(".metadata.json")?;
+    let stem = stem.strip_prefix('v').unwrap_or(stem);
+    // Iceberg writes `v1.metadata.json`, `1.metadata.json`, and the
+    // `00001-<uuid>.metadata.json` form; only the leading version is the sort
+    // key, and a bare `<uuid>.metadata.json` has none.
+    let version = stem.split('-').next()?;
+    if version.is_empty() || !version.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    version.parse().ok()
+}
+
+async fn active_files(
+    lake: &Lake,
+    table_location: &str,
+    manifest_list: &str,
+) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
+    let root = table_root(table_location)?;
+    let entries: Vec<Entry> = active_entries(
+        lake.clone(),
+        table_location.to_owned(),
+        manifest_list.to_owned(),
+    )
+    .await?
+    .try_collect()
+    .await?;
+    let mut files = Vec::with_capacity(entries.len());
+    let mut deletes = Vec::new();
+    for entry in entries {
+        match entry {
+            Entry::Data(file) => files.push(file),
+            Entry::Delete(path) => {
+                // A delete outside the table keeps the manifest's raw path in
+                // the log; it is never read.
+                deletes.push(
+                    data_file_parts(&root, &path)
+                        .map(|(_, relative)| relative)
+                        .unwrap_or(path),
+                );
+            }
+        }
+    }
+    Ok((files, deletes))
+}
+
+/// One entry the active manifests name.
+///
+/// A manifest's entries are built together, so the data variant's size is one
+/// manifest's cost, not the walk's state; a `Box` would add an allocation to
+/// every file to save a few hundred bytes of stack.
+#[allow(clippy::large_enum_variant)]
+enum Entry {
+    /// A data file to measure.
+    Data(v1::TableFile),
+    /// A delete file's path: named in the log, never measured.
+    Delete(String),
+}
+
+/// One manifest entry as an active entry, or `None` when the entry is deleted.
+fn active_entry(
+    root: &TableRoot,
+    manifest_content: i32,
+    entry: ManifestEntry,
+) -> Option<Result<Entry, Error>> {
+    if entry.status == STATUS_DELETED {
+        return None;
+    }
+    let content = if manifest_content == MANIFEST_DELETES && entry.data_file.content == CONTENT_DATA
+    {
+        MANIFEST_DELETES
+    } else {
+        entry.data_file.content
+    };
+    if content != CONTENT_DATA {
+        return Some(Ok(Entry::Delete(entry.data_file.file_path)));
+    }
+    Some(data_file(root, entry).map(Entry::Data))
+}
+
+/// Stream the active manifests' entries, without collecting them.
+///
+/// The manifest list is read once; each manifest is then read when the walk
+/// reaches it, so a table holds one manifest's entries at a time however many
+/// manifests its snapshot names.
+async fn active_entries(
+    lake: Lake,
+    table_location: String,
+    manifest_list: String,
+) -> Result<impl Stream<Item = Result<Entry, Error>> + Send + 'static, Error> {
+    let root = table_root(&table_location)?;
+    let bytes = read_location(&lake, &manifest_list).await?;
+    let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
+    Ok(stream::iter(manifests)
+        .then(move |manifest| {
+            let lake = lake.clone();
+            let root = root.clone();
+            async move {
+                let bytes = read_location(&lake, &manifest.manifest_path).await?;
+                let entries: Vec<ManifestEntry> =
+                    read_avro(&bytes, "manifest").map_err(Error::Avro)?;
+                Ok(entries
+                    .into_iter()
+                    .filter_map(|entry| active_entry(&root, manifest.content, entry))
+                    .collect::<Vec<_>>())
+            }
+        })
+        .map_ok(stream::iter)
+        .try_flatten())
+}
+
+/// Stream the selected snapshot's active files, without collecting them.
+///
+/// Iceberg records no per-file time, so a caller's window can only drop what
+/// arrives; the walk is the snapshot's manifests either way.
+pub(super) async fn stream_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<super::FileStream<'static>, Error> {
+    let metadata = read_metadata(lake, &request.uri).await?;
+    let location = metadata.location.clone();
+    let requested = request.snapshot_version.map(create_i64).transpose()?;
+    let Some(snapshot) = select_snapshot(&metadata, requested)? else {
+        return Ok(stream::empty().boxed());
+    };
+    let manifest_list = snapshot.manifest_list.clone();
+    Ok(active_entries(lake.clone(), location, manifest_list)
+        .await?
+        .try_filter_map(|entry| async move {
+            Ok(match entry {
+                Entry::Data(file) => Some(file),
+                Entry::Delete(_) => None,
+            })
+        })
+        .boxed())
+}
+
+/// One active manifest entry as a `v1::TableFile`, checking it is Parquet.
+fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<v1::TableFile, Error> {
+    if !entry.data_file.file_format.eq_ignore_ascii_case("parquet") {
+        return Err(Error::Invalid(format!(
+            "active data file is not Parquet: {}",
+            entry.data_file.file_path
+        )));
+    }
+    let size = u64::try_from(entry.data_file.file_size_bytes).map_err(|_| {
+        Error::Invalid(format!(
+            "invalid file size in manifest: {}",
+            entry.data_file.file_path
+        ))
+    })?;
+    let (uri, relative) = data_file_parts(root, &entry.data_file.file_path)?;
+    Ok(v1::TableFile {
+        blob: Some(v1::name::blob_name(&uri)),
+        path: relative,
+        size_bytes: Some(size),
+        ..v1::TableFile::default()
+    })
+}
+
+#[derive(Clone)]
+enum TableRoot {
+    Local(PathBuf),
+    Object(Url),
+}
+
+fn table_root(location: &str) -> Result<TableRoot, Error> {
+    if looks_like_uri(location) {
+        let url = parse_dir_url(location)?;
+        if url.scheme() == "file" {
+            let path = url.to_file_path().map_err(|()| {
+                Error::Invalid(format!(
+                    "cannot convert table location to a path: {location}"
+                ))
+            })?;
+            return Ok(TableRoot::Local(path));
+        }
+        return Ok(TableRoot::Object(url));
+    }
+    Ok(TableRoot::Local(PathBuf::from(location)))
+}
+
+/// The data file's readable URI and its path relative to the table root.
+///
+/// Iceberg manifests may name a file either relative to the table location or
+/// by full URI; a `TableFile` records the relative form (as Delta does) and
+/// keeps the resolved URI only on its `Blob`.
+fn data_file_parts(root: &TableRoot, location: &str) -> Result<(String, String), Error> {
+    match root {
+        TableRoot::Local(root) => {
+            let path = local_data_path(root, location)?;
+            let relative = path.strip_prefix(root).map_err(|_| {
+                Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                ))
+            })?;
+            if !relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                )));
+            }
+            Ok((path.to_string_lossy().into_owned(), slash_path(relative)))
+        }
+        TableRoot::Object(base) => {
+            let uri = object_input(base, location)?;
+            let url = Url::parse(&uri).map_err(Error::Uri)?;
+            let relative = url.path().strip_prefix(base.path()).ok_or_else(|| {
+                Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                ))
+            })?;
+            let relative = crate::v1::name::decode(relative);
+            if relative.is_empty()
+                || !Path::new(&relative)
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err(Error::Invalid(format!(
+                    "active data file is outside the Iceberg table location: {location}"
+                )));
+            }
+            Ok((url.to_string(), relative))
+        }
+    }
+}
+
+/// A relative filesystem path with `/` separators, the form a resource id uses.
+fn slash_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn local_data_path(root: &Path, location: &str) -> Result<PathBuf, Error> {
+    let candidate = if looks_like_uri(location) {
+        let url = Url::parse(location).map_err(Error::Uri)?;
+        if url.scheme() != "file" {
+            return Err(Error::Invalid(format!(
+                "active data file is not local: {location}"
+            )));
+        }
+        url.to_file_path().map_err(|()| {
+            Error::Invalid(format!(
+                "cannot convert active data file to a path: {location}"
+            ))
+        })?
+    } else {
+        relative_data_path(location)?.to_path_buf()
+    };
+    let local = if candidate.is_absolute() {
+        candidate
+    } else {
+        root.join(candidate)
+    };
+    if !local.starts_with(root) {
+        return Err(Error::Invalid(format!(
+            "active data file is outside the Iceberg table location: {location}"
+        )));
+    }
+    Ok(local)
+}
+
+fn object_input(base: &Url, location: &str) -> Result<String, Error> {
+    let uri = if looks_like_uri(location) {
+        location.to_string()
+    } else {
+        relative_data_path(location)?;
+        base.join(location).map_err(Error::Uri)?.into()
+    };
+    let url = Url::parse(&uri).map_err(Error::Uri)?;
+    if url.scheme() != base.scheme()
+        || url.host_str() != base.host_str()
+        || !url.path().starts_with(base.path())
+    {
+        return Err(Error::Invalid(format!(
+            "active data file is outside the Iceberg table location: {location}"
+        )));
+    }
+    Ok(uri)
+}
+
+fn parse_dir_url(location: &str) -> Result<Url, Error> {
+    let mut url = Url::parse(location).map_err(Error::Uri)?;
+    if !url.path().ends_with('/') {
+        url.set_path(&format!("{}/", url.path()));
+    }
+    Ok(url)
+}
+
+async fn read_location(lake: &Lake, location: &str) -> Result<Vec<u8>, Error> {
+    if looks_like_uri(location) {
+        let reader = object_store::open(lake, location).map_err(|e| Error::Storage(Box::new(e)))?;
+        let stat = reader
+            .stat()
+            .await
+            .map_err(|e| Error::Storage(Box::new(e)))?;
+        reader
+            .read_range(0..stat.size_bytes, stat.identity.as_deref())
+            .await
+            .map_err(|e| Error::Storage(Box::new(e)))
+    } else {
+        std::fs::read(location).map_err(|e| Error::Io {
+            path: location.to_string(),
+            source: e,
+        })
+    }
+}
+
+async fn object_exists(lake: &Lake, location: &str) -> Result<bool, Error> {
+    let reader = object_store::open(lake, location).map_err(|e| Error::Storage(Box::new(e)))?;
+    reader
+        .exists()
+        .await
+        .map_err(|e| Error::Storage(Box::new(e)))
+}
+
+fn is_metadata_json(uri: &str) -> bool {
+    uri.rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name.ends_with(".metadata.json"))
+}
+
+fn looks_like_uri(value: &str) -> bool {
+    value.contains("://")
+}
+
+fn create_u64(value: i64) -> Result<u64, Error> {
+    u64::try_from(value)
+        .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is negative: {value}")))
+}
+
+fn create_i64(value: u64) -> Result<i64, Error> {
+    i64::try_from(value)
+        .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is too large: {value}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_paths_are_relative_decoded_and_canonical() {
+        let root = TableRoot::Object(Url::parse("s3://bucket/table/").unwrap());
+        let (uri, path) = data_file_parts(&root, "s3://bucket/table/data/a%20b.parquet").unwrap();
+        assert_eq!(uri, "s3://bucket/table/data/a%20b.parquet");
+        assert_eq!(path, "data/a b.parquet");
+
+        let (uri, path) = data_file_parts(&root, "data/a%20b.parquet").unwrap();
+        assert_eq!(uri, "s3://bucket/table/data/a%20b.parquet");
+        assert_eq!(path, "data/a b.parquet");
+    }
+
+    #[test]
+    fn object_paths_outside_the_table_are_rejected() {
+        let root = TableRoot::Object(Url::parse("s3://bucket/table/").unwrap());
+        assert!(data_file_parts(&root, "s3://bucket/other/a.parquet").is_err());
+        assert!(data_file_parts(&root, "s3://other/table/a.parquet").is_err());
+    }
+
+    #[test]
+    fn local_paths_are_relative_to_the_table_root() {
+        let root = TableRoot::Local(PathBuf::from("/tmp/table"));
+        let (uri, path) = data_file_parts(&root, "data/a.parquet").unwrap();
+        assert_eq!(uri, "/tmp/table/data/a.parquet");
+        assert_eq!(path, "data/a.parquet");
+    }
+
+    #[test]
+    fn local_paths_outside_the_table_are_rejected() {
+        let root = TableRoot::Local(PathBuf::from("/tmp/table"));
+        assert!(data_file_parts(&root, "file:///tmp/other/a.parquet").is_err());
+    }
+}

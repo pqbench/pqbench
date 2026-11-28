@@ -28,7 +28,9 @@ pub(crate) async fn run(lake: &pqbench::Lake, args: &DiffArgs) -> Result<(), Cli
     let deltas = diff::compare(&left, &right, args.depth)?;
     let mut emit = Emitter::open();
     for delta in &deltas {
-        emit.write(delta).await?;
+        if emit.write(delta).await?.is_break() {
+            break;
+        }
     }
     emit.finish().await
 }

@@ -22,7 +22,6 @@ aws = ["pqbench/aws"]
 iceberg = ["pqbench/iceberg"]
 delta-s3 = ["pqbench/delta-s3"]
 iceberg-s3 = ["pqbench/iceberg-s3"]
-
 [[bin]]
 name = "pqbench"
 path = "src/main.rs"
@@ -32,13 +31,18 @@ test = false
 
 [dependencies]
 pqbench = { workspace = true }
+pqbench-driver = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# `--partition` is an ISO date: the civil calendar is chrono's, already in the
+# graph through `parquet`.
+chrono = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 lz4 = "1"
 libc = "0.2"
-tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "fs", "net", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "fs", "net", "process", "signal", "sync", "time"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

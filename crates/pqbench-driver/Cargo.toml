@@ -1,0 +1,33 @@
+[package]
+name = "pqbench-driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Partition-version state driver for pqbench."
+
+[[bin]]
+name = "pqbench-driver"
+path = "src/main.rs"
+# `main.rs` has no unit tests; building the harness would link the graph again
+# just to run zero of them.
+test = false
+
+[dependencies]
+# The wire types and the local Parquet work only: the driver runs the commands,
+# which reach storage themselves, so it never links deltalake, the AWS SDK, or
+# iceberg.
+pqbench-model-v1 = { workspace = true }
+pqbench-parquet = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+libc = "0.2"
+serde = { version = "1.0.229", features = ["derive"] }
+# `raw_value`: a version's stored results cross the socket as the bytes they
+# were read from, not as a parsed tree.
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+tokio = { version = "1", features = ["rt", "macros", "io-util", "net", "process", "signal", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"

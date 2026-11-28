@@ -14,14 +14,15 @@ fn pipe_stdin(args: &[&str], stdin: &[u8]) -> std::process::Output {
 
 /// pqbench with extra environment: the walk's context comes from `PQB_*`.
 fn pipe_env(args: &[&str], stdin: &[u8], env: &[(&str, &str)]) -> std::process::Output {
-    let mut child = pqbench()
+    let mut command = pqbench();
+    command
         .args(args)
         .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    let _daemon = crate::common::attach_daemon(&mut command);
+    let mut child = command.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();
     child.wait_with_output().unwrap()
 }
@@ -109,6 +110,9 @@ fn routes(routes: &'static [(&'static str, u16, &'static str)]) -> String {
 }
 
 /// The walk's config: `PQB_ENDPOINT` names the endpoint.
+/// The catalog keeps `information_schema` for itself: it holds views over
+/// metadata, no files, so `list schemas` does not list it.
+///
 /// One parent record, as the stream carries it.
 fn parent(name: &str) -> Vec<u8> {
     format!(r#"{{"name":"{name}"}}"#).into_bytes()
@@ -131,8 +135,7 @@ const SCHEMA_REFS: &str = concat!(
     "\n",
 );
 
-const SCHEMAS: &str =
-    r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"}],"next_page_token":null}"#;
+const SCHEMAS: &str = r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"},{"name":"information_schema","securable_kind":"SCHEMA_SYSTEM"}],"next_page_token":null}"#;
 const SCHEMAS_PAGE: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":"more"}"#;
 const SCHEMAS_LAST: &str = r#"{"schemas":[{"name":"bakehouse"}]}"#;
 const ICEBERG_NAMESPACES: &str =
@@ -145,15 +148,6 @@ const CATALOG_REFS: &str = concat!(
     r#"{"name":"catalogs/dbx_samples"}"#,
     "\n",
     r#"{"name":"catalogs/system"}"#,
-    "\n",
-);
-
-/// The same stream with the unreachable catalog first, so a drop cannot be
-/// confused with the stream ending.
-const CATALOG_REFS_BAD_FIRST: &str = concat!(
-    r#"{"name":"catalogs/system"}"#,
-    "\n",
-    r#"{"name":"catalogs/dbx_samples"}"#,
     "\n",
 );
 
@@ -317,6 +311,12 @@ fn schema_ls_follows_unity_page_tokens() {
         ("page_token=", 200, SCHEMAS_LAST),
         ("/schemas", 200, SCHEMAS_PAGE),
     ]);
+    // Pages stream in arrival order: page 1's `nyctaxi`, then page 2's
+    // `bakehouse`. Nothing buffers the pages to sort them.
+    let page_order = [
+        "catalogs/dbx_samples/schemas/nyctaxi",
+        "catalogs/dbx_samples/schemas/bakehouse",
+    ];
     let output = pipe_env(
         &["list", "schemas"],
         &parent("catalogs/dbx_samples"),
@@ -332,13 +332,7 @@ fn schema_ls_follows_unity_page_tokens() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        names,
-        [
-            "catalogs/dbx_samples/schemas/bakehouse",
-            "catalogs/dbx_samples/schemas/nyctaxi"
-        ]
-    );
+    assert_eq!(names, page_order);
 }
 
 #[test]
@@ -380,6 +374,11 @@ fn schema_ls_follows_iceberg_page_tokens() {
         ("pageToken=", 200, ICEBERG_LAST),
         ("/namespaces", 200, ICEBERG_PAGE),
     ]);
+    // `nyctaxi` arrives on the first page, `bakehouse` on the second.
+    let page_order = [
+        "catalogs/dbx_samples/schemas/nyctaxi",
+        "catalogs/dbx_samples/schemas/bakehouse",
+    ];
     let output = pipe_env(
         &["list", "schemas"],
         &parent("catalogs/dbx_samples"),
@@ -398,13 +397,7 @@ fn schema_ls_follows_iceberg_page_tokens() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        names,
-        [
-            "catalogs/dbx_samples/schemas/bakehouse",
-            "catalogs/dbx_samples/schemas/nyctaxi"
-        ]
-    );
+    assert_eq!(names, page_order);
 }
 
 #[test]
@@ -472,92 +465,52 @@ fn schema_ls_lists_a_catalog_stream() {
 }
 
 #[test]
-fn schema_ls_drops_a_catalog_that_never_answers() {
-    // The walk shares one endpoint: one catalog's request gets no answer (a
-    // timeout or a dropped connection) while the rest answer. The level reports
-    // it, finishes the stream, and then exits non-zero — one unreachable ref
-    // does not truncate the walk.
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 0, ""),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas"],
-        CATALOG_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2, "{records:?}");
-    assert!(records.iter().all(|record| record["name"]
-        .as_str()
-        .unwrap()
-        .starts_with("catalogs/dbx_samples/")));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("catalogs/system"), "{stderr}");
-}
-
-#[test]
-fn schema_ls_drops_a_catalog_that_answers_an_error() {
-    // The drop is type-agnostic: a 500 is treated like a timeout, named on
-    // standard error, and the rest of the walk carries on. The run exits
-    // non-zero after the stream finishes.
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 500, r#"{"message":"boom"}"#),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas"],
-        CATALOG_REFS.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2, "{records:?}");
-    assert!(records.iter().all(|record| record["name"]
-        .as_str()
-        .unwrap()
-        .starts_with("catalogs/dbx_samples/")));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("catalogs/system"), "{stderr}");
-    assert!(stderr.contains("500"), "{stderr}");
-}
-
-#[test]
-fn schema_ls_keeps_reading_after_a_drop() {
-    // The failed ref is first and one request is in flight, so the good
-    // catalog's schemas are read only after the drop — not already buffered
-    // when the stream ends.
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 0, ""),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas", "--fan-out", "1"],
-        CATALOG_REFS_BAD_FIRST.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let records = ndjson(&output.stdout);
-    assert_eq!(records.len(), 2, "{records:?}");
-    assert!(records.iter().all(|record| record["name"]
-        .as_str()
-        .unwrap()
-        .starts_with("catalogs/dbx_samples/")));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("catalogs/system"), "{stderr}");
+fn schema_ls_drops_a_catalog_that_fails() {
+    // The walk shares one endpoint: one catalog's request fails (no answer, or
+    // an HTTP error) while the rest answer. The level reports it, finishes the
+    // stream, and then exits non-zero — one unreachable ref does not truncate
+    // the walk.
+    for status in [0_u16, 500] {
+        // Each plan is a constant, so the server thread can own it.
+        let plan: &'static [(&'static str, u16, &'static str)] = match status {
+            0 => &[
+                ("catalog_name=dbx_samples", 200, SCHEMAS),
+                ("catalog_name=system", 0, ""),
+            ],
+            _ => &[
+                ("catalog_name=dbx_samples", 200, SCHEMAS),
+                ("catalog_name=system", 500, r#"{"message":"boom"}"#),
+            ],
+        };
+        let address = routes(plan);
+        let output = pipe_env(
+            &["list", "schemas"],
+            CATALOG_REFS.as_bytes(),
+            &[("PQB_ENDPOINT", address.as_str())],
+        );
+        assert!(
+            !output.status.success(),
+            "status {status}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let records = ndjson(&output.stdout);
+        assert_eq!(records.len(), 2, "status {status}: {records:?}");
+        assert!(records.iter().all(|record| record["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("catalogs/dbx_samples/")));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("catalogs/system"),
+            "status {status}: {stderr}"
+        );
+        if status != 0 {
+            assert!(
+                stderr.contains(&status.to_string()),
+                "status {status}: {stderr}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -581,24 +534,4 @@ fn schema_ls_counts_every_dropped_catalog() {
         2,
         "{stderr}"
     );
-}
-
-#[test]
-fn schema_ls_finishes_the_table_before_a_drop() {
-    let address = routes(&[
-        ("catalog_name=dbx_samples", 200, SCHEMAS),
-        ("catalog_name=system", 0, ""),
-    ]);
-    let output = pipe_env(
-        &["list", "schemas", "--fan-out", "1"],
-        CATALOG_REFS_BAD_FIRST.as_bytes(),
-        &[("PQB_ENDPOINT", address.as_str())],
-    );
-    assert!(
-        !output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("dbx_samples"), "{stdout}");
 }

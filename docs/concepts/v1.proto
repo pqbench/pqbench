@@ -1,6 +1,7 @@
 // Status: the wire contract. The implemented resources are in
-// `crates/pqbench/src/v1/`; the profile record is in
-// `crates/pqbench/src/profile.rs`. The modelling rules are
+// `crates/pqbench-model-v1/src/` (re-exported as `pqbench::v1`); the profile
+// record is in `crates/pqbench-parquet/src/profile.rs` (re-exported as
+// `pqbench::profile`). The modelling rules are
 // `docs/concepts/data-modelling.md`; where this contract differs from them, they
 // win.
 //
@@ -165,6 +166,10 @@ message Table {
 
   // The user-facing name the endpoint reports for the table.
   string display_name = 12;
+
+  // When the table was created, milliseconds since the Unix epoch: the Delta
+  // log's `metaData.createdTime`, else the catalog record's `created_at`.
+  optional int64 create_time = 13;
 }
 
 // A column of a table's schema. Not a resource: the declared column is a
@@ -193,8 +198,15 @@ message Blob {
 
   int64 size_bytes = 2;
 
+  // Rows in the file, from its footer. Absent when the footer was not read.
+  optional int64 row_count = 8;
+
   // The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
   string storage_class = 3;
+
+  // Whether reading the object needs a restore first. Absent when the storage
+  // service has no such state.
+  optional bool restore_required = 9;
 
   // The writer that produced the file, as its footer names it (`created_by`),
   // e.g. `parquet-mr version 1.13.1`. Absent when the footer names none.
@@ -243,6 +255,225 @@ message TableFile {
   // The probability a `sample files` stage kept this record with; its inverse
   // is the weight a sum over the stream applies. Absent means unsampled.
   optional double sample_rate = 9;
+}
+
+// One partition of a table's snapshot: the active files that share its
+// partition values, folded into totals. An unpartitioned table has one.
+message Partition {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}
+  // `{partition}` is the Hive-style path of the values (`k=v/k2=v2`, in the
+  // table's partition column order; `/`, `=` and `%` in a key or value
+  // percent-escaped; a null value is `__HIVE_DEFAULT_PARTITION__`), URL-encoded
+  // to one segment. A table without partition columns has `unpartitioned`, as
+  // do removed files whose `remove` action records no partition values.
+  string name = 1;
+
+  // The log's partition values; a null value is JSON null.
+  map<string, google.protobuf.Value> partition_values = 2;
+
+  // Changes when a file is added to or removed from the partition: an
+  // order-independent hash of each file's path and size, 16 hex digits.
+  string etag = 3;
+
+  int64 file_count = 4;
+
+  // Sum of the files' sizes, as the log claims them.
+  int64 size_bytes = 5;
+
+  // Sum of the files' record counts; absent when a file has none.
+  optional int64 record_count = 6;
+
+  int64 smallest_file_size_bytes = 7;
+
+  int64 largest_file_size_bytes = 8;
+
+  // The oldest and newest file by the log's modification time (ties fall to
+  // the path). Absent when the log records no per-file time (Iceberg).
+  TableFile first_file = 9;
+
+  TableFile last_file = 10;
+
+  // The file a measurement reads for the partition: the one whose path and
+  // size hash lowest, so it stays the same while the partition holds it.
+  TableFile sample_file = 11;
+
+  // Files the snapshot removed whose tombstones it still keeps and no active
+  // file holds: stored, and billed, until a vacuum deletes them. Absent when
+  // the format's removed files are not read (Iceberg).
+  optional int64 removed_file_count = 12;
+
+  // Sum of the removed files' sizes, as the `remove` actions record them.
+  optional int64 removed_size_bytes = 13;
+}
+
+// A partition's storage price at one etag, the partition's singleton child
+// (AIP-156): the storage classes of the files `get partition-price` looked at,
+// and what the partition's bytes cost in each.
+message PartitionPrice {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/price
+  string name = 1;
+
+  // The partition's etag when it was priced.
+  string partition_etag = 2;
+
+  // The storage classes of the partition's oldest, sample and newest files,
+  // without repeats, in that order. Lifecycle moves objects by age, so one
+  // class covers the partition and two mean a transition inside it. Empty
+  // when the files are not S3 objects.
+  repeated string storage_classes = 3;
+
+  // The partition's bytes priced in each class it shows: one entry per class,
+  // and one per access sub-tier for a class that prices by access. With one
+  // class this is the cost; with two they bound it.
+  repeated StorageTierCost storage_costs = 4;
+
+  // The partition's removed bytes priced the same way.
+  repeated StorageTierCost removed_storage_costs = 5;
+
+  // Whether any sampled file needs a restore before it can be read. Absent when
+  // no sampled file is an S3 object.
+  optional bool restore_required = 6;
+}
+
+// A partition at one etag and where it is in the pipeline: the driver's
+// record of it (`list partition-versions`), and the engine's whole state. A
+// walk makes a version for each etag it finds; the previous one leaves the map
+// and its results are purged.
+message PartitionVersion {
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/versions/{version}
+  // The version id is the partition's etag.
+  string name = 1;
+
+  // Where a version is: each transition takes it from the state before it,
+  // through the transition's running state, to the state after it.
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    reserved 1; // was DELETED
+    // Found, not processed yet.
+    PENDING = 2;
+    PRICING = 3;
+    PRICED = 4;
+    // The version's sample file is being copied into its directory.
+    DOWNLOADING = 5;
+    // The sample file is on disk, for the commands that read its data.
+    DOWNLOADED = 6;
+    BYTEMASSING = 7;
+    BYTEMASSED = 8;
+    LINTING = 9;
+    // The potential suggestions are on disk, waiting for the verification that
+    // measures them against their control.
+    LISTED = 17;
+    VERIFYING = 18;
+    // Every transition the version needs is done: a version with no live file, or
+    // whose files need a restore, is done after its price.
+    UP_TO_DATE = 10;
+    // The version failed too many times: it is quarantined, so no transition
+    // runs on it again. Only a walk that finds a new etag — a partition that
+    // was written — makes a version that is tried afresh.
+    FAILED = 19;
+  }
+
+  State state = 2;
+
+  // When a walk first found this version.
+  int64 create_time = 3;
+
+  // When a walk last found this version.
+  optional int64 list_time = 15;
+
+  reserved 4; // was up_to_date_time
+
+  // The partition's first scan, carried from version to version.
+  int64 first_listed_time = 5;
+
+  // The partition's versions before this one.
+  int64 etag_change_count = 6;
+
+  // Failures of the current transition on this version; after repeated
+  // failures the version backs off until `retry_time`, and after enough of
+  // them it is FAILED.
+  int64 failure_count = 7;
+
+  // The last failure's error.
+  optional string error = 8;
+
+  // Earliest time (epoch ms) to retry after repeated failures.
+  optional int64 retry_time = 16;
+
+  // The version's files and bytes, from its listing.
+  int64 file_count = 9;
+
+  int64 size_bytes = 10;
+
+  // The bytes removed from the log but not vacuumed, when the log reports
+  // them.
+  optional int64 removed_size_bytes = 11;
+
+  // When the version's newest file was written; absent when the log records
+  // no per-file time (Iceberg).
+  optional int64 last_modification_time = 12;
+
+  // The version's monthly storage cost from its price: the cheapest and the
+  // dearest class or access tier it may be in. Absent until priced, and for
+  // files with no storage class.
+  optional double lowest_cost_per_month = 13;
+
+  optional double highest_cost_per_month = 14;
+}
+
+// The totals of the partition versions under one catalog, schema or table,
+// its singleton child (AIP-156), from `summarize partition-versions`. A
+// partition has at most one version.
+message PartitionStats {
+  // Format: catalogs/{catalog}/partitionStats
+  // Format: catalogs/{catalog}/schemas/{schema}/partitionStats
+  // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitionStats
+  string name = 1;
+
+  // The versions, one per partition.
+  int64 partition_count = 2;
+
+  // The partitions' files and bytes, from their listings.
+  int64 file_count = 3;
+
+  int64 size_bytes = 4;
+
+  // The bytes removed from the logs but not vacuumed, where the logs report
+  // them.
+  int64 removed_size_bytes = 5;
+
+  // The partitions with a monthly cost: priced, and their files have a
+  // storage class.
+  int64 priced_partition_count = 6;
+
+  // Those partitions' monthly cost, summed over their cheapest and their
+  // dearest class or access tier. Absent when none has a cost.
+  optional double lowest_cost_per_month = 7;
+
+  optional double highest_cost_per_month = 8;
+
+  // When the newest file of any partition was written.
+  optional int64 last_modification_time = 9;
+
+  // Every version, by its state's value name.
+  map<string, int64> version_counts = 10;
+
+  // The versions whose last command failed.
+  int64 failed_version_count = 11;
+}
+
+// One candidate monthly storage cost: a class with one price, or one access
+// sub-tier of a class that chooses its price by access.
+message StorageTierCost {
+  string storage_class = 1;
+
+  // The access sub-tier, for a class that prices by access.
+  optional string access_tier = 2;
+
+  // The S3 list price, in dollars per gibibyte per month (us-east-1).
+  double dollars_per_gibibyte_per_month = 3;
+
+  double cost_per_month = 4;
 }
 
 // One commit of a table's log. The `{commit}` id segment is the log version, a
@@ -304,13 +535,39 @@ message Column {
 // chunks. A value on `Column`, not a resource; the per-chunk breakdown is not
 // carried.
 message Bytemass {
+  // The leaf column's logical type, as the Parquet spec names it (`STRING`,
+  // `DECIMAL(10,2)`, `TIMESTAMP(MICROS,UTC)`, …). Absent when the footer's
+  // schema records none. A footer fact: it costs no page read.
+  string logical_type = 21;
+
   int64 compressed_bytes = 2;
   int64 uncompressed_bytes = 3;
+  // The file's serialized Thrift footer and its eight-byte trailer, in bytes:
+  // the metadata a file pays for once, so every column of the file carries the
+  // same value. A footer fact: the length comes with the footer read, so no
+  // extra byte is fetched. Absent only when the caller did not supply it.
+  int64 footer_bytes = 24;
+  // The file's bytes outside every column chunk: the footer above, the page
+  // indexes, bloom filters, key-value metadata (an `ARROW:schema`, say), and
+  // any other object bytes no chunk accounts for. `size_bytes` − Σ
+  // `compressed_bytes`; a file fact repeated on each of its columns.
+  int64 unaccounted_bytes = 25;
   string codec = 4;
   repeated string encodings = 5;
   repeated string data_encodings = 15;
+  // The chunk is dictionary-encoded: a dictionary page offset, dictionary data
+  // pages, or a dictionary encoding in the chunk's encoding set. A writer that
+  // omits the offset (parquet-mr 1.8.3) still sets this.
   bool dictionary = 6;
+  // Bytes from the dictionary page offset to the first data page, when the
+  // footer records an offset that locates the page.
   int64 dictionary_bytes = 16;
+
+  // Data pages the footer counts, split by how they encode their values; a
+  // dictionary page counts as neither. Absent when the writer recorded no page
+  // encoding statistics. Footer facts: no page read.
+  optional int64 plain_data_page_count = 22;
+  optional int64 dictionary_data_page_count = 23;
 
   // Every chunk carries a page index (a column index and an offset index), so
   // the column can be pruned at page granularity.
@@ -373,23 +630,33 @@ message ColumnProfile {
   string monotonic = 20;
 }
 
-// A storage suggestion for a column. `list suggestions` emits a potential (no
-// `verified`); `get suggestion` measures it against a control written by the
-// same writer at the same codec and level, then sets `verified` and, on a win,
-// `savings_bytes`. The fields below are the wire contract.
+// A storage suggestion for a column, or for a whole partition. `list
+// suggestions` emits a column rule's potential (no `verified`); `get
+// suggestion` measures it against a control written by the same writer at the
+// same codec and level, then sets `verified` and, on a win, `savings_bytes`.
+// The partition rules (`tombstones`, `small-files`) decide from a partition's
+// metadata alone: their `name` is `{partition}/suggestions/{rule}`, their
+// `column` is empty, and `partition` names the partition. The fields below are
+// the wire contract.
 message Suggestion {
   // Format:
   // blobs/{service}/{locator}/columns/{column}/suggestions/{rule}
+  // Format (a partition rule):
+  // catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/suggestions/{rule}
   string name = 1;
 
   // The stable rule id.
   string rule = 2;
 
-  // The column's dotted leaf path.
+  // The column's dotted leaf path; empty on a partition rule.
   string column = 3;
 
   // The table whose file was measured, when measured through a table file.
   string table = 4;
+
+  // The partition a partition-level rule measured
+  // (`…/tables/{table}/partitions/{partition}`); absent on a column rule.
+  optional string partition = 15;
 
   // The probability the table file naming this column was kept with, when a
   // `sample files` stage chose it. Absent means unsampled, weight one.
@@ -408,18 +675,39 @@ message Suggestion {
   // The change that recovers the bytes, in the terms of the file's writer.
   string remedy = 8;
 
-  // Whether the controlled rewrite confirms a saving. Absent on a potential
-  // from `list suggestions`; true when `get suggestion` measured a win; false
-  // when it measured none.
+  // The same change as one setting per engine, when the rule has one for that
+  // engine. Ordered by engine; `remedy` is the detected writer's.
+  repeated Remedy remedies = 14;
+
+  // Whether the controlled rewrite confirms a saving, or, on a partition
+  // rule, whether the rule's own count is exact. Absent on a potential from
+  // `list suggestions`, and on `small-files`, whose saving is not measured;
+  // true when `get suggestion` measured a win (or `tombstones` counted the
+  // removed bytes); false when the measurement measured none.
   optional bool verified = 11;
 
   // Estimated bytes saved, conservative across compression levels. Present
   // only when `verified` is true.
   optional int64 savings_bytes = 9;
 
-  // Leading rows the detection sampled, so `get suggestion` measures the same
-  // values. Absent means the default.
+  // Rows the detection decoded, not the rows it asked for: the sample is one
+  // whole representative row group.
   optional int64 sample_row_count = 12;
+
+  // Whole row groups the detection decoded: the one group whose row count is
+  // closest to the file's average. `get suggestion` re-reads it, so the
+  // verification measures what the detection did.
+  optional int64 sample_row_group_count = 13;
+}
+
+// One engine's setting that applies a suggestion's rewrite.
+message Remedy {
+  // The engine the setting belongs to: `spark`, `pyarrow`, `parquet-rs`,
+  // `delta`, or `iceberg`.
+  string engine = 1;
+
+  // The setting, as that engine spells it.
+  string setting = 2;
 }
 
 // One frequent value in a column profile.

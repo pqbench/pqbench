@@ -14,12 +14,22 @@ use ::object_store::client::{
 use ::object_store::signer::Signer;
 use ::object_store::{GetOptions, ObjectStore, ObjectStoreExt};
 use async_trait::async_trait;
+use chrono::DateTime;
 use url::Url;
 
 use crate::third_party::object_store::api::{
     Error, ObjectReader, ObjectStat, PrefixListing, Remote,
 };
 use crate::third_party::reqwest::r#impl::Http;
+
+/// How long the store retries a failed request, the credential probes
+/// included: bounded well below `object_store`'s three-minute default so
+/// refused probes still fail in seconds, while leaving room for retries after
+/// a cross-region S3 timeout.
+const RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Maximum retries for transient S3 transport/timeout errors.
+const MAX_RETRIES: usize = 3;
 
 /// The one `reqwest` client backs every store. `object_store` builds a fresh
 /// client on each `build()`, and `reqwest` re-parses the platform CA bundle
@@ -65,13 +75,13 @@ impl HttpService for ClassifySendFailure {
     }
 }
 
-/// Whether the underlying reqwest error is a request that could not be sent
-/// (the socket carried no response), rather than a permanent failure.
+/// Whether the underlying reqwest error is a transient send, timeout, or body
+/// failure on an idempotent read, rather than a permanent failure.
 fn sends_failed(error: &HttpError) -> bool {
     let mut source = std::error::Error::source(error);
     while let Some(error) = source {
         if let Some(error) = error.downcast_ref::<reqwest::Error>() {
-            return error.is_request();
+            return error.is_request() || error.is_timeout() || error.is_body();
         }
         source = error.source();
     }
@@ -276,7 +286,17 @@ impl Stores {
         // it.
         let mut builder = AmazonS3Builder::from_env()
             .with_url(url.to_string())
-            .with_http_connector(SharedConnector(self.http.clone()));
+            .with_http_connector(SharedConnector(self.http.clone()))
+            // The retry loop also covers the credential chain: a host that
+            // is not in AWS answers the metadata probe with a refused
+            // connection, and the store's default three-minute window turned
+            // every unreadable table into minutes of a walk. A table that
+            // cannot be read now fails within seconds, and is skipped.
+            .with_retry(::object_store::RetryConfig {
+                max_retries: MAX_RETRIES,
+                retry_timeout: RETRY_TIMEOUT,
+                ..::object_store::RetryConfig::default()
+            });
         for (key, value) in options {
             let config_key: AmazonS3ConfigKey = key
                 .to_ascii_lowercase()
@@ -363,15 +383,73 @@ async fn stat_get_opts(
             .attributes
             .get(&::object_store::Attribute::StorageClass)
             .map(|value| value.as_ref().to_string()),
+        ..ObjectStat::default()
     })
 }
 
-/// Parse size, identity, and storage class from a HEAD response.
+/// The S3 restore state HEAD reports in `x-amz-restore`: whether a restore is
+/// still running, when a completed one expires, and whether the header said a
+/// restore completed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Restore {
+    ongoing: bool,
+    expiry_time_ms: Option<u64>,
+    completed: bool,
+}
+
+/// Parse an `x-amz-restore` value: `ongoing-request="true"`, or
+/// `ongoing-request="false", expiry-date="Fri, 21 Dec 2012 00:00:00 GMT"`.
+/// A header this reader cannot read reports no restore, so the storage read
+/// decides rather than a false archive verdict.
+fn parse_restore(value: &str) -> Restore {
+    let Some(ongoing) = flag(value, "ongoing-request") else {
+        return Restore::default();
+    };
+    Restore {
+        ongoing,
+        expiry_time_ms: quoted(value, "expiry-date").and_then(parse_http_date),
+        completed: !ongoing,
+    }
+}
+
+/// A quoted or bare boolean field of an `x-amz-restore` value.
+fn flag(value: &str, name: &str) -> Option<bool> {
+    let rest = value.split_once(name)?.1.trim_start_matches(['=', ' ']);
+    let rest = rest.trim_start_matches('"');
+    let word = rest.split([',', '"']).next()?.trim();
+    match word {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// A quoted field of an `x-amz-restore` value, with its surrounding quotes
+/// removed.
+fn quoted<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+    let rest = value.split_once(name)?.1.trim_start_matches(['=', ' ']);
+    let rest = rest.strip_prefix('"')?;
+    rest.split_once('"').map(|(field, _)| field)
+}
+
+/// An IMF-fixdate (`Fri, 21 Dec 2012 00:00:00 GMT`) as epoch milliseconds.
+///
+/// The date is an RFC 2822 date, which is what S3 writes: chrono reads the
+/// weekday, the day, the month, the year, and the zone, and rejects a spelling
+/// that is not a date. A date before 1970 has no millisecond count to report.
+fn parse_http_date(value: &str) -> Option<u64> {
+    let date = DateTime::parse_from_rfc2822(value).ok()?;
+    u64::try_from(date.timestamp_millis()).ok()
+}
+
+/// Parse size, identity, storage class, and archive state from a HEAD response.
 fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
     let mut size = None;
     let mut etag = None;
     let mut version = None;
     let mut storage_class = None;
+    let mut archive_status = None;
+    let mut restore = Restore::default();
     for (name, value) in headers {
         match name.to_ascii_lowercase().as_str() {
             "content-length" => size = value.parse().ok(),
@@ -380,6 +458,10 @@ fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
             "x-amz-storage-class" | "x-goog-storage-class" if !value.is_empty() => {
                 storage_class = Some((*value).to_string());
             }
+            "x-amz-archive-status" if !value.is_empty() => {
+                archive_status = Some((*value).to_string());
+            }
+            "x-amz-restore" => restore = parse_restore(value),
             _ => {}
         }
     }
@@ -387,15 +469,20 @@ fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
         size_bytes: size?,
         identity: etag.or(version),
         storage_class,
+        archive_status,
+        restore_ongoing: restore.ongoing,
+        restore_expiry_time: restore.expiry_time_ms,
+        restore_completed: restore.completed,
     })
 }
 
 fn child_name(parent: &str, child: &str) -> String {
     let parent = parent.trim_end_matches('/');
     let child = child.trim_end_matches('/');
-    let relative = match parent.is_empty() {
-        true => child,
-        false => child.strip_prefix(parent).unwrap_or(child),
+    let relative = if parent.is_empty() {
+        child
+    } else {
+        child.strip_prefix(parent).unwrap_or(child)
     };
     relative.trim_start_matches('/').to_string()
 }
@@ -525,6 +612,71 @@ mod tests {
         let stat = super::head_stat(&[("content-length", "8")]).unwrap();
         assert_eq!(stat.size_bytes, 8);
         assert!(stat.storage_class.is_none());
+        assert!(!stat.restore_required("s3"));
+    }
+
+    /// HEAD's archive headers are read into the stat: the archive tier, an
+    /// in-progress restore, and a completed restore with its expiry.
+    #[test]
+    fn head_reads_archive_and_restore_headers() {
+        let archived = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "GLACIER"),
+            ("x-amz-restore", "ongoing-request=\"true\""),
+        ])
+        .unwrap();
+        assert_eq!(archived.storage_class.as_deref(), Some("GLACIER"));
+        assert!(archived.restore_ongoing);
+        assert!(archived.restore_required("s3"));
+
+        let restored = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "DEEP_ARCHIVE"),
+            (
+                "x-amz-restore",
+                "ongoing-request=\"false\", expiry-date=\"Fri, 21 Dec 2012 00:00:00 GMT\"",
+            ),
+        ])
+        .unwrap();
+        assert!(!restored.restore_ongoing);
+        assert_eq!(restored.restore_expiry_time, Some(1_356_048_000_000));
+        assert!(!restored.restore_required("s3"));
+
+        let tier = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "INTELLIGENT_TIERING"),
+            ("x-amz-archive-status", "ARCHIVE_ACCESS"),
+        ])
+        .unwrap();
+        assert_eq!(tier.archive_status.as_deref(), Some("ARCHIVE_ACCESS"));
+        assert!(tier.restore_required("s3"));
+    }
+
+    /// A completed restore with no expiry is still a completed restore.
+    #[test]
+    fn a_completed_restore_without_an_expiry_is_readable() {
+        let stat = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "GLACIER"),
+            ("x-amz-restore", "ongoing-request=\"false\""),
+        ])
+        .unwrap();
+        assert!(stat.restore_completed);
+        assert!(stat.restore_expiry_time.is_none());
+        assert!(!stat.restore_required("s3"));
+    }
+
+    #[test]
+    fn http_dates_parse_to_epoch_milliseconds() {
+        assert_eq!(
+            super::parse_http_date("Fri, 21 Dec 2012 00:00:00 GMT"),
+            Some(1_356_048_000_000)
+        );
+        assert_eq!(
+            super::parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"),
+            Some(0)
+        );
+        assert_eq!(super::parse_http_date("not a date"), None);
     }
 
     /// Two opens for one bucket and options share one store, and so one client

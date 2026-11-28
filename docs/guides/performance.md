@@ -92,8 +92,9 @@ time and bytes read as well.
 
 ## Lease daemon
 
-The daemon is optional; the numbers below compare the same pipeline with and
-without it. They were taken on the synthetic suite (10 tables x 1,000 files,
+The numbers below compare the same pipeline through the daemon and with each
+command making its own catalog calls, the mode pqbench had before every catalog
+call went through the daemon. They were taken on the synthetic suite (10 tables x 1,000 files,
 Iceberg) and the live `pqbench_ext` Unity catalog, release builds.
 
 | Workload | without daemon | with daemon |

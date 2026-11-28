@@ -6,10 +6,23 @@ tidyings; this page covers structure.
 
 ## Layers
 
-- `crates/pqbench` — the library: command implementations, domain types, and
-  the third-party adapters.
+- `crates/pqbench-model-v1` — the wire model: the resources, their name
+  grammar (`v1::name`), and their JSON. `serde` only; it reads no file and
+  speaks to no service, so it compiles in under a second. `pqbench` re-exports
+  it as `pqbench::v1`.
+- `crates/pqbench-parquet` — the local work: a footer's byte masses, page
+  compression, the lint rules, a decoded profile. No network, no object store,
+  no Delta, no Iceberg, so a change to a lint rule rebuilds one small crate.
+  `pqbench` re-exports its modules at the same paths.
+- `crates/pqbench` — the library's remote half: command implementations that
+  read object storage, Delta, Iceberg, or Unity, their domain types, and the
+  network third-party adapters.
 - `crates/pqbench-cli` — a thin wrapper: argument parsing, the JSON documents,
   and output formatting. No command logic.
+- `crates/pqbench-driver` — the partition-version state driver, a separate
+  process (`pqbench-driver`) with its own socket and store. Its engine holds
+  the map of partition versions and the driver runs the pqbench commands that
+  move them; the CLI reads the map through `PQB_DRIVER_SOCK`.
 
 ## Commands
 
@@ -28,10 +41,15 @@ socket.
 crates/pqbench/src/
   <resource>/
     <verb>/{api.rs, impl.rs, mod.rs}
-  bytemass/{api.rs, raw.rs, analytics.rs, text.rs, json.rs, …}
+  bytemass/{api.rs, collection.rs, remote.rs}
   third_party/
     <crate>/{api.rs, impl.rs, mod.rs}
     <crate>/impl/<module>.rs
+
+crates/pqbench-parquet/src/
+  lint/, compression/, profile.rs, codecs.rs, mass.rs, diff.rs
+  third_party/
+    <codec>/{api.rs, impl.rs, mod.rs}
 ```
 
 - `api.rs` — the command's public entry point and the few helpers a caller
@@ -56,6 +74,40 @@ Commands mirror the resource hierarchy of the data model — metastore, catalog,
 schema, table, file. Each level's `list` module lists that level's resources
 (the parent rides the argument, or parent refs on standard input); `get` reads
 one resource.
+
+## Partition-version states
+
+`pqbench-driver` moves each `PartitionVersion` through the pipeline one command
+at a time, and a price with nothing left to read stops it there.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Pricing: price
+    Pricing --> Priced: priced
+    Priced --> Downloading: download sample
+    Downloading --> Downloaded
+    Downloaded --> Bytemassing
+    Bytemassing --> Bytemassed
+    Bytemassed --> Linting: list suggestions
+    Linting --> Listed
+    Listed --> Verifying: get suggestion
+    Verifying --> UpToDate: verified
+    Pricing --> UpToDate: archived
+    Pricing --> Pending: failed (backoff)
+    Downloading --> Pending: failed (backoff)
+    Bytemassing --> Pending: failed (backoff)
+    Linting --> Pending: failed (backoff)
+    Verifying --> Pending: failed (backoff)
+    Pending --> Failed: six failures (quarantined)
+    Pending --> [*]: purged
+    Failed --> [*]: a new etag is a new version
+    note right of Failed
+        Terminal: a quarantined version is never scheduled
+        again and a restart keeps it that way. The etag's
+        replacement is a new version, which starts at Pending.
+    end note
+```
 
 ## Interfaces
 

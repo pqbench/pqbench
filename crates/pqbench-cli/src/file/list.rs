@@ -35,11 +35,7 @@ pub(crate) async fn run(
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("list files").await?;
     let window = args.window.window();
-    let lake = lake.clone();
-    let daemon = daemon.clone();
     drive(flat_map(parents, args.fan_out, move |table: v1::Table| {
-        let lake = lake.clone();
-        let daemon = daemon.clone();
         async move {
             let reference = table.name.clone();
             let env = daemon.resolve_env(&reference).await?;

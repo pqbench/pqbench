@@ -8,6 +8,22 @@
 
 use crate::v1::CatalogType;
 
+// A name segment and a query value encode the same way, and a name is only
+// encoded segments, so the one encoder lives with the names.
+pub(crate) use pqbench_model_v1::name::encode;
+
+/// The workspace root an endpoint of either dialect names: an Iceberg REST
+/// catalog base was built from it (`{root}/iceberg-rest/v1[/{prefix}]`), and a
+/// Unity endpoint may already name the REST root. The OAuth token route
+/// (`{root}/oidc/v1/token`) hangs off this root, not off either catalog base.
+pub(crate) fn workspace_root(endpoint: &str) -> String {
+    let endpoint = endpoint.trim_end_matches('/');
+    let root = endpoint
+        .split_once("/iceberg-rest/")
+        .map_or(endpoint, |(root, _)| root);
+    root.trim_end_matches("/api/2.1/unity-catalog").to_string()
+}
+
 /// The Unity REST root, whether or not the endpoint already names it.
 pub(crate) fn api_root(endpoint: &str) -> String {
     let endpoint = endpoint.trim_end_matches('/');
@@ -18,9 +34,9 @@ pub(crate) fn api_root(endpoint: &str) -> String {
     }
 }
 
-/// The Iceberg REST base, whether or not the endpoint has a trailing slash.
-pub(crate) fn iceberg_root(endpoint: &str) -> String {
-    endpoint.trim_end_matches('/').to_string()
+/// The Iceberg REST base: the endpoint without its trailing slash.
+pub(crate) fn iceberg_root(endpoint: &str) -> &str {
+    endpoint.trim_end_matches('/')
 }
 
 /// The Unity REST root of an endpoint of either dialect: an Iceberg REST
@@ -30,20 +46,6 @@ pub(crate) fn unity_root(endpoint: &str) -> String {
     endpoint
         .split_once("/iceberg-rest/")
         .map_or_else(|| api_root(endpoint), |(root, _)| api_root(root))
-}
-
-/// Percent-encode one path or query value (RFC 3986 unreserved bytes pass).
-pub(crate) fn encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
 
 /// A percent-encoded Iceberg namespace: parts joined by the unit separator.

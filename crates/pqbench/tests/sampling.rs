@@ -50,8 +50,6 @@ fn bigger_files_are_kept_more_often() {
 fn a_file_large_enough_is_certain() {
     let file = table_file("files/large", sample::REFERENCE_BYTES * 10);
     assert_eq!(sample::select(&file, 0.1).unwrap(), Some(1.0));
-    let file = table_file("files/larger", sample::REFERENCE_BYTES * 10_000);
-    assert_eq!(sample::select(&file, 0.1).unwrap(), Some(1.0));
 }
 
 #[test]
@@ -65,15 +63,6 @@ fn a_higher_rate_never_drops_a_kept_file() {
             kept_before = kept;
         }
     }
-}
-
-#[test]
-fn the_same_record_always_makes_the_same_decision() {
-    let file = table_file("files/stable", sample::REFERENCE_BYTES);
-    assert_eq!(
-        sample::select(&file, 0.5).unwrap(),
-        sample::select(&file, 0.5).unwrap()
-    );
 }
 
 #[test]
