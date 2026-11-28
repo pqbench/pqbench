@@ -93,7 +93,7 @@ pub async fn list(
     Ok(files
         .map_err(Error::Table)
         .try_filter_map(move |file| {
-            let record = if !window.is_none_or(|window| window.contains(file.modification_time)) {
+            let record = if window.is_some_and(|window| !window.contains(file.modification_time)) {
                 None
             } else {
                 let mut file = file;

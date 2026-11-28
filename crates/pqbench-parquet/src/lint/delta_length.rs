@@ -38,10 +38,10 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     if !sample.byte_array()
         || sample.chunk_has_dictionary
         || control::source_encoding(sample.mass).is_some()
-        || !sample
+        || sample
             .column
             .max_repetition_level
-            .is_none_or(|level| level == 0)
+            .is_some_and(|level| level != 0)
     {
         return None;
     }

@@ -41,10 +41,10 @@ enum Width {
 /// decimal whose precision fits an integer and whose values fit that integer.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     if sample.physical() != "FIXED_LEN_BYTE_ARRAY"
-        || !sample
+        || sample
             .column
             .max_repetition_level
-            .is_none_or(|level| level == 0)
+            .is_some_and(|level| level != 0)
     {
         return None;
     }
