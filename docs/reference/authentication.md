@@ -271,8 +271,9 @@ one is running, and local tables need none.
   `download` (the partition's sample file into the version's directory),
   `bytemass` and `lint` (`bytemass --local` and `list suggestions --local` on
   that copy), then `verify` (`get suggestion --local` on the potential
-  suggestions, while the copy is still there; the two partition rules that need
-  no file — `tombstones` and `small-files` — are added to the same record set).
+  suggestions, while the copy is still there; the three partition rules that
+  need no file — `tombstones`, `small-files`, and `delete-files` — are added to
+  the same record set).
   The fifteen column rules (`uuid-text`, `base64-text`, `int96-timestamp`,
   `text-timestamp`, `numeric-text`, `codec-zstd`, `page-size`, `delta-integer`,
   `int64-narrow`, `decimal-narrow`, `dictionary-unique`, `dictionary-missing`,
@@ -331,12 +332,15 @@ driver measured, one per line, largest saving first, all of them or those under
 a catalog, schema, table or partition name. The driver holds each version's
 records in its map as soon as the version is done, so a listing over a whole
 lake reads the results it has not read yet, not every version's file. Each record is a version's
-potential column suggestion measured against its control, or one of the two
-partition rules that need no file: `tombstones` (Delta's removed files the log
-no longer needs, with the log's own byte count as the saving) and `small-files`
-(many small files, with the compaction remedy each engine spells). A partition
-rule's `name` is `{partition}/suggestions/{rule}`, its `partition` names the
-partition, and its `column` is empty.
+potential column suggestion measured against its control, or one of the three
+partition rules that need no file: `tombstones` (removed files no active file
+holds — Delta's tombstones, and Iceberg's deleted entries and superseded
+snapshots — with the log's own byte count as the saving), `small-files` (many
+small files, with the compaction remedy each engine spells), and `delete-files`
+(Iceberg merge-on-read delete files a scan still applies, with the rewrite that
+merges them into the data). A partition rule's `name` is
+`{partition}/suggestions/{rule}`, its `partition` names the partition, and its
+`column` is empty.
 
 One setting of the driver's own — `step-timeout` — lives only in the same
 run-control file; see

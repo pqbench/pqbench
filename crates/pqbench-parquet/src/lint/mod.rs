@@ -32,10 +32,10 @@
 //! writer's own bytes, so the bytes above the 64-byte truncation length are
 //! exact without reading a page.
 //!
-//! Two rules read no file at all: `tombstones` and `small-files` decide from
-//! the totals `list partitions` folded, so they hold for every partition,
-//! including the ones a host with little network never copies.
-//! [`partition_suggestions`] is that pair.
+//! Three rules read no file at all: `tombstones`, `small-files`, and
+//! `delete-files` decide from the totals `list partitions` folded, so they hold
+//! for every partition, including the ones a host with little network never
+//! copies. [`partition_suggestions`] is that set.
 
 mod base64;
 mod codec;
@@ -84,7 +84,7 @@ pub use int64_narrow::INT64_NARROW_RULE;
 pub use int96::INT96_TIMESTAMP_RULE;
 pub use numeric_text::NUMERIC_TEXT_RULE;
 pub use page_size::PAGE_SIZE_RULE;
-pub use partition::{partition_suggestions, SMALL_FILES_RULE, TOMBSTONES_RULE};
+pub use partition::{partition_suggestions, DELETE_FILES_RULE, SMALL_FILES_RULE, TOMBSTONES_RULE};
 pub use stats::STATS_TRUNCATED_RULE;
 pub use text_timestamp::TEXT_TIMESTAMP_RULE;
 pub use uuid::UUID_TEXT_RULE;

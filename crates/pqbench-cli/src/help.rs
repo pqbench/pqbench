@@ -247,10 +247,12 @@ daily run reads the day's writes without walking what the table already held.
 statistics, and writes one Partition per partition, sorted by name, once the
 table is read. It holds one running total per partition, never the files, and
 a table that fails writes nothing. Removed files (Delta tombstones a vacuum
-has not deleted) are read first, a path hash and a size each, and counted in
-their partition unless an active file still holds the path. A partition's name follows the table's
-partition column order, so the input is `get table` output, which names the
-columns; a `list tables` ref is refused.
+has not deleted, Iceberg entries a snapshot deleted or superseded) are read
+first, a path hash and a size each, and counted in their partition unless an
+active file still holds the path. Iceberg's merge-on-read delete files are
+counted in the partition they narrow, and only when the partition holds one.
+A partition's name follows the table's partition column order, so the input is
+`get table` output, which names the columns; a `list tables` ref is refused.
 
 `list partition-versions [PARENT]` reads no catalog and no storage: it prints
 pqbench-driver's rows, one PartitionVersion per line in name order, all of

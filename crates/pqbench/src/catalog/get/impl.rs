@@ -8,7 +8,7 @@ use serde::Deserialize;
 use super::api::{Catalog, Error};
 use crate::dialect;
 use crate::v1::name;
-use crate::Workspace;
+use crate::{Dialect, Workspace};
 
 /// The subset of `GET /catalogs/{name}` this command reports.
 #[derive(Deserialize)]
@@ -25,6 +25,12 @@ struct Record {
 pub(crate) async fn get(workspace: &Workspace, name: &str) -> Result<Catalog, Error> {
     let catalog = Catalog::parse_name(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/… name")))?;
+    if workspace.config().dialect == Dialect::Iceberg {
+        return Ok(Catalog {
+            name: name::catalog(&catalog),
+            ..Catalog::default()
+        });
+    }
     let url = format!(
         "{}/catalogs/{}",
         dialect::api_root(workspace.config().endpoint.as_str()),

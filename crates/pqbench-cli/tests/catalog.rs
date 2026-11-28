@@ -361,3 +361,55 @@ fn catalog_ls_reads_a_metastore_stream() {
     );
     assert_eq!(ndjson(&output.stdout).len(), 1);
 }
+
+#[test]
+fn catalog_ls_and_get_name_the_iceberg_rest_catalog() {
+    let prefixed = pipe_env(
+        &[
+            "list",
+            "catalogs",
+            "--table-format",
+            "iceberg",
+            "--endpoint",
+            "http://127.0.0.1:1/api/2.1/unity-catalog/iceberg-rest/v1/catalogs/demo",
+        ],
+        b"",
+        &[],
+    );
+    assert!(
+        prefixed.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&prefixed.stderr)
+    );
+    assert_eq!(ndjson(&prefixed.stdout), [json!({"name": "catalogs/demo"})]);
+
+    let bare = pipe_env(
+        &[
+            "list",
+            "catalogs",
+            "--table-format",
+            "iceberg",
+            "--endpoint",
+            "http://127.0.0.1:1/v1",
+        ],
+        b"",
+        &[],
+    );
+    assert!(bare.status.success());
+    assert_eq!(ndjson(&bare.stdout), [json!({"name": "catalogs/iceberg"})]);
+
+    let got = pipe_env(
+        &[
+            "get",
+            "catalog",
+            "--table-format",
+            "iceberg",
+            "--endpoint",
+            "http://127.0.0.1:1/v1",
+        ],
+        &prefixed.stdout,
+        &[],
+    );
+    assert!(got.status.success());
+    assert_eq!(ndjson(&got.stdout), [json!({"name": "catalogs/demo"})]);
+}

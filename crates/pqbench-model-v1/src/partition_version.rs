@@ -42,7 +42,7 @@ pub struct PartitionVersion {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub removed_size_bytes: Option<u64>,
     /// When the version's newest file was written, from its listing; absent
-    /// when the log records no per-file time (Iceberg).
+    /// when the log records no per-file time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modification_time: Option<u64>,
     /// The version's monthly storage cost, from its price: the cheapest and

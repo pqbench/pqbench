@@ -1,16 +1,17 @@
-//! Read Avro object-container records into Rust values.
+//! Read Avro object-container records into [`Value`] trees.
 //!
-//! [`read_avro`] is the only entry point: it decodes every record in an Avro
-//! object container byte buffer into `T`. Iceberg manifests use it to turn
-//! manifest entries into typed structs.
+//! [`read_avro_values`] decodes every record into [`Value`], a format-agnostic
+//! tree, so a caller interprets both Iceberg manifest lists (whose v1 and v2/v3
+//! schemas differ in whether integer fields are nullable unions) and manifest
+//! `partition` records (whose fields and types follow the table's partition
+//! spec).
 //!
 //! All `apache-avro` interaction lives in the private `impl` module. The
-//! `iceberg` feature compiles it; without it [`read_avro`] fails and names the
-//! feature. There are no feature flags outside this folder.
+//! `iceberg` feature compiles it; without it the entry point fails and names
+//! the feature. There are no feature flags outside this folder.
 
+use std::collections::BTreeMap;
 use std::fmt;
-
-use serde::Deserialize;
 
 /// Errors reading Avro records.
 #[derive(Debug)]
@@ -45,14 +46,62 @@ impl std::error::Error for Error {
     }
 }
 
-/// Decode every record in an Avro object container into `T`.
+/// One Avro value, decoded without a caller-supplied schema.
 ///
-/// `kind` names what is being read (`"manifest entry"`, `"manifest list"`) so
-/// errors identify the caller's context.
+/// The tree keeps the value's own type, so a reader decides what a value means
+/// from the record it sits in: a `Date` is the same 32-bit count as an `Int`,
+/// but only the schema knows it counts days.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    /// A `null`.
+    Null,
+    /// A `boolean`.
+    Bool(bool),
+    /// An `int`.
+    Int(i32),
+    /// A `long`.
+    Long(i64),
+    /// A `float`.
+    Float(f32),
+    /// A `double`.
+    Double(f64),
+    /// A `string`.
+    String(String),
+    /// `bytes`, and the body of a `fixed`.
+    Bytes(Vec<u8>),
+    /// The days since the Unix epoch of a `date`.
+    Date(i32),
+    /// The microseconds since the Unix epoch of a `timestamp-micros`.
+    TimestampMicros(i64),
+    /// The milliseconds since the Unix epoch of a `timestamp-millis`.
+    TimestampMillis(i64),
+    /// The nanoseconds since the Unix epoch of a `timestamp-nanos`.
+    TimestampNanos(i64),
+    /// The microseconds after midnight of a `time-micros`.
+    TimeMicros(i64),
+    /// The milliseconds after midnight of a `time-millis`.
+    TimeMillis(i32),
+    /// A decimal's unscaled value, big-endian two's complement.
+    Decimal(Vec<u8>),
+    /// The canonical text of a `uuid`.
+    Uuid(String),
+    /// A record's fields, in schema order.
+    Record(Vec<(String, Value)>),
+    /// An array's items, in order.
+    Array(Vec<Value>),
+    /// A map's entries, by key. Sorted so a walk does not depend on the
+    /// container's hash order.
+    Map(BTreeMap<String, Value>),
+}
+
+/// Decode every record in an Avro object container into [`Value`].
+///
+/// `kind` names what is being read (`"manifest"`, `"manifest list"`) so errors
+/// identify the caller's context.
 ///
 /// # Errors
-/// Fails when the `iceberg` feature is off, `bytes` is not a valid Avro object
-/// container, or a record does not deserialize into `T`.
-pub fn read_avro<T: for<'de> Deserialize<'de>>(bytes: &[u8], kind: &str) -> Result<Vec<T>, Error> {
-    super::r#impl::read_avro(bytes, kind)
+/// Fails when the `iceberg` feature is off or `bytes` is not a valid Avro
+/// object container.
+pub fn read_avro_values(bytes: &[u8], kind: &str) -> Result<Vec<Value>, Error> {
+    super::r#impl::read_avro_values(bytes, kind)
 }
