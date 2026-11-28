@@ -10,6 +10,18 @@ use std::fmt::Write;
 
 use crate::v1::CatalogType;
 
+/// The workspace root an endpoint of either dialect names: an Iceberg REST
+/// catalog base was built from it (`{root}/iceberg-rest/v1[/{prefix}]`), and a
+/// Unity endpoint may already name the REST root. The OAuth token route
+/// (`{root}/oidc/v1/token`) hangs off this root, not off either catalog base.
+pub(crate) fn workspace_root(endpoint: &str) -> String {
+    let endpoint = endpoint.trim_end_matches('/');
+    let root = endpoint
+        .split_once("/iceberg-rest/")
+        .map_or(endpoint, |(root, _)| root);
+    root.trim_end_matches("/api/2.1/unity-catalog").to_string()
+}
+
 /// The Unity REST root, whether or not the endpoint already names it.
 pub(crate) fn api_root(endpoint: &str) -> String {
     let endpoint = endpoint.trim_end_matches('/');

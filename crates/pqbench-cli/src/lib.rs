@@ -213,7 +213,7 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Profile(args) => profile::run(&args).await,
         Command::Summarize(args) => summarize::run(&args).await,
         Command::Skill(args) => skill::run(&args),
-        Command::Setup(args) => setup::run(&workspace, &args),
+        Command::Setup(args) => setup::run(&workspace, &args).await,
     }
 }
 

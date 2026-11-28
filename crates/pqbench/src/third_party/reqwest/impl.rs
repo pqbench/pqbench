@@ -40,11 +40,19 @@ impl Http {
         let mut builder = match request.method {
             Method::Post => client
                 .post(&request.url)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(request.body.clone().unwrap_or_default()),
             Method::Get => client.get(&request.url),
             Method::Head => client.head(&request.url),
         };
+        // A POST carries JSON unless the caller's own header names another
+        // type, like the form body an OAuth token request sends.
+        let content_type_given = request
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-type"));
+        if request.method == Method::Post && !content_type_given {
+            builder = builder.header(reqwest::header::CONTENT_TYPE, "application/json");
+        }
         if let Some(bearer) = &request.bearer {
             builder = builder.bearer_auth(bearer);
         }

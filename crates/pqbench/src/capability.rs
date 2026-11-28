@@ -54,6 +54,21 @@ impl Workspace {
         &self.config
     }
 
+    /// This workspace with `token` as its bearer, for a caller that minted one:
+    /// the same client, the same pool, a configuration that carries the token
+    /// every catalog request reads.
+    // aipnaming: allow(aip-136/method-prepositions)
+    #[must_use]
+    pub fn with_token(&self, token: impl Into<String>) -> Self {
+        Self {
+            config: Config {
+                token: Some(token.into()),
+                ..self.config.clone()
+            },
+            ..self.clone()
+        }
+    }
+
     /// This workspace with `http_get` sending its catalog GETs: the transport
     /// is called with the URL and answers as the pool would (a status, headers,
     /// and a body), so the status policy and the JSON decoding above it do not

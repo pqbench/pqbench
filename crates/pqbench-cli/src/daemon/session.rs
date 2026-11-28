@@ -8,6 +8,11 @@
 //! vends nothing is remembered briefly so the negative answer is not asked
 //! again for every file.
 //!
+//! The daemon also serves the bearer: [`Daemon::authorized`] hands a request
+//! the workspace it is sent under, carrying a service-principal token minted
+//! on first use and refreshed with the same margin as a lease
+//! ([`Auth::token`]).
+//!
 //! The daemon also owns the catalog transport: [`Daemon::http_workspace`]
 //! attaches it to the reader's workspace as the HTTP GET hook, so every catalog
 //! command runs the library's own URLs, pages, and JSON decoding while the
@@ -23,6 +28,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::Mutex as AsyncMutex;
 
+use pqbench::oauth::Token;
 use pqbench::v1::Credentials;
 use pqbench::{Dialect, Workspace};
 
@@ -45,6 +51,55 @@ const AMBIENT_TTL: Duration = Duration::from_secs(5 * 60);
 /// How long a failed vending call is remembered.
 const FAILED_TTL: Duration = Duration::from_secs(30);
 
+/// The bearer a session serves: a service principal's token, minted on first
+/// use and refreshed before it expires. Clones share one cache, so every
+/// connection the daemon accepts sends the same token.
+#[derive(Clone)]
+struct Auth {
+    token: Arc<AsyncMutex<Option<Minted>>>,
+}
+
+/// A minted token and when it was minted, so [`Token::fresh`] can say whether
+/// it may still be sent.
+struct Minted {
+    minted: Instant,
+    token: Token,
+}
+
+impl Auth {
+    fn new() -> Self {
+        Self {
+            token: Arc::new(AsyncMutex::new(None)),
+        }
+    }
+
+    /// The bearer to send, or `None` when the session has no service principal
+    /// to mint from (a static token, or no bearer at all).
+    ///
+    /// The mint is serialized: a walk with many requests in flight mints one
+    /// token, not one per connection.
+    async fn token(&self, workspace: &Workspace) -> Result<Option<String>, CliError> {
+        let config = workspace.config();
+        let service_principal =
+            config.token.is_none() && config.client_id.is_some() && config.client_secret.is_some();
+        if !service_principal {
+            return Ok(None);
+        }
+        let mut cached = self.token.lock().await;
+        let now = Instant::now();
+        if let Some(minted) = cached
+            .as_ref()
+            .filter(|minted| minted.token.fresh(minted.minted, now))
+        {
+            return Ok(Some(minted.token.access_token().to_string()));
+        }
+        let token = pqbench::oauth::mint(workspace).await?;
+        let access_token = token.access_token().to_string();
+        *cached = Some(Minted { minted: now, token });
+        Ok(Some(access_token))
+    }
+}
+
 /// The synthetic `local` catalog is a path, not a catalog: it never vends.
 fn local(table: &str) -> bool {
     table.starts_with("catalogs/local/")
@@ -62,6 +117,7 @@ pub(crate) struct Vended {
 #[derive(Clone)]
 pub(crate) struct Daemon {
     vendor: Vendor,
+    auth: Auth,
     entries: Arc<Mutex<BTreeMap<String, Cached>>>,
     /// One async lock per table, so a burst of files from the same table
     /// makes one vending call, not one per in-flight file.
@@ -123,6 +179,7 @@ impl Daemon {
     fn new(vendor: Vendor, cache_failures: bool, rate: Option<Arc<UnityRate>>) -> Self {
         Self {
             vendor,
+            auth: Auth::new(),
             entries: Arc::new(Mutex::new(BTreeMap::new())),
             inflight: Arc::new(Mutex::new(BTreeMap::new())),
             cache_failures,
@@ -135,6 +192,17 @@ impl Daemon {
         match &self.vendor {
             Vendor::Direct(workspace) => workspace,
             Vendor::Daemon { workspace, .. } => workspace,
+        }
+    }
+
+    /// The workspace a request is sent under: this session's own, carrying a
+    /// service-principal bearer when it holds none of its own. A reader that
+    /// asks the daemon sends none — the daemon mints and sends its own.
+    pub(crate) async fn authorized(&self) -> Result<Workspace, CliError> {
+        let workspace = self.workspace();
+        match self.auth.token(workspace).await? {
+            Some(token) => Ok(workspace.with_token(token)),
+            None => Ok(workspace.clone()),
         }
     }
 
@@ -190,7 +258,13 @@ impl Daemon {
             return cached.result();
         }
         self.pace().await;
-        match self.vendor.vend(table).await {
+        let vended = match self.authorized().await {
+            Ok(workspace) => self.vendor.vend(table, &workspace).await,
+            // A bearer that cannot be minted fails this vend like any other
+            // endpoint failure, under the same caching rule.
+            Err(error) => Err(error),
+        };
+        match vended {
             Ok(vended) => {
                 let cached = Cached::new(vended, Instant::now());
                 self.put(table, cached.clone());
@@ -235,9 +309,12 @@ impl Daemon {
 }
 
 impl Vendor {
-    async fn vend(&self, table: &str) -> Result<Option<Vended>, CliError> {
+    /// The lease for `table`; `workspace` is the caller's authorized one, which
+    /// carries a minted bearer when the catalog's own identity is a service
+    /// principal.
+    async fn vend(&self, table: &str, workspace: &Workspace) -> Result<Option<Vended>, CliError> {
         match self {
-            Vendor::Direct(workspace) => direct(workspace, table).await,
+            Vendor::Direct(_) => direct(workspace, table).await,
             Vendor::Daemon { path, .. } => parse_response(ask(path, &Request::lease(table)).await?),
         }
     }

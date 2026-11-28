@@ -20,6 +20,7 @@ pub mod lint;
 pub mod lz;
 pub mod mass;
 pub mod metastore;
+pub mod oauth;
 pub mod partition;
 mod price;
 pub mod profile;
@@ -35,4 +36,4 @@ pub mod v1;
 pub mod viz;
 
 pub use capability::{Lake, Workspace};
-pub use config::{Combine, Config, Dialect, Layer};
+pub use config::{Combine, Config, Dialect, Layer, Secret};

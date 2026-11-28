@@ -542,7 +542,10 @@ the caller to evaluate:
   eval \"$(pqbench setup)\"
 
 The endpoint and token resolve the way the Databricks SDKs do: the flag, then
-PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A notebook
+PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A workspace
+with a service principal's client id and secret and no token exports a bearer
+minted for this run; the secret itself is never printed, so a daemon that
+refreshes the token reads the credentials from the configuration. A notebook
 kernel's dbutils context is not visible to a subprocess, so a notebook sets
 DATABRICKS_* from it first. AWS_REGION comes from the flag or AWS_REGION (a
 vended lease carries no region); AWS_EC2_METADATA_DISABLED=true keeps the AWS
@@ -550,13 +553,20 @@ SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
 
   endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
   token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
+  client    --client-id / --client-secret | PQB_CLIENT_ID / PQB_CLIENT_SECRET
   format    --table-format | PQB_TABLE_FORMAT (unity default)
-  region    --region   | AWS_REGION";
+  region    --region   | AWS_REGION
+
+With --check, setup prints no exports: it reports the resolved configuration,
+the credential (minting a service principal's token), and the endpoint's answer
+to the walk's first listing level, one line each, and exits non-zero when any
+check failed.";
 
 pub const SETUP_AFTER: &str = "\
 Examples:
   eval \"$(pqbench setup --endpoint https://… --token dapi-… --region us-east-1)\"
   DATABRICKS_HOST=https://… DATABRICKS_TOKEN=dapi-… eval \"$(pqbench setup)\"
+  pqbench setup --check
   pqbench setup --table-format iceberg --region us-west-2
 
 See also:

@@ -23,7 +23,18 @@ table_format = unity
 endpoint     = https://dbc-abc123.cloud.databricks.com
 token        = dapi…
 table_format = iceberg
+
+[principal]
+endpoint      = https://dbc-abc123.cloud.databricks.com
+client-id     = 0123-4567
+client-secret = …
+table_format  = unity
 ```
+
+A profile may name a service principal's `client-id` and `client-secret`
+(`client_id`/`client_secret` are the same keys) instead of a bearer; see
+[Service principal](authentication.md#service-principal-oauth-m2m). A static
+`token` wins when a profile carries both.
 
 Two profiles over one workspace let a run switch dialect with `--profile`. The
 profile is chosen by `--profile` or `PQB_PROFILE`; without either, `pqbench`
@@ -49,16 +60,23 @@ The environment overrides the selected profile:
 | `PQB_PROFILE` | the `~/.pqbenchrc` profile to run under |
 | `PQB_ENDPOINT` | workspace URL, Unity OSS, or Iceberg REST base |
 | `PQB_TOKEN` | bearer PAT (`dapi-…`) or OAuth token; catalog reads and vending |
+| `PQB_CLIENT_ID` / `PQB_CLIENT_SECRET` | a service principal, minting the bearer when no token is set |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg` |
 | `PQB_TABLE_FAN_OUT` | tables in flight for `get table` (default: the core count) |
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | a lower-priority fallback for the endpoint and bearer |
+| `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET` | the same fallback for a service principal |
 | `AWS_*` | object-store region and ambient credentials, read by the storage client |
 | `PQB_DAEMON_SOCK` | override the daemon socket path (a sidecar or a test) |
 
 `pqb setup` prints the resolved endpoint, bearer, and dialect for the shell to
-evaluate. A later layer wins, so the environment can override the profile.
-`pqb daemon start` runs the daemon for those values; without it each
-command vends directly, which is correct but asks the catalog once per stage.
+evaluate; a service principal's bearer is minted for the export, and the secret
+is never printed. `pqb setup --check` prints no exports: it reports the resolved
+configuration, the credential, and the endpoint's answer as three `ok`/`fail`
+lines, and exits non-zero when any check failed. A later layer wins, so the
+environment can override the profile. `pqb daemon start` runs the daemon for
+those values, minting and refreshing a service principal's bearer; without it
+each command vends directly, which is correct but asks the catalog once per
+stage.
 
 ```console run
 $ PQB_CONFIG_FILE=examples/pqbenchrc pqb setup --profile iceberg
@@ -81,6 +99,7 @@ subcommand:
 - `--profile NAME`
 - `--endpoint URL`
 - `--token TOKEN`
+- `--client-id ID` / `--client-secret SECRET`
 - `--table-format unity|iceberg`
 
 Everything else is a per-invocation switch on its own command — `--last`,
@@ -90,8 +109,10 @@ file. See the [CLI reference](cli.md) for each command's flags.
 
 ## Driver settings
 
-`pqbench-driver` reads two settings of its own from the same run-control file,
-from `[DEFAULT]` or from the section `PQB_PROFILE` names. The file is
+`pqbench-driver` keeps a map of partition versions and drives each through
+price, download, bytemass, lint, and verify; its walk re-lists the catalog on a
+period. It reads two settings of its own from the same run-control file, from
+`[DEFAULT]` or from the section `PQB_PROFILE` names. The file is
 `~/.pqbenchrc`, or what `PQB_CONFIG_FILE` (or `PQB_CONFIG`) names:
 
 ```ini
@@ -105,10 +126,10 @@ step-timeout     = 300
 | `checkpoint-codec` | the store's checkpoint format: `none` (plain NDJSON), `zstd`, or `lz4` | `zstd` |
 | `step-timeout` | seconds one worker command, or one walk, may run before it is killed | `300` |
 
-Both change rarely, so they are not flags and have no environment variable of
-their own: the command line carries what changes per run, the file what an
-operator sets once. The keys above sit beside the profile's, and either side
-ignores the other's.
+Both change rarely, so they live only in the file: they are not flags and have
+no environment variable of their own. The command line carries what changes per
+run, the file what an operator sets once. The keys sit beside the profile's, and
+either side ignores the other's.
 
 The checkpoint is `checkpoint.ndjson`, `checkpoint.ndjson.zst`, or
 `checkpoint.ndjson.lz4` under the store. The last two are standard Zstd and LZ4

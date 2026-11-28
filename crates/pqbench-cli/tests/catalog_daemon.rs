@@ -15,11 +15,22 @@ fn pqbench() -> Command {
     command
 }
 
-/// One request the fake endpoint answered: its path and when it arrived.
+/// One request the fake endpoint answered: its path, the bearer it carried, and
+/// when it arrived.
 #[derive(Clone)]
 struct Hit {
     path: String,
+    authorization: Option<String>,
     request_time: Instant,
+}
+
+/// The `Authorization` header a request carried, as the fake endpoint read it.
+fn bearer(request: &str) -> Option<String> {
+    request.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("authorization")
+            .then(|| value.trim().to_string())
+    })
 }
 
 /// A fake Unity endpoint. Every request is recorded, and the path selects the
@@ -39,6 +50,7 @@ fn server() -> (String, Arc<Mutex<Vec<Hit>>>) {
             let path = line.split_whitespace().nth(1).unwrap_or_default();
             recorded.lock().unwrap().push(Hit {
                 path: path.to_string(),
+                authorization: bearer(&request),
                 request_time: Instant::now(),
             });
             let body = if path.contains("/catalogs") {
@@ -222,6 +234,98 @@ fn a_catalog_level_without_a_daemon_says_how_to_start_one() {
     assert!(stderr.contains("absent.sock"), "stderr: {stderr}");
     assert!(catalogs.stdout.is_empty());
     assert!(hits.lock().unwrap().is_empty());
+}
+
+/// A fake workspace serving the OAuth token route and the Unity catalog
+/// listing route. Every request is recorded with the bearer it carried.
+fn oauth_server() -> (String, Arc<Mutex<Vec<Hit>>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&hits);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buffer = [0u8; 8192];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let path = request
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            recorded.lock().unwrap().push(Hit {
+                path: path.clone(),
+                authorization: bearer(&request),
+                request_time: Instant::now(),
+            });
+            let body = if path.ends_with("/oidc/v1/token") {
+                r#"{"access_token":"minted","expires_in":3600}"#
+            } else {
+                r#"{"catalogs":[{"name":"c1"}]}"#
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    (address, hits)
+}
+
+/// A daemon started for a service principal mints its own bearer: the child
+/// process resolves the client credentials `daemon start` passed it, and the
+/// catalog request it sends carries the minted token. Neither the secret nor
+/// the token reaches the command's output.
+#[test]
+fn the_daemon_mints_a_service_principals_bearer() {
+    let (endpoint, hits) = oauth_server();
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("daemon.sock");
+    let socket = socket.to_str().unwrap();
+    let env = [
+        ("PQB_DAEMON_SOCK", socket),
+        ("PQB_ENDPOINT", endpoint.as_str()),
+        ("PQB_TABLE_FORMAT", "unity"),
+        ("PQB_CLIENT_ID", "0123-4567"),
+        ("PQB_CLIENT_SECRET", "oauth-secret-value"),
+    ];
+    let status = pqbench()
+        .args(["daemon", "start", "--idle-seconds", "10"])
+        .envs(env.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&status.stderr);
+    assert!(status.status.success(), "stderr: {stderr}");
+    assert!(!stderr.contains("oauth-secret-value"), "stderr: {stderr}");
+
+    let catalogs = pipe(&["list", "catalogs"], b"", &env);
+    let stderr = String::from_utf8_lossy(&catalogs.stderr);
+    assert!(catalogs.status.success(), "stderr: {stderr}");
+    assert!(!stderr.contains("oauth-secret-value"), "stderr: {stderr}");
+    assert_eq!(ndjson(&catalogs.stdout).len(), 1);
+    assert!(!String::from_utf8_lossy(&catalogs.stdout).contains("minted"));
+
+    let hits = hits.lock().unwrap().clone();
+    assert!(
+        hits.iter().any(|hit| hit.path.ends_with("/oidc/v1/token")),
+        "the daemon minted no token"
+    );
+    let listing = hits
+        .iter()
+        .find(|hit| hit.path.contains("/catalogs"))
+        .expect("the daemon listed the catalogs");
+    assert_eq!(listing.authorization.as_deref(), Some("Bearer minted"));
+
+    stop(socket);
 }
 
 fn catalogs_output(records: &[Value]) -> Vec<u8> {

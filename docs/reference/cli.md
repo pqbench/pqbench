@@ -180,6 +180,8 @@ Format skills (read these when the input is Parquet or a table):
 * `--profile <NAME>` — the `~/.pqbenchrc` profile to run under [env: PQB_PROFILE]
 * `--endpoint <URL>` — workspace URL; overrides the profile [env: PQB_ENDPOINT]
 * `--token <TOKEN>` — bearer token; overrides the profile [env: PQB_TOKEN]
+* `--client-id <ID>` — service-principal OAuth client id; mints the bearer when no token is set [env: PQB_CLIENT_ID]
+* `--client-secret <SECRET>` — service-principal OAuth client secret [env: PQB_CLIENT_SECRET]
 * `--table-format <FORMAT>` — catalog dialect: unity (the default) or iceberg [env: PQB_TABLE_FORMAT]
 
 
@@ -1100,7 +1102,10 @@ the caller to evaluate:
 ```
 
 The endpoint and token resolve the way the Databricks SDKs do: the flag, then
-PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A notebook
+PQB_ENDPOINT / PQB_TOKEN, then DATABRICKS_HOST / DATABRICKS_TOKEN. A workspace
+with a service principal's client id and secret and no token exports a bearer
+minted for this run; the secret itself is never printed, so a daemon that
+refreshes the token reads the credentials from the configuration. A notebook
 kernel's dbutils context is not visible to a subprocess, so a notebook sets
 DATABRICKS_* from it first. AWS_REGION comes from the flag or AWS_REGION (a
 vended lease carries no region); AWS_EC2_METADATA_DISABLED=true keeps the AWS
@@ -1109,9 +1114,15 @@ SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
 ```text
   endpoint  --endpoint | PQB_ENDPOINT | DATABRICKS_HOST
   token     --token    | PQB_TOKEN    | DATABRICKS_TOKEN
+  client    --client-id / --client-secret | PQB_CLIENT_ID / PQB_CLIENT_SECRET
   format    --table-format | PQB_TABLE_FORMAT (unity default)
   region    --region   | AWS_REGION
 ```
+
+With --check, setup prints no exports: it reports the resolved configuration,
+the credential (minting a service principal's token), and the endpoint's answer
+to the walk's first listing level, one line each, and exits non-zero when any
+check failed.
 
 **Usage:** `pqbench setup [OPTIONS]`
 
@@ -1119,6 +1130,7 @@ SDK from probing EC2 metadata, which hangs where that endpoint is blackholed.
 Examples:
   eval "$(pqbench setup --endpoint https://… --token dapi-… --region us-east-1)"
   DATABRICKS_HOST=https://… DATABRICKS_TOKEN=dapi-… eval "$(pqbench setup)"
+  pqbench setup --check
   pqbench setup --table-format iceberg --region us-west-2
 
 See also:
@@ -1131,6 +1143,7 @@ See also:
 ###### **Options:**
 
 * `--region <REGION>` — bucket region [env: AWS_REGION]
+* `--check` — check the configuration, the credentials, and the endpoint instead of printing exports
 
 
 

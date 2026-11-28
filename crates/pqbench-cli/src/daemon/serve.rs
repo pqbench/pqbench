@@ -117,11 +117,21 @@ async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Resp
 }
 
 /// One catalog GET: paced at the catalog's ceiling like a vend, and sent under
-/// the daemon's own bearer. The status and body go back unchanged, so the
-/// reader's own status policy and JSON decoding apply.
+/// the daemon's own bearer — a service-principal one is minted and refreshed
+/// here. The status and body go back unchanged, so the reader's own status
+/// policy and JSON decoding apply.
 async fn answer(session: &Daemon, url: &str) -> Response {
     session.pace().await;
-    match pqbench::http::fetch(session.workspace(), url).await {
+    let workspace = match session.authorized().await {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            return Response {
+                error: Some(crate::error::error_chain(error.as_ref())),
+                ..Response::default()
+            }
+        }
+    };
+    match pqbench::http::fetch(&workspace, url).await {
         Ok(answer) => Response {
             status: Some(answer.status),
             body: Some(answer.body),
@@ -149,6 +159,8 @@ fn failure(error: &dyn std::error::Error) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
     use crate::daemon::{client, start};
 
@@ -176,11 +188,88 @@ mod tests {
     fn workspace() -> pqbench::Workspace {
         pqbench::Workspace::new(pqbench::Config {
             endpoint: "http://127.0.0.1:1".into(),
-            token: None,
-            dialect: pqbench::Dialect::Unity,
-            request_timeout: None,
+            ..pqbench::Config::default()
         })
         .expect("the workspace builds")
+    }
+
+    /// What the fake endpoint read from one request: its path, and the
+    /// `Authorization` header the daemon sent.
+    #[derive(Clone)]
+    struct Read {
+        path: String,
+        authorization: Option<String>,
+    }
+
+    /// A fake workspace endpoint: `/oidc/v1/token` mints a bearer living
+    /// `expires_in` seconds, every other request answers a `200 {}`. Each
+    /// request is recorded, so a test counts the mints and reads the bearer the
+    /// daemon sent.
+    fn oauth_endpoint(expires_in: u64) -> (String, Arc<Mutex<Vec<Read>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&reads);
+        let token = format!(r#"{{"access_token":"minted","expires_in":{expires_in}}}"#);
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write};
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buffer = [0u8; 8192];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let mut lines = request.lines();
+                let path = lines
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                let authorization = lines.find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("authorization")
+                        .then(|| value.trim().to_string())
+                });
+                recorded.lock().expect("the record lock").push(Read {
+                    path: path.clone(),
+                    authorization,
+                });
+                let body = if path.ends_with("/oidc/v1/token") {
+                    token.as_str()
+                } else {
+                    "{}"
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (address, reads)
+    }
+
+    /// A workspace that authenticates as a service principal.
+    fn service_principal(endpoint: &str) -> pqbench::Workspace {
+        pqbench::Workspace::new(pqbench::Config {
+            endpoint: endpoint.to_string(),
+            client_id: Some("client-id".into()),
+            client_secret: Some(pqbench::Secret::new("client-secret")),
+            ..pqbench::Config::default()
+        })
+        .expect("the workspace builds")
+    }
+
+    /// How many mint requests the endpoint read.
+    fn mints(reads: &Arc<Mutex<Vec<Read>>>) -> usize {
+        reads
+            .lock()
+            .expect("the record lock")
+            .iter()
+            .filter(|read| read.path.ends_with("/oidc/v1/token"))
+            .count()
     }
 
     async fn ready(socket: &std::path::Path) {
@@ -210,6 +299,80 @@ mod tests {
 
         start::stop(&socket).await.expect("the daemon stops");
         assert!(!socket.exists(), "the socket was not removed");
+        server
+            .await
+            .expect("the server task joins")
+            .expect("no server error");
+    }
+
+    /// A service principal's bearer is minted once and sent to every catalog
+    /// request the daemon answers, so a walk's hundreds of GETs cost one token.
+    #[tokio::test]
+    async fn a_service_principals_token_is_minted_once() {
+        let (endpoint, reads) = oauth_endpoint(3600);
+        let directory = tempfile::tempdir().expect("a temp directory");
+        let socket = directory.path().join("daemon.sock");
+        let server = tokio::spawn(run(
+            Daemon::direct(service_principal(&endpoint)),
+            socket.clone(),
+            0,
+        ));
+        ready(&socket).await;
+
+        let url = format!("{endpoint}/api/2.1/unity-catalog/catalogs");
+        for _ in 0..3 {
+            let response = client::request(&socket, &Request::http_get(&url))
+                .await
+                .expect("the daemon answers a get request");
+            assert_eq!(response.status, Some(200));
+            assert!(response.error.is_none(), "{:?}", response.error);
+        }
+
+        assert_eq!(mints(&reads), 1, "the token was minted more than once");
+        let reads = reads.lock().expect("the record lock").clone();
+        let sent: Vec<&Option<String>> = reads
+            .iter()
+            .filter(|read| read.path.contains("/catalogs"))
+            .map(|read| &read.authorization)
+            .collect();
+        assert_eq!(sent.len(), 3);
+        assert!(
+            sent.iter()
+                .all(|sent| sent.as_deref() == Some("Bearer minted")),
+            "{sent:?}"
+        );
+
+        start::stop(&socket).await.expect("the daemon stops");
+        server
+            .await
+            .expect("the server task joins")
+            .expect("no server error");
+    }
+
+    /// A token with no lifetime left is minted again for the next request: the
+    /// daemon never sends an expired token.
+    #[tokio::test]
+    async fn an_expired_token_is_minted_again() {
+        let (endpoint, reads) = oauth_endpoint(0);
+        let directory = tempfile::tempdir().expect("a temp directory");
+        let socket = directory.path().join("daemon.sock");
+        let server = tokio::spawn(run(
+            Daemon::direct(service_principal(&endpoint)),
+            socket.clone(),
+            0,
+        ));
+        ready(&socket).await;
+
+        let url = format!("{endpoint}/api/2.1/unity-catalog/catalogs");
+        for _ in 0..2 {
+            let response = client::request(&socket, &Request::http_get(&url))
+                .await
+                .expect("the daemon answers a get request");
+            assert_eq!(response.status, Some(200));
+        }
+        assert_eq!(mints(&reads), 2, "an expired token was sent again");
+
+        start::stop(&socket).await.expect("the daemon stops");
         server
             .await
             .expect("the server task joins")

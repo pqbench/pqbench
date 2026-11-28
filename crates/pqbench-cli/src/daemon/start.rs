@@ -59,13 +59,17 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
         .arg("--idle-seconds")
         .arg(idle_seconds.to_string());
     // The child resolves the same identity from explicit environment values;
-    // the token is never on its command line.
+    // no credential is ever on its command line.
     for name in [
         "PQB_DAEMON_SOCK",
         "PQB_PROFILE",
         "PQB_TOKEN",
+        "PQB_CLIENT_ID",
+        "PQB_CLIENT_SECRET",
         "DATABRICKS_HOST",
         "DATABRICKS_TOKEN",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
     ] {
         command.env_remove(name);
     }
@@ -76,6 +80,14 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
     command.env("PQB_TABLE_FORMAT", config.dialect.as_str());
     if let Some(token) = &config.token {
         command.env("PQB_TOKEN", token);
+    }
+    // A service principal mints and refreshes its own bearer, so the daemon's
+    // identity is the client credentials rather than a token.
+    if let Some(client_id) = &config.client_id {
+        command.env("PQB_CLIENT_ID", client_id);
+    }
+    if let Some(client_secret) = &config.client_secret {
+        command.env("PQB_CLIENT_SECRET", client_secret.expose());
     }
     let log = OpenOptions::new()
         .create(true)

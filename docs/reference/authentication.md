@@ -44,11 +44,40 @@ one with `--profile` (`PQB_PROFILE`), then override `--endpoint` / `--token` /
 | `PQB_PROFILE` | the `~/.pqbenchrc` profile to run under |
 | `PQB_ENDPOINT` | Databricks workspace URL, Unity OSS, or Iceberg REST base |
 | `PQB_TOKEN` | Bearer PAT (`dapi-…`) or OAuth token; catalog API only |
+| `PQB_CLIENT_ID` / `PQB_CLIENT_SECRET` | a service principal, when no static token is set |
 | `PQB_TABLE_FORMAT` | `unity` (the default) or `iceberg`; for `iceberg` the endpoint names the catalog base (`{root}/v1` or `{root}/v1/{prefix}`) |
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | a lower-priority fallback for the endpoint and bearer |
+| `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET` | the same fallback for a service principal |
 
 The token is a Bearer on the **catalog** API only. Only `AWS_*` is copied onto
 listed tables. A PAT does not open `s3://`.
+
+### Service principal (OAuth M2M)
+
+A service principal authenticates with a client id and secret instead of a
+long-lived token. Name them in the profile, or in the environment:
+
+```ini
+[DEFAULT]
+endpoint      = https://dbc-abc123.cloud.databricks.com
+client-id     = 0123-4567
+client-secret = …
+table_format  = unity
+```
+
+With no static `token`, pqbench mints the bearer from
+`POST {endpoint}/oidc/v1/token` — HTTP Basic over `client_id:client_secret`,
+`grant_type=client_credentials`, `scope=all-apis` — when the daemon needs one.
+The daemon holds the token and mints the next one five minutes before it
+expires, or at half its lifetime for a token shorter than ten minutes; a walk
+therefore mints one token an hour rather than one per request. `pqb setup`
+mints one for the exports, and `pqb setup --check` proves one end to end.
+
+A static `token` always wins, so a workspace with both configured uses the
+bearer an operator handed it. Neither the client secret nor a minted bearer is
+ever printed: `--check` reports the token's lifetime, `pqb setup` exports the
+token alone (never the secret), and an error carries only the endpoint's
+`error`/`error_description`.
 
 `get metastore` reads the same endpoint and reports its metastore record
 (name, uid, cloud_provider, region) as `Metastore`. `list catalogs` lists the
@@ -141,9 +170,27 @@ export AWS_EC2_METADATA_DISABLED='true'
 It resolves the endpoint and token the way the Databricks SDKs do — the flag,
 then `PQB_*`, then `DATABRICKS_*` — and adds `AWS_REGION` and
 `AWS_EC2_METADATA_DISABLED=true` (the AWS SDK otherwise probes EC2 metadata for
-the region, which hangs where that endpoint is blackholed). A notebook kernel's
-dbutils context is not visible to a subprocess, so a notebook sets
-`DATABRICKS_*` from it first.
+the region, which hangs where that endpoint is blackholed). A workspace
+configured as a service principal exports a bearer minted for that run. A
+notebook kernel's dbutils context is not visible to a subprocess, so a notebook
+sets `DATABRICKS_*` from it first.
+
+`pqb setup --check` is the preflight: it runs no exports, and reports three
+checks, one line each, then exits non-zero when any failed.
+
+```console no-run
+$ pqb setup --check
+ok    config   endpoint https://dbc-abc123.cloud.databricks.com, dialect unity, a service principal's client id and secret
+ok    auth     service-principal token minted, expires in 3600 s
+ok    catalog  GET https://dbc-abc123.cloud.databricks.com/api/2.1/unity-catalog/catalogs?max_results=1 answered 200
+```
+
+`config` is what the profile, the environment, and the flags resolved — the
+endpoint, the dialect, and which credential the run would send, described and
+never shown. `auth` is that credential (a mint for a service principal). `catalog`
+is one page of the endpoint's first listing level under that credential: the
+Unity catalogs, or the Iceberg REST base's namespaces. A failed check does not
+stop the next one, so one run reports every problem.
 
 ## The daemon
 
@@ -211,8 +258,13 @@ one is running, and local tables need none.
   `download` (the partition's sample file into the version's directory),
   `bytemass` and `lint` (`bytemass --local` and `list suggestions --local` on
   that copy), then `verify` (`get suggestion --local` on the potential
-  suggestions, while the copy is still there; the partition rules that need no
-  file are added to the same record set). One command runs per CPU at once,
+  suggestions, while the copy is still there; the two partition rules that need
+  no file — `tombstones` and `small-files` — are added to the same record set).
+  The six column rules (`codec-zstd`, `uuid-text`, `int96-timestamp`,
+  `dictionary-unique`, `dictionary-missing`, `delta-text-encoding`) each name
+  their change in every engine pqbench knows, so the driver records one
+  suggestion per rule with the `remedies` for spark, pyarrow, parquet-rs, Delta,
+  and Iceberg. One command runs per CPU at once,
   taking the newest data first and then the largest partition. A version
   with no live file, or whose files are in an archive class or tier, is
   `UP_TO_DATE` after its price. With `--low-network` no file is copied: after
@@ -258,6 +310,10 @@ no longer needs, with the log's own byte count as the saving) and `small-files`
 (many small files, with the compaction remedy each engine spells). A partition
 rule's `name` is `{partition}/suggestions/{rule}`, its `partition` names the
 partition, and its `column` is empty.
+
+Two settings of the driver's own — `checkpoint-codec` and `step-timeout` —
+live only in the same run-control file; see
+[Configuration](configuration.md#driver-settings).
 
 `pqbench-driver stop` sends a stop over the socket. `SIGINT` and `SIGTERM` do
 the same: the driver aborts the runs in flight (their commands are killed with

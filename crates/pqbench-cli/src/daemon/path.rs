@@ -1,9 +1,10 @@
 //! Where the daemon's socket lives.
 //!
 //! The path is derived from the resolved identity — endpoint, dialect, and a
-//! fingerprint of the token — so a client can find the daemon without an
-//! environment variable, and two principals on the same workspace never share
-//! one. `PQB_DAEMON_SOCK` overrides it for a sidecar or a test.
+//! fingerprint of the bearer (a static token, or a service principal's client
+//! id) — so a client can find the daemon without an environment variable, and
+//! two principals on the same workspace never share one. `PQB_DAEMON_SOCK`
+//! overrides it for a sidecar or a test.
 
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -55,6 +56,7 @@ fn fingerprint(config: &Config) -> u64 {
         config.endpoint.as_str(),
         config.dialect.as_str(),
         config.token.as_deref().unwrap_or_default(),
+        config.client_id.as_deref().unwrap_or_default(),
     ] {
         for byte in part.as_bytes() {
             hash ^= u64::from(*byte);
@@ -99,6 +101,7 @@ mod tests {
             token: Some(token.into()),
             dialect: Dialect::Unity,
             request_timeout: None,
+            ..Config::default()
         }
     }
 
@@ -109,5 +112,18 @@ mod tests {
         let mut other = config("a");
         other.dialect = Dialect::Iceberg;
         assert_ne!(fingerprint(&config("a")), fingerprint(&other));
+    }
+
+    /// A service principal's identity is its client id, so two principals on
+    /// one workspace get their own daemons.
+    #[test]
+    fn a_service_principals_client_id_is_part_of_the_identity() {
+        let principal = |client_id: &str| Config {
+            token: None,
+            client_id: Some(client_id.into()),
+            ..config("")
+        };
+        assert_ne!(fingerprint(&principal("a")), fingerprint(&principal("b")));
+        assert_eq!(fingerprint(&principal("a")), fingerprint(&principal("a")));
     }
 }

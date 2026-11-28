@@ -3,9 +3,10 @@
 //!
 //! `~/.pqbenchrc` is an INI of named profiles — the shape of `~/.databrickscfg`
 //! — each naming an endpoint, a bearer, and a dialect, so one workspace can
-//! carry a `[unity]` and an `[iceberg]` profile. Everything else is a
-//! per-invocation flag. Least to most specific: the selected profile, then the
-//! environment, then the flags.
+//! carry a `[unity]` and an `[iceberg]` profile. A profile may instead name a
+//! service principal's client id and secret, and the bearer is minted from them
+//! (`pqbench::oauth`). Everything else is a per-invocation flag. Least to most
+//! specific: the selected profile, then the environment, then the flags.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ use std::time::Duration;
 
 use clap::Args;
 use pqbench::config::{Combine, Dialect, Layer};
+use pqbench::Secret;
 
 use crate::CliError;
 
@@ -29,6 +31,23 @@ pub(crate) struct ConfigArgs {
     /// bearer token; overrides the profile [env: PQB_TOKEN]
     #[arg(long, global = true, value_name = "TOKEN", env = "PQB_TOKEN")]
     pub token: Option<String>,
+    /// service-principal OAuth client id; mints the bearer when no token is set
+    /// [env: PQB_CLIENT_ID]
+    #[arg(
+        long = "client-id",
+        global = true,
+        value_name = "ID",
+        env = "PQB_CLIENT_ID"
+    )]
+    pub client_id: Option<String>,
+    /// service-principal OAuth client secret [env: PQB_CLIENT_SECRET]
+    #[arg(
+        long = "client-secret",
+        global = true,
+        value_name = "SECRET",
+        env = "PQB_CLIENT_SECRET"
+    )]
+    pub client_secret: Option<String>,
     /// catalog dialect: unity (the default) or iceberg [env: PQB_TABLE_FORMAT]
     #[arg(long, global = true, value_name = "FORMAT", env = "PQB_TABLE_FORMAT", value_parser = parse_dialect)]
     pub table_format: Option<Dialect>,
@@ -104,8 +123,9 @@ fn config_path() -> Option<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".pqbenchrc")))
 }
 
-/// One `[profile]` table per profile, each with `endpoint`, `token`, and
-/// `table_format` keys, with `#` comments (INI).
+/// One `[profile]` table per profile, each with `endpoint`, `token`,
+/// `table_format`, and the service principal's `client-id`/`client-secret`
+/// keys, with `#` comments (INI).
 fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
     let mut profiles: BTreeMap<String, Layer> = BTreeMap::new();
     let mut profile: Option<String> = None;
@@ -135,6 +155,8 @@ fn parse_profiles(text: &str) -> Result<BTreeMap<String, Layer>, CliError> {
         match key.trim() {
             "endpoint" => layer.endpoint = Some(value),
             "token" => layer.token = Some(value),
+            "client-id" | "client_id" => layer.client_id = Some(value),
+            "client-secret" | "client_secret" => layer.client_secret = Some(Secret::new(value)),
             "table_format" => {
                 layer.dialect =
                     Some(parse_dialect(&value).map_err(|error| format!("~/.pqbenchrc: {error}"))?);
@@ -152,6 +174,8 @@ fn env_layer() -> Layer {
         endpoint: env_var("DATABRICKS_HOST"),
         token: env_var("DATABRICKS_TOKEN"),
         dialect: None,
+        client_id: env_var("DATABRICKS_CLIENT_ID"),
+        client_secret: env_var("DATABRICKS_CLIENT_SECRET").map(Secret::new),
     }
 }
 
@@ -162,6 +186,8 @@ fn flag_layer(args: &ConfigArgs) -> Layer {
         endpoint: non_empty(args.endpoint.clone()),
         token: non_empty(args.token.clone()),
         dialect: args.table_format,
+        client_id: non_empty(args.client_id.clone()),
+        client_secret: non_empty(args.client_secret.clone()).map(Secret::new),
     }
 }
 
@@ -216,7 +242,12 @@ mod tests {
              \n\
              [iceberg]\n\
              endpoint = https://example.cloud.databricks.com\n\
-             table_format = iceberg\n",
+             table_format = iceberg\n\
+             \n\
+             [principal]\n\
+             endpoint = https://example.cloud.databricks.com\n\
+             client_id = 0123-4567\n\
+             client-secret = oauth-secret\n",
         )
         .unwrap();
         assert_eq!(
@@ -226,6 +257,18 @@ mod tests {
         assert_eq!(profiles["DEFAULT"].dialect, Some(Dialect::Unity));
         assert_eq!(profiles["iceberg"].dialect, Some(Dialect::Iceberg));
         assert_eq!(profiles["iceberg"].token, None);
+        assert_eq!(profiles["principal"].token, None);
+        assert_eq!(
+            profiles["principal"].client_id.as_deref(),
+            Some("0123-4567")
+        );
+        assert_eq!(
+            profiles["principal"]
+                .client_secret
+                .as_ref()
+                .map(Secret::expose),
+            Some("oauth-secret")
+        );
     }
 
     #[test]
@@ -234,11 +277,11 @@ mod tests {
             endpoint: Some("profile".into()),
             token: None,
             dialect: Some(Dialect::Iceberg),
+            ..Layer::default()
         };
         let flags = Layer {
-            endpoint: None,
             token: Some("flag".into()),
-            dialect: None,
+            ..Layer::default()
         };
         let config = profile.combine(flags).resolve();
         assert_eq!(config.endpoint, "profile");

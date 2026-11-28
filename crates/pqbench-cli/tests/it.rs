@@ -68,6 +68,9 @@ mod sample;
 #[path = "schema.rs"]
 mod schema;
 
+#[path = "setup.rs"]
+mod setup;
+
 #[path = "skill.rs"]
 mod skill;
 

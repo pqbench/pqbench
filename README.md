@@ -38,6 +38,7 @@ so the walk is one bash pipeline.
 ```console no-run
 $ set -euo pipefail
 $ export PQB_ENDPOINT=https://<workspace>.cloud.databricks.com PQB_TOKEN=dapi-…
+$ pqb setup --check
 $ pqb daemon start
 $ pqb ls catalogs \
     | pqb ls schemas \
@@ -55,6 +56,15 @@ Read it left to right:
   catalog. A live endpoint rate-limits its REST calls, so the daemon that the
   next bullet starts owns those requests and paces Unity at 15/s, the catalog's
   per-endpoint ceiling.
+- `setup --check` is the preflight: it reports the resolved configuration, the
+  credential, and the endpoint's answer to the walk's first level as three
+  `ok`/`fail` lines and exits non-zero on a failure, so a misconfigured run
+  fails before it starts.
+- With no static token, a Databricks service principal authenticates with
+  `PQB_CLIENT_ID` and `PQB_CLIENT_SECRET`: the daemon mints the OAuth M2M
+  bearer, holds it, and mints the next one five minutes before it expires.
+  Neither the secret nor the bearer is printed. See
+  [Authentication](https://pqbench.github.io/pqbench/reference/authentication/).
 - `daemon start` runs one daemon for the walk. It makes every catalog request
   and caches the storage lease each table is read under, serving both to every
   stage, so the catalog vends each table once rather than once per command.
@@ -173,6 +183,50 @@ c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511        
 Filtering which files to measure is a shell job on the `list files` stream —
 see [Visual demos](https://pqbench.github.io/pqbench/guides/demo/).
 
+### list suggestions
+
+The storage a file's values do not need. One suggestion per column the file's
+footer and a representative row group make plausible, each with the change that
+recovers the bytes:
+
+```console run
+$ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb list suggestions | pqb fmt
+COLUMN            RULE        VERIFIED  SAVINGS  REMEDY                                                                           MESSAGE
+----------------  ----------  --------  -------  -------------------------------------------------------------------------------  ------------------------------
+url_encoded       codec-zstd  -                  compression={url_encoded: 'zstd'}, compression_level={url_encoded: 3}            uncompressed at 302.37 B/value
+text              codec-zstd  -                  compression={text: 'zstd'}, compression_level={text: 3}                          uncompressed at 247.86 B/value
+username_encoded  codec-zstd  -                  compression={username_encoded: 'zstd'}, compression_level={username_encoded: 3}  uncompressed at 148.73 B/value
+```
+
+Six rules read one column's chunk; the first that detects a column wins, so a
+column's bytes are never priced twice:
+
+| Rule | What it finds | Remedy |
+| --- | --- | --- |
+| `codec-zstd` | a chunk stored uncompressed, snappy, or gzip | write the column with zstd |
+| `uuid-text` | canonical UUID text, 36 bytes for 16 of data | write it as `BINARY(16)` |
+| `int96-timestamp` | the deprecated INT96 timestamp | write an `INT64` microsecond timestamp |
+| `dictionary-unique` | a dictionary page on nearly unique values | write the column without a dictionary |
+| `dictionary-missing` | repeated values written without a dictionary | write the column with one |
+| `delta-text-encoding` | nearly-unique text without a dictionary | write Delta-length byte arrays (page v2) |
+
+Two more decide from `list partitions` totals, so they read no file and hold
+for partitions a host never copies:
+
+| Rule | What it finds | Remedy |
+| --- | --- | --- |
+| `tombstones` | Delta's removed files the log still holds | `VACUUM` (Delta), expire snapshots (Iceberg) |
+| `small-files` | many small files in one partition | `OPTIMIZE` (Delta), `rewrite_data_files` (Iceberg), a coalesce before write |
+
+A suggestion's `remedy` is the setting in the detected writer's own terms —
+parquet-mr takes per-column keys, pyarrow and parquet-rs write options, Photon
+forwards them unverified — and `remedies` carries the same change for every
+engine pqbench knows: `spark`, `pyarrow`, `parquet-rs`, `delta`, `iceberg`.
+So a table compacted by any of them has its setting without a second lookup.
+`get suggestion` re-writes the sample under the remedy's control and marks the
+suggestion `verified` with the bytes it saves; `list suggestions` only names
+the candidates.
+
 ### list files
 
 List a table's active files — the files its snapshot holds now.
@@ -243,6 +297,31 @@ $ cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb 
 ```
 
 The page lands at `/tmp/report.html`. Open it in a browser.
+
+## The driver
+
+`pqbench-driver` keeps a map of partition versions — a partition at one etag —
+and drives each one through price, download, bytemass, lint, and verify with the
+plain `pqbench` commands, one per CPU, newest data first. Its walk re-lists the
+catalog every `--walk-period-seconds`, so a partition whose etag moved is
+measured again and a version the walk no longer finds leaves the map. State is
+checkpointed under `--store DIR`, results land in `DIR/results/`, and
+`pqbench list partition-versions` / `pqbench get partition-version` read it back
+over the driver's own socket:
+
+```console no-run
+$ pqbench-driver start --store /var/lib/pqbench --walk-period-seconds 86400
+$ pqbench list partition-versions catalogs/main/schemas/sales
+$ pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
+$ pqbench-driver status
+$ pqbench-driver stop
+```
+
+Two operator settings — `checkpoint-codec` and `step-timeout` — change rarely
+enough to live only in `~/.pqbenchrc`; see
+[Configuration](https://pqbench.github.io/pqbench/reference/configuration/#driver-settings).
+The catalog daemon is independent: the driver's commands talk to it when one is
+running, and local tables need none.
 
 ## Documentation
 
