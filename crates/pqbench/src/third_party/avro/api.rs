@@ -1,16 +1,13 @@
 //! Read Avro object-container records into [`Value`] trees.
 //!
-//! [`read_avro_values`] decodes every record into [`Value`], a format-agnostic
-//! tree, so a caller interprets both Iceberg manifest lists (whose v1 and v2/v3
-//! schemas differ in whether integer fields are nullable unions) and manifest
-//! `partition` records (whose fields and types follow the table's partition
-//! spec).
+//! [`read_avro_values`] decodes every record into [`Value`], a minimal
+//! format-agnostic tree, so a caller reads Iceberg manifest lists and manifest
+//! entries without a Rust struct per Avro schema version or partition spec.
 //!
 //! All `apache-avro` interaction lives in the private `impl` module. The
 //! `iceberg` feature compiles it; without it the entry point fails and names
 //! the feature. There are no feature flags outside this folder.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 /// Errors reading Avro records.
@@ -21,7 +18,7 @@ pub enum Error {
     Unsupported,
     /// The Avro container could not be decoded.
     Read {
-        /// What was being read (`"manifest entry"`, `"manifest list"`).
+        /// What was being read (`"manifest"`, `"manifest list"`).
         kind: String,
         /// The underlying Avro failure.
         source: Box<dyn std::error::Error + Send + Sync>,
@@ -46,58 +43,60 @@ impl std::error::Error for Error {
     }
 }
 
-/// One Avro value, decoded without a caller-supplied schema.
-///
-/// The tree keeps the value's own type, so a reader decides what a value means
-/// from the record it sits in: a `Date` is the same 32-bit count as an `Int`,
-/// but only the schema knows it counts days.
-#[derive(Debug, Clone, PartialEq)]
+/// One Avro value, reduced to the primitives an Iceberg manifest carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
-    /// A `null`.
+    /// `null` (or an unused container type).
     Null,
-    /// A `boolean`.
-    Bool(bool),
-    /// An `int`.
-    Int(i32),
-    /// A `long`.
-    Long(i64),
-    /// A `float`.
-    Float(f32),
-    /// A `double`.
-    Double(f64),
-    /// A `string`.
-    String(String),
-    /// `bytes`, and the body of a `fixed`.
+    /// A 32-bit or 64-bit integer.
+    Int(i64),
+    /// Text, or a scalar formatted by its Avro logical type (`date`,
+    /// `timestamp-*`, `uuid`, `boolean`, floating-point).
+    Text(String),
+    /// Raw `bytes`, `fixed`, or unscaled big-endian `decimal` bytes.
     Bytes(Vec<u8>),
-    /// The days since the Unix epoch of a `date`.
-    Date(i32),
-    /// The microseconds since the Unix epoch of a `timestamp-micros`.
-    TimestampMicros(i64),
-    /// The milliseconds since the Unix epoch of a `timestamp-millis`.
-    TimestampMillis(i64),
-    /// The nanoseconds since the Unix epoch of a `timestamp-nanos`.
-    TimestampNanos(i64),
-    /// The microseconds after midnight of a `time-micros`.
-    TimeMicros(i64),
-    /// The milliseconds after midnight of a `time-millis`.
-    TimeMillis(i32),
-    /// A decimal's unscaled value, big-endian two's complement.
-    Decimal(Vec<u8>),
-    /// The canonical text of a `uuid`.
-    Uuid(String),
-    /// A record's fields, in schema order.
+    /// A record's `(name, value)` fields in schema order.
     Record(Vec<(String, Value)>),
-    /// An array's items, in order.
-    Array(Vec<Value>),
-    /// A map's entries, by key. Sorted so a walk does not depend on the
-    /// container's hash order.
-    Map(BTreeMap<String, Value>),
+}
+
+impl Value {
+    /// Look up a named field when this value is a [`Value::Record`].
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Self> {
+        self.fields()?
+            .iter()
+            .find_map(|(field, value)| (field == name).then_some(value))
+    }
+
+    /// Read an integer field by name.
+    #[must_use]
+    pub fn int(&self, name: &str) -> Option<i64> {
+        match self.get(name)? {
+            Self::Int(number) => Some(*number),
+            _ => None,
+        }
+    }
+
+    /// Read a text field by name.
+    #[must_use]
+    pub fn str(&self, name: &str) -> Option<&str> {
+        match self.get(name)? {
+            Self::Text(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The record's fields, when this value is a [`Value::Record`].
+    #[must_use]
+    pub fn fields(&self) -> Option<&[(String, Self)]> {
+        match self {
+            Self::Record(fields) => Some(fields),
+            _ => None,
+        }
+    }
 }
 
 /// Decode every record in an Avro object container into [`Value`].
-///
-/// `kind` names what is being read (`"manifest"`, `"manifest list"`) so errors
-/// identify the caller's context.
 ///
 /// # Errors
 /// Fails when the `iceberg` feature is off or `bytes` is not a valid Avro

@@ -426,28 +426,6 @@ pub async fn stream_removed_files(
     }
 }
 
-/// Stream the merge-on-read delete files the requested snapshot still applies,
-/// without collecting them: for Iceberg, the active entries of its delete
-/// manifests (position deletes, equality deletes, and v3 deletion vectors),
-/// whatever format the writer chose. `None` for a format whose deletes are not
-/// stored as files (Delta applies them when it writes).
-///
-/// These are not data: their size is storage a rewrite removes, and their rows
-/// narrow the data files they reference.
-///
-/// # Errors
-/// As [`stream_active_files`].
-pub async fn stream_delete_files(
-    lake: &Lake,
-    request: &LoadRequest,
-) -> Result<Option<FileStream<'static>>, Error> {
-    match detect(lake, &request.uri).await? {
-        v1::TableFormat::Delta => Ok(None),
-        v1::TableFormat::Iceberg => Ok(Some(iceberg::stream_delete_files(lake, request).await?)),
-        _ => Err(unrecognized(&request.uri)),
-    }
-}
-
 /// Stream a snapshot's removed, active, and delete files in one pass.
 ///
 /// For Delta this chains the `remove` stream ahead of the `add` stream under

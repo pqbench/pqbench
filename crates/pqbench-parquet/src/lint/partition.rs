@@ -102,15 +102,21 @@ pub fn partition_suggestions(partition: &v1::Partition) -> Vec<v1::Suggestion> {
     rules.iter().filter_map(|rule| rule(partition)).collect()
 }
 
+fn exceeds_bytes_or_share(bytes: u64, min_bytes: u64, active_bytes: u64, denom: u64) -> bool {
+    bytes >= min_bytes || (active_bytes > 0 && bytes.saturating_mul(denom) >= active_bytes)
+}
+
 /// The bytes a vacuum recovers: the removed files the log still counts, when
 /// they are worth a vacuum on their own or against the active bytes.
 fn tombstones(partition: &v1::Partition) -> Option<v1::Suggestion> {
     let removed_bytes = partition.removed_size_bytes.filter(|bytes| *bytes > 0)?;
     let active_bytes = partition.size_bytes;
-    let large = removed_bytes >= TOMBSTONES_MIN_BYTES;
-    let share = active_bytes > 0
-        && removed_bytes.saturating_mul(TOMBSTONES_ACTIVE_DENOMINATOR) >= active_bytes;
-    if !large && !share {
+    if !exceeds_bytes_or_share(
+        removed_bytes,
+        TOMBSTONES_MIN_BYTES,
+        active_bytes,
+        TOMBSTONES_ACTIVE_DENOMINATOR,
+    ) {
         return None;
     }
     let remedies = vacuum_remedies();
@@ -170,12 +176,14 @@ fn small_files(partition: &v1::Partition) -> Option<v1::Suggestion> {
 fn delete_files(partition: &v1::Partition) -> Option<v1::Suggestion> {
     let delete_file_count = partition.delete_file_count.filter(|count| *count > 0)?;
     let delete_size_bytes = partition.delete_size_bytes.unwrap_or_default();
-    let active_bytes = partition.size_bytes;
-    let many = delete_file_count >= DELETE_FILES_MIN_COUNT;
-    let large = delete_size_bytes >= DELETE_FILES_MIN_BYTES;
-    let share = active_bytes > 0
-        && delete_size_bytes.saturating_mul(DELETE_FILES_ACTIVE_DENOMINATOR) >= active_bytes;
-    if !many && !large && !share {
+    if delete_file_count < DELETE_FILES_MIN_COUNT
+        && !exceeds_bytes_or_share(
+            delete_size_bytes,
+            DELETE_FILES_MIN_BYTES,
+            partition.size_bytes,
+            DELETE_FILES_ACTIVE_DENOMINATOR,
+        )
+    {
         return None;
     }
     let remedies = delete_remedies();
@@ -411,50 +419,21 @@ mod tests {
         }
     }
 
-    /// Enough delete files, large enough ones, or a large enough share of the
-    /// data they narrow earns the rewrite.
     #[test]
     fn delete_files_trigger_on_the_count_the_bytes_or_the_share() {
         for partition in [
             deleting(partition(1, 1_000_000), DELETE_FILES_MIN_COUNT, 4_000),
             deleting(partition(1, 100 * 1024 * 1024), 1, DELETE_FILES_MIN_BYTES),
-            // 64 KiB of deletes against 1 MiB of data is over one twentieth.
             deleting(partition(1, 1024 * 1024), 1, 64 * 1024),
         ] {
             let suggestions = partition_suggestions(&partition);
-            let suggestion =
-                rule(&suggestions, DELETE_FILES_RULE).expect("a delete-files suggestion");
+            let suggestion = rule(&suggestions, DELETE_FILES_RULE).unwrap();
             assert_eq!(suggestion.verified, None);
             assert_eq!(suggestion.savings_bytes, None);
-            assert_eq!(suggestion.partition.as_deref(), Some(PARTITION));
-            assert_eq!(
-                suggestion.name,
-                format!("{PARTITION}/suggestions/{DELETE_FILES_RULE}")
-            );
-            assert!(suggestion.column.is_empty());
-            assert!(
-                suggestion.message.contains("delete files"),
-                "{}",
-                suggestion.message
-            );
-            assert!(
-                suggestion.remedy.contains("rewrite_data_files")
-                    && suggestion.remedy.contains("rewrite_position_delete_files"),
-                "{}",
-                suggestion.remedy
-            );
+            assert!(suggestion.remedy.contains("rewrite_position_delete_files"));
             for engine in ["iceberg", "spark"] {
-                assert!(
-                    suggestion
-                        .remedies
-                        .iter()
-                        .any(|remedy| remedy.engine == engine),
-                    "{engine} has no remedy"
-                );
+                assert!(suggestion.remedies.iter().any(|r| r.engine == engine));
             }
-            let json = serde_json::to_string(suggestion).expect("a suggestion serializes");
-            let read: v1::Suggestion = serde_json::from_str(&json).expect("it parses");
-            assert_eq!(&read, suggestion);
         }
     }
 

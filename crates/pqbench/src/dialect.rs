@@ -58,15 +58,11 @@ pub(crate) fn iceberg_namespace(schema: &str) -> String {
 /// `…/v1/warehouse` → `warehouse`), or `"iceberg"` when the endpoint has no
 /// prefix (`…/v1`).
 pub(crate) fn iceberg_catalog(endpoint: &str) -> String {
-    let trimmed = endpoint.trim_end_matches('/');
-    let prefix = trimmed
+    endpoint
+        .trim_end_matches('/')
         .rsplit_once("/v1/")
-        .map(|(_, prefix)| prefix)
-        .filter(|prefix| !prefix.is_empty());
-    match prefix.and_then(|prefix| prefix.rsplit('/').find(|part| !part.is_empty())) {
-        Some(part) => pqbench_model_v1::name::decode(part),
-        None => "iceberg".to_string(),
-    }
+        .and_then(|(_, prefix)| prefix.rsplit('/').find(|part| !part.is_empty()))
+        .map_or_else(|| "iceberg".to_string(), pqbench_model_v1::name::decode)
 }
 
 /// The catalog kind the endpoint reports (`MANAGED_CATALOG`, …) as the proto

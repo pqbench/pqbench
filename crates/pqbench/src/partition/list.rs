@@ -17,6 +17,8 @@ const UNPARTITIONED: &str = "unpartitioned";
 /// The id segment Hive and Spark write for a null partition value.
 const NULL_VALUE: &str = "__HIVE_DEFAULT_PARTITION__";
 
+type PartitionValues = BTreeMap<String, Option<String>>;
+
 /// Errors listing a table's partitions.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -77,11 +79,16 @@ pub async fn list(lake: &Lake, table: &v1::Table) -> Result<Vec<v1::Partition>, 
     let mut entries = crate::table::stream_snapshot_files(lake, &request)
         .await
         .map_err(Error::Table)?;
-    let mut removed = Removed::default();
-    let mut partitions: HashMap<BTreeMap<String, Option<String>>, Fold> = HashMap::new();
+    let mut removed: HashMap<u64, Option<(PartitionValues, u64)>> = HashMap::new();
+    let mut partitions: HashMap<PartitionValues, Fold> = HashMap::new();
     while let Some(entry) = entries.try_next().await.map_err(Error::Table)? {
         match entry {
-            SnapshotFile::Removed(file) => removed.insert(file),
+            SnapshotFile::Removed(file) => {
+                let size = file.size_bytes.unwrap_or_default();
+                removed
+                    .entry(path_hash(&file.path))
+                    .or_insert(Some((file.partition_values, size)));
+            }
             SnapshotFile::Active(file) => {
                 let size_bytes = file.size_bytes.ok_or_else(|| {
                     let name = v1::name::table_file_name(&table.name, &file.path);
@@ -102,128 +109,46 @@ pub async fn list(lake: &Lake, table: &v1::Table) -> Result<Vec<v1::Partition>, 
                     modification_time,
                     ..v1::TableFile::default()
                 };
-                removed.cancel(&reference.path);
+                if let Some(slot) = removed.get_mut(&path_hash(&reference.path)) {
+                    *slot = None;
+                }
                 let record_count = stats.map(|stats| stats.record_count);
-                match partitions.get_mut(&partition_values) {
-                    Some(fold) => fold.add(reference, record_count),
-                    None => {
-                        check_columns(&partition_values, &table.partition_columns)?;
-                        let mut fold = Fold::default();
-                        fold.add(reference, record_count);
-                        partitions.insert(partition_values, fold);
-                    }
-                }
+                partition_fold(&mut partitions, partition_values, &table.partition_columns)?
+                    .add(reference, record_count);
             }
-            SnapshotFile::Delete(file) => match partitions.get_mut(&file.partition_values) {
-                Some(fold) => fold.add_delete(&file),
-                None => {
-                    check_columns(&file.partition_values, &table.partition_columns)?;
-                    let mut fold = Fold::default();
-                    fold.add_delete(&file);
-                    partitions.insert(file.partition_values, fold);
-                }
-            },
+            SnapshotFile::Delete(mut file) => {
+                let values = std::mem::take(&mut file.partition_values);
+                partition_fold(&mut partitions, values, &table.partition_columns)?
+                    .add_delete(&file);
+            }
         }
     }
-    for total in removed.totals() {
-        check_columns(&total.values, &table.partition_columns)?;
-        partitions.entry(total.values).or_default().add_removed(
-            total.file_count,
-            total.size_bytes,
-            total.hash,
-        );
+    for (hash, slot) in removed {
+        if let Some((values, size_bytes)) = slot {
+            partition_fold(&mut partitions, values, &table.partition_columns)?.add_removed(
+                1,
+                size_bytes,
+                removed_hash(hash, size_bytes),
+            );
+        }
     }
     let mut records: Vec<v1::Partition> = partitions
         .into_iter()
-        .map(|(values, fold)| fold.finish(&table.name, values, &table.partition_columns, true))
+        .map(|(values, fold)| fold.finish(&table.name, values, &table.partition_columns))
         .collect();
     records.sort_unstable_by(|a, b| a.name.cmp(&b.name));
     Ok(records)
 }
 
-/// The removed files of a table, keyed by path hash: what is left of each once
-/// the active files have cancelled the paths they still hold.
-#[derive(Default)]
-struct Removed {
-    files: HashMap<u64, RemovedFile>,
-    partitions: Vec<BTreeMap<String, Option<String>>>,
-    index: HashMap<BTreeMap<String, Option<String>>, usize>,
-}
-
-struct RemovedFile {
-    partition: usize,
-    size_bytes: u64,
-    live: bool,
-}
-
-impl Removed {
-    fn insert(&mut self, file: v1::TableFile) {
-        let hash = path_hash(&file.path);
-        if self.files.contains_key(&hash) {
-            // A path tombstoned twice (each of its deletion vectors, or both a
-            // historical manifest and a delete entry) is one file.
-            return;
-        }
-        let partition = match self.index.get(&file.partition_values) {
-            Some(partition) => *partition,
-            None => {
-                let partition = self.partitions.len();
-                self.partitions.push(file.partition_values.clone());
-                self.index.insert(file.partition_values, partition);
-                partition
-            }
-        };
-        self.files.insert(
-            hash,
-            RemovedFile {
-                partition,
-                size_bytes: file.size_bytes.unwrap_or_default(),
-                live: false,
-            },
-        );
+fn partition_fold<'a>(
+    partitions: &'a mut HashMap<PartitionValues, Fold>,
+    values: PartitionValues,
+    order: &[String],
+) -> Result<&'a mut Fold, Error> {
+    if !partitions.contains_key(&values) {
+        check_columns(&values, order)?;
     }
-
-    fn cancel(&mut self, path: &str) {
-        if let Some(entry) = self.files.get_mut(&path_hash(path)) {
-            entry.live = true;
-        }
-    }
-
-    /// Per partition: its values, and the count, bytes and identity hash of its
-    /// removed files.
-    fn totals(self) -> Vec<RemovedTotal> {
-        let mut totals = vec![(0_u64, 0_u64, 0_u64); self.partitions.len()];
-        for (path_hash, file) in self.files {
-            if file.live {
-                continue;
-            }
-            let total = &mut totals[file.partition];
-            total.0 += 1;
-            total.1 += file.size_bytes;
-            total.2 ^= removed_hash(path_hash, file.size_bytes);
-        }
-        self.partitions
-            .into_iter()
-            .zip(totals)
-            .filter(|(_, (file_count, _, _))| *file_count > 0)
-            .map(|(values, (file_count, size_bytes, hash))| RemovedTotal {
-                values,
-                file_count,
-                size_bytes,
-                hash,
-            })
-            .collect()
-    }
-}
-
-/// One partition's removed files, once the active ones cancelled the paths
-/// they still hold.
-struct RemovedTotal {
-    values: BTreeMap<String, Option<String>>,
-    file_count: u64,
-    size_bytes: u64,
-    /// The XOR of the files' hashes: their share of the partition's etag.
-    hash: u64,
+    Ok(partitions.entry(values).or_default())
 }
 
 fn path_hash(path: &str) -> u64 {
@@ -322,14 +247,12 @@ impl Fold {
         self.etag ^= delete_hash(file);
     }
 
-    /// The partition's record. `counted` says whether the table's format
-    /// records removed files; without it the removed totals are absent.
+    /// The partition's record.
     fn finish(
         self,
         table: &str,
         partition_values: BTreeMap<String, Option<String>>,
         order: &[String],
-        counted: bool,
     ) -> v1::Partition {
         let named = |mut file: v1::TableFile| {
             file.name = v1::name::table_file_name(table, &file.path);
@@ -348,8 +271,8 @@ impl Fold {
             first_file: self.first_file.map(named),
             last_file: self.last_file.map(named),
             sample_file: self.sample.map(|(_, file)| named(file)),
-            removed_file_count: counted.then_some(self.removed_file_count),
-            removed_size_bytes: counted.then_some(self.removed_size_bytes),
+            removed_file_count: Some(self.removed_file_count),
+            removed_size_bytes: Some(self.removed_size_bytes),
             delete_file_count: has_deletes.then_some(self.delete_file_count),
             delete_size_bytes: has_deletes.then_some(self.delete_size_bytes),
         }
@@ -441,7 +364,7 @@ mod tests {
 
     use crate::v1::TableFile;
 
-    use super::{partition_id, Fold, Removed, RemovedFile};
+    use super::{partition_id, removed_hash, Fold};
 
     fn values(pairs: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
         pairs
@@ -487,22 +410,9 @@ mod tests {
         let live_etag = no_removed.etag;
 
         for (path_hash, size_bytes) in [(0x1234_u64, 200_u64), (0x9876, 300)] {
-            let removed = Removed {
-                files: std::collections::HashMap::from([(
-                    path_hash,
-                    RemovedFile {
-                        partition: 0,
-                        size_bytes,
-                        live: false,
-                    },
-                )]),
-                partitions: vec![BTreeMap::new()],
-                index: std::collections::HashMap::new(),
-            };
-            let total = removed.totals().pop().unwrap();
             let mut fold = Fold::default();
             fold.add(live.clone(), None);
-            fold.add_removed(total.file_count, total.size_bytes, total.hash);
+            fold.add_removed(1, size_bytes, removed_hash(path_hash, size_bytes));
             assert_ne!(
                 fold.etag, live_etag,
                 "a tombstone at {path_hash:x} did not change the etag"

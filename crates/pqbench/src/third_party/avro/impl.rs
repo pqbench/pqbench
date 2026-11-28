@@ -1,7 +1,4 @@
 //! The Avro record reader, isolated behind the `iceberg` feature.
-//!
-//! [`read_avro_values`] is the runtime dispatch: without the feature it returns
-//! an error naming it, so callers never see a `#[cfg]`.
 
 use super::api::{Error, Value};
 
@@ -9,70 +6,56 @@ use super::api::{Error, Value};
 pub(crate) fn read_avro_values(bytes: &[u8], kind: &str) -> Result<Vec<Value>, Error> {
     use std::io::Cursor;
 
-    use apache_avro::Reader;
-
-    let reader = Reader::new(Cursor::new(bytes)).map_err(|error| Error::Read {
+    let read_err = |source| Error::Read {
         kind: kind.to_string(),
-        source: Box::new(error),
-    })?;
-    reader
-        .map(|value| {
-            value.map(convert).map_err(|error| Error::Read {
-                kind: kind.to_string(),
-                source: Box::new(error),
-            })
-        })
+        source: Box::new(source),
+    };
+    apache_avro::Reader::new(Cursor::new(bytes))
+        .map_err(read_err)?
+        .map(|item| item.map(convert).map_err(read_err))
         .collect()
 }
 
-/// One `apache-avro` value as this crate's [`Value`].
-///
-/// A union is transparent: its index is the writer's schema detail, and the
-/// value it wraps already says whether it is null. `fixed` and `enum` are their
-/// bodies (bytes and symbol), and the local timestamp variants are their UTC
-/// counterparts — the same count, which is what a reader formats.
 #[cfg(feature = "iceberg")]
 fn convert(value: apache_avro::types::Value) -> Value {
     use apache_avro::types::Value as Avro;
+    use chrono::{DateTime, Duration, NaiveDate, SecondsFormat, Utc};
 
+    let iso = |time: DateTime<Utc>| Value::Text(time.to_rfc3339_opts(SecondsFormat::AutoSi, true));
     match value {
-        Avro::Null => Value::Null,
-        Avro::Boolean(value) => Value::Bool(value),
-        Avro::Int(value) => Value::Int(value),
-        Avro::Long(value) => Value::Long(value),
-        Avro::Float(value) => Value::Float(value),
-        Avro::Double(value) => Value::Double(value),
-        Avro::String(value) => Value::String(value),
-        Avro::Bytes(value) => Value::Bytes(value),
-        Avro::Fixed(_, value) => Value::Bytes(value),
-        Avro::Enum(_, symbol) => Value::String(symbol),
-        Avro::Union(_, value) => convert(*value),
-        Avro::Array(items) => Value::Array(items.into_iter().map(convert).collect()),
-        Avro::Map(entries) => Value::Map(
-            entries
-                .into_iter()
-                .map(|(key, value)| (key, convert(value)))
-                .collect(),
-        ),
+        Avro::Null | Avro::Array(_) | Avro::Map(_) | Avro::Duration(_) => Value::Null,
+        Avro::Union(_, inner) => convert(*inner),
+        Avro::Int(number) | Avro::TimeMillis(number) => Value::Int(i64::from(number)),
+        Avro::Long(number) | Avro::TimeMicros(number) => Value::Int(number),
+        Avro::Boolean(flag) => Value::Text(flag.to_string()),
+        Avro::Float(number) => Value::Text(number.to_string()),
+        Avro::Double(number) => Value::Text(number.to_string()),
+        Avro::String(text) | Avro::Enum(_, text) => Value::Text(text),
+        Avro::Uuid(uuid) => Value::Text(uuid.to_string()),
+        Avro::BigDecimal(decimal) => Value::Text(decimal.to_string()),
+        Avro::Bytes(bytes) | Avro::Fixed(_, bytes) => Value::Bytes(bytes),
+        Avro::Decimal(decimal) => Value::Bytes(Vec::<u8>::try_from(decimal).unwrap_or_default()),
+        Avro::Date(days) => NaiveDate::from_ymd_opt(1970, 1, 1)
+            .and_then(|epoch| epoch.checked_add_signed(Duration::days(i64::from(days))))
+            .map_or_else(
+                || Value::Int(i64::from(days)),
+                |date| Value::Text(date.format("%Y-%m-%d").to_string()),
+            ),
+        Avro::TimestampMillis(millis) | Avro::LocalTimestampMillis(millis) => {
+            DateTime::from_timestamp_millis(millis).map_or(Value::Int(millis), iso)
+        }
+        Avro::TimestampMicros(micros) | Avro::LocalTimestampMicros(micros) => {
+            DateTime::from_timestamp_micros(micros).map_or(Value::Int(micros), iso)
+        }
+        Avro::TimestampNanos(nanos) | Avro::LocalTimestampNanos(nanos) => {
+            iso(DateTime::from_timestamp_nanos(nanos))
+        }
         Avro::Record(fields) => Value::Record(
             fields
                 .into_iter()
-                .map(|(name, value)| (name, convert(value)))
+                .map(|(name, field)| (name, convert(field)))
                 .collect(),
         ),
-        Avro::Date(days) => Value::Date(days),
-        Avro::TimeMillis(value) => Value::TimeMillis(value),
-        Avro::TimeMicros(value) => Value::TimeMicros(value),
-        Avro::TimestampMillis(value) => Value::TimestampMillis(value),
-        Avro::TimestampMicros(value) => Value::TimestampMicros(value),
-        Avro::TimestampNanos(value) => Value::TimestampNanos(value),
-        Avro::LocalTimestampMillis(value) => Value::TimestampMillis(value),
-        Avro::LocalTimestampMicros(value) => Value::TimestampMicros(value),
-        Avro::LocalTimestampNanos(value) => Value::TimestampNanos(value),
-        Avro::Decimal(value) => Value::Decimal(Vec::<u8>::try_from(value).unwrap_or_default()),
-        Avro::BigDecimal(value) => Value::String(value.to_string()),
-        Avro::Duration(value) => Value::Bytes(<[u8; 12]>::from(value).to_vec()),
-        Avro::Uuid(value) => Value::Uuid(value.to_string()),
     }
 }
 
