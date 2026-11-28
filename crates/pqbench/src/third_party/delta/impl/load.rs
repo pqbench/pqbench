@@ -16,10 +16,13 @@ use deltalake::logstore::{commit_uri_from_version, LogStore, LogStoreRef};
 use deltalake::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use futures::stream::{self, Stream};
 use futures::{StreamExt, TryStreamExt};
+use serde::de::IgnoredAny;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{relative_data_path, Error, LoadRequest, PartitionMass, TableInfo};
+use crate::third_party::json;
 use crate::v1;
 use crate::Lake;
 
@@ -489,15 +492,18 @@ async fn commit_head(store: &LogStoreRef, version: u64) -> Result<CommitHead, Er
 /// long commit are not parsed. A read that stops mid-line — a prefix, or a log
 /// that does not end in a newline — simply holds no `commitInfo` yet.
 fn parse_commit_info(bytes: &[u8]) -> Option<Value> {
+    /// What a line has to hold to be the commit's own action.
+    const MARKER: &[u8] = br#""commitInfo""#;
     for line in bytes.split(|byte| *byte == b'\n') {
-        let line = String::from_utf8_lossy(line);
-        if !line.contains("\"commitInfo\"") {
+        // The marker is looked for in the bytes: decoding every line of a long
+        // commit to text to reject it would cost more than the parse.
+        if !line.windows(MARKER.len()).any(|window| window == MARKER) {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+        let Ok(Action::CommitInfo(info)) = json::from_slice::<Action>(line) else {
             continue;
         };
-        return value.get("commitInfo").cloned();
+        return Some(info);
     }
     None
 }
@@ -516,25 +522,19 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
     let mut commit_time = None;
     let mut commit_info = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let value: serde_json::Value = serde_json::from_str(line).map_err(Error::Json)?;
-        let object = value
-            .as_object()
-            .ok_or_else(|| Error::Invalid(format!("commit {version} action is not an object")))?;
-        let (kind, body) = object
-            .iter()
-            .next()
-            .ok_or_else(|| Error::Invalid(format!("commit {version} action is empty")))?;
-        if kind == "commitInfo" && commit_info.is_none() {
-            commit_info = Some(body.clone());
-            commit_time = body.get("timestamp").and_then(serde_json::Value::as_i64);
+        let action: Action = json::from_slice(line.as_bytes())
+            .map_err(|error| Error::Invalid(format!("commit {version}: {error}")))?;
+        if let Action::CommitInfo(info) = &action {
+            if commit_info.is_none() {
+                commit_time = info.get("timestamp").and_then(Value::as_i64);
+                commit_info = Some(info.clone());
+            }
         }
+        let body = action.body();
         actions.push(v1::LogAction {
-            kind: Some(kind.clone()),
-            path: body
-                .get("path")
-                .and_then(|path| path.as_str())
-                .map(str::to_owned),
-            size_bytes: body.get("size").and_then(serde_json::Value::as_u64),
+            kind: Some(action.kind().to_owned()),
+            path: body.and_then(|body| body.path.clone()),
+            size_bytes: body.and_then(|body| body.size),
         });
     }
     Ok(ParsedCommit {
@@ -542,6 +542,75 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
         commit_time,
         commit_info,
     })
+}
+
+/// One action of a commit file.
+///
+/// Delta writes one action per line and the line's one key names the kind, which
+/// is what an externally tagged enum reads: the tag is the kind, its value the
+/// action's body. The protocol fixes the kinds, and a kind this reader does not
+/// know is an error rather than a silent drop — the file's actions are the
+/// commit, and half of them is not a commit.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Action {
+    /// A file the commit wrote.
+    Add(ActionBody),
+    /// A file the commit removed.
+    Remove(ActionBody),
+    /// A change-data-capture file the commit wrote.
+    Cdc(ActionBody),
+    /// The table's metadata: the snapshot describes it already.
+    #[serde(rename = "metaData")]
+    Metadata(IgnoredAny),
+    /// The table's protocol: the snapshot describes it already.
+    Protocol(IgnoredAny),
+    /// A transaction identifier.
+    Txn(IgnoredAny),
+    /// The commit's own record: its time, and what the writer reports.
+    #[serde(rename = "commitInfo")]
+    CommitInfo(Value),
+    /// A domain's metadata.
+    DomainMetadata(IgnoredAny),
+    /// A checkpoint's sidecar file.
+    Sidecar(ActionBody),
+}
+
+impl Action {
+    /// The kind as the log spells it.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Add(_) => "add",
+            Self::Remove(_) => "remove",
+            Self::Cdc(_) => "cdc",
+            Self::Metadata(_) => "metaData",
+            Self::Protocol(_) => "protocol",
+            Self::Txn(_) => "txn",
+            Self::CommitInfo(_) => "commitInfo",
+            Self::DomainMetadata(_) => "domainMetadata",
+            Self::Sidecar(_) => "sidecar",
+        }
+    }
+
+    /// The action's body, when its kind has one a log record reads.
+    fn body(&self) -> Option<&ActionBody> {
+        match self {
+            Self::Add(body) | Self::Remove(body) | Self::Cdc(body) | Self::Sidecar(body) => {
+                Some(body)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The part of an action's body a log record keeps.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionBody {
+    /// The data path the action names, when it names one.
+    path: Option<String>,
+    /// The size the action declares, when it declares one.
+    size: Option<u64>,
 }
 
 /// Resolve every active data file to a path `bytemass` can read, collecting
@@ -831,16 +900,10 @@ fn data_file(
             record_count,
             ..v1::FileStats::default()
         }),
-        None => file_stats(file.stats()),
+        None => file_stats(file.stats(), keep_stats),
     };
     if let Some(stats) = stats.as_mut() {
         stats.bytes_per_row = bytes_per_row(size, stats.record_count);
-        if !keep_stats {
-            stats.first_values.clear();
-            stats.last_values.clear();
-            stats.null_count.clear();
-            stats.tight_bounds = None;
-        }
     }
     Ok(v1::TableFile {
         blob: Some(v1::name::blob_name(&uri)),
@@ -872,15 +935,25 @@ fn partition_values(file: &deltalake::kernel::LogicalFileView) -> BTreeMap<Strin
         .collect()
 }
 
-/// Parse `add.stats`. Nested `nullCount` objects are flattened to dotted
-/// keys. A malformed stats blob is omitted rather than failing the table.
-fn file_stats(raw: Option<String>) -> Option<v1::FileStats> {
-    let raw = raw?;
-    let value: Value = serde_json::from_str(&raw).ok()?;
+/// Parse `add.stats` into the facts `keep_stats` asks for: the record count
+/// always, and the per-column maps only when the caller keeps them. Nested
+/// `nullCount` objects are flattened to dotted keys. A malformed stats blob is
+/// omitted rather than failing the table.
+fn file_stats(raw: Option<String>, keep_stats: bool) -> Option<v1::FileStats> {
+    // The blob is the log's own bytes: parse it where it lies rather than
+    // through a copy.
+    let mut raw = raw?.into_bytes();
+    let value: Value = json::from_slice_mut(&mut raw).ok()?;
     let object = value.as_object()?;
-    let num_records = object.get("numRecords").and_then(Value::as_u64)?;
+    let record_count = object.get("numRecords").and_then(Value::as_u64)?;
+    if !keep_stats {
+        return Some(v1::FileStats {
+            record_count,
+            ..v1::FileStats::default()
+        });
+    }
     Some(v1::FileStats {
-        record_count: num_records,
+        record_count,
         bytes_per_row: None,
         first_values: stat_object(object, "minValues"),
         last_values: stat_object(object, "maxValues"),

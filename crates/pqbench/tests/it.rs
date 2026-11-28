@@ -33,6 +33,9 @@ mod file_selection;
 #[path = "iceberg.rs"]
 mod iceberg;
 
+#[path = "json.rs"]
+mod json;
+
 #[path = "lz_e2e.rs"]
 mod lz_e2e;
 

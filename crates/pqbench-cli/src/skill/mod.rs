@@ -4,6 +4,7 @@ use std::io::Write;
 
 use clap::Args;
 use pqbench::skill::{self, Skill};
+use pqbench::third_party::json;
 use serde::Serialize;
 
 use crate::CliError;
@@ -26,6 +27,7 @@ pub(crate) fn run(args: &SkillArgs) -> Result<(), CliError> {
 
 fn list() -> Result<(), CliError> {
     let mut out = std::io::stdout().lock();
+    let mut line = Vec::new();
     for item in skill::skills() {
         let record = SkillRecord {
             kind: "pqbench.skill",
@@ -34,8 +36,12 @@ fn list() -> Result<(), CliError> {
             description: item.description,
             documents: document_names(item),
         };
-        let line = serde_json::to_string(&record)?;
-        closed_pipe(writeln!(out, "{line}"))?;
+        // The record is written where it will be output: one reused buffer, no
+        // string of its own.
+        line.clear();
+        json::to_writer(&mut line, &record)?;
+        line.push(b'\n');
+        closed_pipe(out.write_all(&line))?;
     }
     Ok(())
 }

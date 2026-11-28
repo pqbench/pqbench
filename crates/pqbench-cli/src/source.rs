@@ -26,8 +26,9 @@ use std::future::Future;
 use futures_util::future::join_all;
 use futures_util::stream::{self, LocalBoxStream, Stream, StreamExt};
 use futures_util::TryStreamExt;
+use pqbench::third_party::json;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 use pqbench::v1::Resource;
 
@@ -43,14 +44,45 @@ pub(crate) struct Input {
     /// The first record, when stdin carried one.
     pub first: Option<Value>,
     /// The lines after the first record.
-    pub lines: Lines<BufReader<tokio::io::Stdin>>,
+    pub lines: Lines,
+}
+
+/// Standard input's lines, read as bytes.
+///
+/// A record is parsed where it lies, in a buffer that is reused, so reading
+/// one costs no string of its own.
+pub(crate) struct Lines {
+    input: BufReader<tokio::io::Stdin>,
+    /// The bytes of the line being parsed.
+    bytes: Vec<u8>,
+}
+
+impl Lines {
+    fn new() -> Self {
+        Self {
+            input: BufReader::new(tokio::io::stdin()),
+            bytes: Vec::new(),
+        }
+    }
+
+    /// The next line, without its newline: `None` at the end of input.
+    async fn next(&mut self) -> Result<Option<&mut [u8]>, CliError> {
+        self.bytes.clear();
+        if self.input.read_until(b'\n', &mut self.bytes).await? == 0 {
+            return Ok(None);
+        }
+        if self.bytes.last() == Some(&b'\n') {
+            self.bytes.pop();
+        }
+        Ok(Some(self.bytes.as_mut_slice()))
+    }
 }
 
 /// The parent records: the peeked first record, then the rest of stdin.
 pub(crate) fn records(
     command: &'static str,
     first: Option<Value>,
-    lines: Lines<BufReader<tokio::io::Stdin>>,
+    lines: Lines,
 ) -> impl Stream<Item = Result<Value, CliError>> + Unpin {
     let first = stream::iter(first).map(Ok::<_, CliError>);
     let rest = stream::try_unfold(lines, move |mut lines| async move {
@@ -62,15 +94,12 @@ pub(crate) fn records(
 
 /// Standard input's next record: the next line that is not blank, or `None`
 /// at the end of input.
-async fn next_record(
-    command: &'static str,
-    lines: &mut Lines<BufReader<tokio::io::Stdin>>,
-) -> Result<Option<Value>, CliError> {
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
+async fn next_record(command: &'static str, lines: &mut Lines) -> Result<Option<Value>, CliError> {
+    while let Some(line) = lines.next().await? {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let record: Value = serde_json::from_str(&line)
+        let record = json::from_slice_mut(line)
             .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
         return Ok(Some(record));
     }
@@ -81,7 +110,7 @@ async fn next_record(
 /// without resolving config.
 pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError> {
     let piped = is_stream();
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut lines = Lines::new();
     let first = if piped {
         next_record(command, &mut lines).await?
     } else {

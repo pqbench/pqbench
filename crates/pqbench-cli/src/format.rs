@@ -15,6 +15,7 @@
 use clap::Args;
 use futures_util::StreamExt;
 use pqbench::{diff, mass, v1};
+use serde::Deserialize as _;
 use serde_json::Value;
 
 use crate::document::{self, Input, Record};
@@ -140,9 +141,7 @@ fn classify(record: &Value) -> Option<Class> {
         if mass::ColumnMass::from_document(record).is_some() {
             return Some(Class::Mass);
         }
-        if record.get("delta_bytes").is_some()
-            && serde_json::from_value::<diff::ColumnDelta>(record.clone()).is_ok()
-        {
+        if record.get("delta_bytes").is_some() && diff::ColumnDelta::deserialize(record).is_ok() {
             return Some(Class::Delta);
         }
         return None;

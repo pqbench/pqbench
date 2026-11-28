@@ -24,9 +24,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pqbench::codecs::{self, Codec};
+use pqbench::third_party::json;
 use pqbench::v1::partition_version::State;
 use pqbench::v1::{PartitionVersion, Suggestion};
-use serde_json::Value;
+use serde_json::value::RawValue;
 
 use super::engine::{self, Key};
 
@@ -195,7 +196,7 @@ impl Store {
         text.lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| {
-                serde_json::from_str(line).map_err(|error| format!("bad checkpoint row: {error}"))
+                json::from_str(line).map_err(|error| format!("bad checkpoint row: {error}"))
             })
             .collect()
     }
@@ -310,7 +311,11 @@ impl Store {
 
     /// One version's results, in the order its transitions wrote them: its
     /// price, each suggestion, each column mass, then the listing.
-    pub(crate) fn read_results(&self, key: &Key) -> Result<Vec<Value>, String> {
+    ///
+    /// Each record stays the JSON line it was read from: the driver hands a
+    /// version's results to a client verbatim, so parsing them into a tree here
+    /// and serializing them again would be two passes for no one.
+    pub(crate) fn read_results(&self, key: &Key) -> Result<Vec<Box<RawValue>>, String> {
         let directory = self.version_dir(key);
         let mut results = Vec::new();
         for (file, all) in [
@@ -325,7 +330,7 @@ impl Store {
                 Err(error) => return Err(format!("cannot read {file}: {error}")),
             };
             for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                let record: Value = serde_json::from_str(line)
+                let record = RawValue::from_string(line.to_owned())
                     .map_err(|error| format!("bad result line in {file}: {error}"))?;
                 results.push(record);
                 if !all {
@@ -370,7 +375,7 @@ impl Store {
         text.lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| {
-                serde_json::from_str(line)
+                json::from_str(line)
                     .map_err(|error| format!("bad suggestion of {}: {error}", key.0))
             })
             .collect()

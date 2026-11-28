@@ -109,7 +109,9 @@ Documents:
 ```
 
 Features: delta / iceberg to load those logs; aws / delta-s3 / iceberg-s3
-for s3://. A missing feature fails at runtime and names itself.
+for s3://. A missing feature fails at runtime and names itself. json-simd
+parses JSON with the SIMD parser; without it serde_json parses, for the same
+records and the same output.
 
 ```console no-run
 Auth (how to reach data):

@@ -12,9 +12,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
+use pqbench::third_party::json;
 use pqbench::v1::{PartitionVersion, Suggestion};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::value::{to_raw_value, RawValue};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
@@ -99,7 +100,7 @@ async fn results(
     engine: &RwLock<Engine>,
     store: &Store,
     name: &str,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<Vec<Box<RawValue>>, String> {
     let (key, version) = read_engine(engine).version(name)?;
     let store = store.clone();
     let results = tokio::task::spawn_blocking(move || store.read_results(&key))
@@ -117,7 +118,7 @@ async fn suggestions(
     engine: &RwLock<Engine>,
     store: &Store,
     parent: Option<&str>,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<Box<RawValue>>, String> {
     let keys = read_engine(engine).keys(parent.unwrap_or_default())?;
     let store = store.clone();
     let mut suggestions = tokio::task::spawn_blocking(move || {
@@ -137,7 +138,7 @@ async fn suggestions(
     });
     suggestions
         .iter()
-        .map(|suggestion| serde_json::to_value(suggestion).map_err(|error| error.to_string()))
+        .map(|suggestion| to_raw_value(suggestion).map_err(|error| error.to_string()))
         .collect()
 }
 
@@ -162,20 +163,23 @@ async fn handle(
     else {
         return Ok(());
     };
+    // The protocol is `serde_json`'s: a pass-through record is a `RawValue`,
+    // which only a direct deserializer can read.
     let request: Request =
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
     let mut write = BufWriter::new(write);
+    let mut frame = Vec::new();
     match &request {
-        Request::Ping => write_frame(&mut write, &ok()).await?,
+        Request::Ping => write_frame(&mut write, &mut frame, &ok()).await?,
         Request::Stop => {
             shutdown.notify_one();
-            write_frame(&mut write, &ok()).await?;
+            write_frame(&mut write, &mut frame, &ok()).await?;
         }
         Request::ListPartitionVersions { parent } => {
             // The lock is released before a line is written: a slow reader
             // does not hold the map.
             let versions = read_engine(&engine).records(parent);
-            write_versions(&mut write, versions).await?;
+            write_versions(&mut write, &mut frame, versions).await?;
         }
         Request::PartitionResults { name } => {
             let response = match results(&engine, &store, name).await {
@@ -188,7 +192,7 @@ async fn handle(
                     ..Response::default()
                 },
             };
-            write_frame(&mut write, &response).await?;
+            write_frame(&mut write, &mut frame, &response).await?;
         }
         Request::Status => {
             // The lock is released before a line is written: a slow reader
@@ -198,7 +202,7 @@ async fn handle(
                 status: Some(status),
                 ..Response::default()
             };
-            write_frame(&mut write, &response).await?;
+            write_frame(&mut write, &mut frame, &response).await?;
         }
         Request::ListSuggestions { parent } => {
             let response = match suggestions(&engine, &store, parent.as_deref()).await {
@@ -211,7 +215,7 @@ async fn handle(
                     ..Response::default()
                 },
             };
-            write_frame(&mut write, &response).await?;
+            write_frame(&mut write, &mut frame, &response).await?;
         }
     }
     write
@@ -230,6 +234,7 @@ fn ok() -> Response {
 /// Answer a `ListPartitionVersions`: the count, then one line per version.
 async fn write_versions(
     write: &mut BufWriter<OwnedWriteHalf>,
+    frame: &mut Vec<u8>,
     versions: Result<Vec<PartitionVersion>, String>,
 ) -> Result<(), String> {
     match versions {
@@ -237,6 +242,7 @@ async fn write_versions(
             let count = Some(versions.len() as u64);
             write_frame(
                 write,
+                frame,
                 &Response {
                     count,
                     ..Response::default()
@@ -244,7 +250,7 @@ async fn write_versions(
             )
             .await?;
             for version in &versions {
-                write_frame(write, version).await?;
+                write_frame(write, frame, version).await?;
             }
             Ok(())
         }
@@ -253,19 +259,23 @@ async fn write_versions(
                 error: Some(error),
                 ..Response::default()
             };
-            write_frame(write, &response).await
+            write_frame(write, frame, &response).await
         }
     }
 }
 
+/// One answer, written from a reused buffer: a listing can be millions of
+/// lines, and none of them needs a buffer of its own.
 async fn write_frame<T: Serialize>(
     write: &mut BufWriter<OwnedWriteHalf>,
-    frame: &T,
+    frame: &mut Vec<u8>,
+    answer: &T,
 ) -> Result<(), String> {
-    let mut line = serde_json::to_vec(frame).map_err(|error| error.to_string())?;
-    line.push(b'\n');
+    frame.clear();
+    json::to_writer(&mut *frame, answer).map_err(|error| error.to_string())?;
+    frame.push(b'\n');
     write
-        .write_all(&line)
+        .write_all(frame)
         .await
         .map_err(|error| format!("cannot write the answer: {error}"))
 }

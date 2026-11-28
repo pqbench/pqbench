@@ -166,8 +166,8 @@ pub(crate) async fn list_suggestions(parent: Option<&str>) -> Result<(), String>
         return Err(error);
     }
     for record in &response.records {
-        let line = serde_json::to_string(record).map_err(|error| error.to_string())?;
-        println!("{line}");
+        // The record is the JSON the driver read: print it as it is.
+        println!("{}", record.get());
     }
     Ok(())
 }

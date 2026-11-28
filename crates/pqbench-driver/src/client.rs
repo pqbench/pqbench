@@ -80,6 +80,8 @@ async fn open(
             "the driver closed the connection without an answer".into(),
         ));
     }
+    // `serde_json`'s deserializer and no other: an answer carries a version's
+    // records as `RawValue`, which needs the parser to hand over its own bytes.
     let response =
         serde_json::from_str(&line).map_err(|error| Error::Protocol(error.to_string()))?;
     Ok((response, reader))

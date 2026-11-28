@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
+use pqbench::third_party::json;
 use pqbench::v1::{Partition, PartitionPrice, Suggestion};
 use tokio::sync::Notify;
 use tokio::task::{JoinHandle, JoinSet};
@@ -335,7 +336,7 @@ impl Driver {
     /// version and the keys of the partition's versions it supersedes.
     fn found(&mut self, line: &str, now: u64) -> Result<(Key, Vec<Key>), String> {
         let listing: Partition =
-            serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
+            json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
         let key = engine::key(&listing.name, &listing.etag).ok_or_else(|| {
             format!(
                 "{} at {} is not a partition version",
@@ -383,7 +384,7 @@ async fn work(store: &Store, run: &Run, worker: &Worker) -> Outcome {
     let input = match transition.input {
         Input::Partition => listing,
         Input::SampleFile => {
-            let partition: Partition = serde_json::from_str(&listing)
+            let partition: Partition = json::from_str(&listing)
                 .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
             let sample = partition
                 .sample_file
@@ -418,7 +419,7 @@ async fn work(store: &Store, run: &Run, worker: &Worker) -> Outcome {
     }
     let first = String::from_utf8_lossy(&stdout);
     let first = first.lines().next().unwrap_or_default();
-    serde_json::from_str(first)
+    json::from_str(first)
         .map(Some)
         .map_err(|error| format!("bad price: {error}"))
 }
@@ -434,8 +435,8 @@ async fn verify(
     listing: &str,
     worker: &Worker,
 ) -> Outcome {
-    let partition: Partition = serde_json::from_str(listing)
-        .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
+    let partition: Partition =
+        json::from_str(listing).map_err(|error| format!("bad listing of {}: {error}", key.0))?;
     let mut suggestions = measured(store, key, transition, worker).await?;
     suggestions.extend(pqbench::lint::partition_suggestions(&partition));
     store.write_suggestions(key, &suggestions)?;
@@ -473,7 +474,7 @@ async fn measured(
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            serde_json::from_str(line)
+            json::from_str(line)
                 .map_err(|error| format!("bad measured suggestion of {}: {error}", key.0))
         })
         .collect()

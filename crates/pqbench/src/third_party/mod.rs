@@ -6,6 +6,7 @@
 pub mod avro;
 pub mod delta;
 pub mod flate2;
+pub mod json;
 pub mod lz4;
 pub mod object_store;
 pub mod parquet;

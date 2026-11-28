@@ -1,9 +1,9 @@
 //! Output: one NDJSON line per record on standard output.
 //!
-//! Each record is serialized and written directly to tokio's stdout without a
-//! user-space `BufWriter`, so a closed reader (`BrokenPipe`) surfaces
-//! immediately on write and lets the caller cancel upstream work via
-//! [`ControlFlow::Break`].
+//! Each record is serialized into a reused line buffer and written directly to
+//! tokio's stdout without a user-space `BufWriter`, so a closed reader
+//! (`BrokenPipe`) surfaces immediately on write and lets the caller cancel
+//! upstream work via [`ControlFlow::Break`].
 //!
 //! Writes complete before the exit status is decided, so a partial run's output
 //! is never truncated by its own error.
@@ -11,6 +11,7 @@
 use std::io::ErrorKind;
 use std::ops::ControlFlow;
 
+use pqbench::third_party::json;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -19,6 +20,9 @@ use crate::CliError;
 /// One command's NDJSON stream.
 pub(crate) struct Emitter {
     pipe: tokio::io::Stdout,
+    /// The bytes of the line being written, reused: a record costs no
+    /// allocation of its own.
+    bytes: Vec<u8>,
     closed: bool,
 }
 
@@ -27,6 +31,7 @@ impl Emitter {
     pub(crate) fn open() -> Self {
         Self {
             pipe: tokio::io::stdout(),
+            bytes: Vec::new(),
             closed: false,
         }
     }
@@ -40,10 +45,11 @@ impl Emitter {
         if self.closed {
             return Ok(ControlFlow::Break(()));
         }
-        let mut line = serde_json::to_vec(value)
+        self.bytes.clear();
+        json::to_writer(&mut self.bytes, value)
             .map_err(|error| format!("cannot serialize output: {error}"))?;
-        line.push(b'\n');
-        match self.pipe.write_all(&line).await {
+        self.bytes.push(b'\n');
+        match self.pipe.write_all(&self.bytes).await {
             Ok(()) => Ok(ControlFlow::Continue(())),
             Err(error) if error.kind() == ErrorKind::BrokenPipe => {
                 self.closed = true;

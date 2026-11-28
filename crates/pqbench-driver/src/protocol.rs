@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::value::RawValue;
 
 /// A client's request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,9 +68,11 @@ pub struct Response {
     /// The answer to a ping or a stop.
     #[serde(skip_serializing_if = "is_false")]
     pub ok: bool,
-    /// The records a `partition_results` or `list_suggestions` request read.
+    /// The records a `partition_results` or `list_suggestions` request read:
+    /// each as the JSON it was read from, so a client writes it out without a
+    /// parse on either side.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub records: Vec<Value>,
+    pub records: Vec<Box<RawValue>>,
     /// The call failed; the reader drops the ref with this cause.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

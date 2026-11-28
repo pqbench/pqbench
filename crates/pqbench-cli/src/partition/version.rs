@@ -59,9 +59,13 @@ pub(crate) async fn get(args: &GetArgs) -> Result<(), CliError> {
     };
     let mut out = BufWriter::new(tokio::io::stdout());
     for record in &records {
-        let mut line = serde_json::to_string(record)?;
-        line.push('\n');
-        match out.write_all(line.as_bytes()).await {
+        // The record is the JSON the driver read from its store: it is written
+        // as it is, not parsed and written again.
+        let result = match out.write_all(record.get().as_bytes()).await {
+            Ok(()) => out.write_all(b"\n").await,
+            Err(error) => Err(error),
+        };
+        match result {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => return Ok(()),
             Err(error) => return Err(error.into()),
