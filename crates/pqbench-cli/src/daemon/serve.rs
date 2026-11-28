@@ -1,7 +1,7 @@
 //! The daemon: one socket, one cache, one request per connection.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -9,36 +9,20 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
-use super::master::Master;
 use super::path;
 use super::protocol::{Request, Response};
 use super::session::Daemon;
-use super::store::Store;
-
-/// The master and its store, when the daemon runs one.
-#[derive(Clone)]
-pub(crate) struct SharedMaster {
-    pub master: Arc<RwLock<Master>>,
-    pub store: Store,
-}
 
 /// Serve leases on `socket` until stopped, or until `idle_seconds` pass with
-/// no connection (`0` serves until stopped). A daemon running the master
-/// serves until stopped: its work does not come through the socket. On stop
-/// the master's map is checkpointed.
-pub(crate) async fn run(
-    session: Daemon,
-    master: Option<SharedMaster>,
-    socket: PathBuf,
-    idle_seconds: u64,
-) -> Result<(), String> {
+/// no connection (`0` serves until stopped).
+pub(crate) async fn run(session: Daemon, socket: PathBuf, idle_seconds: u64) -> Result<(), String> {
     path::prepare(&socket)?;
     let listener = UnixListener::bind(&socket)
         .map_err(|error| format!("cannot bind {}: {error}", socket.display()))?;
     path::set_socket_mode(&socket)?;
 
     let shutdown = Arc::new(Notify::new());
-    let idle = (idle_seconds > 0 && master.is_none()).then_some(Duration::from_secs(idle_seconds));
+    let idle = (idle_seconds > 0).then_some(Duration::from_secs(idle_seconds));
     let result = loop {
         let accepted = accept(&listener, idle);
         tokio::select! {
@@ -46,10 +30,9 @@ pub(crate) async fn run(
             result = accepted => match result {
                 Ok(Some(stream)) => {
                     let session = session.clone();
-                    let master = master.clone();
                     let shutdown = Arc::clone(&shutdown);
                     tokio::spawn(async move {
-                        let _ = handle(stream, session, master, shutdown).await;
+                        let _ = handle(stream, session, shutdown).await;
                     });
                 }
                 Ok(None) => break Ok(()),
@@ -57,36 +40,8 @@ pub(crate) async fn run(
             }
         }
     };
-    // The checkpoint first: a reader that waits for the socket to go away,
-    // `daemon stop` included, waits for the map to be on disk.
-    if let Some(shared) = &master {
-        shared
-            .store
-            .write_checkpoint(read_master(&shared.master).versions())?;
-    }
     let _ = std::fs::remove_file(&socket);
     result
-}
-
-/// One version's stored results: `name` is a version, or a partition for
-/// its newest live version.
-fn results(shared: &SharedMaster, name: &str) -> Result<Vec<serde_json::Value>, String> {
-    let (key, version) = read_master(&shared.master).version(name)?;
-    let results = shared.store.read_results(&key)?;
-    if results.is_empty() {
-        let state = serde_json::to_value(version.state).unwrap_or_default();
-        return Err(format!(
-            "{name} has no results yet ({})",
-            state.as_str().unwrap_or_default()
-        ));
-    }
-    Ok(results)
-}
-
-fn read_master(master: &RwLock<Master>) -> std::sync::RwLockReadGuard<'_, Master> {
-    master
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 async fn accept(
@@ -107,12 +62,7 @@ async fn accept(
     }
 }
 
-async fn handle(
-    stream: UnixStream,
-    session: Daemon,
-    master: Option<SharedMaster>,
-    shutdown: Arc<Notify>,
-) -> Result<(), String> {
+async fn handle(stream: UnixStream, session: Daemon, shutdown: Arc<Notify>) -> Result<(), String> {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     let Some(line) = lines
@@ -124,39 +74,11 @@ async fn handle(
     };
     let request: Request =
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
-    if let Request::ListPartitionVersions { parent } = &request {
-        let versions = match &master {
-            Some(shared) => read_master(&shared.master).records(parent),
-            None => Err("the daemon runs no master; start it with --master".into()),
-        };
-        return write_versions(write, versions).await;
-    }
     if let Request::List { collection, parent } = &request {
         return write_stream(write, &session, *collection, parent.as_ref()).await;
     }
 
-    let mut response = match &request {
-        Request::PartitionResults { name } => match &master {
-            Some(shared) => match results(shared, name) {
-                Ok(records) => Response {
-                    records,
-                    ..Response::default()
-                },
-                Err(error) => Response {
-                    error: Some(error),
-                    ..Response::default()
-                },
-            },
-            None => Response {
-                error: Some("the daemon runs no master; start it with --master".into()),
-                ..Response::default()
-            },
-        },
-        _ => respond(&request, &session, &shutdown).await,
-    };
-    if matches!(request, Request::Ping) {
-        response.master = master.is_some();
-    }
+    let response = respond(&request, &session, &shutdown).await;
 
     let mut line = serde_json::to_string(&response)
         .map_err(|error| format!("cannot encode the answer: {error}"))?;
@@ -243,43 +165,6 @@ async fn write_frame(
         .map_err(|error| format!("cannot flush the stream: {error}"))
 }
 
-/// Answer a `ListPartitionVersions`: the count, then one line per version,
-/// written after the master's lock is released.
-async fn write_versions(
-    write: tokio::net::unix::OwnedWriteHalf,
-    versions: Result<Vec<pqbench::v1::PartitionVersion>, String>,
-) -> Result<(), String> {
-    let header = match &versions {
-        Ok(versions) => Response {
-            count: Some(versions.len() as u64),
-            ..Response::default()
-        },
-        Err(error) => Response {
-            error: Some(error.clone()),
-            ..Response::default()
-        },
-    };
-    let mut write = tokio::io::BufWriter::new(write);
-    let mut line = serde_json::to_vec(&header).map_err(|error| error.to_string())?;
-    for version in versions.iter().flatten() {
-        line.push(b'\n');
-        write
-            .write_all(&line)
-            .await
-            .map_err(|error| format!("cannot write the versions: {error}"))?;
-        line = serde_json::to_vec(version).map_err(|error| error.to_string())?;
-    }
-    line.push(b'\n');
-    write
-        .write_all(&line)
-        .await
-        .map_err(|error| format!("cannot write the versions: {error}"))?;
-    write
-        .flush()
-        .await
-        .map_err(|error| format!("cannot flush the versions: {error}"))
-}
-
 async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Response {
     match request {
         Request::Stop => {
@@ -342,7 +227,7 @@ mod tests {
         })
         .expect("the workspace builds");
         let cache = Daemon::direct(workspace);
-        let server = tokio::spawn(run(cache, None, socket.clone(), 0));
+        let server = tokio::spawn(run(cache, socket.clone(), 0));
 
         let mut running = false;
         for _ in 0..100 {

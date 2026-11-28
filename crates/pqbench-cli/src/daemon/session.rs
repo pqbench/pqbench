@@ -380,57 +380,6 @@ impl Daemon {
         }
     }
 
-    /// One listing call on the daemon's master: how many lines follow, and
-    /// the lines.
-    pub(crate) async fn master_list(
-        &self,
-        request: &Request,
-    ) -> Result<
-        (
-            u64,
-            tokio::io::Lines<tokio::io::BufReader<tokio::net::UnixStream>>,
-        ),
-        CliError,
-    > {
-        let path = self.master_socket()?;
-        let (response, lines) = client::list(path, request)
-            .await
-            .map_err(|error| connect_error(path, error))?;
-        match response.error {
-            Some(error) => Err(error.into()),
-            None => Ok((response.count.unwrap_or(0), lines)),
-        }
-    }
-
-    /// One version's stored results on the daemon's master: its price, its
-    /// suggestions, its column masses, then the listing.
-    pub(crate) async fn master_results(&self, request: &Request) -> Result<Vec<Value>, CliError> {
-        let path = self.master_socket()?;
-        let response = client::request(path, request)
-            .await
-            .map_err(|error| connect_error(path, error))?;
-        match response.error {
-            Some(error) => Err(error.into()),
-            None => Ok(response.records),
-        }
-    }
-
-    /// The socket of the daemon that runs the master.
-    fn master_socket(&self) -> Result<&std::path::Path, CliError> {
-        self.socket().ok_or_else(|| -> CliError {
-            "the master's records need its daemon; run `pqbench daemon start --master --store DIR`"
-                .into()
-        })
-    }
-
-    /// The daemon's socket, for a reader that asks one.
-    pub(crate) fn socket(&self) -> Option<&std::path::Path> {
-        match &self.vendor {
-            Vendor::Daemon { path, .. } => Some(path),
-            Vendor::Direct(_) => None,
-        }
-    }
-
     /// The `AWS_*` options to read `table` with; empty means ambient.
     pub(crate) async fn resolve_env(
         &self,

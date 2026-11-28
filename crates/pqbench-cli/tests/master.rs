@@ -1,9 +1,10 @@
 #![cfg(feature = "delta")]
 
-//! The daemon's master: it walks the tables it is given, runs the transitions on
-//! each partition version, purges what a walk no longer finds, and serves
-//! the versions to `list partition-versions` and one version's results to
-//! `get partition-version`.
+//! The master's process: it walks the tables it is given, runs the
+//! transitions on each partition version, purges what a walk no longer finds,
+//! and serves the versions to `list partition-versions` and one version's
+//! results to `get partition-version`. The commands read it over
+//! `PQB_MASTER_SOCK`; no catalog daemon runs here, so every table is local.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-/// A daemon serving the master over `store`, on a private socket.
+/// The `pqbench-master` binary beside the test's `pqbench`.
+fn master_binary() -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_pqbench")).with_file_name("pqbench-master")
+}
+
+/// A master serving `store` on a private socket.
 struct Master {
     child: Child,
     socket: PathBuf,
@@ -26,14 +32,16 @@ impl Master {
         let socket = directory.join("d.sock");
         let store = directory.join("store");
         let tables = directory.join("tables.ndjson");
-        // A killed daemon leaves its socket behind.
+        // A killed master leaves its socket behind.
         let _ = std::fs::remove_file(&socket);
-        let mut command = pqbench();
+        let mut command = master();
         command
-            .args(["daemon", "serve", "--master", "--store"])
+            .args(["serve", "--store"])
             .arg(&store)
             .arg("--socket")
-            .arg(&socket);
+            .arg(&socket)
+            .arg("--pqbench")
+            .arg(env!("CARGO_BIN_EXE_pqbench"));
         if tables.exists() {
             command.arg("--walk-tables").arg(&tables);
         }
@@ -44,13 +52,7 @@ impl Master {
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap();
-        for _ in 0..500 {
-            if socket.exists() || child.try_wait().unwrap().is_some() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(socket.exists(), "the master did not start");
+        await_socket(&socket, &mut child);
         Master {
             child,
             socket,
@@ -61,7 +63,7 @@ impl Master {
     fn run(&self, args: &[&str], stdin: &str) -> Output {
         let mut child = pqbench()
             .args(args)
-            .env("PQB_DAEMON_SOCK", &self.socket)
+            .env("PQB_MASTER_SOCK", &self.socket)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -115,9 +117,9 @@ impl Master {
     }
 
     fn stop(mut self) {
-        let _ = pqbench()
-            .args(["daemon", "stop"])
-            .env("PQB_DAEMON_SOCK", &self.socket)
+        let _ = master()
+            .args(["stop", "--socket"])
+            .arg(&self.socket)
             .status();
         let _ = self.child.wait();
     }
@@ -130,12 +132,38 @@ impl Drop for Master {
     }
 }
 
+fn await_socket(socket: &Path, child: &mut Child) {
+    let start = Instant::now();
+    while !socket.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("pqbench-master exited before listening: {status}");
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "pqbench-master did not start on {}",
+            socket.display()
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn pqbench() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_pqbench"));
     command
         .env("PQB_CONFIG_FILE", "/dev/null")
         .env("PQB_ENDPOINT", "http://127.0.0.1:1")
         .env_remove("PQB_PROFILE");
+    command
+}
+
+fn master() -> Command {
+    let mut command = Command::new(master_binary());
+    command
+        .env("PQB_CONFIG_FILE", "/dev/null")
+        .env("PQB_ENDPOINT", "http://127.0.0.1:1")
+        .env_remove("PQB_PROFILE")
+        .env_remove("PQB_DAEMON_SOCK")
+        .env_remove("PQB_MASTER_SOCK");
     command
 }
 
@@ -395,14 +423,14 @@ fn list_partition_versions_reads_under_a_parent() {
     assert!(names(&["catalogs/other"]).is_empty());
     let refused = pqbench()
         .args(["list", "partition-versions", "catalogs/local/tables/orders"])
-        .env("PQB_DAEMON_SOCK", &master.socket)
+        .env("PQB_MASTER_SOCK", &master.socket)
         .output()
         .unwrap();
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("is not a catalog"));
 }
 
-/// The rows outlive the daemon: a restart over the same store has them all.
+/// The rows outlive the master: a restart over the same store has them all.
 #[test]
 fn the_rows_survive_a_restart() {
     let directory = tempfile::tempdir().unwrap();
@@ -542,7 +570,7 @@ fn a_failing_version_is_left_after_two_failures() {
         .is_some_and(|error| !error.is_empty()));
 }
 
-/// A daemon whose executable is replaced on disk keeps running its own: its
+/// A master whose executable is replaced on disk keeps running its own: its
 /// commands start from the image it runs, so the versions move on.
 #[test]
 fn commands_go_on_after_the_executable_is_replaced() {
@@ -550,31 +578,30 @@ fn commands_go_on_after_the_executable_is_replaced() {
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1", "2"]));
     walk(directory.path(), &[("events", &root)]);
-    // A second name for the binary, on its filesystem, to delete under the
-    // running daemon.
+    // A second name for the pqbench binary, on its filesystem, to delete
+    // under the running master.
     let binaries = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let binary = binaries.path().join("pqbench");
     std::fs::hard_link(env!("CARGO_BIN_EXE_pqbench"), &binary).unwrap();
     let socket = directory.path().join("d.sock");
-    let daemon = Command::new(&binary)
-        .env("PQB_CONFIG_FILE", "/dev/null")
-        .env("PQB_ENDPOINT", "http://127.0.0.1:1")
-        .args(["daemon", "serve", "--master", "--store"])
+    let mut child = master();
+    child
+        .args(["serve", "--store"])
         .arg(directory.path().join("store"))
         .arg("--socket")
         .arg(&socket)
+        .arg("--pqbench")
+        .arg(&binary)
         .arg("--walk-tables")
         .arg(directory.path().join("tables.ndjson"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .spawn()
-        .unwrap();
-    while !socket.exists() {
-        std::thread::sleep(Duration::from_millis(5));
-    }
+        .stderr(Stdio::inherit());
+    let mut child = child.spawn().unwrap();
+    await_socket(&socket, &mut child);
     std::fs::remove_file(&binary).unwrap();
     let master = Master {
-        child: daemon,
+        child,
         socket,
         store: directory.path().join("store"),
     };

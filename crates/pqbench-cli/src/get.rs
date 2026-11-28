@@ -68,7 +68,7 @@ pub(crate) async fn run(
         GetResource::Catalog(args) => crate::catalog::get::run(daemon, args).await,
         GetResource::Schema(args) => crate::schema::get::run(daemon, args).await,
         GetResource::Table(args) => crate::table::get::run(daemon, args).await,
-        GetResource::PartitionVersion(args) => crate::partition::version::get(daemon, args).await,
+        GetResource::PartitionVersion(args) => crate::partition::version::get(args).await,
         GetResource::PartitionPrice(args) => crate::partition::price::run(lake, daemon, args).await,
         GetResource::Suggestion(args) => crate::lint::verify(args).await,
     }

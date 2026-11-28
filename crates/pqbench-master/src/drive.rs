@@ -1,7 +1,7 @@
 //! The master's driver: the worker side. It runs the pqbench commands the
 //! master hands out, keeps their files, and tells the master how each ended.
 //!
-//! One task on the daemon's runtime awaits the running commands, gives the
+//! One task on the master's runtime awaits the running commands, gives the
 //! master each finished one, starts the runs the master hands out next, and
 //! starts a walk when one is due; it also moves superseded results to the
 //! trash and checkpoints. Only the driver changes the map, and each change
@@ -16,7 +16,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
@@ -26,7 +25,7 @@ use serde_json::Value;
 use tokio::task::JoinSet;
 
 use super::master::{self, Input, Key, Master, Run, State};
-use super::process;
+use super::process::{self, WorkerExe};
 use super::store::{Store, SAMPLE};
 
 /// How long the driver sleeps when no command finishes: when a walk falls
@@ -43,7 +42,7 @@ pub(crate) struct Settings {
     /// A file of Table records the walk lists instead of the metastore.
     pub walk_tables: Option<PathBuf>,
     /// How long after a walk the next one is due; `None` walks once, when the
-    /// daemon starts.
+    /// master starts.
     pub walk_period: Option<Duration>,
 }
 
@@ -56,7 +55,10 @@ struct Driver {
     settings: Settings,
     /// The most runs at once: one per CPU.
     commands: usize,
-    socket: PathBuf,
+    /// The pqbench image every command runs.
+    exe: WorkerExe,
+    /// The daemon's socket, when commands talk to one.
+    daemon_socket: Option<PathBuf>,
     /// The runs in progress, each ending in its version's key and outcome.
     running: JoinSet<(Key, Outcome)>,
     /// The walk, while it runs.
@@ -69,13 +71,14 @@ struct Driver {
     checkpoint_time: Instant,
 }
 
-/// Start the driver on the daemon's runtime. A pass does short blocking file
+/// Start the driver on the master's runtime. A pass does short blocking file
 /// work (a checkpoint, a listing), which the socket waits out.
 pub(crate) fn spawn(
     master: Arc<RwLock<Master>>,
     store: Store,
     settings: Settings,
-    socket: PathBuf,
+    exe: WorkerExe,
+    daemon_socket: Option<PathBuf>,
 ) {
     let walk_time = read(&master).last_list_time();
     let mut driver = Driver {
@@ -83,7 +86,8 @@ pub(crate) fn spawn(
         store,
         settings,
         commands: std::thread::available_parallelism().map_or(1, usize::from),
-        socket,
+        exe,
+        daemon_socket,
         running: JoinSet::new(),
         walk: JoinSet::new(),
         emptying: JoinSet::new(),
@@ -99,7 +103,7 @@ pub(crate) fn spawn(
             tokio::select! {
                 Some(done) = driver.running.join_next() => match done {
                     Ok((key, outcome)) => driver.finish(&key, outcome),
-                    Err(error) => eprintln!("pqbench daemon: a run's task failed: {error}"),
+                    Err(error) => eprintln!("pqbench-master: a run's task failed: {error}"),
                 },
                 Some(done) = driver.walk.join_next() => {
                     let outcome = done.unwrap_or_else(|error| Err(error.to_string()));
@@ -133,9 +137,10 @@ impl Driver {
         }
         for run in write(&self.master).start(free) {
             let store = self.store.clone();
-            let socket = self.socket.clone();
+            let exe = self.exe.clone();
+            let daemon_socket = self.daemon_socket.clone();
             self.running.spawn(async move {
-                let outcome = work(&store, &run, &socket).await;
+                let outcome = work(&store, &run, &exe, daemon_socket.as_deref()).await;
                 if outcome.is_err() {
                     store.discard(&run.key, run.transition.output);
                 }
@@ -162,7 +167,7 @@ impl Driver {
         for key in keys {
             match self.store.trash(&key) {
                 Ok(()) => trashed = true,
-                Err(error) => eprintln!("pqbench daemon: {error}"),
+                Err(error) => eprintln!("pqbench-master: {error}"),
             }
         }
         if !trashed || !self.emptying.is_empty() {
@@ -171,13 +176,13 @@ impl Driver {
         let store = self.store.clone();
         self.emptying.spawn_blocking(move || {
             if let Err(error) = store.empty_trash() {
-                eprintln!("pqbench daemon: {error}");
+                eprintln!("pqbench-master: {error}");
             }
         });
     }
 
     /// Start a walk when none runs and one is due: the first since the
-    /// daemon started, then one each walk period.
+    /// master started, then one each walk period.
     fn start_walk(&mut self) {
         if !self.walk.is_empty() {
             return;
@@ -200,13 +205,23 @@ impl Driver {
         let (stages, input, output, error) = match opened {
             Ok(opened) => opened,
             Err(error) => {
-                eprintln!("pqbench daemon: cannot start the walk: {error}");
+                eprintln!("pqbench-master: cannot start the walk: {error}");
                 return;
             }
         };
-        let socket = self.socket.clone();
-        self.walk
-            .spawn(async move { process::pipeline(&stages, input, output, &error, &socket).await });
+        let exe = self.exe.clone();
+        let daemon_socket = self.daemon_socket.clone();
+        self.walk.spawn(async move {
+            process::pipeline(
+                &exe,
+                &stages,
+                input,
+                output,
+                &error,
+                daemon_socket.as_deref(),
+            )
+            .await
+        });
     }
 
     /// Apply the walk's listing: each listed table's versions are found, and
@@ -220,14 +235,14 @@ impl Driver {
         if let Err(error) = &outcome {
             let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
             eprintln!(
-                "pqbench daemon: the walk failed ({error}): {}",
+                "pqbench-master: the walk failed ({error}): {}",
                 process::tail(text.trim())
             );
         }
         let listing = match listing {
             Ok(listing) => listing,
             Err(error) => {
-                eprintln!("pqbench daemon: the walk has no listing ({error})");
+                eprintln!("pqbench-master: the walk has no listing ({error})");
                 let _ = fs::remove_dir_all(&directory);
                 return;
             }
@@ -242,7 +257,7 @@ impl Driver {
                     found.entry(table).or_default().insert(key);
                     dropped.extend(superseded);
                 }
-                Err(error) => eprintln!("pqbench daemon: walk: {error}"),
+                Err(error) => eprintln!("pqbench-master: walk: {error}"),
             }
         }
         // A listing that stops early still names real versions; only a
@@ -288,7 +303,7 @@ impl Driver {
             return;
         }
         if let Err(error) = self.store.write_checkpoint(read(&self.master).versions()) {
-            eprintln!("pqbench daemon: {error}");
+            eprintln!("pqbench-master: {error}");
             return;
         }
         write(&self.master).checkpointed();
@@ -298,7 +313,7 @@ impl Driver {
 /// Run one transition on one version: its command, built from the version's
 /// listing, and its output landed in the version's directory. A price run
 /// returns the price.
-async fn work(store: &Store, run: &Run, socket: &Path) -> Outcome {
+async fn work(store: &Store, run: &Run, exe: &WorkerExe, daemon_socket: Option<&Path>) -> Outcome {
     let (key, transition) = (&run.key, run.transition);
     let listing = store.read_listing(key)?;
     let input = match transition.input {
@@ -327,7 +342,7 @@ async fn work(store: &Store, run: &Run, socket: &Path) -> Outcome {
         command.push("--local".into());
         command.push(sample.to_string_lossy().into_owned());
     }
-    let stdout = process::run(&command, &(input + "\n"), socket).await?;
+    let stdout = process::run(exe, &command, &(input + "\n"), daemon_socket).await?;
     store.land(
         key,
         transition.output,

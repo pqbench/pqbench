@@ -183,6 +183,9 @@ analogy, convention, or precedent:
   reproduce a specific CI leg.
 - Integration tests are one target per crate: `tests/it.rs` lists every
   `tests/*.rs` file as a `#[path]` module. Add the line when you add a file.
+  `make test` builds the workspace's binaries first: `pqbench-cli`'s master
+  tests run the `pqbench-master` binary from beside `pqbench`, which `cargo
+  test` alone does not build.
 - Build footprint. Dependencies build without debug info
   (`[profile.dev.package."*"] debug = false`), there is one test binary per
   crate, and the rustc wrapper links with mold when it is installed.

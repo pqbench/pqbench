@@ -45,22 +45,14 @@ const CATALOG_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) async fn request(path: &Path, request: &Request) -> Result<Response, Error> {
     let timeout = match request {
         Request::Ping | Request::Stop | Request::Lease { .. } => LEASE_TIMEOUT,
-        // A catalog read, or a master call that writes one table's results.
+        // A catalog read: the daemon is doing the endpoint and storage read.
         _ => CATALOG_TIMEOUT,
     };
-    exchange(path, request, timeout).await
+    open(path, request, timeout).await
 }
 
-async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<Response, Error> {
-    Ok(open(path, request, timeout).await?.0)
-}
-
-/// Send `request` and read the answer, leaving the connection open after it.
-async fn open(
-    path: &Path,
-    request: &Request,
-    timeout: Duration,
-) -> Result<(Response, BufReader<UnixStream>), Error> {
+/// Send `request` and read the answer.
+async fn open(path: &Path, request: &Request, timeout: Duration) -> Result<Response, Error> {
     let mut stream = bounded(timeout, UnixStream::connect(path)).await?;
     let line = serde_json::to_vec(request).map_err(|error| Error::Protocol(error.to_string()))?;
     bounded(timeout, stream.write_all(&line)).await?;
@@ -75,9 +67,7 @@ async fn open(
             "the daemon closed the connection without an answer".into(),
         ));
     }
-    let response =
-        serde_json::from_str(&line).map_err(|error| Error::Protocol(error.to_string()))?;
-    Ok((response, reader))
+    serde_json::from_str(&line).map_err(|error| Error::Protocol(error.to_string()))
 }
 
 /// Send a streaming `request` and return the line reader for its response frames.
@@ -91,16 +81,6 @@ pub(crate) async fn stream(
     bounded(CATALOG_TIMEOUT, stream.write_all(b"\n")).await?;
     bounded(CATALOG_TIMEOUT, stream.flush()).await?;
     Ok(BufReader::new(stream).lines())
-}
-
-/// Send a listing `request`: its answer, and the lines that follow it, as
-/// many as the answer's `count`.
-pub(crate) async fn list(
-    path: &Path,
-    request: &Request,
-) -> Result<(Response, Lines<BufReader<UnixStream>>), Error> {
-    let (response, reader) = open(path, request, CATALOG_TIMEOUT).await?;
-    Ok((response, reader.lines()))
 }
 
 /// One socket operation, bounded by the exchange's timeout.

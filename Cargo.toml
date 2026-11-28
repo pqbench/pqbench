@@ -10,6 +10,7 @@ members = [
     "crates/pqbench-derive",
     "crates/pqbench-resource",
     "crates/pqbench-cli",
+    "crates/pqbench-master",
 ]
 default-members = [
     "crates/aipnaming",
@@ -21,6 +22,7 @@ default-members = [
     "crates/pqbench-derive",
     "crates/pqbench-resource",
     "crates/pqbench-cli",
+    "crates/pqbench-master",
 ]
 
 [workspace.package]
@@ -35,6 +37,7 @@ repository = "https://github.com/pqbench/pqbench"
 aipnaming = { version = "0.0.12", path = "crates/aipnaming" }
 docscheck = { version = "0.0.12", path = "crates/docscheck" }
 pqbench = { version = "0.0.12", path = "crates/pqbench" }
+pqbench-master = { version = "0.0.12", path = "crates/pqbench-master" }
 
 [profile.dev]
 opt-level = 0

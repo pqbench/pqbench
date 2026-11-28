@@ -33,13 +33,6 @@ pub(crate) enum Request {
         #[serde(skip_serializing_if = "Option::is_none")]
         record: Option<Value>,
     },
-    /// The master's partition versions under `parent` (every one when it is
-    /// empty): the answer's `count` says how many lines follow it, one
-    /// PartitionVersion each.
-    ListPartitionVersions { parent: String },
-    /// One version's stored results under `name` (a version, or a partition
-    /// for its newest live version), in the answer's `records`.
-    PartitionResults { name: String },
 }
 
 /// The collection a `list` request enumerates.
@@ -139,7 +132,7 @@ pub(crate) struct Response {
     /// The catalog vended nothing; the reader keeps its ambient `AWS_*`.
     #[serde(skip_serializing_if = "is_false")]
     pub none: bool,
-    /// The records a `get` or `partition_results` request read.
+    /// The records a `get` request read.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub records: Vec<Value>,
     /// One streamed record from a `list` request.
@@ -151,12 +144,6 @@ pub(crate) struct Response {
     /// The answer to a ping or a stop.
     #[serde(skip_serializing_if = "is_false")]
     pub ok: bool,
-    /// How many records follow the answer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub count: Option<u64>,
-    /// The answer to a ping: the daemon runs the master.
-    #[serde(skip_serializing_if = "is_false")]
-    pub master: bool,
 }
 
 fn is_false(value: &bool) -> bool {

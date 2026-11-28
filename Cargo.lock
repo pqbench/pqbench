@@ -2956,6 +2956,7 @@ dependencies = [
  "libc",
  "lz4",
  "pqbench",
+ "pqbench-master",
  "serde",
  "serde_json",
  "tempfile",
@@ -2970,6 +2971,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "pqbench-master"
+version = "0.0.12"
+dependencies = [
+ "clap",
+ "libc",
+ "pqbench",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

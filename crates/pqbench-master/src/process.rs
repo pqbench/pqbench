@@ -1,13 +1,19 @@
-//! The daemon's child processes: pqbench commands from the daemon's own
-//! executable, awaited on the daemon's runtime.
+//! The master's worker commands: pqbench processes from the image the master
+//! opened before any of them started.
 //!
-//! A child dies with the daemon (`PR_SET_PDEATHSIG`) and with the task that
+//! A command execs `/proc/self/fd/{fd}` of the pinned binary rather than a
+//! path, so a binary replaced on disk (an upgrade, a rebuild) changes no
+//! command of a master that is still running the old one.
+//!
+//! A child dies with the master (`PR_SET_PDEATHSIG`) and with the task that
 //! awaits it (`kill_on_drop`), so a restart finds none of its predecessor's
 //! running, and no file a child was writing has a writer left.
 
 use std::fs::File;
-use std::path::Path;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::sync::Arc;
 
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -15,16 +21,64 @@ use tokio::process::Command;
 /// The most of a failed command's standard error kept as its error.
 const ERROR_BYTES: usize = 2000;
 
-/// The pqbench command `arguments`, talking to the daemon on `socket`.
-/// `/proc/self/exe` is the image the daemon runs, so a binary replaced on
-/// disk (an upgrade, a rebuild) changes no command of a daemon that is still
-/// running the old one.
-fn command(arguments: &[String], socket: &Path) -> Command {
-    let mut command = Command::new("/proc/self/exe");
-    command
-        .args(arguments)
-        .env("PQB_DAEMON_SOCK", socket)
-        .kill_on_drop(true);
+/// The pqbench image the master's worker commands run.
+#[derive(Clone)]
+pub(crate) struct WorkerExe {
+    file: Arc<File>,
+}
+
+impl WorkerExe {
+    /// Pin the pqbench binary: `explicit` when the operator named one, else
+    /// the `pqbench` beside this executable, else the one on `PATH`.
+    pub(crate) fn open(explicit: Option<&Path>) -> Result<Self, String> {
+        let path = match explicit {
+            Some(path) => path.to_path_buf(),
+            None => default_binary()?,
+        };
+        let file = File::open(&path).map_err(|error| {
+            format!("cannot open the pqbench binary {}: {error}", path.display())
+        })?;
+        Ok(WorkerExe {
+            file: Arc::new(file),
+        })
+    }
+}
+
+/// The pqbench binary beside this executable, else the one on `PATH`.
+fn default_binary() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|error| format!("cannot find the pqbench-master executable: {error}"))?;
+    let sibling = exe.with_file_name("pqbench");
+    if sibling.exists() {
+        return Ok(sibling);
+    }
+    search_path().ok_or_else(|| {
+        let searched = exe
+            .parent()
+            .map(|directory| directory.join("pqbench").display().to_string())
+            .unwrap_or_default();
+        format!(
+            "cannot find the pqbench binary (looked for {searched} and on PATH): pass --pqbench"
+        )
+    })
+}
+
+fn search_path() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join("pqbench"))
+        .find(|candidate| candidate.is_file())
+}
+
+/// The pinned image as `arguments`, talking to the daemon on `daemon_socket`
+/// when there is one.
+fn command(exe: &WorkerExe, arguments: &[String], daemon_socket: Option<&Path>) -> Command {
+    let image = format!("/proc/self/fd/{}", exe.file.as_raw_fd());
+    let mut command = Command::new(image);
+    command.args(arguments).arg0("pqbench").kill_on_drop(true);
+    if let Some(socket) = daemon_socket {
+        command.env("PQB_DAEMON_SOCK", socket);
+    }
     let parent = std::process::id() as libc::pid_t;
     // SAFETY: `prctl`, `getppid`, and `_exit` are async-signal-safe, so they
     // may run between fork and exec.
@@ -45,12 +99,13 @@ fn command(arguments: &[String], socket: &Path) -> Command {
 /// Run one command with `input` on its standard input: its standard output
 /// when it succeeds, else its error.
 pub(crate) async fn run(
+    exe: &WorkerExe,
     arguments: &[String],
     input: &str,
-    socket: &Path,
+    daemon_socket: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
     let name = arguments.join(" ");
-    let mut child = command(arguments, socket)
+    let mut child = command(exe, arguments, daemon_socket)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -73,11 +128,12 @@ pub(crate) async fn run(
 /// standard input: the first reads `input`, the last writes `output`, all
 /// write their errors to `error`. `Ok` when every stage succeeded.
 pub(crate) async fn pipeline(
+    exe: &WorkerExe,
     stages: &[Vec<String>],
     input: File,
     output: File,
     error: &File,
-    socket: &Path,
+    daemon_socket: Option<&Path>,
 ) -> Result<(), String> {
     let mut children = Vec::new();
     let mut stdin = Stdio::from(input);
@@ -88,7 +144,7 @@ pub(crate) async fn pipeline(
             false => Stdio::piped(),
         };
         let started = error.try_clone().and_then(|stderr| {
-            command(arguments, socket)
+            command(exe, arguments, daemon_socket)
                 .stdin(stdin)
                 .stdout(stdout)
                 .stderr(stderr)

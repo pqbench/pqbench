@@ -52,10 +52,11 @@ jobs:
       - run: make lint CARGO_FEATURES=--all-features
 
   # Drafts run only the lightweight workflow; this one runs on non-draft PRs.
-  # `cargo test` builds as it goes, so there is no separate build step. A leg
-  # per feature set catches feature-gating bugs, and `--include-ignored` turns
-  # on the network e2e (redset, gated on `aws`) on the aws/all-features legs.
-  # default and all-features also run on arm64; fmt/clippy are arch-independent.
+  # `make test` builds the workspace's binaries first, then runs every test
+  # target. A leg per feature set catches feature-gating bugs, and
+  # `--include-ignored` turns on the network e2e (redset, gated on `aws`) on
+  # the aws/all-features legs. default and all-features also run on arm64;
+  # fmt/clippy are arch-independent.
   test:
     name: Test (${{ matrix.features || 'default' }}, ${{ matrix.arch }})
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft

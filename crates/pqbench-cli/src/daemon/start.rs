@@ -13,26 +13,14 @@ use super::path;
 use super::protocol::Request;
 
 /// Start a background daemon for this identity, or reuse the one already
-/// listening. With a `store` the daemon runs the master; one already running
-/// without it is refused rather than reused.
-pub(crate) async fn start(
-    config: &Config,
-    socket: &Path,
-    idle_seconds: u64,
-    master: &super::MasterArgs,
-) -> Result<(), String> {
+/// listening.
+pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> Result<(), String> {
     if client::ping(socket).await {
-        if master.store().is_some() && !runs_master(socket).await {
-            return Err(format!(
-                "a daemon without the master is running at {}; stop it first",
-                socket.display()
-            ));
-        }
         return Ok(());
     }
     path::prepare(socket)?;
 
-    let mut child = serve_command(config, socket, idle_seconds, master)?
+    let mut child = serve_command(config, socket, idle_seconds)?
         .spawn()
         .map_err(|error| format!("cannot start the daemon: {error}"))?;
 
@@ -49,12 +37,7 @@ pub(crate) async fn start(
 
 /// The background daemon's command: this executable, serving `socket` with
 /// the resolved identity passed explicitly.
-fn serve_command(
-    config: &Config,
-    socket: &Path,
-    idle_seconds: u64,
-    master: &super::MasterArgs,
-) -> Result<Command, String> {
+fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Command, String> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("cannot find the pqbench executable: {error}"))?;
     let mut command = Command::new(exe);
@@ -65,7 +48,6 @@ fn serve_command(
         .arg(socket)
         .arg("--idle-seconds")
         .arg(idle_seconds.to_string());
-    command.args(master.arguments());
     // The child resolves the same identity from explicit environment values;
     // the token is never on its command line.
     for name in [
@@ -108,13 +90,6 @@ fn serve_command(
         });
     }
     Ok(command)
-}
-
-/// Whether the daemon at `socket` runs the master, as its ping says.
-async fn runs_master(socket: &Path) -> bool {
-    client::request(socket, &Request::ping())
-        .await
-        .is_ok_and(|response| response.master)
 }
 
 /// Stop the daemon listening at `socket`.

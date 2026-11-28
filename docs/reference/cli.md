@@ -629,8 +629,11 @@ partition column order, so the input is `get table` output, which names the
 columns; a `list tables` ref is refused.
 
 `list partition-versions [PARENT]` reads no catalog and no storage: it prints
-the daemon master's rows, one PartitionVersion per line in name order, all of
-them or those under a catalog, schema, table or partition name.
+pqbench-master's rows, one PartitionVersion per line in name order, all of
+them or those under a catalog, schema, table or partition name. `get
+partition-version NAME` reads one version's stored results. Both talk to
+`pqbench-master`, a separate process whose socket `PQB_MASTER_SOCK` names;
+start it with `pqbench-master start --store DIR`.
 
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
@@ -659,6 +662,7 @@ Examples:
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench list columns
   pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
+  pqbench list partition-versions | pqbench summarize partition-versions
 
 See also:
   pqbench get --help          read one resource
@@ -674,7 +678,7 @@ See also:
 * `tables` — List the tables in a schema (`CATALOG.SCHEMA`)
 * `files` — List a table's active files (Table refs on stdin)
 * `partitions` — List a table's partitions (Table refs on stdin)
-* `partition-versions` — List the daemon master's partition versions (`PARENT`, or all)
+* `partition-versions` — List the master's partition versions (`PARENT`, or all)
 * `columns` — List a file's columns and their byte masses (Table-file refs on stdin)
 * `suggestions` — List potential storage suggestions for each local blob (Table-file refs on stdin)
 
@@ -751,7 +755,7 @@ List a table's partitions (Table refs on stdin)
 
 ## `pqbench list partition-versions`
 
-List the daemon master's partition versions (`PARENT`, or all)
+List the master's partition versions (`PARENT`, or all)
 
 **Usage:** `pqbench list partition-versions [PARENT]`
 
@@ -867,40 +871,6 @@ table's lease. A command that needs the catalog and finds no daemon fails with a
 hint to start one; a read of local files needs none. Vended leases are session
 state and never ride a Table or TableFile document.
 
-With --master --store DIR the daemon also runs the master. Its state is one
-map of partition versions (a partition at one etag); the work is plain pqbench
-commands the daemon runs as child processes and awaits:
-
-```text
-  walk      `list catalogs | list schemas | list tables | get table | list
-            partitions`, the whole metastore, or `list partitions` over the
-            --walk-tables records instead; once at start, then every
-            --walk-period-seconds. A partition at a new etag is a new PENDING
-            version and the etag it replaces leaves the map; so does a listed
-            table's version the walk no longer finds, and when every table was
-            read, the versions of tables it did not list. Their results are
-            moved to DIR/deleted and removed.
-  versions  one command per version, one per CPU at once, taking the newest
-            data first and then the largest partition:
-              price     `get partition-price`; a version with no live file,
-                        or in an archive class, is then UP_TO_DATE
-              download  `download` of the sample file into the version's
-                        directory
-              bytemass  `bytemass --local` on that copy
-              lint      `list suggestions --local` on it; then UP_TO_DATE
-            With --low-network no file is copied: after its price, a version
-            runs `bytemass` on the sample file in place (it reads only the
-            footer) and is then UP_TO_DATE. A failure puts the version back
-            with its error; after two it waits.
-The map is checkpointed to DIR/checkpoint.ndjson every 5 minutes while
-commands run, at once when none do, and on stop. A restart loads it and puts
-running versions back; the commands redo the rest. `pqbench list
-partition-versions [PARENT]` prints the map, and `pqbench get
-partition-version NAME` prints one version's stored results (its price, its
-lint suggestions, its column masses and its listing), one record per line;
-NAME may be a version or a partition for its newest live version.
-```
-
 **Usage:** `pqbench daemon <COMMAND>`
 
 ```console no-run
@@ -909,9 +879,6 @@ Examples:
   pqbench list tables | pqbench get table | pqbench list files | pqbench bytemass
   pqbench daemon status
   pqbench daemon stop
-  pqbench daemon start --master --store /var/lib/pqbench \
-    --walk-period-seconds 86400
-  pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
 
 See also:
   pqbench --help  catalog auth, PQB_* config
@@ -939,11 +906,6 @@ Start the daemon in the background
 * `--idle-seconds <IDLE_SECONDS>` — seconds without a connection before the daemon exits
 
   Default value: `900`
-* `--master` — also run the master: the partition versions and the commands that move them
-* `--store <DIR>` — the master's store: its checkpoint and results (with --master)
-* `--walk-tables <FILE>` — walk the tables these Table records name instead of the metastore (e.g. local tables)
-* `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
-* `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
 
 
 
@@ -974,11 +936,6 @@ Serve leases in the foreground
 * `--idle-seconds <IDLE_SECONDS>` — seconds without a connection before the daemon exits; 0 serves until stopped
 
   Default value: `0`
-* `--master` — also run the master: the partition versions and the commands that move them
-* `--store <DIR>` — the master's store: its checkpoint and results (with --master)
-* `--walk-tables <FILE>` — walk the tables these Table records name instead of the metastore (e.g. local tables)
-* `--walk-period-seconds <SECONDS>` — seconds from one walk to the next; without it the master walks once, when it starts
-* `--low-network` — the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
 
 
 
