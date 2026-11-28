@@ -139,7 +139,7 @@ const SCHEMAS: &str = r#"{"schemas":[{"name":"nyctaxi"},{"name":"bakehouse"},{"n
 const SCHEMAS_PAGE: &str = r#"{"schemas":[{"name":"nyctaxi"}],"next_page_token":"more"}"#;
 const SCHEMAS_LAST: &str = r#"{"schemas":[{"name":"bakehouse"}]}"#;
 const ICEBERG_NAMESPACES: &str =
-    r#"{"namespaces":[["nyctaxi"],["bakehouse"],["information_schema"]],"next-page-token":null}"#;
+    r#"{"namespaces":[["nyctaxi"],["bakehouse"]],"next-page-token":null}"#;
 const ICEBERG_PAGE: &str = r#"{"namespaces":[["nyctaxi"]],"next-page-token":"more"}"#;
 const ICEBERG_LAST: &str = r#"{"namespaces":[["bakehouse"]],"next-page-token":null}"#;
 

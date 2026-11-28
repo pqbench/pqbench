@@ -149,10 +149,6 @@ async fn iceberg_page(
                 "the endpoint listed a nameless namespace".to_string(),
             ));
         }
-        // `information_schema` holds system views over metadata, no files.
-        if parts.len() == 1 && parts[0] == "information_schema" {
-            continue;
-        }
         rows.push(named_schema(catalog, parts.join(".")));
     }
     Ok(crate::http::Page {
