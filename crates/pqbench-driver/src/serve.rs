@@ -1,22 +1,30 @@
 //! The driver's socket: one request per connection, answered from the map.
 //!
 //! The driver serves its own protocol only — a ping, a stop, the map's
-//! versions under a parent, and one version's stored results. The results
-//! read runs off the async runtime, so a large version's files never stall a
-//! worker command.
+//! versions under a parent, one version's stored results, the map's state, and
+//! the suggestions it measured. A read runs off the async runtime, so a large
+//! version's files never stall a worker command.
+//!
+//! The foreground driver ends on a stop request or on `SIGINT`/`SIGTERM`: it
+//! stops the runs in flight, checkpoints the map, removes its socket, and exits
+//! 0.
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-use pqbench::v1::PartitionVersion;
+use pqbench::v1::{PartitionVersion, Suggestion};
 use serde::Serialize;
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Notify;
 
+use super::drive::Task;
 use super::engine::Engine;
 use super::protocol::{Request, Response};
+use super::run_control;
 use super::socket;
 use super::store::Store;
 use super::{drive, process, RunArgs};
@@ -24,38 +32,45 @@ use super::{drive, process, RunArgs};
 /// Serve `args`' store on its socket until stopped: the foreground driver.
 pub(crate) async fn serve(args: &RunArgs) -> Result<(), String> {
     let socket = socket::resolve(args.socket.as_deref(), Some(&args.store()))?;
-    let store = Store::open(&args.store())?;
+    let run_control = run_control::read()?;
+    let store = Store::open(&args.store(), run_control.checkpoint_codec)?;
     let engine = Engine::new(store.read_checkpoint()?, args.low_network)?;
     store.sweep(|key| engine.state(key))?;
     let engine = Arc::new(RwLock::new(engine));
-    let exe = process::WorkerExe::open(args.pqbench.as_deref())?;
-    drive::spawn(
-        engine.clone(),
-        store.clone(),
-        args.settings(),
-        exe,
+    let worker = process::Worker::new(
+        process::WorkerExe::open(args.pqbench.as_deref())?,
         args.daemon_socket.as_deref().map(socket::absolute),
+        run_control.step_timeout,
     );
-    run(engine, store, socket).await
+    let driver = drive::spawn(engine.clone(), store.clone(), args.settings(), worker);
+    run(engine, store, socket, driver).await
 }
 
-/// Answer requests on `socket` until a stop: on stop the map is checkpointed
-/// before the socket goes away, so a reader that waits for that has the map
-/// on disk.
+/// Answer requests on `socket` until a stop or a signal. The driver is stopped
+/// first, so its runs never outlive the map they move; then the map is
+/// checkpointed and the socket goes away, so a reader that waits for that has
+/// the map on disk.
 pub(crate) async fn run(
     engine: Arc<RwLock<Engine>>,
     store: Store,
     socket: PathBuf,
+    driver: Task,
 ) -> Result<(), String> {
     socket::prepare(&socket, "driver")?;
     let listener = UnixListener::bind(&socket)
         .map_err(|error| format!("cannot bind {}: {error}", socket.display()))?;
     socket::set_socket_mode(&socket)?;
 
+    let mut interrupt = signal(SignalKind::interrupt())
+        .map_err(|error| format!("cannot listen for SIGINT: {error}"))?;
+    let mut terminate = signal(SignalKind::terminate())
+        .map_err(|error| format!("cannot listen for SIGTERM: {error}"))?;
     let shutdown = Arc::new(Notify::new());
     let result = loop {
         tokio::select! {
             _ = shutdown.notified() => break Ok(()),
+            _ = interrupt.recv() => break Ok(()),
+            _ = terminate.recv() => break Ok(()),
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
                     let engine = engine.clone();
@@ -69,9 +84,10 @@ pub(crate) async fn run(
             }
         }
     };
-    store.write_checkpoint(read_engine(&engine).versions())?;
+    driver.stop().await;
+    let checkpoint = store.write_checkpoint(read_engine(&engine).versions());
     let _ = std::fs::remove_file(&socket);
-    result
+    checkpoint.and(result)
 }
 
 /// One version's stored results: `name` is a version, or a partition for its
@@ -90,6 +106,36 @@ async fn results(
         return Err(format!("{name} has no results yet ({})", version.state));
     }
     Ok(results)
+}
+
+/// The suggestions the live versions under `parent` hold, largest saving
+/// first.
+async fn suggestions(
+    engine: &RwLock<Engine>,
+    store: &Store,
+    parent: Option<&str>,
+) -> Result<Vec<Value>, String> {
+    let keys = read_engine(engine).keys(parent.unwrap_or_default())?;
+    let store = store.clone();
+    let mut suggestions = tokio::task::spawn_blocking(move || {
+        let mut all = Vec::new();
+        for key in keys {
+            all.extend(store.read_suggestions(&key)?);
+        }
+        Ok::<Vec<Suggestion>, String>(all)
+    })
+    .await
+    .map_err(|error| format!("the suggestions read failed: {error}"))??;
+    suggestions.sort_by(|left, right| {
+        right
+            .savings_bytes
+            .cmp(&left.savings_bytes)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    suggestions
+        .iter()
+        .map(|suggestion| serde_json::to_value(suggestion).map_err(|error| error.to_string()))
+        .collect()
 }
 
 fn read_engine(engine: &RwLock<Engine>) -> RwLockReadGuard<'_, Engine> {
@@ -130,6 +176,29 @@ async fn handle(
         }
         Request::PartitionResults { name } => {
             let response = match results(&engine, &store, name).await {
+                Ok(records) => Response {
+                    records,
+                    ..Response::default()
+                },
+                Err(error) => Response {
+                    error: Some(error),
+                    ..Response::default()
+                },
+            };
+            write_frame(&mut write, &response).await?;
+        }
+        Request::Status => {
+            // The lock is released before a line is written: a slow reader
+            // does not hold the map.
+            let status = read_engine(&engine).status();
+            let response = Response {
+                status: Some(status),
+                ..Response::default()
+            };
+            write_frame(&mut write, &response).await?;
+        }
+        Request::ListSuggestions { parent } => {
+            let response = match suggestions(&engine, &store, parent.as_deref()).await {
                 Ok(records) => Response {
                     records,
                     ..Response::default()
@@ -202,16 +271,40 @@ async fn write_frame<T: Serialize>(
 mod tests {
     use super::*;
     use crate::client;
+    use crate::drive::Settings;
+    use crate::process::{Worker, WorkerExe};
+    use crate::store::CheckpointCodec;
+    use std::path::Path;
     use std::time::Duration;
+
+    /// A driver task over `engine` and `store` that runs no command: the
+    /// tests here cover the socket, not the transitions.
+    fn idle_driver(engine: Arc<RwLock<Engine>>, store: Store) -> Task {
+        let worker = Worker::new(
+            WorkerExe::open(Some(Path::new("/bin/true"))).expect("/bin/true opens"),
+            None,
+            Duration::from_secs(30),
+        );
+        drive::spawn(
+            engine,
+            store,
+            Settings {
+                walk_tables: None,
+                walk_period: None,
+            },
+            worker,
+        )
+    }
 
     #[tokio::test]
     async fn a_ping_and_a_stop_round_trip() {
         let directory = tempfile::tempdir().expect("a temp directory");
         let socket = directory.path().join("driver.sock");
-        let store = Store::open(directory.path()).expect("the store opens");
+        let store = Store::open(directory.path(), CheckpointCodec::None).expect("the store opens");
         let engine = Engine::new(Vec::new(), false).expect("an empty map");
         let engine = Arc::new(RwLock::new(engine));
-        let server = tokio::spawn(run(engine, store, socket.clone()));
+        let driver = idle_driver(engine.clone(), store.clone());
+        let server = tokio::spawn(run(engine, store, socket.clone(), driver));
 
         let mut running = false;
         for _ in 0..100 {
@@ -235,6 +328,19 @@ mod tests {
             response.error.is_some(),
             "a version the map lacks is an error"
         );
+
+        let response = client::request(&socket, &Request::status())
+            .await
+            .expect("the driver answers a status request");
+        let status = response.status.expect("a status");
+        assert_eq!(status.total_versions, 0);
+        assert_eq!(status.failing_versions, 0);
+        assert_eq!(status.state_counts["UP_TO_DATE"], 0);
+
+        let response = client::request(&socket, &Request::list_suggestions(None))
+            .await
+            .expect("the driver answers a suggestion request");
+        assert!(response.records.is_empty(), "an empty map suggests nothing");
 
         client::request(&socket, &Request::stop())
             .await

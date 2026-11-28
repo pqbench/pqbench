@@ -8,11 +8,18 @@
 //! takes the write lock for one short update.
 //!
 //! - **Runs**: one command per version (`get partition-price`, `download`,
-//!   `bytemass`, `list suggestions`), one per CPU at once.
+//!   `bytemass`, `list suggestions`, `get suggestion`), one per CPU at once.
 //! - **The walk**: `list catalogs | list schemas | list tables | get table |
 //!   list partitions`, the whole metastore, or `list partitions` over the
 //!   configured Table records instead; its listing makes and deletes
 //!   versions.
+//! - **The verification**: right after a version is measured, and before its
+//!   copy of the sample file is swept, the potential suggestions are measured
+//!   against their control and the partition rules the listing supports are
+//!   added; both land beside the version.
+//!
+//! A stop aborts the runs and the walk; their commands are dropped, which
+//! `kill_on_drop` kills, so no child outlives the driver.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -20,12 +27,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
-use pqbench::v1::{Partition, PartitionPrice};
-use tokio::task::JoinSet;
+use pqbench::v1::{Partition, PartitionPrice, Suggestion};
+use tokio::sync::Notify;
+use tokio::task::{JoinHandle, JoinSet};
 
-use super::engine::{self, Engine, Input, Key, Run, State};
-use super::process::{self, WorkerExe};
-use super::store::{Store, SAMPLE};
+use super::engine::{self, Activity, Engine, Input, Key, Run, State, Transition};
+use super::process::{self, Worker};
+use super::store::{self, Store, SAMPLE};
 
 /// How long the driver sleeps when no command finishes: when a walk falls
 /// due, and when a checkpoint does, are checked this often.
@@ -54,10 +62,8 @@ struct Driver {
     settings: Settings,
     /// The most runs at once: one per CPU.
     commands: usize,
-    /// The pqbench image every command runs.
-    exe: WorkerExe,
-    /// The daemon's socket, when commands talk to one.
-    daemon_socket: Option<PathBuf>,
+    /// The commands the runs and the walk are.
+    worker: Worker,
     /// The runs in progress, each ending in its version's key and outcome.
     running: JoinSet<(Key, Outcome)>,
     /// The walk, while it runs.
@@ -66,8 +72,32 @@ struct Driver {
     emptying: JoinSet<()>,
     /// When the last walk started, milliseconds since the Unix epoch.
     walk_time: Option<u64>,
+    /// Why the last walk failed; absent when it succeeded.
+    walk_error: Option<String>,
+    /// What the last status pass wrote, so an idle driver writes nothing.
+    activity: Activity,
     walked: bool,
     checkpoint_time: Instant,
+}
+
+/// The driver's task and the signal that stops it.
+pub(crate) struct Task {
+    stop: Arc<Notify>,
+    handle: JoinHandle<()>,
+}
+
+impl Task {
+    /// Stop the driver and wait for its task to end: the runs and the walk are
+    /// aborted, dropping their commands, so every child is killed and the map
+    /// is checkpointable when this returns.
+    pub(crate) async fn stop(self) {
+        // One waiter, and a permit if the loop has not reached its select:
+        // a stop between two passes is not lost.
+        self.stop.notify_one();
+        if let Err(error) = self.handle.await {
+            eprintln!("pqbench-driver: the driver's task failed: {error}");
+        }
+    }
 }
 
 /// Start the driver on the runtime. A pass does short blocking file
@@ -76,43 +106,28 @@ pub(crate) fn spawn(
     engine: Arc<RwLock<Engine>>,
     store: Store,
     settings: Settings,
-    exe: WorkerExe,
-    daemon_socket: Option<PathBuf>,
-) {
+    worker: Worker,
+) -> Task {
     let walk_time = read_engine(&engine).last_list_time();
-    let mut driver = Driver {
+    let driver = Driver {
         engine,
         store,
         settings,
         commands: std::thread::available_parallelism().map_or(1, usize::from),
-        exe,
-        daemon_socket,
+        worker,
         running: JoinSet::new(),
         walk: JoinSet::new(),
         emptying: JoinSet::new(),
         walk_time,
+        walk_error: None,
+        activity: Activity::default(),
         walked: false,
         checkpoint_time: Instant::now(),
     };
-    tokio::spawn(async move {
-        loop {
-            driver.start_walk();
-            driver.start_runs();
-            driver.checkpoint();
-            tokio::select! {
-                Some(done) = driver.running.join_next() => match done {
-                    Ok((key, outcome)) => driver.finish(&key, outcome),
-                    Err(error) => eprintln!("pqbench-driver: a run's task failed: {error}"),
-                },
-                Some(done) = driver.walk.join_next() => {
-                    let outcome = done.unwrap_or_else(|error| Err(error.to_string()));
-                    driver.finish_walk(outcome);
-                }
-                Some(_) = driver.emptying.join_next() => {}
-                () = tokio::time::sleep(TICK) => {}
-            }
-        }
-    });
+    let stop = Arc::new(Notify::new());
+    let waiting = Arc::clone(&stop);
+    let handle = tokio::spawn(async move { driver.run(waiting).await });
+    Task { stop, handle }
 }
 
 fn read_engine(engine: &RwLock<Engine>) -> RwLockReadGuard<'_, Engine> {
@@ -128,6 +143,57 @@ fn write_engine(engine: &RwLock<Engine>) -> RwLockWriteGuard<'_, Engine> {
 }
 
 impl Driver {
+    /// Run transitions until `stop`: each pass starts what is due, then waits
+    /// for a command to finish, a walk to finish, the trash to empty, or the
+    /// tick.
+    async fn run(mut self, stop: Arc<Notify>) {
+        loop {
+            self.start_walk();
+            self.start_runs();
+            self.checkpoint();
+            self.record_activity();
+            tokio::select! {
+                () = stop.notified() => break,
+                Some(done) = self.running.join_next() => match done {
+                    Ok((key, outcome)) => self.finish(&key, outcome),
+                    Err(error) => eprintln!("pqbench-driver: a run's task failed: {error}"),
+                },
+                Some(done) = self.walk.join_next() => {
+                    let outcome = done.unwrap_or_else(|error| Err(error.to_string()));
+                    self.finish_walk(outcome);
+                }
+                Some(_) = self.emptying.join_next() => {}
+                () = tokio::time::sleep(TICK) => {}
+            }
+        }
+        self.cancel().await;
+    }
+
+    /// Stop the runs and the walk in flight, and put the versions they were
+    /// moving back to the state before their transition: the commands died
+    /// with the tasks, so the map a stop checkpoints restarts cleanly.
+    async fn cancel(&mut self) {
+        self.running.shutdown().await;
+        self.walk.shutdown().await;
+        self.emptying.shutdown().await;
+        write_engine(&self.engine).reset_running();
+        self.record_activity();
+    }
+
+    /// Tell the map what the driver is doing, when it changed.
+    fn record_activity(&mut self) {
+        let activity = Activity {
+            running_commands: (self.running.len() + self.walk.len()) as u64,
+            last_walk_time: self.walk_time,
+            last_walk_error: self.walk_error.clone(),
+        };
+        if activity == self.activity {
+            return;
+        }
+        self.activity = activity;
+        write_engine(&self.engine).set_activity(self.activity.clone());
+    }
+
     /// Start the runs the engine hands out, while there are free slots.
     fn start_runs(&mut self) {
         let free = self.commands.saturating_sub(self.running.len());
@@ -136,10 +202,9 @@ impl Driver {
         }
         for run in write_engine(&self.engine).start(free) {
             let store = self.store.clone();
-            let exe = self.exe.clone();
-            let daemon_socket = self.daemon_socket.clone();
+            let worker = self.worker.clone();
             self.running.spawn(async move {
-                let outcome = work(&store, &run, &exe, daemon_socket.as_deref()).await;
+                let outcome = work(&store, &run, &worker).await;
                 if outcome.is_err() {
                     store.discard(&run.key, run.transition.output);
                 }
@@ -208,19 +273,9 @@ impl Driver {
                 return;
             }
         };
-        let exe = self.exe.clone();
-        let daemon_socket = self.daemon_socket.clone();
-        self.walk.spawn(async move {
-            process::pipeline(
-                &exe,
-                &stages,
-                input,
-                output,
-                &error,
-                daemon_socket.as_deref(),
-            )
-            .await
-        });
+        let worker = self.worker.clone();
+        self.walk
+            .spawn(async move { process::pipeline(&worker, &stages, input, output, &error).await });
     }
 
     /// Apply the walk's listing: each listed table's versions are found, and
@@ -231,17 +286,20 @@ impl Driver {
         let directory = self.store.walk_dir();
         let listing = fs::read_to_string(directory.join("partitions.ndjson"))
             .map_err(|error| format!("cannot read the walk's listing: {error}"));
-        if let Err(error) = &outcome {
-            let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
-            eprintln!(
-                "pqbench-driver: the walk failed ({error}): {}",
-                process::tail(text.trim())
-            );
+        self.walk_error = match (&outcome, &listing) {
+            (Err(error), _) => {
+                let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
+                Some(format!("{error}: {}", process::tail(text.trim())))
+            }
+            (Ok(()), Err(error)) => Some(error.clone()),
+            (Ok(()), Ok(_)) => None,
+        };
+        if let Some(error) = &self.walk_error {
+            eprintln!("pqbench-driver: the walk failed ({error})");
         }
         let listing = match listing {
             Ok(listing) => listing,
-            Err(error) => {
-                eprintln!("pqbench-driver: the walk has no listing ({error})");
+            Err(_) => {
                 let _ = fs::remove_dir_all(&directory);
                 return;
             }
@@ -316,9 +374,12 @@ impl Driver {
 /// Run one transition on one version: its command, built from the version's
 /// listing, and its output landed in the version's directory. A price run
 /// returns the price.
-async fn work(store: &Store, run: &Run, exe: &WorkerExe, daemon_socket: Option<&Path>) -> Outcome {
+async fn work(store: &Store, run: &Run, worker: &Worker) -> Outcome {
     let (key, transition) = (&run.key, run.transition);
     let listing = store.read_listing(key)?;
+    if transition.running == State::Verifying {
+        return verify(store, key, transition, &listing, worker).await;
+    }
     let input = match transition.input {
         Input::Partition => listing,
         Input::SampleFile => {
@@ -346,7 +407,7 @@ async fn work(store: &Store, run: &Run, exe: &WorkerExe, daemon_socket: Option<&
         command.push("--local".into());
         command.push(sample.to_string_lossy().into_owned());
     }
-    let stdout = process::run(exe, &command, &(input + "\n"), daemon_socket).await?;
+    let stdout = worker.run(&command, &(input + "\n")).await?;
     store.land(
         key,
         transition.output,
@@ -360,6 +421,62 @@ async fn work(store: &Store, run: &Run, exe: &WorkerExe, daemon_socket: Option<&
     serde_json::from_str(first)
         .map(Some)
         .map_err(|error| format!("bad price: {error}"))
+}
+
+/// Verify a version's suggestions while its copy of the sample file is still
+/// on disk: the potential ones `list suggestions` emitted, measured against
+/// their control, and the partition rules the listing's metadata alone
+/// supports. Both land in one NDJSON file beside the version.
+async fn verify(
+    store: &Store,
+    key: &Key,
+    transition: &'static Transition,
+    listing: &str,
+    worker: &Worker,
+) -> Outcome {
+    let partition: Partition = serde_json::from_str(listing)
+        .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
+    let mut suggestions = measured(store, key, transition, worker).await?;
+    suggestions.extend(pqbench::lint::partition_suggestions(&partition));
+    store.write_suggestions(key, &suggestions)?;
+    Ok(None)
+}
+
+/// The potential suggestions the listing landed, measured by the verifier:
+/// empty when the version listed none, or when the host lists none (a low
+/// network copies no file to measure).
+async fn measured(
+    store: &Store,
+    key: &Key,
+    transition: &'static Transition,
+    worker: &Worker,
+) -> Result<Vec<Suggestion>, String> {
+    let Some(candidates) = store.read_output(key, store::LIST_SUGGESTIONS)? else {
+        return Ok(Vec::new());
+    };
+    if candidates.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut command: Vec<String> = transition
+        .command
+        .iter()
+        .map(|word| (*word).to_string())
+        .collect();
+    if transition.local {
+        let sample = store.version_dir(key).join(SAMPLE);
+        command.push("--local".into());
+        command.push(sample.to_string_lossy().into_owned());
+    }
+    let input = format!("{}\n", candidates.trim_end());
+    let stdout = worker.run(&command, &input).await?;
+    String::from_utf8_lossy(&stdout)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str(line)
+                .map_err(|error| format!("bad measured suggestion of {}: {error}", key.0))
+        })
+        .collect()
 }
 
 /// The walk's pipeline and its files in `directory`: the whole metastore,

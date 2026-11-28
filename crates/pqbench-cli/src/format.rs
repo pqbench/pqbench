@@ -16,10 +16,10 @@ use clap::Args;
 use futures_util::StreamExt;
 use pqbench::{diff, mass, v1};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::document::{self, Input, Record};
 use crate::render::{self, Row};
+use crate::source;
 use crate::CliError;
 
 /// Arguments for `format`.
@@ -90,14 +90,12 @@ async fn html() -> Result<(), CliError> {
 
 /// The default: one table per record kind.
 async fn tables() -> Result<(), CliError> {
+    const COMMAND: &str = "format";
+    let input = source::read_input(COMMAND).await?;
+    let mut records = source::records(COMMAND, input.first, input.lines);
     let mut sections: Vec<(Class, Section)> = Vec::new();
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let record: Value = serde_json::from_str(&line)
-            .map_err(|error| format!("format reads NDJSON records: {error}"))?;
+    while let Some(record) = records.next().await {
+        let record = record?;
         let Some(class) = classify(&record) else {
             continue;
         };

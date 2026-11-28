@@ -47,3 +47,20 @@ pub fn compress(src: &[u8], level: u8) -> Result<Vec<u8>, Error> {
 pub fn decompress(src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
     super::r#impl::decompress(src, out_cap)
 }
+
+/// Compress `src` at `level` into one Zstandard frame: the standalone format,
+/// with a header and an end mark, that `zstdcat` and other frame decoders read.
+///
+/// # Errors
+/// Returns [`Error`] if the underlying zstd call fails.
+pub fn compress_frame(src: &[u8], level: u8) -> Result<Vec<u8>, Error> {
+    super::r#impl::compress_frame(src, level)
+}
+
+/// Decompress one Zstandard frame, whatever length it decodes to.
+///
+/// # Errors
+/// Returns [`Error`] if `src` is not a valid Zstandard frame.
+pub fn decompress_frame(src: &[u8]) -> Result<Vec<u8>, Error> {
+    super::r#impl::decompress_frame(src)
+}

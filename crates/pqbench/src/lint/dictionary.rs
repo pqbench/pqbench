@@ -2,6 +2,8 @@
 //! against the same writer with the dictionary off. `dictionary-missing`: the
 //! same values written without a dictionary, priced with one on.
 
+use crate::v1;
+
 use super::control::{self, Arm, Measurement};
 use super::price::{PhysicalShape, Settings};
 use super::unique_fraction;
@@ -31,12 +33,14 @@ pub(super) fn detect_unique(sample: &ColumnSample<'_>) -> Option<Finding> {
     {
         return None;
     }
+    let leaf = sample.leaf;
     Some(Finding {
         message: format!(
             "a dictionary on nearly-unique values at {:.2} B/value",
             sample.text_bpv
         ),
-        remedy: unique_remedy(sample.writer_kind(), sample.leaf),
+        remedy: unique_remedy(sample.writer_kind(), leaf),
+        remedies: unique_remedies(leaf),
         measure: measure_unique,
     })
 }
@@ -51,13 +55,15 @@ pub(super) fn detect_missing(sample: &ColumnSample<'_>) -> Option<Finding> {
     if fraction >= REPEATED_FRACTION {
         return None;
     }
+    let leaf = sample.leaf;
     Some(Finding {
         message: format!(
             "only {:.1}% of sampled values are distinct at {:.2} B/value",
             fraction * 100.0,
             sample.text_bpv
         ),
-        remedy: missing_remedy(sample.writer_kind(), sample.leaf),
+        remedy: missing_remedy(sample.writer_kind(), leaf),
+        remedies: missing_remedies(leaf),
         measure: measure_missing,
     })
 }
@@ -99,41 +105,70 @@ fn sheet<'a>(sample: &ColumnSample<'a>, dictionary: bool) -> Arm<'a> {
     }
 }
 
-/// The setting that disables one column's dictionary, in the writer's terms.
-fn unique_remedy(writer: Writer, leaf: &str) -> String {
-    match writer {
-        Writer::ParquetMr => format!(
-            "disable the dictionary for this column: spark.hadoop.parquet.enable.dictionary#{leaf}=false"
+/// The settings that disable one column's dictionary, one per engine.
+fn unique_remedies(leaf: &str) -> Vec<v1::Remedy> {
+    vec![
+        v1::Remedy::new(
+            "spark",
+            format!("spark.hadoop.parquet.enable.dictionary#{leaf}=false"),
         ),
-        Writer::ArrowCpp => format!(
-            "disable the dictionary for this column: leave {leaf} out of pyarrow's use_dictionary"
+        v1::Remedy::new(
+            "pyarrow",
+            format!("use_dictionary=[<other columns>] (leave {leaf} out)"),
         ),
-        Writer::ArrowRs => {
-            format!("disable the dictionary for this column: set_column_dictionary_enabled({leaf:?}, false)")
-        }
-        Writer::Photon => format!(
-            "disable the dictionary for this column: \
-             spark.hadoop.parquet.enable.dictionary#{leaf}=false (Photon forwarding unverified)"
+        v1::Remedy::new(
+            "parquet-rs",
+            format!("set_column_dictionary_enabled({leaf:?}, false)"),
         ),
-        Writer::Other => "disable the dictionary for this column at write".to_string(),
-    }
+        v1::Remedy::new("iceberg", "write.parquet.dict-size-bytes=8192"),
+    ]
 }
 
-/// The setting that enables one column's dictionary, in the writer's terms.
+/// The settings that enable one column's dictionary, one per engine.
+fn missing_remedies(leaf: &str) -> Vec<v1::Remedy> {
+    vec![
+        v1::Remedy::new(
+            "spark",
+            format!("spark.hadoop.parquet.enable.dictionary#{leaf}=true"),
+        ),
+        v1::Remedy::new("pyarrow", format!("use_dictionary=[{leaf}]")),
+        v1::Remedy::new(
+            "parquet-rs",
+            format!("set_column_dictionary_enabled({leaf:?}, true)"),
+        ),
+        v1::Remedy::new("iceberg", "write.parquet.dict-size-bytes=2097152"),
+    ]
+}
+
+/// The setting that disables one column's dictionary, in the detected writer's
+/// terms.
+fn unique_remedy(writer: Writer, leaf: &str) -> String {
+    let remedies = unique_remedies(leaf);
+    let setting = |engine: &str| super::setting(&remedies, engine);
+    primary_remedy(writer, "disable", &setting)
+}
+
+/// The setting that enables one column's dictionary, in the detected writer's
+/// terms.
 fn missing_remedy(writer: Writer, leaf: &str) -> String {
+    let remedies = missing_remedies(leaf);
+    let setting = |engine: &str| super::setting(&remedies, engine);
+    primary_remedy(writer, "enable", &setting)
+}
+
+/// The one-line remedy for a writer: the column's dictionary, then the
+/// writer's own setting.
+fn primary_remedy(writer: Writer, verb: &str, setting: &dyn Fn(&str) -> String) -> String {
+    let lead = format!("{verb} the dictionary for this column");
     match writer {
-        Writer::ParquetMr => format!(
-            "enable the dictionary for this column: spark.hadoop.parquet.enable.dictionary#{leaf}=true"
-        ),
-        Writer::ArrowCpp => format!("enable the dictionary for this column: use_dictionary=[{leaf}]"),
-        Writer::ArrowRs => {
-            format!("enable the dictionary for this column: set_column_dictionary_enabled({leaf:?}, true)")
-        }
+        Writer::ParquetMr => format!("{lead}: {}", setting("spark")),
+        Writer::ArrowCpp => format!("{lead}: {}", setting("pyarrow")),
+        Writer::ArrowRs => format!("{lead}: {}", setting("parquet-rs")),
         Writer::Photon => format!(
-            "enable the dictionary for this column: \
-             spark.hadoop.parquet.enable.dictionary#{leaf}=true (Photon forwarding unverified)"
+            "{lead}: {} (Photon forwarding unverified)",
+            setting("spark")
         ),
-        Writer::Other => "enable the dictionary for this column at write".to_string(),
+        Writer::Other => format!("{lead} at write"),
     }
 }
 

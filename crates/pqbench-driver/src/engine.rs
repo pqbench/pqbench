@@ -15,6 +15,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) use pqbench::v1::partition_version::State;
 use pqbench::v1::{Partition, PartitionPrice, PartitionVersion};
 
+use super::protocol::DriverStatus;
+use super::store;
+
 /// Immediate retries before a version backs off.
 const MAX_FAILURES: u64 = 2;
 
@@ -59,13 +62,14 @@ const PRICE: Transition = Transition {
     done: State::Priced,
     command: &["get", "partition-price"],
     input: Input::Partition,
-    output: "price.ndjson",
+    output: store::PRICE,
     stdout: true,
     local: false,
 };
 
-/// The transitions, in pipeline order: the sample file is copied, and the
-/// commands that read its data read the copy.
+/// The transitions, in pipeline order: the sample file is copied, the
+/// commands that read its data read the copy, and the verifier measures the
+/// suggestions the listing found while the copy is still there.
 const TRANSITIONS: &[Transition] = &[
     PRICE,
     Transition {
@@ -74,7 +78,7 @@ const TRANSITIONS: &[Transition] = &[
         done: State::Downloaded,
         command: &["download"],
         input: Input::SampleFile,
-        output: "sample.parquet",
+        output: store::SAMPLE,
         stdout: false,
         local: false,
     },
@@ -84,37 +88,62 @@ const TRANSITIONS: &[Transition] = &[
         done: State::Bytemassed,
         command: &["bytemass"],
         input: Input::SampleFile,
-        output: "bytemass.ndjson",
+        output: store::BYTEMASS,
         stdout: true,
         local: true,
     },
     Transition {
         source: State::Bytemassed,
         running: State::Linting,
-        done: State::UpToDate,
+        done: State::Listed,
         command: &["list", "suggestions"],
         input: Input::SampleFile,
-        output: "list-suggestions.ndjson",
+        output: store::LIST_SUGGESTIONS,
         stdout: true,
         local: true,
     },
+    VERIFY,
 ];
 
 /// The transitions on a host with little network: no file is copied;
-/// bytemass reads only the sample file's footer, in place, and is the last.
+/// bytemass reads only the sample file's footer, in place, there is no lint,
+/// and the verifier lands only what the partition's metadata alone supports.
 const LOW_NETWORK_TRANSITIONS: &[Transition] = &[
     PRICE,
     Transition {
         source: State::Priced,
         running: State::Bytemassing,
-        done: State::UpToDate,
+        done: State::Bytemassed,
         command: &["bytemass"],
         input: Input::SampleFile,
-        output: "bytemass.ndjson",
+        output: store::BYTEMASS,
         stdout: true,
         local: false,
     },
+    Transition {
+        source: State::Bytemassed,
+        running: State::Verifying,
+        done: State::UpToDate,
+        command: &["get", "suggestion"],
+        input: Input::Partition,
+        output: store::SUGGESTIONS,
+        stdout: true,
+        local: true,
+    },
 ];
+
+/// The last transition either way: the potential suggestions on disk are
+/// measured, and the partition rules that need no file are added.
+const VERIFY: Transition = Transition {
+    source: State::Listed,
+    running: State::Verifying,
+    done: State::UpToDate,
+    command: &["get", "suggestion"],
+    input: Input::Partition,
+    output: store::SUGGESTIONS,
+    stdout: true,
+    local: true,
+};
 
 /// A version: its partition name and etag.
 pub(crate) type Key = (String, String);
@@ -132,8 +161,22 @@ pub(crate) struct Engine {
     /// The versions by partition and etag; a row's `name` is left empty, the
     /// key holds it, and [`named`] puts it back.
     rows: BTreeMap<Key, PartitionVersion>,
+    /// What the driver is doing: the walk, and the commands in flight.
+    activity: Activity,
     /// Whether the rows changed since the last checkpoint.
     changed: bool,
+}
+
+/// What the driver is doing, for `status`: it is not the map, so it never
+/// marks the map changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Activity {
+    /// The worker commands running now: a version's command, or a walk.
+    pub running_commands: u64,
+    /// When the last walk started, milliseconds since the Unix epoch.
+    pub last_walk_time: Option<u64>,
+    /// Why the last walk failed; absent when it succeeded.
+    pub last_walk_error: Option<String>,
 }
 
 impl Engine {
@@ -166,6 +209,7 @@ impl Engine {
         Ok(Engine {
             transitions,
             rows,
+            activity: Activity::default(),
             changed: true,
         })
     }
@@ -178,24 +222,16 @@ impl Engine {
     /// The versions under `parent`, in key order: a catalog, schema, table or
     /// partition name, or every version when it is empty.
     pub(crate) fn records(&self, parent: &str) -> Result<Vec<PartitionVersion>, String> {
-        let wanted: Vec<&str> = parent
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
-        let collections = ["catalogs", "schemas", "tables", "partitions"];
-        if !wanted.len().is_multiple_of(2)
-            || wanted.len() > 2 * collections.len()
-            || wanted
-                .iter()
-                .step_by(2)
-                .zip(collections)
-                .any(|(have, want)| *have != want)
-        {
-            return Err(format!(
-                "{parent} is not a catalog, schema, table or partition name"
-            ));
-        }
-        let prefix = wanted.join("/");
+        Ok(self
+            .keys(parent)?
+            .into_iter()
+            .map(|key| named(&key, &self.rows[&key]))
+            .collect())
+    }
+
+    /// The keys of the versions under `parent`, in key order.
+    pub(crate) fn keys(&self, parent: &str) -> Result<Vec<Key>, String> {
+        let prefix = parent_prefix(parent)?;
         let under = |name: &str| {
             prefix.is_empty()
                 || name == prefix
@@ -208,8 +244,38 @@ impl Engine {
             .range((prefix.clone(), String::new())..)
             .take_while(|((name, _), _)| name.starts_with(&prefix))
             .filter(|((name, _), _)| under(name))
-            .map(|(key, row)| named(key, row))
+            .map(|(key, _)| key.clone())
             .collect())
+    }
+
+    /// The map as a whole: the versions by state, and what the driver is
+    /// doing.
+    pub(crate) fn status(&self) -> DriverStatus {
+        let mut state_counts: BTreeMap<String, u64> = State::ALL
+            .into_iter()
+            .map(|state| (state.to_string(), 0))
+            .collect();
+        for row in self.rows.values() {
+            *state_counts.entry(row.state.to_string()).or_default() += 1;
+        }
+        DriverStatus {
+            state_counts,
+            total_versions: self.rows.len() as u64,
+            running_commands: self.activity.running_commands,
+            failing_versions: self
+                .rows
+                .values()
+                .filter(|row| row.failure_count > 0)
+                .count() as u64,
+            last_walk_time: self.activity.last_walk_time,
+            last_walk_error: self.activity.last_walk_error.clone(),
+        }
+    }
+
+    /// What the driver is doing now. A status update is not a map change, so
+    /// it never asks for a checkpoint.
+    pub(crate) fn set_activity(&mut self, activity: Activity) {
+        self.activity = activity;
     }
 
     /// One version by name: a version, or a partition for its one version.
@@ -459,6 +525,20 @@ impl Engine {
         }
         self.changed |= !keys.is_empty();
     }
+
+    /// Put every version a run was moving back to the state before its
+    /// transition: aborting the run killed its command, so a checkpoint taken
+    /// now restarts them there.
+    pub(crate) fn reset_running(&mut self) {
+        let transitions = self.transitions;
+        for row in self.rows.values_mut() {
+            let Some(transition) = running_transition(transitions, row.state) else {
+                continue;
+            };
+            row.state = transition.source;
+            self.changed = true;
+        }
+    }
 }
 
 /// How a finished run left its version.
@@ -475,7 +555,7 @@ fn engine_needs_sample(row: &PartitionVersion) -> bool {
 }
 
 /// Whether a version in `state` reads its copy of the sample file: from the
-/// download to the transitions that read the data.
+/// download to the verification that measures the listing against it.
 pub(crate) fn needs_sample(state: State) -> bool {
     matches!(
         state,
@@ -484,6 +564,8 @@ pub(crate) fn needs_sample(state: State) -> bool {
             | State::Bytemassing
             | State::Bytemassed
             | State::Linting
+            | State::Listed
+            | State::Verifying
     )
 }
 
@@ -515,6 +597,30 @@ pub(crate) fn key(name: &str, etag: &str) -> Option<Key> {
 pub(crate) fn parent_table(name: &str) -> &str {
     name.split_once("/partitions/")
         .map_or(name, |(table, _)| table)
+}
+
+/// The canonical prefix a `parent` names: its non-empty segments, which must
+/// spell catalog, schema, table and partition names in that order. The empty
+/// parent is every version.
+fn parent_prefix(parent: &str) -> Result<String, String> {
+    let wanted: Vec<&str> = parent
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let collections = ["catalogs", "schemas", "tables", "partitions"];
+    let valid = wanted.len().is_multiple_of(2)
+        && wanted.len() <= 2 * collections.len()
+        && wanted
+            .iter()
+            .step_by(2)
+            .zip(collections)
+            .all(|(have, want)| *have == want);
+    if !valid {
+        return Err(format!(
+            "{parent} is not a catalog, schema, table or partition name"
+        ));
+    }
+    Ok(wanted.join("/"))
 }
 
 /// Whether any of a price's files needs a restore to be read: an archive
@@ -658,6 +764,64 @@ mod tests {
         assert_eq!(versions[0].state, State::Pricing);
         let engine = Engine::new(versions, false).unwrap();
         assert_eq!(engine.rows[&key].state, State::Pending);
+    }
+
+    /// `status` counts every state the map can hold, the versions that are
+    /// failing, and what the driver is doing.
+    #[test]
+    fn a_status_counts_the_map_by_state() {
+        let (mut engine, key) = found(1);
+        engine.set_activity(Activity {
+            running_commands: 2,
+            last_walk_time: Some(42),
+            last_walk_error: Some("boom".into()),
+        });
+        let status = engine.status();
+        assert_eq!(status.total_versions, 1);
+        assert_eq!(status.state_counts.len(), State::ALL.len());
+        assert_eq!(status.state_counts["PENDING"], 1);
+        assert_eq!(status.state_counts["UP_TO_DATE"], 0);
+        assert_eq!(status.running_commands, 2);
+        assert_eq!(status.last_walk_time, Some(42));
+        assert_eq!(status.last_walk_error.as_deref(), Some("boom"));
+        assert_eq!(status.failing_versions, 0);
+
+        engine.start(1);
+        engine.finish_timed(&key, Err("boom".into()), 1);
+        assert_eq!(engine.status().failing_versions, 1);
+    }
+
+    /// A parent selects the keys under it at any level, and a name that is not
+    /// one is refused.
+    #[test]
+    fn a_parent_selects_the_keys_under_it() {
+        let (engine, key) = found(1);
+        for parent in [
+            "",
+            "catalogs/c",
+            "catalogs/c/schemas/s",
+            "catalogs/c/schemas/s/tables/t",
+            PARTITION,
+        ] {
+            assert_eq!(engine.keys(parent).unwrap(), vec![key.clone()], "{parent}");
+        }
+        assert!(engine.keys("catalogs/other").unwrap().is_empty());
+        assert!(engine.keys("catalogs/c/tables/t").is_err());
+    }
+
+    /// A stop puts the versions a run was moving back to the state before its
+    /// transition, and asks for a checkpoint of that map.
+    #[test]
+    fn a_stop_resets_the_versions_a_run_was_moving() {
+        let (mut engine, key) = found(1);
+        engine.checkpointed();
+        assert!(!engine.changed());
+        engine.start(1);
+        assert_eq!(engine.rows[&key].state, State::Pricing);
+        engine.checkpointed();
+        engine.reset_running();
+        assert_eq!(engine.rows[&key].state, State::Pending);
+        assert!(engine.changed());
     }
 
     /// A name that would be a path outside the store is no key.

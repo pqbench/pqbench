@@ -7,6 +7,7 @@
 //! turns on without recompressing every page of every column.
 
 use crate::codecs::Codec;
+use crate::v1;
 
 use super::control::{self, Measurement};
 use super::writer::Writer;
@@ -32,9 +33,11 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     if !WEAK_CODECS.contains(&family) {
         return None;
     }
+    let leaf = sample.leaf;
     Some(Finding {
         message: format!("{family} at {:.2} B/value", sample.text_bpv),
-        remedy: remedy(sample.writer_kind(), sample.leaf),
+        remedy: remedy(sample.writer_kind(), leaf),
+        remedies: remedies(leaf),
         measure,
     })
 }
@@ -117,28 +120,46 @@ fn saving(compressed_bytes: u64, candidates: &[u64; LEVELS.len()]) -> Option<Mea
     })
 }
 
-/// The setting that writes one column with zstd, in the writer's terms. Each is
-/// the writer's per-column form, so one column's codec and level change without
+/// The settings that write one column with zstd, one per engine. Each is the
+/// engine's per-column form, so one column's codec and level change without
 /// rewriting the table's other columns.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    match writer {
-        Writer::ParquetMr => format!(
-            "spark.hadoop.parquet.compression#{leaf}=ZSTD with \
-             spark.hadoop.parquet.compression.level#{leaf}=3, or \
-             spark.sql.parquet.compression.codec=zstd for the table"
+fn remedies(leaf: &str) -> Vec<v1::Remedy> {
+    vec![
+        v1::Remedy::new(
+            "spark",
+            format!(
+                "spark.hadoop.parquet.compression#{leaf}=ZSTD with \
+                 spark.hadoop.parquet.compression.level#{leaf}=3, or \
+                 spark.sql.parquet.compression.codec=zstd for the table"
+            ),
         ),
-        Writer::Photon => "ALTER TABLE <table> SET TBLPROPERTIES \
-             ('delta.parquet.compression.codec'='zstd') (Photon forwarding unverified)"
-            .to_string(),
-        Writer::ArrowCpp => {
-            format!("compression={{{leaf}: 'zstd'}}, compression_level={{{leaf}: 3}}")
-        }
-        Writer::ArrowRs => {
-            format!("set_column_compression({leaf:?}, Compression::ZSTD(ZstdLevel::default()))")
-        }
-        Writer::Other => {
-            "write the column with zstd (Iceberg: write.parquet.compression-codec=zstd)".to_string()
-        }
+        v1::Remedy::new(
+            "pyarrow",
+            format!("compression={{{leaf}: 'zstd'}}, compression_level={{{leaf}: 3}}"),
+        ),
+        v1::Remedy::new(
+            "parquet-rs",
+            format!("set_column_compression({leaf:?}, Compression::ZSTD(ZstdLevel::default()))"),
+        ),
+        v1::Remedy::new("delta", "'delta.parquet.compression.codec'='zstd'"),
+        v1::Remedy::new("iceberg", "write.parquet.compression-codec=zstd"),
+    ]
+}
+
+/// The setting that writes one column with zstd, in the detected writer's
+/// terms.
+fn remedy(writer: Writer, leaf: &str) -> String {
+    let remedies = remedies(leaf);
+    let setting = |engine: &str| super::setting(&remedies, engine);
+    match writer {
+        Writer::ParquetMr => setting("spark"),
+        Writer::Photon => format!(
+            "ALTER TABLE <table> SET TBLPROPERTIES ({}) (Photon forwarding unverified)",
+            setting("delta")
+        ),
+        Writer::ArrowCpp => setting("pyarrow"),
+        Writer::ArrowRs => setting("parquet-rs"),
+        Writer::Other => format!("write the column with zstd ({})", setting("iceberg")),
     }
 }
 

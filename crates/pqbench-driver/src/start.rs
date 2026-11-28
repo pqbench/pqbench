@@ -129,13 +129,45 @@ pub(crate) async fn stop(args: &TargetArgs) -> Result<(), String> {
     Ok(())
 }
 
-/// Report whether a driver is listening at `socket`.
+/// Report the driver's state as one JSON object: the versions by state, what
+/// it is running, and how its walks have gone.
 pub(crate) async fn status(args: &TargetArgs) -> Result<(), String> {
     let socket = socket::resolve(args.socket.as_deref(), args.store.as_deref())?;
-    if client::ping(&socket).await {
-        println!("running {}", socket.display());
-        Ok(())
-    } else {
-        Err("pqbench-driver is not running".into())
+    let response = match client::request(&socket, &Request::status()).await {
+        Ok(response) => response,
+        Err(client::Error::Connect(_)) => return Err("pqbench-driver is not running".into()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if let Some(error) = response.error {
+        return Err(error);
     }
+    let Some(status) = response.status else {
+        return Err("the driver answered no status".into());
+    };
+    let line = serde_json::to_string(&status).map_err(|error| error.to_string())?;
+    println!("{line}");
+    Ok(())
+}
+
+/// List the suggestions the driver measured under `parent` (all when it is
+/// absent), one Suggestion per line, largest saving first.
+pub(crate) async fn list_suggestions(parent: Option<&str>) -> Result<(), String> {
+    let socket =
+        socket::from_env().ok_or_else(|| format!("no driver socket: set {}", socket::ENV))?;
+    let request = Request::list_suggestions(parent.map(ToString::to_string));
+    let response = match client::request(&socket, &request).await {
+        Ok(response) => response,
+        Err(client::Error::Connect(_)) => {
+            return Err(format!("no driver is listening at {}", socket.display()));
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    if let Some(error) = response.error {
+        return Err(error);
+    }
+    for record in &response.records {
+        let line = serde_json::to_string(record).map_err(|error| error.to_string())?;
+        println!("{line}");
+    }
+    Ok(())
 }

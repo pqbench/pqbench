@@ -107,10 +107,101 @@ fn suggestions(path: &Path) -> Vec<Json> {
     )
 }
 
+/// Run a command and return its standard output as text, for the human table.
+fn run_text(args: &[&str], input: &str) -> String {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pqbench"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run pqbench");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(input.as_bytes())
+        .expect("write input");
+    let output = child.wait_with_output().expect("wait for pqbench");
+    assert!(
+        output.status.success(),
+        "{} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 /// Verify candidates, as `list suggestions | get suggestion` does.
 fn verified(records: &[Json]) -> Vec<Json> {
     let input: Vec<String> = records.iter().map(ToString::to_string).collect();
     run(&["get", "suggestion"], &input.join("\n"))
+}
+
+#[test]
+fn a_local_path_lints_verifies_and_formats_as_a_pipe() {
+    let directory = temporary("path");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..100_000).map(uuid).collect();
+    write_values(&path, &values, false, 0);
+
+    let text = path.to_str().expect("utf-8 path");
+    let records = run(&["list", "suggestions", text], "");
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "uuid-text", "{records:?}");
+    // The path is the minimal table-file record a `table-file` stage names.
+    assert_eq!(
+        records[0]["name"],
+        format!(
+            "{}/columns/id/suggestions/uuid-text",
+            pqbench::v1::name::blob_name(text)
+        ),
+        "{records:?}"
+    );
+    assert_eq!(
+        records[0]["size_bytes"],
+        std::fs::metadata(&path).unwrap().len()
+    );
+    let remedies = records[0]["remedies"].as_array().expect("remedies");
+    assert!(!remedies.is_empty(), "{records:?}");
+    assert!(
+        remedies
+            .iter()
+            .any(|remedy| remedy["engine"] == "pyarrow" && remedy["setting"].is_string()),
+        "{records:?}"
+    );
+
+    // The same pipeline a table-file stream takes: the candidate verifies, and
+    // the verified record formats as one table row.
+    let verified = verified(&records);
+    assert_eq!(verified[0]["verified"], true, "{verified:?}");
+    let input: Vec<String> = verified.iter().map(ToString::to_string).collect();
+    let table = run_text(&["format"], &input.join("\n"));
+    assert!(table.contains("uuid-text"), "{table}");
+    assert!(table.contains("yes"), "{table}");
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn a_missing_path_is_reported_and_fails_the_run() {
+    let directory = temporary("missing");
+    let missing = directory.join("absent.parquet");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_pqbench"))
+        .args(["list", "suggestions"])
+        .arg(&missing)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run pqbench");
+    let output = child.wait_with_output().expect("wait for pqbench");
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("absent.parquet"), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(directory);
 }
 
 #[test]

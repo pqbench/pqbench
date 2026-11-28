@@ -2,6 +2,8 @@
 
 use parquet::data_type::ByteArray;
 
+use crate::v1;
+
 use super::control::{self, Arm, Measurement};
 use super::price::{PhysicalShape, Settings};
 use super::{ColumnSample, Error, Finding};
@@ -33,8 +35,28 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
         } else {
             "store as BINARY(16)".to_string()
         },
+        remedies: remedies(sample.leaf),
         measure,
     })
+}
+
+/// The settings that store the values as a 16-byte UUID, one per engine that
+/// has a UUID type.
+fn remedies(leaf: &str) -> Vec<v1::Remedy> {
+    vec![
+        v1::Remedy::new(
+            "pyarrow",
+            format!("column_types={{{leaf}: pa.uuid()}} (or pa.binary(16))"),
+        ),
+        v1::Remedy::new(
+            "parquet-rs",
+            format!("write {leaf} as LogicalType::Uuid over FIXED_LEN_BYTE_ARRAY(16)"),
+        ),
+        v1::Remedy::new(
+            "iceberg",
+            format!("ALTER TABLE <table> ALTER COLUMN {leaf} TYPE uuid"),
+        ),
+    ]
 }
 
 /// Price the text arm against the binary arm, both written by the same writer

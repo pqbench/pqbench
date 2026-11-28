@@ -65,7 +65,7 @@ pub use partition_version::PartitionVersion;
 pub use pqbench_resource::Resource;
 pub use schema::Schema;
 pub use storage_tier_cost::StorageTierCost;
-pub use suggestion::Suggestion;
+pub use suggestion::{Remedy, Suggestion};
 pub use table::Table;
 pub use table_file::TableFile;
 pub use table_format::TableFormat;

@@ -210,14 +210,17 @@ one is running, and local tables need none.
   before it to the state after it: `price` (`get partition-price`),
   `download` (the partition's sample file into the version's directory),
   `bytemass` and `lint` (`bytemass --local` and `list suggestions --local` on
-  that copy, which is deleted once the version is done). One command runs per
-  CPU at once, taking the newest data first and then the largest partition.
-  A version
+  that copy), then `verify` (`get suggestion --local` on the potential
+  suggestions, while the copy is still there; the partition rules that need no
+  file are added to the same record set). One command runs per CPU at once,
+  taking the newest data first and then the largest partition. A version
   with no live file, or whose files are in an archive class or tier, is
   `UP_TO_DATE` after its price. With `--low-network` no file is copied: after
   its price a version runs `bytemass` on the sample file in place, which reads
-  only the footer, and is then `UP_TO_DATE` without suggestions. A failure
-  puts the version back with the command's error; after two it waits.
+  only the footer, and then verifies from the partition's metadata alone,
+  since it has no column suggestion to measure. A failure puts the version
+  back with the command's error; after two it waits.
+
 A command's output lands in `DIR/results/{partition}/{etag}/` through a
 temporary file and is renamed into place when the command succeeds. The map is
 written whole to `DIR/checkpoint.ndjson` every 5 minutes while commands run,
@@ -239,11 +242,34 @@ then its listing, one record per line. NAME is a version
 (`…/partitions/{partition}/versions/{etag}`), or a partition for its newest
 live version. A version with no results yet reports its state instead.
 
+`pqbench-driver status [--socket PATH]` prints the map as one JSON object:
+`state_counts` (the versions in each `PartitionVersion.State`),
+`total_versions`, `running_commands` (the worker commands in flight),
+`failing_versions` (versions whose current transition failed and that back off
+before retrying), `last_walk_time`, and `last_walk_error` when that walk
+failed.
+
+`pqbench-driver list suggestions [PARENT]` prints the `Suggestion` records the
+driver measured, one per line, largest saving first, all of them or those under
+a catalog, schema, table or partition name. Each record is a version's
+potential column suggestion measured against its control, or one of the two
+partition rules that need no file: `tombstones` (Delta's removed files the log
+no longer needs, with the log's own byte count as the saving) and `small-files`
+(many small files, with the compaction remedy each engine spells). A partition
+rule's `name` is `{partition}/suggestions/{rule}`, its `partition` names the
+partition, and its `column` is empty.
+
+`pqbench-driver stop` sends a stop over the socket. `SIGINT` and `SIGTERM` do
+the same: the driver aborts the runs in flight (their commands are killed with
+them), checkpoints the map, removes its socket, and exits 0.
+
 ```console no-run
 $ pqbench-driver start --store /var/lib/pqbench --walk-period-seconds 86400
 export PQB_DRIVER_SOCK=/var/lib/pqbench/driver.sock
 $ pqbench list partition-versions catalogs/main/schemas/sales
 $ pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
+$ pqbench-driver status
+$ pqbench-driver list suggestions catalogs/main/schemas/sales
 $ pqbench-driver stop --socket /var/lib/pqbench/driver.sock
 ```
 

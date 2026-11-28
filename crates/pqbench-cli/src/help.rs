@@ -221,9 +221,9 @@ List a collection of the walk, by name:
               removed bytes, etag, and the oldest, newest and sample file
   columns     a file's columns and their byte masses (TableFile refs on
               standard input), one Column line each
-  suggestions the storage each local blob's values may not need (TableFile refs
-              on standard input), one Suggestion line each; `get suggestion`
-              measures them
+  suggestions the storage each local blob's values may not need (PATHs, or
+              TableFile refs on standard input), one Suggestion line each;
+              `get suggestion` measures them
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
 PQB_TABLE_FORMAT=iceberg the schema and table levels speak Iceberg REST
@@ -280,6 +280,7 @@ Examples:
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench list columns
   pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
+  pqbench list suggestions data.parquet | pqbench get suggestion | pqbench format
   pqbench list partition-versions | pqbench summarize partition-versions
 
 See also:

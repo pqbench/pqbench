@@ -29,12 +29,18 @@ impl Driver {
     /// Start the driver on `directory`, walking the Table records of
     /// `{directory}/tables.ndjson` when there are some.
     fn start(directory: &Path, flags: &[&str]) -> Self {
+        Driver::configured(directory, flags, Path::new("/dev/null"))
+    }
+
+    /// Start the driver reading `config` as its run-control file.
+    fn configured(directory: &Path, flags: &[&str], config: &Path) -> Self {
         let socket = directory.join("d.sock");
         let store = directory.join("store");
         let tables = directory.join("tables.ndjson");
         // A killed driver leaves its socket behind.
         let _ = std::fs::remove_file(&socket);
         let mut command = driver();
+        command.env("PQB_CONFIG_FILE", config);
         command
             .args(["serve", "--store"])
             .arg(&store)
@@ -388,6 +394,44 @@ fn pqbench_time() -> u64 {
         .as_millis() as u64
 }
 
+/// The driver's `status`, as the JSON object it prints.
+fn driver_status(running: &Driver) -> Value {
+    let output = driver()
+        .args(["status", "--socket"])
+        .arg(&running.socket)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "pqbench-driver status: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("the status is one JSON object")
+}
+
+/// The driver's `list suggestions`, one record per line.
+fn list_suggestions(running: &Driver, args: &[&str]) -> Vec<Value> {
+    let output = driver()
+        .env("PQB_DRIVER_SOCK", &running.socket)
+        .args(["list", "suggestions"])
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "pqbench-driver list suggestions {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice(line).unwrap())
+        .collect()
+}
+
 /// `list partition-versions` takes a parent at any level, and refuses a
 /// name that is not one.
 #[test]
@@ -459,12 +503,18 @@ fn the_transitions_take_each_version_up_to_date() {
     let rows =
         driver.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
     for row in &rows {
-        for output in ["price.ndjson", "bytemass.ndjson", "list-suggestions.ndjson"] {
+        for output in [
+            "price.ndjson",
+            "bytemass.ndjson",
+            "list-suggestions.ndjson",
+            "suggestions.ndjson",
+        ] {
             assert!(
                 result_file(&driver, row, output).exists(),
                 "{output} for {row}"
             );
         }
+        assert_eq!(row["state"], "UP_TO_DATE");
         assert!(!result_file(&driver, row, "sample.parquet").exists());
         let bytemass =
             std::fs::read_to_string(result_file(&driver, row, "bytemass.ndjson")).unwrap();
@@ -660,4 +710,274 @@ fn one_version_reads_its_stored_results() {
 
     // The partition's name reads the same version's results.
     assert_eq!(read(partition(&rows[0])), results);
+}
+
+/// The driver's two settings are the run-control file's, not flags: the store's
+/// checkpoint lands under the configured codec's name, and a restart loads it.
+#[test]
+fn the_run_control_file_sets_the_checkpoint_codec() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    table(&root);
+    walk(directory.path(), &[("events", &root)]);
+    let config = directory.path().join("run-control");
+    std::fs::write(
+        &config,
+        "[DEFAULT]\ncheckpoint-codec = lz4\nstep-timeout = 60\n",
+    )
+    .unwrap();
+    let driver = Driver::configured(directory.path(), &[], &config);
+    // The table's files are not there, so both versions fail twice and settle:
+    // a version caught mid-transition would go back a state on the restart.
+    let rows =
+        driver.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["failure_count"] == 2));
+    driver.stop();
+
+    let store = directory.path().join("store");
+    let checkpoint = store.join("checkpoint.ndjson.lz4");
+    assert!(
+        checkpoint.is_file(),
+        "no LZ4 checkpoint: {:?}",
+        walk_files(&store)
+    );
+    let bytes = std::fs::read(&checkpoint).unwrap();
+    assert!(
+        bytes.starts_with(&[0x04, 0x22, 0x4d, 0x18]),
+        "the checkpoint is not an LZ4 frame"
+    );
+    for other in ["checkpoint.ndjson", "checkpoint.ndjson.zst"] {
+        assert!(!store.join(other).exists(), "{other} was written too");
+    }
+
+    // Nothing to walk, so the rows are the checkpoint's: the driver loaded it.
+    std::fs::remove_file(directory.path().join("tables.ndjson")).unwrap();
+    let driver = Driver::configured(directory.path(), &[], &config);
+    assert_eq!(driver.rows(), rows);
+}
+
+/// A table whose one partition holds `files` copies of the fixture: enough
+/// files, each small, for the `small-files` rule.
+fn small_files_table(root: &Path, files: usize) -> Vec<Value> {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/small_reddit_none.parquet"
+    );
+    let size = std::fs::metadata(fixture).unwrap().len();
+    let mut actions = vec![
+        json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}}),
+        json!({"metaData": {
+            "id": "55555555-5555-5555-5555-555555555555",
+            "format": {"provider": "parquet", "options": {}},
+            "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"day\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}",
+            "partitionColumns": ["day"],
+            "configuration": {},
+            "createdTime": 0
+        }}),
+    ];
+    for at in 0..files {
+        let path = format!("day=1/part-{at}.parquet");
+        std::fs::create_dir_all(root.join("day=1")).unwrap();
+        std::fs::copy(fixture, root.join(&path)).unwrap();
+        actions.push(add(&path, "1", size));
+    }
+    actions
+}
+
+/// `status` reports the map as a whole: the versions by state, the failing
+/// count and the last walk, without a flag to choose the output.
+#[test]
+fn status_reports_the_map() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, readable_table(&root, &["1", "2"]));
+    walk(directory.path(), &[("events", &root)]);
+    let driver = Driver::start(directory.path(), &[]);
+    let rows =
+        driver.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
+
+    let start = Instant::now();
+    let status = loop {
+        let status = driver_status(&driver);
+        if status["running_commands"] == 0 {
+            break status;
+        }
+        assert!(start.elapsed() < Duration::from_secs(30), "{status}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status["total_versions"], rows.len());
+    assert_eq!(status["state_counts"]["UP_TO_DATE"], rows.len());
+    assert_eq!(status["state_counts"]["PENDING"], 0);
+    assert_eq!(status["failing_versions"], 0);
+    assert!(
+        status["last_walk_time"]
+            .as_u64()
+            .is_some_and(|time| time > 0),
+        "{status}"
+    );
+    assert!(status.get("last_walk_error").is_none(), "{status}");
+}
+
+/// A version's measured suggestions are on disk beside it, and `list
+/// suggestions` returns them largest saving first: the log's tombstones (an
+/// exact count) above the column rewrites, with `small-files` in the same
+/// record set.
+#[test]
+fn the_driver_persists_and_lists_its_measured_suggestions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    let removed_file_bytes = 2 * 1024 * 1024;
+    commit(&root, 0, small_files_table(&root, 16));
+    commit(
+        &root,
+        1,
+        vec![
+            remove("day=1/gone-0.parquet", "1", removed_file_bytes),
+            remove("day=1/gone-2.parquet", "1", removed_file_bytes),
+        ],
+    );
+    walk(directory.path(), &[("events", &root)]);
+    let running = Driver::start(directory.path(), &[]);
+    let rows = running.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
+
+    let persisted = std::fs::read_to_string(result_file(&running, &rows[0], "suggestions.ndjson"))
+        .expect("the version kept its measured suggestions");
+    let records: Vec<Value> = persisted
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(records.iter().any(|record| record["rule"] == "small-files"));
+    assert!(!result_file(&running, &rows[0], "sample.parquet").exists());
+
+    let listed = list_suggestions(&running, &[]);
+    assert!(!listed.is_empty(), "{listed:#?}");
+    let savings: Vec<u64> = listed
+        .iter()
+        .map(|record| record["savings_bytes"].as_u64().unwrap_or(0))
+        .collect();
+    assert!(
+        savings.windows(2).all(|pair| pair[0] >= pair[1]),
+        "not largest saving first: {savings:?}"
+    );
+    let tombstones = listed
+        .iter()
+        .find(|record| record["rule"] == "tombstones")
+        .expect("a tombstones suggestion");
+    assert_eq!(tombstones["verified"], true);
+    assert_eq!(
+        tombstones["savings_bytes"].as_u64(),
+        Some(2 * removed_file_bytes)
+    );
+    assert_eq!(
+        tombstones["name"],
+        format!("{}/suggestions/tombstones", partition(&rows[0]))
+    );
+    let small_files = listed
+        .iter()
+        .find(|record| record["rule"] == "small-files")
+        .expect("a small-files suggestion");
+    assert_eq!(small_files["partition"], partition(&rows[0]));
+    assert!(small_files["message"]
+        .as_str()
+        .unwrap()
+        .contains("16 files"));
+
+    // A parent narrows the listing; one that is not a name the driver knows
+    // is refused.
+    assert!(list_suggestions(&running, &["catalogs/other"]).is_empty());
+    assert_eq!(
+        list_suggestions(&running, &["catalogs/local"]).len(),
+        listed.len()
+    );
+    let refused = driver()
+        .env("PQB_DRIVER_SOCK", &running.socket)
+        .args(["list", "suggestions", "catalogs/local/tables/events"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("is not a catalog"));
+}
+
+/// A host with little network copies no sample, so there is no column
+/// suggestion to measure, and the partition rules still land: the log's
+/// tombstones are an exact saving from metadata alone.
+#[test]
+fn a_low_network_still_persists_the_partition_suggestions() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    let removed_file_bytes = 3 * 1024 * 1024;
+    commit(&root, 0, readable_table(&root, &["1"]));
+    commit(
+        &root,
+        1,
+        vec![remove("day=1/gone.parquet", "1", removed_file_bytes)],
+    );
+    walk(directory.path(), &[("events", &root)]);
+    let driver = Driver::start(directory.path(), &["--low-network"]);
+    let rows = driver.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
+    assert!(!result_file(&driver, &rows[0], "sample.parquet").exists());
+    assert!(!result_file(&driver, &rows[0], "list-suggestions.ndjson").exists());
+
+    let listed = list_suggestions(&driver, &[]);
+    assert_eq!(listed.len(), 1, "{listed:#?}");
+    assert_eq!(listed[0]["rule"], "tombstones");
+    assert_eq!(listed[0]["verified"], true);
+    assert_eq!(listed[0]["savings_bytes"], removed_file_bytes);
+}
+
+/// A signal stops the driver cleanly: the runs are aborted, the map is
+/// checkpointed, the socket goes away, and the process exits 0. `SIGINT` and
+/// `SIGTERM` are the two a supervisor sends.
+#[test]
+fn a_signal_stops_the_driver_cleanly() {
+    for signal in [libc::SIGTERM, libc::SIGINT] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("events");
+        commit(&root, 0, readable_table(&root, &["1", "2"]));
+        walk(directory.path(), &[("events", &root)]);
+        let socket = directory.path().join("d.sock");
+        let store = directory.path().join("store");
+        let mut child = driver()
+            .args(["serve", "--store"])
+            .arg(&store)
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--pqbench")
+            .arg(env!("CARGO_BIN_EXE_pqbench"))
+            .arg("--walk-tables")
+            .arg(directory.path().join("tables.ndjson"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        await_socket(&socket, &mut child);
+        // SAFETY: the child is this test's own process, and `kill` takes its
+        // pid and a signal number.
+        assert_eq!(
+            unsafe { libc::kill(child.id() as libc::pid_t, signal) },
+            0,
+            "cannot signal the driver"
+        );
+        let start = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "the driver ignored signal {signal}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(status.success(), "signal {signal} exited {status}");
+        assert!(!socket.exists(), "the socket outlived signal {signal}");
+        assert!(
+            ["checkpoint.ndjson.zst", "checkpoint.ndjson"]
+                .iter()
+                .any(|name| store.join(name).is_file()),
+            "no checkpoint after signal {signal}"
+        );
+    }
 }

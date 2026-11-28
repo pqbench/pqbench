@@ -7,6 +7,7 @@ use parquet::data_type::{ByteArray, Int96};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
 use crate::third_party::parquet::api::Error as ParquetError;
+use crate::v1;
 
 use super::control::{self, Measurement};
 use super::price::{price_bytes, price_int64, Int64Settings, PhysicalShape, Settings};
@@ -39,6 +40,7 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     Some(Finding {
         message: format!("an INT96 timestamp at {:.2} B/value", sample.text_bpv),
         remedy: remedy(sample.writer_kind()),
+        remedies: remedies(),
         measure,
     })
 }
@@ -165,22 +167,39 @@ fn micros(value: &Int96) -> i64 {
         .wrapping_add(nanos / 1_000)
 }
 
+/// The settings that write timestamps as microsecond `INT64`, one per engine.
+fn remedies() -> Vec<v1::Remedy> {
+    vec![
+        v1::Remedy::new(
+            "spark",
+            "spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS",
+        ),
+        v1::Remedy::new("pyarrow", "use_deprecated_int96_timestamps=False"),
+        v1::Remedy::new(
+            "parquet-rs",
+            "write the column as INT64 TIMESTAMP(MICROS), not deprecated INT96",
+        ),
+        v1::Remedy::new(
+            "iceberg",
+            "ALTER TABLE <table> ALTER COLUMN <column> TYPE timestamp",
+        ),
+    ]
+}
+
 /// The session setting that writes timestamps as microsecond `INT64`, in the
-/// writer's terms.
+/// detected writer's terms.
 fn remedy(writer: Writer) -> String {
+    let remedies = remedies();
+    let setting = |engine: &str| super::setting(&remedies, engine);
     match writer {
-        Writer::ParquetMr => "spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS".to_string(),
-        Writer::Photon => {
-            "spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS (Photon forwarding unverified)"
-                .to_string()
-        }
-        Writer::ArrowCpp => "use_deprecated_int96_timestamps=False".to_string(),
-        Writer::ArrowRs => {
-            "write the column as INT64 TIMESTAMP(MICROS), not deprecated INT96".to_string()
-        }
-        Writer::Other => {
-            "write timestamps as INT64 TIMESTAMP(MICROS), not deprecated INT96".to_string()
-        }
+        Writer::ParquetMr => setting("spark"),
+        Writer::Photon => format!("{} (Photon forwarding unverified)", setting("spark")),
+        Writer::ArrowCpp => setting("pyarrow"),
+        Writer::ArrowRs => setting("parquet-rs"),
+        Writer::Other => format!(
+            "write timestamps as INT64 TIMESTAMP(MICROS), not deprecated INT96 ({})",
+            setting("iceberg")
+        ),
     }
 }
 

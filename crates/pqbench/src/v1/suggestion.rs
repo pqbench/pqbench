@@ -2,6 +2,31 @@ use serde::{Deserialize, Serialize};
 
 use super::Resource;
 
+/// One engine's setting that applies a suggestion's rewrite.
+///
+/// A rewrite is written by whichever engine compacts the table, so the same
+/// change has a setting per engine. `engine` names the library or table format
+/// the setting belongs to (`spark`, `pyarrow`, `parquet-rs`, `delta`,
+/// `iceberg`), and `setting` spells it that engine's way.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Remedy {
+    /// The engine the setting belongs to.
+    pub engine: String,
+    /// The setting, as that engine spells it.
+    pub setting: String,
+}
+
+impl Remedy {
+    /// One engine's setting.
+    pub fn new(engine: impl Into<String>, setting: impl Into<String>) -> Self {
+        Self {
+            engine: engine.into(),
+            setting: setting.into(),
+        }
+    }
+}
+
 /// One storage suggestion for a column: a rewrite `list suggestions` finds
 /// plausible and `get suggestion` measures against a control.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
@@ -17,6 +42,12 @@ pub struct Suggestion {
     /// The table whose file was measured, when measured through a table file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table: Option<String>,
+    /// The partition a partition-level rule measured,
+    /// `…/tables/{table}/partitions/{partition}`; absent on a column rule. The
+    /// record's name is `{partition}/suggestions/{rule}` and its `column` is
+    /// empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partition: Option<String>,
     /// The probability the table file was kept with, when a sample stage chose
     /// it. Absent means unsampled, weight one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -31,6 +62,10 @@ pub struct Suggestion {
     pub message: String,
     /// The change that recovers the bytes, in the terms of the file's writer.
     pub remedy: String,
+    /// The same change as one setting per engine, when the rule has one for
+    /// that engine. Ordered by engine; `remedy` is the detected writer's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remedies: Vec<Remedy>,
     /// Whether the controlled rewrite confirms a saving. Absent on the
     /// potential `list suggestions` emits; `true` when `get suggestion`
     /// measured a win; `false` when it measured none.

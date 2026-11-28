@@ -3,6 +3,8 @@
 
 use parquet::basic::Encoding;
 
+use crate::v1;
+
 use super::control::{self, Arm, Measurement};
 use super::price::{PhysicalShape, Settings};
 use super::unique_fraction;
@@ -31,12 +33,14 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     if unique_fraction(sample.cells) < UNIQUE_FRACTION {
         return None;
     }
+    let leaf = sample.leaf;
     Some(Finding {
         message: format!(
             "nearly-unique text at {:.2} B/value without a dictionary",
             sample.text_bpv
         ),
-        remedy: remedy(sample.writer_kind(), sample.leaf),
+        remedy: remedy(sample.writer_kind(), leaf),
+        remedies: remedies(leaf),
         measure,
     })
 }
@@ -65,23 +69,42 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
     control::compare(sample, &baseline, &candidate)
 }
 
-/// The setting that Delta-encodes one column's text, in the writer's terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    match writer {
-        Writer::ParquetMr => "write the file at parquet.writer.version=PARQUET_2_0".to_string(),
-        Writer::ArrowCpp => format!(
-            "use_dictionary=False with column_encoding={{{leaf}: 'DELTA_LENGTH_BYTE_ARRAY'}}"
+/// The settings that Delta-encode one column's text, one per engine.
+fn remedies(leaf: &str) -> Vec<v1::Remedy> {
+    vec![
+        v1::Remedy::new("spark", "parquet.writer.version=PARQUET_2_0"),
+        v1::Remedy::new(
+            "pyarrow",
+            format!(
+                "use_dictionary=False with column_encoding={{{leaf}: 'DELTA_LENGTH_BYTE_ARRAY'}}"
+            ),
         ),
-        Writer::ArrowRs => {
-            format!("set_column_encoding({leaf:?}, Encoding::DELTA_LENGTH_BYTE_ARRAY)")
-        }
-        Writer::Photon => {
-            "write the file at parquet.writer.version=PARQUET_2_0 (Photon forwarding unverified)"
-                .to_string()
-        }
-        Writer::Other => "write the column Delta-length byte-array encoded \
-             (Iceberg: write.parquet.page-version=v2)"
-            .to_string(),
+        v1::Remedy::new(
+            "parquet-rs",
+            format!("set_column_encoding({leaf:?}, Encoding::DELTA_LENGTH_BYTE_ARRAY)"),
+        ),
+        v1::Remedy::new("delta", "parquet.writer.version=PARQUET_2_0"),
+        v1::Remedy::new("iceberg", "write.parquet.page-version=v2"),
+    ]
+}
+
+/// The setting that Delta-encodes one column's text, in the detected writer's
+/// terms.
+fn remedy(writer: Writer, leaf: &str) -> String {
+    let remedies = remedies(leaf);
+    let setting = |engine: &str| super::setting(&remedies, engine);
+    match writer {
+        Writer::ParquetMr => format!("write the file at {}", setting("spark")),
+        Writer::Photon => format!(
+            "write the file at {} (Photon forwarding unverified)",
+            setting("delta")
+        ),
+        Writer::ArrowCpp => setting("pyarrow"),
+        Writer::ArrowRs => setting("parquet-rs"),
+        Writer::Other => format!(
+            "write the column Delta-length byte-array encoded ({})",
+            setting("iceberg")
+        ),
     }
 }
 

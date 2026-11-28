@@ -78,12 +78,32 @@ pub enum State {
     Bytemassing,
     Bytemassed,
     Linting,
+    /// The potential suggestions are on disk, waiting for the verification
+    /// that measures them against their control.
+    Listed,
+    Verifying,
     /// Every transition the version needs is done: a version with no live file,
     /// or whose files need a restore, is done after its price.
     UpToDate,
 }
 
 impl State {
+    /// Every state, in pipeline order: what `status` counts by.
+    pub const ALL: [State; 12] = [
+        State::Deleted,
+        State::Pending,
+        State::Pricing,
+        State::Priced,
+        State::Downloading,
+        State::Downloaded,
+        State::Bytemassing,
+        State::Bytemassed,
+        State::Linting,
+        State::Listed,
+        State::Verifying,
+        State::UpToDate,
+    ];
+
     /// The state's name as the wire spells it.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -97,6 +117,8 @@ impl State {
             State::Bytemassing => "BYTEMASSING",
             State::Bytemassed => "BYTEMASSED",
             State::Linting => "LINTING",
+            State::Listed => "LISTED",
+            State::Verifying => "VERIFYING",
             State::UpToDate => "UP_TO_DATE",
         }
     }

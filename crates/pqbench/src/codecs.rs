@@ -24,6 +24,10 @@ pub enum Error {
     },
     /// A compress/decompress round trip did not return the input.
     RoundTrip,
+    /// The codec has no standalone frame format.
+    Frame {
+        codec: &'static str,
+    },
     /// The codec backend failed.
     Codec(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -44,6 +48,7 @@ impl fmt::Display for Error {
                 )
             }
             Error::RoundTrip => write!(f, "round-trip mismatch"),
+            Error::Frame { codec } => write!(f, "{codec} has no frame format"),
             Error::Codec(_) => write!(f, "codec failed"),
         }
     }
@@ -54,7 +59,7 @@ impl std::error::Error for Error {
         match self {
             Error::Io(error) => Some(error),
             Error::Codec(error) => Some(error.as_ref()),
-            Error::Level { .. } | Error::RoundTrip => None,
+            Error::Level { .. } | Error::RoundTrip | Error::Frame { .. } => None,
         }
     }
 }
@@ -178,6 +183,41 @@ fn check_level(codec: &Codec, level: u8) -> Result<(), Error> {
 impl fmt::Display for Codec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
+    }
+}
+
+/// Compress `src` into one frame of `codec` at `level`: the standalone
+/// container, with its own header and end mark, that a frame decoder
+/// (`zstdcat`, `lz4cat`) reads — not the bare block [`Codec::compress`]
+/// produces. Only a codec with a frame format has one.
+///
+/// # Errors
+/// Returns [`Error::Level`] when `level` is outside [`Codec::level_range`],
+/// [`Error::Frame`] for a codec without a frame format, or [`Error::Codec`]
+/// when the backend fails.
+pub fn compress_frame(codec: Codec, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
+    check_level(&codec, level)?;
+    match codec {
+        Codec::Zstd => crate::third_party::zstd::compress_frame(src, level).map_err(codec_error),
+        Codec::Lz4 => crate::third_party::lz4::compress_frame(src).map_err(codec_error),
+        Codec::Snappy | Codec::Gzip => Err(Error::Frame {
+            codec: codec.name(),
+        }),
+    }
+}
+
+/// Decompress one frame of `codec`, whatever length it decodes to.
+///
+/// # Errors
+/// Returns [`Error::Frame`] for a codec without a frame format, or
+/// [`Error::Codec`] when the backend fails.
+pub fn decompress_frame(codec: Codec, src: &[u8]) -> Result<Vec<u8>, Error> {
+    match codec {
+        Codec::Zstd => crate::third_party::zstd::decompress_frame(src).map_err(codec_error),
+        Codec::Lz4 => crate::third_party::lz4::decompress_frame(src).map_err(codec_error),
+        Codec::Snappy | Codec::Gzip => Err(Error::Frame {
+            codec: codec.name(),
+        }),
     }
 }
 
@@ -319,6 +359,25 @@ mod tests {
             let d = codec.decompress(level, &c, src.len()).unwrap();
             assert_eq!(d, src, "{codec} round-trip mismatch");
         }
+    }
+
+    /// A frame is the standalone container: it starts with its codec's magic
+    /// number, and it decodes without a declared capacity.
+    #[test]
+    fn frames_round_trip_through_their_magic() {
+        let src = one_mb_sample();
+        let zstd = [0x28, 0xb5, 0x2f, 0xfd];
+        let lz4 = [0x04, 0x22, 0x4d, 0x18];
+        for (codec, magic) in [(Codec::Zstd, &zstd[..]), (Codec::Lz4, &lz4[..])] {
+            let frame = compress_frame(codec, 1, &src).unwrap();
+            assert!(frame.starts_with(magic), "{codec} wrote no frame");
+            assert!(frame.len() < src.len(), "{codec} frame is no smaller");
+            assert_eq!(decompress_frame(codec, &frame).unwrap(), src);
+        }
+        assert!(matches!(
+            compress_frame(Codec::Snappy, 1, b"x"),
+            Err(Error::Frame { .. })
+        ));
     }
 
     #[test]

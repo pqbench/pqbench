@@ -91,6 +91,13 @@ pub fn suggestion(blob: &str, column: &str, rule: &str) -> String {
     )
 }
 
+/// `{partition}/suggestions/{rule}`: a suggestion a partition's metadata alone
+/// supports, about the partition rather than one column.
+#[must_use]
+pub fn partition_suggestion(partition: &str, rule: &str) -> String {
+    format!("{partition}/suggestions/{}", encode(rule))
+}
+
 /// The metastore id in a `metastores/{metastore}` name.
 #[must_use]
 pub fn parse_metastore(value: &str) -> Option<String> {

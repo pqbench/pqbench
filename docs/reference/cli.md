@@ -596,9 +596,9 @@ List a collection of the walk, by name:
               removed bytes, etag, and the oldest, newest and sample file
   columns     a file's columns and their byte masses (TableFile refs on
               standard input), one Column line each
-  suggestions the storage each local blob's values may not need (TableFile refs
-              on standard input), one Suggestion line each; `get suggestion`
-              measures them
+  suggestions the storage each local blob's values may not need (PATHs, or
+              TableFile refs on standard input), one Suggestion line each;
+              `get suggestion` measures them
 ```
 
 Unity REST serves /catalogs, /schemas, and /tables. Under
@@ -662,6 +662,7 @@ Examples:
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files | pqbench list columns
   cat docker/e2e-lakehouse/table.ndjson | pqbench list files --last 1d | pqbench list columns
   pqbench table-file data.parquet | pqbench list suggestions | pqbench get suggestion
+  pqbench list suggestions data.parquet | pqbench get suggestion | pqbench format
   pqbench list partition-versions | pqbench summarize partition-versions
 
 See also:
@@ -680,7 +681,7 @@ See also:
 * `partitions` — List a table's partitions (Table refs on stdin)
 * `partition-versions` — List the driver's partition versions (`PARENT`, or all)
 * `columns` — List a file's columns and their byte masses (Table-file refs on stdin)
-* `suggestions` — List potential storage suggestions for each local blob (Table-file refs on stdin)
+* `suggestions` — List potential storage suggestions for each local blob (PATHs, or Table-file refs on stdin)
 
 
 
@@ -784,10 +785,14 @@ List a file's columns and their byte masses (Table-file refs on stdin)
 
 ## `pqbench list suggestions`
 
-List potential storage suggestions for each local blob (Table-file refs on stdin)
+List potential storage suggestions for each local blob (PATHs, or Table-file refs on stdin)
 
-**Usage:** `pqbench list suggestions [OPTIONS]`
+**Usage:** `pqbench list suggestions [OPTIONS] [PATH]...`
 
+
+###### **Arguments:**
+
+* `<PATH>` — local parquet files to lint, when there is no table-file stream to read; each path becomes the table-file record a `table-file` stage would name
 
 ###### **Options:**
 

@@ -88,6 +88,40 @@ Everything else is a per-invocation switch on its own command — `--last`,
 `--top`, `--per-column`, `--output` — and is not read from the run-control
 file. See the [CLI reference](cli.md) for each command's flags.
 
+## Driver settings
+
+`pqbench-driver` reads two settings of its own from the same run-control file,
+from `[DEFAULT]` or from the section `PQB_PROFILE` names. The file is
+`~/.pqbenchrc`, or what `PQB_CONFIG_FILE` (or `PQB_CONFIG`) names:
+
+```ini
+[DEFAULT]
+checkpoint-codec = zstd
+step-timeout     = 300
+```
+
+| Key | Role | Default |
+| --- | --- | --- |
+| `checkpoint-codec` | the store's checkpoint format: `none` (plain NDJSON), `zstd`, or `lz4` | `zstd` |
+| `step-timeout` | seconds one worker command, or one walk, may run before it is killed | `300` |
+
+Both change rarely, so they are not flags and have no environment variable of
+their own: the command line carries what changes per run, the file what an
+operator sets once. The keys above sit beside the profile's, and either side
+ignores the other's.
+
+The checkpoint is `checkpoint.ndjson`, `checkpoint.ndjson.zst`, or
+`checkpoint.ndjson.lz4` under the store. The last two are standard Zstd and LZ4
+frames, so `zstdcat` and `lz4cat` read them. The driver assembles a checkpoint
+in a temporary file, syncs it, renames it into place, and syncs the store
+directory, so a crash leaves the old checkpoint or the new one and never half
+of either. It loads whichever of the three files it finds, so changing
+`checkpoint-codec` on an existing store migrates it at the next checkpoint.
+
+A step that outlives `step-timeout` — a command or the walk — is killed and
+reaped, so no hung worker outlives its step, and the version goes back to its
+previous state with the failure counted, retrying after the usual backoff.
+
 ## Example
 
 The catalog levels read a profile; a single command can still override the

@@ -17,12 +17,18 @@
 //! or row cap, and a short leading or trailing group never stands in for the
 //! rest. Only the byte rules decode values; a codec suggestion rereads the
 //! chunk's own pages, so a numeric column is never decoded to price it.
+//!
+//! Two rules read no file at all: `tombstones` and `small-files` decide from
+//! the totals `list partitions` folded, so they hold for every partition,
+//! including the ones a host with little network never copies.
+//! [`partition_suggestions`] is that pair.
 
 mod codec;
 mod control;
 mod delta_text;
 mod dictionary;
 mod int96;
+mod partition;
 mod price;
 mod uuid;
 mod writer;
@@ -49,6 +55,7 @@ pub use codec::CODEC_ZSTD_RULE;
 pub use delta_text::DELTA_TEXT_ENCODING_RULE;
 pub use dictionary::{DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE};
 pub use int96::INT96_TIMESTAMP_RULE;
+pub use partition::{partition_suggestions, SMALL_FILES_RULE, TOMBSTONES_RULE};
 pub use uuid::UUID_TEXT_RULE;
 
 /// Wins smaller than this are noted as noise, not dropped.
@@ -320,11 +327,13 @@ impl<'a> ColumnSample<'a> {
             rule: rule.to_string(),
             column: self.leaf.to_string(),
             table: self.column.table.clone(),
+            partition: None,
             sample_rate: self.column.sample_rate,
             size_bytes: self.column.size_bytes,
             writer: self.writer.map(ToString::to_string),
             message: finding.message,
             remedy: finding.remedy,
+            remedies: finding.remedies,
             verified: None,
             savings_bytes: None,
             sample_row_count: Some(self.coverage.row_count),
@@ -337,7 +346,19 @@ impl<'a> ColumnSample<'a> {
 pub(crate) struct Finding {
     pub(crate) message: String,
     pub(crate) remedy: String,
+    /// The same advice as one setting per engine, so a reader can apply it in
+    /// whichever engine compacts the table.
+    pub(crate) remedies: Vec<v1::Remedy>,
     pub(crate) measure: Measure,
+}
+
+/// A rule's setting for `engine`, from its remedy table: empty when the engine
+/// has none.
+pub(crate) fn setting(remedies: &[v1::Remedy], engine: &str) -> String {
+    remedies
+        .iter()
+        .find(|remedy| remedy.engine == engine)
+        .map_or_else(String::new, |remedy| remedy.setting.clone())
 }
 
 /// A rule's controlled measurement of its rewrite.
@@ -601,6 +622,7 @@ fn enriched(
     enriched.sample_row_count = Some(coverage.row_count);
     enriched.sample_row_group_count = Some(coverage.row_group_count);
     enriched.remedy = finding.remedy;
+    enriched.remedies = finding.remedies;
     let Some(measurement) = measurement else {
         enriched.verified = None;
         enriched.savings_bytes = None;
@@ -982,12 +1004,177 @@ fn decode_typed<T: DataType>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
+    use parquet::data_type::ByteArray;
     use parquet::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
     use parquet::schema::types::{SchemaDescriptor, Type};
 
     use super::representative_row_group;
+    use super::{
+        rule, ColumnSample, CODEC_ZSTD_RULE, DELTA_TEXT_ENCODING_RULE, DICTIONARY_MISSING_RULE,
+        DICTIONARY_UNIQUE_RULE, INT96_TIMESTAMP_RULE, UUID_TEXT_RULE,
+    };
+    use crate::v1;
+
+    /// A `BYTE_ARRAY` column whose chunk is stored at `codec`.
+    fn byte_column(codec: &str) -> v1::Column {
+        v1::Column {
+            physical_data_type: Some("BYTE_ARRAY".into()),
+            mass: Some(v1::Bytemass {
+                codec: Some(codec.into()),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
+        }
+    }
+
+    /// A column of `physical_data_type` stored at `codec`.
+    fn typed_column(physical_data_type: &str, codec: &str) -> v1::Column {
+        v1::Column {
+            physical_data_type: Some(physical_data_type.into()),
+            mass: Some(v1::Bytemass {
+                codec: Some(codec.into()),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
+        }
+    }
+
+    /// Canonical UUID text for `value`.
+    fn uuid_text(value: usize) -> String {
+        format!("{value:08x}-0000-4000-8000-{value:012x}")
+    }
+
+    /// The values as a decoded byte-array chunk.
+    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
+        values
+            .iter()
+            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
+            .collect()
+    }
+
+    /// Check one rule's finding on `sample`, then check the suggestion it
+    /// makes: every remedy names an engine and a setting, and the record
+    /// round-trips through JSON with its remedies intact.
+    fn check(rule_id: &'static str, sample: &ColumnSample<'_>, engines: &mut BTreeSet<String>) {
+        let rule = rule(rule_id).expect("the rule exists");
+        let finding = (rule.detect)(sample).expect("the sample earns the rule");
+        assert!(!finding.remedies.is_empty(), "{rule_id} has no remedies");
+        let mut named: Vec<String> = Vec::new();
+        for remedy in &finding.remedies {
+            assert!(
+                !remedy.engine.is_empty(),
+                "{rule_id} has a remedy with no engine"
+            );
+            assert!(
+                !remedy.setting.is_empty(),
+                "{rule_id}'s {} remedy has no setting",
+                remedy.engine
+            );
+            assert!(
+                !named.contains(&remedy.engine),
+                "{rule_id} names {} twice",
+                remedy.engine
+            );
+            named.push(remedy.engine.clone());
+            engines.insert(remedy.engine.clone());
+        }
+        let suggestion = sample.candidate(rule_id, finding);
+        assert_eq!(suggestion.remedies.len(), named.len(), "{rule_id}");
+        let json = serde_json::to_string(&suggestion).expect("a suggestion serializes");
+        let read: v1::Suggestion = serde_json::from_str(&json).expect("a suggestion parses");
+        assert_eq!(read, suggestion, "{rule_id}");
+    }
+
+    /// Every rule carries structured remedies, and together they name every
+    /// engine a table is compacted with.
+    #[test]
+    fn every_rule_populates_remedies_across_engines() {
+        let mut engines = BTreeSet::new();
+
+        let uuid_column = byte_column("UNCOMPRESSED");
+        let uuids: Vec<String> = (0..100).map(uuid_text).collect();
+        let uuid_cells = cells(&uuids);
+        check(
+            UUID_TEXT_RULE,
+            &ColumnSample::for_test(&uuid_column, &uuid_cells, false),
+            &mut engines,
+        );
+
+        let int96_column = typed_column("INT96", "UNCOMPRESSED");
+        check(
+            INT96_TIMESTAMP_RULE,
+            &ColumnSample::for_test(&int96_column, &[], false),
+            &mut engines,
+        );
+
+        let snappy_column = byte_column("SNAPPY");
+        check(
+            CODEC_ZSTD_RULE,
+            &ColumnSample::for_test(&snappy_column, &[], false),
+            &mut engines,
+        );
+
+        let unique_column = byte_column("ZSTD");
+        let distinct: Vec<String> = (0..100).map(|value| format!("{value:016x}")).collect();
+        let distinct_cells = cells(&distinct);
+        check(
+            DICTIONARY_UNIQUE_RULE,
+            &ColumnSample::for_test(&unique_column, &distinct_cells, true),
+            &mut engines,
+        );
+
+        let repeated: Vec<String> = (0..100)
+            .map(|value| format!("region-{:02}", value % 5))
+            .collect();
+        let repeated_cells = cells(&repeated);
+        check(
+            DICTIONARY_MISSING_RULE,
+            &ColumnSample::for_test(&unique_column, &repeated_cells, false),
+            &mut engines,
+        );
+
+        check(
+            DELTA_TEXT_ENCODING_RULE,
+            &ColumnSample::for_test(&unique_column, &distinct_cells, false),
+            &mut engines,
+        );
+
+        for engine in ["spark", "pyarrow", "parquet-rs", "delta", "iceberg"] {
+            assert!(engines.contains(engine), "no rule remedies {engine}");
+        }
+    }
+
+    /// A suggestion written without remedies reads as one that has none, and
+    /// one with them keeps them: the field is additive on the wire.
+    #[test]
+    fn remedies_are_optional_on_the_wire() {
+        let minimal: v1::Suggestion =
+            serde_json::from_str(r#"{"name":"blobs/file/x/columns/id/suggestions/uuid-text","rule":"uuid-text","column":"id","message":"m","remedy":"r"}"#)
+                .expect("a suggestion without remedies parses");
+        assert!(minimal.remedies.is_empty());
+        assert!(
+            !serde_json::to_string(&minimal)
+                .expect("serializes")
+                .contains("remedies"),
+            "an empty remedies list is not written"
+        );
+
+        let with_remedies = v1::Suggestion {
+            remedies: vec![v1::Remedy {
+                engine: "pyarrow".into(),
+                setting: "column_types={id: pa.uuid()}".into(),
+            }],
+            ..minimal
+        };
+        let json = serde_json::to_string(&with_remedies).expect("serializes");
+        assert_eq!(
+            serde_json::from_str::<v1::Suggestion>(&json).expect("parses"),
+            with_remedies
+        );
+    }
 
     /// A footer with these row-group row counts and no columns.
     fn metadata(rows_per_group: &[i64]) -> ParquetMetaData {

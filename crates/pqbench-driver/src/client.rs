@@ -42,8 +42,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub async fn request(path: &Path, request: &Request) -> Result<Response, Error> {
     let timeout = match request {
-        Request::Ping | Request::Stop => CALL_TIMEOUT,
-        Request::ListPartitionVersions { .. } | Request::PartitionResults { .. } => READ_TIMEOUT,
+        Request::Ping | Request::Stop | Request::Status => CALL_TIMEOUT,
+        Request::ListPartitionVersions { .. }
+        | Request::PartitionResults { .. }
+        | Request::ListSuggestions { .. } => READ_TIMEOUT,
     };
     Ok(open(path, request, timeout).await?.0)
 }

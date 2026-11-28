@@ -3,12 +3,18 @@
 //!
 //! The engine holds the map of partition versions, and the driver runs the
 //! pqbench commands that move them (`get partition-price`, `download`,
-//! `bytemass`, `list suggestions`), walking the tables on a period. A client
-//! reads the map and one version's results over [`protocol`] on the socket
-//! [`socket`] names; [`client`] is that side.
+//! `bytemass`, `list suggestions`, `get suggestion`), walking the tables on a
+//! period. A client reads the map, one version's results, the map's state and
+//! the measured suggestions over [`protocol`] on the socket [`socket`] names;
+//! [`client`] is that side.
 //!
 //! The commands themselves talk to the catalog daemon, not to the driver, so
 //! a driver without a daemon still answers for the map it has.
+//!
+//! Two settings are the operator's and change rarely — the checkpoint codec
+//! and the per-step timeout — so they live in the run-control file the
+//! commands read (`~/.pqbenchrc`, or `PQB_CONFIG_FILE`), not on the command
+//! line: see [`run_control`].
 
 pub mod client;
 pub mod protocol;
@@ -17,6 +23,7 @@ pub mod socket;
 mod drive;
 mod engine;
 mod process;
+mod run_control;
 mod serve;
 mod start;
 mod store;
@@ -50,8 +57,30 @@ enum Command {
     Serve(RunArgs),
     /// Stop the driver
     Stop(TargetArgs),
-    /// Report whether the driver is running
+    /// Report the driver's state as JSON
     Status(TargetArgs),
+    /// List a collection the driver holds
+    List(ListArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ListArgs {
+    #[command(subcommand)]
+    collection: ListCollection,
+}
+
+/// The collection a `list` enumerates.
+#[derive(Subcommand)]
+enum ListCollection {
+    /// List the suggestions the driver measured (`PARENT`, or all)
+    Suggestions(SuggestionListArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct SuggestionListArgs {
+    /// only the versions under this catalog, schema, table or partition
+    /// (`catalogs/…`); every version without it
+    parent: Option<String>,
 }
 
 #[derive(Args)]
@@ -113,6 +142,9 @@ pub async fn run() -> ExitCode {
         Command::Serve(args) => serve::serve(args).await,
         Command::Stop(args) => start::stop(args).await,
         Command::Status(args) => start::status(args).await,
+        Command::List(ListArgs {
+            collection: ListCollection::Suggestions(args),
+        }) => start::list_suggestions(args.parent.as_deref()).await,
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
