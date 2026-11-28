@@ -410,7 +410,7 @@ fn get_table_refuses_default_storage_at_once() {
         "catalog_name": "dbx_samples",
         "schema_name": "bakehouse",
         "data_source_format": "DELTA",
-        "storage_location": "s3://dbstorage-prod-1lflv/uc/x/__unitystorage/catalogs/c/tables/t",
+        "storage_location": "s3://dbstorage-prod-example/uc/x/__unitystorage/catalogs/c/tables/t",
         "table_id": "11111111-1111-1111-1111-111111111111",
         "securable_kind": "TABLE_DB_STORAGE",
         "columns": unity_columns(),

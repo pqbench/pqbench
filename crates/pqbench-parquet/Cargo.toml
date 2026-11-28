@@ -24,4 +24,4 @@ parquet = { version = "59", default-features = false, features = ["snap", "brotl
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
-pqbench-model-v1 = { version = "0.0.12", path = "../pqbench-model-v1" }
+pqbench-model-v1 = { workspace = true }

@@ -34,8 +34,8 @@ json-simd = ["dep:simd-json"]
 [dependencies]
 # The local half: footers, codecs, lint, profile. Kept behind this one
 # dependency so a change to a lint rule does not rebuild the AWS SDK.
-pqbench-parquet = { version = "0.0.12", path = "../pqbench-parquet" }
-pqbench-model-v1 = { version = "0.0.12", path = "../pqbench-model-v1" }
+pqbench-parquet = { workspace = true }
+pqbench-model-v1 = { workspace = true }
 glob = "0.3"
 # Native roots only: the OS certificate store, where internal/private CAs live.
 # `rustls-tls-native-roots` also brings the rustls backend and the ring
