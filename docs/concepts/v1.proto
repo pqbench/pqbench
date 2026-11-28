@@ -548,7 +548,12 @@ message Bytemass {
   string codec = 4;
   repeated string encodings = 5;
   repeated string data_encodings = 15;
+  // The chunk is dictionary-encoded: a dictionary page offset, dictionary data
+  // pages, or a dictionary encoding in the chunk's encoding set. A writer that
+  // omits the offset (parquet-mr 1.8.3) still sets this.
   bool dictionary = 6;
+  // Bytes from the dictionary page offset to the first data page, when the
+  // footer records an offset that locates the page.
   int64 dictionary_bytes = 16;
 
   // Data pages the footer counts, split by how they encode their values; a

@@ -19,6 +19,14 @@
 //! `BOOLEAN` and `INT96` excepted: `BOOLEAN` has no rule, and the `INT96` rule
 //! reads its own timestamps. A codec suggestion rereads the chunk's own pages.
 //!
+//! A leaf's repetition level decides which rules may read it. A rule that
+//! decodes values (`uuid-text`, `text-timestamp`, `base64-text`, the Delta and
+//! dictionary rules, `page-size`) runs on scalar leaves only: a repeated leaf's
+//! values are nested, and re-encoding them is not implemented. A rule that
+//! reads page headers, raw page bytes, or footer metadata (`codec-zstd`,
+//! `stats-truncated`) runs on any leaf, so a nested `imp[]` or `seatbid[].bid[]`
+//! column is priced like a scalar one.
+//!
 //! `stats-truncated` is the one rule that can prove its saving arithmetically
 //! instead of by a re-encode: a footer's `min_value` and `max_value` are the
 //! writer's own bytes, so the bytes above the 64-byte truncation length are
@@ -29,6 +37,7 @@
 //! including the ones a host with little network never copies.
 //! [`partition_suggestions`] is that pair.
 
+mod base64;
 mod codec;
 mod control;
 mod decode;
@@ -60,6 +69,7 @@ use self::decode::{decode_leaves, pages_fell_back, Coverage, DecodedLeaves};
 use self::price::Values;
 use self::writer::Writer;
 
+pub use base64::BASE64_TEXT_RULE;
 pub use codec::CODEC_ZSTD_RULE;
 pub use delta_integer::DELTA_INTEGER_RULE;
 pub use delta_text::DELTA_TEXT_ENCODING_RULE;
@@ -559,6 +569,22 @@ fn distinct_share<T: Eq + Hash>(values: impl Iterator<Item = Option<T>>) -> f64 
     distinct.len() as f64 / total.max(1) as f64
 }
 
+/// `leaf` as a Python string literal: a pyarrow setting takes its column keys
+/// as a dict literal, so a dotted, colon-bearing, or `@` name is quoted, and a
+/// backslash or quote inside one is escaped.
+pub(crate) fn py_string(leaf: &str) -> String {
+    let mut literal = String::with_capacity(leaf.len() + 2);
+    literal.push('\'');
+    for ch in leaf.chars() {
+        if matches!(ch, '\\' | '\'') {
+            literal.push('\\');
+        }
+        literal.push(ch);
+    }
+    literal.push('\'');
+    literal
+}
+
 /// A rule's setting for `engine`, from its remedy table: empty when the engine
 /// has none.
 pub(crate) fn setting(remedies: &[v1::Remedy], engine: &str) -> String {
@@ -575,6 +601,11 @@ pub(crate) type Measure = fn(&ColumnSample<'_>) -> Result<Option<Measurement>, E
 /// verifies it.
 pub(crate) struct Rule {
     pub(crate) id: &'static str,
+    /// The rule reads the leaf's decoded values. Such a rule runs on scalar
+    /// leaves only, because a repeated leaf's values are nested; a rule that
+    /// reads only page headers, raw page bytes, or footer facts runs on any
+    /// leaf, repeated ones included.
+    pub(crate) values: bool,
     pub(crate) detect: fn(&ColumnSample<'_>) -> Option<Finding>,
 }
 
@@ -585,56 +616,73 @@ pub(crate) struct Rule {
 /// a snappy or uncompressed file's 35-60% codec upgrade must not be masked by a
 /// 0-1% dictionary or Delta encoding tweak. A zstd file never reaches it, so
 /// its columns fall through to the encoding rules. The rules that change a
-/// column's type (`uuid-text`, `text-timestamp`) outrank it, because a value
-/// shrunk to a sixteenth of its bytes beats any codec; `stats-truncated` comes
-/// last, because its few hundred footer bytes are the smallest win a column can
-/// have. `delta-integer` outranks the dictionary rules because a dense integer
+/// column's type (`uuid-text`, `base64-text`, `text-timestamp`) outrank it,
+/// because a value shrunk to a sixteenth (UUID) or three quarters (Base64) of
+/// its bytes beats any codec; `stats-truncated` comes last, because its few
+/// hundred footer bytes are the smallest win a column can have.
+/// `delta-integer` outranks the dictionary rules because a dense integer
 /// column's dictionary is only present when it overflowed, and packed deltas it
 /// never uses are the larger win. `page-size` follows `codec-zstd`: a weaker
 /// codec is the larger win, while a zstd chunk's tiny pages still earn it.
 pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: UUID_TEXT_RULE,
+        values: true,
         detect: uuid::detect,
     },
     Rule {
+        id: BASE64_TEXT_RULE,
+        values: true,
+        detect: base64::detect,
+    },
+    Rule {
         id: INT96_TIMESTAMP_RULE,
+        values: true,
         detect: int96::detect,
     },
     Rule {
         id: TEXT_TIMESTAMP_RULE,
+        values: true,
         detect: text_timestamp::detect,
     },
     Rule {
         id: CODEC_ZSTD_RULE,
+        values: false,
         detect: codec::detect,
     },
     Rule {
         id: PAGE_SIZE_RULE,
+        values: true,
         detect: page_size::detect,
     },
     Rule {
         id: DELTA_INTEGER_RULE,
+        values: true,
         detect: delta_integer::detect,
     },
     Rule {
         id: DICTIONARY_UNIQUE_RULE,
+        values: true,
         detect: dictionary::detect_unique,
     },
     Rule {
         id: DICTIONARY_MISSING_RULE,
+        values: true,
         detect: dictionary::detect_missing,
     },
     Rule {
         id: DELTA_TEXT_ENCODING_RULE,
+        values: true,
         detect: delta_text::detect,
     },
     Rule {
         id: DICTIONARY_FALLBACK_RULE,
+        values: true,
         detect: dictionary_fallback::detect,
     },
     Rule {
         id: STATS_TRUNCATED_RULE,
+        values: false,
         detect: stats::detect,
     },
 ];
@@ -652,7 +700,8 @@ fn rule(id: &str) -> Option<&'static Rule> {
 /// one representative row group, because a codec decision is made per column
 /// chunk. A 1 MiB+ file skips the columns whose chunk cannot clear the noise
 /// floor without decoding them; a smaller file is a fixture whose every column
-/// is measured.
+/// is measured. A repeated leaf is measured by the rules that read its pages
+/// and footer, and never decoded.
 ///
 /// # Errors
 /// Fails when `file` has no blob name or the file cannot be read.
@@ -676,7 +725,6 @@ pub fn suggestions(path: &Path, file: &v1::TableFile) -> Result<Vec<v1::Suggesti
         .is_some_and(|bytes| bytes >= LARGE_FILE_BYTES);
     let targets: Vec<(&v1::Column, String)> = columns
         .iter()
-        .filter(|column| column.max_repetition_level == Some(0))
         .filter(|column| !large_file || clears_noise_floor(column))
         .filter_map(|column| {
             let (_, _, leaf) = v1::Column::parse_name(&column.name)?;
@@ -708,6 +756,9 @@ pub fn suggestions(path: &Path, file: &v1::TableFile) -> Result<Vec<v1::Suggesti
             .and_then(|mass| mass.compressed_bytes)
             .unwrap_or(0);
         for rule in RULES {
+            if rule.values && column.max_repetition_level != Some(0) {
+                continue;
+            }
             if let Some(finding) = (rule.detect)(&sample) {
                 suggestions.push((compressed, sample.candidate(rule.id, finding)));
                 break;
@@ -759,6 +810,7 @@ pub fn verify(path: &Path, candidate: &v1::Suggestion) -> Result<v1::Suggestion,
     let blob_name = v1::name::blob(&service, &locator);
     let measured = crate::bytemass::measure_footer(&blob_name, path)?;
     let blob = &measured.blob;
+    let rule = rule(&candidate.rule).ok_or_else(|| Error::Rule(candidate.rule.clone()))?;
     let column = measured
         .columns
         .iter()
@@ -767,12 +819,12 @@ pub fn verify(path: &Path, candidate: &v1::Suggestion) -> Result<v1::Suggestion,
                 .is_some_and(|(_, _, leaf)| leaf == candidate.column)
         })
         .ok_or_else(|| Error::Invalid(format!("the file has no column `{}`", candidate.column)))?;
-    if column.max_repetition_level != Some(0) {
+    if rule.values && column.max_repetition_level != Some(0) {
         return Ok(reject(
             candidate,
             blob,
             None,
-            "the column is repeated; suggestions measure scalar leaves only",
+            "the column is repeated; this rule reads scalar values only",
         ));
     }
     let leaf = candidate.column.clone();
@@ -793,9 +845,6 @@ pub fn verify(path: &Path, candidate: &v1::Suggestion) -> Result<v1::Suggestion,
             Some(coverage),
             "the sample has no non-null value",
         ));
-    };
-    let Some(rule) = rule(&candidate.rule) else {
-        return Err(Error::Rule(candidate.rule.clone()));
     };
     let Some(finding) = (rule.detect)(&sample) else {
         return Ok(reject(
@@ -934,13 +983,20 @@ fn percent(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::Path;
+    use std::sync::Arc;
 
-    use parquet::data_type::ByteArray;
+    use parquet::basic::{Compression, ZstdLevel};
+    use parquet::data_type::{ByteArray, ByteArrayType, Int64Type};
+    use parquet::file::properties::WriterProperties;
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
 
     use super::{
-        rule, ColumnSample, CODEC_ZSTD_RULE, DELTA_INTEGER_RULE, DELTA_TEXT_ENCODING_RULE,
-        DICTIONARY_FALLBACK_RULE, DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE,
-        INT96_TIMESTAMP_RULE, STATS_TRUNCATED_RULE, TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
+        rule, suggestions, verify, ColumnSample, BASE64_TEXT_RULE, CODEC_ZSTD_RULE,
+        DELTA_INTEGER_RULE, DELTA_TEXT_ENCODING_RULE, DICTIONARY_FALLBACK_RULE,
+        DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE, INT96_TIMESTAMP_RULE,
+        STATS_TRUNCATED_RULE, TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
     };
     use crate::v1;
 
@@ -971,6 +1027,30 @@ mod tests {
     /// Canonical UUID text for `value`.
     fn uuid_text(value: usize) -> String {
         format!("{value:08x}-0000-4000-8000-{value:012x}")
+    }
+
+    /// Standard Base64 of `raw`, padded to a multiple of four.
+    fn payloads_base64(raw: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut text = String::with_capacity(raw.len().div_ceil(3) * 4);
+        for chunk in raw.chunks(3) {
+            let bits = (u32::from(chunk[0]) << 16)
+                | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+                | u32::from(*chunk.get(2).unwrap_or(&0));
+            text.push(ALPHABET[(bits >> 18) as usize & 0x3f] as char);
+            text.push(ALPHABET[(bits >> 12) as usize & 0x3f] as char);
+            text.push(if chunk.len() > 1 {
+                ALPHABET[(bits >> 6) as usize & 0x3f] as char
+            } else {
+                '='
+            });
+            text.push(if chunk.len() > 2 {
+                ALPHABET[bits as usize & 0x3f] as char
+            } else {
+                '='
+            });
+        }
+        text
     }
 
     /// The values as a decoded byte-array chunk.
@@ -1026,6 +1106,22 @@ mod tests {
         check(
             UUID_TEXT_RULE,
             &ColumnSample::for_test(&uuid_column, &uuid_cells, false),
+            &mut engines,
+        );
+
+        let base64_column = byte_column("UNCOMPRESSED");
+        let payloads: Vec<String> = (0..100u32)
+            .map(|value| {
+                let raw: Vec<u8> = (0..96u32)
+                    .map(|at| (value.wrapping_mul(31).wrapping_add(at * 7) % 251) as u8)
+                    .collect();
+                payloads_base64(&raw)
+            })
+            .collect();
+        let payload_cells = cells(&payloads);
+        check(
+            BASE64_TEXT_RULE,
+            &ColumnSample::for_test(&base64_column, &payload_cells, false),
             &mut engines,
         );
 
@@ -1111,6 +1207,148 @@ mod tests {
         ] {
             assert!(engines.contains(engine), "no rule remedies {engine}");
         }
+    }
+
+    /// A pyarrow setting takes its column key as a Python string literal, so
+    /// the helper quotes every name and escapes the two characters that would
+    /// end the literal early.
+    #[test]
+    fn a_python_string_literal_quotes_and_escapes() {
+        for leaf in ["request.ext", "site.publisher:ext", "request.@timestamp"] {
+            assert_eq!(super::py_string(leaf), format!("'{leaf}'"));
+        }
+        assert_eq!(super::py_string("a'b\\c"), "'a\\'b\\\\c'");
+    }
+
+    /// Write an OpenRTB-shaped bid stream: a scalar `id` and a repeated
+    /// `imp` group whose `id` is UUID text and whose `ext` holds a long
+    /// payload. `imp.id` is snappy-compressed (a codec candidate) and
+    /// `imp.ext` is zstd-compressed with untruncated statistics (a footer
+    /// candidate).
+    fn write_bid_requests(path: &Path) {
+        let schema = Arc::new(
+            parse_message_type(
+                "message bid_request {
+                    REQUIRED INT64 id;
+                    REPEATED GROUP imp {
+                        REQUIRED BINARY id (STRING);
+                        REQUIRED BINARY ext (STRING);
+                    }
+                }",
+            )
+            .expect("a valid schema"),
+        );
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .set_column_compression(
+                    vec!["imp".to_string(), "ext".to_string()].into(),
+                    Compression::ZSTD(ZstdLevel::default()),
+                )
+                .set_statistics_truncate_length(None)
+                .build(),
+        );
+        let output = std::fs::File::create(path).expect("create the fixture");
+        let mut writer =
+            SerializedFileWriter::new(output, schema, properties).expect("a parquet writer");
+        let mut row_group = writer.next_row_group().expect("a row group");
+
+        let rows = 2_000u64;
+        let ids: Vec<i64> = (0..i64::try_from(rows).unwrap()).collect();
+        let mut imp_ids = Vec::with_capacity(rows as usize * 2);
+        let mut imp_ext = Vec::with_capacity(rows as usize * 2);
+        let mut def_levels = Vec::with_capacity(rows as usize * 2);
+        let mut rep_levels = Vec::with_capacity(rows as usize * 2);
+        for row in 0..rows {
+            for place in 0..2 {
+                let uuid = format!("{row:08x}-0000-4000-8000-{row:012x}");
+                imp_ids.push(ByteArray::from(uuid.into_bytes()));
+                let payload = format!("{}-{}", "ext".repeat(100), row % 8);
+                imp_ext.push(ByteArray::from(payload.into_bytes()));
+                def_levels.push(1);
+                rep_levels.push(i16::from(place > 0));
+            }
+        }
+
+        let mut column = row_group.next_column().unwrap().expect("an id column");
+        column
+            .typed::<Int64Type>()
+            .write_batch(&ids, None, None)
+            .expect("write the ids");
+        column.close().expect("close the ids");
+
+        let mut column = row_group.next_column().unwrap().expect("an imp.id column");
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&imp_ids, Some(&def_levels), Some(&rep_levels))
+            .expect("write imp.id");
+        column.close().expect("close imp.id");
+
+        let mut column = row_group.next_column().unwrap().expect("an imp.ext column");
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&imp_ext, Some(&def_levels), Some(&rep_levels))
+            .expect("write imp.ext");
+        column.close().expect("close imp.ext");
+
+        row_group.close().expect("close the row group");
+        writer.close().expect("close the file");
+    }
+
+    /// A repeated leaf is priced from its page headers, page bytes, and footer
+    /// facts: `codec-zstd` and `stats-truncated` both detect it and both
+    /// verify a non-zero saving, while the value-decoding rules stay out.
+    #[test]
+    fn a_repeated_leaf_is_priced_by_its_pages_and_footer() {
+        let directory =
+            std::env::temp_dir().join(format!("pqbench-lint-repeated-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("a temporary directory");
+        let path = directory.join("bid_requests.parquet");
+        write_bid_requests(&path);
+
+        let file = v1::TableFile {
+            name: v1::name::table_file("local", "rtb", "bid_requests", "f1"),
+            blob: Some(v1::name::blob_name(path.to_str().expect("a utf-8 path"))),
+            ..v1::TableFile::default()
+        };
+        let candidates = suggestions(&path, &file).expect("lint the file");
+
+        let codec = candidates
+            .iter()
+            .find(|candidate| candidate.rule == CODEC_ZSTD_RULE && candidate.column == "imp.id")
+            .unwrap_or_else(|| panic!("no codec-zstd on the repeated leaf: {candidates:#?}"));
+        let measured = verify(&path, codec).expect("verify the codec candidate");
+        assert_eq!(measured.verified, Some(true), "{}", measured.message);
+        assert!(
+            measured.savings_bytes.unwrap_or(0) > 0,
+            "{}",
+            measured.message
+        );
+
+        let stats = candidates
+            .iter()
+            .find(|candidate| {
+                candidate.rule == STATS_TRUNCATED_RULE && candidate.column == "imp.ext"
+            })
+            .unwrap_or_else(|| panic!("no stats-truncated on the repeated leaf: {candidates:#?}"));
+        let measured = verify(&path, stats).expect("verify the footer candidate");
+        assert_eq!(measured.verified, Some(true), "{}", measured.message);
+        assert!(
+            measured.savings_bytes.unwrap_or(0) > 0,
+            "{}",
+            measured.message
+        );
+
+        // The values are canonical UUID text, but the leaf repeats: a rule that
+        // decodes values must not claim a repeated leaf.
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.rule != UUID_TEXT_RULE),
+            "{candidates:#?}"
+        );
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     /// A suggestion written without remedies reads as one that has none, and

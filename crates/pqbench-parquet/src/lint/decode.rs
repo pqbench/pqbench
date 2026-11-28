@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use parquet::basic::Encoding;
+use parquet::basic::{Encoding, PageType};
 use parquet::column::reader::{ColumnReader, ColumnReaderImpl};
 use parquet::data_type::{ByteArray, DataType, FixedLenByteArrayType};
 use parquet::file::metadata::{
@@ -35,10 +35,11 @@ pub(super) struct Coverage {
     pub(super) row_group_count: u64,
 }
 
-/// What a column chunk's footer records about its dictionary page.
+/// What a column chunk's footer records about its dictionary encoding.
 #[derive(Clone, Copy, Default)]
 pub(super) struct ChunkDictionary {
-    /// The chunk has a dictionary page.
+    /// The chunk is dictionary-encoded: a dictionary page offset, dictionary
+    /// data pages, or a dictionary encoding in the chunk's encoding set.
     pub(super) present: bool,
     /// Bytes from the dictionary page offset to the first data page.
     pub(super) page_size: Option<usize>,
@@ -122,10 +123,13 @@ pub(super) struct DecodedLeaves {
     pub(super) row_group: usize,
 }
 
-/// Decode the file's one representative row group for the requested scalar
-/// leaf columns, directly from their column chunks. Values are decoded for
-/// every physical type a rule prices (`BOOLEAN` and `INT96` excluded: no rule
-/// re-encodes them from this sample). Unselected columns are never read.
+/// Decode the file's one representative row group for the requested leaf
+/// columns, directly from their column chunks. Values are decoded for every
+/// physical type a rule prices (`BOOLEAN` and `INT96` excluded: no rule
+/// re-encodes them from this sample), and only for scalar leaves: a repeated
+/// leaf's page and footer facts are recorded without decoding its nested
+/// values, because the rules that read those facts (a codec, a footer bound)
+/// need only the chunk's bytes. Unselected columns are never read.
 pub(super) fn decode_leaves(path: &Path, leaves: &[String]) -> Result<DecodedLeaves, Error> {
     let file = std::fs::File::open(path).map_err(ParquetError::Io)?;
     let reader = SerializedFileReader::new(file)?;
@@ -135,7 +139,6 @@ pub(super) fn decode_leaves(path: &Path, leaves: &[String]) -> Result<DecodedLea
         .columns()
         .iter()
         .enumerate()
-        .filter(|(_, descr)| descr.max_rep_level() == 0)
         .map(|(at, descr)| (descr.path().string(), at))
         .collect();
     let Some(row_group) = representative_row_group(metadata) else {
@@ -155,7 +158,13 @@ pub(super) fn decode_leaves(path: &Path, leaves: &[String]) -> Result<DecodedLea
         };
         let meta = group.metadata().column(col_idx);
         let descr = schema.column(col_idx);
-        let mut column = decode_values(group.as_ref(), col_idx, &descr, row_count)?;
+        // A repeated leaf's values are nested, so no rule prices them: its
+        // chunk keeps only the footer and page facts the window rules read.
+        let mut column = if descr.max_rep_level() == 0 {
+            decode_values(group.as_ref(), col_idx, &descr, row_count)?
+        } else {
+            DecodedColumn::default()
+        };
         column.non_null_value_count = column
             .decoded_non_null()
             .unwrap_or_else(|| chunk_non_null(meta));
@@ -252,9 +261,11 @@ pub(super) fn representative_row_group(metadata: &ParquetMetaData) -> Option<usi
     Some(representative)
 }
 
-/// What one column chunk's footer records about its dictionary page.
+/// What one column chunk's footer records about its dictionary encoding.
 fn chunk_dictionary(meta: &ColumnChunkMetaData) -> ChunkDictionary {
-    let dictionary_page_offset = meta.dictionary_page_offset();
+    // A writer that records no dictionary page may still leave the offset field
+    // at zero: only a positive offset locates one.
+    let dictionary_page_offset = meta.dictionary_page_offset().filter(|offset| *offset > 0);
     let data_page_offset = meta.data_page_offset();
     // A dictionary page's values are PLAIN-encoded, so a chunk's whole encoding
     // set always lists PLAIN beside its dictionary encoding; only the data
@@ -268,12 +279,41 @@ fn chunk_dictionary(meta: &ColumnChunkMetaData) -> ChunkDictionary {
         plain && dictionary
     });
     ChunkDictionary {
-        present: dictionary_page_offset.is_some(),
+        present: dictionary_page_offset.is_some()
+            || records_dictionary_pages(meta)
+            || records_dictionary_encoding(meta),
         page_size: dictionary_page_offset
             .filter(|offset| data_page_offset > *offset)
             .and_then(|offset| usize::try_from(data_page_offset - offset).ok()),
         fell_back,
     }
+}
+
+/// Whether the footer counts dictionary-encoded data pages: a fact older
+/// writers record even when they omit the dictionary page offset.
+fn records_dictionary_pages(meta: &ColumnChunkMetaData) -> bool {
+    meta.page_encoding_stats().is_some_and(|stats| {
+        stats.iter().any(|stat| {
+            matches!(stat.page_type, PageType::DATA_PAGE | PageType::DATA_PAGE_V2)
+                && matches!(
+                    stat.encoding,
+                    Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
+                )
+                && stat.count > 0
+        })
+    })
+}
+
+/// Whether the chunk's encoding set names a dictionary encoding: the other
+/// footer fact that marks a dictionary-encoded chunk whose page offset the
+/// writer omitted (parquet-mr 1.8.3 does both).
+fn records_dictionary_encoding(meta: &ColumnChunkMetaData) -> bool {
+    meta.encodings().any(|encoding| {
+        matches!(
+            encoding,
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
+        )
+    })
 }
 
 /// Decode one chunk's cells into the vector of the leaf's physical type.

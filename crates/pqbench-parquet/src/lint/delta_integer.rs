@@ -127,7 +127,10 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
         v1::Remedy::new("spark", "spark.hadoop.parquet.writer.version=PARQUET_2_0"),
         v1::Remedy::new(
             "pyarrow",
-            format!("use_dictionary=False, column_encoding={{{leaf:?}: 'DELTA_BINARY_PACKED'}}"),
+            format!(
+                "use_dictionary=False, column_encoding={{{}: 'DELTA_BINARY_PACKED'}}",
+                super::py_string(leaf)
+            ),
         ),
         v1::Remedy::new(
             "parquet-rs",
@@ -204,14 +207,19 @@ mod tests {
     fn the_pyarrow_remedy_quotes_the_column_key() {
         let setting = remedy(Writer::ArrowCpp, "id");
         assert!(
-            setting.contains("column_encoding={\"id\": 'DELTA_BINARY_PACKED'}"),
+            setting.contains("column_encoding={'id': 'DELTA_BINARY_PACKED'}"),
             "{setting}"
         );
-        let dotted = remedy(Writer::ArrowCpp, "a.b");
-        assert!(
-            dotted.contains("column_encoding={\"a.b\": 'DELTA_BINARY_PACKED'}"),
-            "{dotted}"
-        );
+        for leaf in ["a.b", "site.publisher:ext", "request.@timestamp"] {
+            let exotic = remedy(Writer::ArrowCpp, leaf);
+            assert!(
+                exotic.contains(&format!(
+                    "column_encoding={{'{}': 'DELTA_BINARY_PACKED'}}",
+                    leaf
+                )),
+                "{exotic}"
+            );
+        }
     }
 
     /// Sequential and monotone values have close neighbours; random ones do

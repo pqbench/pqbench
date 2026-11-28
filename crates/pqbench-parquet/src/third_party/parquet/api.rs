@@ -177,10 +177,11 @@ pub struct ColumnMass {
     /// Values in this chunk (including nulls).
     // aipnaming: allow(aip-141/count-suffix)
     pub num_values: u64,
-    /// Dictionary page offset is present.
+    /// The chunk is dictionary-encoded: a dictionary page offset, dictionary
+    /// data pages, or a dictionary encoding in the chunk's encoding set.
     pub dictionary: bool,
-    /// Bytes from the dictionary page offset to the first data page, when a
-    /// dictionary page is present.
+    /// Bytes from the dictionary page offset to the first data page, when the
+    /// footer records an offset that locates the page.
     pub dictionary_bytes: Option<u64>,
     /// Data pages the footer counts as `PLAIN`-encoded, when it counts pages.
     pub plain_data_page_count: Option<u64>,

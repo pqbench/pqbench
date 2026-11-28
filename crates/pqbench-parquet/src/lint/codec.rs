@@ -136,7 +136,11 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
         ),
         v1::Remedy::new(
             "pyarrow",
-            format!("compression={{{leaf:?}: 'zstd'}}, compression_level={{{leaf:?}: 3}}"),
+            format!(
+                "compression={{{}: 'zstd'}}, compression_level={{{}: 3}}",
+                super::py_string(leaf),
+                super::py_string(leaf)
+            ),
         ),
         v1::Remedy::new(
             "parquet-rs",
@@ -233,6 +237,22 @@ mod tests {
         }
     }
 
+    /// The pyarrow setting is a Python dict literal, so every column key is a
+    /// quoted string whatever its spelling.
+    #[test]
+    fn the_pyarrow_remedy_quotes_exotic_column_keys() {
+        for leaf in ["request.ext", "site.publisher:ext", "request.@timestamp"] {
+            let quoted = crate::lint::py_string(leaf);
+            let setting = remedy(Writer::ArrowCpp, leaf);
+            assert!(
+                setting.contains(&format!(
+                    "compression={{{quoted}: 'zstd'}}, compression_level={{{quoted}: 3}}"
+                )),
+                "{setting}"
+            );
+        }
+    }
+
     #[test]
     fn each_writer_gets_a_setting_it_has() {
         assert!(
@@ -246,7 +266,7 @@ mod tests {
         assert!(remedy(Writer::Photon, "id").contains("unverified"));
         assert_eq!(
             remedy(Writer::ArrowCpp, "id"),
-            "compression={\"id\": 'zstd'}, compression_level={\"id\": 3}"
+            "compression={'id': 'zstd'}, compression_level={'id': 3}"
         );
         assert!(remedy(Writer::ArrowRs, "id").contains("set_column_compression"));
         assert!(remedy(Writer::Other, "id").contains("write.parquet.compression-codec=zstd"));

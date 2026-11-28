@@ -112,7 +112,8 @@ fn remedies(leaf: &str, cap: usize) -> Vec<v1::Remedy> {
             "pyarrow",
             format!(
                 "raise dictionary_pagesize_limit {raise}, or use_dictionary=[<other columns>] \
-                 (leave {leaf} out)"
+                 (leave {} out)",
+                super::py_string(leaf)
             ),
         ),
         v1::Remedy::new(

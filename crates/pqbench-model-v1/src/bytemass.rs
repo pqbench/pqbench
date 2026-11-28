@@ -25,7 +25,9 @@ pub struct Bytemass {
     /// Encodings used by the data pages, when the writer recorded them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_encodings: Option<Vec<String>>,
-    /// A dictionary page is present.
+    /// The chunk is dictionary-encoded: a dictionary page offset, dictionary
+    /// data pages, or a dictionary encoding in the chunk's encoding set. A
+    /// writer that omits the offset (parquet-mr 1.8.3) still sets this.
     #[serde(default)]
     pub dictionary: bool,
     /// Bytes from the dictionary page offset to the first data page, when a

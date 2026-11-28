@@ -950,3 +950,133 @@ fn standard_page_sizes_are_not_reported() {
 
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// Standard Base64 of `raw`, padded to a multiple of four.
+fn base64(raw: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::with_capacity(raw.len().div_ceil(3) * 4);
+    for chunk in raw.chunks(3) {
+        let bits = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        text.push(ALPHABET[(bits >> 18) as usize & 0x3f] as char);
+        text.push(ALPHABET[(bits >> 12) as usize & 0x3f] as char);
+        text.push(if chunk.len() > 1 {
+            ALPHABET[(bits >> 6) as usize & 0x3f] as char
+        } else {
+            '='
+        });
+        text.push(if chunk.len() > 2 {
+            ALPHABET[bits as usize & 0x3f] as char
+        } else {
+            '='
+        });
+    }
+    text
+}
+
+/// A Base64 spelling of `len` incompressible bytes seeded by `value`.
+fn base64_payload(value: u64, len: usize) -> String {
+    let mut bytes = Vec::with_capacity(len);
+    let mut state = value;
+    while bytes.len() < len {
+        state = mix(state);
+        bytes.extend_from_slice(&state.to_le_bytes());
+    }
+    bytes.truncate(len);
+    base64(&bytes)
+}
+
+/// Write a one-column text file with no codec, so the text's own width is what
+/// the control prices.
+fn write_uncompressed(path: &Path, values: &[String]) {
+    let rows: Vec<Vec<Value>> = values
+        .iter()
+        .map(|value| vec![Value::Bytes(value.as_bytes().to_vec())])
+        .collect();
+    let options = WriteOptions {
+        compression: "uncompressed".into(),
+        ..options(false)
+    };
+    write_column(
+        path,
+        TypedColumn {
+            name: "id".into(),
+            kind: Kind::Bytes,
+        },
+        &rows,
+        options,
+    );
+}
+
+/// Base64 of binary payloads is a candidate for the decoded bytes, and the
+/// controlled rewrite confirms the saving.
+#[test]
+fn base64_text_earns_binary_bytes() {
+    let directory = temporary("base64-text");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..20_000).map(|value| base64_payload(value, 96)).collect();
+    write_uncompressed(&path, &values);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "base64-text", "{records:?}");
+    assert_eq!(records[0]["column"], "id");
+    let remedies = records[0]["remedies"].as_array().expect("remedies");
+    for engine in ["spark", "duckdb", "pyarrow"] {
+        assert!(
+            remedies
+                .iter()
+                .any(|remedy| remedy["engine"] == engine && remedy["setting"].is_string()),
+            "no {engine} remedy: {records:?}"
+        );
+    }
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() >= 64 * 1024,
+        "{measured:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Text that merely uses Base64 characters never earns the rule: UUIDs, hex
+/// digests, words, and short tokens are not binary payloads in Base64.
+#[test]
+fn base64_lookalikes_are_not_reported() {
+    let directory = temporary("base64-lookalikes");
+    let cases: [(&str, Vec<String>); 4] = [
+        ("uuid", (0..20_000).map(uuid).collect()),
+        (
+            "hex",
+            (0..20_000)
+                .map(|value| format!("{:016x}{:016x}", mix(value), value))
+                .collect(),
+        ),
+        (
+            "words",
+            (0..20_000)
+                .map(|value| format!("the same repeated words number {value}"))
+                .collect(),
+        ),
+        (
+            "short",
+            (0..20_000)
+                .map(|value| format!("dGVsbG8t{value:04}"))
+                .collect(),
+        ),
+    ];
+    for (name, values) in cases {
+        let path = directory.join(format!("{name}.parquet"));
+        write_uncompressed(&path, &values);
+        let records = suggestions(&path);
+        assert!(
+            records.iter().all(|record| record["rule"] != "base64-text"),
+            "{name}: {records:?}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(directory);
+}

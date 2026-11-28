@@ -193,17 +193,18 @@ recovers the bytes:
 $ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb list suggestions | pqb fmt
 COLUMN            RULE        VERIFIED  SAVINGS  REMEDY                                                                               MESSAGE
 ----------------  ----------  --------  -------  -----------------------------------------------------------------------------------  ------------------------------
-url_encoded       codec-zstd  -                  compression={"url_encoded": 'zstd'}, compression_level={"url_encoded": 3}            uncompressed at 302.37 B/value
-text              codec-zstd  -                  compression={"text": 'zstd'}, compression_level={"text": 3}                          uncompressed at 247.86 B/value
-username_encoded  codec-zstd  -                  compression={"username_encoded": 'zstd'}, compression_level={"username_encoded": 3}  uncompressed at 148.73 B/value
+url_encoded       codec-zstd  -                  compression={'url_encoded': 'zstd'}, compression_level={'url_encoded': 3}            uncompressed at 302.37 B/value
+text              codec-zstd  -                  compression={'text': 'zstd'}, compression_level={'text': 3}                          uncompressed at 247.86 B/value
+username_encoded  codec-zstd  -                  compression={'username_encoded': 'zstd'}, compression_level={'username_encoded': 3}  uncompressed at 148.73 B/value
 ```
 
-Eleven rules read one column's chunk; the first that detects a column wins, so a
-column's bytes are never priced twice:
+Twelve rules read one column's chunk; the first that detects a column wins, so
+a column's bytes are never priced twice:
 
 | Rule | What it finds | Remedy |
 | --- | --- | --- |
 | `uuid-text` | canonical UUID text, 36 bytes for 16 of data | write it as `BINARY(16)` |
+| `base64-text` | Base64 text of binary payloads, four characters per three bytes | decode it to a binary column |
 | `int96-timestamp` | the deprecated INT96 timestamp | write an `INT64` microsecond timestamp |
 | `text-timestamp` | every value is ISO-8601 timestamp text | write a microsecond `INT64` timestamp |
 | `codec-zstd` | a chunk stored uncompressed, snappy, or gzip | write the column with zstd |
@@ -221,8 +222,17 @@ physical type a dictionary can pay on — byte arrays, fixed-length byte arrays,
 arms at the file's own codec, keeping the smaller of a raised limit and no
 dictionary. `page-size` is measured as a controlled pair: the source's own
 effective page size against the standard 1 MiB, at the file's codec and
-encoding. `stats-truncated` needs no re-encode: a footer's bounds are the
+encoding. `base64-text` reads only values that are canonical Base64 of binary
+bytes: a UUID, a hex digest, and a word all use Base64 characters without being
+one, and a decoded payload that is mostly printable is a text column, not a
+binary one. `stats-truncated` needs no re-encode: a footer's bounds are the
 writer's own bytes, so the bytes past the truncation length are exact.
+
+`uuid-text`, `base64-text`, `text-timestamp`, `delta-integer`,
+`delta-text-encoding`, the dictionary rules, and `page-size` decode and
+re-encode a leaf's values, so they measure scalar leaves only. `codec-zstd` and
+`stats-truncated` read page headers, page bytes, and footer facts, so they
+measure any leaf, nested `list<struct>` columns included.
 
 Two more decide from `list partitions` totals, so they read no file and hold
 for partitions a host never copies:

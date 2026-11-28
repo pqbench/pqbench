@@ -47,7 +47,10 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     vec![
         v1::Remedy::new(
             "pyarrow",
-            format!("column_types={{{leaf:?}: pa.uuid()}} (or pa.binary(16))"),
+            format!(
+                "column_types={{{}: pa.uuid()}} (or pa.binary(16))",
+                super::py_string(leaf)
+            ),
         ),
         v1::Remedy::new(
             "parquet-rs",
@@ -155,6 +158,23 @@ mod tests {
             .iter()
             .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
             .collect()
+    }
+
+    /// The pyarrow remedy's column key is a Python string literal, so a dotted,
+    /// colon-bearing, or `@` name is quoted like any other.
+    #[test]
+    fn the_pyarrow_remedy_quotes_exotic_column_keys() {
+        for leaf in ["request.ext", "site.publisher:ext", "request.@timestamp"] {
+            let setting = super::remedies(leaf)
+                .into_iter()
+                .find(|remedy| remedy.engine == "pyarrow")
+                .expect("a pyarrow remedy")
+                .setting;
+            assert!(
+                setting.contains(&format!("column_types={{'{leaf}': pa.uuid()}}")),
+                "{setting}"
+            );
+        }
     }
 
     #[test]

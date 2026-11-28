@@ -7,9 +7,9 @@ the numbers the tool printed.
 
 The first four run on the committed Reddit comments sample
 (`crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet`, 3000 rows, 7
-columns). The last two use larger public datasets committed under
-`data/samples/` (Git LFS). All six blocks run in the gate; after a clone that
-skipped LFS, fetch and verify the samples first:
+columns). The next two use larger public datasets committed under
+`data/samples/` (Git LFS). All six of those blocks run in the gate; after a
+clone that skipped LFS, fetch and verify the samples first:
 
 ```console no-run
 $ git lfs pull
@@ -130,6 +130,77 @@ c_last_review_date     BYTE_ARRAY  UNCOMPRESSED  DELTA_BYTE_ARRAY   3511        
 The footer reports the encoding the writer actually used, and
 `c_email_address` (27 KB) dominates a table whose every other column is under
 10 KB — the same triage, on a file from a different ecosystem.
+
+## OpenRTB bid streams
+
+Real-time bidding is nested by construction. An [IAB OpenRTB
+2.5](https://github.com/InteractiveAdvertisingBureau/openrtb) bid request
+carries `imp[]`, `site.publisher`, `seatbid[].bid[]`, and `banner.format[]`;
+[rtblint](https://github.com/aleksUIX/rtblint) (Apache-2.0) validates requests
+against versioned snapshots of that spec. A bid-stream table therefore has
+scalar leaves (`id`, `user.ext`, `ext`) beside repeated ones
+(`imp.list.element.ext`, `seatbid.list.element.bid.list.element.ext`), and
+`bytemass` names them by their physical path:
+
+```console no-run
+$ pqb table-file openrtb_bids_snappy.parquet | pqb bytemass \
+>     | jq -r '[(.name | capture("/columns/(?<c>[^/]+)$").c), .mass.codec, .mass.compressed_bytes] | @tsv' \
+>     | column -t -s $'\t'
+id                                           SNAPPY  222317
+user.ext                                     SNAPPY  1233750
+ext                                          SNAPPY  857121
+imp.list.element.id                          SNAPPY  378
+imp.list.element.bidfloor                    SNAPPY  83111
+imp.list.element.ext                         SNAPPY  1507120
+seatbid.list.element.bid.list.element.price  SNAPPY  45471
+seatbid.list.element.bid.list.element.adm    SNAPPY  56398
+seatbid.list.element.bid.list.element.w      SNAPPY  264
+seatbid.list.element.bid.list.element.h      SNAPPY  264
+seatbid.list.element.bid.list.element.ext    SNAPPY  596900
+```
+
+The repeated leaves own the bytes — `imp.list.element.ext` (1.5 MB) and
+`seatbid...ext` (597 KB) are 46% of this 4.6 MB, 6,000-request stream. Lint and
+verify are the usual two commands; each suggestion is a rewrite measured
+against a control written by the same writer at the same codec:
+
+```console no-run
+$ pqb table-file openrtb_bids_snappy.parquet \
+>     | pqb list suggestions | pqb get suggestion \
+>     | jq -r '[.column, .rule, (.verified|tostring), (.savings_bytes|tostring)] | @tsv' \
+>     | column -t -s $'\t'
+imp.list.element.ext                       codec-zstd   true  367098
+user.ext                                   base64-text  true  308676
+ext                                        codec-zstd   true  267701
+seatbid.list.element.bid.list.element.ext  codec-zstd   true  155642
+id                                         uuid-text    true  127012
+imp.list.element.bidfloor                  codec-zstd   true  9988
+```
+
+A snappy bid stream yields 1.2 MB of verified savings in one pass. The scanner
+prices the repeated leaves from their page headers and raw pages — `codec-zstd`
+needs no decoded values — while the value rules read only scalar leaves:
+`user.ext` is Base64 of a binary payload (four characters per three bytes) and
+`id` is UUID text. Rewrite the file with zstd and the same commands find
+the next layer, including `stats-truncated` on the nested leaves:
+
+```console no-run
+$ pqb table-file openrtb_bids_zstd.parquet \
+>     | pqb list suggestions | pqb get suggestion \
+>     | jq -r '[.column, .rule, (.verified|tostring), (.savings_bytes|tostring)] | @tsv' \
+>     | column -t -s $'\t'
+imp.list.element.ext                       stats-truncated    true  336
+user.ext                                   base64-text        true  5668
+ext                                        dictionary-unique  true  8199
+seatbid.list.element.bid.list.element.ext  stats-truncated    true  192
+id                                         uuid-text          true  29194
+```
+
+The footer win is small by nature — a chunk's bounds are a few hundred bytes —
+but it is the same repeated leaves that used to be skipped, and `uuid-text` now
+shows the smaller saving a stronger codec leaves it. Both runs read only the
+footer and the sample row group, so they answer in seconds on a stream this
+size.
 
 ## Where to go next
 

@@ -35,39 +35,39 @@ fn bytemass() {
 #[test]
 fn list_suggestions() {
     // list_suggestions, from line 192
-    support::run("pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb list suggestions | pqb fmt", 193, Some(&["COLUMN            RULE        VERIFIED  SAVINGS  REMEDY                                                                               MESSAGE", "----------------  ----------  --------  -------  -----------------------------------------------------------------------------------  ------------------------------", r#"url_encoded       codec-zstd  -                  compression={"url_encoded": 'zstd'}, compression_level={"url_encoded": 3}            uncompressed at 302.37 B/value"#, r#"text              codec-zstd  -                  compression={"text": 'zstd'}, compression_level={"text": 3}                          uncompressed at 247.86 B/value"#, r#"username_encoded  codec-zstd  -                  compression={"username_encoded": 'zstd'}, compression_level={"username_encoded": 3}  uncompressed at 148.73 B/value"#]));
+    support::run("pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb list suggestions | pqb fmt", 193, Some(&["COLUMN            RULE        VERIFIED  SAVINGS  REMEDY                                                                               MESSAGE", "----------------  ----------  --------  -------  -----------------------------------------------------------------------------------  ------------------------------", "url_encoded       codec-zstd  -                  compression={'url_encoded': 'zstd'}, compression_level={'url_encoded': 3}            uncompressed at 302.37 B/value", "text              codec-zstd  -                  compression={'text': 'zstd'}, compression_level={'text': 3}                          uncompressed at 247.86 B/value", "username_encoded  codec-zstd  -                  compression={'username_encoded': 'zstd'}, compression_level={'username_encoded': 3}  uncompressed at 148.73 B/value"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn list_files() {
-    // list_files, from line 248
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt", 249, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
+    // list_files, from line 258
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb fmt", 259, Some(&["path                                                                 size_bytes", "-------------------------------------------------------------------  ----------", "part-00000-5eef9a52-f717-4d78-8e62-d7a2a05c707b-c000.snappy.parquet         796"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn list_files_2() {
-    // list_files_2, from line 266
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 267, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
+    // list_files_2, from line 276
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb bytemass | pqb fmt", 277, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn format_html() {
-    // format_html, from line 296
-    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb fmt", 297, Some(&["table                           column                 bytes  values  bytes/value  ratio  files  class  $/month", "------------------------------  ---------------------  -----  ------  -----------  -----  -----  -----  -------", "local.delta_byte_array.parquet  c_birth_country         9599    1000         9.60   1.00      1", "local.delta_byte_array.parquet  c_customer_id           8248    1000         8.25   1.00      1", "local.delta_byte_array.parquet  c_email_address        27763    1000        27.76   1.00      1", "local.delta_byte_array.parquet  c_first_name            6595    1000         6.59   1.00      1", "local.delta_byte_array.parquet  c_last_name             6955    1000         6.96   1.00      1", "local.delta_byte_array.parquet  c_last_review_date      3511    1000         3.51   1.00      1", "local.delta_byte_array.parquet  c_login                   42    1000         0.04   1.00      1", "local.delta_byte_array.parquet  c_preferred_cust_flag   1220    1000         1.22   1.00      1", "local.delta_byte_array.parquet  c_salutation            3362    1000         3.36   1.00      1"]));
-    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 309, None);
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 310, None);
+    // format_html, from line 306
+    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb fmt", 307, Some(&["table                           column                 bytes  values  bytes/value  ratio  files  class  $/month", "------------------------------  ---------------------  -----  ------  -----------  -----  -----  -----  -------", "local.delta_byte_array.parquet  c_birth_country         9599    1000         9.60   1.00      1", "local.delta_byte_array.parquet  c_customer_id           8248    1000         8.25   1.00      1", "local.delta_byte_array.parquet  c_email_address        27763    1000        27.76   1.00      1", "local.delta_byte_array.parquet  c_first_name            6595    1000         6.59   1.00      1", "local.delta_byte_array.parquet  c_last_name             6955    1000         6.96   1.00      1", "local.delta_byte_array.parquet  c_last_review_date      3511    1000         3.51   1.00      1", "local.delta_byte_array.parquet  c_login                   42    1000         0.04   1.00      1", "local.delta_byte_array.parquet  c_preferred_cust_flag   1220    1000         1.22   1.00      1", "local.delta_byte_array.parquet  c_salutation            3362    1000         3.36   1.00      1"]));
+    support::run("pqb table-file data/samples/delta_byte_array.parquet | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 319, None);
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb ls files | pqb list columns | pqb summarize columns | pqb format --html > /tmp/report.html", 320, None);
 }
 
 #[cfg(feature = "delta")]
 #[rustfmt::skip]
 #[test]
 fn python() {
-    // python, from line 373
-    support::run("pqbench list files < docker/e2e-lakehouse/table.ndjson | zstd -3 > /tmp/files.jsonl.zst", 374, None);
+    // python, from line 383
+    support::run("pqbench list files < docker/e2e-lakehouse/table.ndjson | zstd -3 > /tmp/files.jsonl.zst", 384, None);
 }

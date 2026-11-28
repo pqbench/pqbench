@@ -100,8 +100,9 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
         v1::Remedy::new(
             "pyarrow",
             format!(
-                "use_dictionary=False with column_encoding={{{leaf:?}: 'DELTA_BYTE_ARRAY'}} \
-                 (or 'DELTA_LENGTH_BYTE_ARRAY')"
+                "use_dictionary=False with column_encoding={{{}: 'DELTA_BYTE_ARRAY'}} \
+                 (or 'DELTA_LENGTH_BYTE_ARRAY')",
+                super::py_string(leaf)
             ),
         ),
         v1::Remedy::new(
@@ -162,6 +163,22 @@ mod tests {
             .iter()
             .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
             .collect()
+    }
+
+    /// The pyarrow setting is a Python dict literal, so every column key is a
+    /// quoted string whatever its spelling.
+    #[test]
+    fn the_pyarrow_remedy_quotes_exotic_column_keys() {
+        for leaf in ["request.ext", "site.publisher:ext", "request.@timestamp"] {
+            let setting = remedy(Writer::ArrowCpp, leaf);
+            assert!(
+                setting.contains(&format!(
+                    "column_encoding={{'{}': 'DELTA_BYTE_ARRAY'}}",
+                    leaf
+                )),
+                "{setting}"
+            );
+        }
     }
 
     #[test]

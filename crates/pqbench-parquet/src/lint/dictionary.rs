@@ -162,7 +162,10 @@ fn unique_remedies(leaf: &str) -> Vec<v1::Remedy> {
         ),
         v1::Remedy::new(
             "pyarrow",
-            format!("use_dictionary=[<other columns>] (leave {leaf} out)"),
+            format!(
+                "use_dictionary=[<other columns>] (leave {} out)",
+                super::py_string(leaf)
+            ),
         ),
         v1::Remedy::new(
             "parquet-rs",
@@ -183,7 +186,10 @@ fn missing_remedies(leaf: &str) -> Vec<v1::Remedy> {
             "spark",
             format!("spark.hadoop.parquet.enable.dictionary#{leaf}=true"),
         ),
-        v1::Remedy::new("pyarrow", format!("use_dictionary=[{leaf}]")),
+        v1::Remedy::new(
+            "pyarrow",
+            format!("use_dictionary=[{}]", super::py_string(leaf)),
+        ),
         v1::Remedy::new(
             "parquet-rs",
             format!("set_column_dictionary_enabled({leaf:?}, true)"),
@@ -253,6 +259,33 @@ mod tests {
             .iter()
             .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
             .collect()
+    }
+
+    /// Both pyarrow dictionary settings quote the column key, in the list form
+    /// and in the leave-it-out advice.
+    #[test]
+    fn the_pyarrow_remedies_quote_exotic_column_keys() {
+        for leaf in ["request.ext", "site.publisher:ext", "request.@timestamp"] {
+            let enable = super::missing_remedies(leaf)
+                .into_iter()
+                .find(|remedy| remedy.engine == "pyarrow")
+                .expect("a pyarrow remedy")
+                .setting;
+            assert!(
+                enable.contains(&format!("use_dictionary=['{leaf}']")),
+                "{enable}"
+            );
+
+            let disable = super::unique_remedies(leaf)
+                .into_iter()
+                .find(|remedy| remedy.engine == "pyarrow")
+                .expect("a pyarrow remedy")
+                .setting;
+            assert!(
+                disable.contains(&format!("(leave '{leaf}' out)")),
+                "{disable}"
+            );
+        }
     }
 
     #[test]

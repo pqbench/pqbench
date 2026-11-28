@@ -368,6 +368,7 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
                 .and_then(|offset| u64::try_from(data_page_offset - offset).ok());
             let page_stats = meta.page_encoding_stats().map(Vec::as_slice);
             let page_counts = data_page_counts(page_stats);
+            let encodings: Vec<Encoding> = meta.encodings().collect();
             columns.push(ColumnMass {
                 column: meta.column_path().string(),
                 physical_data_type: descriptor.physical_type().to_string(),
@@ -377,10 +378,14 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
                 compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
                 uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
                 codec: codec_name(meta.compression()).to_string(),
-                encodings: meta.encodings().map(|e| e.to_string()).collect(),
+                encodings: encodings.iter().map(ToString::to_string).collect(),
                 data_encodings: data_page_encodings(page_stats),
                 num_values: u64::try_from(meta.num_values()).unwrap_or(0),
-                dictionary: dictionary_page_offset.is_some(),
+                dictionary: chunk_is_dictionary_encoded(
+                    dictionary_page_offset,
+                    page_counts,
+                    &encodings,
+                ),
                 dictionary_bytes,
                 plain_data_page_count: page_counts.map(|counts| counts.plain_data_page_count),
                 dictionary_data_page_count: page_counts
@@ -411,6 +416,28 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
 struct DataPageCounts {
     plain_data_page_count: u64,
     dictionary_data_page_count: u64,
+}
+
+/// Whether a chunk's footer marks it dictionary-encoded.
+///
+/// A positive dictionary page offset is the direct answer, but `parquet-mr`
+/// 1.8.3 omits that field even when the chunk wrote a dictionary page and its
+/// data pages use it. The footer still records the dictionary two other ways —
+/// a dictionary-encoded data page count and a `PLAIN_DICTIONARY`/`RLE_DICTIONARY`
+/// entry in the chunk's encoding set — and either one marks the chunk.
+fn chunk_is_dictionary_encoded(
+    dictionary_page_offset: Option<i64>,
+    page_counts: Option<DataPageCounts>,
+    encodings: &[Encoding],
+) -> bool {
+    dictionary_page_offset.is_some()
+        || page_counts.is_some_and(|counts| counts.dictionary_data_page_count > 0)
+        || encodings.iter().any(|encoding| {
+            matches!(
+                encoding,
+                Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
+            )
+        })
 }
 
 /// The chunk's data pages by encoding, when the footer counts its pages.
@@ -586,9 +613,13 @@ mod tests {
 
     use super::*;
 
-    /// A footer of one `BYTE_ARRAY` chunk whose writer recorded a zero
-    /// dictionary page offset, a page it never wrote, and page encoding counts.
-    fn zero_dictionary_offset_footer() -> Vec<u8> {
+    /// A footer of one `BYTE_ARRAY` chunk with the requested dictionary page
+    /// offset, encoding set, and page encoding counts.
+    fn dictionary_footer(
+        dictionary_page_offset: Option<i64>,
+        encodings: Vec<Encoding>,
+        page_stats: Option<Vec<PageEncodingStats>>,
+    ) -> Vec<u8> {
         let leaf = Type::primitive_type_builder("s", PhysicalType::BYTE_ARRAY)
             .with_logical_type(Some(LogicalType::String))
             .build()
@@ -598,33 +629,20 @@ mod tests {
             .build()
             .expect("a valid schema");
         let schema_descriptor = Arc::new(SchemaDescriptor::new(Arc::new(schema)));
-        let chunk = ColumnChunkMetaData::builder(schema_descriptor.column(0))
+        let mut chunk = ColumnChunkMetaData::builder(schema_descriptor.column(0))
             .set_compression(Compression::UNCOMPRESSED)
-            .set_encodings(vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY])
+            .set_encodings(encodings)
             .set_num_values(400)
             .set_total_compressed_size(1_000)
             .set_total_uncompressed_size(2_000)
-            .set_data_page_offset(500)
-            .set_dictionary_page_offset(Some(0))
-            .set_page_encoding_stats(vec![
-                PageEncodingStats {
-                    page_type: PageType::DICTIONARY_PAGE,
-                    encoding: Encoding::PLAIN,
-                    count: 1,
-                },
-                PageEncodingStats {
-                    page_type: PageType::DATA_PAGE_V2,
-                    encoding: Encoding::RLE_DICTIONARY,
-                    count: 2,
-                },
-                PageEncodingStats {
-                    page_type: PageType::DATA_PAGE,
-                    encoding: Encoding::PLAIN,
-                    count: 3,
-                },
-            ])
-            .build()
-            .expect("a valid chunk");
+            .set_data_page_offset(500);
+        if let Some(offset) = dictionary_page_offset {
+            chunk = chunk.set_dictionary_page_offset(Some(offset));
+        }
+        if let Some(stats) = page_stats {
+            chunk = chunk.set_page_encoding_stats(stats);
+        }
+        let chunk = chunk.build().expect("a valid chunk");
         let row_group = RowGroupMetaData::builder(schema_descriptor.clone())
             .set_num_rows(400)
             .set_total_byte_size(1_000)
@@ -647,9 +665,35 @@ mod tests {
         footer
     }
 
+    /// The page encoding counts of a chunk that kept one dictionary page and
+    /// wrote two dictionary-encoded data pages beside three PLAIN ones.
+    fn page_stats() -> Vec<PageEncodingStats> {
+        vec![
+            PageEncodingStats {
+                page_type: PageType::DICTIONARY_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 1,
+            },
+            PageEncodingStats {
+                page_type: PageType::DATA_PAGE_V2,
+                encoding: Encoding::RLE_DICTIONARY,
+                count: 2,
+            },
+            PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 3,
+            },
+        ]
+    }
+
     #[test]
     fn footer_facts_come_from_the_footer_alone() {
-        let footer = zero_dictionary_offset_footer();
+        let footer = dictionary_footer(
+            Some(0),
+            vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+            Some(page_stats()),
+        );
         let mass = read_footer_masses(&footer, footer.len() as u64).expect("a readable footer");
 
         assert_eq!(mass.row_count, 400);
@@ -666,19 +710,62 @@ mod tests {
         );
     }
 
+    /// A positive offset locates the dictionary page and its size.
     #[test]
-    fn a_zero_dictionary_page_offset_is_not_a_dictionary_page() {
-        let footer = zero_dictionary_offset_footer();
+    fn a_dictionary_page_offset_bounds_the_dictionary_page() {
+        let footer = dictionary_footer(Some(100), vec![Encoding::PLAIN], None);
+        let mass = read_footer_masses(&footer, footer.len() as u64).expect("a readable footer");
+
+        let column = &mass.columns[0];
+        assert!(column.dictionary);
+        assert_eq!(column.dictionary_bytes, Some(400));
+    }
+
+    /// parquet-mr 1.8.3 writes dictionary pages and omits the offset: the page
+    /// counts still record them, and a zero offset locates nothing to size.
+    #[test]
+    fn an_omitted_dictionary_page_offset_with_dictionary_pages_is_a_dictionary_chunk() {
+        let footer = dictionary_footer(
+            None,
+            vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+            Some(page_stats()),
+        );
         let mass = read_footer_masses(&footer, footer.len() as u64).expect("a readable footer");
 
         let column = &mass.columns[0];
         assert!(
-            !column.dictionary,
-            "a writer's zero offset locates no dictionary page"
+            column.dictionary,
+            "dictionary data pages mark the chunk, offset or not"
         );
         assert!(
             column.dictionary_bytes.is_none(),
-            "a zero offset bounds no dictionary page"
+            "an omitted offset bounds no dictionary page"
         );
+    }
+
+    /// The chunk's encoding set is the other footer fact that marks a
+    /// dictionary-encoded chunk whose page counts are absent.
+    #[test]
+    fn a_dictionary_encoding_without_an_offset_or_page_counts_is_a_dictionary_chunk() {
+        let footer = dictionary_footer(
+            None,
+            vec![Encoding::PLAIN, Encoding::PLAIN_DICTIONARY],
+            None,
+        );
+        let mass = read_footer_masses(&footer, footer.len() as u64).expect("a readable footer");
+
+        let column = &mass.columns[0];
+        assert!(column.dictionary, "PLAIN_DICTIONARY marks the chunk");
+        assert!(column.dictionary_bytes.is_none());
+    }
+
+    /// A PLAIN-only chunk with no offset and no page counts is not a
+    /// dictionary chunk: the fallback detection must not invent one.
+    #[test]
+    fn a_plain_chunk_is_not_a_dictionary_chunk() {
+        let footer = dictionary_footer(None, vec![Encoding::PLAIN], None);
+        let mass = read_footer_masses(&footer, footer.len() as u64).expect("a readable footer");
+
+        assert!(!mass.columns[0].dictionary);
     }
 }

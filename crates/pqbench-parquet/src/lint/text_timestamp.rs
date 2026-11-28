@@ -250,8 +250,9 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
         v1::Remedy::new(
             "pyarrow",
             format!(
-                "cast {leaf} to pa.timestamp('us') before write (pc.strptime for text, \
-                 then Table.set_column)"
+                "cast column {} to pa.timestamp('us') before write (pc.strptime for text, \
+                 then Table.set_column)",
+                super::py_string(leaf)
             ),
         ),
         v1::Remedy::new(
