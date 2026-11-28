@@ -6,6 +6,6 @@ use crate::support;
 #[rustfmt::skip]
 #[test]
 fn usage() {
-    // usage, from line 48
-    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt", 49, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
+    // usage, from line 62
+    support::run("pqb table-file examples/quickstart.parquet | pqb bytemass | pqb fmt", 63, Some(&["column  type   codec         encoding  bytes  dict bytes  bytes/row  values", "------  -----  ------------  --------  -----  ----------  ---------  ------", "id      INT64  UNCOMPRESSED  dict        102          80      12.75       8", "year    INT32  UNCOMPRESSED  dict         68          46       8.50       8"]));
 }

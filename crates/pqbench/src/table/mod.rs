@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 use futures_util::stream::{BoxStream, StreamExt};
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -128,6 +129,21 @@ pub type CommitStream<'a> = BoxStream<'a, Result<v1::Commit, Error>>;
 ///
 /// The stream owns the log it reads, so it borrows nothing from the caller.
 pub type FileStream<'a> = BoxStream<'a, Result<v1::TableFile, Error>>;
+
+/// One file of a snapshot, classified for [`crate::partition::list`].
+///
+/// Any `Removed` entry for a path arrives before a live `Active` entry for the
+/// same path, so a caller cancels tombstones as active files stream past.
+pub(crate) enum SnapshotFile {
+    /// An active data file in the snapshot.
+    Active(v1::TableFile),
+    /// A removed or superseded data file still retained on storage.
+    Removed(v1::TableFile),
+    /// An active merge-on-read delete file in the snapshot.
+    Delete(v1::TableFile),
+}
+
+pub(crate) type SnapshotStream<'a> = BoxStream<'a, Result<SnapshotFile, Error>>;
 
 /// Byte mass of one partition, summed from the active files' log statistics.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -386,11 +402,12 @@ pub async fn stream_active_files(
     }
 }
 
-/// Stream the files the requested snapshot removed but still names, without
+/// Stream the files the requested snapshot removed but still holds, without
 /// collecting them: for Delta, the `remove` actions whose tombstones the
 /// table's deleted-file retention has not expired, billed until a vacuum
-/// deletes them. `None` for a format whose removed files are not read
-/// (Iceberg).
+/// deletes them; for Iceberg, the data files the snapshot marks deleted plus
+/// the data files only a retained older snapshot still names, billed until an
+/// expire removes them.
 ///
 /// A removed path can still be live (a deletion-vector update removes and
 /// re-adds it); drop the paths [`stream_active_files`] yields to count the
@@ -404,7 +421,31 @@ pub async fn stream_removed_files(
 ) -> Result<Option<FileStream<'static>>, Error> {
     match detect(lake, &request.uri).await? {
         v1::TableFormat::Delta => Ok(Some(delta::stream_removed_files(lake, request).await?)),
-        v1::TableFormat::Iceberg => Ok(None),
+        v1::TableFormat::Iceberg => Ok(Some(iceberg::stream_removed_files(lake, request).await?)),
+        _ => Err(unrecognized(&request.uri)),
+    }
+}
+
+/// Stream a snapshot's removed, active, and delete files in one pass.
+///
+/// For Delta this chains the `remove` stream ahead of the `add` stream under
+/// one format check; for Iceberg it reads the metadata JSON, the manifest list,
+/// and each manifest at most once.
+pub(crate) async fn stream_snapshot_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<SnapshotStream<'static>, Error> {
+    match detect(lake, &request.uri).await? {
+        v1::TableFormat::Delta => {
+            let removed = delta::stream_removed_files(lake, request)
+                .await?
+                .map_ok(SnapshotFile::Removed);
+            let active = delta::stream_active_files(lake, request)
+                .await?
+                .map_ok(SnapshotFile::Active);
+            Ok(removed.chain(active).boxed())
+        }
+        v1::TableFormat::Iceberg => iceberg::stream_snapshot_files(lake, request).await,
         _ => Err(unrecognized(&request.uri)),
     }
 }

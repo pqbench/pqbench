@@ -3,13 +3,13 @@
 //! The URL, the page shape, and the pagination are this command's; the
 //! transport is the third-party HTTP facade. No feature flags live here.
 
-use futures_util::stream::Stream;
+use futures_util::stream::{self, Stream, StreamExt};
 use serde::Deserialize;
 
 use super::api::{Catalog, Error};
 use crate::dialect;
 use crate::v1::{name, CatalogType};
-use crate::Workspace;
+use crate::{Dialect, Workspace};
 
 /// Catalog names per page; the walk follows `next_page_token`.
 const PAGE_SIZE: u32 = 1000;
@@ -40,10 +40,24 @@ const UNREADABLE: &[&str] = &["CATALOG_SYSTEM", "CATALOG_DB_STORAGE"];
 
 /// List the endpoint's catalogs, page by page: a page's catalogs are yielded,
 /// in name order, before the next page is fetched.
+///
+/// An Iceberg REST endpoint already names one catalog base (`…/v1` or
+/// `…/v1/{prefix}`), so it yields that one catalog directly.
 pub(crate) fn list(workspace: &Workspace) -> impl Stream<Item = Result<Catalog, Error>> + '_ {
-    crate::http::paginate(None::<String>, move |page_token| async move {
-        fetch_page(workspace, page_token.as_deref()).await
-    })
+    match workspace.config().dialect {
+        Dialect::Unity => crate::http::paginate(None::<String>, move |page_token| async move {
+            fetch_page(workspace, page_token.as_deref()).await
+        })
+        .left_stream(),
+        Dialect::Iceberg => {
+            let catalog = dialect::iceberg_catalog(workspace.config().endpoint.as_str());
+            stream::iter([Ok(Catalog {
+                name: name::catalog(&catalog),
+                ..Catalog::default()
+            })])
+            .right_stream()
+        }
+    }
 }
 
 /// Fetch one page of `GET /catalogs`; `None` is the first page.

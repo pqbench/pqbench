@@ -1,145 +1,43 @@
 //! Iceberg metadata loader: the only module that reads Iceberg metadata.
 //!
 //! [`load`] reads the metadata JSON and Avro manifests and returns a
-//! [`TableInfo`]. It does not measure Parquet footers; pipe the document to
-//! `bytemass`. Delete files are named in the log and omitted from `files`.
-//!
-//! Nothing here is behind a `#[cfg]`: the Avro reader and the object store
-//! enforce the `iceberg` and `aws` features at runtime, so this module compiles
-//! in every configuration and fails only when a read needs a disabled one.
+//! [`TableInfo`]. Nothing here is behind a `#[cfg]`: the Avro reader and the
+//! object store enforce the `iceberg` and `aws` features at runtime.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
-use futures_util::stream::{self, Stream};
+use chrono::{DateTime, Duration, NaiveDate, SecondsFormat, Utc};
+use futures_util::stream::{self, BoxStream, Stream};
 use futures_util::{StreamExt, TryStreamExt};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::Value as JsonValue;
 use url::Url;
 
 use crate::table::{is_local, join_uri, local_path, relative_data_path};
-use crate::third_party::avro::read_avro;
+use crate::third_party::avro::{read_avro_values, Value as AvroValue};
 use crate::third_party::object_store;
 use crate::v1;
 use crate::Lake;
 
-use super::{Error, LoadRequest, TableInfo};
+use super::{Error, LoadRequest, SnapshotFile, SnapshotStream, TableInfo};
 
-/// Load the current or requested Iceberg snapshot into a table record.
-///
-/// `request.uri` is a table root (`metadata/version-hint.text` or
-/// `metadata/*.metadata.json`) or a metadata JSON path/URI. Run inside a Tokio
-/// runtime.
-///
-/// # Errors
-/// Fails for invalid metadata, missing snapshots, non-Parquet data files, or
-/// data paths outside the table location.
-pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
-    let metadata = read_metadata(lake, &request.uri).await?;
-    let requested = request.snapshot_version.map(create_i64).transpose()?;
-    let selected = select_snapshot(&metadata, requested)?;
-    let snapshot_version = selected
-        .as_ref()
-        .map(|snapshot| create_u64(snapshot.snapshot_id))
-        .transpose()?
-        .unwrap_or(0);
-    let (files, deletes) = match selected {
-        Some(snapshot) if request.require_files => {
-            active_files(lake, &metadata.location, &snapshot.manifest_list).await?
-        }
-        _ => (Vec::new(), Vec::new()),
-    };
-    let mut log = if request.require_files {
-        ancestry_log(&metadata, selected, &v1::name::local_table(&request.uri))?
-    } else {
-        Vec::new()
-    };
-    attach_actions(&mut log, snapshot_version, &files, &deletes);
-    let mut info = TableInfo::new(
-        v1::TableFormat::Iceberg,
-        request.uri.clone(),
-        snapshot_version,
-        partition_columns(&metadata),
-        log,
-        files,
-    );
-    info.columns = columns(&metadata);
-    info.iceberg_properties = metadata.properties.clone();
-    Ok(info)
-}
+const STATUS_DELETED: i32 = 2;
+const CONTENT_DATA: i32 = 0;
+const MANIFEST_DELETES: i32 = 1;
+const VERSION_LAST: i32 = 3;
 
-/// Resolve, read, parse, and validate the table's metadata JSON.
-async fn read_metadata(lake: &Lake, uri: &str) -> Result<TableMetadata, Error> {
-    let metadata_location = resolve_metadata_location(lake, uri).await?;
-    let metadata_bytes = read_location(lake, &metadata_location).await?;
-    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
-    if metadata.format_version != 1 && metadata.format_version != 2 {
-        return Err(Error::Invalid(format!(
-            "unsupported Iceberg format version: {}",
-            metadata.format_version
-        )));
-    }
-    Ok(metadata)
-}
-
-/// The selected snapshot's ancestry as log commits, one action per snapshot.
-fn ancestry_log(
-    metadata: &TableMetadata,
-    selected: Option<&Snapshot>,
-    table: &str,
-) -> Result<Vec<v1::Commit>, Error> {
-    ancestry(metadata, selected)
-        .into_iter()
-        .map(|snapshot| {
-            let version = create_u64(snapshot.snapshot_id)?;
-            Ok(v1::Commit {
-                name: v1::name::commit_name(table, &version.to_string()),
-                version,
-                commit_time: snapshot.snapshot_time,
-                commit_info: None,
-                actions: vec![v1::LogAction {
-                    kind: Some("snapshot".into()),
-                    path: Some(snapshot.manifest_list.clone()),
-                    size_bytes: None,
-                }],
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-}
-
-/// Attach the snapshot's added and deleted files to its log commit.
-fn attach_actions(
-    log: &mut [v1::Commit],
-    version: u64,
-    files: &[v1::TableFile],
-    deletes: &[String],
-) {
-    let Some(commit) = log.iter_mut().find(|commit| commit.version == version) else {
-        return;
-    };
-    for file in files {
-        commit.actions.push(v1::LogAction {
-            kind: Some("add".into()),
-            path: Some(file.path.clone()),
-            size_bytes: file.size_bytes,
-        });
-    }
-    for path in deletes {
-        commit.actions.push(v1::LogAction {
-            kind: Some("delete".into()),
-            path: Some(path.clone()),
-            size_bytes: None,
-        });
-    }
-}
-
+/// The metadata JSON, shared with Iceberg REST `loadTable`.
 #[derive(Debug, Deserialize)]
-struct TableMetadata {
-    #[serde(rename = "format-version")]
+pub(super) struct TableMetadata {
+    #[serde(rename = "format-version", default)]
     format_version: i32,
+    #[serde(default)]
     location: String,
     #[serde(rename = "current-snapshot-id", default)]
-    current_snapshot_id: Option<i64>,
+    pub(super) current_snapshot_id: Option<i64>,
     #[serde(rename = "current-schema-id", default)]
     current_schema_id: i32,
     #[serde(rename = "default-spec-id", default)]
@@ -149,41 +47,46 @@ struct TableMetadata {
     #[serde(default)]
     schemas: Vec<Schema>,
     #[serde(default)]
-    properties: BTreeMap<String, String>,
+    pub(super) properties: BTreeMap<String, String>,
     #[serde(default)]
     snapshots: Vec<Snapshot>,
 }
 
-/// One Iceberg schema; the current one carries the table's columns.
 #[derive(Debug, Deserialize)]
-struct Schema {
-    #[serde(rename = "schema-id")]
+pub(super) struct Schema {
+    #[serde(rename = "schema-id", default)]
     schema_id: i32,
     #[serde(default)]
     fields: Vec<Field>,
 }
 
-/// One top-level Iceberg schema field.
 #[derive(Debug, Deserialize)]
-struct Field {
+pub(super) struct Field {
+    #[serde(default)]
+    id: i32,
     name: String,
     #[serde(rename = "type")]
-    data_type: Value,
+    data_type: JsonValue,
     #[serde(default)]
     required: bool,
 }
 
 #[derive(Debug, Deserialize)]
-struct PartitionSpec {
-    #[serde(rename = "spec-id")]
+pub(super) struct PartitionSpec {
+    #[serde(rename = "spec-id", default)]
     spec_id: i32,
     #[serde(default)]
     fields: Vec<PartitionField>,
 }
 
 #[derive(Debug, Deserialize)]
-struct PartitionField {
+pub(super) struct PartitionField {
+    #[serde(rename = "source-id", default)]
+    source_id: i32,
     name: String,
+    // aipnaming: allow(aip-140/verbs)
+    #[serde(default)]
+    transform: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,50 +101,244 @@ struct Snapshot {
     snapshot_time: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone)]
 struct ManifestFile {
     manifest_path: String,
-    #[serde(default)]
     content: i32,
+    partition_spec_id: i32,
+    added_snapshot_id: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ManifestEntry {
+struct EntryRecord {
     status: i32,
-    data_file: DataFile,
-}
-
-#[derive(Debug, Deserialize)]
-struct DataFile {
-    #[serde(default)]
+    snapshot_id: Option<i64>,
     content: i32,
     file_path: String,
     file_format: String,
-    #[serde(rename = "file_size_in_bytes")]
-    file_size_bytes: i64,
+    size_bytes: i64,
+    record_count: i64,
+    partition: Vec<(String, AvroValue)>,
 }
 
-const STATUS_DELETED: i32 = 2;
-const CONTENT_DATA: i32 = 0;
-const MANIFEST_DELETES: i32 = 1;
+pub(super) async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error> {
+    let metadata = read_metadata(lake, &request.uri).await?;
+    let selected = select_snapshot(&metadata, request.snapshot_version)?;
+    let snapshot_version = selected
+        .map(|snapshot| create_u64(snapshot.snapshot_id))
+        .transpose()?
+        .unwrap_or(0);
+    let (files, deletes) = match selected.filter(|_| request.require_files) {
+        Some(snapshot) => active_files(lake, &metadata, snapshot).await?,
+        None => (Vec::new(), Vec::new()),
+    };
+    let mut log = if request.require_files {
+        ancestry_log(&metadata, selected, &v1::name::local_table(&request.uri))?
+    } else {
+        Vec::new()
+    };
+    if let Some(commit) = log.iter_mut().find(|c| c.version == snapshot_version) {
+        commit
+            .actions
+            .extend(files.iter().map(|file| v1::LogAction {
+                kind: Some("add".into()),
+                path: Some(file.path.clone()),
+                size_bytes: file.size_bytes,
+            }));
+        commit
+            .actions
+            .extend(deletes.into_iter().map(|path| v1::LogAction {
+                kind: Some("delete".into()),
+                path: Some(path),
+                size_bytes: None,
+            }));
+    }
+    let mut info = TableInfo::new(
+        v1::TableFormat::Iceberg,
+        request.uri.clone(),
+        snapshot_version,
+        partition_columns(&metadata),
+        log,
+        files,
+    );
+    info.columns = columns(&metadata);
+    info.iceberg_properties = metadata.properties;
+    Ok(info)
+}
 
-fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
-    metadata
+pub(super) async fn stream_commits(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
+    let metadata = read_metadata(lake, &request.uri).await?;
+    let selected = select_snapshot(&metadata, request.snapshot_version)?;
+    let table = v1::name::local_table(&request.uri);
+    let commits = ancestry_newest_first(&metadata, selected)
+        .map(|snapshot| {
+            let version = create_u64(snapshot.snapshot_id)?;
+            Ok(v1::Commit {
+                name: v1::name::commit_name(&table, &version.to_string()),
+                version,
+                commit_time: snapshot.snapshot_time,
+                commit_info: None,
+                actions: Vec::new(),
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(stream::iter(commits.into_iter().map(Ok)))
+}
+
+pub(super) async fn stream_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<impl Stream<Item = Result<v1::TableFile, Error>>, Error> {
+    let mut request = request.clone();
+    request.require_files = true;
+    let info = load(lake, &request).await?;
+    let files = match request.commit_versions.as_ref() {
+        Some(named) if !named.contains(&info.snapshot_version) => Vec::new(),
+        _ => info.files,
+    };
+    Ok(stream::iter(files.into_iter().map(Ok)))
+}
+
+pub(super) async fn stream_active_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<super::FileStream<'static>, Error> {
+    let metadata = Arc::new(read_metadata(lake, &request.uri).await?);
+    let Some(snapshot) = select_snapshot(&metadata, request.snapshot_version)? else {
+        return Ok(stream::empty().boxed());
+    };
+    let root = table_root(&metadata.location)?;
+    let snapshot_id = snapshot.snapshot_id;
+    let work = manifests(lake, &snapshot.manifest_list)
+        .await?
+        .into_iter()
+        .filter(|manifest| manifest.content == CONTENT_DATA)
+        .map(move |manifest| (snapshot_id, manifest));
+    Ok(stream_manifests(
+        lake,
+        work,
+        move |fallback_id, manifest, entries| {
+            entries
+                .into_iter()
+                .filter(|entry| {
+                    entry.status != STATUS_DELETED && entry_content(manifest, entry) == CONTENT_DATA
+                })
+                .map(|entry| data_file(&metadata, manifest, Some(fallback_id), &root, &entry))
+                .collect()
+        },
+    ))
+}
+
+pub(super) async fn stream_removed_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<super::FileStream<'static>, Error> {
+    Ok(stream_snapshot_files(lake, request)
+        .await?
+        .try_filter_map(|item| async move {
+            Ok(match item {
+                SnapshotFile::Removed(file) => Some(file),
+                SnapshotFile::Active(_) | SnapshotFile::Delete(_) => None,
+            })
+        })
+        .boxed())
+}
+
+/// Stream a snapshot's removed, active, and delete files while reading the
+/// metadata JSON, each manifest list, and each manifest at most once.
+pub(super) async fn stream_snapshot_files(
+    lake: &Lake,
+    request: &LoadRequest,
+) -> Result<SnapshotStream<'static>, Error> {
+    let metadata = Arc::new(read_metadata(lake, &request.uri).await?);
+    let Some(snapshot) = select_snapshot(&metadata, request.snapshot_version)? else {
+        return Ok(stream::empty().boxed());
+    };
+    let snapshot_id = snapshot.snapshot_id;
+    let root = table_root(&metadata.location)?;
+    let current = manifests(lake, &snapshot.manifest_list).await?;
+    let mut read_lists = BTreeSet::from([snapshot.manifest_list.clone()]);
+    let mut seen: BTreeSet<String> = current.iter().map(|m| m.manifest_path.clone()).collect();
+    let mut work = Vec::new();
+    for other in &metadata.snapshots {
+        if other.snapshot_id != snapshot_id && read_lists.insert(other.manifest_list.clone()) {
+            work.extend(
+                manifests(lake, &other.manifest_list)
+                    .await?
+                    .into_iter()
+                    .filter(|m| m.content == CONTENT_DATA && seen.insert(m.manifest_path.clone()))
+                    .map(|manifest| ((other.snapshot_id, false), manifest)),
+            );
+        }
+    }
+    work.extend(
+        current
+            .into_iter()
+            .rev()
+            .map(|manifest| ((snapshot_id, true), manifest)),
+    );
+    Ok(stream_manifests(
+        lake,
+        work.into_iter(),
+        move |(fallback_id, is_current), manifest, entries| {
+            let (removed, rest): (Vec<_>, Vec<_>) = entries
+                .into_iter()
+                .filter_map(|entry| {
+                    classify_entry(&metadata, manifest, fallback_id, is_current, &root, &entry)
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .partition(|item| matches!(item, SnapshotFile::Removed(_)));
+            Ok(removed.into_iter().chain(rest).collect())
+        },
+    ))
+}
+
+fn classify_entry(
+    metadata: &TableMetadata,
+    manifest: &ManifestFile,
+    fallback_id: i64,
+    is_current: bool,
+    root: &TableRoot,
+    entry: &EntryRecord,
+) -> Result<Option<SnapshotFile>, Error> {
+    let is_data = entry_content(manifest, entry) == CONTENT_DATA;
+    match (is_current, entry.status == STATUS_DELETED, is_data) {
+        (false, _, true) | (true, true, true) => {
+            table_file(metadata, manifest, Some(fallback_id), root, entry)
+                .map(|file| Some(SnapshotFile::Removed(file)))
+        }
+        (true, false, true) => data_file(metadata, manifest, Some(fallback_id), root, entry)
+            .map(|file| Some(SnapshotFile::Active(file))),
+        (true, false, false) => table_file(metadata, manifest, Some(fallback_id), root, entry)
+            .map(|file| Some(SnapshotFile::Delete(file))),
+        _ => Ok(None),
+    }
+}
+
+/// The partition columns of the table: the default spec's non-`void` fields
+/// first, then any non-`void` field another spec in `partition-specs` declares.
+pub(super) fn partition_columns(metadata: &TableMetadata) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let (default, rest): (Vec<_>, Vec<_>) = metadata
         .partition_specs
         .iter()
-        .find(|spec| spec.spec_id == metadata.default_spec_id)
-        .or_else(|| metadata.partition_specs.first())
-        .map(|spec| spec.fields.iter().map(|field| field.name.clone()).collect())
-        .unwrap_or_default()
+        .partition(|spec| spec.spec_id == metadata.default_spec_id);
+    default
+        .into_iter()
+        .chain(rest)
+        .flat_map(|spec| &spec.fields)
+        .filter(|field| field.transform != "void" && seen.insert(field.name.as_str()))
+        .map(|field| field.name.clone())
+        .collect()
 }
 
 /// The columns of the current schema; the first schema when none is marked.
-fn columns(metadata: &TableMetadata) -> Vec<v1::DeclaredColumn> {
-    metadata
-        .schemas
-        .iter()
-        .find(|schema| schema.schema_id == metadata.current_schema_id)
-        .or_else(|| metadata.schemas.first())
+pub(super) fn columns(metadata: &TableMetadata) -> Vec<v1::DeclaredColumn> {
+    current_schema(metadata)
         .map(|schema| {
             schema
                 .fields
@@ -257,22 +354,71 @@ fn columns(metadata: &TableMetadata) -> Vec<v1::DeclaredColumn> {
         .unwrap_or_default()
 }
 
-/// A primitive type is its name; a nested type stays the format's JSON form.
-fn type_name(value: &Value) -> String {
+fn current_schema(metadata: &TableMetadata) -> Option<&Schema> {
+    metadata
+        .schemas
+        .iter()
+        .find(|schema| schema.schema_id == metadata.current_schema_id)
+        .or_else(|| metadata.schemas.first())
+}
+
+fn source_type(metadata: &TableMetadata, source_id: i32) -> Option<String> {
+    current_schema(metadata)
+        .into_iter()
+        .chain(&metadata.schemas)
+        .find_map(|schema| field_type(&schema.fields, source_id))
+}
+
+fn field_type(fields: &[Field], id: i32) -> Option<String> {
+    fields
+        .iter()
+        .find(|field| field.id == id)
+        .map(|field| type_name(&field.data_type))
+        .or_else(|| {
+            fields
+                .iter()
+                .find_map(|field| nested_field_type(&field.data_type, id))
+        })
+}
+
+fn nested_field_type(value: &JsonValue, id: i32) -> Option<String> {
+    value.get("fields")?.as_array()?.iter().find_map(|item| {
+        (item.get("id")?.as_i64() == Some(i64::from(id)))
+            .then(|| item.get("type").map(type_name))
+            .flatten()
+            .or_else(|| item.get("type").and_then(|ty| nested_field_type(ty, id)))
+    })
+}
+
+fn type_name(value: &JsonValue) -> String {
     match value {
-        Value::String(name) => name.clone(),
+        JsonValue::String(name) => name.clone(),
         other => other.to_string(),
     }
 }
 
+async fn read_metadata(lake: &Lake, uri: &str) -> Result<TableMetadata, Error> {
+    let location = resolve_metadata_location(lake, uri).await?;
+    let bytes = read_location(lake, &location).await?;
+    let metadata: TableMetadata = serde_json::from_slice(&bytes).map_err(Error::Json)?;
+    if !(1..=VERSION_LAST).contains(&metadata.format_version) {
+        return Err(Error::Invalid(format!(
+            "unsupported Iceberg format version: {}",
+            metadata.format_version
+        )));
+    }
+    Ok(metadata)
+}
+
 fn select_snapshot(
     metadata: &TableMetadata,
-    requested: Option<i64>,
+    requested: Option<u64>,
 ) -> Result<Option<&Snapshot>, Error> {
     let snapshot_id = match requested {
-        Some(snapshot_id) => snapshot_id,
+        Some(version) => i64::try_from(version)
+            .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is too large: {version}")))?,
         None => match metadata.current_snapshot_id.filter(|id| *id != -1) {
-            Some(snapshot_id) => snapshot_id,
+            Some(id) => id,
             None => return Ok(None),
         },
     };
@@ -284,104 +430,125 @@ fn select_snapshot(
         .ok_or_else(|| Error::Invalid(format!("Iceberg snapshot does not exist: {snapshot_id}")))
 }
 
-/// Visit the table's snapshots, newest first, without collecting them.
-///
-/// The metadata JSON carries the snapshot ancestry, so no manifest or data file
-/// is read.
-///
-/// Iceberg's history is the selected snapshot's ancestry — a list the metadata
-/// JSON already fixes — so the read resolves it and streams it in order.
-pub(super) async fn stream_commits(
-    lake: &Lake,
-    request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<v1::Commit, Error>>, Error> {
-    let metadata_location = resolve_metadata_location(lake, &request.uri).await?;
-    let metadata_bytes = read_location(lake, &metadata_location).await?;
-    let metadata: TableMetadata = serde_json::from_slice(&metadata_bytes).map_err(Error::Json)?;
-    if metadata.format_version != 1 && metadata.format_version != 2 {
-        return Err(Error::Invalid(format!(
-            "unsupported Iceberg format version: {}",
-            metadata.format_version
-        )));
-    }
-    let requested = request.snapshot_version.map(create_i64).transpose()?;
-    let selected = select_snapshot(&metadata, requested)?;
-    // `ancestry` walks from the selected snapshot back through its parents, so
-    // the newest snapshot comes first.
-    let mut commits = Vec::new();
-    let table = v1::name::local_table(&request.uri);
-    for snapshot in ancestry(&metadata, selected) {
-        let version = create_u64(snapshot.snapshot_id)?;
-        commits.push(v1::Commit {
-            name: v1::name::commit_name(&table, &version.to_string()),
-            version,
-            commit_time: snapshot.snapshot_time,
-            commit_info: None,
-            actions: Vec::new(),
-        });
-    }
-    Ok(stream::iter(commits.into_iter().map(Ok)))
-}
-
-/// Stream the files the selected snapshot's manifests name.
-///
-/// An Iceberg snapshot attaches its files only when it is resolved, and this read
-/// resolves one snapshot — the requested one, or the latest — so the files are
-/// that snapshot's. A request that names commits and does not name that snapshot
-/// yields none: what an older snapshot added is a separate manifest read.
-///
-/// Each file carries the size the manifest declares, which `bytemass`
-/// cross-checks against the footer.
-pub(super) async fn stream_files(
-    lake: &Lake,
-    request: &LoadRequest,
-) -> Result<impl Stream<Item = Result<v1::TableFile, Error>>, Error> {
-    let mut request = request.clone();
-    request.require_files = true;
-    let info = load(lake, &request).await?;
-    let files = match request.commit_versions.as_ref() {
-        Some(named) if !named.contains(&info.snapshot_version) => Vec::new(),
-        _ => info.files,
-    };
-    // `data_file` already resolved each blob and normalized its relative path.
-    Ok(stream::iter(files.into_iter().map(Ok)))
-}
-
-fn ancestry<'a>(metadata: &'a TableMetadata, selected: Option<&'a Snapshot>) -> Vec<&'a Snapshot> {
-    let Some(selected) = selected else {
-        return Vec::new();
-    };
+fn ancestry_newest_first<'a>(
+    metadata: &'a TableMetadata,
+    selected: Option<&'a Snapshot>,
+) -> impl Iterator<Item = &'a Snapshot> {
     let mut seen = BTreeSet::new();
-    let newest_first: Vec<&Snapshot> = std::iter::successors(Some(selected), |snapshot| {
+    std::iter::successors(selected, move |snapshot| {
         snapshot
             .parent_snapshot_id
             .filter(|parent| *parent != -1)
-            .and_then(|id| {
-                metadata
-                    .snapshots
-                    .iter()
-                    .find(|snapshot| snapshot.snapshot_id == id)
-            })
+            .and_then(|id| metadata.snapshots.iter().find(|s| s.snapshot_id == id))
     })
-    // A parent cycle would otherwise repeat the snapshots it names.
-    .take_while(|snapshot| seen.insert(snapshot.snapshot_id))
-    .collect();
-    newest_first.into_iter().rev().collect()
+    .take_while(move |snapshot| seen.insert(snapshot.snapshot_id))
+}
+
+fn ancestry_log(
+    metadata: &TableMetadata,
+    selected: Option<&Snapshot>,
+    table: &str,
+) -> Result<Vec<v1::Commit>, Error> {
+    ancestry_newest_first(metadata, selected)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|snapshot| {
+            let version = create_u64(snapshot.snapshot_id)?;
+            Ok(v1::Commit {
+                name: v1::name::commit_name(table, &version.to_string()),
+                version,
+                commit_time: snapshot.snapshot_time,
+                commit_info: None,
+                actions: vec![v1::LogAction {
+                    kind: Some("snapshot".into()),
+                    path: Some(snapshot.manifest_list.clone()),
+                    size_bytes: None,
+                }],
+            })
+        })
+        .collect()
+}
+
+async fn active_files(
+    lake: &Lake,
+    metadata: &TableMetadata,
+    snapshot: &Snapshot,
+) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
+    let root = table_root(&metadata.location)?;
+    let (mut files, mut deletes) = (Vec::new(), Vec::new());
+    for manifest in manifests(lake, &snapshot.manifest_list).await? {
+        for entry in manifest_entries(lake, &manifest).await? {
+            if entry.status == STATUS_DELETED {
+                continue;
+            }
+            if entry_content(&manifest, &entry) == CONTENT_DATA {
+                files.push(data_file(
+                    metadata,
+                    &manifest,
+                    Some(snapshot.snapshot_id),
+                    &root,
+                    &entry,
+                )?);
+            } else {
+                deletes.push(
+                    data_file_parts(&root, &entry.file_path)
+                        .map_or(entry.file_path, |(_, relative)| relative),
+                );
+            }
+        }
+    }
+    Ok((files, deletes))
+}
+
+fn stream_manifests<I, T, F>(
+    lake: &Lake,
+    work: impl Iterator<Item = (I, ManifestFile)> + Send + 'static,
+    map_manifest: F,
+) -> BoxStream<'static, Result<T, Error>>
+where
+    I: Send + 'static,
+    T: Send + 'static,
+    F: Fn(I, &ManifestFile, Vec<EntryRecord>) -> Result<Vec<T>, Error> + Send + Sync + 'static,
+{
+    let lake = lake.clone();
+    let map_manifest = Arc::new(map_manifest);
+    stream::iter(work)
+        .then(move |(context, manifest)| {
+            let lake = lake.clone();
+            let map_manifest = Arc::clone(&map_manifest);
+            async move {
+                let entries = manifest_entries(&lake, &manifest).await?;
+                map_manifest(context, &manifest, entries)
+            }
+        })
+        .map_ok(|items| stream::iter(items.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
 }
 
 async fn resolve_metadata_location(lake: &Lake, uri: &str) -> Result<String, Error> {
-    if is_metadata_json(uri) {
+    if uri
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|name| name.ends_with(".metadata.json"))
+    {
         return Ok(uri.to_string());
     }
     if is_local(uri) {
         return local_metadata(&local_path(uri)?);
     }
     let hint = join_uri(uri, "metadata/version-hint.text")?;
-    let bytes = read_location(lake, &hint).await?;
-    let version = parse_hint_version(&String::from_utf8_lossy(&bytes))?;
+    let version = parse_hint_version(&String::from_utf8_lossy(&read_location(lake, &hint).await?))?;
     for name in hint_names(version) {
         let candidate = join_uri(uri, &format!("metadata/{name}"))?;
-        if object_exists(lake, &candidate).await? {
+        let reader =
+            object_store::open(lake, &candidate).map_err(|e| Error::Storage(Box::new(e)))?;
+        if reader
+            .exists()
+            .await
+            .map_err(|e| Error::Storage(Box::new(e)))?
+        {
             return Ok(candidate);
         }
     }
@@ -395,57 +562,33 @@ fn local_metadata(root: &Path) -> Result<String, Error> {
         return Ok(root.to_string_lossy().into_owned());
     }
     let metadata = root.join("metadata");
-    match hint_metadata(&metadata)? {
-        Some(found) => Ok(found),
-        None => newest_metadata(&metadata),
-    }
-}
-
-/// Resolve the metadata JSON named by `version-hint.text`, when the directory
-/// has one.
-fn hint_metadata(metadata: &Path) -> Result<Option<String>, Error> {
     let hint_path = metadata.join("version-hint.text");
-    if !hint_path.is_file() {
-        return Ok(None);
+    if hint_path.is_file() {
+        let hint =
+            std::fs::read_to_string(&hint_path).map_err(|source| io_error(&hint_path, source))?;
+        let version = parse_hint_version(&hint)?;
+        return hint_names(version)
+            .into_iter()
+            .map(|name| metadata.join(name))
+            .find(|candidate| candidate.is_file())
+            .map(|path| path.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                Error::Invalid(format!(
+                    "version-hint.text is {version} but no matching metadata JSON is in {}",
+                    metadata.display()
+                ))
+            });
     }
-    let hint = std::fs::read_to_string(&hint_path).map_err(|e| Error::Io {
-        path: hint_path.display().to_string(),
-        source: e,
-    })?;
-    let version = parse_hint_version(&hint)?;
-    for name in hint_names(version) {
-        let candidate = metadata.join(name);
-        if candidate.is_file() {
-            return Ok(Some(candidate.to_string_lossy().into_owned()));
-        }
-    }
-    Err(Error::Invalid(format!(
-        "version-hint.text is {version} but no matching metadata JSON is in {}",
-        metadata.display()
-    )))
-}
-
-/// The newest metadata JSON in the directory, by leading version.
-fn newest_metadata(metadata: &Path) -> Result<String, Error> {
-    let entries = std::fs::read_dir(metadata).map_err(|e| Error::Io {
-        path: metadata.display().to_string(),
-        source: e,
-    })?;
-    let mut found = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| Error::Io {
-            path: metadata.display().to_string(),
-            source: e,
-        })?;
-        let name = entry.file_name();
-        let Some(version) = metadata_json_version(&name.to_string_lossy()) else {
-            continue;
-        };
-        found.push((version, entry.path()));
-    }
-    found.sort_by_key(|(version, _)| *version);
-    found
-        .pop()
+    std::fs::read_dir(&metadata)
+        .map_err(|source| io_error(&metadata, source))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| io_error(&metadata, source))?
+        .into_iter()
+        .filter_map(|entry| {
+            metadata_json_version(&entry.file_name().to_string_lossy())
+                .map(|version| (version, entry.path()))
+        })
+        .max_by_key(|(version, _)| *version)
         .map(|(_, path)| path.to_string_lossy().into_owned())
         .ok_or_else(|| {
             Error::Invalid(format!(
@@ -474,162 +617,264 @@ fn hint_names(version: u64) -> [String; 3] {
 
 fn metadata_json_version(name: &str) -> Option<u64> {
     let stem = name.strip_suffix(".metadata.json")?;
-    let stem = stem.strip_prefix('v').unwrap_or(stem);
-    // Iceberg writes `v1.metadata.json`, `1.metadata.json`, and the
-    // `00001-<uuid>.metadata.json` form; only the leading version is the sort
-    // key, and a bare `<uuid>.metadata.json` has none.
-    let version = stem.split('-').next()?;
-    if version.is_empty() || !version.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    version.parse().ok()
+    let version = stem.strip_prefix('v').unwrap_or(stem).split('-').next()?;
+    (!version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| version.parse().ok())
+        .flatten()
 }
 
-async fn active_files(
-    lake: &Lake,
-    table_location: &str,
-    manifest_list: &str,
-) -> Result<(Vec<v1::TableFile>, Vec<String>), Error> {
-    let root = table_root(table_location)?;
-    let entries: Vec<Entry> = active_entries(
-        lake.clone(),
-        table_location.to_owned(),
-        manifest_list.to_owned(),
-    )
-    .await?
-    .try_collect()
-    .await?;
-    let mut files = Vec::with_capacity(entries.len());
-    let mut deletes = Vec::new();
-    for entry in entries {
-        match entry {
-            Entry::Data(file) => files.push(file),
-            Entry::Delete(path) => {
-                // A delete outside the table keeps the manifest's raw path in
-                // the log; it is never read.
-                deletes.push(
-                    data_file_parts(&root, &path)
-                        .map(|(_, relative)| relative)
-                        .unwrap_or(path),
-                );
-            }
-        }
-    }
-    Ok((files, deletes))
-}
-
-/// One entry the active manifests name.
-///
-/// A manifest's entries are built together, so the data variant's size is one
-/// manifest's cost, not the walk's state; a `Box` would add an allocation to
-/// every file to save a few hundred bytes of stack.
-#[allow(clippy::large_enum_variant)]
-enum Entry {
-    /// A data file to measure.
-    Data(v1::TableFile),
-    /// A delete file's path: named in the log, never measured.
-    Delete(String),
-}
-
-/// One manifest entry as an active entry, or `None` when the entry is deleted.
-fn active_entry(
+fn data_file(
+    metadata: &TableMetadata,
+    manifest: &ManifestFile,
+    fallback_snapshot_id: Option<i64>,
     root: &TableRoot,
-    manifest_content: i32,
-    entry: ManifestEntry,
-) -> Option<Result<Entry, Error>> {
-    if entry.status == STATUS_DELETED {
-        return None;
-    }
-    let content = if manifest_content == MANIFEST_DELETES && entry.data_file.content == CONTENT_DATA
-    {
-        MANIFEST_DELETES
-    } else {
-        entry.data_file.content
-    };
-    if content != CONTENT_DATA {
-        return Some(Ok(Entry::Delete(entry.data_file.file_path)));
-    }
-    Some(data_file(root, entry).map(Entry::Data))
-}
-
-/// Stream the active manifests' entries, without collecting them.
-///
-/// The manifest list is read once; each manifest is then read when the walk
-/// reaches it, so a table holds one manifest's entries at a time however many
-/// manifests its snapshot names.
-async fn active_entries(
-    lake: Lake,
-    table_location: String,
-    manifest_list: String,
-) -> Result<impl Stream<Item = Result<Entry, Error>> + Send + 'static, Error> {
-    let root = table_root(&table_location)?;
-    let bytes = read_location(&lake, &manifest_list).await?;
-    let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
-    Ok(stream::iter(manifests)
-        .then(move |manifest| {
-            let lake = lake.clone();
-            let root = root.clone();
-            async move {
-                let bytes = read_location(&lake, &manifest.manifest_path).await?;
-                let entries: Vec<ManifestEntry> =
-                    read_avro(&bytes, "manifest").map_err(Error::Avro)?;
-                Ok(entries
-                    .into_iter()
-                    .filter_map(|entry| active_entry(&root, manifest.content, entry))
-                    .collect::<Vec<_>>())
-            }
-        })
-        .map_ok(stream::iter)
-        .try_flatten())
-}
-
-/// Stream the selected snapshot's active files, without collecting them.
-///
-/// Iceberg records no per-file time, so a caller's window can only drop what
-/// arrives; the walk is the snapshot's manifests either way.
-pub(super) async fn stream_active_files(
-    lake: &Lake,
-    request: &LoadRequest,
-) -> Result<super::FileStream<'static>, Error> {
-    let metadata = read_metadata(lake, &request.uri).await?;
-    let location = metadata.location.clone();
-    let requested = request.snapshot_version.map(create_i64).transpose()?;
-    let Some(snapshot) = select_snapshot(&metadata, requested)? else {
-        return Ok(stream::empty().boxed());
-    };
-    let manifest_list = snapshot.manifest_list.clone();
-    Ok(active_entries(lake.clone(), location, manifest_list)
-        .await?
-        .try_filter_map(|entry| async move {
-            Ok(match entry {
-                Entry::Data(file) => Some(file),
-                Entry::Delete(_) => None,
-            })
-        })
-        .boxed())
-}
-
-/// One active manifest entry as a `v1::TableFile`, checking it is Parquet.
-fn data_file(root: &TableRoot, entry: ManifestEntry) -> Result<v1::TableFile, Error> {
-    if !entry.data_file.file_format.eq_ignore_ascii_case("parquet") {
+    entry: &EntryRecord,
+) -> Result<v1::TableFile, Error> {
+    if !entry.file_format.eq_ignore_ascii_case("parquet") {
         return Err(Error::Invalid(format!(
             "active data file is not Parquet: {}",
-            entry.data_file.file_path
+            entry.file_path
         )));
     }
-    let size = u64::try_from(entry.data_file.file_size_bytes).map_err(|_| {
+    table_file(metadata, manifest, fallback_snapshot_id, root, entry)
+}
+
+fn table_file(
+    metadata: &TableMetadata,
+    manifest: &ManifestFile,
+    fallback_snapshot_id: Option<i64>,
+    root: &TableRoot,
+    entry: &EntryRecord,
+) -> Result<v1::TableFile, Error> {
+    let size = u64::try_from(entry.size_bytes).map_err(|_| {
         Error::Invalid(format!(
             "invalid file size in manifest: {}",
-            entry.data_file.file_path
+            entry.file_path
         ))
     })?;
-    let (uri, relative) = data_file_parts(root, &entry.data_file.file_path)?;
+    let (uri, relative) = data_file_parts(root, &entry.file_path)?;
+    let snapshot_id = entry
+        .snapshot_id
+        .or(manifest.added_snapshot_id)
+        .or(fallback_snapshot_id);
+    let modification_time = snapshot_id
+        .and_then(|id| metadata.snapshots.iter().find(|s| s.snapshot_id == id))
+        .and_then(|snapshot| snapshot.snapshot_time)
+        .and_then(|time| u64::try_from(time).ok());
     Ok(v1::TableFile {
         blob: Some(v1::name::blob_name(&uri)),
         path: relative,
         size_bytes: Some(size),
+        modification_time,
+        partition_values: partition_values(metadata, manifest, &entry.partition),
+        stats: u64::try_from(entry.record_count)
+            .ok()
+            .map(|record_count| v1::FileStats {
+                record_count,
+                ..v1::FileStats::default()
+            }),
         ..v1::TableFile::default()
     })
+}
+
+fn entry_content(manifest: &ManifestFile, entry: &EntryRecord) -> i32 {
+    if manifest.content == MANIFEST_DELETES && entry.content == CONTENT_DATA {
+        MANIFEST_DELETES
+    } else {
+        entry.content
+    }
+}
+
+async fn manifests(lake: &Lake, manifest_list: &str) -> Result<Vec<ManifestFile>, Error> {
+    read_avro_values(&read_location(lake, manifest_list).await?, "manifest list")
+        .map_err(Error::Avro)?
+        .into_iter()
+        .map(|row| {
+            Ok(ManifestFile {
+                manifest_path: row
+                    .str("manifest_path")
+                    .ok_or_else(|| {
+                        Error::Invalid(
+                            "an Iceberg manifest-list entry names no manifest_path".into(),
+                        )
+                    })?
+                    .to_owned(),
+                content: row.int("content").unwrap_or(0) as i32,
+                partition_spec_id: row.int("partition_spec_id").unwrap_or(0) as i32,
+                added_snapshot_id: row.int("added_snapshot_id"),
+            })
+        })
+        .collect()
+}
+
+async fn manifest_entries(lake: &Lake, manifest: &ManifestFile) -> Result<Vec<EntryRecord>, Error> {
+    read_avro_values(
+        &read_location(lake, &manifest.manifest_path).await?,
+        "manifest",
+    )
+    .map_err(Error::Avro)?
+    .into_iter()
+    .map(|row| {
+        let data_file = row
+            .get("data_file")
+            .filter(|value| value.fields().is_some())
+            .ok_or_else(|| Error::Invalid("an Iceberg manifest entry names no data_file".into()))?;
+        Ok(EntryRecord {
+            status: row.int("status").unwrap_or(0) as i32,
+            snapshot_id: row.int("snapshot_id"),
+            content: data_file.int("content").unwrap_or(0) as i32,
+            file_path: data_file.str("file_path").unwrap_or_default().to_owned(),
+            file_format: data_file.str("file_format").unwrap_or_default().to_owned(),
+            size_bytes: data_file.int("file_size_in_bytes").unwrap_or(0),
+            record_count: data_file.int("record_count").unwrap_or(-1),
+            partition: data_file
+                .get("partition")
+                .and_then(AvroValue::fields)
+                .unwrap_or_default()
+                .to_vec(),
+        })
+    })
+    .collect()
+}
+
+fn partition_values(
+    metadata: &TableMetadata,
+    manifest: &ManifestFile,
+    partition: &[(String, AvroValue)],
+) -> BTreeMap<String, Option<String>> {
+    let spec = metadata
+        .partition_specs
+        .iter()
+        .find(|spec| spec.spec_id == manifest.partition_spec_id)
+        .or_else(|| {
+            metadata
+                .partition_specs
+                .iter()
+                .find(|spec| spec.spec_id == metadata.default_spec_id)
+        })
+        .or_else(|| metadata.partition_specs.first());
+    partition
+        .iter()
+        .filter_map(|(name, value)| {
+            let field = spec.and_then(|spec| spec.fields.iter().find(|f| &f.name == name));
+            let transform = field.map_or("identity", |f| f.transform.as_str());
+            if transform == "void" && matches!(value, AvroValue::Null) {
+                return None;
+            }
+            let source = field.and_then(|f| source_type(metadata, f.source_id));
+            let text = (!matches!(value, AvroValue::Null))
+                .then(|| partition_text(transform, source.as_deref(), value));
+            Some((name.clone(), text))
+        })
+        .collect()
+}
+
+fn partition_text(transform: &str, source_type: Option<&str>, value: &AvroValue) -> String {
+    let iso = |time: DateTime<Utc>| time.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+    match (
+        transform.split('[').next().unwrap_or(transform),
+        source_type,
+        value,
+    ) {
+        ("year", _, AvroValue::Int(years)) => format!("{:04}", 1970 + years),
+        ("month", _, AvroValue::Int(months)) => format!(
+            "{:04}-{:02}",
+            1970 + months.div_euclid(12),
+            months.rem_euclid(12) + 1
+        ),
+        ("day", _, AvroValue::Int(days))
+        | ("" | "identity", Some("date"), AvroValue::Int(days)) => {
+            civil_date(*days).unwrap_or_else(|| days.to_string())
+        }
+        ("hour", _, AvroValue::Int(hours)) => hours
+            .checked_mul(3_600)
+            .and_then(|secs| DateTime::from_timestamp(secs, 0))
+            .map_or_else(
+                || hours.to_string(),
+                |time| time.format("%Y-%m-%d-%H").to_string(),
+            ),
+        ("" | "identity", Some("timestamp" | "timestamptz"), AvroValue::Int(micros)) => {
+            DateTime::from_timestamp_micros(*micros).map_or_else(|| micros.to_string(), iso)
+        }
+        ("" | "identity", Some("timestamp_ms"), AvroValue::Int(millis)) => {
+            DateTime::from_timestamp_millis(*millis).map_or_else(|| millis.to_string(), iso)
+        }
+        ("" | "identity", Some("timestamp_ns" | "timestamptz_ns"), AvroValue::Int(nanos)) => {
+            iso(DateTime::from_timestamp_nanos(*nanos))
+        }
+        ("" | "identity", Some("uuid"), AvroValue::Bytes(bytes)) if bytes.len() == 16 => {
+            let digits = hex(bytes);
+            format!(
+                "{}-{}-{}-{}-{}",
+                &digits[0..8],
+                &digits[8..12],
+                &digits[12..16],
+                &digits[16..20],
+                &digits[20..32]
+            )
+        }
+        ("" | "identity", Some("uuid"), AvroValue::Text(text)) => text.to_lowercase(),
+        (_, Some(ty), AvroValue::Bytes(bytes)) if ty.starts_with("decimal(") => {
+            decimal_text(ty, bytes).unwrap_or_else(|| hex(bytes))
+        }
+        (_, _, AvroValue::Int(number)) => number.to_string(),
+        (_, _, AvroValue::Text(text)) => text.clone(),
+        (_, _, AvroValue::Bytes(bytes)) => hex(bytes),
+        (_, _, AvroValue::Null | AvroValue::Record(_)) => String::new(),
+    }
+}
+
+fn civil_date(days: i64) -> Option<String> {
+    NaiveDate::from_ymd_opt(1970, 1, 1)?
+        .checked_add_signed(Duration::days(days))
+        .map(|date| date.format("%Y-%m-%d").to_string())
+}
+
+fn decimal_text(source_type: &str, bytes: &[u8]) -> Option<String> {
+    let (_, scale) = source_type
+        .strip_prefix("decimal(")?
+        .strip_suffix(')')?
+        .split_once(',')?;
+    let scale: u32 = scale.trim().parse().ok()?;
+    let unscaled = unscaled_value(bytes)?;
+    Some(scaled_text(unscaled, scale))
+}
+
+fn unscaled_value(bytes: &[u8]) -> Option<i128> {
+    (bytes.len() <= 16).then(|| {
+        let sign = if bytes.first().is_some_and(|first| first & 0x80 != 0) {
+            -1
+        } else {
+            0
+        };
+        bytes
+            .iter()
+            .fold(sign, |acc, &byte| (acc << 8) | i128::from(byte))
+    })
+}
+
+fn scaled_text(unscaled: i128, scale: u32) -> String {
+    if scale == 0 {
+        return unscaled.to_string();
+    }
+    let magnitude = unscaled.unsigned_abs();
+    let divisor = 10_u128.pow(scale);
+    let sign = if unscaled < 0 { "-" } else { "" };
+    format!(
+        "{sign}{}.{:0width$}",
+        magnitude / divisor,
+        magnitude % divisor,
+        width = scale as usize
+    )
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        })
 }
 
 #[derive(Clone)]
@@ -639,137 +884,94 @@ enum TableRoot {
 }
 
 fn table_root(location: &str) -> Result<TableRoot, Error> {
-    if looks_like_uri(location) {
-        let url = parse_dir_url(location)?;
-        if url.scheme() == "file" {
-            let path = url.to_file_path().map_err(|()| {
-                Error::Invalid(format!(
-                    "cannot convert table location to a path: {location}"
-                ))
-            })?;
-            return Ok(TableRoot::Local(path));
-        }
-        return Ok(TableRoot::Object(url));
+    if !location.contains("://") {
+        return Ok(TableRoot::Local(PathBuf::from(location)));
     }
-    Ok(TableRoot::Local(PathBuf::from(location)))
-}
-
-/// The data file's readable URI and its path relative to the table root.
-///
-/// Iceberg manifests may name a file either relative to the table location or
-/// by full URI; a `TableFile` records the relative form (as Delta does) and
-/// keeps the resolved URI only on its `Blob`.
-fn data_file_parts(root: &TableRoot, location: &str) -> Result<(String, String), Error> {
-    match root {
-        TableRoot::Local(root) => {
-            let path = local_data_path(root, location)?;
-            let relative = path.strip_prefix(root).map_err(|_| {
-                Error::Invalid(format!(
-                    "active data file is outside the Iceberg table location: {location}"
-                ))
-            })?;
-            if !relative
-                .components()
-                .all(|component| matches!(component, Component::Normal(_)))
-            {
-                return Err(Error::Invalid(format!(
-                    "active data file is outside the Iceberg table location: {location}"
-                )));
-            }
-            Ok((path.to_string_lossy().into_owned(), slash_path(relative)))
-        }
-        TableRoot::Object(base) => {
-            let uri = object_input(base, location)?;
-            let url = Url::parse(&uri).map_err(Error::Uri)?;
-            let relative = url.path().strip_prefix(base.path()).ok_or_else(|| {
-                Error::Invalid(format!(
-                    "active data file is outside the Iceberg table location: {location}"
-                ))
-            })?;
-            let relative = crate::v1::name::decode(relative);
-            if relative.is_empty()
-                || !Path::new(&relative)
-                    .components()
-                    .all(|component| matches!(component, Component::Normal(_)))
-            {
-                return Err(Error::Invalid(format!(
-                    "active data file is outside the Iceberg table location: {location}"
-                )));
-            }
-            Ok((url.to_string(), relative))
-        }
-    }
-}
-
-/// A relative filesystem path with `/` separators, the form a resource id uses.
-fn slash_path(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(part) => Some(part.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn local_data_path(root: &Path, location: &str) -> Result<PathBuf, Error> {
-    let candidate = if looks_like_uri(location) {
-        let url = Url::parse(location).map_err(Error::Uri)?;
-        if url.scheme() != "file" {
-            return Err(Error::Invalid(format!(
-                "active data file is not local: {location}"
-            )));
-        }
-        url.to_file_path().map_err(|()| {
-            Error::Invalid(format!(
-                "cannot convert active data file to a path: {location}"
-            ))
-        })?
-    } else {
-        relative_data_path(location)?.to_path_buf()
-    };
-    let local = if candidate.is_absolute() {
-        candidate
-    } else {
-        root.join(candidate)
-    };
-    if !local.starts_with(root) {
-        return Err(Error::Invalid(format!(
-            "active data file is outside the Iceberg table location: {location}"
-        )));
-    }
-    Ok(local)
-}
-
-fn object_input(base: &Url, location: &str) -> Result<String, Error> {
-    let uri = if looks_like_uri(location) {
-        location.to_string()
-    } else {
-        relative_data_path(location)?;
-        base.join(location).map_err(Error::Uri)?.into()
-    };
-    let url = Url::parse(&uri).map_err(Error::Uri)?;
-    if url.scheme() != base.scheme()
-        || url.host_str() != base.host_str()
-        || !url.path().starts_with(base.path())
-    {
-        return Err(Error::Invalid(format!(
-            "active data file is outside the Iceberg table location: {location}"
-        )));
-    }
-    Ok(uri)
-}
-
-fn parse_dir_url(location: &str) -> Result<Url, Error> {
     let mut url = Url::parse(location).map_err(Error::Uri)?;
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    Ok(url)
+    if url.scheme() == "file" {
+        return url.to_file_path().map(TableRoot::Local).map_err(|()| {
+            Error::Invalid(format!(
+                "cannot convert table location to a path: {location}"
+            ))
+        });
+    }
+    Ok(TableRoot::Object(url))
+}
+
+fn data_file_parts(root: &TableRoot, location: &str) -> Result<(String, String), Error> {
+    let outside = || {
+        Error::Invalid(format!(
+            "active data file is outside the Iceberg table location: {location}"
+        ))
+    };
+    match root {
+        TableRoot::Local(root) => {
+            let candidate = if location.contains("://") {
+                let url = Url::parse(location).map_err(Error::Uri)?;
+                if url.scheme() != "file" {
+                    return Err(Error::Invalid(format!(
+                        "active data file is not local: {location}"
+                    )));
+                }
+                url.to_file_path().map_err(|()| {
+                    Error::Invalid(format!(
+                        "cannot convert active data file to a path: {location}"
+                    ))
+                })?
+            } else {
+                relative_data_path(location)?.to_path_buf()
+            };
+            let full = if candidate.is_absolute() {
+                candidate
+            } else {
+                root.join(candidate)
+            };
+            let relative = full.strip_prefix(root).map_err(|_| outside())?;
+            if !is_normal_relative(relative) {
+                return Err(outside());
+            }
+            let slash = relative
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(part) => Some(part.to_string_lossy()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            Ok((full.to_string_lossy().into_owned(), slash))
+        }
+        TableRoot::Object(base) => {
+            let url = if location.contains("://") {
+                Url::parse(location).map_err(Error::Uri)?
+            } else {
+                relative_data_path(location)?;
+                base.join(location).map_err(Error::Uri)?
+            };
+            if url.scheme() != base.scheme() || url.host_str() != base.host_str() {
+                return Err(outside());
+            }
+            let relative =
+                crate::v1::name::decode(url.path().strip_prefix(base.path()).ok_or_else(outside)?);
+            if !is_normal_relative(Path::new(&relative)) {
+                return Err(outside());
+            }
+            Ok((url.into(), relative))
+        }
+    }
+}
+
+fn is_normal_relative(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 async fn read_location(lake: &Lake, location: &str) -> Result<Vec<u8>, Error> {
-    if looks_like_uri(location) {
+    if location.contains("://") {
         let reader = object_store::open(lake, location).map_err(|e| Error::Storage(Box::new(e)))?;
         let stat = reader
             .stat()
@@ -780,29 +982,15 @@ async fn read_location(lake: &Lake, location: &str) -> Result<Vec<u8>, Error> {
             .await
             .map_err(|e| Error::Storage(Box::new(e)))
     } else {
-        std::fs::read(location).map_err(|e| Error::Io {
-            path: location.to_string(),
-            source: e,
-        })
+        std::fs::read(Path::new(location)).map_err(|source| io_error(Path::new(location), source))
     }
 }
 
-async fn object_exists(lake: &Lake, location: &str) -> Result<bool, Error> {
-    let reader = object_store::open(lake, location).map_err(|e| Error::Storage(Box::new(e)))?;
-    reader
-        .exists()
-        .await
-        .map_err(|e| Error::Storage(Box::new(e)))
-}
-
-fn is_metadata_json(uri: &str) -> bool {
-    uri.rsplit(['/', '\\'])
-        .next()
-        .is_some_and(|name| name.ends_with(".metadata.json"))
-}
-
-fn looks_like_uri(value: &str) -> bool {
-    value.contains("://")
+fn io_error(path: &Path, source: std::io::Error) -> Error {
+    Error::Io {
+        path: path.display().to_string(),
+        source,
+    }
 }
 
 fn create_u64(value: i64) -> Result<u64, Error> {
@@ -810,45 +998,92 @@ fn create_u64(value: i64) -> Result<u64, Error> {
         .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is negative: {value}")))
 }
 
-fn create_i64(value: u64) -> Result<i64, Error> {
-    i64::try_from(value)
-        .map_err(|_| Error::Invalid(format!("Iceberg snapshot id is too large: {value}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn object_paths_are_relative_decoded_and_canonical() {
-        let root = TableRoot::Object(Url::parse("s3://bucket/table/").unwrap());
-        let (uri, path) = data_file_parts(&root, "s3://bucket/table/data/a%20b.parquet").unwrap();
-        assert_eq!(uri, "s3://bucket/table/data/a%20b.parquet");
-        assert_eq!(path, "data/a b.parquet");
+    fn paths_resolve_and_reject_escapes() {
+        let object = TableRoot::Object(Url::parse("s3://bucket/table/").unwrap());
+        for input in ["s3://bucket/table/data/a%20b.parquet", "data/a%20b.parquet"] {
+            let (uri, path) = data_file_parts(&object, input).unwrap();
+            assert_eq!(uri, "s3://bucket/table/data/a%20b.parquet");
+            assert_eq!(path, "data/a b.parquet");
+        }
+        assert!(data_file_parts(&object, "s3://bucket/other/a.parquet").is_err());
+        assert!(data_file_parts(&object, "s3://other/table/a.parquet").is_err());
 
-        let (uri, path) = data_file_parts(&root, "data/a%20b.parquet").unwrap();
-        assert_eq!(uri, "s3://bucket/table/data/a%20b.parquet");
-        assert_eq!(path, "data/a b.parquet");
+        let local = TableRoot::Local(PathBuf::from("/tmp/table"));
+        assert_eq!(
+            data_file_parts(&local, "data/a.parquet").unwrap(),
+            ("/tmp/table/data/a.parquet".into(), "data/a.parquet".into())
+        );
+        assert!(data_file_parts(&local, "file:///tmp/other/a.parquet").is_err());
     }
 
     #[test]
-    fn object_paths_outside_the_table_are_rejected() {
-        let root = TableRoot::Object(Url::parse("s3://bucket/table/").unwrap());
-        assert!(data_file_parts(&root, "s3://bucket/other/a.parquet").is_err());
-        assert!(data_file_parts(&root, "s3://other/table/a.parquet").is_err());
-    }
-
-    #[test]
-    fn local_paths_are_relative_to_the_table_root() {
-        let root = TableRoot::Local(PathBuf::from("/tmp/table"));
-        let (uri, path) = data_file_parts(&root, "data/a.parquet").unwrap();
-        assert_eq!(uri, "/tmp/table/data/a.parquet");
-        assert_eq!(path, "data/a.parquet");
-    }
-
-    #[test]
-    fn local_paths_outside_the_table_are_rejected() {
-        let root = TableRoot::Local(PathBuf::from("/tmp/table"));
-        assert!(data_file_parts(&root, "file:///tmp/other/a.parquet").is_err());
+    fn transforms_and_identity_types_format_values() {
+        let uuid = vec![
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x8a, 0xbc, 0xde, 0xf0, 0x12, 0x34,
+            0x56, 0x78,
+        ];
+        let cases = [
+            ("year", None, AvroValue::Int(55), "2025"),
+            ("month", None, AvroValue::Int(661), "2025-02"),
+            ("month", None, AvroValue::Int(0), "1970-01"),
+            ("day", Some("date"), AvroValue::Int(20_089), "2025-01-01"),
+            (
+                "day",
+                Some("date"),
+                AvroValue::Text("2025-01-01".into()),
+                "2025-01-01",
+            ),
+            (
+                "hour",
+                Some("timestamp"),
+                AvroValue::Int(481_321),
+                "2024-11-28-01",
+            ),
+            (
+                "identity",
+                Some("timestamptz"),
+                AvroValue::Int(1_735_689_600_000_000),
+                "2025-01-01T00:00:00Z",
+            ),
+            (
+                "identity",
+                Some("uuid"),
+                AvroValue::Bytes(uuid),
+                "12345678-9abc-4def-8abc-def012345678",
+            ),
+            (
+                "identity",
+                Some("decimal(9, 2)"),
+                AvroValue::Bytes(vec![0x30, 0x39]),
+                "123.45",
+            ),
+            (
+                "identity",
+                Some("decimal(9, 2)"),
+                AvroValue::Bytes(vec![0xfb]),
+                "-0.05",
+            ),
+            (
+                "identity",
+                Some("binary"),
+                AvroValue::Bytes(vec![0x0f, 0xff]),
+                "0fff",
+            ),
+            ("bucket[16]", Some("long"), AvroValue::Int(7), "7"),
+            (
+                "truncate[3]",
+                Some("string"),
+                AvroValue::Text("abc".into()),
+                "abc",
+            ),
+        ];
+        for (transform, source, value, expected) in cases {
+            assert_eq!(partition_text(transform, source, &value), expected);
+        }
     }
 }

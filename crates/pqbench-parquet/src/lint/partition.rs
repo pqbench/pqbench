@@ -1,12 +1,12 @@
-//! `tombstones` and `small-files`: the storage a partition's metadata alone
-//! shows it does not need, without reading a file.
+//! `tombstones`, `small-files`, and `delete-files`: the storage a partition's
+//! metadata alone shows it does not need, without reading a file.
 //!
-//! Both rules decide from the totals `list partitions` already folded, so they
-//! cost no read and hold for every partition of the walk, including the ones
-//! whose files a host with little network never copies. The bytes a tombstone
-//! holds are exact (`removed_size_bytes` is the log's own sum), so the
-//! `tombstones` record is verified as it is found; `small-files` has no byte
-//! saving of its own and states a verdict instead.
+//! All three rules decide from the totals `list partitions` already folded, so
+//! they cost no read and hold for every partition of the walk, including the
+//! ones whose files a host with little network never copies. The bytes a
+//! tombstone holds are exact (`removed_size_bytes` is the log's own sum), so the
+//! `tombstones` record is verified as it is found; `small-files` and
+//! `delete-files` have no byte saving of their own and state a verdict instead.
 
 use crate::v1;
 
@@ -15,6 +15,9 @@ pub const TOMBSTONES_RULE: &str = "tombstones";
 
 /// The rule id a small-files suggestion carries.
 pub const SMALL_FILES_RULE: &str = "small-files";
+
+/// The rule id a delete-files suggestion carries.
+pub const DELETE_FILES_RULE: &str = "delete-files";
 
 /// Removed bytes worth a vacuum on their own.
 const TOMBSTONES_MIN_BYTES: u64 = 1024 * 1024;
@@ -28,6 +31,17 @@ const SMALL_FILES_MIN_COUNT: u64 = 16;
 
 /// The average active file size below which a partition's files are small.
 const SMALL_FILES_AVERAGE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Delete files worth a rewrite on their own: a scan pays for each one, however
+/// small it is.
+const DELETE_FILES_MIN_COUNT: u64 = 4;
+
+/// Delete bytes worth a rewrite on their own.
+const DELETE_FILES_MIN_BYTES: u64 = 1024 * 1024;
+
+/// Delete bytes worth a rewrite against the data they narrow: at least one
+/// twentieth, since a delete file is read on every scan it applies to.
+const DELETE_FILES_ACTIVE_DENOMINATOR: u64 = 20;
 
 /// The settings that delete a partition's tombstones, one per engine.
 ///
@@ -58,13 +72,38 @@ fn compaction_remedies() -> Vec<v1::Remedy> {
     ]
 }
 
+/// The settings that merge a partition's delete files into its data files, one
+/// per engine.
+///
+/// A merge-on-read table pays for its deletes twice: the delete files are
+/// stored, and every scan reads them alongside the data. Rewriting the data
+/// files applies them and leaves the position-delete files empty.
+fn delete_remedies() -> Vec<v1::Remedy> {
+    vec![
+        v1::Remedy::new(
+            "iceberg",
+            "ALTER TABLE <table> EXECUTE rewrite_data_files; \
+             ALTER TABLE <table> EXECUTE rewrite_position_delete_files",
+        ),
+        v1::Remedy::new(
+            "spark",
+            "CALL system.rewrite_data_files(table => '<table>'); \
+             CALL system.rewrite_position_delete_files(table => '<table>')",
+        ),
+    ]
+}
+
 /// The suggestions a partition's metadata alone supports, one per rule that
-/// triggers. Both rules are engine-agnostic: the suggestion names the settings
+/// triggers. Every rule is engine-agnostic: the suggestion names the settings
 /// of every engine that can apply it.
 #[must_use]
 pub fn partition_suggestions(partition: &v1::Partition) -> Vec<v1::Suggestion> {
-    let rules = [tombstones, small_files];
+    let rules = [tombstones, small_files, delete_files];
     rules.iter().filter_map(|rule| rule(partition)).collect()
+}
+
+fn exceeds_bytes_or_share(bytes: u64, min_bytes: u64, active_bytes: u64, denom: u64) -> bool {
+    bytes >= min_bytes || (active_bytes > 0 && bytes.saturating_mul(denom) >= active_bytes)
 }
 
 /// The bytes a vacuum recovers: the removed files the log still counts, when
@@ -72,10 +111,12 @@ pub fn partition_suggestions(partition: &v1::Partition) -> Vec<v1::Suggestion> {
 fn tombstones(partition: &v1::Partition) -> Option<v1::Suggestion> {
     let removed_bytes = partition.removed_size_bytes.filter(|bytes| *bytes > 0)?;
     let active_bytes = partition.size_bytes;
-    let large = removed_bytes >= TOMBSTONES_MIN_BYTES;
-    let share = active_bytes > 0
-        && removed_bytes.saturating_mul(TOMBSTONES_ACTIVE_DENOMINATOR) >= active_bytes;
-    if !large && !share {
+    if !exceeds_bytes_or_share(
+        removed_bytes,
+        TOMBSTONES_MIN_BYTES,
+        active_bytes,
+        TOMBSTONES_ACTIVE_DENOMINATOR,
+    ) {
         return None;
     }
     let remedies = vacuum_remedies();
@@ -119,6 +160,41 @@ fn small_files(partition: &v1::Partition) -> Option<v1::Suggestion> {
             partition.file_count,
             human_bytes(average_bytes),
             human_bytes(SMALL_FILES_AVERAGE_BYTES),
+        ),
+        remedy,
+        remedies,
+    ))
+}
+
+/// The verdict on a partition whose merge-on-read delete files are worth
+/// rewriting: enough of them, large enough, or large against the data they
+/// narrow.
+///
+/// One delete file is a normal write, not a problem; a scan reads it anyway, so
+/// it becomes one when there are several, when the file is large, or when it is
+/// not small next to the data it deletes from.
+fn delete_files(partition: &v1::Partition) -> Option<v1::Suggestion> {
+    let delete_file_count = partition.delete_file_count.filter(|count| *count > 0)?;
+    let delete_size_bytes = partition.delete_size_bytes.unwrap_or_default();
+    if delete_file_count < DELETE_FILES_MIN_COUNT
+        && !exceeds_bytes_or_share(
+            delete_size_bytes,
+            DELETE_FILES_MIN_BYTES,
+            partition.size_bytes,
+            DELETE_FILES_ACTIVE_DENOMINATOR,
+        )
+    {
+        return None;
+    }
+    let remedies = delete_remedies();
+    let remedy = super::setting(&remedies, "iceberg");
+    Some(candidate(
+        partition,
+        DELETE_FILES_RULE,
+        format!(
+            "{delete_file_count} delete files totalling {} are merge-on-read deletes, read on \
+             every scan and stored until a rewrite folds them into the data",
+            human_bytes(delete_size_bytes),
         ),
         remedy,
         remedies,
@@ -329,13 +405,77 @@ mod tests {
         }
     }
 
-    /// Both rules can trigger on one partition, and each names its own rule.
+    /// A partition whose log reports `delete_file_count` merge-on-read delete
+    /// files totalling `delete_size_bytes`.
+    fn deleting(
+        partition: v1::Partition,
+        delete_file_count: u64,
+        delete_size_bytes: u64,
+    ) -> v1::Partition {
+        v1::Partition {
+            delete_file_count: Some(delete_file_count),
+            delete_size_bytes: Some(delete_size_bytes),
+            ..partition
+        }
+    }
+
     #[test]
-    fn a_partition_can_earn_both_rules() {
-        let partition = tombstoned(partition(20, 20 * 1024 * 1024), 2, 3 * 1024 * 1024);
+    fn delete_files_trigger_on_the_count_the_bytes_or_the_share() {
+        for partition in [
+            deleting(partition(1, 1_000_000), DELETE_FILES_MIN_COUNT, 4_000),
+            deleting(partition(1, 100 * 1024 * 1024), 1, DELETE_FILES_MIN_BYTES),
+            deleting(partition(1, 1024 * 1024), 1, 64 * 1024),
+        ] {
+            let suggestions = partition_suggestions(&partition);
+            let suggestion = rule(&suggestions, DELETE_FILES_RULE).unwrap();
+            assert_eq!(suggestion.verified, None);
+            assert_eq!(suggestion.savings_bytes, None);
+            assert!(suggestion.remedy.contains("rewrite_position_delete_files"));
+            for engine in ["iceberg", "spark"] {
+                assert!(suggestion.remedies.iter().any(|r| r.engine == engine));
+            }
+        }
+    }
+
+    /// One delete file is a normal write; it earns a rewrite only when it is
+    /// large, or large next to the data it narrows.
+    #[test]
+    fn delete_files_do_not_trigger_on_one_small_file() {
+        let small = DELETE_FILES_MIN_BYTES - 1;
+        for partition in [
+            // A partition with no delete files at all: an un-merged table.
+            partition(10, 100 * 1024 * 1024),
+            deleting(partition(10, 100 * 1024 * 1024), 0, 0),
+            deleting(
+                partition(10, 100 * 1024 * 1024),
+                DELETE_FILES_MIN_COUNT - 1,
+                small,
+            ),
+            deleting(partition(0, 0), 1, 1024),
+        ] {
+            assert!(
+                rule(&partition_suggestions(&partition), DELETE_FILES_RULE).is_none(),
+                "{partition:?}"
+            );
+        }
+    }
+
+    /// All three rules can trigger on one partition, in rule order, and each
+    /// names its own rule.
+    #[test]
+    fn a_partition_can_earn_every_partition_rule() {
+        let partition = deleting(
+            tombstoned(partition(20, 20 * 1024 * 1024), 2, 3 * 1024 * 1024),
+            2,
+            2 * 1024 * 1024,
+        );
         let suggestions = partition_suggestions(&partition);
-        assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions.len(), 3);
         assert_eq!(suggestions[0].rule, TOMBSTONES_RULE);
         assert_eq!(suggestions[1].rule, SMALL_FILES_RULE);
+        assert_eq!(suggestions[2].rule, DELETE_FILES_RULE);
+        // The rules that predate delete files keep their Delta-first remedy.
+        assert_eq!(suggestions[0].remedy, "VACUUM <table> RETAIN 168 HOURS");
+        assert_eq!(suggestions[1].remedy, "OPTIMIZE <table>");
     }
 }

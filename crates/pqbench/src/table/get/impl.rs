@@ -16,7 +16,6 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
-use serde_json::Value;
 
 use super::api::{Error, Table, TableFormat as Dialect};
 use crate::dialect;
@@ -201,51 +200,9 @@ struct LoadedTable {
     metadata: Option<IcebergMetadata>,
 }
 
-#[derive(Deserialize)]
-struct IcebergMetadata {
-    #[serde(rename = "current-snapshot-id", default)]
-    current_snapshot_id: Option<i64>,
-    #[serde(rename = "current-schema-id", default)]
-    current_schema_id: i32,
-    #[serde(rename = "default-spec-id", default)]
-    default_spec_id: i32,
-    #[serde(default)]
-    schemas: Vec<IcebergSchema>,
-    #[serde(rename = "partition-specs", default)]
-    partition_specs: Vec<IcebergPartitionSpec>,
-    #[serde(default)]
-    properties: BTreeMap<String, String>,
-}
-
-#[derive(Deserialize)]
-struct IcebergSchema {
-    #[serde(rename = "schema-id")]
-    schema_id: i32,
-    #[serde(default)]
-    fields: Vec<IcebergField>,
-}
-
-#[derive(Deserialize)]
-struct IcebergField {
-    name: String,
-    #[serde(rename = "type")]
-    data_type: Value,
-    #[serde(default)]
-    required: bool,
-}
-
-#[derive(Deserialize)]
-struct IcebergPartitionSpec {
-    #[serde(rename = "spec-id")]
-    spec_id: i32,
-    #[serde(default)]
-    fields: Vec<IcebergPartitionField>,
-}
-
-#[derive(Deserialize)]
-struct IcebergPartitionField {
-    name: String,
-}
+/// The inline metadata is the table's own metadata JSON, so it parses into the
+/// loader's type and its columns and partition columns are read the same way.
+type IcebergMetadata = crate::table::iceberg::TableMetadata;
 
 async fn iceberg_record(
     workspace: &Workspace,
@@ -272,8 +229,8 @@ async fn iceberg_record(
     let metadata = loaded
         .metadata
         .ok_or_else(|| Error::Malformed(format!("the table {name} has no metadata")))?;
-    let columns = columns(&metadata);
-    let partition_columns = partition_columns(&metadata);
+    let columns = crate::table::iceberg::columns(&metadata);
+    let partition_columns = crate::table::iceberg::partition_columns(&metadata);
     // The metadata JSON is what a later stage reads: an Iceberg table root is
     // only detectable when it carries `metadata/version-hint.text`, so the
     // storage path names the metadata JSON instead.
@@ -294,46 +251,4 @@ async fn iceberg_record(
     info.columns = columns;
     info.iceberg_properties = metadata.properties;
     Ok(info)
-}
-
-/// The columns of the current schema; the first schema when none is marked.
-fn columns(metadata: &IcebergMetadata) -> Vec<v1::DeclaredColumn> {
-    metadata
-        .schemas
-        .iter()
-        .find(|schema| schema.schema_id == metadata.current_schema_id)
-        .or_else(|| metadata.schemas.first())
-        .map(|schema| {
-            schema
-                .fields
-                .iter()
-                .map(|field| v1::DeclaredColumn {
-                    column: field.name.clone(),
-                    data_type: table::non_empty(&type_name(&field.data_type)),
-                    nullable: !field.required,
-                    position: None,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The partition fields of the default spec; the first spec when none is
-/// marked.
-fn partition_columns(metadata: &IcebergMetadata) -> Vec<String> {
-    metadata
-        .partition_specs
-        .iter()
-        .find(|spec| spec.spec_id == metadata.default_spec_id)
-        .or_else(|| metadata.partition_specs.first())
-        .map(|spec| spec.fields.iter().map(|field| field.name.clone()).collect())
-        .unwrap_or_default()
-}
-
-/// A primitive type is its name; a nested type stays the format's JSON form.
-fn type_name(value: &Value) -> String {
-    match value {
-        Value::String(name) => name.clone(),
-        other => other.to_string(),
-    }
 }

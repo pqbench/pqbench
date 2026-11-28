@@ -234,13 +234,14 @@ re-encode a leaf's values, so they measure scalar leaves only. `codec-zstd` and
 `stats-truncated` read page headers, page bytes, and footer facts, so they
 measure any leaf, nested `list<struct>` columns included.
 
-Two more decide from `list partitions` totals, so they read no file and hold
+Three more decide from `list partitions` totals, so they read no file and hold
 for partitions a host never copies:
 
 | Rule | What it finds | Remedy |
 | --- | --- | --- |
-| `tombstones` | Delta's removed files the log still holds | `VACUUM` (Delta), expire snapshots (Iceberg) |
+| `tombstones` | removed files no active file holds: Delta's tombstones, Iceberg's deleted entries and superseded snapshots | `VACUUM` (Delta), expire snapshots (Iceberg) |
 | `small-files` | many small files in one partition | `OPTIMIZE` (Delta), `rewrite_data_files` (Iceberg), a coalesce before write |
+| `delete-files` | merge-on-read delete files a scan still applies | `rewrite_data_files` and `rewrite_position_delete_files` (Iceberg) |
 
 A suggestion's `remedy` is the setting in the detected writer's own terms —
 parquet-mr takes per-column keys, pyarrow and parquet-rs write options, Photon

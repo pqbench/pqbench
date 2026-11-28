@@ -249,7 +249,8 @@ message TableFile {
   string path = 7;
 
   // The write time the log records for the file, in milliseconds since the
-  // Unix epoch. Absent when the log records none (Iceberg records none).
+  // Unix epoch: Delta's `add.modificationTime`, or the commit time of the
+  // Iceberg snapshot that added the file. Absent when the log records none.
   optional int64 modification_time = 8;
 
   // The probability a `sample files` stage kept this record with; its inverse
@@ -288,7 +289,7 @@ message Partition {
   int64 largest_file_size_bytes = 8;
 
   // The oldest and newest file by the log's modification time (ties fall to
-  // the path). Absent when the log records no per-file time (Iceberg).
+  // the path). Absent when the log records no per-file time.
   TableFile first_file = 9;
 
   TableFile last_file = 10;
@@ -297,13 +298,21 @@ message Partition {
   // size hash lowest, so it stays the same while the partition holds it.
   TableFile sample_file = 11;
 
-  // Files the snapshot removed whose tombstones it still keeps and no active
-  // file holds: stored, and billed, until a vacuum deletes them. Absent when
-  // the format's removed files are not read (Iceberg).
+  // Files the snapshot removed that no active file holds and that are still
+  // stored, and billed: Delta's tombstones until a vacuum, and Iceberg's
+  // deleted manifest entries and superseded snapshots until an expire.
   optional int64 removed_file_count = 12;
 
-  // Sum of the removed files' sizes, as the `remove` actions record them.
+  // Sum of the removed files' sizes.
   optional int64 removed_size_bytes = 13;
+
+  // Merge-on-read delete files the snapshot still applies: Iceberg position
+  // and equality deletes, and a v3 deletion vector. Absent when the partition
+  // holds none, and for a format without delete files (Delta).
+  optional int64 delete_file_count = 14;
+
+  // Sum of the delete files' sizes.
+  optional int64 delete_size_bytes = 15;
 }
 
 // A partition's storage price at one etag, the partition's singleton child
@@ -410,7 +419,7 @@ message PartitionVersion {
   optional int64 removed_size_bytes = 11;
 
   // When the version's newest file was written; absent when the log records
-  // no per-file time (Iceberg).
+  // no per-file time.
   optional int64 last_modification_time = 12;
 
   // The version's monthly storage cost from its price: the cheapest and the
@@ -634,10 +643,10 @@ message ColumnProfile {
 // suggestions` emits a column rule's potential (no `verified`); `get
 // suggestion` measures it against a control written by the same writer at the
 // same codec and level, then sets `verified` and, on a win, `savings_bytes`.
-// The partition rules (`tombstones`, `small-files`) decide from a partition's
-// metadata alone: their `name` is `{partition}/suggestions/{rule}`, their
-// `column` is empty, and `partition` names the partition. The fields below are
-// the wire contract.
+// The partition rules (`tombstones`, `small-files`, `delete-files`) decide from
+// a partition's metadata alone: their `name` is `{partition}/suggestions/{rule}`,
+// their `column` is empty, and `partition` names the partition. The fields
+// below are the wire contract.
 message Suggestion {
   // Format:
   // blobs/{service}/{locator}/columns/{column}/suggestions/{rule}
@@ -681,9 +690,10 @@ message Suggestion {
 
   // Whether the controlled rewrite confirms a saving, or, on a partition
   // rule, whether the rule's own count is exact. Absent on a potential from
-  // `list suggestions`, and on `small-files`, whose saving is not measured;
-  // true when `get suggestion` measured a win (or `tombstones` counted the
-  // removed bytes); false when the measurement measured none.
+  // `list suggestions`, and on `small-files` and `delete-files`, whose saving
+  // is not measured; true when `get suggestion` measured a win (or
+  // `tombstones` counted the removed bytes); false when the measurement
+  // measured none.
   optional bool verified = 11;
 
   // Estimated bytes saved, conservative across compression levels. Present

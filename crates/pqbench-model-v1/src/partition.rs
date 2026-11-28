@@ -33,7 +33,7 @@ pub struct Partition {
     /// The largest file's size.
     pub largest_file_size_bytes: u64,
     /// The oldest file by the log's modification time. Absent when the log
-    /// records no per-file time (Iceberg).
+    /// records no per-file time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_file: Option<TableFile>,
     /// The newest file by the log's modification time.
@@ -46,10 +46,17 @@ pub struct Partition {
     pub sample_file: Option<TableFile>,
     /// Files the snapshot removed whose tombstones it still keeps and no
     /// active file holds: stored, and billed, until a vacuum deletes them.
-    /// Absent when the format's removed files are not read (Iceberg).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed_file_count: Option<u64>,
     /// Sum of the removed files' sizes, as the `remove` actions record them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed_size_bytes: Option<u64>,
+    /// Merge-on-read delete files the snapshot still applies: position and
+    /// equality deletes, and a v3 deletion vector. Absent when the partition
+    /// holds none, and for a format without delete files (Delta).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_file_count: Option<u64>,
+    /// Sum of the delete files' sizes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_size_bytes: Option<u64>,
 }
