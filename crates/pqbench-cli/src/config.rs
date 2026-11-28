@@ -54,9 +54,10 @@ pub(crate) struct ConfigArgs {
 }
 
 /// How long one request may take. The library leaves the bound to its caller;
-/// two seconds is already far past a metadata read's own latency, so a read that
-/// has not answered by then is better retried than waited on.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+/// ten seconds covers a cross-region 256 KiB S3 footer GET under concurrent
+/// fan-out while still failing fast on a hung socket so the retry loop can
+/// recover it.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Resolve the run's configuration: the selected profile, then the environment,
 /// then the command line.

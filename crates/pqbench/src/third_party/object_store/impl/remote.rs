@@ -22,8 +22,13 @@ use crate::third_party::object_store::api::{
 use crate::third_party::reqwest::r#impl::Http;
 
 /// How long the store retries a failed request, the credential probes
-/// included: the same two seconds the client bounds one request with.
-const RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// included: bounded well below `object_store`'s three-minute default so
+/// refused probes still fail in seconds, while leaving room for retries after
+/// a cross-region S3 timeout.
+const RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Maximum retries for transient S3 transport/timeout errors.
+const MAX_RETRIES: usize = 3;
 
 /// The one `reqwest` client backs every store. `object_store` builds a fresh
 /// client on each `build()`, and `reqwest` re-parses the platform CA bundle
@@ -69,13 +74,13 @@ impl HttpService for ClassifySendFailure {
     }
 }
 
-/// Whether the underlying reqwest error is a request that could not be sent
-/// (the socket carried no response), rather than a permanent failure.
+/// Whether the underlying reqwest error is a transient send, timeout, or body
+/// failure on an idempotent read, rather than a permanent failure.
 fn sends_failed(error: &HttpError) -> bool {
     let mut source = std::error::Error::source(error);
     while let Some(error) = source {
         if let Some(error) = error.downcast_ref::<reqwest::Error>() {
-            return error.is_request();
+            return error.is_request() || error.is_timeout() || error.is_body();
         }
         source = error.source();
     }
@@ -287,6 +292,7 @@ impl Stores {
             // every unreadable table into minutes of a walk. A table that
             // cannot be read now fails within seconds, and is skipped.
             .with_retry(::object_store::RetryConfig {
+                max_retries: MAX_RETRIES,
                 retry_timeout: RETRY_TIMEOUT,
                 ..::object_store::RetryConfig::default()
             });
