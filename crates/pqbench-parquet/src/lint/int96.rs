@@ -40,8 +40,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     }
     Some(Finding {
         message: format!("an INT96 timestamp at {:.2} B/value", sample.text_bpv),
-        remedy: remedy(sample.writer_kind()),
-        remedies: remedies(),
+        remedy: remedy(sample.writer_kind(), sample.leaf),
+        remedies: remedies(sample.leaf),
         measure,
     })
 }
@@ -188,11 +188,15 @@ fn micros(value: &Int96) -> i64 {
 }
 
 /// The settings that write timestamps as microsecond `INT64`, one per engine.
-fn remedies() -> Vec<v1::Remedy> {
+fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     vec![
         v1::Remedy::new(
             "spark",
             "spark.sql.parquet.outputTimestampType=TIMESTAMP_MICROS",
+        ),
+        v1::Remedy::new(
+            "duckdb",
+            format!("CAST(\"{leaf}\" AS TIMESTAMP) in the COPY ... SELECT"),
         ),
         v1::Remedy::new("pyarrow", "use_deprecated_int96_timestamps=False"),
         v1::Remedy::new(
@@ -201,15 +205,15 @@ fn remedies() -> Vec<v1::Remedy> {
         ),
         v1::Remedy::new(
             "iceberg",
-            "ALTER TABLE <table> ALTER COLUMN <column> TYPE timestamp",
+            format!("ALTER TABLE <table> ALTER COLUMN {leaf} TYPE timestamp"),
         ),
     ]
 }
 
 /// The session setting that writes timestamps as microsecond `INT64`, in the
 /// detected writer's terms.
-fn remedy(writer: Writer) -> String {
-    let remedies = remedies();
+fn remedy(writer: Writer, leaf: &str) -> String {
+    let remedies = remedies(leaf);
     let setting = |engine: &str| super::setting(&remedies, engine);
     match writer {
         Writer::ParquetMr => setting("spark"),
@@ -291,13 +295,28 @@ mod tests {
 
     #[test]
     fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr).contains("TIMESTAMP_MICROS"));
-        assert!(remedy(Writer::Photon).contains("unverified"));
+        assert!(remedy(Writer::ParquetMr, "ts").contains("TIMESTAMP_MICROS"));
+        assert!(remedy(Writer::Photon, "ts").contains("unverified"));
         assert_eq!(
-            remedy(Writer::ArrowCpp),
+            remedy(Writer::ArrowCpp, "ts"),
             "use_deprecated_int96_timestamps=False"
         );
-        assert!(remedy(Writer::ArrowRs).contains("TIMESTAMP(MICROS)"));
+        assert!(remedy(Writer::ArrowRs, "ts").contains("TIMESTAMP(MICROS)"));
+        assert!(remedy(Writer::Other, "ts").contains("TYPE timestamp"));
+
+        // Every engine's setting names the column, and a duckdb identifier is
+        // quoted the way SQL quotes it.
+        let settings = super::remedies("request.@timestamp");
+        for engine in ["spark", "duckdb", "pyarrow", "parquet-rs", "iceberg"] {
+            assert!(
+                settings.iter().any(|remedy| remedy.engine == engine),
+                "no {engine} remedy"
+            );
+        }
+        assert!(settings.iter().any(|remedy| remedy.engine == "duckdb"
+            && remedy
+                .setting
+                .contains("CAST(\"request.@timestamp\" AS TIMESTAMP)")));
     }
 
     /// Twelve bytes per value against eight, with Delta binary packing for the

@@ -27,7 +27,13 @@ schema.
 
 `profile` adds the CLI's `id` (the input path) to each `ColumnProfile` row;
 see [Profile](profile.md). The `Bytemass` value is nested in `Column.mass`; it
-has no resource name of its own.
+has no resource name of its own. Besides the column chunk's own bytes, it
+carries the file's metadata accounting, which costs no extra read:
+`footer_bytes` (the serialized footer plus its eight-byte trailer, from the
+footer's own length) and `unaccounted_bytes` (the object's size less the sum of
+its chunks: footer, page indexes, bloom filters, key-value metadata). Both are
+file facts, so every column of a file carries the same pair, and a fold over
+sampled files weights them like the other additive quantities.
 
 A resource's `name` is its identity. The collection segment (`catalogs`,
 `schemas`, `tables`, `files`, `partitions`, `blobs`, `columns`) names the type, so no resource
@@ -45,7 +51,7 @@ Some commands emit a document that is not a resource: it has no addressable
 | `ReportRow` | [`lz`](cli.md#pqbench-lz), [`compression`](cli.md#pqbench-compression) | `name`, `codec`, `level`, `compress_estimate`, `decompress_estimate`, `compressed_bytes`, `uncompressed_bytes`, `ratio` |
 | `ColumnRow` | [`compression --per-column`](cli.md#pqbench-compression) | `ReportRow` fields plus `column` |
 | `ColumnDelta` | [`diff`](diff.md) | `column`, `left_bytes`, `right_bytes`, `delta_bytes`, `change_percent`, `left_values`, `right_values`, `left_bytes_per_value`, `right_bytes_per_value` |
-| `ColumnMass` | [`summarize columns`](cli.md#pqbench-summarize-columns) | `table`, `column`, `compressed_bytes`, `uncompressed_bytes`, `value_count`, `bytes_per_value`, `compression_ratio`, `file_count`, `storage_classes`, `storage_costs` |
+| `ColumnMass` | [`summarize columns`](cli.md#pqbench-summarize-columns) | `table`, `column`, `compressed_bytes`, `uncompressed_bytes`, `footer_bytes`, `unaccounted_bytes`, `value_count`, `bytes_per_value`, `compression_ratio`, `file_count`, `storage_classes`, `storage_costs` |
 | `Skill` | [`skill`](skill.md) (no arguments) | `kind: "pqbench.skill"`, `version`, `name`, `description`, `documents` |
 
 `ColumnDelta` has no `name`, so `pqb fmt` cannot place it in a table; pipe it
@@ -90,7 +96,8 @@ the same way. `bytemass` also records the footer's `created_by` as the blob's
 file's writer can actually change; `get suggestion` writes only the verdict
 (`verified`, `savings_bytes`). Scale
 only the additive quantities by its inverse — `size_bytes`, `compressed_bytes`,
-`uncompressed_bytes`, `dictionary_bytes`, `unencoded_bytes`, `value_count`,
+`uncompressed_bytes`, `footer_bytes`, `unaccounted_bytes`, `dictionary_bytes`,
+`unencoded_bytes`, `value_count`,
 `null_count`, `row_group_count`, a `Suggestion`'s `savings_bytes` — and
 recompute the ratios (`bytes_per_value`,
 `bytes_per_row`, `compression_ratio`, `null_fraction`, `dictionary_fraction`)

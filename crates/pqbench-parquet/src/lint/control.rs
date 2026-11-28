@@ -75,6 +75,16 @@ pub(super) fn source_encoding(mass: &v1::Bytemass) -> Option<Encoding> {
     }
 }
 
+/// The source integer column's own encoding, when the footer records one.
+///
+/// `PLAIN` is what a writer uses when it names nothing, so only a recorded
+/// `DELTA_BINARY_PACKED` has to be reproduced by name. A dictionary-encoded
+/// chunk's data pages hold indices, and its encoding set lists the dictionary
+/// encoding; `PLAIN` then stands for the dictionary's own value encoding.
+pub(super) fn integer_encoding(mass: &v1::Bytemass) -> Option<Encoding> {
+    records(mass, Encoding::DELTA_BINARY_PACKED).then_some(Encoding::DELTA_BINARY_PACKED)
+}
+
 /// One arm of a controlled pair: the values to encode and how to encode them.
 pub(super) struct Arm<'a> {
     pub(super) values: Values<'a>,

@@ -35,6 +35,16 @@ pub struct ColumnMass {
     /// reported them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uncompressed_bytes: Option<u64>,
+    /// Estimated footer and trailer bytes of the files that measured the
+    /// column, when every measurement reported them. The footer is a file fact,
+    /// so a column's fold counts it once per measured file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer_bytes: Option<u64>,
+    /// Estimated bytes outside every column chunk (footer, page indexes, bloom
+    /// filters, key-value metadata) across the measured files, when every
+    /// measurement reported them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unaccounted_bytes: Option<u64>,
     /// Estimated values in the column (including nulls).
     pub value_count: u64,
     /// [`Self::compressed_bytes`] divided by [`Self::value_count`].
@@ -239,6 +249,14 @@ impl ColumnSummary {
             Some(bytes) => Some(weighted(bytes, weight, "uncompressed_bytes")?),
             None => None,
         };
+        let footer = match mass.map(|mass| mass.footer_bytes) {
+            Some(bytes) if bytes > 0 => Some(weighted(bytes, weight, "footer_bytes")?),
+            _ => None,
+        };
+        let unaccounted = match mass.map(|mass| mass.unaccounted_bytes) {
+            Some(bytes) if bytes > 0 => Some(weighted(bytes, weight, "unaccounted_bytes")?),
+            _ => None,
+        };
         let values = weighted(
             mass.and_then(|mass| mass.value_count).unwrap_or(0),
             weight,
@@ -260,6 +278,8 @@ impl ColumnSummary {
         }
         total.compressed_bytes += bytes;
         total.uncompressed.add(uncompressed);
+        total.footer.add(footer);
+        total.unaccounted.add(unaccounted);
         total.value_count += values;
         let file = total.blobs.entry(blob).or_default();
         file.bytes += bytes;
@@ -286,11 +306,19 @@ impl ColumnSummary {
                 let uncompressed_bytes = (!mass.uncompressed.incomplete)
                     .then(|| round(mass.uncompressed.bytes, "uncompressed_bytes"))
                     .transpose()?;
+                let footer_bytes = (!mass.footer.incomplete)
+                    .then(|| round(mass.footer.bytes, "footer_bytes"))
+                    .transpose()?;
+                let unaccounted_bytes = (!mass.unaccounted.incomplete)
+                    .then(|| round(mass.unaccounted.bytes, "unaccounted_bytes"))
+                    .transpose()?;
                 rows.push(ColumnMass {
                     table: name.clone(),
                     column,
                     compressed_bytes,
                     uncompressed_bytes,
+                    footer_bytes,
+                    unaccounted_bytes,
                     value_count,
                     bytes_per_value: if value_count > 0 {
                         compressed_bytes as f64 / value_count as f64
@@ -365,14 +393,16 @@ fn round(value: f64, field: &'static str) -> Result<u64, Error> {
     }
 }
 
-/// Uncompressed bytes behind a fold, and whether a measurement omitted them.
+/// A summed total that must fit in `u64`, and whether a measurement omitted
+/// it. A field some measurement never reported is absent from the fold rather
+/// than undercounted.
 #[derive(Default)]
-struct Uncompressed {
+struct KnownSum {
     bytes: f64,
     incomplete: bool,
 }
 
-impl Uncompressed {
+impl KnownSum {
     fn add(&mut self, bytes: Option<f64>) {
         match bytes {
             Some(bytes) => self.bytes += bytes,
@@ -385,7 +415,9 @@ impl Uncompressed {
 #[derive(Default)]
 struct ColumnBytes {
     compressed_bytes: f64,
-    uncompressed: Uncompressed,
+    uncompressed: KnownSum,
+    footer: KnownSum,
+    unaccounted: KnownSum,
     value_count: f64,
     /// What each measured file contributed.
     blobs: BTreeMap<String, MeasuredFile>,
@@ -594,6 +626,47 @@ mod tests {
             summary.add_column(column)?;
         }
         summary.into_rows()
+    }
+
+    /// The file's metadata overhead adds up across the files that measured the
+    /// column, weighted like its other additive quantities, and stays absent
+    /// when a measurement did not report it.
+    #[test]
+    fn metadata_overhead_sums_across_files() {
+        let first = blob("s3://lake/lineitem/part-0.parquet");
+        let second = blob("s3://lake/lineitem/part-1.parquet");
+        let with = |file: &v1::Blob, footer_bytes: u64, unaccounted_bytes: u64| {
+            let mut column = column(file, Some(TABLE), "id", 4, 1);
+            if let Some(mass) = column.mass.as_mut() {
+                mass.footer_bytes = footer_bytes;
+                mass.unaccounted_bytes = unaccounted_bytes;
+            }
+            column
+        };
+
+        let rows = summarize(&[with(&first, 1_000, 3_000), with(&second, 2_000, 4_000)]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].footer_bytes, Some(3_000));
+        assert_eq!(rows[0].unaccounted_bytes, Some(7_000));
+
+        // A sampled file counts for the inverse of its rate, like the bytes do.
+        let sampled = v1::Blob {
+            sample_rate: Some(0.5),
+            ..blob("s3://lake/lineitem/part-2.parquet")
+        };
+        let rows = summarize(&[with(&sampled, 1_000, 3_000)]).unwrap();
+        assert_eq!(rows[0].footer_bytes, Some(2_000));
+        assert_eq!(rows[0].unaccounted_bytes, Some(6_000));
+
+        // A record from a source that measured no footer leaves the estimate
+        // absent rather than undercounting it.
+        let rows = summarize(&[
+            with(&first, 1_000, 3_000),
+            column(&second, Some(TABLE), "id", 4, 1),
+        ])
+        .unwrap();
+        assert_eq!(rows[0].footer_bytes, None);
+        assert_eq!(rows[0].unaccounted_bytes, None);
     }
 
     #[test]

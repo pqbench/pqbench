@@ -95,7 +95,18 @@ stateDiagram-v2
     Verifying --> UpToDate: verified
     Pricing --> UpToDate: archived
     Pricing --> Pending: failed (backoff)
+    Downloading --> Pending: failed (backoff)
+    Bytemassing --> Pending: failed (backoff)
+    Linting --> Pending: failed (backoff)
+    Verifying --> Pending: failed (backoff)
+    Pending --> Failed: six failures (quarantined)
     Pending --> [*]: purged
+    Failed --> [*]: a new etag is a new version
+    note right of Failed
+        Terminal: a quarantined version is never scheduled
+        again and a restart keeps it that way. The etag's
+        replacement is a new version, which starts at Pending.
+    end note
 ```
 
 ## Interfaces

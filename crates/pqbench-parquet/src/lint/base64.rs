@@ -181,6 +181,12 @@ fn decode(text: &[u8]) -> Option<Vec<u8>> {
     }
     let unpadded = text.strip_suffix(b"=").unwrap_or(text);
     let unpadded = unpadded.strip_suffix(b"=").unwrap_or(unpadded);
+    // Padding only pads a three-byte group, so it appears on a length that is a
+    // multiple of four: a trailing `=` on a `4k+1` string is a stray character,
+    // not part of a spelling.
+    if text.ends_with(b"=") && !text.len().is_multiple_of(4) {
+        return None;
+    }
     if unpadded.contains(&b'=') || unpadded.len() % 4 == 1 {
         return None;
     }
@@ -375,6 +381,20 @@ mod tests {
                 "{text} is not Base64 of a binary payload"
             );
         }
+    }
+
+    /// A trailing `=` pads a three-byte group, so it only belongs on a
+    /// four-character boundary. A stray one on a `4k+1` length would otherwise
+    /// be stripped and the text read as an unpadded spelling of the same bytes.
+    #[test]
+    fn a_stray_trailing_pad_is_rejected() {
+        let unpadded = base64(&payload(3, 18));
+        assert_eq!(unpadded.len() % 4, 0);
+        assert!(decode(unpadded.as_bytes()).is_some());
+
+        let stray = format!("{unpadded}=");
+        assert_eq!(stray.len() % 4, 1);
+        assert!(decode(stray.as_bytes()).is_none());
     }
 
     /// A Base64 column of binary payloads is a candidate and the control shows

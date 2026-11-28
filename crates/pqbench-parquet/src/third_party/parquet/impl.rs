@@ -4,6 +4,7 @@
 //! crate exposes is [`super::api::parse_pages`]. Tool code never imports
 //! `parquet` directly.
 
+use std::io::{Read, Seek};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -56,7 +57,7 @@ pub(crate) fn parse_pages(bytes: &[u8]) -> Result<ParquetFile, Error> {
 /// Decode byte masses from a complete Parquet footer without reading pages.
 pub(crate) fn read_footer_masses(footer: &[u8], size_bytes: u64) -> Result<FileMass, Error> {
     let metadata = footer_reader().parse_and_finish(&bytes::Bytes::copy_from_slice(footer))?;
-    Ok(create_masses(&metadata, size_bytes))
+    Ok(create_masses(&metadata, size_bytes, footer.len() as u64))
 }
 
 /// A metadata reader that keeps the footer's page encoding statistics whole.
@@ -342,16 +343,41 @@ fn value_text(value: &Value) -> String {
 }
 
 /// Read byte masses from a local file. One open: the size comes from the same
-/// handle the footer is read from.
+/// handle the footer is read from, and the trailer's last eight bytes give the
+/// footer's own length.
 pub(crate) fn read_file_masses(path: &Path) -> Result<FileMass, Error> {
-    let file = std::fs::File::open(path).map_err(Error::Io)?;
+    let mut file = std::fs::File::open(path).map_err(Error::Io)?;
     let size_bytes = file.metadata().map_err(Error::Io)?.len();
+    let footer_bytes = footer_length(&mut file, size_bytes).unwrap_or(0);
     let metadata = footer_reader().parse_and_finish(&file)?;
-    Ok(create_masses(&metadata, size_bytes))
+    Ok(create_masses(&metadata, size_bytes, footer_bytes))
+}
+
+/// The serialized footer and its trailer, from the trailer's own four-byte
+/// length. `None` when the file is too short to hold a trailer or the trailer
+/// is not one, so the mass records no footer bytes rather than a guess.
+fn footer_length(file: &mut std::fs::File, size_bytes: u64) -> Option<u64> {
+    const TRAILER_BYTES: u64 = 8;
+    if size_bytes < TRAILER_BYTES {
+        return None;
+    }
+    let mut trailer = [0_u8; TRAILER_BYTES as usize];
+    file.seek(std::io::SeekFrom::End(-(TRAILER_BYTES as i64)))
+        .ok()?;
+    file.read_exact(&mut trailer).ok()?;
+    if &trailer[4..] != b"PAR1" {
+        return None;
+    }
+    let metadata_len = u64::from(u32::from_le_bytes([
+        trailer[0], trailer[1], trailer[2], trailer[3],
+    ]));
+    metadata_len
+        .checked_add(TRAILER_BYTES)
+        .filter(|footer_bytes| *footer_bytes <= size_bytes)
 }
 
 /// Read one `ColumnMass` per column chunk from the parsed footer.
-fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
+fn create_masses(metadata: &ParquetMetaData, size_bytes: u64, footer_bytes: u64) -> FileMass {
     let mut row_count = 0u64;
     let mut columns = Vec::new();
     for row_group in metadata.row_groups() {
@@ -402,8 +428,11 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
             });
         }
     }
+    let accounted_bytes: u64 = columns.iter().map(|column| column.compressed_bytes).sum();
     FileMass {
         size_bytes,
+        footer_bytes,
+        unaccounted_bytes: size_bytes.saturating_sub(accounted_bytes),
         writer: metadata.file_metadata().created_by().map(str::to_owned),
         row_count,
         row_group_count: metadata.row_groups().len(),

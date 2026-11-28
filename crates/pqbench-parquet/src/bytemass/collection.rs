@@ -32,7 +32,9 @@ pub fn from_file_mass(
     let row_group_count = mass.row_group_count as u64;
     let row_count = mass.row_count;
     let writer = mass.writer.clone();
-    let columns = columns(name, mass)?;
+    let footer_bytes = mass.footer_bytes;
+    let unaccounted_bytes = mass.unaccounted_bytes;
+    let columns = columns(name, mass, footer_bytes, unaccounted_bytes)?;
     let blob = v1::Blob {
         name: name.to_string(),
         size_bytes: Some(size_bytes),
@@ -47,7 +49,14 @@ pub fn from_file_mass(
 }
 
 /// Fold one `ColumnMass` per chunk into one [`v1::Column`] per leaf column.
-fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
+/// `footer_bytes` and `unaccounted_bytes` are the file's, so each folded
+/// column carries them.
+fn columns(
+    blob_name: &str,
+    mass: FileMass,
+    footer_bytes: u64,
+    unaccounted_bytes: u64,
+) -> Result<Vec<v1::Column>, Error> {
     let (service, locator) = v1::name::parse_blob(blob_name)
         .ok_or_else(|| Error::Name(format!("{blob_name} is not a blobs/… name")))?;
     let row_count = mass.row_count;
@@ -73,12 +82,19 @@ fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
         chunks[index].push(chunk);
     }
     for (column, chunks) in columns.iter_mut().zip(chunks) {
-        column.mass = Some(measure(&chunks, row_count));
+        column.mass = Some(measure(&chunks, row_count, footer_bytes, unaccounted_bytes));
     }
     Ok(columns)
 }
 
-fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
+/// One column's mass from its chunks. The footer and unaccounted bytes are the
+/// file's, so every column of the file carries the same pair.
+fn measure(
+    chunks: &[ColumnMass],
+    row_count: u64,
+    footer_bytes: u64,
+    unaccounted_bytes: u64,
+) -> v1::Bytemass {
     let compressed_bytes = chunks.iter().map(|chunk| chunk.compressed_bytes).sum();
     let uncompressed_bytes = chunks.iter().map(|chunk| chunk.uncompressed_bytes).sum();
     let value_count = chunks.iter().map(|chunk| chunk.num_values).sum();
@@ -103,6 +119,8 @@ fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
         logical_type: uniform_logical_type(chunks),
         compressed_bytes: Some(compressed_bytes),
         uncompressed_bytes: Some(uncompressed_bytes),
+        footer_bytes,
+        unaccounted_bytes,
         codec: uniform_codec(chunks),
         encodings,
         data_encodings,

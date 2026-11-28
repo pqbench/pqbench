@@ -8,6 +8,6 @@ use crate::support;
 #[rustfmt::skip]
 #[test]
 fn sampling() {
-    // sampling, from line 62
-    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb list files | pqb sample files --rate 1 2>/dev/null | pqb bytemass | pqb fmt", 63, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
+    // sampling, from line 68
+    support::run("cat docker/e2e-lakehouse/table.ndjson | pqb list files | pqb sample files --rate 1 2>/dev/null | pqb bytemass | pqb fmt", 69, Some(&["column  type        codec   encoding  bytes  dict bytes  bytes/row  values", "------  ----------  ------  --------  -----  ----------  ---------  ------", "id      INT64       SNAPPY  dict         66          37      22.00       3", "label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3"]));
 }

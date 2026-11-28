@@ -112,15 +112,16 @@ async fn results(
     Ok(results)
 }
 
-/// The suggestions the live versions under `parent` hold, largest saving
-/// first. A version's suggestions are read from its results once and then held
-/// by the map, so a lake-wide listing costs the reads the map has not done yet.
+/// The suggestions the `UP_TO_DATE` versions under `parent` hold, largest
+/// saving first. A version's suggestions are read from its results once and
+/// then held by the map, so a lake-wide listing costs the reads the map has not
+/// done yet; a version still in the pipeline holds no results to read.
 async fn suggestions(
     engine: &RwLock<Engine>,
     store: &Store,
     parent: Option<&str>,
 ) -> Result<Vec<Box<RawValue>>, String> {
-    let keys = read_engine(engine).keys(parent.unwrap_or_default())?;
+    let keys = read_engine(engine).measured_keys(parent.unwrap_or_default())?;
     let mut suggestions = Vec::new();
     let mut missing = Vec::new();
     {

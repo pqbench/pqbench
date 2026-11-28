@@ -1080,3 +1080,107 @@ fn base64_lookalikes_are_not_reported() {
 
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// Canonical numeric text is a candidate for an `INT64`, and the controlled
+/// rewrite confirms the saving. A padded identifier is never a candidate.
+#[test]
+fn numeric_text_earns_an_integer_column() {
+    let directory = temporary("numeric-text");
+    let path = directory.join("data.parquet");
+    let values: Vec<String> = (0..40_000)
+        .map(|value| (100_001 + value).to_string())
+        .collect();
+    write_values(&path, &values, false, 0);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "numeric-text", "{records:?}");
+    assert_eq!(records[0]["column"], "id");
+    let remedies = records[0]["remedies"].as_array().expect("remedies");
+    for engine in ["spark", "duckdb", "pyarrow"] {
+        assert!(
+            remedies
+                .iter()
+                .any(|remedy| remedy["engine"] == engine && remedy["setting"].is_string()),
+            "no {engine} remedy: {records:?}"
+        );
+    }
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() > 0,
+        "{measured:?}"
+    );
+
+    // A zero-padded identifier is a code, not a number.
+    let padded: Vec<String> = (0..40_000).map(|value| format!("{value:06}")).collect();
+    write_values(&path, &padded, false, 0);
+    assert!(
+        suggestions(&path)
+            .iter()
+            .all(|record| record["rule"] != "numeric-text"),
+        "a padded identifier was read as a number"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Variable-length text with no shared prefixes is a candidate for
+/// `DELTA_LENGTH_BYTE_ARRAY`, and the controlled rewrite confirms the saving.
+#[test]
+fn variable_length_text_earns_delta_length() {
+    let directory = temporary("delta-length");
+    let path = directory.join("data.parquet");
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let values: Vec<String> = (0..40_000)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let len = 6 + (state >> 59) as usize;
+            (0..len)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    (b'a' + (state >> 33) as u8 % 26) as char
+                })
+                .collect()
+        })
+        .collect();
+    write_values(&path, &values, false, 0);
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "delta-length-byte-array", "{records:?}");
+    assert!(
+        records[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("length prefix"),
+        "{records:?}"
+    );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() > 0,
+        "{measured:?}"
+    );
+
+    // Short sorted text shares its prefix, so its rewrite is
+    // `delta-text-encoding`, not this rule.
+    let sorted: Vec<String> = (0..40_000)
+        .map(|value| format!("org.apache.parquet.column.{value:08}"))
+        .collect();
+    write_values(&path, &sorted, false, 0);
+    assert!(
+        suggestions(&path)
+            .iter()
+            .all(|record| record["rule"] != "delta-length-byte-array"),
+        "prefix-heavy text claimed the length encoding"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}

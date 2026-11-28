@@ -16,6 +16,16 @@ pub struct Bytemass {
     /// Encoded bytes before compression.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncompressed_bytes: Option<u64>,
+    /// The file's serialized footer and its eight-byte trailer, in bytes: the
+    /// metadata the file pays for once, repeated here so a column carries its
+    /// file's overhead. It costs no extra read: it is the footer's own length.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub footer_bytes: u64,
+    /// The file's bytes outside every column chunk: footer, page indexes, bloom
+    /// filters, key-value metadata, and any other object bytes no chunk
+    /// accounts for. A file fact, repeated on each of its columns.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unaccounted_bytes: u64,
     /// The compression codec.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec: Option<String>,
@@ -77,4 +87,9 @@ pub struct Bytemass {
     /// [`Self::dictionary_bytes`] divided by [`Self::compressed_bytes`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dictionary_fraction: Option<f64>,
+}
+
+/// Whether a count or a size is absent, so the wire form keeps omitting it.
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }

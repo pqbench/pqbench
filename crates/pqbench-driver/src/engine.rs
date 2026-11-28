@@ -312,6 +312,16 @@ impl Engine {
             .collect())
     }
 
+    /// The keys of the versions under `parent` that have been measured, in key
+    /// order: only an `UP_TO_DATE` version's results hold verified suggestions.
+    pub(crate) fn measured_keys(&self, parent: &str) -> Result<Vec<Key>, String> {
+        Ok(self
+            .keys(parent)?
+            .into_iter()
+            .filter(|key| self.state(key) == Some(State::UpToDate))
+            .collect())
+    }
+
     /// The keys of the versions under `parent`, in key order.
     pub(crate) fn keys(&self, parent: &str) -> Result<Vec<Key>, String> {
         let prefix = parent_prefix(parent)?;
@@ -367,7 +377,14 @@ impl Engine {
     /// Hold a version's verified suggestions, so the next read of them is the
     /// map's. They are what its results on disk say, not a change to the map,
     /// so this asks for no checkpoint.
+    ///
+    /// Only an `UP_TO_DATE` version caches: a read that was in flight when the
+    /// version left the map, or one whose verification is still running, would
+    /// otherwise leave an entry nothing prunes and nothing serves.
     pub(crate) fn cache_suggestions(&mut self, key: &Key, suggestions: Vec<Suggestion>) {
+        if self.state(key) != Some(State::UpToDate) {
+            return;
+        }
         self.suggestions.insert(key.clone(), suggestions);
     }
 
@@ -1100,11 +1117,12 @@ mod tests {
         assert_eq!(counted.state_counts["FAILED"], 1);
     }
 
-    /// The map holds a version's verified suggestions, and a version that
-    /// leaves the map takes its cached suggestions with it.
+    /// The map holds an `UP_TO_DATE` version's verified suggestions, and a
+    /// version that leaves the map takes its cached suggestions with it.
     #[test]
     fn a_purge_drops_a_versions_cached_suggestions() {
         let (mut engine, key) = found(1);
+        engine.rows.get_mut(&key).unwrap().state = State::UpToDate;
         assert!(
             engine.cached_suggestions(&key).is_none(),
             "a version no run has measured holds suggestions"
@@ -1122,6 +1140,63 @@ mod tests {
         assert!(
             engine.cached_suggestions(&key).is_none(),
             "a purged version kept its suggestions"
+        );
+    }
+
+    /// A read that finishes for a version still being verified, quarantined, or
+    /// already purged caches nothing: an entry for one of those is either empty
+    /// (its verification has not run yet) or an orphan the map never prunes.
+    #[test]
+    fn only_an_up_to_date_version_caches_suggestions() {
+        let suggestions = vec![Suggestion {
+            name: format!("{PARTITION}/suggestions/tombstones"),
+            rule: "tombstones".into(),
+            ..Suggestion::default()
+        }];
+
+        for state in [State::Pending, State::Verifying, State::Failed] {
+            let (mut engine, key) = found(1);
+            engine.rows.get_mut(&key).unwrap().state = state;
+            engine.cache_suggestions(&key, suggestions.clone());
+            assert_eq!(
+                engine.cached_suggestions(&key),
+                None,
+                "{state} cached suggestions"
+            );
+        }
+
+        // A version purged while its results were being read stays gone.
+        let (mut engine, key) = found(1);
+        engine.rows.get_mut(&key).unwrap().state = State::UpToDate;
+        engine.missing(parent_table(&key.0), &BTreeSet::new());
+        engine.cache_suggestions(&key, suggestions);
+        assert_eq!(
+            engine.cached_suggestions(&key),
+            None,
+            "a purged version was cached again"
+        );
+    }
+
+    /// Only the measured (`UP_TO_DATE`) keys under a parent are read: a pending
+    /// or failed version has no measured results to open.
+    #[test]
+    fn a_parent_reads_only_the_measured_keys() {
+        let (mut engine, done) = found(1);
+        engine.rows.get_mut(&done).unwrap().state = State::UpToDate;
+        let pending = key("catalogs/c/schemas/s/tables/t/partitions/day%3D2", "bb").unwrap();
+        engine.found(
+            &pending,
+            &Partition {
+                file_count: 1,
+                ..Partition::default()
+            },
+            1,
+        );
+        engine.rows.get_mut(&pending).unwrap().state = State::Failed;
+
+        assert_eq!(
+            engine.measured_keys(parent_table(&done.0)).unwrap(),
+            vec![done]
         );
     }
 

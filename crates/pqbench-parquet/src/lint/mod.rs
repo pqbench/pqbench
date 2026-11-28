@@ -20,12 +20,12 @@
 //! reads its own timestamps. A codec suggestion rereads the chunk's own pages.
 //!
 //! A leaf's repetition level decides which rules may read it. A rule that
-//! decodes values (`uuid-text`, `text-timestamp`, `base64-text`, the Delta and
-//! dictionary rules, `page-size`) runs on scalar leaves only: a repeated leaf's
-//! values are nested, and re-encoding them is not implemented. A rule that
-//! reads page headers, raw page bytes, or footer metadata (`codec-zstd`,
-//! `stats-truncated`) runs on any leaf, so a nested `imp[]` or `seatbid[].bid[]`
-//! column is priced like a scalar one.
+//! decodes values (`uuid-text`, `text-timestamp`, `numeric-text`,
+//! `base64-text`, the narrowing, Delta and dictionary rules, `page-size`) runs
+//! on scalar leaves only: a repeated leaf's values are nested, and re-encoding
+//! them is not implemented. A rule that reads page headers, raw page bytes, or
+//! footer metadata (`codec-zstd`, `stats-truncated`) runs on any leaf, so a
+//! nested `imp[]` or `seatbid[].bid[]` column is priced like a scalar one.
 //!
 //! `stats-truncated` is the one rule that can prove its saving arithmetically
 //! instead of by a re-encode: a footer's `min_value` and `max_value` are the
@@ -40,12 +40,16 @@
 mod base64;
 mod codec;
 mod control;
+mod decimal_narrow;
 mod decode;
 mod delta_integer;
+mod delta_length;
 mod delta_text;
 mod dictionary;
 mod dictionary_fallback;
+mod int64_narrow;
 mod int96;
+mod numeric_text;
 mod page_size;
 mod partition;
 mod price;
@@ -71,11 +75,15 @@ use self::writer::Writer;
 
 pub use base64::BASE64_TEXT_RULE;
 pub use codec::CODEC_ZSTD_RULE;
+pub use decimal_narrow::DECIMAL_NARROW_RULE;
 pub use delta_integer::DELTA_INTEGER_RULE;
+pub use delta_length::DELTA_LENGTH_RULE;
 pub use delta_text::DELTA_TEXT_ENCODING_RULE;
 pub use dictionary::{DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE};
 pub use dictionary_fallback::DICTIONARY_FALLBACK_RULE;
+pub use int64_narrow::INT64_NARROW_RULE;
 pub use int96::INT96_TIMESTAMP_RULE;
+pub use numeric_text::NUMERIC_TEXT_RULE;
 pub use page_size::PAGE_SIZE_RULE;
 pub use partition::{partition_suggestions, SMALL_FILES_RULE, TOMBSTONES_RULE};
 pub use stats::STATS_TRUNCATED_RULE;
@@ -616,14 +624,18 @@ pub(crate) struct Rule {
 /// a snappy or uncompressed file's 35-60% codec upgrade must not be masked by a
 /// 0-1% dictionary or Delta encoding tweak. A zstd file never reaches it, so
 /// its columns fall through to the encoding rules. The rules that change a
-/// column's type (`uuid-text`, `base64-text`, `text-timestamp`) outrank it,
-/// because a value shrunk to a sixteenth (UUID) or three quarters (Base64) of
-/// its bytes beats any codec; `stats-truncated` comes last, because its few
-/// hundred footer bytes are the smallest win a column can have.
-/// `delta-integer` outranks the dictionary rules because a dense integer
-/// column's dictionary is only present when it overflowed, and packed deltas it
-/// never uses are the larger win. `page-size` follows `codec-zstd`: a weaker
-/// codec is the larger win, while a zstd chunk's tiny pages still earn it.
+/// column's type (`uuid-text`, `base64-text`, `numeric-text`, `text-timestamp`,
+/// `int64-narrow`, `decimal-narrow`) outrank it, because a value stored at a
+/// width or in a shape it does not need beats any codec; `stats-truncated`
+/// comes last, because its few hundred footer bytes are the smallest win a
+/// column can have. `delta-integer` outranks the narrowing rules because packed
+/// deltas on a dense column beat a narrower plain width; the narrowing rules
+/// outrank the dictionary rules because a dictionary is only what a writer
+/// reaches for after the width is decided. `delta-length-byte-array` follows
+/// the dictionary rules — a dictionary is the writer's own answer to repeated
+/// text — and precedes `delta-text-encoding`, which also prices the
+/// shared-prefix encoding. `page-size` follows `codec-zstd`: a weaker codec is
+/// the larger win, while a zstd chunk's tiny pages still earn it.
 pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: UUID_TEXT_RULE,
@@ -646,6 +658,11 @@ pub(crate) const RULES: &[Rule] = &[
         detect: text_timestamp::detect,
     },
     Rule {
+        id: NUMERIC_TEXT_RULE,
+        values: true,
+        detect: numeric_text::detect,
+    },
+    Rule {
         id: CODEC_ZSTD_RULE,
         values: false,
         detect: codec::detect,
@@ -661,6 +678,16 @@ pub(crate) const RULES: &[Rule] = &[
         detect: delta_integer::detect,
     },
     Rule {
+        id: INT64_NARROW_RULE,
+        values: true,
+        detect: int64_narrow::detect,
+    },
+    Rule {
+        id: DECIMAL_NARROW_RULE,
+        values: true,
+        detect: decimal_narrow::detect,
+    },
+    Rule {
         id: DICTIONARY_UNIQUE_RULE,
         values: true,
         detect: dictionary::detect_unique,
@@ -669,6 +696,11 @@ pub(crate) const RULES: &[Rule] = &[
         id: DICTIONARY_MISSING_RULE,
         values: true,
         detect: dictionary::detect_missing,
+    },
+    Rule {
+        id: DELTA_LENGTH_RULE,
+        values: true,
+        detect: delta_length::detect,
     },
     Rule {
         id: DELTA_TEXT_ENCODING_RULE,
@@ -994,9 +1026,10 @@ mod tests {
 
     use super::{
         rule, suggestions, verify, ColumnSample, BASE64_TEXT_RULE, CODEC_ZSTD_RULE,
-        DELTA_INTEGER_RULE, DELTA_TEXT_ENCODING_RULE, DICTIONARY_FALLBACK_RULE,
-        DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE, INT96_TIMESTAMP_RULE,
-        STATS_TRUNCATED_RULE, TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
+        DECIMAL_NARROW_RULE, DELTA_INTEGER_RULE, DELTA_LENGTH_RULE, DELTA_TEXT_ENCODING_RULE,
+        DICTIONARY_FALLBACK_RULE, DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE,
+        INT64_NARROW_RULE, INT96_TIMESTAMP_RULE, NUMERIC_TEXT_RULE, STATS_TRUNCATED_RULE,
+        TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
     };
     use crate::v1;
 
@@ -1004,6 +1037,7 @@ mod tests {
     fn byte_column(codec: &str) -> v1::Column {
         v1::Column {
             physical_data_type: Some("BYTE_ARRAY".into()),
+            max_repetition_level: Some(0),
             mass: Some(v1::Bytemass {
                 codec: Some(codec.into()),
                 ..v1::Bytemass::default()
@@ -1016,6 +1050,7 @@ mod tests {
     fn typed_column(physical_data_type: &str, codec: &str) -> v1::Column {
         v1::Column {
             physical_data_type: Some(physical_data_type.into()),
+            max_repetition_level: Some(0),
             mass: Some(v1::Bytemass {
                 codec: Some(codec.into()),
                 ..v1::Bytemass::default()
@@ -1129,6 +1164,54 @@ mod tests {
         check(
             INT96_TIMESTAMP_RULE,
             &ColumnSample::for_test(&int96_column, &[], false),
+            &mut engines,
+        );
+
+        let numeric_column = byte_column("UNCOMPRESSED");
+        let numbers: Vec<String> = (0..100)
+            .map(|value| (100_001 + value).to_string())
+            .collect();
+        let number_cells = cells(&numbers);
+        check(
+            NUMERIC_TEXT_RULE,
+            &ColumnSample::for_test(&numeric_column, &number_cells, false),
+            &mut engines,
+        );
+
+        let narrow_column = typed_column("INT64", "UNCOMPRESSED");
+        let small: Vec<Option<i64>> = (0..100).map(|value| Some(value + 40_000)).collect();
+        check(
+            INT64_NARROW_RULE,
+            &ColumnSample::for_test_int64(&narrow_column, &small, false),
+            &mut engines,
+        );
+
+        let mut decimal_column = typed_column("FIXED_LEN_BYTE_ARRAY", "UNCOMPRESSED");
+        decimal_column.mass = Some(v1::Bytemass {
+            codec: Some("UNCOMPRESSED".into()),
+            logical_type: Some("DECIMAL(9,2)".into()),
+            ..v1::Bytemass::default()
+        });
+        let amounts: Vec<Option<ByteArray>> = (0..100)
+            .map(|value| {
+                Some(ByteArray::from(
+                    (1_000 + value as i64).to_be_bytes().to_vec(),
+                ))
+            })
+            .collect();
+        check(
+            DECIMAL_NARROW_RULE,
+            &ColumnSample::for_test(&decimal_column, &amounts, false),
+            &mut engines,
+        );
+
+        let lengths: Vec<String> = (0..100)
+            .map(|value| format!("{value}{}", "x".repeat(value as usize)))
+            .collect();
+        let length_cells = cells(&lengths);
+        check(
+            DELTA_LENGTH_RULE,
+            &ColumnSample::for_test(&byte_column("UNCOMPRESSED"), &length_cells, false),
             &mut engines,
         );
 

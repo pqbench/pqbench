@@ -429,6 +429,8 @@ mod tests {
             column: column.to_string(),
             compressed_bytes: bytes,
             uncompressed_bytes: Some(bytes * 3),
+            footer_bytes: None,
+            unaccounted_bytes: None,
             value_count: values,
             bytes_per_value: if values == 0 {
                 0.0

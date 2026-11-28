@@ -209,6 +209,14 @@ pub struct ColumnMass {
 pub struct FileMass {
     /// The file's size in bytes.
     pub size_bytes: u64,
+    /// The serialized Thrift footer and its eight-byte trailer, in bytes: the
+    /// metadata every column of the file pays for. Zero when the caller did not
+    /// supply the footer's own length.
+    pub footer_bytes: u64,
+    /// The file's bytes outside every column chunk: the footer, the page
+    /// indexes, bloom filters, key-value metadata (an `ARROW:schema`, say), and
+    /// any other object bytes no chunk accounts for.
+    pub unaccounted_bytes: u64,
     /// The writer the footer names (`created_by`), when it names one.
     pub writer: Option<String>,
     /// Number of rows in the file.
@@ -222,8 +230,10 @@ pub struct FileMass {
 /// Read byte masses from a complete Parquet footer.
 ///
 /// `footer` must contain the serialized Thrift metadata followed by the
-/// eight-byte Parquet footer trailer, and `size_bytes` the object's size.
-/// Storage adapters that fetch only the end of a Parquet object use this.
+/// eight-byte Parquet footer trailer, and `size_bytes` the object's size, so
+/// the record prices the metadata (the footer's own bytes) and every byte no
+/// column chunk accounts for. Storage adapters that fetch only the end of a
+/// Parquet object use this.
 ///
 /// # Errors
 /// Returns [`Error`] if `footer` is not a valid Parquet footer.
@@ -327,6 +337,79 @@ mod tests {
             .columns
             .iter()
             .all(|column| column.compressed_bytes > 0));
+    }
+
+    /// A written file's footer and the bytes no chunk accounts for are measured
+    /// from the same read: the footer's own length and the object's size.
+    #[test]
+    fn a_written_file_accounts_for_its_footer() {
+        let columns = vec![
+            TypedColumn {
+                name: "id".into(),
+                kind: Kind::Integer,
+            },
+            TypedColumn {
+                name: "tag".into(),
+                kind: Kind::Bytes,
+            },
+        ];
+        let rows: Vec<Vec<Value>> = (0..64)
+            .map(|n| {
+                vec![
+                    Value::Integer(n),
+                    Value::Bytes(format!("row-{n}").into_bytes()),
+                ]
+            })
+            .collect();
+        let options = WriteOptions {
+            compression: "zstd".into(),
+            level: None,
+            dictionary: false,
+            dictionary_bytes: None,
+            encoding: None,
+            page_size: None,
+            stats_truncate_length: None,
+            sorting_columns: Vec::new(),
+            row_group_size: 32,
+        };
+        let bytes = write_parquet(&columns, &rows, &options).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "pqbench-accounting-{}-{:?}.parquet",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, &bytes).unwrap();
+        let mass = read_file_masses(&path).unwrap();
+        let size_bytes = std::fs::metadata(&path).unwrap().len();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(mass.size_bytes, size_bytes);
+        assert_eq!(bytes.len() as u64, size_bytes);
+        assert!(mass.footer_bytes > 0, "{mass:?}");
+        assert!(mass.footer_bytes < size_bytes);
+        let accounted: u64 = mass
+            .columns
+            .iter()
+            .map(|column| column.compressed_bytes)
+            .sum();
+        assert_eq!(mass.unaccounted_bytes, size_bytes - accounted);
+        // The footer is the largest part of what no chunk holds: the trailer
+        // alone means at least eight bytes are always unaccounted for.
+        assert!(mass.unaccounted_bytes >= mass.footer_bytes);
+
+        // The same numbers from the footer slice alone, with no second read.
+        let footer = &bytes[bytes.len() - mass.footer_bytes as usize..];
+        let from_footer = read_footer_masses(footer, size_bytes).unwrap();
+        assert_eq!(from_footer.footer_bytes, mass.footer_bytes);
+        assert_eq!(from_footer.unaccounted_bytes, mass.unaccounted_bytes);
+        assert_eq!(
+            from_footer
+                .columns
+                .iter()
+                .map(|column| column.compressed_bytes)
+                .sum::<u64>(),
+            accounted
+        );
     }
 
     #[test]

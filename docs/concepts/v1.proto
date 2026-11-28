@@ -545,6 +545,16 @@ message Bytemass {
 
   int64 compressed_bytes = 2;
   int64 uncompressed_bytes = 3;
+  // The file's serialized Thrift footer and its eight-byte trailer, in bytes:
+  // the metadata a file pays for once, so every column of the file carries the
+  // same value. A footer fact: the length comes with the footer read, so no
+  // extra byte is fetched. Absent only when the caller did not supply it.
+  int64 footer_bytes = 24;
+  // The file's bytes outside every column chunk: the footer above, the page
+  // indexes, bloom filters, key-value metadata (an `ARROW:schema`, say), and
+  // any other object bytes no chunk accounts for. `size_bytes` − Σ
+  // `compressed_bytes`; a file fact repeated on each of its columns.
+  int64 unaccounted_bytes = 25;
   string codec = 4;
   repeated string encodings = 5;
   repeated string data_encodings = 15;
