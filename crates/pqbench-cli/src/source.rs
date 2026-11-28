@@ -14,17 +14,19 @@
 //! resource as the `list` they read from, so they enrich a stream in place.
 //!
 //! A one-record level reads a batch of `fan_out` parents to completion before
-//! it writes the batch's first record. A streaming level runs each core stream
-//! in its own task, and the core stream reads a batch, writes it, and only then
-//! reads again. Either way, a slow consumer blocks on a write with no read in
-//! flight, so a request timeout cannot fire on a read the consumer stalled; the
-//! trade is one straggler per batch.
+//! it writes the batch's first record. A streaming level multiplexes up to
+//! `fan_out` core streams in this task — no task per stream, no channel between
+//! them — and each core stream reads a batch, writes it, and only then reads
+//! again. Either way the sink is the only poller: a consumer blocked on a write
+//! stops every read, which is what bounds the run's memory; the trade is one
+//! straggler per batch, and a read's timeout running while the sink stalls.
 
 use std::future::Future;
 use std::pin::Pin;
 
 use futures_util::future::join_all;
 use futures_util::stream::{self, LocalBoxStream, Stream, StreamExt};
+use futures_util::TryStreamExt;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 
@@ -53,19 +55,27 @@ pub(crate) fn records(
 ) -> impl Stream<Item = Result<Value, CliError>> + Unpin {
     let first = stream::iter(first).map(Ok::<_, CliError>);
     let rest = stream::try_unfold(lines, move |mut lines| async move {
-        loop {
-            let Some(line) = lines.next_line().await? else {
-                return Ok(None);
-            };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let record: Value = serde_json::from_str(&line)
-                .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
-            return Ok(Some((record, lines)));
-        }
+        let record = next_record(command, &mut lines).await?;
+        Ok(record.map(|record| (record, lines)))
     });
     Box::pin(first.chain(rest))
+}
+
+/// Standard input's next record: the next line that is not blank, or `None`
+/// at the end of input.
+async fn next_record(
+    command: &'static str,
+    lines: &mut Lines<BufReader<tokio::io::Stdin>>,
+) -> Result<Option<Value>, CliError> {
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: Value = serde_json::from_str(&line)
+            .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
+        return Ok(Some(record));
+    }
+    Ok(None)
 }
 
 /// Read stdin's first record (a parent ref, kept for the command's stream),
@@ -73,18 +83,11 @@ pub(crate) fn records(
 pub(crate) async fn read_input(command: &'static str) -> Result<Input, CliError> {
     let piped = is_stream();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut first = None;
-    if piped {
-        while let Some(line) = lines.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let record: Value = serde_json::from_str(&line)
-                .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
-            first = Some(record);
-            break;
-        }
-    }
+    let first = if piped {
+        next_record(command, &mut lines).await?
+    } else {
+        None
+    };
     Ok(Input {
         piped,
         first,
@@ -180,93 +183,45 @@ where
 }
 
 /// `flatMap` with `fan_out` streams in flight: a parent becomes its stream,
-/// and each stream is driven by its own task.
+/// and `flatten_unordered` polls those streams concurrently in this task.
 ///
-/// The core stream owns the read/write invariant: it reads a batch, yields
-/// its rows, and only then reads again. Driving it from the sink's task would
-/// break that invariant under backpressure: the sink blocks on a row from one
-/// stream, and every other stream stays polled out at its next batch read.
-/// A task per stream keeps those reads advancing; the bounded channel makes a
-/// blocked consumer block the task on `send`, where no request is in flight.
+/// A parent's `read` is awaited inside its own one-item stream, so pulling the
+/// next parent never waits on the last one's request: `flatten_unordered` polls
+/// every pending read on each pass. It takes the next parent once the number of
+/// streams in flight drops below `fan_out`.
 ///
 /// `read` may fail before it yields anything (the table it loads, a window it
 /// rejects); that failure is reported under the parent, like a stream item.
-pub(crate) fn flat_map<A, B, E, S, F, Fut>(
-    parents: impl Stream<Item = Result<A, CliError>> + 'static,
+pub(crate) fn flat_map<'a, A, B, E, S, F, Fut>(
+    parents: impl Stream<Item = Result<A, CliError>> + 'a,
     fan_out: usize,
     read: F,
-) -> Records<'static, B>
+) -> Records<'a, B>
 where
-    A: Resource + Send + 'static,
-    B: Send + 'static,
-    E: Into<CliError> + Send + 'static,
-    S: Stream<Item = Result<B, E>> + Send + 'static,
-    F: Fn(A) -> Fut + Clone + Send + 'static,
-    Fut: Future<Output = Result<S, CliError>> + Send + 'static,
+    A: Resource + 'a,
+    B: 'a,
+    E: Into<CliError> + 'a,
+    S: Stream<Item = Result<B, E>> + 'a,
+    F: Fn(A) -> Fut + Clone + 'a,
+    Fut: Future<Output = Result<S, CliError>> + 'a,
 {
-    let fan_out = fan_out.max(1);
-    let (tx, rx) = tokio::sync::mpsc::channel(fan_out);
-    let parents: Pin<Box<dyn Stream<Item = Result<A, CliError>> + 'static>> = Box::pin(parents);
-    stream::unfold(
-        (parents, tokio::task::JoinSet::new(), rx, Some(tx), false),
-        move |(mut parents, mut tasks, mut rx, mut tx, mut done)| {
+    parents
+        .map(move |parent| {
             let read = read.clone();
-            async move {
-                loop {
-                    while tasks.len() < fan_out && !done {
-                        match parents.as_mut().next().await {
-                            Some(Ok(parent)) => {
-                                let reference = parent.name().to_owned();
-                                let read = read.clone();
-                                let sender =
-                                    tx.as_ref().expect("the sender outlives the tasks").clone();
-                                tasks.spawn(async move {
-                                    let stream = match read(parent).await {
-                                        Ok(stream) => stream,
-                                        Err(error) => {
-                                            let _ = sender
-                                                .send(Err(crate::error::context(&reference, error)))
-                                                .await;
-                                            return;
-                                        }
-                                    };
-                                    futures_util::pin_mut!(stream);
-                                    while let Some(row) = stream.next().await {
-                                        let row = row.map_err(|error| {
-                                            crate::error::context(&reference, error.into())
-                                        });
-                                        if sender.send(row).await.is_err() {
-                                            return;
-                                        }
-                                    }
-                                });
-                            }
-                            Some(Err(error)) => {
-                                return Some((Err(error), (parents, tasks, rx, tx, done)));
-                            }
-                            None => {
-                                done = true;
-                                tx = None;
-                            }
-                        }
-                    }
-                    if done && tasks.is_empty() {
-                        return rx
-                            .recv()
-                            .await
-                            .map(|row| (row, (parents, tasks, rx, tx, done)));
-                    }
-                    tokio::select! {
-                        row = rx.recv() => {
-                            return row.map(|row| (row, (parents, tasks, rx, tx, done)));
-                        }
-                        Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
-                    }
-                }
-            }
-        },
-    )
-    .boxed_local()
+            stream::once(async move {
+                let parent = parent?;
+                let reference = parent.name().to_owned();
+                let rows = read(parent).await?;
+                let rows: LocalBoxStream<'a, Result<B, CliError>> = rows
+                    .map_err(move |error| crate::error::context(&reference, error))
+                    .boxed_local();
+                Ok::<_, CliError>(rows)
+            })
+            .try_flatten()
+            .boxed_local()
+        })
+        .flatten_unordered(Some(fan_out.max(1)))
+        .boxed_local()
 }
 
 /// The sink: write every record, name a failure on stderr, count it, and set

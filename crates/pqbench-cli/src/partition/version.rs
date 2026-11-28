@@ -1,11 +1,11 @@
-//! `list partition-versions`: the master's partition versions, one record
+//! `list partition-versions`: the driver's partition versions, one record
 //! each.
 
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use pqbench_master::client;
-use pqbench_master::protocol::Request;
+use pqbench_driver::client;
+use pqbench_driver::protocol::Request;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
 use crate::CliError;
@@ -26,19 +26,19 @@ pub(crate) struct GetArgs {
     name: String,
 }
 
-/// The master's socket, as `PQB_MASTER_SOCK` names it.
+/// The driver's socket, as `PQB_DRIVER_SOCK` names it.
 fn socket() -> Result<PathBuf, CliError> {
-    pqbench_master::socket::from_env().ok_or_else(|| -> CliError {
-        "the master is not configured; set PQB_MASTER_SOCK or run `pqbench-master start --store DIR`"
+    pqbench_driver::socket::from_env().ok_or_else(|| -> CliError {
+        "the driver is not configured; set PQB_DRIVER_SOCK or run `pqbench-driver start --store DIR`"
             .into()
     })
 }
 
-/// A failed exchange, with the way to start the master when none is there.
+/// A failed exchange, with the way to start the driver when none is there.
 fn exchange_error(path: &Path, error: client::Error) -> CliError {
     match error {
         client::Error::Connect(_) => format!(
-            "no master is listening at {}; run `pqbench-master start --store DIR`",
+            "no driver is listening at {}; run `pqbench-driver start --store DIR`",
             path.display()
         )
         .into(),
@@ -73,8 +73,8 @@ pub(crate) async fn get(args: &GetArgs) -> Result<(), CliError> {
     }
 }
 
-/// List the master's partition versions: one PartitionVersion per line, in
-/// name order, as the master holds them now.
+/// List the driver's partition versions: one PartitionVersion per line, in
+/// name order, as the driver holds them now.
 pub(crate) async fn run(args: &ListArgs) -> Result<(), CliError> {
     let path = socket()?;
     let request = Request::list_partition_versions(args.parent.clone().unwrap_or_default());
@@ -108,7 +108,7 @@ pub(crate) async fn run(args: &ListArgs) -> Result<(), CliError> {
     }
     if written != count {
         return Err(
-            format!("the master stopped after {written} of {count} partition versions").into(),
+            format!("the driver stopped after {written} of {count} partition versions").into(),
         );
     }
     Ok(())

@@ -1,12 +1,12 @@
 //! `control`: a rewrite measured against a control written by the same writer
-//! at the same codec and level, preserving sampled row-group boundaries.
+//! at the same codec and level, preserving the sample's row-group boundary.
 
 use parquet::basic::{Compression, Encoding, GzipLevel, ZstdLevel};
 use parquet::data_type::ByteArray;
 
 use crate::v1;
 
-use super::price::price_bytes;
+use super::price::{price_bytes, Settings};
 use super::{ColumnSample, Error};
 
 /// A rewrite's measured advantage over its control, as a fraction of the
@@ -19,7 +19,7 @@ pub(crate) struct Measurement {
 
 /// The codec family both arms use, or `None` when this writer cannot reproduce
 /// the source's codec.
-fn family(codec: Option<&str>) -> Option<&'static str> {
+pub(super) fn family(codec: Option<&str>) -> Option<&'static str> {
     let rendered = codec?.to_lowercase();
     Some(match rendered.split('(').next()?.trim() {
         "uncompressed" | "none" => "uncompressed",
@@ -69,34 +69,47 @@ pub(super) fn source_encoding(mass: &v1::Bytemass) -> Option<Encoding> {
     }
 }
 
+/// One arm of a controlled pair: the values to encode and how to encode them.
+pub(super) struct Arm<'a> {
+    pub(super) cells: &'a [Option<ByteArray>],
+    pub(super) settings: Settings,
+}
+
 /// Encode `baseline` with the source's own settings and `candidate` with the
 /// proposed change, at the same codec and levels, and return the fraction
 /// saved. `None` when the writer cannot reproduce the source codec or the
 /// control encodes to nothing.
 pub(super) fn compare(
     sample: &ColumnSample<'_>,
-    baseline: &[Vec<Option<ByteArray>>],
-    candidate: &[Vec<Option<ByteArray>>],
-    dictionary: bool,
-    encoding: Option<Encoding>,
+    baseline: &Arm<'_>,
+    candidate: &Arm<'_>,
+) -> Result<Option<Measurement>, Error> {
+    measure_arms(sample, |compression| {
+        let baseline_bytes = price_bytes(baseline.cells, compression, baseline.settings)?;
+        let candidate_bytes = price_bytes(candidate.cells, compression, candidate.settings)?;
+        Ok(Some((baseline_bytes, candidate_bytes)))
+    })
+}
+
+/// Fold each compression level's baseline and candidate bytes into the
+/// measurement: the lowest and highest fraction the candidate saves. `arms`
+/// returns `None` for a level that cannot price the sample.
+pub(super) fn measure_arms(
+    sample: &ColumnSample<'_>,
+    mut arms: impl FnMut(Compression) -> Result<Option<(u64, u64)>, Error>,
 ) -> Result<Option<Measurement>, Error> {
     let Some((compressions, levels)) = compressions(sample.mass.codec.as_deref()) else {
         return Ok(None);
     };
-    let source_encoding = source_encoding(sample.mass);
     let mut ratio_low = f64::INFINITY;
     let mut ratio_high = f64::NEG_INFINITY;
     for compression in compressions {
-        let baseline_bytes = price_bytes(
-            baseline,
-            compression,
-            sample.mass.dictionary,
-            source_encoding,
-        )?;
+        let Some((baseline_bytes, candidate_bytes)) = arms(compression)? else {
+            continue;
+        };
         if baseline_bytes == 0 {
             return Ok(None);
         }
-        let candidate_bytes = price_bytes(candidate, compression, dictionary, encoding)?;
         let ratio = (baseline_bytes as f64 - candidate_bytes as f64) / baseline_bytes as f64;
         ratio_low = ratio_low.min(ratio);
         ratio_high = ratio_high.max(ratio);

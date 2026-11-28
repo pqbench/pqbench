@@ -5,7 +5,7 @@
 //! borrowing the caller's, which its kernel can panic on after a failed load.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use deltalake::kernel::scalars::ScalarExt;
@@ -18,10 +18,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use serde_json::{Map, Value};
 use url::Url;
 
-use crate::table::{
-    add_partition_total, bytes_per_row, finish_partition_masses, Error, LoadRequest, PartitionMass,
-    TableInfo,
-};
+use crate::table::{relative_data_path, Error, LoadRequest, PartitionMass, TableInfo};
 use crate::v1;
 use crate::Lake;
 
@@ -560,6 +557,74 @@ async fn active_files(
     Ok((active, finish_partition_masses(totals)))
 }
 
+/// Fold one active file into its partition's running totals.
+fn add_partition_total(
+    groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+    file: &v1::TableFile,
+) -> Result<(), Error> {
+    let entry = groups
+        .entry(file.partition_values.clone())
+        .or_insert(PartitionTotals {
+            file_count: 0,
+            size: 0,
+            num_records: Some(0),
+        });
+    entry.file_count += 1;
+    entry.size = entry
+        .size
+        .checked_add(file.size_bytes.unwrap_or(0))
+        .ok_or_else(|| Error::Overflow {
+            file: file.name.clone(),
+            kind: "byte",
+        })?;
+    entry.num_records =
+        match (entry.num_records, file.stats.as_ref()) {
+            (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(
+                || Error::Overflow {
+                    file: file.name.clone(),
+                    kind: "record",
+                },
+            )?),
+            _ => None,
+        };
+    Ok(())
+}
+
+/// One `PartitionMass` per partition's running totals, in partition order.
+fn finish_partition_masses(
+    groups: BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
+) -> Vec<PartitionMass> {
+    groups
+        .into_iter()
+        .map(|(values, totals)| PartitionMass {
+            values,
+            file_count: totals.file_count,
+            size: totals.size,
+            bytes_per_row: totals
+                .num_records
+                .and_then(|records| bytes_per_row(totals.size, records)),
+            num_records: totals.num_records,
+        })
+        .collect()
+}
+
+/// The running totals of one partition's active files.
+struct PartitionTotals {
+    file_count: usize,
+    size: u64,
+    // aipnaming: allow(aip-141/count-suffix)
+    num_records: Option<u64>,
+}
+
+/// Bytes per row, or `None` for a file that records no rows.
+fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
+    if num_records == 0 {
+        None
+    } else {
+        Some(size as f64 / num_records as f64)
+    }
+}
+
 /// Stream the snapshot's active files, newest first, without collecting them.
 ///
 /// The read is the lazy snapshot's own scan, not a `DeltaTable`: the table
@@ -570,8 +635,8 @@ async fn active_files(
 /// here where [`load`] (the materialized path) omits them.
 ///
 /// The stream owns the snapshot and the store it reads from: `file_views`
-/// borrows the snapshot, so the generator is the one thing that can hold both.
-/// Each file is dropped as soon as the caller asks for the next.
+/// borrows the snapshot, so one task owns both and hands each file over a
+/// one-slot channel, running at most one file ahead of the caller.
 pub(super) async fn stream_active_files(
     lake: &Lake,
     request: &LoadRequest,
@@ -583,13 +648,39 @@ pub(super) async fn stream_active_files(
     let table_url = store.root_url().clone();
     let root = local_table_root(&table_url)?;
     let file_stats = request.file_stats;
-    Ok(async_stream::try_stream! {
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
         let mut files = snapshot.file_views(store.as_ref(), None);
-        while let Some(file) = files.try_next().await.map_err(delta_error)? {
-            yield data_file(&root, &table_url, &file, file_stats)?;
+        loop {
+            let file = match files.try_next().await.map_err(delta_error) {
+                Ok(Some(file)) => file,
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = sender.send(Err(error)).await;
+                    break;
+                }
+            };
+            let file = match data_file(&root, &table_url, &file, file_stats) {
+                Ok(file) => file,
+                Err(error) => {
+                    let _ = sender.send(Err(error)).await;
+                    break;
+                }
+            };
+            if sender.send(Ok(file)).await.is_err() {
+                break;
+            }
         }
-    }
-    .boxed())
+    });
+    Ok(
+        futures_util::stream::try_unfold(receiver, |mut receiver| async move {
+            match receiver.recv().await {
+                Some(file) => Ok(Some((file?, receiver))),
+                None => Ok(None),
+            }
+        })
+        .boxed(),
+    )
 }
 
 /// The snapshot's `remove` actions, one batch at a time: the kernel reads the
@@ -620,7 +711,7 @@ pub(super) async fn stream_removed_files(
     let schema = Arc::new(
         StructType::try_new([StructField::nullable("remove", remove)]).map_err(kernel_error)?,
     );
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Result<Vec<v1::TableFile>, Error>>(2);
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Vec<v1::TableFile>, Error>>(2);
     tokio::task::spawn_blocking(move || {
         let read = || -> Result<(), Error> {
             let mut builder = delta_kernel::Snapshot::builder_for(root);
@@ -651,13 +742,23 @@ pub(super) async fn stream_removed_files(
             let _ = sender.blocking_send(Err(error));
         }
     });
-    Ok(async_stream::try_stream! {
-        while let Some(files) = receiver.recv().await {
-            for file in files? {
-                yield file;
+    // The kernel hands over a batch at a time; the stream yields them one file
+    // at a time, holding only the batch it is working through.
+    let pending: std::vec::IntoIter<v1::TableFile> = Vec::new().into_iter();
+    Ok(futures_util::stream::try_unfold(
+        (receiver, pending),
+        |(mut receiver, mut pending)| async move {
+            loop {
+                if let Some(file) = pending.next() {
+                    return Ok(Some((file, (receiver, pending))));
+                }
+                let Some(files) = receiver.recv().await else {
+                    return Ok(None);
+                };
+                pending = files?.into_iter();
             }
-        }
-    }
+        },
+    )
     .boxed())
 }
 
@@ -847,21 +948,6 @@ fn flatten_counts(value: Option<&Value>, prefix: &str, out: &mut BTreeMap<String
         }
         _ => {}
     }
-}
-
-/// A data path that stays inside the table: empty, absolute, or URI paths
-/// are rejected here, once, for both local and object adapters.
-fn relative_data_path(relative: &str) -> Result<&Path, Error> {
-    let path = Path::new(relative);
-    if relative.is_empty()
-        || relative.contains("://")
-        || !path.components().all(|c| matches!(c, Component::Normal(_)))
-    {
-        return Err(Error::Invalid(format!(
-            "only relative data paths inside the table are supported: {relative}"
-        )));
-    }
-    Ok(path)
 }
 
 fn object_uri(base: &Url, relative: &str) -> Result<String, Error> {

@@ -161,16 +161,10 @@ enum Command {
 
 /// Parse the command line, resolve the shared configuration, and run one
 /// command.
+///
+/// The entry point defaults `AWS_EC2_METADATA_DISABLED` before it starts the
+/// runtime (see `main.rs`); a caller that runs this itself must do the same.
 pub async fn run() -> ExitCode {
-    // pqbench reads tables from outside Databricks with explicit credentials
-    // (vended, or on the lake source); it never relies on EC2 instance
-    // metadata. The AWS SDK's config chain probes IMDS for the region
-    // otherwise, and hangs where that endpoint is blackholed. Default the
-    // probe off before any command builds an AWS client; a caller that sets
-    // AWS_EC2_METADATA_DISABLED wins.
-    if std::env::var_os("AWS_EC2_METADATA_DISABLED").is_none() {
-        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
-    }
     let cli = Cli::parse();
     match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -201,16 +195,19 @@ async fn dispatch(cli: Cli) -> Result<(), CliError> {
     let workspace = pqbench::Workspace::new(config)?;
     let lake = pqbench::Lake::new(&workspace);
     let daemon = daemon::Daemon::client(workspace.clone());
+    // The catalog levels send their requests through the daemon; the daemon
+    // itself keeps the plain workspace, which reads its own endpoint.
+    let catalog_workspace = daemon.http_workspace();
     match cli.command {
         Command::Diff(args) => diff::run(&lake, &args).await,
         Command::Lz(args) => lz::run(&args).await,
         Command::Compression(args) => compression::run(&args).await,
         Command::Bytemass(args) => bytemass::run(&lake, &daemon, &args).await,
-        Command::Get(args) => get::run(&lake, &daemon, &args).await,
+        Command::Get(args) => get::run(&catalog_workspace, &lake, &daemon, &args).await,
         Command::Format(args) => format::run(&args).await,
         Command::TableFile(args) => table_file::run(&args).await,
         Command::Download(args) => file::download::run(&lake, &daemon, &args).await,
-        Command::List(args) => list::run(&lake, &daemon, &args).await,
+        Command::List(args) => list::run(&catalog_workspace, &lake, &daemon, &args).await,
         Command::Sample(args) => sample::run(&args).await,
         Command::Daemon(args) => daemon::run(&workspace, &args).await,
         Command::Profile(args) => profile::run(&args).await,

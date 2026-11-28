@@ -320,6 +320,12 @@ fn schema_ls_follows_unity_page_tokens() {
         ("page_token=", 200, SCHEMAS_LAST),
         ("/schemas", 200, SCHEMAS_PAGE),
     ]);
+    // Pages stream in arrival order: page 1's `nyctaxi`, then page 2's
+    // `bakehouse`. Nothing buffers the pages to sort them.
+    let page_order = [
+        "catalogs/dbx_samples/schemas/nyctaxi",
+        "catalogs/dbx_samples/schemas/bakehouse",
+    ];
     let output = pipe_env(
         &["list", "schemas"],
         &parent("catalogs/dbx_samples"),
@@ -335,13 +341,7 @@ fn schema_ls_follows_unity_page_tokens() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        names,
-        [
-            "catalogs/dbx_samples/schemas/bakehouse",
-            "catalogs/dbx_samples/schemas/nyctaxi"
-        ]
-    );
+    assert_eq!(names, page_order);
 }
 
 #[test]
@@ -383,6 +383,11 @@ fn schema_ls_follows_iceberg_page_tokens() {
         ("pageToken=", 200, ICEBERG_LAST),
         ("/namespaces", 200, ICEBERG_PAGE),
     ]);
+    // `nyctaxi` arrives on the first page, `bakehouse` on the second.
+    let page_order = [
+        "catalogs/dbx_samples/schemas/nyctaxi",
+        "catalogs/dbx_samples/schemas/bakehouse",
+    ];
     let output = pipe_env(
         &["list", "schemas"],
         &parent("catalogs/dbx_samples"),
@@ -401,13 +406,7 @@ fn schema_ls_follows_iceberg_page_tokens() {
         .iter()
         .map(|record| record["name"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        names,
-        [
-            "catalogs/dbx_samples/schemas/bakehouse",
-            "catalogs/dbx_samples/schemas/nyctaxi"
-        ]
-    );
+    assert_eq!(names, page_order);
 }
 
 #[test]

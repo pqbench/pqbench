@@ -5,7 +5,7 @@ use crate::support;
 
 use futures_util::TryStreamExt;
 use pqbench::table::{self, LoadRequest};
-use pqbench::third_party::parquet::api::{default_metadata_parser, MetadataParser};
+use pqbench::third_party::parquet::read_file_masses;
 use pqbench::v1::TableFormat;
 use serde_json::json;
 use support::{metadata, remove, write_parquet, Fixture};
@@ -340,7 +340,7 @@ async fn load_selects_a_snapshot_and_bytemass_weights_columns() {
     let mut file_bytes = 0;
     for relative in ["part=b/kept.parquet", "part=a/added.parquet"] {
         let path = fixture.path().join(relative);
-        let mass = default_metadata_parser().read_masses(&path).unwrap();
+        let mass = read_file_masses(&path).unwrap();
         bytes += mass.columns[0].compressed_bytes;
         uncompressed += mass.columns[0].uncompressed_bytes;
         file_bytes += std::fs::metadata(path).unwrap().len();

@@ -32,20 +32,17 @@ pub(crate) struct VerifyArgs {
 /// Emit each table file's potential suggestions as its record arrives.
 pub(crate) async fn run(args: &SuggestionsArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::TableFile>("list suggestions").await?;
-    let local = args.local.clone();
+    let local = args.local.as_deref();
     // One file at a time: decoding a sample is CPU-bound, so overlapping files
     // buys nothing and holds more samples in memory.
-    let records = flat_map(parents, 1, move |file: v1::TableFile| {
-        let local = local.clone();
-        async move {
-            let blob = file
-                .blob
-                .as_deref()
-                .ok_or("a table-file record needs a blob to read")?;
-            let path = read_path(blob, local.as_deref())?;
-            let suggestions = pqbench::lint::suggestions(&path, &file)?;
-            Ok(stream::iter(suggestions.into_iter().map(Ok::<_, CliError>)))
-        }
+    let records = flat_map(parents, 1, move |file: v1::TableFile| async move {
+        let blob = file
+            .blob
+            .as_deref()
+            .ok_or("a table-file record needs a blob to read")?;
+        let path = read_path(blob, local)?;
+        let suggestions = pqbench::lint::suggestions(&path, &file)?;
+        Ok(stream::iter(suggestions.into_iter().map(Ok::<_, CliError>)))
     });
     drive(records).await
 }
@@ -54,18 +51,15 @@ pub(crate) async fn run(args: &SuggestionsArgs) -> Result<(), CliError> {
 /// the control's verdict.
 pub(crate) async fn verify(args: &VerifyArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Suggestion>("get suggestion").await?;
-    let local = args.local.clone();
+    let local = args.local.as_deref();
     // One suggestion at a time: measuring re-encodes the sample, which is
     // CPU-bound, so overlap buys nothing.
-    let records = map(parents, 1, move |candidate: v1::Suggestion| {
-        let local = local.clone();
-        async move {
-            let (service, locator, _, _) = v1::Suggestion::parse_name(&candidate.name)
-                .ok_or_else(|| format!("not a suggestion name: {}", candidate.name))?;
-            let blob = v1::name::blob(&service, &locator);
-            let path = read_path(&blob, local.as_deref())?;
-            Ok::<_, CliError>(pqbench::lint::verify(&path, &candidate)?)
-        }
+    let records = map(parents, 1, move |candidate: v1::Suggestion| async move {
+        let (service, locator, _, _) = v1::Suggestion::parse_name(&candidate.name)
+            .ok_or_else(|| format!("not a suggestion name: {}", candidate.name))?;
+        let blob = v1::name::blob(&service, &locator);
+        let path = read_path(&blob, local)?;
+        Ok::<_, CliError>(pqbench::lint::verify(&path, &candidate)?)
     });
     drive(records).await
 }

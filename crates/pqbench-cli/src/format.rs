@@ -44,6 +44,7 @@ enum Class {
     Sweep,
     CompressionColumn,
     Profile,
+    Suggestion,
     /// A summarized table column: no name, recognized by its shape.
     Mass,
     /// A `diff` column delta: no name, recognized by its shape.
@@ -103,7 +104,7 @@ async fn tables() -> Result<(), CliError> {
         if let Some(record) = section(&mut sections, class).push(record) {
             // The curated type did not fit the record; its keys still render.
             let fallback = Class::Other(signature(&record));
-            section(&mut sections, fallback).push_raw(record);
+            section(&mut sections, fallback).push_values(record);
         }
     }
     let mut out = String::new();
@@ -148,7 +149,9 @@ fn classify(record: &Value) -> Option<Class> {
         }
         return None;
     };
-    Some(if v1::Column::parse_name(name).is_some() {
+    Some(if is_suggestion(record, name) {
+        Class::Suggestion
+    } else if v1::Column::parse_name(name).is_some() {
         Class::Column
     } else if name.contains("/codecs/") {
         Class::Sweep
@@ -181,6 +184,14 @@ fn classify(record: &Value) -> Option<Class> {
     })
 }
 
+/// A suggestion names its column and its rule, so a `…/suggestions/…` name
+/// with both fields is one.
+fn is_suggestion(record: &Value, name: &str) -> bool {
+    name.contains("/suggestions/")
+        && record.get("rule").and_then(Value::as_str).is_some()
+        && record.get("column").and_then(Value::as_str).is_some()
+}
+
 /// A record's keys, in a stable order: records with the same shape share a
 /// table.
 fn signature(record: &Value) -> String {
@@ -192,63 +203,62 @@ fn signature(record: &Value) -> String {
     keys.join(",")
 }
 
-/// One table's rows: a curated type, or JSON records with no columns yet.
+/// One table's rows: curated cells, or JSON records with no columns yet.
 enum Section {
-    Metastore(Vec<v1::Metastore>),
-    Catalog(Vec<v1::Catalog>),
-    Schema(Vec<v1::Schema>),
-    Table(Vec<v1::Table>),
-    TableFile(Vec<v1::TableFile>),
-    PartitionPrice(Vec<v1::PartitionPrice>),
-    Partition(Vec<v1::Partition>),
-    Column(Vec<v1::Column>),
-    Sweep(Vec<render::SweepRow>),
-    CompressionColumn(Vec<render::ColumnSweepRow>),
-    Profile(Vec<render::ProfileRow>),
-    Mass(Vec<mass::ColumnMass>),
-    Delta(Vec<diff::ColumnDelta>),
+    /// Rows of one curated type, already reduced to cells.
+    Curated {
+        header: &'static [&'static str],
+        align: &'static [render::Align],
+        /// How a record joins the section: [`Self::curated`] names the type.
+        extract: fn(Value) -> Result<Vec<String>, Value>,
+        rows: Vec<Vec<String>>,
+    },
     Other(Vec<Value>),
 }
 
 impl Section {
+    /// The empty section for `class`; this match is the one place a curated
+    /// record type is named.
     fn new(class: &Class) -> Self {
         match class {
-            Class::Metastore => Self::Metastore(Vec::new()),
-            Class::Catalog => Self::Catalog(Vec::new()),
-            Class::Schema => Self::Schema(Vec::new()),
-            Class::Table => Self::Table(Vec::new()),
-            Class::TableFile => Self::TableFile(Vec::new()),
-            Class::PartitionPrice => Self::PartitionPrice(Vec::new()),
-            Class::Partition => Self::Partition(Vec::new()),
-            Class::Column => Self::Column(Vec::new()),
-            Class::Sweep => Self::Sweep(Vec::new()),
-            Class::CompressionColumn => Self::CompressionColumn(Vec::new()),
-            Class::Profile => Self::Profile(Vec::new()),
-            Class::Mass => Self::Mass(Vec::new()),
-            Class::Delta => Self::Delta(Vec::new()),
+            Class::Metastore => Self::curated::<v1::Metastore>(),
+            Class::Catalog => Self::curated::<v1::Catalog>(),
+            Class::Schema => Self::curated::<v1::Schema>(),
+            Class::Table => Self::curated::<v1::Table>(),
+            Class::TableFile => Self::curated::<v1::TableFile>(),
+            Class::PartitionPrice => Self::curated::<v1::PartitionPrice>(),
+            Class::Partition => Self::curated::<v1::Partition>(),
+            Class::Column => Self::curated::<v1::Column>(),
+            Class::Sweep => Self::curated::<render::SweepRow>(),
+            Class::CompressionColumn => Self::curated::<render::ColumnSweepRow>(),
+            Class::Profile => Self::curated::<render::ProfileRow>(),
+            Class::Suggestion => Self::curated::<v1::Suggestion>(),
+            Class::Mass => Self::curated::<mass::ColumnMass>(),
+            Class::Delta => Self::curated::<diff::ColumnDelta>(),
             Class::Other(_) => Self::Other(Vec::new()),
+        }
+    }
+
+    /// An empty section whose rows are `T`'s columns.
+    fn curated<T: Row + serde::de::DeserializeOwned>() -> Self {
+        Self::Curated {
+            header: T::HEADER,
+            align: T::ALIGN,
+            extract: extract_row::<T>,
+            rows: Vec::new(),
         }
     }
 
     /// Take the record, or give it back when the curated type cannot hold it.
     fn push(&mut self, record: Value) -> Option<Value> {
         match self {
-            Self::Metastore(rows) => push_typed(rows, record),
-            Self::Catalog(rows) => push_typed(rows, record),
-            Self::Schema(rows) => push_typed(rows, record),
-            Self::Table(rows) => push_typed(rows, record),
-            Self::TableFile(rows) => push_typed(rows, record),
-            Self::PartitionPrice(rows) => push_typed(rows, record),
-            Self::Partition(rows) => push_typed(rows, record),
-            Self::Column(rows) => push_typed(rows, record),
-            Self::Sweep(rows) => push_typed(rows, record),
-            Self::CompressionColumn(rows) => push_typed(rows, record),
-            Self::Profile(rows) => push_typed(rows, record),
-            Self::Mass(rows) => {
-                rows.extend(mass::ColumnMass::from_document(&record));
-                None
-            }
-            Self::Delta(rows) => push_typed(rows, record),
+            Self::Curated { rows, extract, .. } => match extract(record) {
+                Ok(cells) => {
+                    rows.push(cells);
+                    None
+                }
+                Err(record) => Some(record),
+            },
             Self::Other(rows) => {
                 rows.push(record);
                 None
@@ -256,7 +266,8 @@ impl Section {
         }
     }
 
-    fn push_raw(&mut self, record: Value) {
+    /// Keep a record the curated types cannot hold.
+    fn push_values(&mut self, record: Value) {
         if let Self::Other(rows) = self {
             rows.push(record);
         }
@@ -264,35 +275,23 @@ impl Section {
 
     fn render(&self) -> String {
         match self {
-            Self::Metastore(rows) => render::render(rows),
-            Self::Catalog(rows) => render::render(rows),
-            Self::Schema(rows) => render::render(rows),
-            Self::Table(rows) => render::render(rows),
-            Self::TableFile(rows) => render::render(rows),
-            Self::PartitionPrice(rows) => render::render(rows),
-            Self::Partition(rows) => render::render(rows),
-            Self::Column(rows) => render::render(rows),
-            Self::Sweep(rows) => render::render(rows),
-            Self::CompressionColumn(rows) => render::render(rows),
-            Self::Profile(rows) => render::render(rows),
-            Self::Mass(rows) => render::render(rows),
-            Self::Delta(rows) => render::render(rows),
-            Self::Other(rows) => render::render_values(rows),
+            Self::Curated {
+                header,
+                align,
+                rows,
+                ..
+            } => render::table_cells(header, align, rows),
+            Self::Other(rows) => render::table_values(rows),
         }
     }
 }
 
-/// Deserialize into the curated type; a record the type cannot hold comes back
-/// for the generic table, so nothing is dropped silently.
-fn push_typed<T: Row + serde::de::DeserializeOwned>(
-    rows: &mut Vec<T>,
-    record: Value,
-) -> Option<Value> {
+/// Deserialize into the curated type and reduce it to cells; a record the type
+/// cannot hold comes back for the generic table, so nothing is dropped
+/// silently.
+fn extract_row<T: Row + serde::de::DeserializeOwned>(record: Value) -> Result<Vec<String>, Value> {
     match T::deserialize(&record) {
-        Ok(row) => {
-            rows.push(row);
-            None
-        }
-        Err(_) => Some(record),
+        Ok(row) => Ok(row.cells()),
+        Err(_) => Err(record),
     }
 }

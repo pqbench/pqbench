@@ -1,10 +1,10 @@
-//! The master: the map of partition versions, its whole state, and the
+//! The engine: the map of partition versions, its whole state, and the
 //! transitions that move them.
 //!
-//! The master holds no file and runs no command. A walk's listing makes
-//! versions ([`Master::found`]) and deletes the ones it no longer finds;
-//! [`Master::start`] hands out the next runs, each a [`Transition`] on one
-//! version, and [`Master::finish`] takes how a run ended; [`Master::purge`]
+//! The engine holds no file and runs no command. A walk's listing makes
+//! versions ([`Engine::found`]) and deletes the ones it no longer finds;
+//! [`Engine::start`] hands out the next runs, each a [`Transition`] on one
+//! version, and [`Engine::finish`] takes how a run ended; [`Engine::purge`]
 //! drops what a walk deleted. The driver runs the commands and keeps the
 //! files (`drive`, `store`); every call here is a short update of the map.
 
@@ -13,8 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) use pqbench::v1::partition_version::State;
-use pqbench::v1::{PartitionPrice, PartitionVersion};
-use serde_json::Value;
+use pqbench::v1::{Partition, PartitionPrice, PartitionVersion};
 
 /// Immediate retries before a version backs off.
 const MAX_FAILURES: u64 = 2;
@@ -120,13 +119,13 @@ const LOW_NETWORK_TRANSITIONS: &[Transition] = &[
 /// A version: its partition name and etag.
 pub(crate) type Key = (String, String);
 
-/// One run the master handed out: a transition on one version.
+/// One run the engine handed out: a transition on one version.
 pub(crate) struct Run {
     pub key: Key,
     pub transition: &'static Transition,
 }
 
-pub(crate) struct Master {
+pub(crate) struct Engine {
     /// [`LOW_NETWORK_TRANSITIONS`] on a host with little network, else
     /// [`TRANSITIONS`].
     transitions: &'static [Transition],
@@ -137,9 +136,9 @@ pub(crate) struct Master {
     changed: bool,
 }
 
-impl Master {
-    /// The master over a checkpoint's versions. The commands a version was
-    /// running died with the old daemon, so it goes back to the state before
+impl Engine {
+    /// The engine over a checkpoint's versions. The commands a version was
+    /// running died with the old driver, so it goes back to the state before
     /// its transition.
     pub(crate) fn new(versions: Vec<PartitionVersion>, low_network: bool) -> Result<Self, String> {
         let transitions = match low_network {
@@ -164,7 +163,7 @@ impl Master {
             row.name = String::new();
             rows.insert(key, row);
         }
-        Ok(Master {
+        Ok(Engine {
             transitions,
             rows,
             changed: true,
@@ -249,7 +248,7 @@ impl Master {
     /// its newest version, its sizes and newest file's time from the listing;
     /// the versions of the partition it supersedes leave the map, and their
     /// keys are returned. Every found version is stamped with the walk's time.
-    pub(crate) fn found(&mut self, key: &Key, listing: &Value, now: u64) -> Vec<Key> {
+    pub(crate) fn found(&mut self, key: &Key, listing: &Partition, now: u64) -> Vec<Key> {
         self.changed = true;
         if let Some(row) = self.rows.get_mut(key) {
             row.list_time = Some(now);
@@ -283,10 +282,13 @@ impl Master {
             list_time: Some(now),
             first_listed_time,
             etag_change_count,
-            file_count: listing["file_count"].as_u64().unwrap_or(0),
-            size_bytes: listing["size_bytes"].as_u64().unwrap_or(0),
-            removed_size_bytes: listing["removed_size_bytes"].as_u64(),
-            last_modification_time: listing["last_file"]["modification_time"].as_u64(),
+            file_count: listing.file_count,
+            size_bytes: listing.size_bytes,
+            removed_size_bytes: listing.removed_size_bytes,
+            last_modification_time: listing
+                .last_file
+                .as_ref()
+                .and_then(|file| file.modification_time),
             ..PartitionVersion::default()
         };
         self.rows.insert(key.clone(), row);
@@ -436,7 +438,7 @@ impl Master {
         }
         Some(Conclusion {
             state: row.state,
-            sample: master_needs_sample(row),
+            sample: engine_needs_sample(row),
         })
     }
 
@@ -468,7 +470,7 @@ pub(crate) struct Conclusion {
     pub sample: bool,
 }
 
-fn master_needs_sample(row: &PartitionVersion) -> bool {
+fn engine_needs_sample(row: &PartitionVersion) -> bool {
     row.retry_time.is_none() && needs_sample(row.state)
 }
 
@@ -547,23 +549,28 @@ pub(crate) fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pqbench::v1::TableFile;
 
     const PARTITION: &str = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
 
-    /// A master that found one version of [`PARTITION`] with `file_count`
+    /// An engine that found one version of [`PARTITION`] with `file_count`
     /// files.
-    fn found(file_count: u64) -> (Master, Key) {
-        let mut master = Master::new(Vec::new(), false).unwrap();
+    fn found(file_count: u64) -> (Engine, Key) {
+        let mut engine = Engine::new(Vec::new(), false).unwrap();
         let key = key(PARTITION, "aa").unwrap();
-        master.found(&key, &serde_json::json!({"file_count": file_count}), 1);
-        (master, key)
+        let listing = Partition {
+            file_count,
+            ..Partition::default()
+        };
+        engine.found(&key, &listing, 1);
+        (engine, key)
     }
 
     /// Price one version with a result naming `class` and `tier`, and return
     /// the state it lands in.
     fn priced(file_count: u64, class: &str, tier: Option<&str>) -> State {
-        let (mut master, key) = found(file_count);
-        assert_eq!(master.start(1).len(), 1);
+        let (mut engine, key) = found(file_count);
+        assert_eq!(engine.start(1).len(), 1);
         let price: PartitionPrice = serde_json::from_value(serde_json::json!({
             "name": format!("{PARTITION}/price"),
             "partition_etag": "aa",
@@ -572,8 +579,8 @@ mod tests {
                 "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
         }))
         .unwrap();
-        let conclusion = master.finish(&key, Ok(Some(price))).unwrap();
-        assert_eq!(master.rows[&key].highest_cost_per_month, Some(1.0));
+        let conclusion = engine.finish(&key, Ok(Some(price))).unwrap();
+        assert_eq!(engine.rows[&key].highest_cost_per_month, Some(1.0));
         conclusion.state
     }
 
@@ -599,27 +606,28 @@ mod tests {
     /// A transition takes the newest data first, then the biggest partition.
     #[test]
     fn a_transition_schedules_recent_and_biggest_first() {
-        let mut master = Master::new(Vec::new(), false).unwrap();
+        let mut engine = Engine::new(Vec::new(), false).unwrap();
         let now = 10_000;
         let mut found = |day: &str, modified: u64, size: u64| {
             let name = format!("catalogs/c/schemas/s/tables/t/partitions/day%3D{day}");
             let key = key(&name, "aa").unwrap();
-            master.found(
-                &key,
-                &serde_json::json!({
-                    "file_count": 1,
-                    "size_bytes": size,
-                    "last_file": {"modification_time": modified},
+            let listing = Partition {
+                file_count: 1,
+                size_bytes: size,
+                last_file: Some(TableFile {
+                    modification_time: Some(modified),
+                    ..TableFile::default()
                 }),
-                now,
-            );
+                ..Partition::default()
+            };
+            engine.found(&key, &listing, now);
             key
         };
         let old_big = found("1", 1_000, 500);
         let new_small = found("2", 9_000, 10);
         let new_big = found("3", 9_000, 900);
         let middle = found("4", 5_000, 100);
-        let scheduled: Vec<Key> = master.start(4).into_iter().map(|run| run.key).collect();
+        let scheduled: Vec<Key> = engine.start(4).into_iter().map(|run| run.key).collect();
         assert_eq!(scheduled, vec![new_big, new_small, middle, old_big]);
     }
 
@@ -627,29 +635,29 @@ mod tests {
     /// waits for its backoff window before retrying.
     #[test]
     fn a_version_that_failed_twice_waits() {
-        let (mut master, key) = found(1);
+        let (mut engine, key) = found(1);
         let t0 = 1_000_000;
         for attempt in 0..2 {
-            assert_eq!(master.start_timed(1, t0).len(), 1);
-            let conclusion = master.finish_timed(&key, Err(format!("boom {attempt}")), t0);
+            assert_eq!(engine.start_timed(1, t0).len(), 1);
+            let conclusion = engine.finish_timed(&key, Err(format!("boom {attempt}")), t0);
             assert_eq!(conclusion.map(|c| c.state), Some(State::Pending));
         }
-        assert_eq!(master.rows[&key].failure_count, 2);
-        assert_eq!(master.rows[&key].error.as_deref(), Some("boom 1"));
-        assert!(master.start_timed(1, t0 + RETRY_BASE_MS - 1).is_empty());
-        assert_eq!(master.start_timed(1, t0 + RETRY_BASE_MS).len(), 1);
+        assert_eq!(engine.rows[&key].failure_count, 2);
+        assert_eq!(engine.rows[&key].error.as_deref(), Some("boom 1"));
+        assert!(engine.start_timed(1, t0 + RETRY_BASE_MS - 1).is_empty());
+        assert_eq!(engine.start_timed(1, t0 + RETRY_BASE_MS).len(), 1);
     }
 
     /// A restart puts a running version back to the state before its
     /// transition.
     #[test]
     fn a_restart_puts_running_versions_back() {
-        let (mut master, key) = found(1);
-        master.start(1);
-        let versions: Vec<_> = master.versions().collect();
+        let (mut engine, key) = found(1);
+        engine.start(1);
+        let versions: Vec<_> = engine.versions().collect();
         assert_eq!(versions[0].state, State::Pricing);
-        let master = Master::new(versions, false).unwrap();
-        assert_eq!(master.rows[&key].state, State::Pending);
+        let engine = Engine::new(versions, false).unwrap();
+        assert_eq!(engine.rows[&key].state, State::Pending);
     }
 
     /// A name that would be a path outside the store is no key.

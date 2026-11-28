@@ -17,18 +17,18 @@
 pub mod get;
 pub mod list;
 
+mod iceberg;
 mod selection;
 pub use selection::FileSelection;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use futures_util::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::third_party::delta;
-use crate::third_party::iceberg;
 use crate::third_party::object_store;
 use crate::v1;
 use crate::Lake;
@@ -420,10 +420,10 @@ pub async fn stream_commits(
     request: &LoadRequest,
 ) -> Result<CommitStream<'static>, Error> {
     let format = detect(lake, &request.uri).await?;
-    match format {
-        v1::TableFormat::Delta => delta::stream_commits(lake, request).await,
-        v1::TableFormat::Iceberg => iceberg::stream_commits(lake, request).await,
-    }
+    Ok(match format {
+        v1::TableFormat::Delta => delta::stream_commits(lake, request).await?.boxed(),
+        v1::TableFormat::Iceberg => iceberg::stream_commits(lake, request).await?.boxed(),
+    })
 }
 
 /// Stream the files the requested commits added, in log order, without
@@ -447,70 +447,6 @@ pub async fn stream_files(
         v1::TableFormat::Delta => delta::stream_files(lake, request).await?.boxed(),
         v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await?.boxed(),
     })
-}
-
-pub(crate) fn add_partition_total(
-    groups: &mut BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
-    file: &v1::TableFile,
-) -> Result<(), Error> {
-    let entry = groups
-        .entry(file.partition_values.clone())
-        .or_insert(PartitionTotals {
-            file_count: 0,
-            size: 0,
-            num_records: Some(0),
-        });
-    entry.file_count += 1;
-    entry.size = entry
-        .size
-        .checked_add(file.size_bytes.unwrap_or(0))
-        .ok_or_else(|| Error::Overflow {
-            file: file.name.clone(),
-            kind: "byte",
-        })?;
-    entry.num_records =
-        match (entry.num_records, file.stats.as_ref()) {
-            (Some(sum), Some(stats)) => Some(sum.checked_add(stats.record_count).ok_or_else(
-                || Error::Overflow {
-                    file: file.name.clone(),
-                    kind: "record",
-                },
-            )?),
-            _ => None,
-        };
-    Ok(())
-}
-
-pub(crate) fn finish_partition_masses(
-    groups: BTreeMap<BTreeMap<String, Option<String>>, PartitionTotals>,
-) -> Vec<PartitionMass> {
-    groups
-        .into_iter()
-        .map(|(values, totals)| PartitionMass {
-            values,
-            file_count: totals.file_count,
-            size: totals.size,
-            bytes_per_row: totals
-                .num_records
-                .and_then(|records| bytes_per_row(totals.size, records)),
-            num_records: totals.num_records,
-        })
-        .collect()
-}
-
-pub(crate) struct PartitionTotals {
-    file_count: usize,
-    size: u64,
-    // aipnaming: allow(aip-141/count-suffix)
-    num_records: Option<u64>,
-}
-
-pub(crate) fn bytes_per_row(size: u64, num_records: u64) -> Option<f64> {
-    if num_records == 0 {
-        None
-    } else {
-        Some(size as f64 / num_records as f64)
-    }
 }
 
 /// Local markers `lake` and `table` share. `None` is unrecognized, not an error.
@@ -568,6 +504,24 @@ async fn probe(lake: &Lake, uri: &str, relative: &str) -> Result<bool, Error> {
         .map_err(|e| Error::Storage(Box::new(e)))
 }
 
+/// A data path that stays inside the table: empty, absolute, or URI paths
+/// are rejected here, once, for both the local and the object adapters.
+pub(crate) fn relative_data_path(relative: &str) -> Result<&Path, Error> {
+    let path = Path::new(relative);
+    if relative.is_empty()
+        || relative.contains("://")
+        || !path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(Error::Invalid(format!(
+            "only relative data paths inside the table are supported: {relative}"
+        )));
+    }
+    Ok(path)
+}
+
+/// Resolve a path relative to a table root, either local or a URI.
 pub(crate) fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
     // An absolute location is already the answer: a Delta log names a file
     // relative to the table root, but an Iceberg manifest names it absolute.
@@ -587,11 +541,13 @@ pub(crate) fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
     Ok(url.join(relative).map_err(Error::Uri)?.into())
 }
 
-fn is_local(uri: &str) -> bool {
+/// Whether a table location names the local filesystem.
+pub(crate) fn is_local(uri: &str) -> bool {
     !uri.contains("://") || uri.starts_with("file://")
 }
 
-fn local_path(uri: &str) -> Result<PathBuf, Error> {
+/// The filesystem path of a local table location.
+pub(crate) fn local_path(uri: &str) -> Result<PathBuf, Error> {
     if uri.starts_with("file://") {
         Url::parse(uri)
             .ok()

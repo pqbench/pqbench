@@ -2923,7 +2923,6 @@ name = "pqbench"
 version = "0.0.12"
 dependencies = [
  "apache-avro",
- "async-stream",
  "async-trait",
  "buoyant_kernel",
  "bytes",
@@ -2956,7 +2955,7 @@ dependencies = [
  "libc",
  "lz4",
  "pqbench",
- "pqbench-master",
+ "pqbench-driver",
  "serde",
  "serde_json",
  "tempfile",
@@ -2974,7 +2973,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pqbench-master"
+name = "pqbench-driver"
 version = "0.0.12"
 dependencies = [
  "clap",

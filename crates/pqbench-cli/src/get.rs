@@ -59,15 +59,16 @@ impl GetArgs {
 
 /// Read one resource: the walk's read verb.
 pub(crate) async fn run(
+    workspace: &pqbench::Workspace,
     lake: &pqbench::Lake,
     daemon: &crate::daemon::Daemon,
     args: &GetArgs,
 ) -> Result<(), CliError> {
     match &args.resource {
-        GetResource::Metastore(args) => crate::metastore::get::run(daemon, args).await,
-        GetResource::Catalog(args) => crate::catalog::get::run(daemon, args).await,
-        GetResource::Schema(args) => crate::schema::get::run(daemon, args).await,
-        GetResource::Table(args) => crate::table::get::run(daemon, args).await,
+        GetResource::Metastore(args) => crate::metastore::get::run(workspace, args).await,
+        GetResource::Catalog(args) => crate::catalog::get::run(workspace, args).await,
+        GetResource::Schema(args) => crate::schema::get::run(workspace, args).await,
+        GetResource::Table(args) => crate::table::get::run(workspace, lake, daemon, args).await,
         GetResource::PartitionVersion(args) => crate::partition::version::get(args).await,
         GetResource::PartitionPrice(args) => crate::partition::price::run(lake, daemon, args).await,
         GetResource::Suggestion(args) => crate::lint::verify(args).await,

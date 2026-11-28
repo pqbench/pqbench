@@ -10,20 +10,33 @@
 //! A suggestion carries the file's writer, because its remedy depends on what
 //! that writer can change: parquet-mr, pyarrow, and parquet-rs take
 //! per-column options, while Photon forwards them unverified.
+//!
+//! The sample is the file's one representative row group: the group whose row
+//! count is closest to the file's average. A codec decision is made per column
+//! chunk, so one average-sized chunk prices the file without an arbitrary byte
+//! or row cap, and a short leading or trailing group never stands in for the
+//! rest. Only the byte rules decode values; a codec suggestion rereads the
+//! chunk's own pages, so a numeric column is never decoded to price it.
 
+mod codec;
 mod control;
+mod delta_text;
 mod dictionary;
+mod int96;
 mod price;
 mod uuid;
 mod writer;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
+use parquet::basic::Encoding;
 use parquet::column::reader::{ColumnReader, ColumnReaderImpl};
 use parquet::data_type::{ByteArray, DataType};
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{
+    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
+};
 use parquet::file::reader::{FileReader, RowGroupReader, SerializedFileReader};
 
 use crate::third_party::parquet::api::Error as ParquetError;
@@ -32,15 +45,19 @@ use crate::v1;
 use self::control::Measurement;
 use self::writer::Writer;
 
-pub use dictionary::DICTIONARY_UNIQUE_RULE;
+pub use codec::CODEC_ZSTD_RULE;
+pub use delta_text::DELTA_TEXT_ENCODING_RULE;
+pub use dictionary::{DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE};
+pub use int96::INT96_TIMESTAMP_RULE;
 pub use uuid::UUID_TEXT_RULE;
 
 /// Wins smaller than this are noted as noise, not dropped.
 const NOISE_FLOOR_BYTES: u64 = 64 * 1024;
 
-/// Leading whole row groups are decoded until the target columns' compressed
-/// bytes reach this limit; at least one group is always decoded.
-const SAMPLE_BYTE_LIMIT: u64 = 8 * 1024 * 1024;
+/// A file at least this large is a real table's file rather than a fixture: it
+/// can hold hundreds of columns, so a column that cannot clear the noise floor
+/// is skipped before it is decoded.
+const LARGE_FILE_BYTES: u64 = 1024 * 1024;
 
 /// Errors from the lint layer.
 #[derive(Debug)]
@@ -91,6 +108,12 @@ impl From<crate::bytemass::Error> for Error {
     }
 }
 
+impl From<crate::codecs::Error> for Error {
+    fn from(error: crate::codecs::Error) -> Self {
+        Self::Invalid(error.to_string())
+    }
+}
+
 /// What a sample decoded: rows and the whole row groups they came from.
 #[derive(Clone, Copy, Default)]
 struct Coverage {
@@ -98,13 +121,42 @@ struct Coverage {
     row_group_count: u64,
 }
 
-/// Decoded whole-row-group chunks for the requested scalar leaf columns.
+/// What a column chunk's footer records about its dictionary page.
+#[derive(Clone, Copy, Default)]
+struct ChunkDictionary {
+    /// The chunk has a dictionary page.
+    present: bool,
+    /// Bytes from the dictionary page offset to the first data page.
+    page_size: Option<usize>,
+    /// The chunk's data pages include PLAIN beside a dictionary encoding, so
+    /// its writer fell back to PLAIN.
+    fell_back: bool,
+}
+
+/// One requested column's representative row group chunk.
+#[derive(Default)]
+struct DecodedColumn {
+    /// One cell per row of the group; `None` where the column is null. Empty
+    /// for a non-byte leaf, whose rules read the footer or the raw pages.
+    cells: Vec<Option<ByteArray>>,
+    /// Non-null values in the chunk, exact when the cells were decoded and
+    /// from the footer statistics otherwise.
+    non_null_value_count: u64,
+    /// The chunk's compressed bytes.
+    compressed_bytes: u64,
+    /// The chunk's dictionary page, as its footer records it.
+    dictionary: ChunkDictionary,
+    /// The chunk's leaf index in the file schema.
+    column_index: usize,
+}
+
+/// The representative row group's whole chunks for the requested scalar leaves.
 struct DecodedLeaves {
-    /// Per requested column: one `Vec<Option<ByteArray>>` per sampled row group.
-    columns: Vec<Vec<Vec<Option<ByteArray>>>>,
-    /// Compressed bytes of each requested column across the sampled row groups.
-    compressed_bytes: Vec<u64>,
+    /// Per requested column: its chunk from the representative row group.
+    columns: Vec<DecodedColumn>,
     coverage: Coverage,
+    /// The representative row group's index, or zero when the file has none.
+    row_group: usize,
 }
 
 /// One measured column and its decoded sample: what a rule detects and
@@ -114,8 +166,25 @@ pub(crate) struct ColumnSample<'a> {
     leaf: &'a str,
     column: &'a v1::Column,
     mass: &'a v1::Bytemass,
-    /// One slice per sampled row group, preserving chunk boundaries.
-    groups: &'a [Vec<Option<ByteArray>>],
+    /// The file the sample was decoded from, so a rule can read raw pages.
+    path: &'a Path,
+    /// The sample's row group index in that file.
+    row_group: usize,
+    /// The sample's leaf index in that file's schema.
+    column_index: usize,
+    /// The representative row group's whole chunk, one cell per row; empty for
+    /// a non-byte leaf.
+    cells: &'a [Option<ByteArray>],
+    /// The sample chunk's real on-disk compressed bytes.
+    chunk_compressed_bytes: u64,
+    /// The sample chunk wrote a dictionary page.
+    chunk_has_dictionary: bool,
+    /// Bytes from the sample chunk's dictionary page offset to its first data
+    /// page.
+    chunk_dictionary_page_size: Option<usize>,
+    /// The sample chunk's data pages include PLAIN beside a dictionary
+    /// encoding.
+    chunk_fell_back: bool,
     writer: Option<&'a str>,
     coverage: Coverage,
     text_bpv: f64,
@@ -125,33 +194,31 @@ impl<'a> ColumnSample<'a> {
     /// The sample a rule reads, or `None` when the footer lacks the counts or
     /// the sample has no non-null value.
     fn new(
+        path: &'a Path,
         blob: &'a str,
         leaf: &'a str,
         column: &'a v1::Column,
-        groups: &'a [Vec<Option<ByteArray>>],
-        sampled_compressed_bytes: u64,
+        decoded: &'a DecodedLeaves,
+        at: usize,
         writer: Option<&'a str>,
-        coverage: Coverage,
     ) -> Option<Self> {
         let mass = column.mass.as_ref()?;
-        let non_null: u64 = groups
-            .iter()
-            .flat_map(|cells| cells.iter())
-            .filter(|cell| cell.is_some())
-            .count() as u64;
+        let chunk = decoded.columns.get(at)?;
+        let non_null = chunk.non_null_value_count;
         if non_null == 0 {
             return None;
         }
-        let text_bpv = if sampled_compressed_bytes > 0 {
-            sampled_compressed_bytes as f64 / non_null as f64
+        let chunk_compressed_bytes = chunk.compressed_bytes;
+        let text_bpv = if chunk_compressed_bytes > 0 {
+            chunk_compressed_bytes as f64 / non_null as f64
         } else {
             let compressed_bytes = mass.compressed_bytes?;
             let value_count = mass.value_count?;
             let non_null_values = match mass.null_count {
                 Some(nulls) => value_count.saturating_sub(nulls),
+                None if chunk.cells.is_empty() => value_count,
                 None => {
-                    let total: usize = groups.iter().map(Vec::len).sum();
-                    let fraction = non_null as f64 / total.max(1) as f64;
+                    let fraction = non_null as f64 / chunk.cells.len().max(1) as f64;
                     (value_count as f64 * fraction).round() as u64
                 }
             };
@@ -165,16 +232,85 @@ impl<'a> ColumnSample<'a> {
             leaf,
             column,
             mass,
-            groups,
+            path,
+            row_group: decoded.row_group,
+            column_index: chunk.column_index,
+            cells: chunk.cells.as_slice(),
+            chunk_compressed_bytes,
+            chunk_has_dictionary: chunk.dictionary.present,
+            chunk_dictionary_page_size: chunk.dictionary.page_size,
+            chunk_fell_back: chunk.dictionary.fell_back,
             writer,
-            coverage,
+            coverage: decoded.coverage,
             text_bpv,
         })
+    }
+
+    /// Whether the leaf is a `BYTE_ARRAY`, the physical type the text rules
+    /// read.
+    fn byte_array(&self) -> bool {
+        self.column.physical_data_type.as_deref() == Some("BYTE_ARRAY")
+    }
+
+    /// Whether the leaf is a byte leaf (`BYTE_ARRAY` or
+    /// `FIXED_LEN_BYTE_ARRAY`), the physical types the byte rules decode.
+    fn byte_leaf(&self) -> bool {
+        matches!(
+            self.column.physical_data_type.as_deref(),
+            Some("BYTE_ARRAY" | "FIXED_LEN_BYTE_ARRAY")
+        )
+    }
+
+    /// The dictionary page size limit that reproduces the sample chunk's own
+    /// behavior. A chunk that wrote a dictionary page and never fell back must
+    /// not fall back in the control either, or the arms would compare a
+    /// dictionary against PLAIN and credit a rewrite with the fallback's loss; a
+    /// chunk that did fall back hit its writer's limit, which the dictionary
+    /// page it had written by then approximates. `None` keeps parquet-rs's
+    /// 1 MiB default.
+    fn dictionary_page_size_limit(&self) -> Option<usize> {
+        match (self.chunk_has_dictionary, self.chunk_fell_back) {
+            (true, false) => Some(usize::MAX),
+            (true, true) => self.chunk_dictionary_page_size.filter(|bytes| *bytes > 0),
+            (false, _) => None,
+        }
     }
 
     /// The writer this file came from, as the rules' remedies need it.
     fn writer_kind(&self) -> Writer {
         Writer::classify(self.writer)
+    }
+
+    /// A sample over one chunk, for the rules' unit tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        column: &'a v1::Column,
+        cells: &'a [Option<ByteArray>],
+        chunk_has_dictionary: bool,
+    ) -> Self {
+        let mass = column.mass.as_ref().expect("a sample column has a mass");
+        let non_null = cells.iter().filter(|cell| cell.is_some()).count().max(1) as u64;
+        let chunk_compressed_bytes = mass.compressed_bytes.unwrap_or(0);
+        Self {
+            blob: "blobs/s3/example-bucket/data.parquet",
+            leaf: "id",
+            column,
+            mass,
+            path: Path::new(""),
+            row_group: 0,
+            column_index: 0,
+            cells,
+            chunk_compressed_bytes,
+            chunk_has_dictionary,
+            chunk_dictionary_page_size: None,
+            chunk_fell_back: false,
+            writer: Some("parquet-rs version 59.3.2"),
+            coverage: Coverage {
+                row_count: cells.len() as u64,
+                row_group_count: 1,
+            },
+            text_bpv: chunk_compressed_bytes as f64 / non_null as f64,
+        }
     }
 
     /// One potential suggestion, on the column's own name and context.
@@ -216,14 +352,35 @@ pub(crate) struct Rule {
 
 /// The rules, in priority order. The first that detects a column wins, so a
 /// column's bytes are priced once and two rules never count the same saving.
+///
+/// `codec-zstd` outranks the encoding rules because its win is the larger one:
+/// a snappy or uncompressed file's 35-60% codec upgrade must not be masked by a
+/// 0-1% dictionary or Delta encoding tweak. A zstd file never reaches it, so
+/// its columns fall through to the encoding rules.
 pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: UUID_TEXT_RULE,
         detect: uuid::detect,
     },
     Rule {
+        id: INT96_TIMESTAMP_RULE,
+        detect: int96::detect,
+    },
+    Rule {
+        id: CODEC_ZSTD_RULE,
+        detect: codec::detect,
+    },
+    Rule {
         id: DICTIONARY_UNIQUE_RULE,
-        detect: dictionary::detect,
+        detect: dictionary::detect_unique,
+    },
+    Rule {
+        id: DICTIONARY_MISSING_RULE,
+        detect: dictionary::detect_missing,
+    },
+    Rule {
+        id: DELTA_TEXT_ENCODING_RULE,
+        detect: delta_text::detect,
     },
 ];
 
@@ -236,8 +393,11 @@ fn rule(id: &str) -> Option<&'static Rule> {
 ///
 /// `file` carries the table file's identity and blob name, so each suggestion
 /// names the blob the walk read, not the local path a caller may have copied it
-/// to. No rewrite is encoded here: `verify` does that. The sample is whole
-/// leading row groups, because a codec decision is made per column chunk.
+/// to. No rewrite is encoded here: `verify` does that. The sample is the file's
+/// one representative row group, because a codec decision is made per column
+/// chunk. A 1 MiB+ file skips the columns whose chunk cannot clear the noise
+/// floor without decoding them; a smaller file is a fixture whose every column
+/// is measured.
 ///
 /// # Errors
 /// Fails when `file` has no blob name or the file cannot be read.
@@ -256,15 +416,13 @@ pub fn suggestions(path: &Path, file: &v1::TableFile) -> Result<Vec<v1::Suggesti
     }
     let blob = &measured.blob;
     let columns = &measured.columns;
+    let large_file = blob
+        .size_bytes
+        .is_some_and(|bytes| bytes >= LARGE_FILE_BYTES);
     let targets: Vec<(&v1::Column, String)> = columns
         .iter()
-        .filter(|column| {
-            column.max_repetition_level == Some(0)
-                && matches!(
-                    column.physical_data_type.as_deref(),
-                    Some("BYTE_ARRAY" | "FIXED_LEN_BYTE_ARRAY")
-                )
-        })
+        .filter(|column| column.max_repetition_level == Some(0))
+        .filter(|column| !large_file || clears_noise_floor(column))
         .filter_map(|column| {
             let (_, _, leaf) = v1::Column::parse_name(&column.name)?;
             Some((column, leaf))
@@ -274,19 +432,18 @@ pub fn suggestions(path: &Path, file: &v1::TableFile) -> Result<Vec<v1::Suggesti
         return Ok(Vec::new());
     }
     let leaves: Vec<String> = targets.iter().map(|(_, leaf)| leaf.clone()).collect();
-    let decoded = decode_leaves(path, &leaves, None)?;
-    let coverage = decoded.coverage;
+    let decoded = decode_leaves(path, &leaves)?;
     let mut suggestions = Vec::new();
 
     for (at, (column, leaf)) in targets.iter().enumerate() {
         let Some(sample) = ColumnSample::new(
+            path,
             &blob.name,
             leaf,
             column,
-            &decoded.columns[at],
-            decoded.compressed_bytes[at],
+            &decoded,
+            at,
             blob.writer.as_deref(),
-            coverage,
         ) else {
             continue;
         };
@@ -315,11 +472,22 @@ pub fn suggestions(path: &Path, file: &v1::TableFile) -> Result<Vec<v1::Suggesti
         .collect())
 }
 
+/// Whether a column's chunk holds at least the noise floor. A column below it
+/// cannot earn a win that could be told from noise, so a wide file's null or
+/// short leaves never reach a rule.
+fn clears_noise_floor(column: &v1::Column) -> bool {
+    column
+        .mass
+        .as_ref()
+        .and_then(|mass| mass.compressed_bytes)
+        .is_none_or(|bytes| bytes >= NOISE_FLOOR_BYTES)
+}
+
 /// Measure one potential suggestion against its control.
 ///
-/// The sample is the leading row groups the candidate's
-/// `sample_row_group_count` names, so `list | get` measures the same values
-/// `list` decoded. The record then carries the rows actually read.
+/// The sample is the same representative row group `list` decoded, so
+/// `list | get` measures the same values. The record then carries the rows
+/// actually read.
 ///
 /// # Errors
 /// Fails when the suggestion is invalid, the sample cannot be read, or the rule
@@ -353,21 +521,16 @@ pub fn verify(path: &Path, candidate: &v1::Suggestion) -> Result<v1::Suggestion,
         ));
     }
     let leaf = candidate.column.clone();
-    let row_groups = candidate
-        .sample_row_group_count
-        .and_then(|count| usize::try_from(count).ok());
-    let decoded = decode_leaves(path, std::slice::from_ref(&leaf), row_groups)?;
+    let decoded = decode_leaves(path, std::slice::from_ref(&leaf))?;
     let coverage = decoded.coverage;
-    let groups = decoded.columns.first().map_or(&[][..], Vec::as_slice);
-    let sampled_bytes = decoded.compressed_bytes.first().copied().unwrap_or(0);
     let Some(sample) = ColumnSample::new(
+        path,
         &blob.name,
         &leaf,
         column,
-        groups,
-        sampled_bytes,
+        &decoded,
+        0,
         blob.writer.as_deref(),
-        coverage,
     ) else {
         return Ok(reject(
             candidate,
@@ -492,7 +655,7 @@ fn verdict(measurement: &Measurement, saving: u64, verified: bool) -> String {
         )
     } else if measurement.ratio_low <= 0.0 {
         format!(
-            "the controlled rewrite wins only at some {} levels (best {}%)",
+            "the controlled rewrite wins only at some {} settings (best {}%)",
             measurement.levels,
             percent(high)
         )
@@ -512,13 +675,11 @@ fn percent(value: f64) -> String {
     }
 }
 
-/// Decode whole leading row groups of the requested scalar byte leaf columns
-/// directly from their column chunks; unselected columns are never decoded.
-fn decode_leaves(
-    path: &Path,
-    leaves: &[String],
-    row_groups: Option<usize>,
-) -> Result<DecodedLeaves, Error> {
+/// Decode the file's one representative row group for the requested scalar
+/// leaf columns, directly from their column chunks. Values are decoded only for
+/// a byte leaf; any other leaf carries its footer counts, and a page-reading
+/// rule rereads its raw pages. Unselected columns are never read.
+fn decode_leaves(path: &Path, leaves: &[String]) -> Result<DecodedLeaves, Error> {
     let file = std::fs::File::open(path).map_err(ParquetError::Io)?;
     let reader = SerializedFileReader::new(file)?;
     let metadata = reader.metadata();
@@ -530,79 +691,129 @@ fn decode_leaves(
         .filter(|(_, descr)| descr.max_rep_level() == 0)
         .map(|(at, descr)| (descr.path().string(), at))
         .collect();
-    let targets: Vec<Option<usize>> = leaves
-        .iter()
-        .map(|name| leaf_index.get(name).copied())
-        .collect();
-    let target_indices: Vec<usize> = targets.iter().flatten().copied().collect();
-    let sampled = sampled_row_groups(metadata, &target_indices, row_groups);
-
-    let mut columns: Vec<Vec<Vec<Option<ByteArray>>>> = (0..leaves.len())
-        .map(|_| Vec::with_capacity(sampled))
-        .collect();
-    let mut compressed_bytes = vec![0_u64; leaves.len()];
-    let mut row_count = 0_u64;
-
-    for rg in 0..sampled {
-        let group = reader.get_row_group(rg)?;
-        let group_rows = usize::try_from(group.metadata().num_rows()).unwrap_or(0);
-        row_count += group_rows as u64;
-        for (slot, col_idx) in targets.iter().enumerate() {
-            let Some(col_idx) = *col_idx else {
-                columns[slot].push(vec![None; group_rows]);
-                continue;
-            };
-            let meta = group.metadata().column(col_idx);
-            compressed_bytes[slot] += u64::try_from(meta.compressed_size()).unwrap_or(0);
-            let max_def = schema.column(col_idx).max_def_level();
-            let cells = decode_bytes_chunk(group.as_ref(), col_idx, max_def, group_rows)?;
-            columns[slot].push(cells);
-        }
+    let Some(row_group) = representative_row_group(metadata) else {
+        return Ok(DecodedLeaves {
+            columns: leaves.iter().map(|_| DecodedColumn::default()).collect(),
+            coverage: Coverage::default(),
+            row_group: 0,
+        });
+    };
+    let group = reader.get_row_group(row_group)?;
+    let row_count = usize::try_from(group.metadata().num_rows()).unwrap_or(0);
+    let mut columns = Vec::with_capacity(leaves.len());
+    for leaf in leaves {
+        let Some(col_idx) = leaf_index.get(leaf).copied() else {
+            columns.push(DecodedColumn::default());
+            continue;
+        };
+        let meta = group.metadata().column(col_idx);
+        let descr = schema.column(col_idx);
+        // Only the byte rules decode cells; every other rule reads the footer
+        // or the raw pages, so a numeric column is never decoded here.
+        let cells = if byte_physical_type(descr.physical_type()) {
+            decode_bytes_chunk(group.as_ref(), col_idx, descr.max_def_level(), row_count)?
+        } else {
+            Vec::new()
+        };
+        let non_null_value_count = if cells.is_empty() {
+            chunk_non_null(meta)
+        } else {
+            cells.iter().filter(|cell| cell.is_some()).count() as u64
+        };
+        columns.push(DecodedColumn {
+            cells,
+            non_null_value_count,
+            compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
+            dictionary: chunk_dictionary(meta),
+            column_index: col_idx,
+        });
     }
-
     Ok(DecodedLeaves {
         columns,
-        compressed_bytes,
         coverage: Coverage {
-            row_count,
-            row_group_count: sampled as u64,
+            row_count: row_count as u64,
+            row_group_count: 1,
         },
+        row_group,
     })
 }
 
-/// How many leading row groups to sample: `row_groups` when given, else whole
-/// groups until the target columns' compressed bytes reach
-/// [`SAMPLE_BYTE_LIMIT`] (always at least one group).
-fn sampled_row_groups(
-    metadata: &ParquetMetaData,
-    target_indices: &[usize],
-    row_groups: Option<usize>,
-) -> usize {
-    let available = metadata.num_row_groups();
-    if available == 0 {
-        return 0;
+/// Whether a physical type is a byte leaf: the types the byte rules decode.
+fn byte_physical_type(physical: parquet::basic::Type) -> bool {
+    matches!(
+        physical,
+        parquet::basic::Type::BYTE_ARRAY | parquet::basic::Type::FIXED_LEN_BYTE_ARRAY
+    )
+}
+
+/// The non-null values a chunk's footer records: its value count less the null
+/// statistics, when the writer recorded them.
+fn chunk_non_null(meta: &ColumnChunkMetaData) -> u64 {
+    let values = u64::try_from(meta.num_values()).unwrap_or(0);
+    let nulls = meta
+        .statistics()
+        .and_then(|statistics| statistics.null_count_opt())
+        .unwrap_or(0);
+    values.saturating_sub(nulls)
+}
+
+/// The row group whose row count is closest to the file's average, breaking
+/// ties by the lowest index.
+///
+/// One average-sized group prices a codec decision on whole values, while a
+/// short leading group or a short trailing tail group would not stand for the
+/// rest of the file.
+fn representative_row_group(metadata: &ParquetMetaData) -> Option<usize> {
+    let group_count = metadata.num_row_groups();
+    if group_count == 0 {
+        return None;
     }
-    if let Some(count) = row_groups {
-        return count.min(available);
-    }
-    let mut bytes = 0_u64;
-    let mut count = 0;
-    for group in metadata.row_groups() {
-        let group_bytes: u64 = if target_indices.is_empty() {
-            u64::try_from(group.compressed_size()).unwrap_or(0)
-        } else {
-            target_indices
-                .iter()
-                .map(|&col| u64::try_from(group.column(col).compressed_size()).unwrap_or(0))
-                .sum()
-        };
-        if count > 0 && bytes + group_bytes > SAMPLE_BYTE_LIMIT {
-            break;
+    let total_rows: i64 = metadata
+        .row_groups()
+        .iter()
+        .map(|group| group.num_rows())
+        .sum();
+    let average_rows = total_rows as f64 / group_count as f64;
+    let mut representative = 0;
+    let mut closest = f64::INFINITY;
+    for (at, group) in metadata.row_groups().iter().enumerate() {
+        let distance = (group.num_rows() as f64 - average_rows).abs();
+        if distance < closest {
+            representative = at;
+            closest = distance;
         }
-        bytes += group_bytes;
-        count += 1;
     }
-    count.max(1)
+    Some(representative)
+}
+
+/// What one column chunk's footer records about its dictionary page.
+fn chunk_dictionary(meta: &ColumnChunkMetaData) -> ChunkDictionary {
+    let dictionary_page_offset = meta.dictionary_page_offset();
+    let data_page_offset = meta.data_page_offset();
+    // A dictionary page's values are PLAIN-encoded, so a chunk's whole encoding
+    // set always lists PLAIN beside its dictionary encoding; only the data
+    // pages' encodings tell a falling-back chunk from a dictionary-encoded one.
+    // A footer without page encoding stats cannot say, so it stays a dictionary
+    // chunk: the control then prices a dictionary the source might not have
+    // used, understating the win rather than overstating it.
+    let data_encodings: Vec<Encoding> = meta
+        .page_encoding_stats_mask()
+        .map(|mask| mask.encodings().collect())
+        .unwrap_or_default();
+    let plain = data_encodings.contains(&Encoding::PLAIN);
+    let dictionary_encoding = data_encodings.iter().any(|encoding| {
+        matches!(
+            encoding,
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY
+        )
+    });
+    ChunkDictionary {
+        present: dictionary_page_offset.is_some(),
+        page_size: dictionary_page_offset
+            .filter(|offset| data_page_offset > *offset)
+            .and_then(|offset| usize::try_from(data_page_offset - offset).ok()),
+        fell_back: plain && dictionary_encoding,
+    }
 }
 
 fn decode_bytes_chunk(
@@ -620,8 +831,111 @@ fn decode_bytes_chunk(
                 ByteArray::from(value.data())
             })
         }
-        _ => Ok(vec![None; rows]),
+        _ => Err(Error::Invalid(format!(
+            "column {col_idx} is not a BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY leaf; \
+             the byte rules decode only those"
+        ))),
     }
+}
+
+/// One page of a column chunk, read from the file's bytes: the payload a codec
+/// compresses, and, when the file records an offset index, the bytes the page
+/// occupies on disk.
+pub(crate) struct ChunkPage {
+    /// The page's uncompressed payload: exactly the bytes a codec compresses.
+    pub(crate) payload: Vec<u8>,
+    /// The page's on-disk bytes, page header included; `None` when the file
+    /// records no offset index.
+    pub(crate) compressed_bytes: Option<u64>,
+    /// The page holds values: a data page, not the chunk's dictionary page.
+    pub(crate) data: bool,
+}
+
+/// The sample chunk's pages, read straight from the file: the bytes a codec
+/// compresses, without decoding values.
+pub(crate) fn chunk_pages(sample: &ColumnSample<'_>) -> Result<Vec<ChunkPage>, Error> {
+    let file = std::fs::File::open(sample.path).map_err(ParquetError::Io)?;
+    let reader = SerializedFileReader::new(file)?;
+    let recorded_bytes = chunk_page_compressed_bytes(sample, reader.metadata())?;
+    let group = reader.get_row_group(sample.row_group)?;
+    let mut pages = group.get_column_page_reader(sample.column_index)?;
+    let mut read_pages = Vec::new();
+    let mut data_at = 0;
+    for page in &mut pages {
+        let page = page?;
+        let data = page.is_data_page();
+        // The offset index lists the chunk's data pages only, in file order.
+        let compressed_bytes = if data {
+            let bytes = recorded_bytes.get(data_at).copied().flatten();
+            data_at += 1;
+            bytes
+        } else {
+            None
+        };
+        read_pages.push(ChunkPage {
+            payload: page.buffer().to_vec(),
+            compressed_bytes,
+            data,
+        });
+    }
+    Ok(read_pages)
+}
+
+/// The sample chunk's data pages' on-disk bytes, page header included, as the
+/// file's offset index records them: one entry per data page, in file order.
+///
+/// A `Page` hands back a decompressed buffer and no size of its own, and a
+/// `PageMetadata` carries no size either, so the offset index is the public
+/// source for a single page's on-disk bytes. A file that records no offset
+/// index returns an empty list: its chunk's footer bytes are then the only
+/// on-disk number known.
+fn chunk_page_compressed_bytes(
+    sample: &ColumnSample<'_>,
+    metadata: &ParquetMetaData,
+) -> Result<Vec<Option<u64>>, Error> {
+    let Some(chunk) = metadata
+        .row_groups()
+        .get(sample.row_group)
+        .and_then(|group| group.columns().get(sample.column_index))
+    else {
+        return Ok(Vec::new());
+    };
+    if chunk.offset_index_offset().is_none() {
+        return Ok(Vec::new());
+    }
+    let file = std::fs::File::open(sample.path).map_err(ParquetError::Io)?;
+    // A footer whose offset index cannot be read costs the page granularity,
+    // not the measurement: whole-chunk pricing stays exact.
+    let Ok(indexed) = ParquetMetaDataReader::new()
+        .with_offset_index_policy(PageIndexPolicy::Optional)
+        .parse_and_finish(&file)
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(index) = indexed
+        .offset_index()
+        .and_then(|row_groups| row_groups.get(sample.row_group))
+        .and_then(|columns| columns.get(sample.column_index))
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(index
+        .page_locations()
+        .iter()
+        .map(|location| u64::try_from(location.compressed_page_size).ok())
+        .collect())
+}
+
+/// The fraction of sampled non-null values that are distinct within the chunk
+/// (Parquet builds one dictionary per row-group column chunk).
+pub(crate) fn unique_fraction(cells: &[Option<ByteArray>]) -> f64 {
+    let mut distinct: HashSet<&[u8]> = HashSet::new();
+    let mut non_null_total = 0usize;
+    for bytes in cells.iter().flatten() {
+        non_null_total += 1;
+        distinct.insert(bytes.data());
+    }
+    distinct.len() as f64 / non_null_total.max(1) as f64
 }
 
 fn decode_typed<T: DataType>(
@@ -664,4 +978,47 @@ fn decode_typed<T: DataType>(
         remaining = remaining.saturating_sub(consumed);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use parquet::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
+    use parquet::schema::types::{SchemaDescriptor, Type};
+
+    use super::representative_row_group;
+
+    /// A footer with these row-group row counts and no columns.
+    fn metadata(rows_per_group: &[i64]) -> ParquetMetaData {
+        let schema = Arc::new(Type::group_type_builder("schema").build().expect("schema"));
+        let descr = Arc::new(SchemaDescriptor::new(schema));
+        let row_groups = rows_per_group
+            .iter()
+            .map(|rows| {
+                RowGroupMetaData::builder(descr.clone())
+                    .set_num_rows(*rows)
+                    .build()
+                    .expect("row group")
+            })
+            .collect();
+        let file = FileMetaData::new(1, rows_per_group.iter().sum(), None, None, descr, None);
+        ParquetMetaData::new(file, row_groups)
+    }
+
+    #[test]
+    fn the_representative_row_group_is_the_one_closest_to_average() {
+        assert_eq!(representative_row_group(&metadata(&[100])), Some(0));
+        assert_eq!(representative_row_group(&metadata(&[100, 100, 3])), Some(0));
+        assert_eq!(representative_row_group(&metadata(&[3, 100, 100])), Some(1));
+        // 25 rows in groups of 10, 10, 5: the full groups stand for the file.
+        assert_eq!(representative_row_group(&metadata(&[10, 10, 5])), Some(0));
+        assert_eq!(representative_row_group(&metadata(&[])), None);
+    }
+
+    /// Equally average groups break the tie by the lowest index.
+    #[test]
+    fn equal_groups_pick_the_first() {
+        assert_eq!(representative_row_group(&metadata(&[7, 7, 7, 7])), Some(0));
+    }
 }

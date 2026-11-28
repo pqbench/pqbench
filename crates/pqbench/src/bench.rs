@@ -7,7 +7,7 @@
 //! its own, so neither command depends on the other. Its [`Error`] is the error
 //! type both sweeps and their renderers return.
 
-use crate::codecs::{Codec, CodecImpl, Error as CodecError};
+use crate::codecs::{Codec, Error as CodecError};
 use crate::stats;
 
 /// The measurement decisions a request resolves to: the codec×level set, the

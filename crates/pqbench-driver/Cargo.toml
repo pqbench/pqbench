@@ -1,15 +1,15 @@
 [package]
-name = "pqbench-master"
+name = "pqbench-driver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Partition-version state engine (master) for pqbench."
+description = "Partition-version state driver for pqbench."
 
 [[bin]]
-name = "pqbench-master"
+name = "pqbench-driver"
 path = "src/main.rs"
 # `main.rs` has no unit tests; building the harness would link the graph again
 # just to run zero of them.
@@ -21,7 +21,7 @@ clap = { version = "4", features = ["derive", "env"] }
 libc = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net", "process", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "macros", "io-util", "net", "process", "sync", "time"] }
 
 [dev-dependencies]
 tempfile = "3"

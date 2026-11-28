@@ -197,6 +197,9 @@ message Blob {
 
   int64 size_bytes = 2;
 
+  // Rows in the file, from its footer. Absent when the footer was not read.
+  optional int64 row_count = 8;
+
   // The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
   string storage_class = 3;
 
@@ -323,10 +326,10 @@ message PartitionPrice {
   repeated StorageTierCost removed_storage_costs = 5;
 }
 
-// A partition at one etag and where it is in the pipeline: the daemon
-// master's record of it (`list partition-versions`), and the master's whole
-// state. A walk makes a version for each etag it finds; the previous one is
-// kept, DELETED, until purge.
+// A partition at one etag and where it is in the pipeline: the driver's
+// record of it (`list partition-versions`), and the engine's whole state. A
+// walk makes a version for each etag it finds; the previous one is kept,
+// DELETED, until purge.
 message PartitionVersion {
   // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/versions/{version}
   // The version id is the partition's etag.
@@ -517,6 +520,11 @@ message Column {
 // chunks. A value on `Column`, not a resource; the per-chunk breakdown is not
 // carried.
 message Bytemass {
+  // The leaf column's logical type, as the Parquet spec names it (`STRING`,
+  // `DECIMAL(10,2)`, `TIMESTAMP(MICROS,UTC)`, …). Absent when the footer's
+  // schema records none. A footer fact: it costs no page read.
+  string logical_type = 21;
+
   int64 compressed_bytes = 2;
   int64 uncompressed_bytes = 3;
   string codec = 4;
@@ -524,6 +532,12 @@ message Bytemass {
   repeated string data_encodings = 15;
   bool dictionary = 6;
   int64 dictionary_bytes = 16;
+
+  // Data pages the footer counts, split by how they encode their values; a
+  // dictionary page counts as neither. Absent when the writer recorded no page
+  // encoding statistics. Footer facts: no page read.
+  optional int64 plain_data_page_count = 22;
+  optional int64 dictionary_data_page_count = 23;
 
   // Every chunk carries a page index (a column index and an offset index), so
   // the column can be pruned at page granularity.
@@ -630,12 +644,13 @@ message Suggestion {
   // only when `verified` is true.
   optional int64 savings_bytes = 9;
 
-  // Rows the detection decoded, not the rows it asked for: the sample is
-  // whole leading row groups.
+  // Rows the detection decoded, not the rows it asked for: the sample is one
+  // whole representative row group.
   optional int64 sample_row_count = 12;
 
-  // Leading whole row groups the detection decoded. `get suggestion`
-  // re-reads them, so the verification measures what the detection did.
+  // Whole row groups the detection decoded: the one group whose row count is
+  // closest to the file's average. `get suggestion` re-reads it, so the
+  // verification measures what the detection did.
   optional int64 sample_row_group_count = 13;
 }
 

@@ -1,4 +1,5 @@
-//! A daemon session: the lease cache, and the catalog calls the daemon owns.
+//! A daemon session: the lease cache, and the catalog transport the daemon
+//! owns.
 //!
 //! The daemon owns the cross-process lease copy; a reader owns a local copy so
 //! a `bytemass` over one table does not ask the socket once per file. Both use
@@ -7,34 +8,29 @@
 //! vends nothing is remembered briefly so the negative answer is not asked
 //! again for every file.
 //!
-//! Every catalog request a reader would make — `list catalogs`, `list
-//! schemas`, `list tables`, `get metastore`, `get catalog`, `get schema`, and
-//! `get table` — is a request this session executes. The daemon's instance
-//! runs them directly, which lets it pace Unity's endpoint at the catalog's
-//! ceiling; a reader's instance asks the daemon over its socket, and fails
-//! with a hint when no daemon is listening. A reader with no endpoint (local
-//! files) has no catalog to ask and never needs one.
+//! The daemon also owns the catalog transport: [`Daemon::http_workspace`]
+//! attaches it to the reader's workspace as the HTTP GET hook, so every catalog
+//! command runs the library's own URLs, pages, and JSON decoding while the
+//! daemon sends the request under its identity and paces it at the catalog's
+//! ceiling. A reader with no daemon reads its endpoint directly. A reader with
+//! no endpoint (local files) has no catalog to ask and never needs one.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use futures_util::stream::{self, BoxStream, Stream, StreamExt};
-use futures_util::TryStreamExt;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
-use pqbench::v1::{self, Credentials};
+use pqbench::v1::Credentials;
 use pqbench::{Dialect, Workspace};
 
 use crate::CliError;
 
 use super::client;
 use super::path;
-use super::protocol::{Collection, Request, Resource, Response};
+use super::protocol::{Request, Response};
 use super::rate::UnityRate;
 
 /// How long before expiry a lease is refreshed.
@@ -74,7 +70,7 @@ pub(crate) struct Daemon {
     /// a walk retry must reach the catalog again. A reader does, so a table's
     /// files do not each retry the same failure.
     cache_failures: bool,
-    /// The daemon's Unity pacer; readers do not pace their own vends.
+    /// The daemon's Unity pacer; readers do not pace their own requests.
     rate: Option<Arc<UnityRate>>,
 }
 
@@ -104,15 +100,16 @@ enum Cached {
 }
 
 impl Daemon {
-    /// The daemon's cache: always vends directly, and paces Unity vends at
-    /// the catalog's per-endpoint ceiling.
+    /// The daemon's session: always vends directly, and paces Unity requests
+    /// at the catalog's per-endpoint ceiling.
     pub(crate) fn direct(workspace: Workspace) -> Self {
         let rate =
             (workspace.config().dialect == Dialect::Unity).then(|| Arc::new(UnityRate::new()));
         Self::new(Vendor::Direct(workspace), false, rate)
     }
 
-    /// A reader's cache: every catalog call and lease goes to the daemon.
+    /// A reader's session: every lease goes to the daemon, and so does every
+    /// catalog request ([`Daemon::http_workspace`]).
     pub(crate) fn client(workspace: Workspace) -> Self {
         // An explicit socket can serve a reader that knows no endpoint; only
         // an unconfigured reader has nothing to ask.
@@ -134,247 +131,32 @@ impl Daemon {
     }
 
     /// The workspace this session speaks for.
-    fn workspace(&self) -> &Workspace {
+    pub(crate) fn workspace(&self) -> &Workspace {
         match &self.vendor {
             Vendor::Direct(workspace) => workspace,
             Vendor::Daemon { workspace, .. } => workspace,
         }
     }
 
-    /// The catalog records a `list` or `get` request names, or the error the
-    /// catalog gave.
-    pub(crate) async fn records(&self, request: &Request) -> Result<Vec<Value>, CliError> {
-        match &self.vendor {
-            Vendor::Direct(_) => self.execute(request).await,
-            Vendor::Daemon { path, .. } => records(ask(path, request).await?),
-        }
-    }
-
-    /// Stream the records a `list` request names directly from the catalog
-    /// without buffering the whole collection.
-    pub(crate) async fn stream_list<'a>(
-        &'a self,
-        collection: Collection,
-        parent: Option<&Value>,
-    ) -> Result<BoxStream<'a, Result<Value, CliError>>, CliError> {
-        self.pace().await;
-        match collection {
-            Collection::Catalogs => Ok(json_stream(pqbench::catalog::list::list(self.workspace()))),
-            Collection::Schemas => {
-                let catalog: v1::Catalog = record_value(parent, "list schemas")?;
-                let workspace = self.workspace();
-                Ok(stream::once(async move {
-                    Ok::<_, CliError>(json_stream(pqbench::schema::list::list(
-                        workspace, &catalog,
-                    )))
-                })
-                .try_flatten()
-                .boxed())
-            }
-            Collection::Tables => {
-                let schema: v1::Schema = record_value(parent, "list tables")?;
-                let workspace = self.workspace();
-                Ok(stream::once(async move {
-                    Ok::<_, CliError>(json_stream(pqbench::table::list::list(workspace, &schema)))
-                })
-                .try_flatten()
-                .boxed())
-            }
-        }
-    }
-
-    /// The catalogs at the endpoint.
-    pub(crate) async fn list_catalogs(
-        &self,
-    ) -> Result<BoxStream<'static, Result<v1::Catalog, CliError>>, CliError> {
-        self.stream_records(&Request::catalogs()).await
-    }
-
-    /// The schemas in `catalog`.
-    pub(crate) async fn list_schemas(
-        &self,
-        catalog: &v1::Catalog,
-    ) -> Result<BoxStream<'static, Result<v1::Schema, CliError>>, CliError> {
-        self.stream_records(&Request::schemas(serde_json::to_value(catalog)?))
-            .await
-    }
-
-    /// The tables in `schema`.
-    pub(crate) async fn list_tables(
-        &self,
-        schema: &v1::Schema,
-    ) -> Result<BoxStream<'static, Result<v1::Table, CliError>>, CliError> {
-        self.stream_records(&Request::tables(serde_json::to_value(schema)?))
-            .await
-    }
-
-    /// The endpoint's metastore record.
-    pub(crate) async fn get_metastore(&self) -> Result<v1::Metastore, CliError> {
-        self.fetch_one(&Request::metastore()).await
-    }
-
-    /// One catalog's record.
-    pub(crate) async fn get_catalog(&self, catalog: &v1::Catalog) -> Result<v1::Catalog, CliError> {
-        self.fetch_one(&Request::catalog(serde_json::to_value(catalog)?))
-            .await
-    }
-
-    /// One schema's record.
-    pub(crate) async fn get_schema(&self, schema: &v1::Schema) -> Result<v1::Schema, CliError> {
-        self.fetch_one(&Request::schema(serde_json::to_value(schema)?))
-            .await
-    }
-
-    /// One table's record, read from its catalog and storage.
-    pub(crate) async fn get_table(&self, table: &v1::Table) -> Result<v1::Table, CliError> {
-        self.fetch_one(&Request::table(serde_json::to_value(table)?))
-            .await
-    }
-
-    /// Stream decoded records for a `list` request.
-    async fn stream_records<T: DeserializeOwned + Send + 'static>(
-        &self,
-        request: &Request,
-    ) -> Result<BoxStream<'static, Result<T, CliError>>, CliError> {
-        match &self.vendor {
-            Vendor::Daemon { path, .. } => {
-                let lines = client::stream(path, request)
-                    .await
-                    .map_err(|error| connect_error(path, error))?;
-                let path = path.clone();
-                Ok(stream::try_unfold(lines, move |mut lines| {
-                    let path = path.clone();
-                    async move {
-                        let Some(line) = lines
-                            .next_line()
-                            .await
-                            .map_err(|error| connect_error(&path, client::Error::Connect(error)))?
-                        else {
-                            return Err(
-                                "the daemon closed the connection before finishing the stream"
-                                    .into(),
-                            );
-                        };
-                        let frame: Response = serde_json::from_str(&line).map_err(|error| {
-                            CliError::from(format!("the daemon answered badly: {error}"))
-                        })?;
-                        if let Some(error) = frame.error {
-                            return Err(error.into());
-                        }
-                        if frame.ok {
-                            return Ok(None);
-                        }
-                        let Some(record) = frame.record else {
-                            return Err("the daemon answered an empty frame".into());
-                        };
-                        let value: T = serde_json::from_value(record).map_err(|error| {
-                            format!("the daemon answered a bad record: {error}")
-                        })?;
-                        Ok(Some((value, lines)))
-                    }
-                })
-                .boxed())
-            }
-            Vendor::Direct(_) => {
-                let Request::List { collection, parent } = request else {
-                    return Err("not a list request".into());
-                };
-                let (tx, rx) = tokio::sync::mpsc::channel(64);
-                let daemon = self.clone();
-                let collection = *collection;
-                let parent = parent.clone();
-                tokio::spawn(async move {
-                    let mut rows = match daemon.stream_list(collection, parent.as_ref()).await {
-                        Ok(rows) => rows,
-                        Err(error) => {
-                            let _ = tx.send(Err(error)).await;
-                            return;
-                        }
-                    };
-                    while let Some(item) = rows.next().await {
-                        let decoded = item.and_then(|value| {
-                            serde_json::from_value(value).map_err(|error| {
-                                CliError::from(format!("the daemon answered a bad record: {error}"))
-                            })
-                        });
-                        if tx.send(decoded).await.is_err() {
-                            return;
-                        }
-                    }
-                });
-                Ok(stream::unfold(rx, |mut rx| async move {
-                    rx.recv().await.map(|item| (item, rx))
-                })
-                .boxed())
-            }
-        }
-    }
-
-    /// Decode the records a `get` request answers with.
-    async fn fetch<T: DeserializeOwned>(&self, request: &Request) -> Result<Vec<T>, CliError> {
-        self.records(request)
-            .await?
-            .into_iter()
-            .map(|value| {
-                serde_json::from_value(value)
-                    .map_err(|error| format!("the daemon answered a bad record: {error}").into())
-            })
-            .collect()
-    }
-
-    /// Decode the one record a `get` request answers with.
-    async fn fetch_one<T: DeserializeOwned>(&self, request: &Request) -> Result<T, CliError> {
-        let mut rows: Vec<T> = self.fetch(request).await?;
-        rows.pop()
-            .ok_or_else(|| "the daemon answered no record".into())
-    }
-
-    /// Run a catalog `get` request in this process.
-    async fn execute(&self, request: &Request) -> Result<Vec<Value>, CliError> {
-        match request {
-            Request::Get { resource, record } => self.get(*resource, record.as_ref()).await,
-            _ => Err("not a catalog request".into()),
-        }
-    }
-
-    async fn get(
-        &self,
-        resource: Resource,
-        record: Option<&Value>,
-    ) -> Result<Vec<Value>, CliError> {
-        match resource {
-            Resource::Metastore => {
-                self.pace().await;
-                one_value(pqbench::metastore::get::get(self.workspace()).await?)
-            }
-            Resource::Catalog => {
-                self.pace().await;
-                let catalog: v1::Catalog = record_value(record, "get catalog")?;
-                one_value(pqbench::catalog::get::get(self.workspace(), &catalog).await?)
-            }
-            Resource::Schema => {
-                self.pace().await;
-                let schema: v1::Schema = record_value(record, "get schema")?;
-                one_value(pqbench::schema::get::get(self.workspace(), &schema).await?)
-            }
-            Resource::Table => self.get_table_record(record).await,
-        }
-    }
-
-    /// `get table`: the table's catalog record and, for a Delta/UniForm table,
-    /// its metadata under the table's own lease.
-    async fn get_table_record(&self, record: Option<&Value>) -> Result<Vec<Value>, CliError> {
-        let table: v1::Table = record_value(record, "get table")?;
-        let env = self.resolve_env(&table.name).await?;
-        let credentials = Credentials::from_env(&env);
-        let lake = pqbench::Lake::new(self.workspace()).with_lease(Some(&credentials));
-        self.pace().await;
-        one_value(pqbench::table::get::get(self.workspace(), &lake, &table).await?)
+    /// This session's workspace with the daemon as its HTTP GET: every catalog
+    /// request a command makes is sent by the daemon at `path`, which paces it
+    /// at the catalog's ceiling and uses its own bearer. A session with no
+    /// daemon reads its own endpoint directly.
+    pub(crate) fn http_workspace(&self) -> Workspace {
+        let workspace = self.workspace().clone();
+        let path = match &self.vendor {
+            Vendor::Direct(_) => return workspace,
+            Vendor::Daemon { path, .. } => path.clone(),
+        };
+        workspace.with_http_get(move |url: String| {
+            let path = path.clone();
+            async move { daemon_get(&path, &url).await }
+        })
     }
 
     /// Wait for the daemon's Unity slot; an Iceberg session and a reader have
     /// none.
-    async fn pace(&self) {
+    pub(crate) async fn pace(&self) {
         if let Some(rate) = &self.rate {
             rate.wait().await;
         }
@@ -407,9 +189,7 @@ impl Daemon {
         if let Some(cached) = self.lookup(table) {
             return cached.result();
         }
-        if let Some(rate) = &self.rate {
-            rate.wait().await;
-        }
+        self.pace().await;
         match self.vendor.vend(table).await {
             Ok(vended) => {
                 let cached = Cached::new(vended, Instant::now());
@@ -481,6 +261,49 @@ fn connect_error(path: &std::path::Path, error: client::Error) -> CliError {
         client::Error::Protocol(_) => error.to_string().into(),
     }
 }
+
+/// One GET sent by the daemon at `path`: its answer is the endpoint's, status
+/// and body unchanged.
+async fn daemon_get(
+    path: &std::path::Path,
+    url: &str,
+) -> Result<pqbench::third_party::reqwest::Response, pqbench::third_party::reqwest::Error> {
+    let answer = client::request(path, &Request::http_get(url))
+        .await
+        .map_err(|error| transport_error(connect_error(path, error).to_string()))?;
+    let answer = match answer.error {
+        Some(message) => return Err(transport_error(message)),
+        None => answer,
+    };
+    let Some(status) = answer.status else {
+        return Err(transport_error(
+            "the daemon answered a catalog GET without a status".into(),
+        ));
+    };
+    Ok(pqbench::third_party::reqwest::Response {
+        status,
+        headers: Vec::new(),
+        bytes: answer.body.unwrap_or_default().into_bytes(),
+    })
+}
+
+/// A transport error whose message already carries its cause: the daemon's
+/// answer is one line, so the chain is the message.
+fn transport_error(message: String) -> pqbench::third_party::reqwest::Error {
+    pqbench::third_party::reqwest::Error::Transport(Box::new(Message(message)))
+}
+
+/// The message a proxied GET reports; it names the daemon and its answer.
+#[derive(Debug)]
+struct Message(String);
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Message {}
 
 async fn direct(workspace: &Workspace, table: &str) -> Result<Option<Vended>, CliError> {
     if workspace.config().endpoint.is_empty() {
@@ -597,37 +420,6 @@ fn answer(response: Response) -> Result<Response, CliError> {
         Some(error) => Err(error.into()),
         None => Ok(response),
     }
-}
-
-/// The records an answer carries, or the error it reports.
-fn records(response: Response) -> Result<Vec<Value>, CliError> {
-    Ok(answer(response)?.records)
-}
-
-/// Decode a request's parent record.
-fn record_value<T: DeserializeOwned>(record: Option<&Value>, request: &str) -> Result<T, CliError> {
-    let record = record.ok_or_else(|| format!("a {request} request carries no record"))?;
-    serde_json::from_value(record.clone())
-        .map_err(|error| format!("a {request} request carries a bad record: {error}").into())
-}
-
-/// Encode a library stream into JSON values without collecting it.
-fn json_stream<'a, T, E>(
-    rows: impl Stream<Item = Result<T, E>> + Send + 'a,
-) -> BoxStream<'a, Result<Value, CliError>>
-where
-    T: Serialize,
-    E: Into<CliError>,
-{
-    rows.map(|item| {
-        let row = item.map_err(Into::into)?;
-        serde_json::to_value(row).map_err(Into::into)
-    })
-    .boxed()
-}
-
-fn one_value<T: Serialize>(value: T) -> Result<Vec<Value>, CliError> {
-    Ok(vec![serde_json::to_value(value)?])
 }
 
 #[cfg(test)]

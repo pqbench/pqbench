@@ -3,7 +3,7 @@
 //! Everything pqbench needs from a parquet file — the encoded page payloads a
 //! codec would compress — is exposed through our own types here. No `parquet`
 //! crate type ever appears in this module's API, so swapping the backing
-//! parser (currently [`default_parser`]) won't touch tool code.
+//! parser won't touch tool code.
 //!
 //! Only NONE-compressed input is supported: `Page.payload` is the raw encoded
 //! values (what `compression.rs` will sweep codecs over).
@@ -71,13 +71,6 @@ pub struct TypedColumn {
     pub kind: Kind,
 }
 
-/// A decoded typed row sample: columns (with kinds) and nullable cells.
-#[derive(Debug, Clone, Default)]
-pub struct TypedSample {
-    pub columns: Vec<TypedColumn>,
-    pub rows: Vec<Vec<Value>>,
-}
-
 /// How to write a typed sample back to Parquet bytes.
 #[derive(Debug, Clone)]
 pub struct WriteOptions {
@@ -110,10 +103,6 @@ pub enum Error {
     Parquet(Box<dyn std::error::Error + Send + Sync>),
     /// A caller argument was invalid.
     Invalid(String),
-    /// A required page header was missing.
-    Missing(&'static str),
-    /// A value did not fit its type.
-    Overflow(&'static str),
     /// An encoding was not usable for a column kind.
     Encoding(String),
     /// The input used a form this parser does not accept.
@@ -128,8 +117,6 @@ impl std::fmt::Display for Error {
             Error::Invalid(message) | Error::Encoding(message) | Error::Unsupported(message) => {
                 write!(f, "{message}")
             }
-            Error::Missing(what) => write!(f, "missing {what}"),
-            Error::Overflow(what) => write!(f, "{what} overflowed"),
         }
     }
 }
@@ -139,11 +126,7 @@ impl std::error::Error for Error {
         match self {
             Error::Io(error) => Some(error),
             Error::Parquet(error) => Some(error.as_ref()),
-            Error::Invalid(_)
-            | Error::Missing(_)
-            | Error::Overflow(_)
-            | Error::Encoding(_)
-            | Error::Unsupported(_) => None,
+            Error::Invalid(_) | Error::Encoding(_) | Error::Unsupported(_) => None,
         }
     }
 }
@@ -154,20 +137,13 @@ impl From<std::io::Error> for Error {
     }
 }
 
-/// Anything that can extract pages from an in-memory parquet byte buffer.
-pub trait PageParser {
-    /// Extract the encoded pages of a parquet file from an in-memory buffer.
-    ///
-    /// # Errors
-    /// Returns [`Error`] if `bytes` is not a valid parquet file, or if any
-    /// column is compressed (only NONE input is supported).
-    fn parse_pages(&self, bytes: &[u8]) -> Result<ParquetFile, Error>;
-}
-
-/// The bundled page parser. Backed by parquet-rs; see the private
-/// `impl` module for the implementation.
-pub fn default_parser() -> impl PageParser {
-    super::r#impl::ParquetRsParser
+/// Extract the encoded pages of a parquet file from an in-memory buffer.
+///
+/// # Errors
+/// Returns [`Error`] if `bytes` is not a valid parquet file, or if any column
+/// is compressed (only NONE input is supported).
+pub fn parse_pages(bytes: &[u8]) -> Result<ParquetFile, Error> {
+    super::r#impl::parse_pages(bytes)
 }
 
 /// One column chunk's byte mass, read from parquet metadata (no page decoding).
@@ -177,6 +153,10 @@ pub struct ColumnMass {
     pub column: String,
     /// The leaf column's physical type.
     pub physical_data_type: String,
+    /// The leaf column's logical type, as the Parquet spec names it (`STRING`,
+    /// `DECIMAL(10,2)`, `TIMESTAMP(MICROS,UTC)`, …), when the footer records
+    /// one.
+    pub logical_type: Option<String>,
     /// The leaf column's maximum definition level.
     pub max_definition_level: u16,
     /// The leaf column's maximum repetition level.
@@ -199,6 +179,10 @@ pub struct ColumnMass {
     /// Bytes from the dictionary page offset to the first data page, when a
     /// dictionary page is present.
     pub dictionary_bytes: Option<u64>,
+    /// Data pages the footer counts as `PLAIN`-encoded, when it counts pages.
+    pub plain_data_page_count: Option<u64>,
+    /// Data pages the footer counts as dictionary-encoded, when it counts pages.
+    pub dictionary_data_page_count: Option<u64>,
     /// Every chunk carries a page index (a column index and an offset index).
     pub page_index: bool,
     /// Variable-length value bytes before encoding, when the writer recorded them.
@@ -231,23 +215,6 @@ pub struct FileMass {
     pub columns: Vec<ColumnMass>,
 }
 
-/// Anything that can read byte masses from a parquet file's footer.
-///
-/// Unlike [`PageParser`], this reads only the file footer metadata, so it works
-/// on any parquet file regardless of column compression.
-pub trait MetadataParser {
-    /// Read a file's byte masses from its footer metadata.
-    ///
-    /// # Errors
-    /// Returns [`Error`] if `path` is not a readable parquet file.
-    fn read_masses(&self, path: &Path) -> Result<FileMass, Error>;
-}
-
-/// The bundled metadata parser. Backed by parquet-rs.
-pub fn default_metadata_parser() -> impl MetadataParser {
-    super::r#impl::ParquetRsParser
-}
-
 /// Read byte masses from a complete Parquet footer.
 ///
 /// `footer` must contain the serialized Thrift metadata followed by the
@@ -262,30 +229,13 @@ pub fn read_footer_masses(footer: &[u8], size_bytes: u64) -> Result<FileMass, Er
 
 /// Read byte masses from a local file.
 ///
+/// Only the footer is read: no page is decoded, so compressed columns are fine,
+/// and large files aren't loaded into memory.
+///
 /// # Errors
 /// Returns [`Error`] if `path` is not a readable parquet file.
 pub fn read_file_masses(path: &Path) -> Result<FileMass, Error> {
     super::r#impl::read_file_masses(path)
-}
-
-/// Read up to `max_rows` leading rows of a local Parquet file, decoding every
-/// value to a string (nulls stay `None`). `None` reads all rows.
-///
-/// # Errors
-/// Returns [`Error`] if `path` is not a readable Parquet file or decoding a
-/// value fails.
-pub fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error> {
-    super::r#impl::read_sample(path, max_rows)
-}
-
-/// Read up to `max_rows` leading rows of a local Parquet file as typed cells.
-/// `None` reads all rows. A column's kind comes from its first non-null value.
-///
-/// # Errors
-/// Returns [`Error`] if `path` is not a readable Parquet file or decoding a
-/// value fails.
-pub fn read_typed_sample(path: &Path, max_rows: Option<usize>) -> Result<TypedSample, Error> {
-    super::r#impl::read_typed_sample(path, max_rows)
 }
 
 /// Write typed columns and rows to an in-memory Parquet file.
@@ -300,14 +250,6 @@ pub fn write_parquet(
     super::r#impl::write_parquet(columns, rows, options)
 }
 
-/// Read byte masses from an in-memory Parquet file.
-///
-/// # Errors
-/// Returns [`Error`] if `bytes` is not a valid Parquet file.
-pub fn read_buffer_masses(bytes: &[u8]) -> Result<FileMass, Error> {
-    super::r#impl::read_buffer_masses(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,7 +262,7 @@ mod tests {
         );
         let buf = std::fs::read(path).expect("missing NONE fixture");
 
-        let file = default_parser().parse_pages(&buf).unwrap();
+        let file = parse_pages(&buf).unwrap();
         assert!(!file.chunks.is_empty());
         for chunk in &file.chunks {
             assert!(!chunk.pages.is_empty());
@@ -345,7 +287,7 @@ mod tests {
             "/tests/fixtures/small_snappy.parquet"
         );
         let buf = std::fs::read(path).expect("missing snappy fixture");
-        let err = default_parser().parse_pages(&buf).unwrap_err();
+        let err = parse_pages(&buf).unwrap_err();
         assert!(
             err.to_string().contains("NONE"),
             "expected a clear NONE-only error, got: {err}"
@@ -353,14 +295,12 @@ mod tests {
     }
 
     #[test]
-    fn read_masses_works_on_compressed_file() {
+    fn read_file_masses_works_on_compressed_file() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/small_snappy.parquet"
         );
-        let mass = default_metadata_parser()
-            .read_masses(Path::new(path))
-            .unwrap();
+        let mass = read_file_masses(Path::new(path)).unwrap();
         assert!(mass.row_count > 0);
         assert!(!mass.columns.is_empty());
         assert!(
@@ -372,39 +312,6 @@ mod tests {
             .columns
             .iter()
             .all(|column| !column.encodings.is_empty() && column.num_values > 0));
-    }
-
-    #[test]
-    fn read_sample_decodes_bounded_rows() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_reddit_none.parquet"
-        );
-        let sample = read_sample(Path::new(path), Some(16)).unwrap();
-        assert!(!sample.columns.is_empty(), "expected columns");
-        assert_eq!(sample.rows.len(), 16);
-        for row in &sample.rows {
-            assert_eq!(row.len(), sample.columns.len());
-        }
-        assert!(
-            sample
-                .rows
-                .iter()
-                .flatten()
-                .any(std::option::Option::is_some),
-            "expected at least one decoded value"
-        );
-    }
-
-    #[test]
-    fn read_sample_decodes_a_compressed_file() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_snappy.parquet"
-        );
-        let sample = read_sample(Path::new(path), None).unwrap();
-        assert_eq!(sample.columns.len(), 1);
-        assert_eq!(sample.rows.len(), 500, "snappy rows should all decode");
     }
 
     #[test]
@@ -423,28 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn read_typed_sample_populates_columns_and_kinds() {
-        let path = Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_reddit_none.parquet"
-        ));
-        let sample = read_typed_sample(path, Some(16)).unwrap();
-        assert_eq!(sample.columns.len(), 7);
-        assert_eq!(sample.rows.len(), 16);
-        for row in &sample.rows {
-            assert_eq!(row.len(), 7);
-        }
-        let text = sample
-            .columns
-            .iter()
-            .find(|column| column.name == "text")
-            .expect("text column");
-        assert_eq!(text.kind, Kind::Bytes);
-        assert!(matches!(sample.rows[0][0], Value::Bytes(_)));
-    }
-
-    #[test]
-    fn write_and_read_buffer_masses_round_trip() {
+    fn written_bytes_carry_the_expected_row_groups() {
         let columns = vec![
             TypedColumn {
                 name: "id".into(),
@@ -484,7 +370,14 @@ mod tests {
             row_group_size: 8,
         };
         let bytes = write_parquet(&columns, &rows, &options).unwrap();
-        let mass = read_buffer_masses(&bytes).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "pqbench-written-{}-{:?}.parquet",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, &bytes).unwrap();
+        let mass = read_file_masses(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
         assert_eq!(mass.row_count, 16);
         assert_eq!(mass.row_group_count, 2);
         assert_eq!(mass.columns.len(), 8);
@@ -492,16 +385,5 @@ mod tests {
             .columns
             .iter()
             .all(|column| column.compressed_bytes > 0));
-    }
-
-    #[test]
-    fn read_typed_sample_decodes_a_compressed_file() {
-        let path = Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_snappy.parquet"
-        ));
-        let sample = read_typed_sample(path, None).unwrap();
-        assert_eq!(sample.columns.len(), 1);
-        assert_eq!(sample.rows.len(), 500);
     }
 }

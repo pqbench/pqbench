@@ -182,14 +182,19 @@ fn repeated_uuid_text_is_measured() {
 }
 
 #[test]
-fn non_uuid_text_is_not_reported() {
+fn non_uuid_text_is_not_reported_as_uuid() {
     let directory = temporary("not-uuid");
     let path = directory.join("data.parquet");
     let values: Vec<String> = (0..10_000).map(|value| format!("value-{value}")).collect();
     write_values(&path, &values, false, 0);
 
     let records = suggestions(&path);
-    assert!(records.is_empty(), "{records:?}");
+    // Nearly-unique non-UUID text still earns the Delta-encoding rule, but the
+    // UUID rule must not claim it.
+    assert!(
+        records.iter().all(|record| record["rule"] != "uuid-text"),
+        "{records:?}"
+    );
 
     let _ = std::fs::remove_dir_all(directory);
 }
@@ -274,23 +279,25 @@ fn a_stale_candidate_is_rejected_not_dropped() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// The sample is whole row groups: a three-group file reports all three, and
-/// `get suggestion` re-reads the same groups.
+/// The sample is one representative whole row group: a short trailing group is
+/// never the one that stands for the file, and `get suggestion` re-reads it.
 #[test]
-fn a_sample_is_whole_row_groups() {
+fn a_sample_is_one_representative_row_group() {
     let directory = temporary("row-groups");
     let path = directory.join("data.parquet");
-    let values: Vec<String> = (0..30).map(uuid).collect();
+    // 25 rows in groups of 10, 10, and a 5-row tail: the full groups are
+    // closest to the average, so the first one is the sample.
+    let values: Vec<String> = (0..25).map(uuid).collect();
     write_values(&path, &values, false, 10);
 
     let records = suggestions(&path);
     assert_eq!(records.len(), 1, "{records:?}");
-    assert_eq!(records[0]["sample_row_count"], 30, "{records:?}");
-    assert_eq!(records[0]["sample_row_group_count"], 3, "{records:?}");
+    assert_eq!(records[0]["sample_row_count"], 10, "{records:?}");
+    assert_eq!(records[0]["sample_row_group_count"], 1, "{records:?}");
 
     let measured = verified(&records);
-    assert_eq!(measured[0]["sample_row_count"], 30, "{measured:?}");
-    assert_eq!(measured[0]["sample_row_group_count"], 3, "{measured:?}");
+    assert_eq!(measured[0]["sample_row_count"], 10, "{measured:?}");
+    assert_eq!(measured[0]["sample_row_group_count"], 1, "{measured:?}");
 
     let _ = std::fs::remove_dir_all(directory);
 }

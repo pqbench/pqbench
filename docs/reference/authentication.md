@@ -185,21 +185,21 @@ A ref the catalog will not vend for is dropped with the cause on standard
 error, and that stage exits non-zero; run the walk over a catalog that is
 externally readable, or filter the refs first.
 
-### The master
+### The driver
 
-`pqbench-master start --store DIR` runs the partition-version state engine as
-its own process, with its own socket (`{DIR}/master.sock`, or the path
-`PQB_MASTER_SOCK` names). Its whole state is one map of partition versions
+`pqbench-driver start --store DIR` runs the partition-version state driver as
+its own process, with its own socket (`{DIR}/driver.sock`, or the path
+`PQB_DRIVER_SOCK` names). Its whole state is one map of partition versions
 (`PartitionVersion`, a partition at one etag). The work is plain pqbench
-commands, which pqbench-master runs as child processes and awaits; the master
+commands, which pqbench-driver runs as child processes and awaits; the driver
 decides what runs next for a version and what a finished command means for it.
-The catalog daemon is independent: pqbench-master's commands talk to it when
+The catalog daemon is independent: pqbench-driver's commands talk to it when
 one is running, and local tables need none.
 
 - **The walk** runs `list catalogs | list schemas | list tables | get table |
   list partitions`: every table the endpoint's metastore shows. With
   `--walk-tables FILE` it runs `list partitions` over the Table records in
-  FILE instead (for local tables). It runs once when pqbench-master
+  FILE instead (for local tables). It runs once when pqbench-driver
   starts, then every `--walk-period-seconds`. A partition at a new etag is a
   new `PENDING` version, and the etag it replaces leaves the map; so does a
   listed table's version the walk no longer finds, and when every table was
@@ -228,8 +228,8 @@ and the commands redo them.
 `pqbench list partition-versions [PARENT]` prints the map as `PartitionVersion`
 records, named `…/partitions/{partition}/versions/{etag}`: all of them, or those
 under a catalog, schema, table or partition name. It reads the map from
-pqbench-master over `PQB_MASTER_SOCK`; with the variable unset it fails with a
-hint to start pqbench-master. The checkpoint is the same records, and `pqbench
+pqbench-driver over `PQB_DRIVER_SOCK`; with the variable unset it fails with a
+hint to start pqbench-driver. The checkpoint is the same records, and `pqbench
 summarize partition-versions` totals them per catalog, schema and table as
 `PartitionStats` records.
 
@@ -240,11 +240,11 @@ then its listing, one record per line. NAME is a version
 live version. A version with no results yet reports its state instead.
 
 ```console no-run
-$ pqbench-master start --store /var/lib/pqbench --walk-period-seconds 86400
-export PQB_MASTER_SOCK=/var/lib/pqbench/master.sock
+$ pqbench-driver start --store /var/lib/pqbench --walk-period-seconds 86400
+export PQB_DRIVER_SOCK=/var/lib/pqbench/driver.sock
 $ pqbench list partition-versions catalogs/main/schemas/sales
 $ pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
-$ pqbench-master stop --socket /var/lib/pqbench/master.sock
+$ pqbench-driver stop --socket /var/lib/pqbench/driver.sock
 ```
 
 ## Databricks-governed tables

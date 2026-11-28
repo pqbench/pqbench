@@ -250,6 +250,57 @@ impl Row for v1::Column {
     }
 }
 
+impl Row for v1::Suggestion {
+    const HEADER: &'static [&'static str] =
+        &["COLUMN", "RULE", "VERIFIED", "SAVINGS", "REMEDY", "MESSAGE"];
+    const ALIGN: &[Align] = &[
+        Align::Left,
+        Align::Left,
+        Align::Left,
+        Align::Right,
+        Align::Left,
+        Align::Left,
+    ];
+
+    fn cells(&self) -> Vec<String> {
+        vec![
+            self.column.clone(),
+            self.rule.clone(),
+            verdict(self.verified).to_string(),
+            self.savings_bytes.map_or_else(String::new, bytes),
+            self.remedy.clone(),
+            self.message.clone(),
+        ]
+    }
+}
+
+/// The control's verdict: `yes` when the rewrite confirmed a saving, `no` when
+/// it measured none, and `-` while the suggestion is only potential.
+fn verdict(verified: Option<bool>) -> &'static str {
+    match verified {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "-",
+    }
+}
+
+/// A byte count in the largest unit that keeps it above one.
+fn bytes(value: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let value = value as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{value:.0} B")
+    }
+}
+
 impl Row for mass::ColumnMass {
     const HEADER: &'static [&'static str] = &[
         "table",
@@ -359,22 +410,10 @@ fn summarize_encodings<'a>(encodings: impl IntoIterator<Item = &'a str>) -> Stri
         .join("+")
 }
 
-/// One table from records of a single curated type.
-pub(crate) fn render<T: Row>(rows: &[T]) -> String {
-    if rows.is_empty() {
-        return String::new();
-    }
-    render_cells(
-        T::HEADER,
-        T::ALIGN,
-        &rows.iter().map(Row::cells).collect::<Vec<_>>(),
-    )
-}
-
 /// One table from records with no curated renderer: their keys, in order.
 ///
 /// Numbers right-align; everything else left-aligns.
-pub(crate) fn render_values(rows: &[Value]) -> String {
+pub(crate) fn table_values(rows: &[Value]) -> String {
     let Some(first) = rows.first().and_then(Value::as_object) else {
         return String::new();
     };
@@ -396,7 +435,7 @@ pub(crate) fn render_values(rows: &[Value]) -> String {
         .iter()
         .map(|row| header.iter().map(|key| cell(row.get(*key))).collect())
         .collect();
-    render_cells(&header, &align, &cells)
+    table_cells(&header, &align, &cells)
 }
 
 /// One JSON value as a table cell.
@@ -408,7 +447,12 @@ fn cell(value: Option<&Value>) -> String {
     }
 }
 
-pub(crate) fn render_cells(header: &[&str], align: &[Align], rows: &[Vec<String>]) -> String {
+/// One table from pre-rendered cells: the header, a rule, then one line per
+/// row. An empty table says nothing.
+pub(crate) fn table_cells(header: &[&str], align: &[Align], rows: &[Vec<String>]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
     let mut widths: Vec<usize> = header.iter().map(|text| text.chars().count()).collect();
     for row in rows {
         for (width, cell) in widths.iter_mut().zip(row) {

@@ -406,9 +406,10 @@ fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
 fn child_name(parent: &str, child: &str) -> String {
     let parent = parent.trim_end_matches('/');
     let child = child.trim_end_matches('/');
-    let relative = match parent.is_empty() {
-        true => child,
-        false => child.strip_prefix(parent).unwrap_or(child),
+    let relative = if parent.is_empty() {
+        child
+    } else {
+        child.strip_prefix(parent).unwrap_or(child)
     };
     relative.trim_start_matches('/').to_string()
 }

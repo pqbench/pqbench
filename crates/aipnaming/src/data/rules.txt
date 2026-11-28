@@ -111,6 +111,7 @@ BinaryHeap
 SmallVec
 ArrayVec
 LinkedList
+IntoIter
 
 # set:opaque-types
 Option

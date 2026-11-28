@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Bytemass {
+    /// The leaf column's logical type, as the Parquet spec names it (`STRING`,
+    /// `DECIMAL(10,2)`, `TIMESTAMP(MICROS,UTC)`, …), when the footer records
+    /// one. It comes from the footer's schema, not its page reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_type: Option<String>,
     /// On-disk (compressed) bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compressed_bytes: Option<u64>,
@@ -27,6 +32,12 @@ pub struct Bytemass {
     /// dictionary page is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dictionary_bytes: Option<u64>,
+    /// Data pages the footer counts as `PLAIN`-encoded, when it counts pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plain_data_page_count: Option<u64>,
+    /// Data pages the footer counts as dictionary-encoded, when it counts pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dictionary_data_page_count: Option<u64>,
     /// Every chunk carries a page index (a column index and an offset index),
     /// so the column can be pruned at page granularity.
     #[serde(default)]

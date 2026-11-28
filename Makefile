@@ -51,7 +51,7 @@ build:
 	@TIMEFORMAT='build: %3R s'; time $(CARGO) build --workspace $(CARGO_FEATURES)
 
 # Build every workspace binary first: pqbench-cli's integration tests run the
-# pqbench-master binary beside pqbench, and `cargo test` builds only the
+# pqbench-driver binary beside pqbench, and `cargo test` builds only the
 # package's own bins, not another crate's.
 test: build
 	@TIMEFORMAT='test: %3R s'; time $(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))

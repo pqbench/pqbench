@@ -40,12 +40,13 @@ pub struct Suggestion {
     /// only when `verified` is true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub savings_bytes: Option<u64>,
-    /// Leading rows the detection sampled, so `get suggestion` measures the
-    /// same values. Absent means the default.
+    /// Rows the detection sampled, so `get suggestion` measures the same
+    /// values. Absent means the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_row_count: Option<u64>,
-    /// Leading whole row groups the detection sampled. `get suggestion`
-    /// re-reads them, so a verification measures the values `list` detected.
+    /// Whole row groups the detection sampled: the one group whose row count is
+    /// closest to the file's average. `get suggestion` re-reads it, so a
+    /// verification measures the values `list` detected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_row_group_count: Option<u64>,
 }

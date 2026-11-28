@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::StreamExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
@@ -13,8 +13,8 @@ use super::path;
 use super::protocol::{Request, Response};
 use super::session::Daemon;
 
-/// Serve leases on `socket` until stopped, or until `idle_seconds` pass with
-/// no connection (`0` serves until stopped).
+/// Serve leases and catalog GETs on `socket` until stopped, or until
+/// `idle_seconds` pass with no connection (`0` serves until stopped).
 pub(crate) async fn run(session: Daemon, socket: PathBuf, idle_seconds: u64) -> Result<(), String> {
     path::prepare(&socket)?;
     let listener = UnixListener::bind(&socket)
@@ -62,6 +62,7 @@ async fn accept(
     }
 }
 
+/// Answer one connection: one request line, then its answer.
 async fn handle(stream: UnixStream, session: Daemon, shutdown: Arc<Notify>) -> Result<(), String> {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
@@ -74,110 +75,31 @@ async fn handle(stream: UnixStream, session: Daemon, shutdown: Arc<Notify>) -> R
     };
     let request: Request =
         serde_json::from_str(&line).map_err(|error| format!("bad request: {error}"))?;
-    if let Request::List { collection, parent } = &request {
-        return write_stream(write, &session, *collection, parent.as_ref()).await;
-    }
+    write_frame(&mut write, &respond(&request, &session, &shutdown).await).await
+}
 
-    let response = respond(&request, &session, &shutdown).await;
-
-    let mut line = serde_json::to_string(&response)
-        .map_err(|error| format!("cannot encode the answer: {error}"))?;
-    line.push('\n');
+async fn write_frame(write: &mut OwnedWriteHalf, frame: &Response) -> Result<(), String> {
+    let mut line =
+        serde_json::to_vec(frame).map_err(|error| format!("cannot encode the answer: {error}"))?;
+    line.push(b'\n');
     write
-        .write_all(line.as_bytes())
+        .write_all(&line)
         .await
         .map_err(|error| format!("cannot write the answer: {error}"))?;
     write
         .flush()
         .await
-        .map_err(|error| format!("cannot flush the answer: {error}"))?;
-    Ok(())
+        .map_err(|error| format!("cannot flush the answer: {error}"))
 }
 
-/// Stream one `Request::List` response as `{"record":...}` lines, ending with
-/// `{"ok":true}` or `{"error":"..."}`.
-async fn write_stream(
-    mut write: tokio::net::unix::OwnedWriteHalf,
-    session: &Daemon,
-    collection: super::protocol::Collection,
-    parent: Option<&serde_json::Value>,
-) -> Result<(), String> {
-    let mut rows = match session.stream_list(collection, parent).await {
-        Ok(rows) => rows,
-        Err(error) => {
-            return write_frame(
-                &mut write,
-                &Response {
-                    error: Some(crate::error::error_chain(error.as_ref())),
-                    ..Response::default()
-                },
-            )
-            .await;
-        }
-    };
-    while let Some(item) = rows.next().await {
-        match item {
-            Ok(record) => {
-                write_frame(
-                    &mut write,
-                    &Response {
-                        record: Some(record),
-                        ..Response::default()
-                    },
-                )
-                .await?;
-            }
-            Err(error) => {
-                return write_frame(
-                    &mut write,
-                    &Response {
-                        error: Some(crate::error::error_chain(error.as_ref())),
-                        ..Response::default()
-                    },
-                )
-                .await;
-            }
-        }
-    }
-    write_frame(
-        &mut write,
-        &Response {
-            ok: true,
-            ..Response::default()
-        },
-    )
-    .await
-}
-
-async fn write_frame(
-    write: &mut tokio::net::unix::OwnedWriteHalf,
-    frame: &Response,
-) -> Result<(), String> {
-    let mut line = serde_json::to_vec(frame).map_err(|error| error.to_string())?;
-    line.push(b'\n');
-    write
-        .write_all(&line)
-        .await
-        .map_err(|error| format!("cannot write the stream: {error}"))?;
-    write
-        .flush()
-        .await
-        .map_err(|error| format!("cannot flush the stream: {error}"))
-}
-
+/// The answer to one request.
 async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Response {
     match request {
+        Request::Ping => answered(),
         Request::Stop => {
             shutdown.notify_one();
-            Response {
-                ok: true,
-                ..Response::default()
-            }
+            answered()
         }
-        Request::Ping => Response {
-            ok: true,
-            ..Response::default()
-        },
         Request::Lease { table } => match session.resolve_vended(table).await {
             Ok(Some(vended)) => Response {
                 env: Some(vended.env),
@@ -188,56 +110,95 @@ async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Resp
                 none: true,
                 ..Response::default()
             },
-            Err(error) => Response {
-                error: Some(crate::error::error_chain(error.as_ref())),
-                ..Response::default()
-            },
+            Err(error) => failure(error.as_ref()),
         },
-        Request::Get { .. } => match session.records(request).await {
-            Ok(records) => Response {
-                records,
-                ..Response::default()
-            },
-            Err(error) => Response {
-                error: Some(crate::error::error_chain(error.as_ref())),
-                ..Response::default()
-            },
-        },
-        _ => Response {
-            error: Some("not a daemon request".into()),
+        Request::HttpGet { url } => answer(session, url).await,
+    }
+}
+
+/// One catalog GET: paced at the catalog's ceiling like a vend, and sent under
+/// the daemon's own bearer. The status and body go back unchanged, so the
+/// reader's own status policy and JSON decoding apply.
+async fn answer(session: &Daemon, url: &str) -> Response {
+    session.pace().await;
+    match pqbench::http::fetch(session.workspace(), url).await {
+        Ok(answer) => Response {
+            status: Some(answer.status),
+            body: Some(answer.body),
             ..Response::default()
         },
+        Err(error) => failure(&error),
+    }
+}
+
+/// The answer that only says the request was served.
+fn answered() -> Response {
+    Response {
+        ok: true,
+        ..Response::default()
+    }
+}
+
+/// The answer that reports `error`, with its cause chain.
+fn failure(error: &dyn std::error::Error) -> Response {
+    Response {
+        error: Some(crate::error::error_chain(error)),
+        ..Response::default()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::{client, session::Daemon, start};
+    use crate::daemon::{client, start};
 
-    #[tokio::test]
-    async fn a_ping_and_a_stop_round_trip() {
-        let directory = tempfile::tempdir().expect("a temp directory");
-        let socket = directory.path().join("daemon.sock");
-        let workspace = pqbench::Workspace::new(pqbench::Config {
+    /// A fake endpoint answering every request with `body` as `200`.
+    fn endpoint(body: &'static str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buffer = [0u8; 4096];
+                let _ = stream.read(&mut buffer);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        address
+    }
+
+    fn workspace() -> pqbench::Workspace {
+        pqbench::Workspace::new(pqbench::Config {
             endpoint: "http://127.0.0.1:1".into(),
             token: None,
             dialect: pqbench::Dialect::Unity,
             request_timeout: None,
         })
-        .expect("the workspace builds");
-        let cache = Daemon::direct(workspace);
-        let server = tokio::spawn(run(cache, socket.clone(), 0));
+        .expect("the workspace builds")
+    }
 
-        let mut running = false;
+    async fn ready(socket: &std::path::Path) {
         for _ in 0..100 {
-            if client::ping(&socket).await {
-                running = true;
-                break;
+            if client::ping(socket).await {
+                return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(running, "the daemon did not answer a ping");
+        panic!("the daemon did not answer a ping");
+    }
+
+    #[tokio::test]
+    async fn a_ping_and_a_stop_round_trip() {
+        let directory = tempfile::tempdir().expect("a temp directory");
+        let socket = directory.path().join("daemon.sock");
+        let server = tokio::spawn(run(Daemon::direct(workspace()), socket.clone(), 0));
+        ready(&socket).await;
 
         let response = client::request(
             &socket,
@@ -249,6 +210,31 @@ mod tests {
 
         start::stop(&socket).await.expect("the daemon stops");
         assert!(!socket.exists(), "the socket was not removed");
+        server
+            .await
+            .expect("the server task joins")
+            .expect("no server error");
+    }
+
+    /// A catalog GET is sent by the daemon and its answer comes back whole: the
+    /// status and the body the endpoint gave, so the reader decodes it.
+    #[tokio::test]
+    async fn an_http_get_round_trips_the_endpoints_answer() {
+        let body = r#"{"catalogs":[{"name":"c1"}]}"#;
+        let url = format!("{}/api/2.1/unity-catalog/catalogs", endpoint(body));
+        let directory = tempfile::tempdir().expect("a temp directory");
+        let socket = directory.path().join("daemon.sock");
+        let server = tokio::spawn(run(Daemon::direct(workspace()), socket.clone(), 0));
+        ready(&socket).await;
+
+        let response = client::request(&socket, &Request::http_get(&url))
+            .await
+            .expect("the daemon answers a get request");
+        assert_eq!(response.status, Some(200));
+        assert_eq!(response.body.as_deref(), Some(body));
+        assert!(response.error.is_none());
+
+        start::stop(&socket).await.expect("the daemon stops");
         server
             .await
             .expect("the server task joins")

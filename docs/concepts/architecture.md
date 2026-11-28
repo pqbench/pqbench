@@ -10,10 +10,10 @@ tidyings; this page covers structure.
   the third-party adapters.
 - `crates/pqbench-cli` — a thin wrapper: argument parsing, the JSON documents,
   and output formatting. No command logic.
-- `crates/pqbench-master` — the partition-version state engine, a separate
-  process (`pqbench-master`) with its own socket and store. It holds the map
-  of partition versions and runs the pqbench commands that move them; the CLI
-  reads the map through `PQB_MASTER_SOCK`.
+- `crates/pqbench-driver` — the partition-version state driver, a separate
+  process (`pqbench-driver`) with its own socket and store. Its engine holds
+  the map of partition versions and the driver runs the pqbench commands that
+  move them; the CLI reads the map through `PQB_DRIVER_SOCK`.
 
 ## Commands
 

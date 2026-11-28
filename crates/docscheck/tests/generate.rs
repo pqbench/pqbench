@@ -99,6 +99,22 @@ fn a_feature_word_gates_the_test() {
 }
 
 #[test]
+fn a_fully_gated_document_allows_the_unused_support_import() {
+    let out = gen("## t\n\n```console run delta\n$ pqbench table x\n```\n");
+    assert!(out.contains("#[allow(unused_imports)]\nuse crate::support;"));
+}
+
+#[test]
+fn an_ungated_test_imports_support_without_an_allow() {
+    let out = gen(&format!(
+        "## a\n\n{}\n## b\n\n```console run delta\n$ pqbench table x\n```\n",
+        transcript("$ pqbench bytemass x")
+    ));
+    assert!(out.contains("\nuse crate::support;\n"));
+    assert!(!out.contains("#[allow(unused_imports)]"));
+}
+
+#[test]
 fn several_feature_words_gate_on_all_of_them() {
     let out = gen("## t\n\n```console run delta aws\n$ pqbench table x\n```\n");
     assert!(out.contains("#[cfg(all(feature = \"delta\", feature = \"aws\"))]"));

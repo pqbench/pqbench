@@ -29,27 +29,21 @@ pub(crate) async fn run(
     args: &PriceArgs,
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Partition>("get partition-price").await?;
-    let lake = lake.clone();
-    let daemon = daemon.clone();
     drive(flat_map(
         parents,
         args.fan_out,
-        move |partition: v1::Partition| {
-            let lake = lake.clone();
-            let daemon = daemon.clone();
-            async move {
-                let reference = partition.name.clone();
-                let table = v1::Partition::parse_name(&reference)
-                    .map(|(catalog, schema, table, _)| v1::name::table(&catalog, &schema, &table))
-                    .unwrap_or_default();
-                let env = daemon.resolve_env(&table).await?;
-                let credentials = v1::Credentials::from_env(&env);
-                let lake = lake.with_lease(Some(&credentials));
-                let price = pqbench::partition::price::price(&lake, &partition)
-                    .await
-                    .map_err(|error| crate::error::context(&reference, error))?;
-                Ok(stream::iter([Ok::<_, CliError>(price)]))
-            }
+        move |partition: v1::Partition| async move {
+            let reference = partition.name.clone();
+            let table = v1::Partition::parse_name(&reference)
+                .map(|(catalog, schema, table, _)| v1::name::table(&catalog, &schema, &table))
+                .unwrap_or_default();
+            let env = daemon.resolve_env(&table).await?;
+            let credentials = v1::Credentials::from_env(&env);
+            let lake = lake.with_lease(Some(&credentials));
+            let price = pqbench::partition::price::price(&lake, &partition)
+                .await
+                .map_err(|error| crate::error::context(&reference, error))?;
+            Ok(stream::iter([Ok::<_, CliError>(price)]))
         },
     ))
     .await

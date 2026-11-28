@@ -1,26 +1,26 @@
-//! Where the master's socket lives.
+//! Where the driver's socket lives.
 //!
-//! The socket sits beside the store it serves — `{store}/master.sock` — so a
-//! client that knows the store finds the master without an environment
-//! variable. `PQB_MASTER_SOCK` overrides it for a sidecar or a test.
+//! The socket sits beside the store it serves — `{store}/driver.sock` — so a
+//! client that knows the store finds the driver without an environment
+//! variable. `PQB_DRIVER_SOCK` overrides it for a sidecar or a test.
 
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-/// The environment variable that names the master's socket.
-pub const ENV: &str = "PQB_MASTER_SOCK";
+/// The environment variable that names the driver's socket.
+pub const ENV: &str = "PQB_DRIVER_SOCK";
 
-/// The socket `PQB_MASTER_SOCK` names, if it is set.
+/// The socket `PQB_DRIVER_SOCK` names, if it is set.
 pub fn from_env() -> Option<PathBuf> {
     std::env::var_os(ENV).map(|path| absolute(Path::new(&path)))
 }
 
 /// The socket beside the store at `store`.
 pub fn default_path(store: &Path) -> PathBuf {
-    absolute(store).join("master.sock")
+    absolute(store).join("driver.sock")
 }
 
-/// The master's socket: an explicit `socket`, else `PQB_MASTER_SOCK`, else the
+/// The driver's socket: an explicit `socket`, else `PQB_DRIVER_SOCK`, else the
 /// one beside `store`.
 pub fn resolve(socket: Option<&Path>, store: Option<&Path>) -> Result<PathBuf, String> {
     match (socket, from_env(), store) {
@@ -28,14 +28,16 @@ pub fn resolve(socket: Option<&Path>, store: Option<&Path>) -> Result<PathBuf, S
         (None, Some(from_env), _) => Ok(from_env),
         (None, None, Some(store)) => Ok(default_path(store)),
         (None, None, None) => Err(format!(
-            "no master socket: pass --socket, --store, or set {ENV}"
+            "no driver socket: pass --socket, --store, or set {ENV}"
         )),
     }
 }
 
 /// Create the socket's directory with owner-only access, and clear a stale
-/// socket left by a master that was killed. A live listener is an error.
-pub fn prepare(socket: &Path) -> Result<(), String> {
+/// socket left by a listener that was killed. A live listener is an error.
+/// `label` names the listener in the messages; the daemon and the driver share
+/// the security rules and differ only in what they call themselves.
+pub fn prepare(socket: &Path, label: &str) -> Result<(), String> {
     let dir = socket
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -44,7 +46,7 @@ pub fn prepare(socket: &Path) -> Result<(), String> {
     if socket.exists() {
         if std::os::unix::net::UnixStream::connect(socket).is_ok() {
             return Err(format!(
-                "a master is already listening on {}",
+                "a {label} is already listening on {}",
                 socket.display()
             ));
         }
@@ -55,7 +57,7 @@ pub fn prepare(socket: &Path) -> Result<(), String> {
 }
 
 /// An absolute socket path: a relative one resolves against the current
-/// directory, the way `PQB_MASTER_SOCK` does.
+/// directory, the way `PQB_DRIVER_SOCK` does.
 pub fn absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -128,6 +130,6 @@ mod tests {
     fn the_default_socket_is_absolute() {
         let path = default_path(Path::new("store"));
         assert!(path.is_absolute());
-        assert_eq!(path.file_name().unwrap(), "master.sock");
+        assert_eq!(path.file_name().unwrap(), "driver.sock");
     }
 }

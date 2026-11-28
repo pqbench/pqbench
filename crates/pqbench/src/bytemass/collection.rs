@@ -67,11 +67,13 @@ pub(crate) fn measure_footer(name: &str, path: &Path) -> Result<MeasuredFile, Er
 /// A measured file from its storage facts and footer masses.
 fn measured(name: &str, stat: ObjectStat, mass: FileMass) -> Result<MeasuredFile, Error> {
     let row_group_count = mass.row_group_count as u64;
+    let row_count = mass.row_count;
     let writer = mass.writer.clone();
     let columns = columns(name, mass)?;
     let blob = v1::Blob {
         name: name.to_string(),
         size_bytes: Some(stat.size_bytes),
+        row_count: Some(row_count),
         storage_class: stat.storage_class,
         writer,
         row_group_count: Some(row_group_count),
@@ -128,10 +130,14 @@ fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
             .filter(|chunk| chunk.dictionary)
             .map(|chunk| chunk.dictionary_bytes),
     );
+    let plain_data_page_count = known_sum(chunks.iter().map(|chunk| chunk.plain_data_page_count));
+    let dictionary_data_page_count =
+        known_sum(chunks.iter().map(|chunk| chunk.dictionary_data_page_count));
     let unencoded_bytes = known_sum(chunks.iter().map(|chunk| chunk.unencoded_bytes));
     let (distinct_count, first_value, last_value) = single_chunk_facts(chunks);
 
     let mut mass = v1::Bytemass {
+        logical_type: uniform_logical_type(chunks),
         compressed_bytes: Some(compressed_bytes),
         uncompressed_bytes: Some(uncompressed_bytes),
         codec: uniform_codec(chunks),
@@ -139,6 +145,8 @@ fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
         data_encodings,
         dictionary,
         dictionary_bytes,
+        plain_data_page_count,
+        dictionary_data_page_count,
         page_index,
         unencoded_bytes,
         value_count: Some(value_count),
@@ -163,6 +171,16 @@ fn uniform_codec(chunks: &[ColumnMass]) -> Option<String> {
         .iter()
         .all(|chunk| chunk.codec == first.codec)
         .then(|| first.codec.clone())
+}
+
+/// The logical type, when every chunk reports the same one: a column's schema
+/// is the file's, so a difference means the footer did not record all of it.
+fn uniform_logical_type(chunks: &[ColumnMass]) -> Option<String> {
+    let first = chunks.first()?.logical_type.as_deref()?;
+    chunks
+        .iter()
+        .all(|chunk| chunk.logical_type.as_deref() == Some(first))
+        .then(|| first.to_string())
 }
 
 /// The union of encoding sets, in first-seen order.

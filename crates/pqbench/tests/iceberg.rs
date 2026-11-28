@@ -9,7 +9,7 @@ use std::path::Path;
 use apache_avro::{Schema, Writer};
 use futures_util::TryStreamExt;
 use pqbench::table::{self, LoadRequest};
-use pqbench::third_party::parquet::{default_metadata_parser, MetadataParser};
+use pqbench::third_party::parquet::read_file_masses;
 use pqbench::v1::TableFormat;
 use serde::Serialize;
 use support::write_parquet;
@@ -432,9 +432,7 @@ async fn load_then_bytemass_matches_footer_totals() {
     assert_eq!(measured_values, 8);
     let mut expected_bytes = 0;
     for relative in ["data/first.parquet", "data/second.parquet"] {
-        let mass = default_metadata_parser()
-            .read_masses(&fixture.root.join(relative))
-            .unwrap();
+        let mass = read_file_masses(&fixture.root.join(relative)).unwrap();
         expected_bytes += mass.columns[0].compressed_bytes;
     }
     assert_eq!(measured_bytes, expected_bytes);

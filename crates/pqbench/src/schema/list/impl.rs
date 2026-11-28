@@ -8,6 +8,7 @@
 //! The URLs, the page shapes, and the pagination are this command's; the
 //! transport is the third-party HTTP facade. No feature flags live here.
 
+use futures_util::stream::{self, Stream, StreamExt};
 use serde::Deserialize;
 
 use super::api::{Catalog, Error, Schema, TableFormat};
@@ -44,93 +45,123 @@ struct NamespacesPage {
     next_page_token: Option<String>,
 }
 
-pub(crate) async fn list(workspace: &Workspace, name: &str) -> Result<Vec<Schema>, Error> {
-    let catalog = Catalog::parse_name(name)
-        .ok_or_else(|| Error::Name(format!("{name} is not a catalogs/… name")))?;
-    let names = match workspace.config().dialect {
-        TableFormat::Unity => unity_schemas(workspace, &catalog).await?,
-        TableFormat::Iceberg => iceberg_namespaces(workspace).await?,
+/// List the schemas the catalog `name` names, page by page: a page's schemas
+/// are yielded, in name order, before the next page is fetched.
+pub(crate) fn list<'a>(
+    workspace: &'a Workspace,
+    name: String,
+) -> impl Stream<Item = Result<Schema, Error>> + 'a {
+    let Some(catalog) = Catalog::parse_name(&name) else {
+        let error = Error::Name(format!("{name} is not a catalogs/… name"));
+        return stream::iter([Err::<Schema, Error>(error)]).left_stream();
     };
-    let mut schemas: Vec<Schema> = names
-        .into_iter()
-        .map(|schema| Schema {
-            display_name: Some(schema.clone()),
-            name: crate::v1::name::schema(&catalog, &schema),
-            ..Schema::default()
-        })
-        .collect();
-    schemas.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(schemas)
+    pages(workspace, catalog).right_stream()
 }
 
-async fn unity_schemas(workspace: &Workspace, catalog: &str) -> Result<Vec<String>, Error> {
+/// The catalog's schemas, one page at a time.
+fn pages<'a>(
+    workspace: &'a Workspace,
+    catalog: String,
+) -> impl Stream<Item = Result<Schema, Error>> + 'a {
+    crate::http::paginate(None::<String>, move |page_token| {
+        let catalog = catalog.clone();
+        async move { fetch_page(workspace, &catalog, page_token.as_deref()).await }
+    })
+}
+
+/// Fetch one page of the catalog's schemas; `None` is the first page.
+async fn fetch_page(
+    workspace: &Workspace,
+    catalog: &str,
+    page_token: Option<&str>,
+) -> Result<crate::http::Page<Schema, String>, Error> {
+    let mut page = match workspace.config().dialect {
+        TableFormat::Unity => unity_page(workspace, catalog, page_token).await?,
+        TableFormat::Iceberg => iceberg_page(workspace, catalog, page_token).await?,
+    };
+    page.rows.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(page)
+}
+
+/// Fetch one page of Unity `GET /schemas`.
+async fn unity_page(
+    workspace: &Workspace,
+    catalog: &str,
+    page_token: Option<&str>,
+) -> Result<crate::http::Page<Schema, String>, Error> {
     let root = dialect::api_root(workspace.config().endpoint.as_str());
-    let mut names = Vec::new();
-    let mut page_token: Option<String> = None;
-    loop {
-        let url = match &page_token {
-            Some(page_token) => format!(
-                "{root}/schemas?catalog_name={}&max_results={PAGE_SIZE}&page_token={}",
-                dialect::encode(catalog),
-                dialect::encode(page_token)
-            ),
-            None => format!(
-                "{root}/schemas?catalog_name={}&max_results={PAGE_SIZE}",
-                dialect::encode(catalog)
-            ),
-        };
-        let page: SchemasPage =
-            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
-                .await
-                .map_err(Error::Http)?;
-        for schema in page.schemas {
-            if schema.name.is_empty() {
-                return Err(Error::Malformed(
-                    "the endpoint listed a nameless schema".to_string(),
-                ));
-            }
-            // A schema the catalog keeps for itself, like
-            // `information_schema`, holds views over metadata: no files.
-            if schema.securable_kind.as_deref() != Some("SCHEMA_SYSTEM") {
-                names.push(schema.name);
-            }
+    let url = match page_token {
+        Some(page_token) => format!(
+            "{root}/schemas?catalog_name={}&max_results={PAGE_SIZE}&page_token={}",
+            dialect::encode(catalog),
+            dialect::encode(page_token)
+        ),
+        None => format!(
+            "{root}/schemas?catalog_name={}&max_results={PAGE_SIZE}",
+            dialect::encode(catalog)
+        ),
+    };
+    let page: SchemasPage =
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::Http)?;
+    let mut rows = Vec::with_capacity(page.schemas.len());
+    for schema in page.schemas {
+        if schema.name.is_empty() {
+            return Err(Error::Malformed(
+                "the endpoint listed a nameless schema".to_string(),
+            ));
         }
-        match page.next_page_token {
-            Some(next) if !next.is_empty() => page_token = Some(next),
-            _ => break,
+        // A schema the catalog keeps for itself, like `information_schema`,
+        // holds views over metadata: no files.
+        if schema.securable_kind.as_deref() != Some("SCHEMA_SYSTEM") {
+            rows.push(named_schema(catalog, schema.name));
         }
     }
-    Ok(names)
+    Ok(crate::http::Page {
+        rows,
+        next_page_token: page.next_page_token.filter(|token| !token.is_empty()),
+    })
 }
 
-async fn iceberg_namespaces(workspace: &Workspace) -> Result<Vec<String>, Error> {
+/// Fetch one page of Iceberg REST `GET {endpoint}/namespaces`.
+async fn iceberg_page(
+    workspace: &Workspace,
+    catalog: &str,
+    page_token: Option<&str>,
+) -> Result<crate::http::Page<Schema, String>, Error> {
     let base = workspace.config().endpoint.trim_end_matches('/');
-    let mut names = Vec::new();
-    let mut page_token: Option<String> = None;
-    loop {
-        let url = match &page_token {
-            Some(page_token) => format!(
-                "{base}/namespaces?pageToken={}",
-                dialect::encode(page_token)
-            ),
-            None => format!("{base}/namespaces"),
-        };
-        let page: NamespacesPage =
-            crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
-                .await
-                .map_err(Error::Http)?;
-        for parts in page.namespaces {
-            if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
-                return Err(Error::Malformed(
-                    "the endpoint listed a nameless namespace".to_string(),
-                ));
-            }
-            names.push(parts.join("."));
+    let url = match page_token {
+        Some(page_token) => format!(
+            "{base}/namespaces?pageToken={}",
+            dialect::encode(page_token)
+        ),
+        None => format!("{base}/namespaces"),
+    };
+    let page: NamespacesPage =
+        crate::http::get_json(workspace, &url, workspace.config().token.as_deref())
+            .await
+            .map_err(Error::Http)?;
+    let mut rows = Vec::with_capacity(page.namespaces.len());
+    for parts in page.namespaces {
+        if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
+            return Err(Error::Malformed(
+                "the endpoint listed a nameless namespace".to_string(),
+            ));
         }
-        match page.next_page_token {
-            Some(next) if !next.is_empty() => page_token = Some(next),
-            _ => break,
-        }
+        rows.push(named_schema(catalog, parts.join(".")));
     }
-    Ok(names)
+    Ok(crate::http::Page {
+        rows,
+        next_page_token: page.next_page_token.filter(|token| !token.is_empty()),
+    })
+}
+
+/// One listed schema, resolved to its resource name.
+fn named_schema(catalog: &str, schema: String) -> Schema {
+    Schema {
+        display_name: Some(schema.clone()),
+        name: crate::v1::name::schema(catalog, &schema),
+        ..Schema::default()
+    }
 }

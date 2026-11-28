@@ -13,6 +13,9 @@ pub struct Blob {
     /// The object's size in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bytes: Option<u64>,
+    /// Rows in the file, from its footer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row_count: Option<u64>,
     /// The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_class: Option<String>,

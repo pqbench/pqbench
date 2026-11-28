@@ -1,11 +1,11 @@
-//! The master's worker commands: pqbench processes from the image the master
+//! The driver's worker commands: pqbench processes from the image the driver
 //! opened before any of them started.
 //!
 //! A command execs `/proc/self/fd/{fd}` of the pinned binary rather than a
 //! path, so a binary replaced on disk (an upgrade, a rebuild) changes no
-//! command of a master that is still running the old one.
+//! command of a driver that is still running the old one.
 //!
-//! A child dies with the master (`PR_SET_PDEATHSIG`) and with the task that
+//! A child dies with the driver (`PR_SET_PDEATHSIG`) and with the task that
 //! awaits it (`kill_on_drop`), so a restart finds none of its predecessor's
 //! running, and no file a child was writing has a writer left.
 
@@ -21,7 +21,7 @@ use tokio::process::Command;
 /// The most of a failed command's standard error kept as its error.
 const ERROR_BYTES: usize = 2000;
 
-/// The pqbench image the master's worker commands run.
+/// The pqbench image the driver's worker commands run.
 #[derive(Clone)]
 pub(crate) struct WorkerExe {
     file: Arc<File>,
@@ -47,7 +47,7 @@ impl WorkerExe {
 /// The pqbench binary beside this executable, else the one on `PATH`.
 fn default_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe()
-        .map_err(|error| format!("cannot find the pqbench-master executable: {error}"))?;
+        .map_err(|error| format!("cannot find the pqbench-driver executable: {error}"))?;
     let sibling = exe.with_file_name("pqbench");
     if sibling.exists() {
         return Ok(sibling);
@@ -118,9 +118,10 @@ pub(crate) async fn run(
     };
     let (_, output) = tokio::join!(write, child.wait_with_output());
     let output = output.map_err(|error| format!("`pqbench {name}` was lost: {error}"))?;
-    match output.status.success() {
-        true => Ok(output.stdout),
-        false => Err(failure(&name, output.status, &output.stderr)),
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(failure(&name, output.status, &output.stderr))
     }
 }
 
@@ -139,9 +140,10 @@ pub(crate) async fn pipeline(
     let mut stdin = Stdio::from(input);
     let mut output = Some(output);
     for (at, arguments) in stages.iter().enumerate() {
-        let stdout = match at + 1 == stages.len() {
-            true => Stdio::from(output.take().expect("the last stage has the output")),
-            false => Stdio::piped(),
+        let stdout = if at + 1 == stages.len() {
+            Stdio::from(output.take().expect("the last stage has the output"))
+        } else {
+            Stdio::piped()
         };
         let started = error.try_clone().and_then(|stderr| {
             command(exe, arguments, daemon_socket)
@@ -166,9 +168,10 @@ pub(crate) async fn pipeline(
             Err(error) => failed.push(format!("`pqbench {name}` was lost: {error}")),
         }
     }
-    match failed.is_empty() {
-        true => Ok(()),
-        false => Err(failed.join("; ")),
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
     }
 }
 
@@ -177,9 +180,10 @@ pub(crate) async fn pipeline(
 fn failure(name: &str, status: ExitStatus, stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let text = text.trim();
-    match text.is_empty() {
-        true => format!("`pqbench {name}` {status}"),
-        false => tail(text),
+    if text.is_empty() {
+        format!("`pqbench {name}` {status}")
+    } else {
+        tail(text)
     }
 }
 

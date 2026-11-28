@@ -1,4 +1,4 @@
-//! `summarize partition-versions`: fold the master's partition versions into
+//! `summarize partition-versions`: fold the driver's partition versions into
 //! one PartitionStats per catalog, schema and table.
 
 use futures_util::TryStreamExt;

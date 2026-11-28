@@ -2,17 +2,25 @@
 
 use parquet::data_type::ByteArray;
 
-use super::control::{self, Measurement};
+use super::control::{self, Arm, Measurement};
+use super::price::{PhysicalShape, Settings};
 use super::{ColumnSample, Error, Finding};
 
 /// The rule id a suggestion carries.
 pub const UUID_TEXT_RULE: &str = "uuid-text";
 
+/// A UUID's binary width, the `FIXED_LEN_BYTE_ARRAY` length the candidate is
+/// written as.
+const UUID_BYTES: i32 = 16;
+
 /// The finding this column earns when every sampled non-null value is a
 /// canonical UUID. The control prices the same values as 16-byte binary.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
+    if !sample.byte_leaf() {
+        return None;
+    }
     let mut annotated = true;
-    for bytes in sample.groups.iter().flatten().flatten() {
+    for bytes in sample.cells.iter().flatten() {
         let uuid = parse_uuid(bytes.data())?;
         if !((1..=8).contains(&(uuid[6] >> 4)) && (8..=11).contains(&(uuid[8] >> 4))) {
             annotated = false;
@@ -31,26 +39,40 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
 
 /// Price the text arm against the binary arm, both written by the same writer
 /// at the file's codec and level.
+///
+/// The binary arm is a `FIXED_LEN_BYTE_ARRAY(16)` column: the values are always
+/// 16 bytes, so a `BYTE_ARRAY` column would pay a 4-byte length prefix the
+/// remedy's `BINARY(16)` type does not.
 fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
-    let binary: Option<Vec<Vec<Option<ByteArray>>>> = sample
-        .groups
-        .iter()
-        .map(|cells| {
-            cells
-                .iter()
-                .map(|cell| match cell {
-                    Some(bytes) => {
-                        parse_uuid(bytes.data()).map(|uuid| Some(ByteArray::from(uuid.as_slice())))
-                    }
-                    None => Some(None),
-                })
-                .collect()
-        })
-        .collect();
-    let Some(binary) = binary else {
-        return Ok(None);
+    let mut binary = Vec::with_capacity(sample.cells.len());
+    for cell in sample.cells {
+        match cell {
+            Some(bytes) => match parse_uuid(bytes.data()) {
+                Some(uuid) => binary.push(Some(ByteArray::from(uuid.to_vec()))),
+                None => return Ok(None),
+            },
+            None => binary.push(None),
+        }
+    }
+    let baseline = Arm {
+        cells: sample.cells,
+        settings: Settings {
+            shape: PhysicalShape::ByteArray,
+            dictionary: sample.chunk_has_dictionary,
+            dictionary_page_size_limit: sample.dictionary_page_size_limit(),
+            encoding: control::source_encoding(sample.mass),
+        },
     };
-    control::compare(sample, sample.groups, &binary, false, None)
+    let candidate = Arm {
+        cells: &binary,
+        settings: Settings {
+            shape: PhysicalShape::FixedLen(UUID_BYTES),
+            dictionary: false,
+            dictionary_page_size_limit: None,
+            encoding: None,
+        },
+    };
+    control::compare(sample, &baseline, &candidate)
 }
 
 /// Parse canonical 36-byte UUID text into its 16 big-endian bytes.
@@ -80,7 +102,32 @@ fn parse_uuid(bytes: &[u8]) -> Option<[u8; 16]> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_uuid;
+    use parquet::data_type::ByteArray;
+
+    use super::{measure, parse_uuid};
+    use crate::lint::ColumnSample;
+    use crate::v1;
+
+    fn column() -> v1::Column {
+        v1::Column {
+            mass: Some(v1::Bytemass {
+                codec: Some("UNCOMPRESSED".into()),
+                ..v1::Bytemass::default()
+            }),
+            ..v1::Column::default()
+        }
+    }
+
+    fn uuid_text(value: usize) -> String {
+        format!("{value:08x}-0000-4000-8000-{value:012x}")
+    }
+
+    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
+        values
+            .iter()
+            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
+            .collect()
+    }
 
     #[test]
     fn canonical_uuid_text_parses_to_big_endian_bytes() {
@@ -99,5 +146,23 @@ mod tests {
         assert!(parse_uuid(b"00112233445566778899aabbccddeeff00").is_none());
         assert!(parse_uuid(b"00112233-4455-6677-8899-aabbccddeefg").is_none());
         assert!(parse_uuid(b"00112233-4455-6677-8899-aabbccddeef").is_none());
+    }
+
+    /// 16 binary bytes per value, with no length prefix: a variable-length
+    /// `BYTE_ARRAY` candidate would save only half of the 36-byte text, not
+    /// three fifths.
+    #[test]
+    fn the_binary_arm_is_priced_as_fixed_length() {
+        let column = column();
+        let values: Vec<String> = (0..1_000).map(uuid_text).collect();
+        let cells = cells(&values);
+        let sample = ColumnSample::for_test(&column, &cells, false);
+
+        let measurement = measure(&sample).expect("measure").expect("uncompressed");
+        assert!(
+            (0.55..0.65).contains(&measurement.ratio_low),
+            "a FIXED_LEN_BYTE_ARRAY(16) candidate saves about 0.6, got {}",
+            measurement.ratio_low
+        );
     }
 }

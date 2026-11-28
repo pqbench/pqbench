@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use crate::bench::{self, Error};
 use crate::report;
 use crate::stats;
-use crate::third_party::parquet::api::{default_parser, PageParser};
+use crate::third_party::parquet::api::parse_pages;
 
 /// Arguments for the `compression` command.
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ pub fn compression(request: &CompressionRequest) -> Result<report::Report, Error
         request.mode,
     )?;
     let bytes = std::fs::read(&request.file).map_err(crate::codecs::Error::from)?;
-    let parsed = default_parser().parse_pages(&bytes)?;
+    let parsed = parse_pages(&bytes)?;
     let raw = super::raw::bench_file(&parsed, &sweep.codec_configs, sweep.passes)?;
     Ok(super::analytics::aggregate(
         &raw,

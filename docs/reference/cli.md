@@ -97,7 +97,7 @@ Documents:
   TableFile              one table file (list files, sample files, table-file)
   Partition              one partition of a table's snapshot (list partitions)
   PartitionPrice         a partition's storage classes and cost (get partition-price)
-  PartitionVersion       a partition at one etag in the master (list partition-versions,
+  PartitionVersion       a partition at one etag in the driver (list partition-versions,
                          get partition-version for its results)
   PartitionStats         a catalog's, schema's or table's partition totals (summarize partition-versions)
   Blob                   one file's storage facts (list columns)
@@ -629,11 +629,11 @@ partition column order, so the input is `get table` output, which names the
 columns; a `list tables` ref is refused.
 
 `list partition-versions [PARENT]` reads no catalog and no storage: it prints
-pqbench-master's rows, one PartitionVersion per line in name order, all of
+pqbench-driver's rows, one PartitionVersion per line in name order, all of
 them or those under a catalog, schema, table or partition name. `get
 partition-version NAME` reads one version's stored results. Both talk to
-`pqbench-master`, a separate process whose socket `PQB_MASTER_SOCK` names;
-start it with `pqbench-master start --store DIR`.
+`pqbench-driver`, a separate process whose socket `PQB_DRIVER_SOCK` names;
+start it with `pqbench-driver start --store DIR`.
 
 Every level reads its parent's refs on standard input and writes one resource
 per line, so the walk is a pipe:
@@ -678,7 +678,7 @@ See also:
 * `tables` — List the tables in a schema (`CATALOG.SCHEMA`)
 * `files` — List a table's active files (Table refs on stdin)
 * `partitions` — List a table's partitions (Table refs on stdin)
-* `partition-versions` — List the master's partition versions (`PARENT`, or all)
+* `partition-versions` — List the driver's partition versions (`PARENT`, or all)
 * `columns` — List a file's columns and their byte masses (Table-file refs on stdin)
 * `suggestions` — List potential storage suggestions for each local blob (Table-file refs on stdin)
 
@@ -755,7 +755,7 @@ List a table's partitions (Table refs on stdin)
 
 ## `pqbench list partition-versions`
 
-List the master's partition versions (`PARENT`, or all)
+List the driver's partition versions (`PARENT`, or all)
 
 **Usage:** `pqbench list partition-versions [PARENT]`
 
@@ -890,7 +890,7 @@ See also:
 * `start` — Start the daemon in the background
 * `stop` — Stop the daemon
 * `status` — Report whether the daemon is running
-* `serve` — Serve leases in the foreground
+* `serve` — Serve leases and catalog GETs in the foreground
 
 
 
@@ -925,7 +925,7 @@ Report whether the daemon is running
 
 ## `pqbench daemon serve`
 
-Serve leases in the foreground
+Serve leases and catalog GETs in the foreground
 
 **Usage:** `pqbench daemon serve [OPTIONS]`
 

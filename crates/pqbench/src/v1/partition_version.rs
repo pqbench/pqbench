@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::Resource;
 
-/// A partition at one etag and where it is in the pipeline: the master's
-/// record of it, and the master's whole state. A partition has one version in
+/// A partition at one etag and where it is in the pipeline: the driver's
+/// record of it, and the engine's whole state. A partition has one version in
 /// the map per etag the newest walk found; a version an etag change supersedes
 /// leaves the map and its results are deleted.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]
@@ -81,4 +81,29 @@ pub enum State {
     /// Every transition the version needs is done: a version with no live file,
     /// or whose files need a restore, is done after its price.
     UpToDate,
+}
+
+impl State {
+    /// The state's name as the wire spells it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            State::Deleted => "DELETED",
+            State::Pending => "PENDING",
+            State::Pricing => "PRICING",
+            State::Priced => "PRICED",
+            State::Downloading => "DOWNLOADING",
+            State::Downloaded => "DOWNLOADED",
+            State::Bytemassing => "BYTEMASSING",
+            State::Bytemassed => "BYTEMASSED",
+            State::Linting => "LINTING",
+            State::UpToDate => "UP_TO_DATE",
+        }
+    }
+}
+
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }

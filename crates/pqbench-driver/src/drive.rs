@@ -1,8 +1,8 @@
-//! The master's driver: the worker side. It runs the pqbench commands the
-//! master hands out, keeps their files, and tells the master how each ended.
+//! The driver's worker side: it runs the pqbench commands the engine hands out,
+//! keeps their files, and tells the engine how each ended.
 //!
-//! One task on the master's runtime awaits the running commands, gives the
-//! master each finished one, starts the runs the master hands out next, and
+//! One task on the driver's runtime awaits the running commands, gives the
+//! engine each finished one, starts the runs the engine hands out next, and
 //! starts a walk when one is due; it also moves superseded results to the
 //! trash and checkpoints. Only the driver changes the map, and each change
 //! takes the write lock for one short update.
@@ -20,11 +20,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
-use pqbench::v1::PartitionPrice;
-use serde_json::Value;
+use pqbench::v1::{Partition, PartitionPrice};
 use tokio::task::JoinSet;
 
-use super::master::{self, Input, Key, Master, Run, State};
+use super::engine::{self, Engine, Input, Key, Run, State};
 use super::process::{self, WorkerExe};
 use super::store::{Store, SAMPLE};
 
@@ -42,7 +41,7 @@ pub(crate) struct Settings {
     /// A file of Table records the walk lists instead of the metastore.
     pub walk_tables: Option<PathBuf>,
     /// How long after a walk the next one is due; `None` walks once, when the
-    /// master starts.
+    /// engine starts.
     pub walk_period: Option<Duration>,
 }
 
@@ -50,7 +49,7 @@ pub(crate) struct Settings {
 type Outcome = Result<Option<PartitionPrice>, String>;
 
 struct Driver {
-    master: Arc<RwLock<Master>>,
+    engine: Arc<RwLock<Engine>>,
     store: Store,
     settings: Settings,
     /// The most runs at once: one per CPU.
@@ -71,18 +70,18 @@ struct Driver {
     checkpoint_time: Instant,
 }
 
-/// Start the driver on the master's runtime. A pass does short blocking file
+/// Start the driver on the runtime. A pass does short blocking file
 /// work (a checkpoint, a listing), which the socket waits out.
 pub(crate) fn spawn(
-    master: Arc<RwLock<Master>>,
+    engine: Arc<RwLock<Engine>>,
     store: Store,
     settings: Settings,
     exe: WorkerExe,
     daemon_socket: Option<PathBuf>,
 ) {
-    let walk_time = read(&master).last_list_time();
+    let walk_time = read_engine(&engine).last_list_time();
     let mut driver = Driver {
-        master,
+        engine,
         store,
         settings,
         commands: std::thread::available_parallelism().map_or(1, usize::from),
@@ -103,7 +102,7 @@ pub(crate) fn spawn(
             tokio::select! {
                 Some(done) = driver.running.join_next() => match done {
                     Ok((key, outcome)) => driver.finish(&key, outcome),
-                    Err(error) => eprintln!("pqbench-master: a run's task failed: {error}"),
+                    Err(error) => eprintln!("pqbench-driver: a run's task failed: {error}"),
                 },
                 Some(done) = driver.walk.join_next() => {
                     let outcome = done.unwrap_or_else(|error| Err(error.to_string()));
@@ -116,26 +115,26 @@ pub(crate) fn spawn(
     });
 }
 
-fn read(master: &RwLock<Master>) -> RwLockReadGuard<'_, Master> {
-    master
+fn read_engine(engine: &RwLock<Engine>) -> RwLockReadGuard<'_, Engine> {
+    engine
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn write(master: &RwLock<Master>) -> RwLockWriteGuard<'_, Master> {
-    master
+fn write_engine(engine: &RwLock<Engine>) -> RwLockWriteGuard<'_, Engine> {
+    engine
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl Driver {
-    /// Start the runs the master hands out, while there are free slots.
+    /// Start the runs the engine hands out, while there are free slots.
     fn start_runs(&mut self) {
         let free = self.commands.saturating_sub(self.running.len());
         if free == 0 {
             return;
         }
-        for run in write(&self.master).start(free) {
+        for run in write_engine(&self.engine).start(free) {
             let store = self.store.clone();
             let exe = self.exe.clone();
             let daemon_socket = self.daemon_socket.clone();
@@ -149,10 +148,10 @@ impl Driver {
         }
     }
 
-    /// Give the master a finished run. A version with no transition left to
+    /// Give the engine a finished run. A version with no transition left to
     /// read it drops its copy of the sample file.
     fn finish(&mut self, key: &Key, outcome: Outcome) {
-        let Some(conclusion) = write(&self.master).finish(key, outcome) else {
+        let Some(conclusion) = write_engine(&self.engine).finish(key, outcome) else {
             return;
         };
         if !conclusion.sample {
@@ -167,7 +166,7 @@ impl Driver {
         for key in keys {
             match self.store.trash(&key) {
                 Ok(()) => trashed = true,
-                Err(error) => eprintln!("pqbench-master: {error}"),
+                Err(error) => eprintln!("pqbench-driver: {error}"),
             }
         }
         if !trashed || !self.emptying.is_empty() {
@@ -176,18 +175,18 @@ impl Driver {
         let store = self.store.clone();
         self.emptying.spawn_blocking(move || {
             if let Err(error) = store.empty_trash() {
-                eprintln!("pqbench-master: {error}");
+                eprintln!("pqbench-driver: {error}");
             }
         });
     }
 
     /// Start a walk when none runs and one is due: the first since the
-    /// master started, then one each walk period.
+    /// engine started, then one each walk period.
     fn start_walk(&mut self) {
         if !self.walk.is_empty() {
             return;
         }
-        let now = master::now_ms();
+        let now = engine::now_ms();
         let due = match (self.walked, self.settings.walk_period, self.walk_time) {
             (false, _, _) => true,
             (true, None, _) => false,
@@ -205,7 +204,7 @@ impl Driver {
         let (stages, input, output, error) = match opened {
             Ok(opened) => opened,
             Err(error) => {
-                eprintln!("pqbench-master: cannot start the walk: {error}");
+                eprintln!("pqbench-driver: cannot start the walk: {error}");
                 return;
             }
         };
@@ -235,59 +234,60 @@ impl Driver {
         if let Err(error) = &outcome {
             let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
             eprintln!(
-                "pqbench-master: the walk failed ({error}): {}",
+                "pqbench-driver: the walk failed ({error}): {}",
                 process::tail(text.trim())
             );
         }
         let listing = match listing {
             Ok(listing) => listing,
             Err(error) => {
-                eprintln!("pqbench-master: the walk has no listing ({error})");
+                eprintln!("pqbench-driver: the walk has no listing ({error})");
                 let _ = fs::remove_dir_all(&directory);
                 return;
             }
         };
-        let now = master::now_ms();
+        let now = engine::now_ms();
         let mut found: BTreeMap<String, BTreeSet<Key>> = BTreeMap::new();
         let mut dropped = Vec::new();
         for line in listing.lines().filter(|line| !line.trim().is_empty()) {
             match self.found(line, now) {
                 Ok((key, superseded)) => {
-                    let table = master::parent_table(&key.0).to_string();
+                    let table = engine::parent_table(&key.0).to_string();
                     found.entry(table).or_default().insert(key);
                     dropped.extend(superseded);
                 }
-                Err(error) => eprintln!("pqbench-master: walk: {error}"),
+                Err(error) => eprintln!("pqbench-driver: walk: {error}"),
             }
         }
         // A listing that stops early still names real versions; only a
         // complete walk can say that one is gone.
         if outcome.is_ok() {
             for (table, keys) in &found {
-                dropped.extend(write(&self.master).missing(table, keys));
+                dropped.extend(write_engine(&self.engine).missing(table, keys));
             }
             let tables: BTreeSet<String> = found.into_keys().collect();
-            dropped.extend(write(&self.master).retain(&tables));
+            dropped.extend(write_engine(&self.engine).retain(&tables));
         }
         self.trash(dropped);
         let _ = fs::remove_dir_all(&directory);
     }
 
     /// One line of the walk's listing, a Partition record: a new version's
-    /// listing is stored before the master has the version. Returns the
+    /// listing is stored before the engine has the version. Returns the
     /// version and the keys of the partition's versions it supersedes.
     fn found(&mut self, line: &str, now: u64) -> Result<(Key, Vec<Key>), String> {
-        let listing: Value =
+        let listing: Partition =
             serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
-        let (Some(name), Some(etag)) = (listing["name"].as_str(), listing["etag"].as_str()) else {
-            return Err("a listing line has no name or etag".into());
-        };
-        let key = master::key(name, etag)
-            .ok_or_else(|| format!("{name} at {etag} is not a partition version"))?;
-        if read(&self.master).state(&key).is_none() {
+        let key = engine::key(&listing.name, &listing.etag).ok_or_else(|| {
+            format!(
+                "{} at {} is not a partition version",
+                listing.name, listing.etag
+            )
+        })?;
+        if read_engine(&self.engine).state(&key).is_none() {
             self.store.write_listing(&key, line)?;
         }
-        let superseded = write(&self.master).found(&key, &listing, now);
+        let superseded = write_engine(&self.engine).found(&key, &listing, now);
         Ok((key, superseded))
     }
 
@@ -299,14 +299,17 @@ impl Driver {
             return;
         }
         self.checkpoint_time = Instant::now();
-        if !read(&self.master).changed() {
+        if !read_engine(&self.engine).changed() {
             return;
         }
-        if let Err(error) = self.store.write_checkpoint(read(&self.master).versions()) {
-            eprintln!("pqbench-master: {error}");
+        if let Err(error) = self
+            .store
+            .write_checkpoint(read_engine(&self.engine).versions())
+        {
+            eprintln!("pqbench-driver: {error}");
             return;
         }
-        write(&self.master).checkpointed();
+        write_engine(&self.engine).checkpointed();
     }
 }
 
@@ -319,12 +322,13 @@ async fn work(store: &Store, run: &Run, exe: &WorkerExe, daemon_socket: Option<&
     let input = match transition.input {
         Input::Partition => listing,
         Input::SampleFile => {
-            let record: Value = serde_json::from_str(&listing)
+            let partition: Partition = serde_json::from_str(&listing)
                 .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
-            record
-                .get("sample_file")
-                .map(Value::to_string)
-                .ok_or_else(|| format!("the listing of {} names no sample file", key.0))?
+            let sample = partition
+                .sample_file
+                .ok_or_else(|| format!("the listing of {} names no sample file", key.0))?;
+            serde_json::to_string(&sample)
+                .map_err(|error| format!("cannot write the sample file of {}: {error}", key.0))?
         }
     };
     let mut command: Vec<String> = transition

@@ -1,21 +1,21 @@
-//! The partition-version state engine (master) for pqbench: a process of its
-//! own, with its own socket and its own store.
+//! The partition-version state driver for pqbench: a process of its own, with
+//! its own socket and its own store.
 //!
-//! The master holds the map of partition versions and runs the pqbench
-//! commands that move them (`get partition-price`, `download`, `bytemass`,
-//! `list suggestions`), walking the tables on a period. A client reads the
-//! map and one version's results over [`protocol`] on the socket [`socket`]
-//! names; [`client`] is that side.
+//! The engine holds the map of partition versions, and the driver runs the
+//! pqbench commands that move them (`get partition-price`, `download`,
+//! `bytemass`, `list suggestions`), walking the tables on a period. A client
+//! reads the map and one version's results over [`protocol`] on the socket
+//! [`socket`] names; [`client`] is that side.
 //!
-//! The commands themselves talk to the catalog daemon, not to the master, so
-//! a master without a daemon still answers for the map it has.
+//! The commands themselves talk to the catalog daemon, not to the driver, so
+//! a driver without a daemon still answers for the map it has.
 
 pub mod client;
 pub mod protocol;
 pub mod socket;
 
 mod drive;
-mod master;
+mod engine;
 mod process;
 mod serve;
 mod start;
@@ -29,12 +29,13 @@ use clap::{Args, Parser, Subcommand};
 
 use drive::Settings;
 
-/// The master: the map of partition versions, and the commands that move them.
+/// The driver: the engine's map of partition versions, and the commands that
+/// move them.
 #[derive(Parser)]
 #[command(
-    name = "pqbench-master",
+    name = "pqbench-driver",
     version,
-    about = "Partition-version state engine (master) for pqbench."
+    about = "Partition-version state driver for pqbench."
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -43,23 +44,23 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start the master in the background
+    /// Start the driver in the background
     Start(RunArgs),
-    /// Serve the master in the foreground
+    /// Serve the driver in the foreground
     Serve(RunArgs),
-    /// Stop the master
+    /// Stop the driver
     Stop(TargetArgs),
-    /// Report whether the master is running
+    /// Report whether the driver is running
     Status(TargetArgs),
 }
 
 #[derive(Args)]
 pub(crate) struct RunArgs {
-    /// the master's store: its checkpoint, results, and default socket
+    /// the driver's store: its checkpoint, results, and default socket
     #[arg(long, value_name = "DIR")]
     pub store: PathBuf,
-    /// the master's socket (default: the store's master.sock)
-    #[arg(long, env = "PQB_MASTER_SOCK", value_name = "PATH")]
+    /// the driver's socket (default: the store's driver.sock)
+    #[arg(long, env = "PQB_DRIVER_SOCK", value_name = "PATH")]
     pub socket: Option<PathBuf>,
     /// the daemon socket the worker commands talk to
     #[arg(long, value_name = "PATH")]
@@ -70,7 +71,7 @@ pub(crate) struct RunArgs {
     /// walk the tables these Table records name instead of the metastore (e.g. local tables)
     #[arg(long, value_name = "FILE")]
     pub walk_tables: Option<PathBuf>,
-    /// seconds from one walk to the next; without it the master walks once, when it starts
+    /// seconds from one walk to the next; without it the driver walks once, when it starts
     #[arg(long, value_name = "SECONDS")]
     pub walk_period_seconds: Option<u64>,
     /// the host has little network: copy no file; bytemass reads each sample file's footer in place, and there is no lint
@@ -79,7 +80,7 @@ pub(crate) struct RunArgs {
 }
 
 impl RunArgs {
-    /// The store, absolute so a detached master resolves it from any working
+    /// The store, absolute so a detached driver resolves it from any working
     /// directory.
     fn store(&self) -> PathBuf {
         socket::absolute(&self.store)
@@ -96,15 +97,15 @@ impl RunArgs {
 
 #[derive(Args)]
 pub(crate) struct TargetArgs {
-    /// the master's socket (default: PQB_MASTER_SOCK, else the store's master.sock)
-    #[arg(long, env = "PQB_MASTER_SOCK", value_name = "PATH")]
+    /// the driver's socket (default: PQB_DRIVER_SOCK, else the store's driver.sock)
+    #[arg(long, env = "PQB_DRIVER_SOCK", value_name = "PATH")]
     pub socket: Option<PathBuf>,
-    /// the master's store, for the socket beside it
+    /// the driver's store, for the socket beside it
     #[arg(long, value_name = "DIR")]
     pub store: Option<PathBuf>,
 }
 
-/// Run the command line: the master's command, or the error that stopped it.
+/// Run the command line: the driver's command, or the error that stopped it.
 pub async fn run() -> ExitCode {
     let cli = Cli::parse();
     let result = match &cli.command {
@@ -116,7 +117,7 @@ pub async fn run() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("pqbench-master: {error}");
+            eprintln!("pqbench-driver: {error}");
             ExitCode::FAILURE
         }
     }
@@ -128,17 +129,17 @@ mod tests {
     use std::ffi::OsString;
     use std::path::Path;
 
-    /// The flags the background master is started with are the flags it
+    /// The flags the background driver is started with are the flags it
     /// accepts: a round-trip through the parser.
     #[test]
     fn the_run_flags_parse_from_the_start_command_line() {
         let arguments: Vec<OsString> = [
-            "pqbench-master",
+            "pqbench-driver",
             "serve",
             "--store",
             "/tmp/store",
             "--socket",
-            "/tmp/master.sock",
+            "/tmp/driver.sock",
             "--daemon-socket",
             "/tmp/daemon.sock",
             "--pqbench",
@@ -157,7 +158,7 @@ mod tests {
             panic!("serve is a subcommand");
         };
         assert_eq!(args.store, PathBuf::from("/tmp/store"));
-        assert_eq!(args.socket.as_deref(), Some(Path::new("/tmp/master.sock")));
+        assert_eq!(args.socket.as_deref(), Some(Path::new("/tmp/driver.sock")));
         assert_eq!(
             args.daemon_socket.as_deref(),
             Some(Path::new("/tmp/daemon.sock"))

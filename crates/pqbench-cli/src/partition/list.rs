@@ -31,12 +31,10 @@ pub(crate) async fn run(
     args: &ListArgs,
 ) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Table>("list partitions").await?;
-    let lake = lake.clone();
-    let daemon = daemon.clone();
-    drive(flat_map(parents, args.fan_out, move |table: v1::Table| {
-        let lake = lake.clone();
-        let daemon = daemon.clone();
-        async move {
+    drive(flat_map(
+        parents,
+        args.fan_out,
+        move |table: v1::Table| async move {
             let reference = table.name.clone();
             let env = daemon.resolve_env(&reference).await?;
             let credentials = v1::Credentials::from_env(&env);
@@ -45,7 +43,7 @@ pub(crate) async fn run(
                 .await
                 .map_err(|error| crate::error::context(&reference, error))?;
             Ok(stream::iter(partitions.into_iter().map(Ok::<_, CliError>)))
-        }
-    }))
+        },
+    ))
     .await
 }

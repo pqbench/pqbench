@@ -1,210 +1,73 @@
-//! The bundled `PageParser` implementation, backed by parquet-rs.
+//! The bundled parquet-rs-backed page parser.
 //!
 //! This module is private (`lib.rs` doesn't `pub mod` it); the only thing the
-//! crate exposes is [`super::api::default_parser`]. Tool code never
-//! imports `parquet` directly.
+//! crate exposes is [`super::api::parse_pages`]. Tool code never imports
+//! `parquet` directly.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use parquet::basic::{
-    Compression, Encoding, GzipLevel, Repetition, Type as PhysicalType, ZstdLevel,
+    Compression, ConvertedType, Encoding, GzipLevel, LogicalType, PageType, Repetition, TimeType,
+    TimeUnit, Type as PhysicalType, ZstdLevel,
 };
 use parquet::column::page::{Page as ParquetPage, PageReader};
-use parquet::data_type::{AsBytes, BoolType, ByteArray, ByteArrayType, DoubleType, Int64Type};
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, SortingColumn};
+use parquet::data_type::{BoolType, ByteArray, ByteArrayType, DoubleType, Int64Type};
+use parquet::file::metadata::{
+    PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+    SortingColumn,
+};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::{SerializedColumnWriter, SerializedFileWriter};
-use parquet::record::Field;
-use parquet::schema::types::{ColumnPath, Type};
+use parquet::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
 use super::api::{
-    ColumnChunk, ColumnMass, Error, FileMass, Kind, MetadataParser, Page, PageParser, ParquetFile,
-    Sample, TypedColumn, TypedSample, Value, WriteOptions,
+    ColumnChunk, ColumnMass, Error, FileMass, Kind, Page, ParquetFile, TypedColumn, Value,
+    WriteOptions,
 };
 
-/// The parquet-rs-backed page parser.
-pub struct ParquetRsParser;
-
-impl PageParser for ParquetRsParser {
-    /// Read a parquet file from an in-memory byte slice and extract its pages.
-    ///
-    /// No disk I/O: `bytes` is wrapped as an in-memory `ChunkReader` and every
-    /// page payload is copied out into the returned [`ParquetFile`].
-    fn parse_pages(&self, bytes: &[u8]) -> Result<ParquetFile, Error> {
-        let reader = SerializedFileReader::new(bytes::Bytes::copy_from_slice(bytes))?;
-        let mut file = ParquetFile { chunks: Vec::new() };
-        for rg in 0..reader.num_row_groups() {
-            let row_group = reader.get_row_group(rg)?;
-            for col in 0..row_group.num_columns() {
-                let meta = row_group.metadata().column(col);
-                let column = meta.column_path().string();
-                let compression = meta.compression();
-                if compression != Compression::UNCOMPRESSED {
-                    return Err(Error::Unsupported(format!(
-                        "only NONE (uncompressed) parquet is supported; column {column} is {compression}"
-                    )));
-                }
-                let pages = collect_pages(row_group.get_column_page_reader(col)?)?;
-                file.chunks.push(ColumnChunk { column, pages });
+/// Read a parquet file from an in-memory byte slice and extract its pages.
+///
+/// No disk I/O: `bytes` is wrapped as an in-memory `ChunkReader` and every
+/// page payload is copied out into the returned [`ParquetFile`].
+pub(crate) fn parse_pages(bytes: &[u8]) -> Result<ParquetFile, Error> {
+    let reader = SerializedFileReader::new(bytes::Bytes::copy_from_slice(bytes))?;
+    let mut file = ParquetFile { chunks: Vec::new() };
+    for rg in 0..reader.num_row_groups() {
+        let row_group = reader.get_row_group(rg)?;
+        for col in 0..row_group.num_columns() {
+            let meta = row_group.metadata().column(col);
+            let column = meta.column_path().string();
+            let compression = meta.compression();
+            if compression != Compression::UNCOMPRESSED {
+                return Err(Error::Unsupported(format!(
+                    "only NONE (uncompressed) parquet is supported; column {column} is {compression}"
+                )));
             }
+            let pages = collect_pages(row_group.get_column_page_reader(col)?)?;
+            file.chunks.push(ColumnChunk { column, pages });
         }
-        Ok(file)
     }
-}
-
-impl MetadataParser for ParquetRsParser {
-    /// Read a parquet file's per-column byte masses from its footer metadata.
-    ///
-    /// Only the footer is read: no page is decoded, so compressed columns are
-    /// fine, and large files aren't loaded into memory.
-    fn read_masses(&self, path: &Path) -> Result<FileMass, Error> {
-        read_file_masses(path)
-    }
+    Ok(file)
 }
 
 /// Decode byte masses from a complete Parquet footer without reading pages.
 pub(crate) fn read_footer_masses(footer: &[u8], size_bytes: u64) -> Result<FileMass, Error> {
-    let metadata =
-        ParquetMetaDataReader::new().parse_and_finish(&bytes::Bytes::copy_from_slice(footer))?;
+    let metadata = footer_reader().parse_and_finish(&bytes::Bytes::copy_from_slice(footer))?;
     Ok(create_masses(&metadata, size_bytes))
 }
 
-/// Decode up to `max_rows` leading rows of a local file into stringified cells.
-pub(crate) fn read_sample(path: &Path, max_rows: Option<usize>) -> Result<Sample, Error> {
-    let file = std::fs::File::open(path).map_err(Error::Io)?;
-    let reader = SerializedFileReader::new(file)?;
-    let mut sample = Sample::default();
-    for row in reader.get_row_iter(None)? {
-        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
-            break;
-        }
-        let row = row?;
-        if sample.columns.is_empty() {
-            sample.columns = row
-                .get_column_iter()
-                .map(|(name, _)| name.clone())
-                .collect();
-        }
-        sample.rows.push(
-            row.get_column_iter()
-                .map(|(_, field)| field_text(field))
-                .collect(),
-        );
-    }
-    Ok(sample)
-}
-
-/// The display text of one decoded value; nulls have none.
-fn field_text(field: &Field) -> Option<String> {
-    match field {
-        Field::Null => None,
-        Field::Str(value) => Some(value.clone()),
-        Field::Bytes(value) => Some(String::from_utf8_lossy(value.data()).into_owned()),
-        other => Some(other.to_string()),
-    }
-}
-
-/// Decode up to `max_rows` leading rows of a local file into typed cells.
-pub(crate) fn read_typed_sample(
-    path: &Path,
-    max_rows: Option<usize>,
-) -> Result<TypedSample, Error> {
-    let file = std::fs::File::open(path).map_err(Error::Io)?;
-    let reader = SerializedFileReader::new(file)?;
-    let mut sample = TypedSample::default();
-    let mut kinds: Vec<Option<Kind>> = Vec::new();
-    for row in reader.get_row_iter(None)? {
-        if max_rows.is_some_and(|max| sample.rows.len() >= max) {
-            break;
-        }
-        let row = row?;
-        if sample.columns.is_empty() {
-            sample.columns = row
-                .get_column_iter()
-                .map(|(name, field)| TypedColumn {
-                    name: name.clone(),
-                    kind: field_kind(field).unwrap_or(Kind::Bytes),
-                })
-                .collect();
-            kinds = vec![None; sample.columns.len()];
-        }
-        for (index, (_, field)) in row.get_column_iter().enumerate() {
-            if kinds.get(index).is_some_and(Option::is_none) {
-                kinds[index] = field_kind(field);
-            }
-        }
-        sample.rows.push(
-            row.get_column_iter()
-                .map(|(_, field)| field_value(field))
-                .collect(),
-        );
-    }
-    for (column, kind) in sample.columns.iter_mut().zip(kinds.iter()) {
-        column.kind = kind.unwrap_or(Kind::Bytes);
-    }
-    Ok(sample)
-}
-
-/// The typed kind of a decoded value; nulls have none.
-fn field_kind(field: &Field) -> Option<Kind> {
-    match field {
-        Field::Null => None,
-        Field::Bool(_) => Some(Kind::Boolean),
-        Field::Byte(_)
-        | Field::Short(_)
-        | Field::Int(_)
-        | Field::Long(_)
-        | Field::UByte(_)
-        | Field::UShort(_)
-        | Field::UInt(_)
-        | Field::ULong(_)
-        | Field::Date(_)
-        | Field::TimeMillis(_)
-        | Field::TimeMicros(_)
-        | Field::TimestampMillis(_)
-        | Field::TimestampMicros(_) => Some(Kind::Integer),
-        Field::Float16(_) | Field::Float(_) | Field::Double(_) | Field::Decimal(_) => {
-            Some(Kind::Number)
-        }
-        Field::Str(_)
-        | Field::Bytes(_)
-        | Field::Group(_)
-        | Field::ListInternal(_)
-        | Field::MapInternal(_) => Some(Kind::Bytes),
-    }
-}
-
-/// The typed cell of a decoded value.
-fn field_value(field: &Field) -> Value {
-    match field {
-        Field::Null => Value::Null,
-        Field::Bool(value) => Value::Boolean(*value),
-        Field::Byte(value) => Value::Integer(i64::from(*value)),
-        Field::Short(value) => Value::Integer(i64::from(*value)),
-        Field::Int(value) => Value::Integer(i64::from(*value)),
-        Field::Long(value) => Value::Integer(*value),
-        Field::UByte(value) => Value::Integer(i64::from(*value)),
-        Field::UShort(value) => Value::Integer(i64::from(*value)),
-        Field::UInt(value) => Value::Integer(i64::from(*value)),
-        Field::ULong(value) => Value::Integer(i64::try_from(*value).unwrap_or(i64::MAX)),
-        Field::Date(value) => Value::Integer(i64::from(*value)),
-        Field::TimeMillis(value) => Value::Integer(i64::from(*value)),
-        Field::TimeMicros(value) => Value::Integer(*value),
-        Field::TimestampMillis(value) => Value::Integer(*value),
-        Field::TimestampMicros(value) => Value::Integer(*value),
-        Field::Float16(value) => Value::Number(value.to_f64()),
-        Field::Float(value) => Value::Number(f64::from(*value)),
-        Field::Double(value) => Value::Number(*value),
-        Field::Decimal(_) => Value::Number(field.to_string().parse().unwrap_or(0.0)),
-        Field::Str(value) => Value::Bytes(value.clone().into_bytes()),
-        Field::Bytes(value) => Value::Bytes(value.data().to_vec()),
-        Field::Group(_) | Field::ListInternal(_) | Field::MapInternal(_) => {
-            Value::Bytes(field.to_string().into_bytes())
-        }
-    }
+/// A metadata reader that keeps the footer's page encoding statistics whole.
+///
+/// The crate's default folds them into a bitmask of the data pages' encodings;
+/// the data page counts need each page type's count, which only the whole
+/// list carries.
+fn footer_reader() -> ParquetMetaDataReader {
+    ParquetMetaDataReader::new().with_metadata_options(Some(
+        ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false),
+    ))
 }
 
 /// Write typed columns and rows to an in-memory Parquet file.
@@ -475,19 +338,12 @@ fn value_text(value: &Value) -> String {
     }
 }
 
-/// Read byte masses from an in-memory Parquet file.
-pub(crate) fn read_buffer_masses(bytes: &[u8]) -> Result<FileMass, Error> {
-    let metadata =
-        ParquetMetaDataReader::new().parse_and_finish(&bytes::Bytes::copy_from_slice(bytes))?;
-    Ok(create_masses(&metadata, bytes.len() as u64))
-}
-
 /// Read byte masses from a local file. One open: the size comes from the same
 /// handle the footer is read from.
 pub(crate) fn read_file_masses(path: &Path) -> Result<FileMass, Error> {
     let file = std::fs::File::open(path).map_err(Error::Io)?;
     let size_bytes = file.metadata().map_err(Error::Io)?.len();
-    let metadata = ParquetMetaDataReader::new().parse_and_finish(&file)?;
+    let metadata = footer_reader().parse_and_finish(&file)?;
     Ok(create_masses(&metadata, size_bytes))
 }
 
@@ -500,28 +356,32 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
         for meta in row_group.columns() {
             let stats = meta.statistics();
             let descriptor = meta.column_descr();
-            let dictionary_page_offset = meta.dictionary_page_offset();
+            // A writer that records no dictionary page may still leave the
+            // offset field at zero: only a positive offset locates one.
+            let dictionary_page_offset = meta.dictionary_page_offset().filter(|offset| *offset > 0);
             let data_page_offset = meta.data_page_offset();
             let dictionary_bytes = dictionary_page_offset
                 .filter(|offset| data_page_offset > *offset)
                 .and_then(|offset| u64::try_from(data_page_offset - offset).ok());
+            let page_stats = meta.page_encoding_stats().map(Vec::as_slice);
+            let page_counts = data_page_counts(page_stats);
             columns.push(ColumnMass {
                 column: meta.column_path().string(),
                 physical_data_type: descriptor.physical_type().to_string(),
+                logical_type: logical_type_text(descriptor),
                 max_definition_level: u16::try_from(descriptor.max_def_level()).unwrap_or(0),
                 max_repetition_level: u16::try_from(descriptor.max_rep_level()).unwrap_or(0),
                 compressed_bytes: u64::try_from(meta.compressed_size()).unwrap_or(0),
                 uncompressed_bytes: u64::try_from(meta.uncompressed_size()).unwrap_or(0),
                 codec: codec_name(meta.compression()).to_string(),
                 encodings: meta.encodings().map(|e| e.to_string()).collect(),
-                data_encodings: meta.page_encoding_stats_mask().map(|mask| {
-                    mask.encodings()
-                        .map(|encoding| encoding.to_string())
-                        .collect()
-                }),
+                data_encodings: data_page_encodings(page_stats),
                 num_values: u64::try_from(meta.num_values()).unwrap_or(0),
                 dictionary: dictionary_page_offset.is_some(),
                 dictionary_bytes,
+                plain_data_page_count: page_counts.map(|counts| counts.plain_data_page_count),
+                dictionary_data_page_count: page_counts
+                    .map(|counts| counts.dictionary_data_page_count),
                 page_index: meta.column_index_offset().is_some()
                     && meta.offset_index_offset().is_some(),
                 unencoded_bytes: meta
@@ -540,6 +400,109 @@ fn create_masses(metadata: &ParquetMetaData, size_bytes: u64) -> FileMass {
         row_count,
         row_group_count: metadata.row_groups().len(),
         columns,
+    }
+}
+
+/// The data pages a chunk's footer counts, split by how they encode values.
+#[derive(Debug, Clone, Copy, Default)]
+struct DataPageCounts {
+    plain_data_page_count: u64,
+    dictionary_data_page_count: u64,
+}
+
+/// The chunk's data pages by encoding, when the footer counts its pages.
+///
+/// Dictionary pages count as neither: they carry the dictionary, not values.
+fn data_page_counts(stats: Option<&[PageEncodingStats]>) -> Option<DataPageCounts> {
+    let stats = stats?;
+    let mut counts = DataPageCounts::default();
+    for stat in stats {
+        if !matches!(stat.page_type, PageType::DATA_PAGE | PageType::DATA_PAGE_V2) {
+            continue;
+        }
+        let count = u64::try_from(stat.count).unwrap_or(0);
+        match stat.encoding {
+            Encoding::PLAIN => counts.plain_data_page_count += count,
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
+                counts.dictionary_data_page_count += count;
+            }
+            _ => {}
+        }
+    }
+    Some(counts)
+}
+
+/// The encodings the chunk's data pages use, in the footer's order, when the
+/// footer counts its pages.
+fn data_page_encodings(stats: Option<&[PageEncodingStats]>) -> Option<Vec<String>> {
+    let stats = stats?;
+    let mut encodings: Vec<String> = Vec::new();
+    for stat in stats {
+        if !matches!(stat.page_type, PageType::DATA_PAGE | PageType::DATA_PAGE_V2) {
+            continue;
+        }
+        let encoding = stat.encoding.to_string();
+        if !encodings.contains(&encoding) {
+            encodings.push(encoding);
+        }
+    }
+    (!encodings.is_empty()).then_some(encodings)
+}
+
+/// The leaf column's logical type, as the Parquet spec spells it, falling back
+/// to the legacy converted type a pre-2.4.0 writer recorded instead.
+fn logical_type_text(descriptor: &ColumnDescriptor) -> Option<String> {
+    if let Some(logical) = descriptor.logical_type_ref() {
+        return Some(logical_type_name(logical));
+    }
+    let converted = descriptor.converted_type();
+    (converted != ConvertedType::NONE).then(|| converted.to_string())
+}
+
+/// `STRING`, `DECIMAL(10,2)`, `TIMESTAMP(MICROS,UTC)`, …, as the spec names them.
+fn logical_type_name(logical: &LogicalType) -> String {
+    match logical {
+        LogicalType::String => "STRING".to_string(),
+        LogicalType::Map => "MAP".to_string(),
+        LogicalType::List => "LIST".to_string(),
+        LogicalType::Enum => "ENUM".to_string(),
+        LogicalType::Decimal(decimal) => {
+            format!("DECIMAL({},{})", decimal.precision, decimal.scale)
+        }
+        LogicalType::Date => "DATE".to_string(),
+        LogicalType::Time(time) => format!("TIME({})", time_text(time)),
+        LogicalType::Timestamp(timestamp) => format!("TIMESTAMP({})", time_text(timestamp)),
+        LogicalType::Integer(integer) => {
+            format!("INT({},{})", integer.bit_width, integer.is_signed)
+        }
+        LogicalType::Unknown => "UNKNOWN".to_string(),
+        LogicalType::Json => "JSON".to_string(),
+        LogicalType::Bson => "BSON".to_string(),
+        LogicalType::Uuid => "UUID".to_string(),
+        LogicalType::Float16 => "FLOAT16".to_string(),
+        LogicalType::Variant(_) => "VARIANT".to_string(),
+        LogicalType::Geometry(_) => "GEOMETRY".to_string(),
+        LogicalType::Geography(_) => "GEOGRAPHY".to_string(),
+        LogicalType::_Unknown { field_id } => format!("UNKNOWN({field_id})"),
+    }
+}
+
+/// The time unit, and whether the value is adjusted to UTC.
+fn time_text(time: &TimeType) -> String {
+    let zone = if time.is_adjusted_to_u_t_c {
+        "UTC"
+    } else {
+        "LOCAL"
+    };
+    format!("{},{zone}", time_unit_text(time.unit))
+}
+
+/// The time unit's name as the spec spells it.
+fn time_unit_text(unit: TimeUnit) -> &'static str {
+    match unit {
+        TimeUnit::MILLIS => "MILLIS",
+        TimeUnit::MICROS => "MICROS",
+        TimeUnit::NANOS => "NANOS",
     }
 }
 
@@ -565,11 +528,9 @@ fn stat_text(stats: &Statistics, min: bool) -> Option<String> {
         Statistics::Int64(value) => pick(value, min).map(ToString::to_string),
         Statistics::Float(value) => pick(value, min).map(ToString::to_string),
         Statistics::Double(value) => pick(value, min).map(ToString::to_string),
-        Statistics::ByteArray(value) => {
-            pick(value, min).and_then(|value| bytes_text(value.as_bytes()))
-        }
+        Statistics::ByteArray(value) => pick(value, min).and_then(|value| bytes_text(value.data())),
         Statistics::FixedLenByteArray(value) => {
-            pick(value, min).and_then(|value| bytes_text(value.as_bytes()))
+            pick(value, min).and_then(|value| bytes_text(value.data()))
         }
         Statistics::Int96(_) => None,
     }
@@ -610,5 +571,111 @@ fn create_page(page: ParquetPage) -> Page {
 impl From<parquet::errors::ParquetError> for Error {
     fn from(e: parquet::errors::ParquetError) -> Self {
         Error::Parquet(Box::new(e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use parquet::file::metadata::{
+        ColumnChunkMetaData, FileMetaData, ParquetMetaDataWriter, RowGroupMetaData,
+    };
+    use parquet::schema::types::SchemaDescriptor;
+
+    use super::*;
+
+    /// A footer of one `BYTE_ARRAY` chunk whose writer recorded a zero
+    /// dictionary page offset, a page it never wrote, and page encoding counts.
+    fn zero_dictionary_offset_footer() -> Vec<u8> {
+        let leaf = Type::primitive_type_builder("s", PhysicalType::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::String))
+            .build()
+            .expect("a valid leaf column");
+        let schema = Type::group_type_builder("schema")
+            .with_fields(vec![Arc::new(leaf)])
+            .build()
+            .expect("a valid schema");
+        let schema_descriptor = Arc::new(SchemaDescriptor::new(Arc::new(schema)));
+        let chunk = ColumnChunkMetaData::builder(schema_descriptor.column(0))
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_encodings(vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY])
+            .set_num_values(400)
+            .set_total_compressed_size(1_000)
+            .set_total_uncompressed_size(2_000)
+            .set_data_page_offset(500)
+            .set_dictionary_page_offset(Some(0))
+            .set_page_encoding_stats(vec![
+                PageEncodingStats {
+                    page_type: PageType::DICTIONARY_PAGE,
+                    encoding: Encoding::PLAIN,
+                    count: 1,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE_V2,
+                    encoding: Encoding::RLE_DICTIONARY,
+                    count: 2,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::PLAIN,
+                    count: 3,
+                },
+            ])
+            .build()
+            .expect("a valid chunk");
+        let row_group = RowGroupMetaData::builder(schema_descriptor.clone())
+            .set_num_rows(400)
+            .set_total_byte_size(1_000)
+            .add_column_metadata(chunk)
+            .build()
+            .expect("a valid row group");
+        let file_metadata = FileMetaData::new(
+            1,
+            400,
+            Some("test writer".to_string()),
+            None,
+            schema_descriptor,
+            None,
+        );
+        let metadata = ParquetMetaData::new(file_metadata, vec![row_group]);
+        let mut footer = Vec::new();
+        ParquetMetaDataWriter::new(&mut footer, &metadata)
+            .finish()
+            .expect("a written footer");
+        footer
+    }
+
+    #[test]
+    fn footer_facts_come_from_the_footer_alone() {
+        let footer = zero_dictionary_offset_footer();
+        let mass = read_footer_masses(&footer, footer.len() as u64).expect("a readable footer");
+
+        assert_eq!(mass.row_count, 400);
+        assert_eq!(mass.row_group_count, 1);
+        assert_eq!(mass.writer.as_deref(), Some("test writer"));
+        let column = &mass.columns[0];
+        assert_eq!(column.column, "s");
+        assert_eq!(column.logical_type.as_deref(), Some("STRING"));
+        assert_eq!(column.plain_data_page_count, Some(3));
+        assert_eq!(column.dictionary_data_page_count, Some(2));
+        assert_eq!(
+            column.data_encodings,
+            Some(vec!["RLE_DICTIONARY".to_string(), "PLAIN".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_zero_dictionary_page_offset_is_not_a_dictionary_page() {
+        let footer = zero_dictionary_offset_footer();
+        let mass = read_footer_masses(&footer, footer.len() as u64).expect("a readable footer");
+
+        let column = &mass.columns[0];
+        assert!(
+            !column.dictionary,
+            "a writer's zero offset locates no dictionary page"
+        );
+        assert!(
+            column.dictionary_bytes.is_none(),
+            "a zero offset bounds no dictionary page"
+        );
     }
 }

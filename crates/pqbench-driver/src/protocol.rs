@@ -1,6 +1,6 @@
-//! One line of JSON each way between a client and the master.
+//! One line of JSON each way between a client and the driver.
 //!
-//! The protocol is deliberately tiny: a client asks whether the master is
+//! The protocol is deliberately tiny: a client asks whether the driver is
 //! alive, tells it to stop, or reads the map (its partition versions under a
 //! parent) and one version's stored results. No method names, no RPC.
 
@@ -11,9 +11,9 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "op")]
 pub enum Request {
-    /// Report whether the master is alive.
+    /// Report whether the driver is alive.
     Ping,
-    /// Stop the master after answering.
+    /// Stop the driver after answering.
     Stop,
     /// The map's partition versions under `parent` (every one when it is
     /// empty): the answer's `count` says how many lines follow it, one
@@ -44,7 +44,7 @@ impl Request {
     }
 }
 
-/// The master's answer.
+/// The driver's answer.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Response {

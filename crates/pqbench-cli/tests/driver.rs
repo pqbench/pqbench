@@ -1,10 +1,10 @@
 #![cfg(feature = "delta")]
 
-//! The master's process: it walks the tables it is given, runs the
+//! The driver's process: it walks the tables it is given, runs the
 //! transitions on each partition version, purges what a walk no longer finds,
 //! and serves the versions to `list partition-versions` and one version's
 //! results to `get partition-version`. The commands read it over
-//! `PQB_MASTER_SOCK`; no catalog daemon runs here, so every table is local.
+//! `PQB_DRIVER_SOCK`; no catalog daemon runs here, so every table is local.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,28 +13,28 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-/// The `pqbench-master` binary beside the test's `pqbench`.
-fn master_binary() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_pqbench")).with_file_name("pqbench-master")
+/// The `pqbench-driver` binary beside the test's `pqbench`.
+fn driver_binary() -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_pqbench")).with_file_name("pqbench-driver")
 }
 
-/// A master serving `store` on a private socket.
-struct Master {
+/// A driver serving `store` on a private socket.
+struct Driver {
     child: Child,
     socket: PathBuf,
     store: PathBuf,
 }
 
-impl Master {
-    /// Start the master on `directory`, walking the Table records of
+impl Driver {
+    /// Start the driver on `directory`, walking the Table records of
     /// `{directory}/tables.ndjson` when there are some.
     fn start(directory: &Path, flags: &[&str]) -> Self {
         let socket = directory.join("d.sock");
         let store = directory.join("store");
         let tables = directory.join("tables.ndjson");
-        // A killed master leaves its socket behind.
+        // A killed driver leaves its socket behind.
         let _ = std::fs::remove_file(&socket);
-        let mut command = master();
+        let mut command = driver();
         command
             .args(["serve", "--store"])
             .arg(&store)
@@ -53,7 +53,7 @@ impl Master {
             .spawn()
             .unwrap();
         await_socket(&socket, &mut child);
-        Master {
+        Driver {
             child,
             socket,
             store,
@@ -63,7 +63,7 @@ impl Master {
     fn run(&self, args: &[&str], stdin: &str) -> Output {
         let mut child = pqbench()
             .args(args)
-            .env("PQB_MASTER_SOCK", &self.socket)
+            .env("PQB_DRIVER_SOCK", &self.socket)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -110,14 +110,14 @@ impl Master {
             }
             assert!(
                 start.elapsed() < Duration::from_secs(30),
-                "the master did not get there: {rows:#?}"
+                "the driver did not get there: {rows:#?}"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
 
     fn stop(mut self) {
-        let _ = master()
+        let _ = driver()
             .args(["stop", "--socket"])
             .arg(&self.socket)
             .status();
@@ -125,7 +125,7 @@ impl Master {
     }
 }
 
-impl Drop for Master {
+impl Drop for Driver {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -136,11 +136,11 @@ fn await_socket(socket: &Path, child: &mut Child) {
     let start = Instant::now();
     while !socket.exists() {
         if let Some(status) = child.try_wait().unwrap() {
-            panic!("pqbench-master exited before listening: {status}");
+            panic!("pqbench-driver exited before listening: {status}");
         }
         assert!(
             start.elapsed() < Duration::from_secs(30),
-            "pqbench-master did not start on {}",
+            "pqbench-driver did not start on {}",
             socket.display()
         );
         std::thread::sleep(Duration::from_millis(5));
@@ -156,14 +156,14 @@ fn pqbench() -> Command {
     command
 }
 
-fn master() -> Command {
-    let mut command = Command::new(master_binary());
+fn driver() -> Command {
+    let mut command = Command::new(driver_binary());
     command
         .env("PQB_CONFIG_FILE", "/dev/null")
         .env("PQB_ENDPOINT", "http://127.0.0.1:1")
         .env_remove("PQB_PROFILE")
         .env_remove("PQB_DAEMON_SOCK")
-        .env_remove("PQB_MASTER_SOCK");
+        .env_remove("PQB_DRIVER_SOCK");
     command
 }
 
@@ -242,7 +242,7 @@ fn readable_table(root: &Path, partitions: &[&str]) -> Vec<Value> {
     actions
 }
 
-/// Write the Table records the master walks.
+/// Write the Table records the driver walks.
 fn walk(directory: &Path, tables: &[(&str, &Path)]) {
     let lines: String = tables
         .iter()
@@ -278,8 +278,8 @@ fn etag(row: &Value) -> &str {
     name.rsplit_once("/versions/").unwrap().1
 }
 
-fn result_file(master: &Master, row: &Value, output: &str) -> PathBuf {
-    master
+fn result_file(driver: &Driver, row: &Value, output: &str) -> PathBuf {
+    driver
         .store
         .join("results")
         .join(partition(row))
@@ -295,13 +295,13 @@ fn a_walk_adds_each_partition_once() {
     let root = directory.path().join("events");
     table(&root);
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &["--walk-period-seconds", "0"]);
-    let first = master.wait(|rows| rows.len() == 2);
+    let driver = Driver::start(directory.path(), &["--walk-period-seconds", "0"]);
+    let first = driver.wait(|rows| rows.len() == 2);
     let listing =
-        std::fs::read_to_string(result_file(&master, &first[0], "list-partitions.ndjson")).unwrap();
+        std::fs::read_to_string(result_file(&driver, &first[0], "list-partitions.ndjson")).unwrap();
     let record: Value = serde_json::from_str(listing.trim()).unwrap();
     assert_eq!(record["etag"], etag(&first[0]));
-    let later = master.wait(|rows| rows[0]["list_time"] != first[0]["list_time"]);
+    let later = driver.wait(|rows| rows[0]["list_time"] != first[0]["list_time"]);
     let names =
         |rows: &[Value]| -> Vec<Value> { rows.iter().map(|row| row["name"].clone()).collect() };
     assert_eq!(names(&later), names(&first));
@@ -316,15 +316,15 @@ fn a_change_is_a_new_version_and_the_old_goes() {
     let root = directory.path().join("events");
     table(&root);
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &["--walk-period-seconds", "0"]);
-    let before = master.wait(|rows| rows.len() == 2);
+    let driver = Driver::start(directory.path(), &["--walk-period-seconds", "0"]);
+    let before = driver.wait(|rows| rows.len() == 2);
     let old = before
         .iter()
         .find(|row| id(row) == "day%3D1")
         .unwrap()
         .clone();
     commit(&root, 1, vec![add("day=1/c.parquet", "1", 300)]);
-    let rows = master.wait(|rows| {
+    let rows = driver.wait(|rows| {
         rows.len() == 2
             && rows
                 .iter()
@@ -333,7 +333,7 @@ fn a_change_is_a_new_version_and_the_old_goes() {
     let new = rows.iter().find(|row| id(row) == "day%3D1").unwrap();
     assert_eq!(new["etag_change_count"], 1);
     assert_eq!(new["first_listed_time"], old["first_listed_time"]);
-    assert!(!result_file(&master, &old, "list-partitions.ndjson").exists());
+    assert!(!result_file(&driver, &old, "list-partitions.ndjson").exists());
 }
 
 /// A walk purges the tables it does not list; a table it lists but cannot
@@ -350,26 +350,26 @@ fn a_walk_purges_the_tables_it_does_not_list() {
         directory.path(),
         &[("events", &events), ("orders", &orders)],
     );
-    let master = Master::start(directory.path(), &["--walk-period-seconds", "0"]);
-    master.wait(|rows| rows.len() == 4);
+    let driver = Driver::start(directory.path(), &["--walk-period-seconds", "0"]);
+    driver.wait(|rows| rows.len() == 4);
 
     // `events` is listed but its log is gone: its versions stay.
     std::fs::remove_dir_all(events.join("_delta_log")).unwrap();
     let rewritten = pqbench_time();
-    master.wait(|rows| {
+    driver.wait(|rows| {
         rows.iter()
             .any(|row| row["list_time"].as_u64().unwrap_or(0) > rewritten + 200)
     });
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(
-        master.rows().len(),
+        driver.rows().len(),
         4,
         "an unreadable table lost its versions"
     );
 
     // `events` is no longer listed: its versions go, `orders` stays.
     walk(directory.path(), &[("orders", &orders)]);
-    let rows = master.wait(|rows| rows.len() == 2);
+    let rows = driver.wait(|rows| rows.len() == 2);
     assert!(rows
         .iter()
         .all(|row| row["name"].as_str().unwrap().contains("/tables/orders/")));
@@ -377,7 +377,7 @@ fn a_walk_purges_the_tables_it_does_not_list() {
     // No table listing at all: nothing is purged.
     std::fs::remove_file(directory.path().join("tables.ndjson")).unwrap();
     std::thread::sleep(Duration::from_millis(400));
-    assert_eq!(master.rows().len(), 2);
+    assert_eq!(driver.rows().len(), 2);
 }
 
 /// Milliseconds since the Unix epoch.
@@ -401,10 +401,10 @@ fn list_partition_versions_reads_under_a_parent() {
         directory.path(),
         &[("events", &events), ("orders", &orders)],
     );
-    let master = Master::start(directory.path(), &[]);
-    master.wait(|rows| rows.len() == 4);
+    let driver = Driver::start(directory.path(), &[]);
+    driver.wait(|rows| rows.len() == 4);
     let names = |args: &[&str]| -> Vec<String> {
-        master
+        driver
             .versions(args)
             .iter()
             .map(|row| partition(row).to_string())
@@ -423,27 +423,27 @@ fn list_partition_versions_reads_under_a_parent() {
     assert!(names(&["catalogs/other"]).is_empty());
     let refused = pqbench()
         .args(["list", "partition-versions", "catalogs/local/tables/orders"])
-        .env("PQB_MASTER_SOCK", &master.socket)
+        .env("PQB_DRIVER_SOCK", &driver.socket)
         .output()
         .unwrap();
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("is not a catalog"));
 }
 
-/// The rows outlive the master: a restart over the same store has them all.
+/// The rows outlive the driver: a restart over the same store has them all.
 #[test]
 fn the_rows_survive_a_restart() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1", "2"]));
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &[]);
+    let driver = Driver::start(directory.path(), &[]);
     let rows =
-        master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
-    master.stop();
+        driver.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
+    driver.stop();
     std::fs::remove_file(directory.path().join("tables.ndjson")).unwrap();
-    let master = Master::start(directory.path(), &[]);
-    assert_eq!(master.rows(), rows);
+    let driver = Driver::start(directory.path(), &[]);
+    assert_eq!(driver.rows(), rows);
 }
 
 /// The transitions take each version to UP_TO_DATE: a price, the sample file's
@@ -455,26 +455,26 @@ fn the_transitions_take_each_version_up_to_date() {
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1", "2"]));
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &[]);
+    let driver = Driver::start(directory.path(), &[]);
     let rows =
-        master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
+        driver.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
     for row in &rows {
         for output in ["price.ndjson", "bytemass.ndjson", "list-suggestions.ndjson"] {
             assert!(
-                result_file(&master, row, output).exists(),
+                result_file(&driver, row, output).exists(),
                 "{output} for {row}"
             );
         }
-        assert!(!result_file(&master, row, "sample.parquet").exists());
+        assert!(!result_file(&driver, row, "sample.parquet").exists());
         let bytemass =
-            std::fs::read_to_string(result_file(&master, row, "bytemass.ndjson")).unwrap();
+            std::fs::read_to_string(result_file(&driver, row, "bytemass.ndjson")).unwrap();
         let blob: Value = serde_json::from_str(bytemass.lines().next().unwrap()).unwrap();
         assert!(
             blob["name"].as_str().unwrap().ends_with("part-0.parquet"),
             "{blob}"
         );
     }
-    let leftovers: Vec<PathBuf> = walk_files(&master.store.join("results"))
+    let leftovers: Vec<PathBuf> = walk_files(&driver.store.join("results"))
         .into_iter()
         .filter(|path| {
             path.extension().is_some_and(|extension| {
@@ -506,11 +506,11 @@ fn a_low_network_reads_only_the_footer() {
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1"]));
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &["--low-network"]);
-    let rows = master.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
-    assert!(result_file(&master, &rows[0], "bytemass.ndjson").exists());
-    assert!(!result_file(&master, &rows[0], "list-suggestions.ndjson").exists());
-    assert!(!result_file(&master, &rows[0], "sample.parquet").exists());
+    let driver = Driver::start(directory.path(), &["--low-network"]);
+    let rows = driver.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
+    assert!(result_file(&driver, &rows[0], "bytemass.ndjson").exists());
+    assert!(!result_file(&driver, &rows[0], "list-suggestions.ndjson").exists());
+    assert!(!result_file(&driver, &rows[0], "sample.parquet").exists());
 }
 
 fn remove(path: &str, day: &str, size: u64) -> Value {
@@ -532,8 +532,8 @@ fn an_etag_change_drops_the_old_version_at_once() {
     let root = directory.path().join("events");
     commit(&root, 0, readable_table(&root, &["1"]));
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &["--walk-period-seconds", "0"]);
-    let old = master
+    let driver = Driver::start(directory.path(), &["--walk-period-seconds", "0"]);
+    let old = driver
         .wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE")
         .remove(0);
 
@@ -548,9 +548,9 @@ fn an_etag_change_drops_the_old_version_at_once() {
             add("day=1/part-1.parquet", "1", size),
         ],
     );
-    let rows = master.wait(|rows| rows.len() == 1 && rows[0]["failure_count"] == 2);
+    let rows = driver.wait(|rows| rows.len() == 1 && rows[0]["failure_count"] == 2);
     assert_ne!(etag(&rows[0]), etag(&old));
-    assert!(!result_file(&master, &old, "bytemass.ndjson").exists());
+    assert!(!result_file(&driver, &old, "bytemass.ndjson").exists());
 }
 
 /// A version whose command fails goes back with its error counted, and after
@@ -562,15 +562,15 @@ fn a_failing_version_is_left_after_two_failures() {
     commit(&root, 0, readable_table(&root, &["1"]));
     std::fs::remove_file(root.join("day=1/part-0.parquet")).unwrap();
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &[]);
-    let rows = master.wait(|rows| rows.len() == 1 && rows[0]["failure_count"] == 2);
+    let driver = Driver::start(directory.path(), &[]);
+    let rows = driver.wait(|rows| rows.len() == 1 && rows[0]["failure_count"] == 2);
     assert_eq!(rows[0]["state"], "PRICED");
     assert!(rows[0]["error"]
         .as_str()
         .is_some_and(|error| !error.is_empty()));
 }
 
-/// A master whose executable is replaced on disk keeps running its own: its
+/// A driver whose executable is replaced on disk keeps running its own: its
 /// commands start from the image it runs, so the versions move on.
 #[test]
 fn commands_go_on_after_the_executable_is_replaced() {
@@ -579,12 +579,12 @@ fn commands_go_on_after_the_executable_is_replaced() {
     commit(&root, 0, readable_table(&root, &["1", "2"]));
     walk(directory.path(), &[("events", &root)]);
     // A second name for the pqbench binary, on its filesystem, to delete
-    // under the running master.
+    // under the running driver.
     let binaries = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let binary = binaries.path().join("pqbench");
     std::fs::hard_link(env!("CARGO_BIN_EXE_pqbench"), &binary).unwrap();
     let socket = directory.path().join("d.sock");
-    let mut child = master();
+    let mut child = driver();
     child
         .args(["serve", "--store"])
         .arg(directory.path().join("store"))
@@ -600,13 +600,13 @@ fn commands_go_on_after_the_executable_is_replaced() {
     let mut child = child.spawn().unwrap();
     await_socket(&socket, &mut child);
     std::fs::remove_file(&binary).unwrap();
-    let master = Master {
+    let driver = Driver {
         child,
         socket,
         store: directory.path().join("store"),
     };
     let rows =
-        master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
+        driver.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
     assert!(
         rows.iter().all(|row| row.get("error").is_none()),
         "{rows:#?}"
@@ -623,13 +623,13 @@ fn one_version_reads_its_stored_results() {
     let actions = readable_table(&root, &["1", "2"]);
     commit(&root, 0, actions);
     walk(directory.path(), &[("events", &root)]);
-    let master = Master::start(directory.path(), &[]);
+    let driver = Driver::start(directory.path(), &[]);
     let rows =
-        master.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
+        driver.wait(|rows| rows.len() == 2 && rows.iter().all(|row| row["state"] == "UP_TO_DATE"));
 
     let name = rows[0]["name"].as_str().unwrap();
     let read = |name: &str| -> Vec<Value> {
-        let output = master.run(&["get", "partition-version", name], "");
+        let output = driver.run(&["get", "partition-version", name], "");
         output
             .stdout
             .split(|byte| *byte == b'\n')

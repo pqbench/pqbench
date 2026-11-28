@@ -15,16 +15,12 @@ pub(crate) struct ListArgs {
     fan_out: usize,
 }
 
-pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &ListArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &ListArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Schema>("list tables").await?;
-    let daemon = daemon.clone();
     drive(flat_map(
         parents,
         args.fan_out,
-        move |schema: v1::Schema| {
-            let daemon = daemon.clone();
-            async move { daemon.list_tables(&schema).await }
-        },
+        move |schema: v1::Schema| async move { Ok(pqbench::table::list::list(workspace, &schema)) },
     ))
     .await
 }

@@ -6,6 +6,8 @@
 //! base (`{root}/v1` or `{root}/v1/{prefix}`), so the commands append
 //! `/namespaces…` directly.
 
+use std::fmt::Write;
+
 use crate::v1::CatalogType;
 
 /// The Unity REST root, whether or not the endpoint already names it.
@@ -40,7 +42,10 @@ pub(crate) fn encode(value: &str) -> String {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
                 encoded.push(byte as char);
             }
-            _ => encoded.push_str(&format!("%{byte:02X}")),
+            _ => {
+                // No per-byte allocation: the hex digits go straight to `encoded`.
+                let _ = write!(encoded, "%{byte:02X}");
+            }
         }
     }
     encoded

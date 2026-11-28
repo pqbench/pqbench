@@ -1,6 +1,6 @@
-//! The master's socket: one request per connection, answered from the map.
+//! The driver's socket: one request per connection, answered from the map.
 //!
-//! The master serves its own protocol only — a ping, a stop, the map's
+//! The driver serves its own protocol only — a ping, a stop, the map's
 //! versions under a parent, and one version's stored results. The results
 //! read runs off the async runtime, so a large version's files never stall a
 //! worker command.
@@ -15,39 +15,39 @@ use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
-use super::master::Master;
+use super::engine::Engine;
 use super::protocol::{Request, Response};
 use super::socket;
 use super::store::Store;
 use super::{drive, process, RunArgs};
 
-/// Serve `args`' store on its socket until stopped: the foreground master.
+/// Serve `args`' store on its socket until stopped: the foreground driver.
 pub(crate) async fn serve(args: &RunArgs) -> Result<(), String> {
     let socket = socket::resolve(args.socket.as_deref(), Some(&args.store()))?;
     let store = Store::open(&args.store())?;
-    let master = Master::new(store.read_checkpoint()?, args.low_network)?;
-    store.sweep(|key| master.state(key))?;
-    let master = Arc::new(RwLock::new(master));
+    let engine = Engine::new(store.read_checkpoint()?, args.low_network)?;
+    store.sweep(|key| engine.state(key))?;
+    let engine = Arc::new(RwLock::new(engine));
     let exe = process::WorkerExe::open(args.pqbench.as_deref())?;
     drive::spawn(
-        master.clone(),
+        engine.clone(),
         store.clone(),
         args.settings(),
         exe,
         args.daemon_socket.as_deref().map(socket::absolute),
     );
-    run(master, store, socket).await
+    run(engine, store, socket).await
 }
 
 /// Answer requests on `socket` until a stop: on stop the map is checkpointed
 /// before the socket goes away, so a reader that waits for that has the map
 /// on disk.
 pub(crate) async fn run(
-    master: Arc<RwLock<Master>>,
+    engine: Arc<RwLock<Engine>>,
     store: Store,
     socket: PathBuf,
 ) -> Result<(), String> {
-    socket::prepare(&socket)?;
+    socket::prepare(&socket, "driver")?;
     let listener = UnixListener::bind(&socket)
         .map_err(|error| format!("cannot bind {}: {error}", socket.display()))?;
     socket::set_socket_mode(&socket)?;
@@ -58,18 +58,18 @@ pub(crate) async fn run(
             _ = shutdown.notified() => break Ok(()),
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    let master = master.clone();
+                    let engine = engine.clone();
                     let store = store.clone();
                     let shutdown = Arc::clone(&shutdown);
                     tokio::spawn(async move {
-                        let _ = handle(stream, master, store, shutdown).await;
+                        let _ = handle(stream, engine, store, shutdown).await;
                     });
                 }
                 Err(error) => break Err(format!("cannot accept a connection: {error}")),
             }
         }
     };
-    store.write_checkpoint(read_master(&master).versions())?;
+    store.write_checkpoint(read_engine(&engine).versions())?;
     let _ = std::fs::remove_file(&socket);
     result
 }
@@ -77,34 +77,30 @@ pub(crate) async fn run(
 /// One version's stored results: `name` is a version, or a partition for its
 /// newest live version.
 async fn results(
-    master: &RwLock<Master>,
+    engine: &RwLock<Engine>,
     store: &Store,
     name: &str,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let (key, version) = read_master(master).version(name)?;
+    let (key, version) = read_engine(engine).version(name)?;
     let store = store.clone();
     let results = tokio::task::spawn_blocking(move || store.read_results(&key))
         .await
         .map_err(|error| format!("the results read failed: {error}"))??;
     if results.is_empty() {
-        let state = serde_json::to_value(version.state).unwrap_or_default();
-        return Err(format!(
-            "{name} has no results yet ({})",
-            state.as_str().unwrap_or_default()
-        ));
+        return Err(format!("{name} has no results yet ({})", version.state));
     }
     Ok(results)
 }
 
-fn read_master(master: &RwLock<Master>) -> RwLockReadGuard<'_, Master> {
-    master
+fn read_engine(engine: &RwLock<Engine>) -> RwLockReadGuard<'_, Engine> {
+    engine
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 async fn handle(
     stream: UnixStream,
-    master: Arc<RwLock<Master>>,
+    engine: Arc<RwLock<Engine>>,
     store: Store,
     shutdown: Arc<Notify>,
 ) -> Result<(), String> {
@@ -129,11 +125,11 @@ async fn handle(
         Request::ListPartitionVersions { parent } => {
             // The lock is released before a line is written: a slow reader
             // does not hold the map.
-            let versions = read_master(&master).records(parent);
+            let versions = read_engine(&engine).records(parent);
             write_versions(&mut write, versions).await?;
         }
         Request::PartitionResults { name } => {
-            let response = match results(&master, &store, name).await {
+            let response = match results(&engine, &store, name).await {
                 Ok(records) => Response {
                     records,
                     ..Response::default()
@@ -211,11 +207,11 @@ mod tests {
     #[tokio::test]
     async fn a_ping_and_a_stop_round_trip() {
         let directory = tempfile::tempdir().expect("a temp directory");
-        let socket = directory.path().join("master.sock");
+        let socket = directory.path().join("driver.sock");
         let store = Store::open(directory.path()).expect("the store opens");
-        let master = Master::new(Vec::new(), false).expect("an empty map");
-        let master = Arc::new(RwLock::new(master));
-        let server = tokio::spawn(run(master, store, socket.clone()));
+        let engine = Engine::new(Vec::new(), false).expect("an empty map");
+        let engine = Arc::new(RwLock::new(engine));
+        let server = tokio::spawn(run(engine, store, socket.clone()));
 
         let mut running = false;
         for _ in 0..100 {
@@ -225,16 +221,16 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(running, "the master did not answer a ping");
+        assert!(running, "the driver did not answer a ping");
 
         let response = client::request(&socket, &Request::list_partition_versions(""))
             .await
-            .expect("the master answers a listing");
+            .expect("the driver answers a listing");
         assert_eq!(response.count, Some(0), "an empty map lists no version");
 
         let response = client::request(&socket, &Request::partition_results("nothing"))
             .await
-            .expect("the master answers a results request");
+            .expect("the driver answers a results request");
         assert!(
             response.error.is_some(),
             "a version the map lacks is an error"
@@ -242,7 +238,7 @@ mod tests {
 
         client::request(&socket, &Request::stop())
             .await
-            .expect("the master takes a stop");
+            .expect("the driver takes a stop");
         for _ in 0..100 {
             if !socket.exists() {
                 break;

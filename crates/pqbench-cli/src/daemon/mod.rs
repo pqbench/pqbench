@@ -1,10 +1,12 @@
-//! The catalog daemon: one process per identity, serving catalog records and
-//! vended storage leases to every pipeline stage over a local socket.
+//! The catalog daemon: one process per identity, serving vended storage leases
+//! and the catalog's HTTP GETs to every pipeline stage over a local socket.
 //!
-//! Every catalog call goes through it: a reader asks the daemon, which paces
-//! the catalog and keeps it from seeing the same table once per stage, and a
-//! reader with no daemon to ask fails with a hint to run `daemon start`. A
-//! read of local files names no endpoint and needs no daemon.
+//! Every catalog request goes through it: a reader asks the daemon for a table's
+//! lease and for each catalog GET, which paces the catalog and keeps it from
+//! seeing the same table once per stage, and a reader with no daemon to ask
+//! fails with a hint to run `daemon start`. The URLs, the pages, and the JSON
+//! stay the reader's, so the daemon repeats no catalog verb. A read of local
+//! files names no endpoint and needs no daemon.
 
 use std::path::PathBuf;
 
@@ -39,7 +41,7 @@ enum DaemonCommand {
     Stop,
     /// Report whether the daemon is running
     Status,
-    /// Serve leases in the foreground
+    /// Serve leases and catalog GETs in the foreground
     Serve(ServeArgs),
 }
 

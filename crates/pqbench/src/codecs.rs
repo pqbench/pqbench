@@ -1,12 +1,9 @@
 //! Codec wiring + lzbench-style single-buffer benchmark core.
 //!
-//! Each codec is a unit struct implementing the [`CodecImpl`] common interface,
-//! delegating to a domain-independent [`crate::third_party`] wrapper (buffer in,
-//! buffer out, never a crate type). The [`Codec`] enum is the closed Parquet
-//! codec set, parses CLI names via [`Codec::from_name`], and dispatches to the
-//! per-codec impls. [`bench_buffer`] is the lzbench core loop reimplemented over
-//! the trait: warmup, iterate until the min-time floor, keep the fastest time,
-//! verify round-trip.
+//! The [`Codec`] enum is the closed Parquet codec set; its inherent `compress`
+//! and `decompress` delegate to a domain-independent [`crate::third_party`]
+//! wrapper (buffer in, buffer out, never a crate type). [`bench_pages`] is the
+//! lzbench core loop: verify each round-trip, then time the passes.
 
 use std::fmt;
 use std::hint::black_box;
@@ -81,110 +78,6 @@ pub struct LevelRange {
     pub last_level: u32,
 }
 
-/// The uniform interface every codec implements.
-pub trait CodecImpl {
-    fn name(&self) -> &'static str;
-    fn level_range(&self) -> LevelRange;
-    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error>;
-    fn decompress(&self, level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error>;
-}
-
-/// Snappy codec (C snappy 1.2.2 via `snappy_src`).
-pub struct Snappy;
-
-impl CodecImpl for Snappy {
-    fn name(&self) -> &'static str {
-        "snappy"
-    }
-
-    fn level_range(&self) -> LevelRange {
-        LevelRange {
-            first_level: 1,
-            last_level: 1,
-        }
-    }
-
-    fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::snappy::compress(src).map_err(codec_error)
-    }
-
-    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::snappy::decompress(src, out_cap).map_err(codec_error)
-    }
-}
-
-/// Zstandard codec (libzstd 1.5.7 via the `zstd` crate).
-pub struct Zstd;
-
-impl CodecImpl for Zstd {
-    fn name(&self) -> &'static str {
-        "zstd"
-    }
-
-    fn level_range(&self) -> LevelRange {
-        LevelRange {
-            first_level: 1,
-            last_level: 22,
-        }
-    }
-
-    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::zstd::compress(src, level).map_err(codec_error)
-    }
-
-    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::zstd::decompress(src, out_cap).map_err(codec_error)
-    }
-}
-
-/// LZ4 codec (raw block format via the `lz4` crate).
-pub struct Lz4;
-
-impl CodecImpl for Lz4 {
-    fn name(&self) -> &'static str {
-        "lz4"
-    }
-
-    fn level_range(&self) -> LevelRange {
-        LevelRange {
-            first_level: 1,
-            last_level: 1,
-        }
-    }
-
-    fn compress(&self, _level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::lz4::compress(src).map_err(codec_error)
-    }
-
-    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::lz4::decompress(src, out_cap).map_err(codec_error)
-    }
-}
-
-/// GZIP codec (gzip format, RFC 1952, via flate2 + C zlib).
-pub struct Gzip;
-
-impl CodecImpl for Gzip {
-    fn name(&self) -> &'static str {
-        "gzip"
-    }
-
-    fn level_range(&self) -> LevelRange {
-        LevelRange {
-            first_level: 1,
-            last_level: 9,
-        }
-    }
-
-    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
-        crate::third_party::flate2::compress(src, level).map_err(codec_error)
-    }
-
-    fn decompress(&self, _level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
-        crate::third_party::flate2::decompress(src, out_cap).map_err(codec_error)
-    }
-}
-
 /// The closed set of Parquet compression codecs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -196,13 +89,31 @@ pub enum Codec {
 }
 
 impl Codec {
-    /// The concrete implementation backing this variant (the registry).
-    pub fn implementation(&self) -> &'static dyn CodecImpl {
+    /// The codec's CLI and report name.
+    pub fn name(&self) -> &'static str {
         match self {
-            Codec::Snappy => &Snappy,
-            Codec::Zstd => &Zstd,
-            Codec::Lz4 => &Lz4,
-            Codec::Gzip => &Gzip,
+            Codec::Snappy => "snappy",
+            Codec::Zstd => "zstd",
+            Codec::Lz4 => "lz4",
+            Codec::Gzip => "gzip",
+        }
+    }
+
+    /// The codec's valid levels, inclusive.
+    pub fn level_range(&self) -> LevelRange {
+        match self {
+            Codec::Snappy | Codec::Lz4 => LevelRange {
+                first_level: 1,
+                last_level: 1,
+            },
+            Codec::Zstd => LevelRange {
+                first_level: 1,
+                last_level: 22,
+            },
+            Codec::Gzip => LevelRange {
+                first_level: 1,
+                last_level: 9,
+            },
         }
     }
 
@@ -215,25 +126,39 @@ impl Codec {
     pub fn all() -> impl Iterator<Item = Codec> {
         [Codec::Snappy, Codec::Zstd, Codec::Lz4, Codec::Gzip].into_iter()
     }
-}
 
-impl CodecImpl for Codec {
-    fn name(&self) -> &'static str {
-        self.implementation().name()
-    }
-
-    fn level_range(&self) -> LevelRange {
-        self.implementation().level_range()
-    }
-
-    fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
+    /// Compress `src` at `level`.
+    ///
+    /// # Errors
+    /// Returns [`Error::Level`] when `level` is outside [`Codec::level_range`],
+    /// or [`Error::Codec`] when the backend fails.
+    pub fn compress(&self, level: u8, src: &[u8]) -> Result<Vec<u8>, Error> {
         check_level(self, level)?;
-        self.implementation().compress(level, src)
+        match self {
+            Codec::Snappy => crate::third_party::snappy::compress(src).map_err(codec_error),
+            Codec::Zstd => crate::third_party::zstd::compress(src, level).map_err(codec_error),
+            Codec::Lz4 => crate::third_party::lz4::compress(src).map_err(codec_error),
+            Codec::Gzip => crate::third_party::flate2::compress(src, level).map_err(codec_error),
+        }
     }
 
-    fn decompress(&self, level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
+    /// Decompress `src` into at most `out_cap` bytes.
+    ///
+    /// # Errors
+    /// Returns [`Error::Level`] when `level` is outside [`Codec::level_range`]
+    /// or [`Error::Codec`] when the backend fails.
+    pub fn decompress(&self, level: u8, src: &[u8], out_cap: usize) -> Result<Vec<u8>, Error> {
         check_level(self, level)?;
-        self.implementation().decompress(level, src, out_cap)
+        match self {
+            Codec::Snappy => {
+                crate::third_party::snappy::decompress(src, out_cap).map_err(codec_error)
+            }
+            Codec::Zstd => crate::third_party::zstd::decompress(src, out_cap).map_err(codec_error),
+            Codec::Lz4 => crate::third_party::lz4::decompress(src, out_cap).map_err(codec_error),
+            Codec::Gzip => {
+                crate::third_party::flate2::decompress(src, out_cap).map_err(codec_error)
+            }
+        }
     }
 }
 
@@ -352,12 +277,14 @@ pub fn bench_buffer(
 /// Repetitive but not constant, so every codec compresses it to fewer bytes.
 #[cfg(test)]
 pub(crate) fn one_mb_sample() -> Vec<u8> {
+    use std::io::Write;
+
     const LINE: &str = "the quick brown fox jumps over the lazy dog 0123456789 ";
     let mut out = Vec::with_capacity(1024 * 1024);
-    let mut i = 0u32;
+    let mut number = 0u32;
     while out.len() < 1024 * 1024 {
-        out.extend_from_slice(format!("{LINE}{i:08}\n").as_bytes());
-        i += 1;
+        writeln!(out, "{LINE}{number:08}").expect("writing to a Vec cannot fail");
+        number += 1;
     }
     out.truncate(1024 * 1024);
     out
@@ -415,74 +342,70 @@ mod tests {
             Codec::Zstd.compress(0, b"x"),
             Err(Error::Level { .. })
         ));
+        assert!(matches!(
+            Codec::Snappy.compress(2, b"x"),
+            Err(Error::Level { .. })
+        ));
     }
 
     #[test]
     fn snappy_round_trip_one_mb() {
         let src = one_mb_sample();
-        let c = Snappy.compress(1, &src).unwrap();
-        let d = Snappy.decompress(1, &c, src.len()).unwrap();
+        let c = Codec::Snappy.compress(1, &src).unwrap();
+        let d = Codec::Snappy.decompress(1, &c, src.len()).unwrap();
         assert_eq!(d, src);
     }
 
     #[test]
     fn snappy_compressible_input_shrinks() {
         let src = b"the quick brown fox jumps over the lazy dog ".repeat(16 * 1024);
-        let c = Snappy.compress(1, &src).unwrap();
+        let c = Codec::Snappy.compress(1, &src).unwrap();
         assert!(c.len() < src.len());
-    }
-
-    #[test]
-    fn snappy_level_is_ignored() {
-        let src = b"hello, world! ".repeat(1000);
-        let a = Snappy.compress(1, &src).unwrap();
-        let b = Snappy.compress(99, &src).unwrap();
-        assert_eq!(a, b);
     }
 
     #[test]
     fn zstd_round_trip_one_mb() {
         let src = one_mb_sample();
-        let c = Zstd.compress(3, &src).unwrap();
-        let d = Zstd.decompress(3, &c, src.len()).unwrap();
+        let c = Codec::Zstd.compress(3, &src).unwrap();
+        let d = Codec::Zstd.decompress(3, &c, src.len()).unwrap();
         assert_eq!(d, src);
     }
 
     #[test]
     fn zstd_higher_level_compresses_smaller() {
         let src = one_mb_sample();
-        let c1 = Zstd.compress(1, &src).unwrap();
-        let c3 = Zstd.compress(3, &src).unwrap();
+        let c1 = Codec::Zstd.compress(1, &src).unwrap();
+        let c3 = Codec::Zstd.compress(3, &src).unwrap();
         assert!(c3.len() <= c1.len(), "zstd-3 should be <= zstd-1 size");
     }
 
     #[test]
     fn lz4_round_trip_one_mb() {
         let src = one_mb_sample();
-        let c = Lz4.compress(1, &src).unwrap();
-        let d = Lz4.decompress(1, &c, src.len()).unwrap();
+        let c = Codec::Lz4.compress(1, &src).unwrap();
+        let d = Codec::Lz4.decompress(1, &c, src.len()).unwrap();
         assert_eq!(d, src);
     }
 
     #[test]
     fn lz4_compressible_input_shrinks() {
         let src = b"the quick brown fox jumps over the lazy dog ".repeat(16 * 1024);
-        let c = Lz4.compress(1, &src).unwrap();
+        let c = Codec::Lz4.compress(1, &src).unwrap();
         assert!(c.len() < src.len());
     }
 
     #[test]
     fn gzip_round_trip_one_mb() {
         let src = one_mb_sample();
-        let c = Gzip.compress(6, &src).unwrap();
-        let d = Gzip.decompress(6, &c, src.len()).unwrap();
+        let c = Codec::Gzip.compress(6, &src).unwrap();
+        let d = Codec::Gzip.decompress(6, &c, src.len()).unwrap();
         assert_eq!(d, src);
     }
 
     #[test]
     fn gzip_compressible_input_shrinks() {
         let src = one_mb_sample();
-        let c = Gzip.compress(6, &src).unwrap();
+        let c = Codec::Gzip.compress(6, &src).unwrap();
         assert!(c.len() < src.len());
     }
 }

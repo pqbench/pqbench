@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::fmt::Write;
 
 use futures_util::TryStreamExt;
 
@@ -357,7 +358,8 @@ fn escape(value: &str, out: &mut String) {
     for character in value.chars() {
         match character {
             '/' | '=' | '%' | '\u{0}'..='\u{1f}' | '\u{7f}' => {
-                out.push_str(&format!("%{:02X}", u32::from(character)));
+                // No per-byte allocation: the hex digits go straight to `out`.
+                let _ = write!(out, "%{:02X}", u32::from(character));
             }
             _ => out.push(character),
         }

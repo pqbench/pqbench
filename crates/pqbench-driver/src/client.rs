@@ -1,4 +1,4 @@
-//! The client side of the master socket: one request, one response, and for a
+//! The client side of the driver socket: one request, one response, and for a
 //! version listing the lines after it.
 
 use std::fmt;
@@ -12,31 +12,31 @@ use tokio::net::UnixStream;
 
 use crate::protocol::{Request, Response};
 
-/// A failed master exchange.
+/// A failed driver exchange.
 #[derive(Debug)]
 pub enum Error {
-    /// The master is not there, or the connection broke.
+    /// The driver is not there, or the connection broke.
     Connect(io::Error),
-    /// The master answered something that is not this protocol.
+    /// The driver answered something that is not this protocol.
     Protocol(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Connect(error) => write!(f, "cannot reach the master: {error}"),
-            Error::Protocol(message) => write!(f, "the master answered badly: {message}"),
+            Error::Connect(error) => write!(f, "cannot reach the driver: {error}"),
+            Error::Protocol(message) => write!(f, "the driver answered badly: {message}"),
         }
     }
 }
 
 impl std::error::Error for Error {}
 
-/// How long a ping or a stop may take before the client reports the master as
+/// How long a ping or a stop may take before the client reports the driver as
 /// gone.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long a map or results read may take: the master writes a checkpoint,
+/// How long a map or results read may take: the driver writes a checkpoint,
 /// or reads a version's result files, while it answers.
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -75,7 +75,7 @@ async fn open(
     bounded(timeout, reader.read_line(&mut line)).await?;
     if line.is_empty() {
         return Err(Error::Protocol(
-            "the master closed the connection without an answer".into(),
+            "the driver closed the connection without an answer".into(),
         ));
     }
     let response =
@@ -97,11 +97,11 @@ async fn bounded<T>(
 fn timed_out() -> Error {
     Error::Connect(io::Error::new(
         io::ErrorKind::TimedOut,
-        "the master did not answer",
+        "the driver did not answer",
     ))
 }
 
-/// Whether a master is listening at `path`.
+/// Whether a driver is listening at `path`.
 pub async fn ping(path: &Path) -> bool {
     matches!(
         request(path, &Request::ping()).await,

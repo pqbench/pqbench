@@ -3,6 +3,10 @@
 //! [`load`] reads the metadata JSON and Avro manifests and returns a
 //! [`TableInfo`]. It does not measure Parquet footers; pipe the document to
 //! `bytemass`. Delete files are named in the log and omitted from `files`.
+//!
+//! Nothing here is behind a `#[cfg]`: the Avro reader and the object store
+//! enforce the `iceberg` and `aws` features at runtime, so this module compiles
+//! in every configuration and fails only when a read needs a disabled one.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -12,11 +16,13 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::table::{Error, LoadRequest, TableInfo};
+use crate::table::{is_local, join_uri, local_path, relative_data_path};
 use crate::third_party::avro::read_avro;
 use crate::third_party::object_store;
 use crate::v1;
 use crate::Lake;
+
+use super::{Error, LoadRequest, TableInfo};
 
 /// Load the current or requested Iceberg snapshot into a table record.
 ///
@@ -241,7 +247,7 @@ fn columns(metadata: &TableMetadata) -> Vec<v1::DeclaredColumn> {
                 .iter()
                 .map(|field| v1::DeclaredColumn {
                     column: field.name.clone(),
-                    data_type: crate::table::non_empty(&type_name(&field.data_type)),
+                    data_type: super::non_empty(&type_name(&field.data_type)),
                     nullable: !field.required,
                     position: None,
                 })
@@ -494,6 +500,7 @@ async fn active_files(
         table_location.to_owned(),
         manifest_list.to_owned(),
     )
+    .await?
     .boxed();
     while let Some(entry) = entries.try_next().await? {
         match entry {
@@ -515,8 +522,8 @@ async fn active_files(
 /// One entry the active manifests name.
 ///
 /// The walk holds one entry at a time, so the data variant's size is the
-/// generator's state, not a per-file cost; a `Box` would add an allocation to
-/// every file to save a few hundred bytes of stack.
+/// walk's state, not a per-file cost; a `Box` would add an allocation to every
+/// file to save a few hundred bytes of stack.
 #[allow(clippy::large_enum_variant)]
 enum Entry {
     /// A data file to measure.
@@ -525,43 +532,70 @@ enum Entry {
     Delete(String),
 }
 
+/// One position in a manifest walk: the manifest list is read once, then one
+/// manifest at a time as the walk reaches it.
+struct ManifestWalk {
+    lake: Lake,
+    root: TableRoot,
+    manifests: std::vec::IntoIter<ManifestFile>,
+    entries: std::vec::IntoIter<ManifestEntry>,
+    /// The content of the manifest whose entries are being walked; no manifest
+    /// is walked until the list is read.
+    manifest_content: i32,
+}
+
 /// Stream the active manifests' entries, without collecting them.
 ///
-/// The stream owns the lake handle and the metadata location, and each manifest
-/// is read when the walk reaches it, so a table holds one manifest's entries at
-/// a time however many manifests its snapshot names.
-fn active_entries(
+/// The manifest list is read once; each manifest is then read when the walk
+/// reaches it, so a table holds one manifest's entries at a time however many
+/// manifests its snapshot names.
+async fn active_entries(
     lake: Lake,
     table_location: String,
     manifest_list: String,
-) -> impl Stream<Item = Result<Entry, Error>> + Send + 'static {
-    async_stream::try_stream! {
-        let root = table_root(&table_location)?;
-        let bytes = read_location(&lake, &manifest_list).await?;
-        let manifests: Vec<ManifestFile> =
-            read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
-        for manifest in manifests {
-            let bytes = read_location(&lake, &manifest.manifest_path).await?;
-            let entries: Vec<ManifestEntry> =
-                read_avro(&bytes, "manifest").map_err(Error::Avro)?;
-            for entry in entries {
-                if entry.status == STATUS_DELETED {
-                    continue;
-                }
-                let content =
-                    if manifest.content == MANIFEST_DELETES && entry.data_file.content == 0 {
-                        1
+) -> Result<impl Stream<Item = Result<Entry, Error>> + Send + 'static, Error> {
+    let root = table_root(&table_location)?;
+    let bytes = read_location(&lake, &manifest_list).await?;
+    let manifests: Vec<ManifestFile> = read_avro(&bytes, "manifest list").map_err(Error::Avro)?;
+    let walk = ManifestWalk {
+        lake,
+        root,
+        manifests: manifests.into_iter(),
+        entries: Vec::new().into_iter(),
+        manifest_content: CONTENT_DATA,
+    };
+    Ok(futures_util::stream::try_unfold(
+        walk,
+        |mut walk| async move {
+            loop {
+                if let Some(entry) = walk.entries.next() {
+                    if entry.status == STATUS_DELETED {
+                        continue;
+                    }
+                    let content = if walk.manifest_content == MANIFEST_DELETES
+                        && entry.data_file.content == CONTENT_DATA
+                    {
+                        MANIFEST_DELETES
                     } else {
                         entry.data_file.content
                     };
-                if content != CONTENT_DATA {
-                    yield Entry::Delete(entry.data_file.file_path);
-                    continue;
+                    if content != CONTENT_DATA {
+                        return Ok(Some((Entry::Delete(entry.data_file.file_path), walk)));
+                    }
+                    let file = data_file(&walk.root, entry)?;
+                    return Ok(Some((Entry::Data(file), walk)));
                 }
-                yield Entry::Data(data_file(&root, entry)?);
+                let Some(manifest) = walk.manifests.next() else {
+                    return Ok(None);
+                };
+                let bytes = read_location(&walk.lake, &manifest.manifest_path).await?;
+                walk.entries = read_avro::<ManifestEntry>(&bytes, "manifest")
+                    .map_err(Error::Avro)?
+                    .into_iter();
+                walk.manifest_content = manifest.content;
             }
-        }
-    }
+        },
+    ))
 }
 
 /// Stream the selected snapshot's active files, without collecting them.
@@ -571,7 +605,7 @@ fn active_entries(
 pub(super) async fn stream_active_files(
     lake: &Lake,
     request: &LoadRequest,
-) -> Result<crate::table::FileStream<'static>, Error> {
+) -> Result<super::FileStream<'static>, Error> {
     let metadata = read_metadata(lake, &request.uri).await?;
     let location = metadata.location.clone();
     let requested = request.snapshot_version.map(create_i64).transpose()?;
@@ -580,6 +614,7 @@ pub(super) async fn stream_active_files(
     };
     let manifest_list = snapshot.manifest_list.clone();
     Ok(active_entries(lake.clone(), location, manifest_list)
+        .await?
         .try_filter_map(|entry| async move {
             Ok(match entry {
                 Entry::Data(file) => Some(file),
@@ -739,38 +774,12 @@ fn object_input(base: &Url, location: &str) -> Result<String, Error> {
     Ok(uri)
 }
 
-fn relative_data_path(relative: &str) -> Result<&Path, Error> {
-    let path = Path::new(relative);
-    if relative.is_empty()
-        || relative.contains("://")
-        || !path.components().all(|c| matches!(c, Component::Normal(_)))
-    {
-        return Err(Error::Invalid(format!(
-            "only relative data paths inside the table are supported: {relative}"
-        )));
-    }
-    Ok(path)
-}
-
 fn parse_dir_url(location: &str) -> Result<Url, Error> {
     let mut url = Url::parse(location).map_err(Error::Uri)?;
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
     Ok(url)
-}
-
-fn join_uri(base: &str, relative: &str) -> Result<String, Error> {
-    let mut url = if looks_like_uri(base) {
-        Url::parse(base).map_err(Error::Uri)?
-    } else {
-        Url::from_directory_path(base)
-            .map_err(|()| Error::Invalid("invalid local table path".into()))?
-    };
-    if !url.path().ends_with('/') {
-        url.set_path(&format!("{}/", url.path()));
-    }
-    Ok(url.join(relative).map_err(Error::Uri)?.into())
 }
 
 async fn read_location(lake: &Lake, location: &str) -> Result<Vec<u8>, Error> {
@@ -804,22 +813,6 @@ fn is_metadata_json(uri: &str) -> bool {
     uri.rsplit(['/', '\\'])
         .next()
         .is_some_and(|name| name.ends_with(".metadata.json"))
-}
-
-fn is_local(uri: &str) -> bool {
-    !uri.contains("://") || uri.starts_with("file://")
-}
-
-fn local_path(uri: &str) -> Result<PathBuf, Error> {
-    if let Some(rest) = uri.strip_prefix("file://") {
-        Url::parse(uri)
-            .ok()
-            .and_then(|url| url.to_file_path().ok())
-            .or_else(|| Some(PathBuf::from(rest)))
-            .ok_or_else(|| Error::Invalid("invalid local table URI".into()))
-    } else {
-        Ok(PathBuf::from(uri))
-    }
 }
 
 fn looks_like_uri(value: &str) -> bool {

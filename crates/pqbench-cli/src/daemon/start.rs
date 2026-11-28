@@ -2,7 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -27,6 +27,16 @@ pub(crate) async fn start(config: &Config, socket: &Path, idle_seconds: u64) -> 
     for _ in 0..250 {
         if client::ping(socket).await {
             return Ok(());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("cannot check the daemon: {error}"))?
+        {
+            return Err(format!(
+                "the daemon exited ({status}) before serving {}; see {}",
+                socket.display(),
+                log_path(socket).display()
+            ));
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -70,7 +80,7 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
     let log = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(socket.with_extension("log"))
+        .open(log_path(socket))
         .map_err(|error| format!("cannot open the daemon log: {error}"))?;
     command
         .stdin(Stdio::null())
@@ -92,9 +102,15 @@ fn serve_command(config: &Config, socket: &Path, idle_seconds: u64) -> Result<Co
     Ok(command)
 }
 
+/// The daemon's log: beside its socket, so a failure is written down where the
+/// error that reports it can point.
+fn log_path(socket: &Path) -> PathBuf {
+    socket.with_extension("log")
+}
+
 /// Stop the daemon listening at `socket`.
 pub(crate) async fn stop(socket: &Path) -> Result<(), String> {
-    match client::request(socket, &Request::stop()).await {
+    match client::request(socket, &Request::Stop).await {
         Ok(_) => {}
         Err(client::Error::Connect(_)) => {
             return Err("the daemon is not running".into());

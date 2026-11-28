@@ -9,7 +9,7 @@ dependencies are feature-gated and remain out of the default dependency graph.
 ```mermaid
 flowchart TD
     detect[pqbench::table::detect] --> metadata[Iceberg metadata JSON]
-    metadata --> load[pqbench::third_party::iceberg]
+    metadata --> load[pqbench::table::iceberg]
     manifests[Avro manifests] --> load
     load --> document[TableFile documents]
     document --> bytemass[pqbench::bytemass]

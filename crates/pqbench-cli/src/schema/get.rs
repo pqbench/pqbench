@@ -7,12 +7,12 @@ use crate::parse;
 use crate::source::{drive, map};
 use crate::CliError;
 
-pub(crate) async fn run(daemon: &crate::daemon::Daemon, args: &NameArgs) -> Result<(), CliError> {
+pub(crate) async fn run(workspace: &pqbench::Workspace, args: &NameArgs) -> Result<(), CliError> {
     let parents = parse::parents::<v1::Schema>("get schema").await?;
-    let daemon = daemon.clone();
+    let workspace = workspace.clone();
     drive(map(parents, args.fan_out, move |schema: v1::Schema| {
-        let daemon = daemon.clone();
-        async move { daemon.get_schema(&schema).await }
+        let workspace = workspace.clone();
+        async move { Ok::<_, CliError>(pqbench::schema::get::get(&workspace, &schema).await?) }
     }))
     .await
 }

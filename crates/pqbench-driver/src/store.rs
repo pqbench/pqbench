@@ -1,5 +1,5 @@
-//! The master's store: the files the daemon keeps for the master, which only
-//! the daemon writes.
+//! The driver's store: the files the driver keeps, which only the driver
+//! writes.
 //!
 //! ```text
 //! {store}/checkpoint.ndjson                  the map, one PartitionVersion per line
@@ -22,7 +22,7 @@ use pqbench::v1::partition_version::State;
 use pqbench::v1::PartitionVersion;
 use serde_json::Value;
 
-use super::master::{self, Key};
+use super::engine::{self, Key};
 
 /// A version's listing: the walk's Partition record for it.
 pub(crate) const LISTING: &str = "list-partitions.ndjson";
@@ -214,7 +214,7 @@ impl Store {
                     continue;
                 }
             };
-            if !master::needs_sample(state) {
+            if !engine::needs_sample(state) {
                 let _ = fs::remove_file(directory.join(SAMPLE));
             }
             for file in fs::read_dir(&directory).into_iter().flatten().flatten() {
