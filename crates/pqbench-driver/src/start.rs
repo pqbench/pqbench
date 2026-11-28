@@ -119,14 +119,19 @@ pub(crate) async fn stop(args: &TargetArgs) -> Result<(), String> {
         }
         Err(error) => return Err(error.to_string()),
     }
+    // The stop answers before the driver has checkpointed the map and removed
+    // its socket: a large map's checkpoint is the slow part, so wait for it
+    // rather than unlinking a socket a live driver still owns.
     for _ in 0..100 {
         if !socket.exists() {
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let _ = std::fs::remove_file(socket);
-    Ok(())
+    Err(format!(
+        "pqbench-driver did not stop within 5 s: {} is still there",
+        socket.display()
+    ))
 }
 
 /// Report the driver's state as one JSON object: the versions by state, what

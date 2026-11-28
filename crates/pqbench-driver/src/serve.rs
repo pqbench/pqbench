@@ -11,16 +11,17 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::Duration;
 
-use pqbench::third_party::json;
-use pqbench::v1::PartitionVersion;
+use pqbench_model_v1::PartitionVersion;
 use serde::Serialize;
 use serde_json::value::{to_raw_value, RawValue};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
+use tokio::time::timeout;
 
 use super::drive::Task;
 use super::engine::Engine;
@@ -30,11 +31,21 @@ use super::socket;
 use super::store::Store;
 use super::{drive, process, RunArgs};
 
+/// The most connections the driver answers at once. A connection is one
+/// request, so this is also the most requests in flight; a burst beyond it
+/// waits in the listener's backlog instead of becoming a task each.
+const MAX_CONNECTIONS: usize = 64;
+
+/// How long one connection may take to send its request and read its answer.
+/// A stalled client would otherwise hold a task and its file descriptor
+/// forever.
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Serve `args`' store on its socket until stopped: the foreground driver.
 pub(crate) async fn serve(args: &RunArgs) -> Result<(), String> {
     let socket = socket::resolve(args.socket.as_deref(), Some(&args.store()))?;
     let run_control = run_control::read()?;
-    let store = Store::open(&args.store(), run_control.checkpoint_codec)?;
+    let store = Store::open(&args.store())?;
     let engine = Engine::new(store.read_checkpoint()?, args.low_network)?;
     store.sweep(|key| engine.state(key))?;
     let engine = Arc::new(RwLock::new(engine));
@@ -70,23 +81,35 @@ pub(crate) async fn run(
     socket::set_socket_mode(&socket)?;
 
     let shutdown = Arc::new(Notify::new());
+    let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let result = loop {
-        tokio::select! {
+        let stream = tokio::select! {
             _ = shutdown.notified() => break Ok(()),
             _ = interrupt.recv() => break Ok(()),
             _ = terminate.recv() => break Ok(()),
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => {
-                    let engine = engine.clone();
-                    let store = store.clone();
-                    let shutdown = Arc::clone(&shutdown);
-                    tokio::spawn(async move {
-                        let _ = handle(stream, engine, store, shutdown).await;
-                    });
-                }
+                Ok((stream, _)) => stream,
                 Err(error) => break Err(format!("cannot accept a connection: {error}")),
             }
-        }
+        };
+        // Take a slot before spawning, so a burst cannot turn into an
+        // unbounded number of tasks each holding a descriptor.
+        let permit = tokio::select! {
+            _ = shutdown.notified() => break Ok(()),
+            _ = interrupt.recv() => break Ok(()),
+            _ = terminate.recv() => break Ok(()),
+            permit = Arc::clone(&connections).acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => break Ok(()),
+            },
+        };
+        let engine = engine.clone();
+        let store = store.clone();
+        let shutdown = Arc::clone(&shutdown);
+        tokio::spawn(async move {
+            let _permit = permit;
+            let _ = timeout(CONNECTION_TIMEOUT, handle(stream, engine, store, shutdown)).await;
+        });
     };
     driver.stop().await;
     let checkpoint = store.write_checkpoint(read_engine(&engine).versions());
@@ -300,7 +323,7 @@ async fn write_frame<T: Serialize>(
     answer: &T,
 ) -> Result<(), String> {
     frame.clear();
-    json::to_writer(&mut *frame, answer).map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut *frame, answer).map_err(|error| error.to_string())?;
     frame.push(b'\n');
     write
         .write_all(frame)
@@ -314,7 +337,6 @@ mod tests {
     use crate::client;
     use crate::drive::Settings;
     use crate::process::{Worker, WorkerExe};
-    use crate::store::CheckpointCodec;
     use std::path::Path;
     use std::time::Duration;
 
@@ -341,7 +363,7 @@ mod tests {
     async fn a_ping_and_a_stop_round_trip() {
         let directory = tempfile::tempdir().expect("a temp directory");
         let socket = directory.path().join("driver.sock");
-        let store = Store::open(directory.path(), CheckpointCodec::None).expect("the store opens");
+        let store = Store::open(directory.path()).expect("the store opens");
         let engine = Engine::new(Vec::new(), false).expect("an empty map");
         let engine = Arc::new(RwLock::new(engine));
         let driver = idle_driver(engine.clone(), store.clone());

@@ -4,7 +4,6 @@ use std::io::Write;
 
 use clap::Args;
 use pqbench::skill::{self, Skill};
-use pqbench::third_party::json;
 use serde::Serialize;
 
 use crate::CliError;
@@ -39,7 +38,7 @@ fn list() -> Result<(), CliError> {
         // The record is written where it will be output: one reused buffer, no
         // string of its own.
         line.clear();
-        json::to_writer(&mut line, &record)?;
+        serde_json::to_writer(&mut line, &record)?;
         line.push(b'\n');
         closed_pipe(out.write_all(&line))?;
     }

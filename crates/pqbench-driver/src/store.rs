@@ -2,7 +2,7 @@
 //! writes.
 //!
 //! ```text
-//! {store}/checkpoint.ndjson[.zst|.lz4]       the map, one PartitionVersion per line
+//! {store}/checkpoint.ndjson.zst               the map, one Zstandard frame of NDJSON
 //! {store}/walk/                              the running walk's output and errors
 //! {store}/results/{partition}/{etag}/{file}  a version's results
 //! {store}/deleted/{partition}/{etag}/        results waiting to be removed
@@ -23,10 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use pqbench::codecs::{self, Codec};
-use pqbench::third_party::json;
-use pqbench::v1::partition_version::State;
-use pqbench::v1::{PartitionVersion, Suggestion};
+use pqbench_model_v1::partition_version::State;
+use pqbench_model_v1::{PartitionVersion, Suggestion};
+use pqbench_parquet::codecs::{self, Codec};
 use serde_json::value::RawValue;
 
 use super::engine::{self, Key};
@@ -51,8 +50,9 @@ pub(crate) const SUGGESTIONS: &str = "suggestions.ndjson";
 /// A version's column masses, from `bytemass`.
 pub(crate) const BYTEMASS: &str = "bytemass.ndjson";
 
-/// The checkpoint's name under the store, as the plain NDJSON it is made of.
-const CHECKPOINT: &str = "checkpoint.ndjson";
+/// The checkpoint's name under the store: one Zstandard frame of NDJSON, which
+/// `zstdcat` reads.
+const CHECKPOINT: &str = "checkpoint.ndjson.zst";
 
 /// Where a checkpoint is assembled before the rename that lands it: never a
 /// checkpoint, whatever a crash leaves there.
@@ -67,79 +67,9 @@ const LOCK_WAIT: Duration = Duration::from_millis(100);
 /// written every few minutes and read once, when the driver starts.
 const CHECKPOINT_LEVEL: u8 = 1;
 
-/// The format the store's checkpoint is written in. The store reads whichever
-/// of these files it finds, so changing the codec migrates an existing store
-/// on its next checkpoint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum CheckpointCodec {
-    /// Plain UTF-8 NDJSON.
-    None,
-    /// One Zstandard frame, which `zstdcat` reads.
-    #[default]
-    Zstd,
-    /// One LZ4 frame, which `lz4cat` reads.
-    Lz4,
-}
-
-impl CheckpointCodec {
-    /// Every codec, in a fixed order.
-    const ALL: [CheckpointCodec; 3] = [
-        CheckpointCodec::None,
-        CheckpointCodec::Zstd,
-        CheckpointCodec::Lz4,
-    ];
-
-    /// The order a checkpoint is looked for in: the configured codec first,
-    /// then the others, so a store written under another codec still loads.
-    fn load_order(self) -> impl Iterator<Item = CheckpointCodec> {
-        let configured = self;
-        std::iter::once(configured).chain(
-            CheckpointCodec::ALL
-                .into_iter()
-                .filter(move |codec| *codec != configured),
-        )
-    }
-
-    /// The checkpoint file's name under the store.
-    pub(crate) fn file_name(self) -> &'static str {
-        match self {
-            CheckpointCodec::None => CHECKPOINT,
-            CheckpointCodec::Zstd => "checkpoint.ndjson.zst",
-            CheckpointCodec::Lz4 => "checkpoint.ndjson.lz4",
-        }
-    }
-
-    /// The codec the run-control file spells `name`: `none`, `zstd`, or `lz4`.
-    pub(crate) fn from_name(name: &str) -> Option<Self> {
-        CheckpointCodec::ALL
-            .into_iter()
-            .find(|codec| codec.name() == name)
-    }
-
-    /// The codec's `~/.pqbenchrc` name.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            CheckpointCodec::None => "none",
-            CheckpointCodec::Zstd => "zstd",
-            CheckpointCodec::Lz4 => "lz4",
-        }
-    }
-
-    /// The pqbench codec that frames a checkpoint, when the format is a frame.
-    fn frame_codec(self) -> Option<Codec> {
-        match self {
-            CheckpointCodec::None => Option::None,
-            CheckpointCodec::Zstd => Some(Codec::Zstd),
-            CheckpointCodec::Lz4 => Some(Codec::Lz4),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct Store {
     root: PathBuf,
-    /// The format the checkpoint is written in.
-    checkpoint_codec: CheckpointCodec,
     /// Exclusive process-lifetime lock on `{root}/store.lock`.
     #[allow(dead_code)]
     lock: Arc<File>,
@@ -148,13 +78,12 @@ pub(crate) struct Store {
 impl Store {
     /// Open the store at `root`: acquire exclusive ownership first, then
     /// delete the walk's directory and the trash a previous run left.
-    pub(crate) fn open(root: &Path, checkpoint_codec: CheckpointCodec) -> Result<Self, String> {
+    pub(crate) fn open(root: &Path) -> Result<Self, String> {
         fs::create_dir_all(root)
             .map_err(|error| format!("cannot create {}: {error}", root.display()))?;
         let lock = acquire_lock(root)?;
         let store = Store {
             root: root.to_path_buf(),
-            checkpoint_codec,
             lock: Arc::new(lock),
         };
         store.remove_temporary()?;
@@ -183,42 +112,29 @@ impl Store {
 
     /// The versions the last checkpoint holds; none before the first.
     pub(crate) fn read_checkpoint(&self) -> Result<Vec<PartitionVersion>, String> {
-        let Some((codec, bytes)) = self.checkpoint_bytes()? else {
-            return Ok(Vec::new());
+        let path = self.root.join(CHECKPOINT);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
         };
-        let text = match codec.frame_codec() {
-            Some(frame) => codecs::decompress_frame(frame, &bytes)
-                .map_err(|error| format!("cannot decompress {}: {error}", codec.file_name()))?,
-            Option::None => bytes,
-        };
+        let text = codecs::decompress_frame(Codec::Zstd, &bytes)
+            .map_err(|error| format!("cannot decompress {CHECKPOINT}: {error}"))?;
         let text =
             String::from_utf8(text).map_err(|error| format!("bad checkpoint text: {error}"))?;
         text.lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| {
-                json::from_str(line).map_err(|error| format!("bad checkpoint row: {error}"))
+                serde_json::from_str(line).map_err(|error| format!("bad checkpoint row: {error}"))
             })
             .collect()
     }
 
-    /// The checkpoint file the store holds and its bytes: the configured
-    /// codec's file first, then any other, so a store written under another
-    /// codec still loads.
-    fn checkpoint_bytes(&self) -> Result<Option<(CheckpointCodec, Vec<u8>)>, String> {
-        for codec in self.checkpoint_codec.load_order() {
-            let path = self.root.join(codec.file_name());
-            match fs::read(&path) {
-                Ok(bytes) => return Ok(Some((codec, bytes))),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
-            }
-        }
-        Ok(Option::None)
-    }
-
     /// Write the checkpoint: a temporary file, synced, then renamed over it,
-    /// with the store directory synced after the rename and any checkpoint of
-    /// another codec removed.
+    /// with the store directory synced after the rename. This is the durable
+    /// barrier, so it keeps its fsyncs; the listing writes below do not.
     pub(crate) fn write_checkpoint(
         &self,
         versions: impl Iterator<Item = PartitionVersion>,
@@ -229,13 +145,10 @@ impl Store {
                 .map_err(|error| format!("cannot write the checkpoint: {error}"))?;
             text.push(b'\n');
         }
-        let bytes = match self.checkpoint_codec.frame_codec() {
-            Some(frame) => codecs::compress_frame(frame, CHECKPOINT_LEVEL, &text)
-                .map_err(|error| format!("cannot compress the checkpoint: {error}"))?,
-            Option::None => text,
-        };
+        let bytes = codecs::compress_frame(Codec::Zstd, CHECKPOINT_LEVEL, &text)
+            .map_err(|error| format!("cannot compress the checkpoint: {error}"))?;
         let temporary = self.temporary_checkpoint();
-        let path = self.root.join(self.checkpoint_codec.file_name());
+        let path = self.root.join(CHECKPOINT);
         let write = || -> std::io::Result<()> {
             let mut file = File::create(&temporary)?;
             file.write_all(&bytes)?;
@@ -243,7 +156,6 @@ impl Store {
             fs::rename(&temporary, &path)
         };
         write().map_err(|error| format!("cannot write the checkpoint: {error}"))?;
-        self.remove_other_checkpoints()?;
         sync_directory(&self.root)
     }
 
@@ -257,20 +169,10 @@ impl Store {
         remove_file(&self.temporary_checkpoint())
     }
 
-    /// Delete the checkpoints of the codecs this store no longer writes: the
-    /// rename above landed the one that applies.
-    fn remove_other_checkpoints(&self) -> Result<(), String> {
-        for codec in CheckpointCodec::ALL {
-            if codec != self.checkpoint_codec {
-                remove_file(&self.root.join(codec.file_name()))?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Store a new version's listing: a temporary file, synced, then renamed
-    /// over the listing, so a power loss after the rename cannot leave an
-    /// empty one.
+    /// Store a new version's listing: a temporary file renamed over the
+    /// listing, so a reader never sees half of one. It is not synced: the
+    /// checkpoint, not a listing, is the durable barrier, and a walk may store
+    /// thousands of listings.
     pub(crate) fn write_listing(&self, key: &Key, line: &str) -> Result<(), String> {
         let directory = self.version_dir(key);
         fs::create_dir_all(&directory)
@@ -279,7 +181,6 @@ impl Store {
         let write = || -> std::io::Result<()> {
             let mut file = File::create(&temporary)?;
             file.write_all(format!("{line}\n").as_bytes())?;
-            file.sync_all()?;
             fs::rename(&temporary, directory.join(LISTING))
         };
         write().map_err(|error| format!("cannot store the listing of {}: {error}", key.0))
@@ -389,7 +290,7 @@ impl Store {
         text.lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| {
-                json::from_str(line)
+                serde_json::from_str(line)
                     .map_err(|error| format!("bad suggestion of {}: {error}", key.0))
             })
             .collect()
@@ -449,8 +350,8 @@ impl Store {
 }
 
 /// The `{partition}/{etag}` directories under `results` and their keys: a
-/// partition name is eight segments (`catalogs/…/partitions/{id}`), then the
-/// etag.
+/// partition name is `catalogs/…/partitions/{id}`, one segment per partition
+/// column, and the etag is the directory below it.
 fn version_dirs(results: &Path) -> Vec<(Key, PathBuf)> {
     let mut partitions = vec![results.to_path_buf()];
     for _ in 0..8 {
@@ -464,15 +365,33 @@ fn version_dirs(results: &Path) -> Vec<(Key, PathBuf)> {
             .to_string_lossy()
             .into_owned();
         for directory in children(&[partition]) {
-            let etag = directory
-                .file_name()
-                .expect("a version directory has a name")
-                .to_string_lossy()
-                .into_owned();
-            versions.push(((name.clone(), etag), directory));
+            // A partition id may itself be several directories (`day=1/hours=05`),
+            // and only the leaf is a version's: its key names it as the last
+            // segment.
+            collect_versions(name.clone(), directory, &mut versions);
         }
     }
     versions
+}
+
+/// Collect the versions under `directory`, whose partition name is `name`: a
+/// directory with no child is a version's — its name is the etag — and one
+/// with children continues the partition's id.
+fn collect_versions(name: String, directory: PathBuf, versions: &mut Vec<(Key, PathBuf)>) {
+    let segment = directory
+        .file_name()
+        .expect("a version or partition directory has a name")
+        .to_string_lossy()
+        .into_owned();
+    let children = children(std::slice::from_ref(&directory));
+    if children.is_empty() {
+        versions.push(((name, segment), directory));
+        return;
+    }
+    let name = format!("{name}/{segment}");
+    for child in children {
+        collect_versions(name.clone(), child, versions);
+    }
 }
 
 /// The directories directly under each of `parents`.
@@ -559,74 +478,27 @@ mod tests {
             .collect()
     }
 
-    /// A checkpoint round-trips in every codec, under its own name, and a
-    /// compressed one is the codec's standard frame: its magic number, which
-    /// is what `zstdcat` and `lz4cat` recognize.
+    /// A checkpoint round-trips under its own name, and is the standard
+    /// Zstandard frame: its magic number, which is what `zstdcat` recognizes.
     #[test]
-    fn a_checkpoint_round_trips_in_every_codec() {
+    fn a_checkpoint_round_trips_as_a_zstd_frame() {
         let versions = versions();
         let zstd = [0x28, 0xb5, 0x2f, 0xfd];
-        let lz4 = [0x04, 0x22, 0x4d, 0x18];
-        let ndjson = b"{";
-        for (codec, magic) in [
-            (CheckpointCodec::None, &ndjson[..]),
-            (CheckpointCodec::Zstd, &zstd[..]),
-            (CheckpointCodec::Lz4, &lz4[..]),
-        ] {
-            let directory = tempfile::tempdir().unwrap();
-            let store = Store::open(directory.path(), codec).unwrap();
-            store
-                .write_checkpoint(versions.clone().into_iter())
-                .unwrap();
-            assert_eq!(store.read_checkpoint().unwrap(), versions, "{codec:?}");
-            let bytes = fs::read(directory.path().join(codec.file_name())).unwrap();
-            assert!(
-                bytes.starts_with(magic),
-                "{codec:?} wrote no standard frame"
-            );
-        }
-    }
-
-    /// A store opened under another codec than the one its checkpoint was
-    /// written in loads it, and the next checkpoint migrates the store: one
-    /// checkpoint file, in the codec the file names.
-    #[test]
-    fn changing_the_codec_migrates_an_existing_store() {
-        let versions = versions();
         let directory = tempfile::tempdir().unwrap();
-        for (at, codec) in [
-            CheckpointCodec::Zstd,
-            CheckpointCodec::Lz4,
-            CheckpointCodec::None,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let store = Store::open(directory.path(), codec).unwrap();
-            let loaded = store.read_checkpoint().unwrap();
-            if at == 0 {
-                assert!(loaded.is_empty(), "a new store holds no checkpoint");
-            } else {
-                assert_eq!(loaded, versions, "{codec:?} lost the previous checkpoint");
-            }
-            store
-                .write_checkpoint(versions.clone().into_iter())
-                .unwrap();
-            drop(store);
-            assert!(
-                directory.path().join(codec.file_name()).is_file(),
-                "{codec:?} wrote no checkpoint of its own"
-            );
-            for other in CheckpointCodec::ALL {
-                assert!(
-                    other == codec || !directory.path().join(other.file_name()).exists(),
-                    "{other:?}'s checkpoint outlived the migration to {codec:?}"
-                );
-            }
-            assert!(!directory.path().join(TEMPORARY).exists());
-        }
-        let plain = fs::read_to_string(directory.path().join(CHECKPOINT)).unwrap();
-        assert_eq!(plain.lines().count(), versions.len());
+        let store = Store::open(directory.path()).unwrap();
+        assert!(store.read_checkpoint().unwrap().is_empty());
+        store
+            .write_checkpoint(versions.clone().into_iter())
+            .unwrap();
+        assert_eq!(store.read_checkpoint().unwrap(), versions);
+        let bytes = fs::read(directory.path().join(CHECKPOINT)).unwrap();
+        assert!(bytes.starts_with(&zstd), "no Zstandard frame");
+        assert!(!directory.path().join(TEMPORARY).exists());
+
+        // The next open reads the map back: the checkpoint is the map's.
+        drop(store);
+        let store = Store::open(directory.path()).unwrap();
+        assert_eq!(store.read_checkpoint().unwrap(), versions);
     }
 
     /// A half-written checkpoint a crash left is never read as one: opening
@@ -635,11 +507,11 @@ mod tests {
     fn a_crashs_temporary_checkpoint_is_swept() {
         let directory = tempfile::tempdir().unwrap();
         {
-            let store = Store::open(directory.path(), CheckpointCodec::Zstd).unwrap();
+            let store = Store::open(directory.path()).unwrap();
             store.write_checkpoint(versions().into_iter()).unwrap();
         }
         fs::write(directory.path().join(TEMPORARY), "half a row").unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::Zstd).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         assert!(!directory.path().join(TEMPORARY).exists());
         assert_eq!(store.read_checkpoint().unwrap(), versions());
     }
@@ -649,7 +521,7 @@ mod tests {
     #[test]
     fn a_sweep_keeps_only_live_results() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         let partition = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
         let live = (partition.to_string(), "aa".to_string());
         let dead = (partition.to_string(), "bb".to_string());
@@ -670,7 +542,7 @@ mod tests {
     #[test]
     fn a_sweep_keeps_only_the_samples_a_transition_reads() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         let partition = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
         let versions: Vec<(Key, State, bool)> = [
             (State::UpToDate, false),
@@ -703,11 +575,10 @@ mod tests {
     #[test]
     fn an_unreadable_checkpoint_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
-        fs::create_dir(directory.path().join("checkpoint.ndjson")).unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        fs::create_dir(directory.path().join(CHECKPOINT)).unwrap();
         assert!(store.read_checkpoint().is_err());
-        let missing =
-            Store::open(&directory.path().join("elsewhere"), CheckpointCodec::None).unwrap();
+        let missing = Store::open(&directory.path().join("elsewhere")).unwrap();
         assert!(missing.read_checkpoint().unwrap().is_empty());
     }
 
@@ -716,7 +587,7 @@ mod tests {
     #[test]
     fn an_unreadable_result_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         let key = (
             "catalogs/c/schemas/s/tables/t/partitions/day%3D1".to_string(),
             "aa".to_string(),
@@ -734,7 +605,7 @@ mod tests {
     #[test]
     fn a_versions_suggestions_land_and_sweep_with_it() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         let key = (
             "catalogs/c/schemas/s/tables/t/partitions/day%3D1".to_string(),
             "aa".to_string(),
@@ -771,7 +642,7 @@ mod tests {
     #[test]
     fn a_trashed_version_waits_outside_results() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         let key = (
             "catalogs/c/schemas/s/tables/t/partitions/day%3D1".to_string(),
             "aa".to_string(),
@@ -781,7 +652,7 @@ mod tests {
         assert!(!store.version_dir(&key).exists());
         assert!(store.trash_dir().join(&key.0).join(&key.1).exists());
         drop(store);
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         assert!(!store.trash_dir().exists());
     }
 
@@ -790,12 +661,49 @@ mod tests {
     #[test]
     fn a_store_has_one_owner_at_a_time() {
         let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path(), CheckpointCodec::None).unwrap();
+        let store = Store::open(directory.path()).unwrap();
         fs::create_dir_all(store.walk_dir()).unwrap();
         fs::write(store.walk_dir().join("active"), "ok").unwrap();
-        assert!(Store::open(directory.path(), CheckpointCodec::None).is_err());
+        assert!(Store::open(directory.path()).is_err());
         assert!(store.walk_dir().join("active").exists());
         drop(store);
-        assert!(Store::open(directory.path(), CheckpointCodec::None).is_ok());
+        assert!(Store::open(directory.path()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod multi_column_tests {
+    use super::*;
+
+    /// A partition id of several segments (`day=1/hours=05`) is a nested path
+    /// under `results`, and its version is still found, swept and trashed as
+    /// one: the id is not truncated to its first segment.
+    #[test]
+    fn a_multi_column_partition_round_trips_through_the_store() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let key = (
+            "catalogs/c/schemas/s/tables/t/partitions/day%3D2026-01-01/hour%3D05".to_string(),
+            "aa".to_string(),
+        );
+        store.write_listing(&key, "{}").unwrap();
+        assert_eq!(store.read_listing(&key).unwrap(), "{}");
+
+        let version = store.version_dir(&key);
+        assert!(version.ends_with("partitions/day%3D2026-01-01/hour%3D05/aa"));
+        assert_eq!(
+            version_dirs(&directory.path().join("results")),
+            vec![(key.clone(), version.clone())],
+            "the nested partition id is not a version directory"
+        );
+
+        store
+            .sweep(|found| (found == &key).then_some(State::UpToDate))
+            .unwrap();
+        assert!(version.exists(), "the sweep dropped a multi-column version");
+
+        store.trash(&key).unwrap();
+        assert!(!version.exists());
+        assert!(store.trash_dir().join(&key.0).join(&key.1).exists());
     }
 }

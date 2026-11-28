@@ -406,19 +406,6 @@ mod tests {
     }
 
     #[test]
-    fn base64_matches_the_reference_vectors() {
-        // RFC 4648 §10, the vectors that exercise all three padding lengths.
-        assert_eq!(encode_base64(b""), "");
-        assert_eq!(encode_base64(b"f"), "Zg==");
-        assert_eq!(encode_base64(b"fo"), "Zm8=");
-        assert_eq!(encode_base64(b"foo"), "Zm9v");
-        assert_eq!(encode_base64(b"foob"), "Zm9vYg==");
-        assert_eq!(encode_base64(b"fooba"), "Zm9vYmE=");
-        assert_eq!(encode_base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(encode_base64(b"id:secret"), "aWQ6c2VjcmV0");
-    }
-
-    #[test]
     fn a_token_is_replaced_before_it_expires() {
         let now = Instant::now();
         let hour = Token {

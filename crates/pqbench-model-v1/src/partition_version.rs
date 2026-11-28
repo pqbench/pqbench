@@ -63,9 +63,6 @@ pub struct PartitionVersion {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum State {
-    /// No longer produced: a checkpoint from before the walk removed
-    /// superseded versions may still name a deleted one.
-    Deleted,
     /// Found, not processed yet.
     #[default]
     Pending,
@@ -93,8 +90,7 @@ pub enum State {
 
 impl State {
     /// Every state: what `status` counts by.
-    pub const ALL: [State; 13] = [
-        State::Deleted,
+    pub const ALL: [State; 12] = [
         State::Pending,
         State::Pricing,
         State::Priced,
@@ -113,7 +109,6 @@ impl State {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            State::Deleted => "DELETED",
             State::Pending => "PENDING",
             State::Pricing => "PRICING",
             State::Priced => "PRICED",

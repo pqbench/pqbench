@@ -339,8 +339,8 @@ no longer needs, with the log's own byte count as the saving) and `small-files`
 rule's `name` is `{partition}/suggestions/{rule}`, its `partition` names the
 partition, and its `column` is empty.
 
-Two settings of the driver's own — `checkpoint-codec` and `step-timeout` —
-live only in the same run-control file; see
+One setting of the driver's own — `step-timeout` — lives only in the same
+run-control file; see
 [Configuration](configuration.md#driver-settings).
 
 `pqbench-driver stop` sends a stop over the socket. `SIGINT` and `SIGTERM` do
@@ -349,7 +349,7 @@ them), checkpoints the map, removes its socket, and exits 0.
 
 ```console no-run
 $ pqbench-driver start --store /var/lib/pqbench --walk-period-seconds 86400
-export PQB_DRIVER_SOCK=/var/lib/pqbench/driver.sock
+$ export PQB_DRIVER_SOCK=/var/lib/pqbench/driver.sock
 $ pqbench list partition-versions catalogs/main/schemas/sales
 $ pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
 $ pqbench-driver status

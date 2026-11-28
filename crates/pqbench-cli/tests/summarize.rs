@@ -227,9 +227,9 @@ fn version(table: &str, partition: &str, etag: &str, fields: serde_json::Value) 
     format!("{record}\n")
 }
 
-/// Live versions count as partitions and add up; a DELETED one counts only
-/// by state; an unpriced one adds no cost; each catalog comes before its
-/// schemas and each schema before its tables.
+/// Every version counts as a partition and adds up; an unpriced one adds no
+/// cost; each catalog comes before its schemas and each schema before its
+/// tables.
 #[test]
 fn summarize_partition_versions_totals_each_level() {
     let input = [
@@ -240,12 +240,6 @@ fn summarize_partition_versions_totals_each_level() {
             serde_json::json!({"state": "UP_TO_DATE", "file_count": 2, "size_bytes": 100,
                 "removed_size_bytes": 10, "last_modification_time": 5,
                 "lowest_cost_per_month": 1.0, "highest_cost_per_month": 3.0}),
-        ),
-        version(
-            "a",
-            "day%3D2",
-            "02",
-            serde_json::json!({"state": "DELETED", "file_count": 9, "size_bytes": 900}),
         ),
         version(
             "a",
@@ -294,7 +288,7 @@ fn summarize_partition_versions_totals_each_level() {
     assert_eq!(table_a["last_modification_time"], 7);
     assert_eq!(
         table_a["version_counts"],
-        serde_json::json!({"DELETED": 1, "PENDING": 1, "UP_TO_DATE": 1})
+        serde_json::json!({"PENDING": 1, "UP_TO_DATE": 1})
     );
     assert_eq!(table_a["failed_version_count"], 1);
     let catalog = &rows[0];

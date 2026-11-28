@@ -27,8 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
-use pqbench::third_party::json;
-use pqbench::v1::{Partition, PartitionPrice, Suggestion};
+use pqbench_model_v1::{Partition, PartitionPrice, Suggestion};
 use tokio::sync::Notify;
 use tokio::task::{JoinHandle, JoinSet};
 
@@ -151,7 +150,7 @@ impl Driver {
         loop {
             self.start_walk();
             self.start_runs();
-            self.checkpoint();
+            self.checkpoint().await;
             self.record_activity();
             tokio::select! {
                 () = stop.notified() => break,
@@ -161,7 +160,7 @@ impl Driver {
                 },
                 Some(done) = self.walk.join_next() => {
                     let outcome = done.unwrap_or_else(|error| Err(error.to_string()));
-                    self.finish_walk(outcome);
+                    self.finish_walk(outcome).await;
                 }
                 Some(_) = self.emptying.join_next() => {}
                 () = tokio::time::sleep(TICK) => {}
@@ -226,11 +225,30 @@ impl Driver {
             self.store.remove_sample(key);
         }
         if conclusion.state == State::UpToDate {
+            // A version the price ended never ran the verification, so the
+            // partition rules its listing supports still have to be written:
+            // a tombstone-only partition has no file to read, and that is
+            // exactly what `tombstones` measures.
+            if conclusion.unverified {
+                if let Err(error) = self.persist_partition_suggestions(key) {
+                    eprintln!("pqbench-driver: {error}");
+                }
+            }
             match self.store.read_suggestions(key) {
                 Ok(suggestions) => write_engine(&self.engine).cache_suggestions(key, suggestions),
                 Err(error) => eprintln!("pqbench-driver: {error}"),
             }
         }
+    }
+
+    /// Land the suggestions the partition's metadata alone supports, for a
+    /// version that ended before the verification could write them.
+    fn persist_partition_suggestions(&self, key: &Key) -> Result<(), String> {
+        let listing = self.store.read_listing(key)?;
+        let partition: Partition = serde_json::from_str(&listing)
+            .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
+        let suggestions = pqbench_parquet::lint::partition_suggestions(&partition);
+        self.store.write_suggestions(key, &suggestions)
     }
 
     /// Move the results of the versions a walk dropped to the trash, and
@@ -278,89 +296,56 @@ impl Driver {
         let (stages, input, output, error) = match opened {
             Ok(opened) => opened,
             Err(error) => {
-                eprintln!("pqbench-driver: cannot start the walk: {error}");
+                // The walk did not start, so it did not succeed: a reader must
+                // see that, not "the walk found nothing".
+                let error = format!("cannot start the walk: {error}");
+                eprintln!("pqbench-driver: {error}");
+                self.walk_error = Some(error);
                 return;
             }
         };
         let worker = self.worker.clone();
-        self.walk
-            .spawn(async move { process::pipeline(&worker, &stages, input, output, &error).await });
+        self.walk.spawn(async move {
+            // The whole metastore, table after table, is one walk: no per-step
+            // limit may kill it halfway.
+            process::pipeline(&worker, &stages, input, output, &error, None).await
+        });
     }
 
     /// Apply the walk's listing: each listed table's versions are found, and
     /// when every command succeeded, a version the listing does not name is
     /// deleted. Only a complete listing can say a version is gone, so a failed
     /// walk, or a listing that cannot be read, deletes nothing.
-    fn finish_walk(&mut self, outcome: Result<(), String>) {
+    ///
+    /// The listing is read, stored and folded off the runtime: a walk of a
+    /// large table is thousands of files, and a socket query must not wait for
+    /// it.
+    async fn finish_walk(&mut self, outcome: Result<(), String>) {
+        let engine = Arc::clone(&self.engine);
+        let store = self.store.clone();
         let directory = self.store.walk_dir();
-        let listing = fs::read_to_string(directory.join("partitions.ndjson"))
-            .map_err(|error| format!("cannot read the walk's listing: {error}"));
-        self.walk_error = match (&outcome, &listing) {
-            (Err(error), _) => {
-                let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
-                Some(format!("{error}: {}", process::tail(text.trim())))
-            }
-            (Ok(()), Err(error)) => Some(error.clone()),
-            (Ok(()), Ok(_)) => None,
+        let (walk_error, dropped) = match tokio::task::spawn_blocking(move || {
+            apply_walk(&engine, &store, &directory, outcome)
+        })
+        .await
+        {
+            Ok(applied) => applied,
+            Err(error) => (Some(format!("the walk's task failed: {error}")), Vec::new()),
         };
+        self.walk_error = walk_error;
         if let Some(error) = &self.walk_error {
             eprintln!("pqbench-driver: the walk failed ({error})");
         }
-        let listing = match listing {
-            Ok(listing) => listing,
-            Err(_) => {
-                let _ = fs::remove_dir_all(&directory);
-                return;
-            }
-        };
-        let now = engine::now_ms();
-        let mut found: BTreeMap<String, BTreeSet<Key>> = BTreeMap::new();
-        let mut dropped = Vec::new();
-        for line in listing.lines().filter(|line| !line.trim().is_empty()) {
-            match self.found(line, now) {
-                Ok((key, superseded)) => {
-                    let table = engine::parent_table(&key.0).to_string();
-                    found.entry(table).or_default().insert(key);
-                    dropped.extend(superseded);
-                }
-                Err(error) => eprintln!("pqbench-driver: walk: {error}"),
-            }
-        }
-        // A listing that stops early still names real versions; only a
-        // complete walk can say that one is gone.
-        if outcome.is_ok() {
-            for (table, keys) in &found {
-                dropped.extend(write_engine(&self.engine).missing(table, keys));
-            }
-            let tables: BTreeSet<String> = found.into_keys().collect();
-            dropped.extend(write_engine(&self.engine).retain(&tables));
-        }
         self.trash(dropped);
-        let _ = fs::remove_dir_all(&directory);
-    }
-
-    /// One line of the walk's listing, a Partition record: a new version's
-    /// listing is stored before the engine has the version. Returns the
-    /// version and the keys of the partition's versions it supersedes.
-    fn found(&mut self, line: &str, now: u64) -> Result<(Key, Vec<Key>), String> {
-        let listing: Partition =
-            json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
-        let key = engine::key(&listing.name, &listing.etag).ok_or_else(|| {
-            format!(
-                "{} at {} is not a partition version",
-                listing.name, listing.etag
-            )
-        })?;
-        if read_engine(&self.engine).state(&key).is_none() {
-            self.store.write_listing(&key, line)?;
-        }
-        let superseded = write_engine(&self.engine).found(&key, &listing, now);
-        Ok((key, superseded))
     }
 
     /// Checkpoint the map when it changed, once the period passed or
     /// nothing runs.
-    fn checkpoint(&mut self) {
+    ///
+    /// Compression and fsync run off the runtime: a large map is a long
+    /// blocking write, and the driver must keep answering its socket and
+    /// reaping children while it lands.
+    async fn checkpoint(&mut self) {
         let idle = self.walk.is_empty() && self.running.is_empty();
         if !idle && self.checkpoint_time.elapsed() < CHECKPOINT_PERIOD {
             return;
@@ -369,15 +354,90 @@ impl Driver {
         if !read_engine(&self.engine).changed() {
             return;
         }
-        if let Err(error) = self
-            .store
-            .write_checkpoint(read_engine(&self.engine).versions())
-        {
-            eprintln!("pqbench-driver: {error}");
-            return;
+        let store = self.store.clone();
+        let versions: Vec<_> = read_engine(&self.engine).versions().collect();
+        let written =
+            tokio::task::spawn_blocking(move || store.write_checkpoint(versions.into_iter())).await;
+        match written {
+            Ok(Ok(())) => write_engine(&self.engine).checkpointed(),
+            Ok(Err(error)) => eprintln!("pqbench-driver: {error}"),
+            Err(error) => eprintln!("pqbench-driver: the checkpoint task failed: {error}"),
         }
-        write_engine(&self.engine).checkpointed();
     }
+}
+
+/// Fold a finished walk's listing into the map, off the runtime.
+fn apply_walk(
+    engine: &RwLock<Engine>,
+    store: &Store,
+    directory: &Path,
+    outcome: Result<(), String>,
+) -> (Option<String>, Vec<Key>) {
+    let listing = fs::read_to_string(directory.join("partitions.ndjson"))
+        .map_err(|error| format!("cannot read the walk's listing: {error}"));
+    let walk_error = match (&outcome, &listing) {
+        (Err(error), _) => {
+            let text = fs::read_to_string(directory.join("walk.err")).unwrap_or_default();
+            Some(format!("{error}: {}", process::tail(text.trim())))
+        }
+        (Ok(()), Err(error)) => Some(error.clone()),
+        (Ok(()), Ok(_)) => None,
+    };
+    let listing = match listing {
+        Ok(listing) => listing,
+        Err(_) => {
+            let _ = fs::remove_dir_all(directory);
+            return (walk_error, Vec::new());
+        }
+    };
+    let now = engine::now_ms();
+    let mut found: BTreeMap<String, BTreeSet<Key>> = BTreeMap::new();
+    let mut dropped = Vec::new();
+    for line in listing.lines().filter(|line| !line.trim().is_empty()) {
+        match found_version(store, engine, line, now) {
+            Ok((key, superseded)) => {
+                let table = engine::parent_table(&key.0).to_string();
+                found.entry(table).or_default().insert(key);
+                dropped.extend(superseded);
+            }
+            Err(error) => eprintln!("pqbench-driver: walk: {error}"),
+        }
+    }
+    // A listing that stops early still names real versions; only a
+    // complete walk can say that one is gone.
+    if outcome.is_ok() {
+        for (table, keys) in &found {
+            dropped.extend(write_engine(engine).missing(table, keys));
+        }
+        let tables: BTreeSet<String> = found.into_keys().collect();
+        dropped.extend(write_engine(engine).retain(&tables));
+    }
+    let _ = fs::remove_dir_all(directory);
+    (walk_error, dropped)
+}
+
+/// One line of the walk's listing, a Partition record: a new version's
+/// listing is stored before the engine has the version. Returns the version
+/// and the keys of the partition's versions it supersedes.
+fn found_version(
+    store: &Store,
+    engine: &RwLock<Engine>,
+    line: &str,
+    now: u64,
+) -> Result<(Key, Vec<Key>), String> {
+    let listing: Partition =
+        serde_json::from_str(line).map_err(|error| format!("bad listing line: {error}"))?;
+    let key = engine::key(&listing.name, &listing.etag).ok_or_else(|| {
+        format!(
+            "{} at {} is not a partition version",
+            listing.name, listing.etag
+        )
+    })?;
+    if read_engine(engine).state(&key).is_none() {
+        store.write_listing(&key, line)?;
+    }
+    let superseded = write_engine(engine).found(&key, &listing, now);
+    Ok((key, superseded))
 }
 
 /// Run one transition on one version: its command, built from the version's
@@ -392,7 +452,7 @@ async fn work(store: &Store, run: &Run, worker: &Worker) -> Outcome {
     let input = match transition.input {
         Input::Partition => listing,
         Input::SampleFile => {
-            let partition: Partition = json::from_str(&listing)
+            let partition: Partition = serde_json::from_str(&listing)
                 .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
             let sample = partition
                 .sample_file
@@ -427,7 +487,7 @@ async fn work(store: &Store, run: &Run, worker: &Worker) -> Outcome {
     }
     let first = String::from_utf8_lossy(&stdout);
     let first = first.lines().next().unwrap_or_default();
-    json::from_str(first)
+    serde_json::from_str(first)
         .map(Some)
         .map_err(|error| Failure::new(format!("bad price: {error}")))
 }
@@ -443,10 +503,10 @@ async fn verify(
     listing: &str,
     worker: &Worker,
 ) -> Outcome {
-    let partition: Partition =
-        json::from_str(listing).map_err(|error| format!("bad listing of {}: {error}", key.0))?;
+    let partition: Partition = serde_json::from_str(listing)
+        .map_err(|error| format!("bad listing of {}: {error}", key.0))?;
     let mut suggestions = measured(store, key, transition, worker).await?;
-    suggestions.extend(pqbench::lint::partition_suggestions(&partition));
+    suggestions.extend(pqbench_parquet::lint::partition_suggestions(&partition));
     store.write_suggestions(key, &suggestions)?;
     Ok(None)
 }
@@ -482,7 +542,7 @@ async fn measured(
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            json::from_str(line).map_err(|error| {
+            serde_json::from_str(line).map_err(|error| {
                 Failure::new(format!("bad measured suggestion of {}: {error}", key.0))
             })
         })

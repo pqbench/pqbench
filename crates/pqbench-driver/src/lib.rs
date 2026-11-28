@@ -11,10 +11,9 @@
 //! The commands themselves talk to the catalog daemon, not to the driver, so
 //! a driver without a daemon still answers for the map it has.
 //!
-//! Two settings are the operator's and change rarely — the checkpoint codec
-//! and the per-step timeout — so they live in the run-control file the
-//! commands read (`~/.pqbenchrc`, or `PQB_CONFIG_FILE`), not on the command
-//! line: see [`run_control`].
+//! One setting is the operator's and changes rarely — the per-step timeout —
+//! so it lives in the run-control file the commands read (`~/.pqbenchrc`, or
+//! `PQB_CONFIG_FILE`), not on the command line: see [`run_control`].
 
 pub mod client;
 pub mod protocol;

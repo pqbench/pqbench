@@ -26,11 +26,6 @@ delta-s3 = ["delta", "deltalake/s3", "aws"]
 # Iceberg snapshot planning reads metadata JSON and Avro manifests.
 iceberg = ["dep:apache-avro"]
 iceberg-s3 = ["iceberg", "aws"]
-# Parses JSON with `simd-json`, which dispatches at runtime to AVX2 + PCLMULQDQ,
-# SSE4.2, or a portable kernel. Without it the parser is `serde_json`; writing
-# is `serde_json` either way.
-json-simd = ["dep:simd-json"]
-
 [dependencies]
 # The local half: footers, codecs, lint, profile. Kept behind this one
 # dependency so a change to a lint rule does not rebuild the AWS SDK.
@@ -52,9 +47,6 @@ serde_json = { version = "1.0.151", features = ["raw_value"] }
 # `parquet` already builds, not a second parser.
 base64 = { workspace = true }
 chrono = { workspace = true }
-# The optional SIMD JSON parser behind `json-simd`. Its dependency tree is small
-# and it needs no build script: the SIMD kernels are selected at runtime.
-simd-json = { version = "0.15", optional = true }
 deltalake = { version = "1.0", default-features = false, features = ["rustls"], optional = true }
 # The kernel delta-rs is built on, with the same version and features, so it
 # adds no build: its log segment reads the snapshot's `remove` actions, which

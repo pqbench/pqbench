@@ -1,13 +1,14 @@
 //! The driver's worker commands: pqbench processes from the image the driver
 //! opened before any of them started.
 //!
-//! A command execs `/proc/self/fd/{fd}` of the pinned binary rather than a
-//! path, so a binary replaced on disk (an upgrade, a rebuild) changes no
-//! command of a driver that is still running the old one.
+//! On Linux a command execs `/proc/self/fd/{fd}` of the pinned binary rather
+//! than a path, so a binary replaced on disk (an upgrade, a rebuild) changes no
+//! command of a driver that is still running the old one; elsewhere it execs
+//! the resolved path.
 //!
-//! A child dies with the driver (`PR_SET_PDEATHSIG`) and with the task that
-//! awaits it (`kill_on_drop`), so a restart finds none of its predecessor's
-//! running, and no file a child was writing has a writer left.
+//! A child dies with the driver (Linux's `PR_SET_PDEATHSIG`) and with the task
+//! that awaits it (`kill_on_drop`), so a restart finds none of its
+//! predecessor's running, and no file a child was writing has a writer left.
 //!
 //! Every command is also bounded by the step timeout: a child that has not
 //! finished by then is killed and reaped, so a hung worker — a wedged network
@@ -16,9 +17,11 @@
 //! retries with the usual backoff.
 
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,7 +37,12 @@ const ERROR_BYTES: usize = 2000;
 /// The pqbench image the driver's worker commands run.
 #[derive(Clone)]
 pub(crate) struct WorkerExe {
+    /// The open image, whose descriptor a Linux command execs.
+    #[cfg(target_os = "linux")]
     file: Arc<File>,
+    /// The resolved binary elsewhere.
+    #[cfg(not(target_os = "linux"))]
+    path: PathBuf,
 }
 
 impl WorkerExe {
@@ -45,12 +53,25 @@ impl WorkerExe {
             Some(path) => path.to_path_buf(),
             None => default_binary()?,
         };
+        // Opening it now fails here, not once per command, and on Linux the
+        // descriptor is the image every command runs.
         let file = File::open(&path).map_err(|error| {
             format!("cannot open the pqbench binary {}: {error}", path.display())
         })?;
-        Ok(WorkerExe {
+        Ok(Self::from_open(path, file))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_open(_path: PathBuf, file: File) -> Self {
+        WorkerExe {
             file: Arc::new(file),
-        })
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn from_open(path: PathBuf, file: File) -> Self {
+        drop(file);
+        WorkerExe { path }
     }
 }
 
@@ -86,7 +107,7 @@ fn search_path() -> Option<PathBuf> {
 pub(crate) struct Worker {
     exe: WorkerExe,
     daemon_socket: Option<PathBuf>,
-    /// How long one command or walk may run before it is killed.
+    /// How long one command may run before it is killed.
     step_timeout: Duration,
 }
 
@@ -106,25 +127,35 @@ impl Worker {
     /// The pinned image as a command with `arguments`, talking to the daemon
     /// when there is one.
     fn command(&self, arguments: &[String]) -> Command {
-        let image = format!("/proc/self/fd/{}", self.exe.file.as_raw_fd());
-        let mut command = Command::new(image);
-        command.args(arguments).arg0("pqbench").kill_on_drop(true);
+        #[cfg(target_os = "linux")]
+        let mut command = {
+            let image = format!("/proc/self/fd/{}", self.exe.file.as_raw_fd());
+            let mut command = Command::new(image);
+            command.args(arguments).arg0("pqbench").kill_on_drop(true);
+            let parent = std::process::id() as libc::pid_t;
+            // SAFETY: `prctl`, `getppid`, and `_exit` are async-signal-safe, so
+            // they may run between fork and exec.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if libc::getppid() != parent {
+                        libc::_exit(1);
+                    }
+                    Ok(())
+                });
+            }
+            command
+        };
+        #[cfg(not(target_os = "linux"))]
+        let mut command = {
+            let mut command = Command::new(&self.exe.path);
+            command.args(arguments).arg0("pqbench").kill_on_drop(true);
+            command
+        };
         if let Some(socket) = &self.daemon_socket {
             command.env("PQB_DAEMON_SOCK", socket);
-        }
-        let parent = std::process::id() as libc::pid_t;
-        // SAFETY: `prctl`, `getppid`, and `_exit` are async-signal-safe, so
-        // they may run between fork and exec.
-        unsafe {
-            command.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::getppid() != parent {
-                    libc::_exit(1);
-                }
-                Ok(())
-            });
         }
         command
     }
@@ -194,12 +225,17 @@ impl Worker {
 /// Run a pipeline of commands, each one's standard output the next one's
 /// standard input: the first reads `input`, the last writes `output`, all
 /// write their errors to `error`. `Ok` when every stage succeeded.
+///
+/// `limit` bounds the whole pipeline when it is given. A walk of the whole
+/// metastore passes `None`: it runs table after table, so a per-step limit
+/// would kill a healthy walk halfway.
 pub(crate) async fn pipeline(
     worker: &Worker,
     stages: &[Vec<String>],
     input: File,
     output: File,
     error: &File,
+    limit: Option<Duration>,
 ) -> Result<(), String> {
     let mut children = Vec::new();
     let mut stdin = Stdio::from(input);
@@ -226,14 +262,17 @@ pub(crate) async fn pipeline(
         };
         children.push((arguments.join(" "), child));
     }
-    let failed = match timeout(worker.step_timeout, wait_children(&mut children)).await {
+    let waited = match limit {
+        Some(limit) => timeout(limit, wait_children(&mut children))
+            .await
+            .map_err(|_| limit),
+        None => Ok(wait_children(&mut children).await),
+    };
+    let failed = match waited {
         Ok(failed) => failed,
-        Err(_) => {
+        Err(limit) => {
             kill_children(&mut children).await;
-            return Err(format!(
-                "the walk timed out after {:?} and was killed",
-                worker.step_timeout
-            ));
+            return Err(format!("the walk timed out after {limit:?} and was killed"));
         }
     };
     if failed.is_empty() {
@@ -343,6 +382,27 @@ mod tests {
         assert_eq!(error.error, "boom");
     }
 
+    /// A walk with no limit runs past the worker's step timeout: the whole
+    /// metastore is one walk, so a per-step limit must not kill it halfway.
+    #[tokio::test]
+    async fn a_walk_with_no_limit_is_not_killed_at_the_step_timeout() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = tempfile::NamedTempFile::new().unwrap().into_file();
+        let output = File::create(directory.path().join("walk.ndjson")).unwrap();
+        let error = File::create(directory.path().join("walk.err")).unwrap();
+        let worker = shell(Duration::from_millis(100));
+        pipeline(
+            &worker,
+            &[vec!["-c".to_string(), "sleep 0.3".to_string()]],
+            input,
+            output,
+            &error,
+            None,
+        )
+        .await
+        .expect("an unbounded walk is not killed at the step timeout");
+    }
+
     /// A walk that outlives its step is killed stage by stage: the command
     /// that would land the listing never runs.
     #[tokio::test]
@@ -360,6 +420,7 @@ mod tests {
             input,
             output,
             &error,
+            Some(Duration::from_millis(100)),
         )
         .await
         .expect_err("a walk past its step is an error");

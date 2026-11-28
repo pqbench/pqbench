@@ -144,7 +144,15 @@ async fn respond(request: &Request, session: &Daemon, shutdown: &Notify) -> Resp
             },
             Err(error) => failure(error.as_ref()),
         },
-        Request::HttpGet { url } => answer(session, url).await,
+        Request::HttpGet { url } => {
+            match check_endpoint(&session.workspace().config().endpoint, url) {
+                Ok(()) => answer(session, url).await,
+                Err(error) => Response {
+                    error: Some(error),
+                    ..Response::default()
+                },
+            }
+        }
     }
 }
 
@@ -178,6 +186,33 @@ async fn answer(session: &Daemon, url: &str) -> Response {
         }
         Err(error) => failure(&error),
     }
+}
+
+/// Whether `url` is on the daemon's endpoint, so the bearer it forwards never
+/// leaves for another host. The path may differ: an Iceberg REST endpoint
+/// carries a catalog prefix (`/iceberg-rest/v1/catalogs/{c}`) while the same
+/// workspace's Unity fallback asks `/api/2.1/unity-catalog/...` on the same
+/// host.
+fn check_endpoint(endpoint: &str, url: &str) -> Result<(), String> {
+    let Some(wanted) = origin(endpoint) else {
+        return Err(format!(
+            "the daemon's endpoint {endpoint:?} is not a URL to send a request to"
+        ));
+    };
+    match origin(url) {
+        Some(requested) if requested.eq_ignore_ascii_case(wanted) => Ok(()),
+        _ => Err(format!(
+            "{url} is not on the daemon's endpoint host {wanted}"
+        )),
+    }
+}
+
+/// A URL's origin: the scheme and authority, with any path after it dropped.
+fn origin(url: &str) -> Option<&str> {
+    let scheme = url.find("://")? + 3;
+    let rest = &url[scheme..];
+    let end = rest.find('/').unwrap_or(rest.len());
+    (end > 0).then(|| &url[..scheme + end])
 }
 
 /// The answer that only says the request was served.
@@ -224,9 +259,9 @@ mod tests {
         address
     }
 
-    fn workspace() -> pqbench::Workspace {
+    fn workspace(endpoint: &str) -> pqbench::Workspace {
         pqbench::Workspace::new(pqbench::Config {
-            endpoint: "http://127.0.0.1:1".into(),
+            endpoint: endpoint.to_string(),
             ..pqbench::Config::default()
         })
         .expect("the workspace builds")
@@ -325,7 +360,11 @@ mod tests {
     async fn a_ping_and_a_stop_round_trip() {
         let directory = tempfile::tempdir().expect("a temp directory");
         let socket = directory.path().join("daemon.sock");
-        let server = tokio::spawn(run(Daemon::direct(workspace()), socket.clone(), 0));
+        let server = tokio::spawn(run(
+            Daemon::direct(workspace("http://127.0.0.1:1")),
+            socket.clone(),
+            0,
+        ));
         ready(&socket).await;
 
         let response = client::request(
@@ -423,10 +462,11 @@ mod tests {
     #[tokio::test]
     async fn an_http_get_round_trips_the_endpoints_answer() {
         let body = r#"{"catalogs":[{"name":"c1"}]}"#;
-        let url = format!("{}/api/2.1/unity-catalog/catalogs", endpoint(body));
+        let endpoint = endpoint(body);
+        let url = format!("{endpoint}/api/2.1/unity-catalog/catalogs");
         let directory = tempfile::tempdir().expect("a temp directory");
         let socket = directory.path().join("daemon.sock");
-        let server = tokio::spawn(run(Daemon::direct(workspace()), socket.clone(), 0));
+        let server = tokio::spawn(run(Daemon::direct(workspace(&endpoint)), socket.clone(), 0));
         ready(&socket).await;
 
         let response = client::request(&socket, &Request::http_get(&url))
@@ -441,5 +481,42 @@ mod tests {
             .await
             .expect("the server task joins")
             .expect("no server error");
+    }
+
+    /// The daemon forwards its bearer only to its own endpoint's host: another
+    /// host, and a host that merely starts with the endpoint's name, are
+    /// refused. The path may differ, since a dialect fallback asks another path
+    /// on the same workspace.
+    #[test]
+    fn an_http_get_outside_the_endpoint_is_refused() {
+        let endpoint = "https://dbc.example.cloud.databricks.com";
+        for url in [
+            format!("{endpoint}/api/2.1/unity-catalog/catalogs"),
+            format!("{endpoint}/iceberg-rest/v1/catalogs/main"),
+            endpoint.to_string(),
+        ] {
+            assert!(check_endpoint(endpoint, &url).is_ok(), "{url}");
+        }
+        for url in [
+            "https://other.example.com/api/2.1/unity-catalog/catalogs".to_string(),
+            format!("{endpoint}.evil/api/2.1/unity-catalog/catalogs"),
+            "http://dbc.example.cloud.databricks.com/api/2.1/unity-catalog/catalogs".into(),
+            "https://attacker.example.com/api/2.1/unity-catalog/catalogs".to_string(),
+        ] {
+            assert!(check_endpoint(endpoint, &url).is_err(), "{url}");
+        }
+
+        // An Iceberg REST endpoint keeps its catalog prefix, and its workspace
+        // still asks the Unity path on the same host.
+        let prefixed = "http://127.0.0.1:34585/iceberg-rest/v1/catalogs/dbx_samples";
+        assert!(check_endpoint(
+            prefixed,
+            "http://127.0.0.1:34585/api/2.1/unity-catalog/tables/dbx_samples.nyctaxi.trips"
+        )
+        .is_ok());
+        assert!(check_endpoint(prefixed, "http://127.0.0.1:34586/api").is_err());
+
+        // A workspace with no endpoint sends nothing.
+        assert!(check_endpoint("", "https://example.com/api").is_err());
     }
 }

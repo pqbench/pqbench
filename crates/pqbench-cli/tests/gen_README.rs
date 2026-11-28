@@ -68,6 +68,6 @@ fn format_html() {
 #[rustfmt::skip]
 #[test]
 fn python() {
-    // python, from line 383
-    support::run("pqbench list files < docker/e2e-lakehouse/table.ndjson | zstd -3 > /tmp/files.jsonl.zst", 384, None);
+    // python, from line 384
+    support::run("pqbench list files < docker/e2e-lakehouse/table.ndjson | zstd -3 > /tmp/files.jsonl.zst", 385, None);
 }

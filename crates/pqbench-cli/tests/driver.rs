@@ -724,20 +724,16 @@ fn one_version_reads_its_stored_results() {
     assert_eq!(read(partition(&rows[0])), results);
 }
 
-/// The driver's two settings are the run-control file's, not flags: the store's
-/// checkpoint lands under the configured codec's name, and a restart loads it.
+/// The driver's setting is the run-control file's, not a flag: the store's
+/// checkpoint lands as one Zstandard frame, and a restart loads it.
 #[test]
-fn the_run_control_file_sets_the_checkpoint_codec() {
+fn the_checkpoint_lands_as_zstd_and_a_restart_loads_it() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("events");
     table(&root);
     walk(directory.path(), &[("events", &root)]);
     let config = directory.path().join("run-control");
-    std::fs::write(
-        &config,
-        "[DEFAULT]\ncheckpoint-codec = lz4\nstep-timeout = 60\n",
-    )
-    .unwrap();
+    std::fs::write(&config, "[DEFAULT]\nstep-timeout = 60\n").unwrap();
     let driver = Driver::configured(directory.path(), &[], &config);
     // The table's files are not there, so both versions fail twice and settle:
     // a version caught mid-transition would go back a state on the restart.
@@ -746,18 +742,18 @@ fn the_run_control_file_sets_the_checkpoint_codec() {
     driver.stop();
 
     let store = directory.path().join("store");
-    let checkpoint = store.join("checkpoint.ndjson.lz4");
+    let checkpoint = store.join("checkpoint.ndjson.zst");
     assert!(
         checkpoint.is_file(),
-        "no LZ4 checkpoint: {:?}",
+        "no Zstandard checkpoint: {:?}",
         walk_files(&store)
     );
     let bytes = std::fs::read(&checkpoint).unwrap();
     assert!(
-        bytes.starts_with(&[0x04, 0x22, 0x4d, 0x18]),
-        "the checkpoint is not an LZ4 frame"
+        bytes.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]),
+        "the checkpoint is not a Zstandard frame"
     );
-    for other in ["checkpoint.ndjson", "checkpoint.ndjson.zst"] {
+    for other in ["checkpoint.ndjson", "checkpoint.ndjson.lz4"] {
         assert!(!store.join(other).exists(), "{other} was written too");
     }
 
@@ -974,17 +970,21 @@ fn the_last_strike_quarantines_a_version_across_restarts() {
         "file_count": 1,
         "size_bytes": 10,
     });
+    let checkpoint = pqbench::codecs::compress_frame(
+        pqbench::codecs::Codec::Zstd,
+        1,
+        (row.to_string() + "\n").as_bytes(),
+    )
+    .unwrap();
     std::fs::write(
-        directory.path().join("store/checkpoint.ndjson"),
-        row.to_string() + "\n",
+        directory.path().join("store/checkpoint.ndjson.zst"),
+        checkpoint,
     )
     .unwrap();
     // A copy a crash left behind: no transition reads it again.
     std::fs::write(version_dir.join("sample.parquet"), "x").unwrap();
-    let config = directory.path().join("run-control");
-    std::fs::write(&config, "[DEFAULT]\ncheckpoint-codec = none\n").unwrap();
 
-    let running = Driver::configured(directory.path(), &[], &config);
+    let running = Driver::start(directory.path(), &[]);
     let rows = running.wait(|rows| rows.len() == 1 && rows[0]["state"] == "FAILED");
     assert_eq!(rows[0]["failure_count"], 6);
     assert!(
@@ -1008,12 +1008,8 @@ fn the_last_strike_quarantines_a_version_across_restarts() {
 
     // A restart loads the quarantine rather than trying the version again.
     running.stop();
-    let running = Driver::configured(directory.path(), &[], &config);
-    let start = Instant::now();
-    while start.elapsed() < Duration::from_millis(1_000) {
-        assert_eq!(running.rows(), rows, "the quarantine did not hold");
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    let running = Driver::start(directory.path(), &[]);
+    assert_eq!(running.rows(), rows, "the quarantine did not hold");
     let status = driver_status(&running);
     assert_eq!(status["state_counts"]["FAILED"], 1);
     assert_eq!(status["failed_run_count"], 0);
@@ -1104,9 +1100,7 @@ fn a_signal_stops_the_driver_cleanly() {
         assert!(status.success(), "signal {signal} exited {status}");
         assert!(!socket.exists(), "the socket outlived signal {signal}");
         assert!(
-            ["checkpoint.ndjson.zst", "checkpoint.ndjson"]
-                .iter()
-                .any(|name| store.join(name).is_file()),
+            store.join("checkpoint.ndjson.zst").is_file(),
             "no checkpoint after signal {signal}"
         );
     }

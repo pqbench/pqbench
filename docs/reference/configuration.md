@@ -113,37 +113,34 @@ file. See the [CLI reference](cli.md) for each command's flags.
 
 `pqbench-driver` keeps a map of partition versions and drives each through
 price, download, bytemass, lint, and verify; its walk re-lists the catalog on a
-period. It reads two settings of its own from the same run-control file, from
+period. It reads one setting of its own from the same run-control file, from
 `[DEFAULT]` or from the section `PQB_PROFILE` names. The file is
 `~/.pqbenchrc`, or what `PQB_CONFIG_FILE` (or `PQB_CONFIG`) names:
 
 ```ini
 [DEFAULT]
-checkpoint-codec = zstd
-step-timeout     = 300
+step-timeout = 300
 ```
 
 | Key | Role | Default |
 | --- | --- | --- |
-| `checkpoint-codec` | the store's checkpoint format: `none` (plain NDJSON), `zstd`, or `lz4` | `zstd` |
-| `step-timeout` | seconds one worker command, or one walk, may run before it is killed | `300` |
+| `step-timeout` | seconds one worker command may run before it is killed | `300` |
 
-Both change rarely, so they live only in the file: they are not flags and have
-no environment variable of their own. The command line carries what changes per
-run, the file what an operator sets once. The keys sit beside the profile's, and
+It changes rarely, so it lives only in the file: it is not a flag and has no
+environment variable of its own. The command line carries what changes per run,
+the file what an operator sets once. The key sits beside the profile's, and
 either side ignores the other's.
 
-The checkpoint is `checkpoint.ndjson`, `checkpoint.ndjson.zst`, or
-`checkpoint.ndjson.lz4` under the store. The last two are standard Zstd and LZ4
-frames, so `zstdcat` and `lz4cat` read them. The driver assembles a checkpoint
-in a temporary file, syncs it, renames it into place, and syncs the store
-directory, so a crash leaves the old checkpoint or the new one and never half
-of either. It loads whichever of the three files it finds, so changing
-`checkpoint-codec` on an existing store migrates it at the next checkpoint.
+The checkpoint is `checkpoint.ndjson.zst` under the store: one standard
+Zstandard frame of NDJSON, which `zstdcat` reads. The driver assembles it in a
+temporary file, syncs it, renames it into place, and syncs the store directory,
+so a crash leaves the old checkpoint or the new one and never half of either.
 
-A step that outlives `step-timeout` — a command or the walk — is killed and
-reaped, so no hung worker outlives its step, and the version goes back to its
-previous state with the failure counted, retrying after the usual backoff.
+A command that outlives `step-timeout` is killed and reaped, so no hung worker
+outlives its step, and the version goes back to its previous state with the
+failure counted, retrying after the usual backoff. A walk of the whole
+metastore is not bounded by it: it runs table after table, and a per-step limit
+would kill a healthy walk halfway.
 
 ## Example
 

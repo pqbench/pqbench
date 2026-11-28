@@ -23,13 +23,10 @@
 //! the only poller: a consumer blocked on a write stops every read, which is
 //! what bounds the run's memory.
 
-use std::collections::BTreeMap;
 use std::future::Future;
-use std::pin::Pin;
 
-use futures_util::stream::{self, FuturesUnordered, LocalBoxStream, Stream, StreamExt};
+use futures_util::stream::{self, LocalBoxStream, Stream, StreamExt};
 use futures_util::TryStreamExt;
-use pqbench::third_party::json;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -102,7 +99,7 @@ async fn next_record(command: &'static str, lines: &mut Lines) -> Result<Option<
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let record = json::from_slice_mut(line)
+        let record = serde_json::from_slice(line)
             .map_err(|error| format!("{command} reads NDJSON records: {error}"))?;
         return Ok(Some(record));
     }
@@ -163,89 +160,18 @@ where
     F: Fn(A) -> Fut + Clone + 'a,
     Fut: Future<Output = Result<Option<B>, E>> + 'a,
 {
-    let window = Window {
-        upstream: parents.boxed_local(),
-        read,
-        fan_out: fan_out.max(1),
-        pending: FuturesUnordered::new(),
-        ready: BTreeMap::new(),
-        next_parent: 0,
-        next_row: 0,
-        exhausted: false,
-    };
-    stream::unfold(window, |mut window| async move {
-        loop {
-            if let Some(row) = window.ready.remove(&window.next_row) {
-                window.next_row += 1;
-                return Some((row, window));
-            }
-            window.fill().await;
-            if window.pending.is_empty() && window.exhausted {
-                return None;
-            }
-            if let Some((index, row)) = window.pending.next().await {
-                window.ready.insert(index, row);
-            }
-        }
-    })
-    .filter_map(|row| async move {
-        match row {
-            Ok(Some(row)) => Some(Ok(row)),
-            Ok(None) => None,
-            Err(error) => Some(Err(error)),
-        }
-    })
-    .boxed_local()
-}
-
-/// One read's result, tagged with its parent's index so the stream can yield
-/// its records in input order.
-type ReadFuture<'a, B> = Pin<Box<dyn Future<Output = (usize, Result<Option<B>, CliError>)> + 'a>>;
-
-/// The sliding window behind [`filter_map`]: the parents still to read, the
-/// reads in flight, and the finished records waiting for their turn.
-///
-/// At most `fan_out` reads are in flight, so a completed read frees its slot at
-/// once. At most `fan_out` finished records wait, so a head that never finishes
-/// cannot buffer the whole parent stream: the window stops pulling once its
-/// finished side is full.
-struct Window<'a, A, B, F> {
-    upstream: LocalBoxStream<'a, Result<A, CliError>>,
-    read: F,
-    fan_out: usize,
-    pending: FuturesUnordered<ReadFuture<'a, B>>,
-    ready: BTreeMap<usize, Result<Option<B>, CliError>>,
-    next_parent: usize,
-    next_row: usize,
-    exhausted: bool,
-}
-
-impl<'a, A, B, E, F, Fut> Window<'a, A, B, F>
-where
-    A: Resource + 'a,
-    B: 'a,
-    E: Into<CliError> + 'a,
-    F: Fn(A) -> Fut + Clone + 'a,
-    Fut: Future<Output = Result<Option<B>, E>> + 'a,
-{
-    /// Start the parents the window has room for.
-    async fn fill(&mut self) {
-        while !self.exhausted
-            && self.pending.len() < self.fan_out
-            && self.ready.len() < self.fan_out
-        {
-            let Some(parent) = self.upstream.next().await else {
-                self.exhausted = true;
-                break;
-            };
-            let index = self.next_parent;
-            self.next_parent += 1;
-            let read = self.read.clone();
-            self.pending.push(Box::pin(
-                async move { (index, read_parent(read, parent).await) },
-            ));
-        }
-    }
+    // `buffered` polls the reads in flight while it waits for the next parent,
+    // so a completed read is written as soon as it is the next one — a slow
+    // parent never delays it — and a finished read starts the next parent's
+    // read at once. It keeps the reads in input order.
+    parents
+        .map(move |parent| {
+            let read = read.clone();
+            read_parent(read, parent)
+        })
+        .buffered(fan_out.max(1))
+        .try_filter_map(|row| async move { Ok(row) })
+        .boxed_local()
 }
 
 /// Read one parent, naming a failure under the parent it came from.
@@ -333,14 +259,11 @@ pub(crate) async fn drive<B: serde::Serialize>(rows: Records<'_, B>) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use std::task::Poll;
     use std::time::Duration;
 
-    use futures_util::stream::{self, Stream, StreamExt};
+    use futures_util::stream::{self, StreamExt};
     use serde::{Deserialize, Serialize};
-    use tokio::sync::{mpsc, Notify};
+    use tokio::sync::{mpsc, oneshot};
 
     use pqbench::v1::Resource;
 
@@ -372,63 +295,55 @@ mod tests {
         }
     }
 
-    /// A read that finishes ahead of the head frees its slot at once: item 1
-    /// completes while item 0 waits on a channel, and item 2 starts and
-    /// completes before item 0 is released.
+    /// A finished head is written while the next parent is still on its way:
+    /// the window polls the reads it has rather than waiting for the upstream
+    /// to hand it another parent. Read 1 starts as soon as its parent arrives,
+    /// before parent 2 does, and read 2 starts when read 1 frees its slot.
     #[tokio::test]
-    async fn a_completed_read_starts_the_next_before_the_head() {
-        let gate = Arc::new(Notify::new());
-        let (finished, mut finished_rx) = mpsc::unbounded_channel::<String>();
-        let read_gate = Arc::clone(&gate);
-        let parents = stream::iter(["0", "1", "2"]).map(|name| {
-            Ok(Parent {
-                name: name.to_string(),
+    async fn a_finished_head_is_written_before_the_next_parent_arrives() {
+        let (started, mut started_rx) = mpsc::unbounded_channel::<String>();
+        let (release, release_rx) = oneshot::channel::<()>();
+        let parents = stream::iter(["0", "1"])
+            .map(|name| {
+                Ok(Parent {
+                    name: name.to_string(),
+                })
             })
-        });
+            .chain(stream::once(async move {
+                // Parent 2 arrives only once the test has seen record 0.
+                let _ = release_rx.await;
+                Ok(Parent {
+                    name: "2".to_string(),
+                })
+            }));
         let mut rows = Box::pin(filter_map(parents, 2, move |parent: Parent| {
-            let gate = Arc::clone(&read_gate);
-            let finished = finished.clone();
+            let started = started.clone();
             async move {
-                match parent.name.as_str() {
-                    "0" => gate.notified().await,
-                    "2" => {
-                        let _ = finished.send(parent.name.clone());
-                    }
-                    _ => {}
+                let _ = started.send(parent.name.clone());
+                if parent.name == "0" {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 Ok::<_, super::CliError>(Some(parent.name))
             }
         }));
 
-        // Drive the window until the third parent's read completes. The head
-        // is blocked, so the stream itself must stay pending: no record may be
-        // written out of order.
-        let head_blocked = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let completed = futures_util::future::poll_fn(|cx| {
-                    assert!(
-                        matches!(Pin::new(&mut rows).poll_next(cx), Poll::Pending),
-                        "a blocked head must not let a later record through"
-                    );
-                    finished_rx.poll_recv(cx)
-                })
-                .await;
-                if completed.is_some() {
-                    break;
-                }
-            }
-        })
-        .await;
+        let first = tokio::time::timeout(Duration::from_secs(2), rows.next())
+            .await
+            .expect("the first record waited for a parent that had not arrived")
+            .expect("a record")
+            .expect("every read succeeds");
+        assert_eq!(first, "0", "records keep their input order");
+        let started: Vec<String> = std::iter::from_fn(|| started_rx.try_recv().ok()).collect();
         assert!(
-            head_blocked.is_ok(),
-            "item 2 must start and finish while item 0 is still blocked"
+            started.contains(&"1".to_string()),
+            "read 1 had not started before parent 2 arrived: {started:?}"
         );
 
-        gate.notify_one();
+        release.send(()).expect("the test releases parent 2");
         let rest: Vec<String> = rows
             .map(|row| row.expect("every read succeeds"))
             .collect()
             .await;
-        assert_eq!(rest, ["0", "1", "2"], "records keep their input order");
+        assert_eq!(rest, ["1", "2"], "records keep their input order");
     }
 }

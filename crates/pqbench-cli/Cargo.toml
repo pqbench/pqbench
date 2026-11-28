@@ -22,10 +22,6 @@ aws = ["pqbench/aws"]
 iceberg = ["pqbench/iceberg"]
 delta-s3 = ["pqbench/delta-s3"]
 iceberg-s3 = ["pqbench/iceberg-s3"]
-# Parse JSON with the SIMD parser. The output is identical either way: this is
-# a build choice, not a behavior one.
-json-simd = ["pqbench/json-simd"]
-
 [[bin]]
 name = "pqbench"
 path = "src/main.rs"

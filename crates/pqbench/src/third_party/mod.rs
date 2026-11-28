@@ -12,6 +12,5 @@ pub use pqbench_parquet::third_party::{flate2, lz4, parquet, snappy, zstd};
 
 pub mod avro;
 pub mod delta;
-pub mod json;
 pub mod object_store;
 pub mod reqwest;

@@ -115,11 +115,13 @@ pub async fn list(lake: &Lake, table: &v1::Table) -> Result<Vec<v1::Partition>, 
         }
     }
     let counted = removed.is_some();
-    for (values, file_count, size_bytes) in removed.map(Removed::totals).unwrap_or_default() {
-        check_columns(&values, &table.partition_columns)?;
-        let fold = partitions.entry(values).or_default();
-        fold.removed_file_count += file_count;
-        fold.removed_size_bytes += size_bytes;
+    for total in removed.map(Removed::totals).unwrap_or_default() {
+        check_columns(&total.values, &table.partition_columns)?;
+        partitions.entry(total.values).or_default().add_removed(
+            total.file_count,
+            total.size_bytes,
+            total.hash,
+        );
     }
     let mut records: Vec<v1::Partition> = partitions
         .into_iter()
@@ -183,20 +185,38 @@ impl Removed {
         }
     }
 
-    /// Per partition: its values, and the count and bytes of its removed files.
-    fn totals(self) -> Vec<(BTreeMap<String, Option<String>>, u64, u64)> {
-        let mut totals = vec![(0, 0); self.partitions.len()];
+    /// Per partition: its values, and the count, bytes and identity hash of its
+    /// removed files.
+    fn totals(self) -> Vec<RemovedTotal> {
+        let mut totals = vec![(0_u64, 0_u64, 0_u64); self.partitions.len()];
         for file in self.files.iter().filter(|file| !file.live) {
-            totals[file.partition].0 += 1;
-            totals[file.partition].1 += file.size_bytes;
+            let total = &mut totals[file.partition];
+            total.0 += 1;
+            total.1 += file.size_bytes;
+            total.2 ^= removed_hash(file.path_hash, file.size_bytes);
         }
         self.partitions
             .into_iter()
             .zip(totals)
-            .filter(|(_, (file_count, _))| *file_count > 0)
-            .map(|(values, (file_count, size_bytes))| (values, file_count, size_bytes))
+            .filter(|(_, (file_count, _, _))| *file_count > 0)
+            .map(|(values, (file_count, size_bytes, hash))| RemovedTotal {
+                values,
+                file_count,
+                size_bytes,
+                hash,
+            })
             .collect()
     }
+}
+
+/// One partition's removed files, once the active ones cancelled the paths
+/// they still hold.
+struct RemovedTotal {
+    values: BTreeMap<String, Option<String>>,
+    file_count: u64,
+    size_bytes: u64,
+    /// The XOR of the files' hashes: their share of the partition's etag.
+    hash: u64,
 }
 
 fn path_hash(path: &str) -> u64 {
@@ -273,6 +293,15 @@ impl Fold {
         }
     }
 
+    /// Fold in the removed files the active ones did not cancel: their count,
+    /// bytes, and identity, so a tombstone-only partition's etag says which
+    /// tombstones it holds and changes when `VACUUM` drops them.
+    fn add_removed(&mut self, file_count: u64, size_bytes: u64, hash: u64) {
+        self.removed_file_count += file_count;
+        self.removed_size_bytes += size_bytes;
+        self.etag ^= hash;
+    }
+
     /// The partition's record. `counted` says whether the table's format
     /// records removed files; without it the removed totals are absent.
     fn finish(
@@ -318,6 +347,14 @@ fn age(file: &v1::TableFile) -> (u64, &str) {
 fn file_hash(file: &v1::TableFile) -> u64 {
     let size_bytes = file.size_bytes.unwrap_or_default().to_le_bytes();
     sample::hash(&[file.path.as_bytes(), &[0], &size_bytes])
+}
+
+/// A removed file's hash: its share of the etag. The domain tag keeps it
+/// distinct from a live file's hash at the same path and size, so a partition
+/// whose only difference is a tombstone never hashes the same.
+fn removed_hash(path_hash: u64, size_bytes: u64) -> u64 {
+    const TAG: &[u8] = b"removed";
+    sample::hash(&[TAG, &path_hash.to_le_bytes(), &size_bytes.to_le_bytes()])
 }
 
 /// A partition's name follows the table's partition column order, so a
@@ -370,7 +407,9 @@ fn escape(value: &str, out: &mut String) {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::partition_id;
+    use crate::v1::TableFile;
+
+    use super::{partition_id, Fold, Removed, RemovedFile};
 
     fn values(pairs: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
         pairs
@@ -396,5 +435,51 @@ mod tests {
     #[test]
     fn a_table_without_partition_values_has_one_partition() {
         assert_eq!(partition_id(&BTreeMap::new(), &[]), "unpartitioned");
+    }
+
+    /// A partition's etag covers its removed files: a tombstone-only partition
+    /// whose tombstones change has a different etag, and vacuuming them returns
+    /// the etag the partition had before the files were removed. A cached
+    /// `tombstones` suggestion is therefore invalidated when `VACUUM` runs or
+    /// more tombstones accumulate.
+    #[test]
+    fn removed_files_change_a_partitions_etag() {
+        let live = TableFile {
+            name: "files/live.parquet".into(),
+            path: "live.parquet".into(),
+            size_bytes: Some(100),
+            ..TableFile::default()
+        };
+        let mut no_removed = Fold::default();
+        no_removed.add(live.clone(), None);
+        let live_etag = no_removed.etag;
+
+        for (path_hash, size_bytes) in [(0x1234_u64, 200_u64), (0x9876, 300)] {
+            let removed = Removed {
+                files: vec![RemovedFile {
+                    path_hash,
+                    partition: 0,
+                    size_bytes,
+                    live: false,
+                }],
+                partitions: vec![BTreeMap::new()],
+            };
+            let total = removed.totals().pop().unwrap();
+            let mut fold = Fold::default();
+            fold.add(live.clone(), None);
+            fold.add_removed(total.file_count, total.size_bytes, total.hash);
+            assert_ne!(
+                fold.etag, live_etag,
+                "a tombstone at {path_hash:x} did not change the etag"
+            );
+            assert_eq!(fold.removed_file_count, 1);
+            assert_eq!(fold.removed_size_bytes, size_bytes);
+        }
+
+        // Vacuumed: a fresh fold without the removed files has the live etag
+        // again, so the stale suggestion no longer matches.
+        let mut vacuumed = Fold::default();
+        vacuumed.add(live, None);
+        assert_eq!(vacuumed.etag, live_etag);
     }
 }

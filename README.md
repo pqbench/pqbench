@@ -335,14 +335,15 @@ over the driver's own socket:
 
 ```console no-run
 $ pqbench-driver start --store /var/lib/pqbench --walk-period-seconds 86400
+$ export PQB_DRIVER_SOCK=/var/lib/pqbench/driver.sock
 $ pqbench list partition-versions catalogs/main/schemas/sales
 $ pqbench get partition-version catalogs/main/schemas/sales/tables/orders/partitions/day%3D1
 $ pqbench-driver status
-$ pqbench-driver stop
+$ pqbench-driver stop --store /var/lib/pqbench
 ```
 
-Two operator settings — `checkpoint-codec` and `step-timeout` — change rarely
-enough to live only in `~/.pqbenchrc`; see
+One operator setting — `step-timeout` — changes rarely enough to live only in
+`~/.pqbenchrc`; see
 [Configuration](https://pqbench.github.io/pqbench/reference/configuration/#driver-settings).
 The catalog daemon is independent: the driver's commands talk to it when one is
 running, and local tables need none.

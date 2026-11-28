@@ -6,14 +6,13 @@
 //! [DEFAULT]
 //! endpoint          = https://dbc-abc123.cloud.databricks.com
 //! token             = dapi…
-//! checkpoint-codec  = zstd
 //! step-timeout      = 300
 //!
 //! [long-walks]
 //! step-timeout      = 3600
 //! ```
 //!
-//! Both settings change rarely, so they belong in the run-control file rather
+//! The setting changes rarely, so it belongs in the run-control file rather
 //! than on the command line, which carries what changes per run. The file is
 //! shared with `pqbench` itself, so the keys the driver does not know
 //! (`endpoint`, `token`, `table_format`) are ignored, not errors.
@@ -24,8 +23,6 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::store::CheckpointCodec;
-
 /// The section that applies when `PQB_PROFILE` names none.
 const DEFAULT_SECTION: &str = "DEFAULT";
 
@@ -35,16 +32,13 @@ const DEFAULT_STEP_TIMEOUT_SECONDS: u64 = 300;
 /// What the driver reads from the run-control file.
 #[derive(Debug)]
 pub(crate) struct RunControl {
-    /// The format the store's checkpoint is written in.
-    pub checkpoint_codec: CheckpointCodec,
-    /// How long one worker command, or the walk, may run before it is killed.
+    /// How long one worker command may run before it is killed.
     pub step_timeout: Duration,
 }
 
 impl Default for RunControl {
     fn default() -> Self {
         RunControl {
-            checkpoint_codec: CheckpointCodec::Zstd,
             step_timeout: Duration::from_secs(DEFAULT_STEP_TIMEOUT_SECONDS),
         }
     }
@@ -108,17 +102,8 @@ fn parse(text: &str, profile: Option<&str>) -> Result<RunControl, String> {
         if value.is_empty() {
             continue;
         }
-        match key.trim().replace('_', "-").as_str() {
-            "checkpoint-codec" => {
-                run_control.checkpoint_codec =
-                    CheckpointCodec::from_name(&value).ok_or_else(|| {
-                        format!("checkpoint-codec expects `none`, `zstd`, or `lz4`, got {value:?}")
-                    })?;
-            }
-            "step-timeout" => {
-                run_control.step_timeout = Duration::from_secs(seconds(&value)?);
-            }
-            _ => {}
+        if key.trim().replace('_', "-") == "step-timeout" {
+            run_control.step_timeout = Duration::from_secs(seconds(&value)?);
         }
     }
     if profile.is_some() && !sections.contains(wanted) {
@@ -157,18 +142,17 @@ mod tests {
     const FILE: &str = "# a run-control file\n\
                         [DEFAULT]\n\
                         endpoint = https://example.cloud.databricks.com\n\
-                        checkpoint-codec = none\n\
                         step-timeout = 30\n\
                         \n\
                         [long-walks]\n\
                         step-timeout = 3600\n";
 
-    /// The default section's two driver keys parse, beside the keys the
-    /// commands own.
+    /// The driver's key parses beside the keys the commands own, and a key it
+    /// does not know — an old `checkpoint-codec` — is ignored.
     #[test]
-    fn the_run_control_file_reads_the_driver_knobs() {
-        let run_control = parse(FILE, None).unwrap();
-        assert_eq!(run_control.checkpoint_codec, CheckpointCodec::None);
+    fn the_run_control_file_reads_the_driver_knob() {
+        let text = format!("{FILE}checkpoint-codec = lz4\n");
+        let run_control = parse(&text, None).unwrap();
         assert_eq!(run_control.step_timeout, Duration::from_secs(30));
     }
 
@@ -177,7 +161,6 @@ mod tests {
     #[test]
     fn a_profile_section_replaces_the_default_section() {
         let run_control = parse(FILE, Some("long-walks")).unwrap();
-        assert_eq!(run_control.checkpoint_codec, CheckpointCodec::Zstd);
         assert_eq!(run_control.step_timeout, Duration::from_secs(3600));
         assert!(parse(FILE, Some("missing")).is_err());
     }
@@ -192,17 +175,14 @@ mod tests {
             "[other]\nstep-timeout = 1\n",
         ] {
             let run_control = parse(text, None).unwrap();
-            assert_eq!(run_control.checkpoint_codec, CheckpointCodec::Zstd);
             assert_eq!(run_control.step_timeout, Duration::from_secs(300));
         }
     }
 
-    /// An unknown codec or a timeout that is not a positive number of seconds
-    /// fails, naming the key.
+    /// A timeout that is not a positive number of seconds fails, naming the
+    /// key.
     #[test]
-    fn a_bad_codec_or_timeout_is_an_error() {
-        let codec = parse("[DEFAULT]\ncheckpoint-codec = gzip\n", None).unwrap_err();
-        assert!(codec.contains("checkpoint-codec"), "{codec}");
+    fn a_bad_timeout_is_an_error() {
         for timeout in ["0", "-1", "soon", "1.5"] {
             let text = format!("[DEFAULT]\nstep-timeout = {timeout}\n");
             let error = parse(&text, None).unwrap_err();
@@ -213,12 +193,7 @@ mod tests {
     /// The hyphen and underscore spellings of a key are the same key.
     #[test]
     fn keys_accept_either_spelling() {
-        let run_control = parse(
-            "[DEFAULT]\ncheckpoint_codec = \"lz4\"\nstep_timeout = '7'\n",
-            None,
-        )
-        .unwrap();
-        assert_eq!(run_control.checkpoint_codec, CheckpointCodec::Lz4);
+        let run_control = parse("[DEFAULT]\nstep_timeout = '7'\n", None).unwrap();
         assert_eq!(run_control.step_timeout, Duration::from_secs(7));
     }
 }

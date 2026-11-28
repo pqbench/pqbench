@@ -3,7 +3,6 @@
 
 use std::collections::BTreeMap;
 
-use crate::v1::partition_version::State;
 use crate::v1::{PartitionStats, PartitionVersion};
 
 /// The running totals: one [`PartitionStats`] per catalog, schema and table
@@ -52,9 +51,6 @@ fn add(stats: &mut PartitionStats, version: &PartitionVersion) {
     *stats.version_counts.entry(version.state).or_default() += 1;
     if version.failure_count > 0 {
         stats.failed_version_count += 1;
-    }
-    if version.state == State::Deleted {
-        return;
     }
     stats.partition_count += 1;
     stats.file_count += version.file_count;

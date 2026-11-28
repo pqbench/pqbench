@@ -71,10 +71,8 @@ label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
 
 Reading a Delta or Iceberg log needs its cargo feature (`delta` / `iceberg`;
 `delta-s3` / `iceberg-s3` for `s3://`). A missing feature fails at runtime and
-names itself. `json-simd` builds the SIMD JSON parser, which picks its kernel
-(AVX2 + PCLMULQDQ, SSE4.2, or a portable one) at runtime; without it
-`serde_json` parses, and every record and every byte of output is the same.
-See [Delta tables](guides/delta.md) and [Iceberg tables](guides/iceberg.md).
+names itself. See [Delta tables](guides/delta.md) and
+[Iceberg tables](guides/iceberg.md).
 
 ## Draw the result
 

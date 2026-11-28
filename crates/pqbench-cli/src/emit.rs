@@ -11,7 +11,6 @@
 use std::io::ErrorKind;
 use std::ops::ControlFlow;
 
-use pqbench::third_party::json;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
@@ -46,7 +45,7 @@ impl Emitter {
             return Ok(ControlFlow::Break(()));
         }
         self.bytes.clear();
-        json::to_writer(&mut self.bytes, value)
+        serde_json::to_writer(&mut self.bytes, value)
             .map_err(|error| format!("cannot serialize output: {error}"))?;
         self.bytes.push(b'\n');
         match self.pipe.write_all(&self.bytes).await {

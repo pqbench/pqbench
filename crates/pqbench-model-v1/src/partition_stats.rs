@@ -7,8 +7,7 @@ use super::partition_version::State;
 /// The totals of the partition versions under one catalog, schema or table,
 /// its singleton child (AIP-156): `summarize partition-versions` folds them.
 ///
-/// The partition totals count the live versions, the ones not `DELETED`: a
-/// partition has at most one, so each counts one partition once.
+/// A partition has at most one version, so each counts one partition once.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartitionStats {
@@ -16,7 +15,7 @@ pub struct PartitionStats {
     /// `catalogs/{catalog}/schemas/{schema}/partitionStats`, or
     /// `catalogs/{catalog}/schemas/{schema}/tables/{table}/partitionStats`.
     pub name: String,
-    /// The live versions: the partitions.
+    /// The versions, one per partition.
     pub partition_count: u64,
     /// The partitions' files and bytes, from their listings.
     pub file_count: u64,
@@ -36,7 +35,7 @@ pub struct PartitionStats {
     /// When the newest file of any partition was written.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modification_time: Option<u64>,
-    /// Every version, `DELETED` ones included, counted by state.
+    /// Every version, counted by state.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub version_counts: BTreeMap<State, u64>,
     /// The versions whose last command failed.

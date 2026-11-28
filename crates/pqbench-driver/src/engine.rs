@@ -12,8 +12,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) use pqbench::v1::partition_version::State;
-use pqbench::v1::{Partition, PartitionPrice, PartitionVersion, Suggestion};
+pub(crate) use pqbench_model_v1::partition_version::State;
+use pqbench_model_v1::{Partition, PartitionPrice, PartitionVersion, Suggestion};
 
 use super::protocol::DriverStatus;
 use super::store;
@@ -74,10 +74,9 @@ impl From<&str> for Failure {
 }
 
 /// Whether a version in `state` is unfinished, so scheduling has to consider
-/// it: the done, the quarantined, and the [`State::Deleted`] a stale checkpoint
-/// may name are not.
+/// it: the done and the quarantined ones are not.
 fn unfinished(state: State) -> bool {
-    !matches!(state, State::UpToDate | State::Failed | State::Deleted)
+    !matches!(state, State::UpToDate | State::Failed)
 }
 
 /// What a transition's command reads on standard input.
@@ -265,11 +264,6 @@ impl Engine {
         };
         let mut rows = BTreeMap::new();
         for mut row in versions {
-            // A checkpoint from before the walk removed superseded versions
-            // may name deleted ones; the sweep takes their results.
-            if row.state == State::Deleted {
-                continue;
-            }
             let key = row
                 .name
                 .rsplit_once("/versions/")
@@ -277,6 +271,21 @@ impl Engine {
                 .ok_or_else(|| format!("bad checkpoint row: {} names no version", row.name))?;
             if let Some(transition) = running_transition(transitions, row.state) {
                 row.state = transition.source;
+            }
+            // A state from the other transition table — the pipeline this
+            // driver no longer runs, after `--low-network` was toggled across a
+            // restart — names no transition here. Put the version back where
+            // that table's next step reads it: priced, or pending when no price
+            // landed, rather than stranded in `active` forever.
+            let known = matches!(row.state, State::Pending | State::UpToDate | State::Failed)
+                || transitions.iter().any(|transition| {
+                    transition.source == row.state || transition.done == row.state
+                });
+            if !known {
+                row.state = match row.lowest_cost_per_month {
+                    Some(_) => State::Priced,
+                    None => State::Pending,
+                };
             }
             row.name = String::new();
             rows.insert(key, row);
@@ -591,6 +600,7 @@ impl Engine {
         let row = self.rows.get_mut(key)?;
         let transition = running_transition(self.transitions, row.state)?;
         self.changed = true;
+        let mut unverified = false;
         match outcome {
             Ok(price) => {
                 self.counters.completed_run_count += 1;
@@ -604,6 +614,9 @@ impl Engine {
                     row.highest_cost_per_month = costs.reduce(f64::max);
                     if row.file_count == 0 || archived(&price) {
                         row.state = State::UpToDate;
+                        // The price ends the pipeline, so no verification runs
+                        // to write the partition rules the listing supports.
+                        unverified = true;
                     }
                 }
             }
@@ -642,7 +655,11 @@ impl Engine {
         } else {
             self.active.remove(key);
         }
-        Some(Conclusion { state, sample })
+        Some(Conclusion {
+            state,
+            sample,
+            unverified,
+        })
     }
 
     /// Whether the rows changed since the last checkpoint.
@@ -688,6 +705,10 @@ pub(crate) struct Conclusion {
     /// Whether the version still reads its copy of the sample file: a
     /// transition it waits for does, and one that stopped for good does not.
     pub sample: bool,
+    /// The version ended after its price, before the verification that would
+    /// have written its partition suggestions: nothing to read, or files that
+    /// need a restore. The driver persists them from the listing.
+    pub unverified: bool,
 }
 
 fn engine_needs_sample(row: &PartitionVersion) -> bool {
@@ -720,11 +741,19 @@ fn running_transition(
         .find(|transition| transition.running == state)
 }
 
-/// The key of a partition name of eight plain segments and a hex etag: a
-/// key that is also a path under the store's results, and cannot leave it.
+/// The key of a partition name and a hex etag: a key that is also a path under
+/// the store's results, and cannot leave it.
+///
+/// A name is `catalogs/{c}/schemas/{s}/tables/{t}/partitions/{id}`, and an id
+/// is one segment per partition column (`day%3D1/hours%3D05`), so a name has
+/// eight segments or more. Every segment is plain: no empty one, and none of
+/// `.` or `..`.
 pub(crate) fn key(name: &str, etag: &str) -> Option<Key> {
     let segments: Vec<&str> = name.split('/').collect();
-    let valid = segments.len() == 8
+    let valid = segments.len() >= 8
+        && segments[0] == "catalogs"
+        && segments[2] == "schemas"
+        && segments[4] == "tables"
         && segments[6] == "partitions"
         && segments
             .iter()
@@ -741,21 +770,37 @@ pub(crate) fn parent_table(name: &str) -> &str {
 }
 
 /// The canonical prefix a `parent` names: its non-empty segments, which must
-/// spell catalog, schema, table and partition names in that order. The empty
-/// parent is every version.
+/// spell catalog, schema and table names in that order, then `partitions` and
+/// the partition's own segments. The empty parent is every version.
 fn parent_prefix(parent: &str) -> Result<String, String> {
     let wanted: Vec<&str> = parent
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect();
-    let collections = ["catalogs", "schemas", "tables", "partitions"];
-    let valid = wanted.len().is_multiple_of(2)
-        && wanted.len() <= 2 * collections.len()
-        && wanted
-            .iter()
-            .step_by(2)
-            .zip(collections)
-            .all(|(have, want)| *have == want);
+    let plain = wanted
+        .iter()
+        .all(|segment| !segment.is_empty() && *segment != "." && *segment != "..");
+    let collections = ["catalogs", "schemas", "tables"];
+    // A catalog, schema or table is a collection and a name, in that order; a
+    // partition adds `partitions` and at least one id segment.
+    let valid = plain
+        && match wanted.len() {
+            0 => true,
+            length @ 1..=6 => {
+                length.is_multiple_of(2)
+                    && wanted
+                        .iter()
+                        .step_by(2)
+                        .zip(collections)
+                        .all(|(have, want)| *have == want)
+            }
+            _ => {
+                wanted[0] == "catalogs"
+                    && wanted[2] == "schemas"
+                    && wanted[4] == "tables"
+                    && wanted[6] == "partitions"
+            }
+        };
     if !valid {
         return Err(format!(
             "{parent} is not a catalog, schema, table or partition name"
@@ -814,7 +859,7 @@ fn jitter_ms(delay: u64, key: &Key, failures: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqbench::v1::{Suggestion, TableFile};
+    use pqbench_model_v1::{Suggestion, TableFile};
 
     const PARTITION: &str = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
 
@@ -1294,6 +1339,132 @@ mod tests {
         assert!(key("catalogs/c/schemas/s/tables/t/partitions/..", "aa").is_none());
         assert!(key(PARTITION, "../x").is_none());
         assert!(key(PARTITION, "aa").is_some());
+    }
+
+    const MULTI: &str = "catalogs/c/schemas/s/tables/t/partitions/day%3D2026-01-01/hour%3D05";
+
+    /// A partition with one segment per column is a key, and every level of its
+    /// name selects it: a multi-column Hive partition is not dropped for being
+    /// longer than eight segments.
+    #[test]
+    fn a_multi_column_partition_is_a_key_and_a_parent() {
+        let multi = key(MULTI, "aa").expect("a multi-column partition is a key");
+        assert_eq!(multi.0, MULTI);
+        let mut engine = Engine::new(Vec::new(), false).unwrap();
+        engine.found(
+            &multi,
+            &Partition {
+                file_count: 1,
+                ..Partition::default()
+            },
+            1,
+        );
+        for parent in [
+            "catalogs/c",
+            "catalogs/c/schemas/s",
+            "catalogs/c/schemas/s/tables/t",
+            "catalogs/c/schemas/s/tables/t/partitions/day%3D2026-01-01",
+            MULTI,
+        ] {
+            assert_eq!(
+                engine.keys(parent).unwrap(),
+                vec![multi.clone()],
+                "{parent}"
+            );
+            assert_eq!(engine.records(parent).unwrap().len(), 1, "{parent}");
+        }
+        assert!(engine
+            .keys("catalogs/c/schemas/s/tables/t/partitions/day%3D2026-01-02")
+            .unwrap()
+            .is_empty());
+
+        // A name that is not the grammar, or that would leave the store, is no
+        // key.
+        for name in [
+            "catalogs/c/schemas/s/tables/t/partitions/day%3D1//hour%3D1",
+            "catalogs/c/schemas/s/tables/t/partitions/day%3D1/../hour%3D1",
+            "catalogs/c/tables/t/partitions/day%3D1",
+            "catalogs/c/schemas/s/partitions/day%3D1",
+            "catalogs/c/schemas/s/tables/t/partitions",
+        ] {
+            assert!(key(name, "aa").is_none(), "{name}");
+        }
+    }
+
+    /// A tombstone-only partition — no live file — ends after its price, and
+    /// says so, so the driver still lands the partition suggestions its
+    /// metadata supports.
+    #[test]
+    fn a_tombstone_only_partition_ends_before_its_verification() {
+        let (mut engine, key) = found(0);
+        assert_eq!(engine.start(1).len(), 1);
+        let price: PartitionPrice = serde_json::from_value(serde_json::json!({
+            "name": format!("{PARTITION}/price"),
+            "partition_etag": "aa",
+            "storage_classes": ["STANDARD"],
+            "storage_costs": [{"storage_class": "STANDARD",
+                "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
+        }))
+        .unwrap();
+        let conclusion = engine.finish(&key, Ok(Some(price))).unwrap();
+        assert_eq!(conclusion.state, State::UpToDate);
+        assert!(
+            conclusion.unverified,
+            "a partition with nothing to read has no verification to run"
+        );
+
+        // A partition with files keeps its pipeline: nothing is skipped.
+        let (mut engine, key) = found(1);
+        assert_eq!(engine.start(1).len(), 1);
+        let price: PartitionPrice = serde_json::from_value(serde_json::json!({
+            "name": format!("{PARTITION}/price"),
+            "partition_etag": "aa",
+            "storage_classes": ["STANDARD"],
+            "storage_costs": [{"storage_class": "STANDARD",
+                "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
+        }))
+        .unwrap();
+        let conclusion = engine.finish(&key, Ok(Some(price))).unwrap();
+        assert_eq!(conclusion.state, State::Priced);
+        assert!(!conclusion.unverified);
+    }
+
+    /// A checkpoint from the other pipeline — `--low-network` toggled across a
+    /// restart — is not stranded in a state the active table never reaches: it
+    /// goes back to `PRICED` when it was priced, and to `PENDING` when it was
+    /// not, so the version runs again instead of sitting in `active` forever.
+    #[test]
+    fn toggling_low_network_puts_versions_back_in_the_active_pipeline() {
+        let versions = |state, price: Option<f64>| {
+            vec![PartitionVersion {
+                name: format!("{PARTITION}/versions/aa"),
+                state,
+                lowest_cost_per_month: price,
+                ..PartitionVersion::default()
+            }]
+        };
+
+        // The normal pipeline's LISTED has no transition on a low-network host.
+        let key = key(PARTITION, "aa").unwrap();
+        let mut low = Engine::new(versions(State::Listed, Some(1.0)), true).unwrap();
+        assert_eq!(low.rows[&key].state, State::Priced);
+        assert!(
+            low.active.contains(&key),
+            "a reset version left the pipeline"
+        );
+        let run = low.start_timed(1, 1);
+        assert_eq!(run.len(), 1);
+        assert_eq!(run[0].transition.running, State::Bytemassing);
+
+        // Without a price the version has to price again first.
+        let engine = Engine::new(versions(State::Listed, None), true).unwrap();
+        assert_eq!(engine.rows[&key].state, State::Pending);
+        assert!(engine.active.contains(&key));
+
+        // The pipeline that knows the state keeps it.
+        let engine = Engine::new(versions(State::Bytemassed, Some(1.0)), false).unwrap();
+        assert_eq!(engine.rows[&key].state, State::Bytemassed);
+        assert!(engine.active.contains(&key));
     }
 
     /// A deterministic pseudo-random sequence: enough variety to reach every

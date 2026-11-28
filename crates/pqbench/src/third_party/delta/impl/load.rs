@@ -22,7 +22,6 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::table::{relative_data_path, Error, LoadRequest, PartitionMass, TableInfo};
-use crate::third_party::json;
 use crate::v1;
 use crate::Lake;
 
@@ -500,7 +499,7 @@ fn parse_commit_info(bytes: &[u8]) -> Option<Value> {
         if !line.windows(MARKER.len()).any(|window| window == MARKER) {
             continue;
         }
-        let Ok(Action::CommitInfo(info)) = json::from_slice::<Action>(line) else {
+        let Ok(Action::CommitInfo(info)) = serde_json::from_slice::<Action>(line) else {
             continue;
         };
         return Some(info);
@@ -522,7 +521,7 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
     let mut commit_time = None;
     let mut commit_info = None;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let action: Action = json::from_slice(line.as_bytes())
+        let action: Action = serde_json::from_slice(line.as_bytes())
             .map_err(|error| Error::Invalid(format!("commit {version}: {error}")))?;
         if let Action::CommitInfo(info) = &action {
             if commit_info.is_none() {
@@ -990,17 +989,17 @@ fn partition_values(file: &deltalake::kernel::LogicalFileView) -> BTreeMap<Strin
 fn file_stats(raw: Option<String>, keep_stats: bool) -> Option<v1::FileStats> {
     // The blob is the log's own bytes: parse it where it lies rather than
     // through a copy.
-    let mut raw = raw?.into_bytes();
+    let raw = raw?.into_bytes();
     if !keep_stats {
         // Only the count is kept, so read only the count: a full value tree for
         // a stats blob would hold every bound just to drop it.
-        let counted: CountOnly = json::from_slice_mut(&mut raw).ok()?;
+        let counted: CountOnly = serde_json::from_slice(&raw).ok()?;
         return Some(v1::FileStats {
             record_count: counted.record_count,
             ..v1::FileStats::default()
         });
     }
-    let value: Value = json::from_slice_mut(&mut raw).ok()?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
     let object = value.as_object()?;
     let record_count = object.get("numRecords").and_then(Value::as_u64)?;
     Some(v1::FileStats {
@@ -1083,14 +1082,13 @@ fn delta_error(error: deltalake::DeltaTableError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{file_stats, parse_commit, Action};
-    use crate::third_party::json;
 
     /// A future protocol's action keeps its own kind instead of failing the
     /// commit, while a known action stays typed.
     #[test]
     fn an_unknown_action_keeps_its_kind() {
         let line = br#"{"checkpointMetadata":{"version":3,"tags":{}}}"#;
-        let action: Action = json::from_slice(line).expect("an unknown action parses");
+        let action: Action = serde_json::from_slice(line).expect("an unknown action parses");
         assert_eq!(action.kind(), "checkpointMetadata");
         assert!(action.body().is_none());
 

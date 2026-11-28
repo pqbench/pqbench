@@ -337,8 +337,8 @@ message PartitionPrice {
 
 // A partition at one etag and where it is in the pipeline: the driver's
 // record of it (`list partition-versions`), and the engine's whole state. A
-// walk makes a version for each etag it finds; the previous one is kept,
-// DELETED, until purge.
+// walk makes a version for each etag it finds; the previous one leaves the map
+// and its results are purged.
 message PartitionVersion {
   // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitions/{partition}/versions/{version}
   // The version id is the partition's etag.
@@ -348,9 +348,7 @@ message PartitionVersion {
   // through the transition's running state, to the state after it.
   enum State {
     STATE_UNSPECIFIED = 0;
-    // No longer produced: a checkpoint from before the walk removed
-    // superseded versions may still name a deleted one.
-    DELETED = 1;
+    reserved 1; // was DELETED
     // Found, not processed yet.
     PENDING = 2;
     PRICING = 3;
@@ -424,16 +422,15 @@ message PartitionVersion {
 }
 
 // The totals of the partition versions under one catalog, schema or table,
-// its singleton child (AIP-156), from `summarize partition-versions`. The
-// partition totals count the live versions, the ones not DELETED: a partition
-// has at most one.
+// its singleton child (AIP-156), from `summarize partition-versions`. A
+// partition has at most one version.
 message PartitionStats {
   // Format: catalogs/{catalog}/partitionStats
   // Format: catalogs/{catalog}/schemas/{schema}/partitionStats
   // Format: catalogs/{catalog}/schemas/{schema}/tables/{table}/partitionStats
   string name = 1;
 
-  // The live versions: the partitions.
+  // The versions, one per partition.
   int64 partition_count = 2;
 
   // The partitions' files and bytes, from their listings.
@@ -458,7 +455,7 @@ message PartitionStats {
   // When the newest file of any partition was written.
   optional int64 last_modification_time = 9;
 
-  // Every version, DELETED ones included, by its state's value name.
+  // Every version, by its state's value name.
   map<string, int64> version_counts = 10;
 
   // The versions whose last command failed.

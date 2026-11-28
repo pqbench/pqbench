@@ -16,7 +16,11 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
-pqbench = { workspace = true }
+# The wire types and the local Parquet work only: the driver runs the commands,
+# which reach storage themselves, so it never links deltalake, the AWS SDK, or
+# iceberg.
+pqbench-model-v1 = { workspace = true }
+pqbench-parquet = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 libc = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
