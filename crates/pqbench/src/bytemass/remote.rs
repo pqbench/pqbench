@@ -136,7 +136,7 @@ fn footer_layout(
 }
 
 fn storage_error(error: object_store::Error) -> Error {
-    Error::Storage(error)
+    Error::Storage(Box::new(error))
 }
 
 #[cfg(test)]

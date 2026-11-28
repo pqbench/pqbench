@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::Resource;
-use crate::profile::ValueCount;
+use super::{Resource, ValueCount};
 
 /// A decoded-sample profile of a column.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Resource)]

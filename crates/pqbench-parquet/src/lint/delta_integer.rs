@@ -127,7 +127,7 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
         v1::Remedy::new("spark", "spark.hadoop.parquet.writer.version=PARQUET_2_0"),
         v1::Remedy::new(
             "pyarrow",
-            format!("use_dictionary=False, column_encoding={{{leaf}: 'DELTA_BINARY_PACKED'}}"),
+            format!("use_dictionary=False, column_encoding={{{leaf:?}: 'DELTA_BINARY_PACKED'}}"),
         ),
         v1::Remedy::new(
             "parquet-rs",
@@ -196,6 +196,22 @@ mod tests {
         assert!(remedy(Writer::ArrowCpp, "id").contains("DELTA_BINARY_PACKED"));
         assert!(remedy(Writer::ArrowRs, "id").contains("set_column_encoding"));
         assert!(remedy(Writer::Other, "id").contains("write.parquet.page-version=v2"));
+    }
+
+    /// The pyarrow setting is a Python dict literal, so the column key is a
+    /// string. A bare key is a `NameError` at the caller, not a rewrite.
+    #[test]
+    fn the_pyarrow_remedy_quotes_the_column_key() {
+        let setting = remedy(Writer::ArrowCpp, "id");
+        assert!(
+            setting.contains("column_encoding={\"id\": 'DELTA_BINARY_PACKED'}"),
+            "{setting}"
+        );
+        let dotted = remedy(Writer::ArrowCpp, "a.b");
+        assert!(
+            dotted.contains("column_encoding={\"a.b\": 'DELTA_BINARY_PACKED'}"),
+            "{dotted}"
+        );
     }
 
     /// Sequential and monotone values have close neighbours; random ones do

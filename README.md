@@ -191,11 +191,11 @@ recovers the bytes:
 
 ```console run
 $ pqb table-file crates/pqbench-cli/tests/fixtures/small_reddit_none.parquet | pqb list suggestions | pqb fmt
-COLUMN            RULE        VERIFIED  SAVINGS  REMEDY                                                                           MESSAGE
-----------------  ----------  --------  -------  -------------------------------------------------------------------------------  ------------------------------
-url_encoded       codec-zstd  -                  compression={url_encoded: 'zstd'}, compression_level={url_encoded: 3}            uncompressed at 302.37 B/value
-text              codec-zstd  -                  compression={text: 'zstd'}, compression_level={text: 3}                          uncompressed at 247.86 B/value
-username_encoded  codec-zstd  -                  compression={username_encoded: 'zstd'}, compression_level={username_encoded: 3}  uncompressed at 148.73 B/value
+COLUMN            RULE        VERIFIED  SAVINGS  REMEDY                                                                               MESSAGE
+----------------  ----------  --------  -------  -----------------------------------------------------------------------------------  ------------------------------
+url_encoded       codec-zstd  -                  compression={"url_encoded": 'zstd'}, compression_level={"url_encoded": 3}            uncompressed at 302.37 B/value
+text              codec-zstd  -                  compression={"text": 'zstd'}, compression_level={"text": 3}                          uncompressed at 247.86 B/value
+username_encoded  codec-zstd  -                  compression={"username_encoded": 'zstd'}, compression_level={"username_encoded": 3}  uncompressed at 148.73 B/value
 ```
 
 Eleven rules read one column's chunk; the first that detects a column wins, so a

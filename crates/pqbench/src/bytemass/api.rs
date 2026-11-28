@@ -3,20 +3,15 @@
 //! [`measure_file`] returns the blob's storage facts and one [`v1::Column`] per
 //! leaf column; [`list_columns`] is the columns-only form. The caller scopes
 //! the lake with the storage lease.
+//!
+//! The fold that turns a footer into per-column masses is local work and lives
+//! in [`pqbench_parquet::bytemass`]; this module adds the reads — a HEAD for
+//! the storage class, a bounded range GET for the footer.
 
 use crate::v1;
 use crate::Lake;
 
-use super::Error;
-
-/// One measured blob: its storage facts and one record per leaf column.
-#[derive(Debug, Clone)]
-pub struct MeasuredFile {
-    /// The blob's name, size, storage class, and file-level counts.
-    pub blob: v1::Blob,
-    /// One record per leaf column, in file order.
-    pub columns: Vec<v1::Column>,
-}
+use super::{Error, MeasuredFile};
 
 /// Measure the blob `name`: its storage facts and its columns.
 ///

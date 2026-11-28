@@ -359,6 +359,7 @@ pub async fn load(lake: &Lake, request: &LoadRequest) -> Result<TableInfo, Error
     match format {
         v1::TableFormat::Delta => delta::load(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::load(lake, request).await,
+        _ => Err(unrecognized(&request.uri)),
     }
 }
 
@@ -381,6 +382,7 @@ pub async fn stream_active_files(
     match format {
         v1::TableFormat::Delta => delta::stream_active_files(lake, request).await,
         v1::TableFormat::Iceberg => iceberg::stream_active_files(lake, request).await,
+        _ => Err(unrecognized(&request.uri)),
     }
 }
 
@@ -403,6 +405,7 @@ pub async fn stream_removed_files(
     match detect(lake, &request.uri).await? {
         v1::TableFormat::Delta => Ok(Some(delta::stream_removed_files(lake, request).await?)),
         v1::TableFormat::Iceberg => Ok(None),
+        _ => Err(unrecognized(&request.uri)),
     }
 }
 
@@ -420,10 +423,11 @@ pub async fn stream_commits(
     request: &LoadRequest,
 ) -> Result<CommitStream<'static>, Error> {
     let format = detect(lake, &request.uri).await?;
-    Ok(match format {
-        v1::TableFormat::Delta => delta::stream_commits(lake, request).await?.boxed(),
-        v1::TableFormat::Iceberg => iceberg::stream_commits(lake, request).await?.boxed(),
-    })
+    match format {
+        v1::TableFormat::Delta => Ok(delta::stream_commits(lake, request).await?.boxed()),
+        v1::TableFormat::Iceberg => Ok(iceberg::stream_commits(lake, request).await?.boxed()),
+        _ => Err(unrecognized(&request.uri)),
+    }
 }
 
 /// Stream the files the requested commits added, in log order, without
@@ -443,10 +447,11 @@ pub async fn stream_files(
     request: &LoadRequest,
 ) -> Result<FileStream<'static>, Error> {
     let format = detect(lake, &request.uri).await?;
-    Ok(match format {
-        v1::TableFormat::Delta => delta::stream_files(lake, request).await?.boxed(),
-        v1::TableFormat::Iceberg => iceberg::stream_files(lake, request).await?.boxed(),
-    })
+    match format {
+        v1::TableFormat::Delta => Ok(delta::stream_files(lake, request).await?.boxed()),
+        v1::TableFormat::Iceberg => Ok(iceberg::stream_files(lake, request).await?.boxed()),
+        _ => Err(unrecognized(&request.uri)),
+    }
 }
 
 /// Local markers `lake` and `table` share. `None` is unrecognized, not an error.

@@ -47,7 +47,7 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     vec![
         v1::Remedy::new(
             "pyarrow",
-            format!("column_types={{{leaf}: pa.uuid()}} (or pa.binary(16))"),
+            format!("column_types={{{leaf:?}: pa.uuid()}} (or pa.binary(16))"),
         ),
         v1::Remedy::new(
             "parquet-rs",

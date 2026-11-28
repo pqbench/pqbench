@@ -136,7 +136,7 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
         ),
         v1::Remedy::new(
             "pyarrow",
-            format!("compression={{{leaf}: 'zstd'}}, compression_level={{{leaf}: 3}}"),
+            format!("compression={{{leaf:?}: 'zstd'}}, compression_level={{{leaf:?}: 3}}"),
         ),
         v1::Remedy::new(
             "parquet-rs",
@@ -246,7 +246,7 @@ mod tests {
         assert!(remedy(Writer::Photon, "id").contains("unverified"));
         assert_eq!(
             remedy(Writer::ArrowCpp, "id"),
-            "compression={id: 'zstd'}, compression_level={id: 3}"
+            "compression={\"id\": 'zstd'}, compression_level={\"id\": 3}"
         );
         assert!(remedy(Writer::ArrowRs, "id").contains("set_column_compression"));
         assert!(remedy(Writer::Other, "id").contains("write.parquet.compression-codec=zstd"));

@@ -1,62 +1,13 @@
-//! `bytemass`: the per-column byte masses of a Parquet file.
+//! `bytemass`: the per-column byte masses of a Parquet blob.
 //!
-//! [`measure_file`] reads one blob's storage facts and columns; each column
-//! carries its [`v1::Bytemass`](crate::v1::Bytemass) when the footer was
-//! measured. [`list_columns`] is the columns-only form. The columns carry no
-//! table, file size, storage class, or sample rate: the caller that measured
-//! them through a table file adds those. The CLI streams the records;
-//! `pqbench summarize columns` folds them and `pqbench format --html` draws the
-//! rows.
-//!
-//! Each file's footer is read once and its column chunks are folded over the
-//! file's row groups into one mass per column.
+//! The fold — footer bytes in, one [`crate::v1::Column`] per leaf column out —
+//! is local work, so it lives in [`pqbench_parquet::bytemass`] and this module
+//! re-exports it. What is added here is the read: a HEAD for the storage class
+//! and a bounded range GET for the footer.
 
 mod api;
 mod collection;
 mod remote;
 
-pub use api::{list_columns, measure_file, measure_local, MeasuredFile};
-pub(crate) use collection::measure_footer;
-
-use std::fmt;
-
-/// Errors measuring a file's byte masses.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum Error {
-    /// The name was not a blob name.
-    Name(String),
-    /// A measured object was not a valid Parquet file.
-    Invalid(String),
-    /// The object store failed.
-    Storage(crate::third_party::object_store::Error),
-    /// The parquet layer failed.
-    Parquet(crate::third_party::parquet::api::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::Name(message) => write!(f, "{message}"),
-            Error::Invalid(message) => write!(f, "{message}"),
-            Error::Storage(_) => write!(f, "object storage failed"),
-            Error::Parquet(_) => write!(f, "the parquet layer failed"),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Storage(error) => Some(error),
-            Error::Parquet(error) => Some(error),
-            Error::Name(_) | Error::Invalid(_) => None,
-        }
-    }
-}
-
-impl From<crate::third_party::parquet::api::Error> for Error {
-    fn from(error: crate::third_party::parquet::api::Error) -> Self {
-        Error::Parquet(error)
-    }
-}
+pub use api::{list_columns, measure_file, measure_local};
+pub use pqbench_parquet::bytemass::{Error, MeasuredFile};

@@ -162,6 +162,9 @@ fn merge_catalog(mut info: TableInfo, record: UnityRecord) -> TableInfo {
             info.iceberg_properties
                 .extend(record.properties.unwrap_or_default());
         }
+        // `TableFormat` is `#[non_exhaustive]`: a format this build does not
+        // know has no property set to merge into.
+        _ => {}
     }
     info
 }

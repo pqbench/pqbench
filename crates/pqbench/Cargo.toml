@@ -32,14 +32,11 @@ iceberg-s3 = ["iceberg", "aws"]
 json-simd = ["dep:simd-json"]
 
 [dependencies]
-snappy_src = "0.2.5"
-zstd = "0.13"
-lz4 = "1"
-flate2 = { version = "1", default-features = false, features = ["zlib"] }
+# The local half: footers, codecs, lint, profile. Kept behind this one
+# dependency so a change to a lint rule does not rebuild the AWS SDK.
+pqbench-parquet = { version = "0.0.12", path = "../pqbench-parquet" }
+pqbench-model-v1 = { version = "0.0.12", path = "../pqbench-model-v1" }
 glob = "0.3"
-# Codecs are enabled so `profile_file` can decode compressed pages; without
-# them parquet-rs fails at runtime (`Disabled feature at compile time`).
-parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
 # Native roots only: the OS certificate store, where internal/private CAs live.
 # `rustls-tls-native-roots` also brings the rustls backend and the ring
 # provider, so the client still has TLS without `aws` (object_store is what
@@ -64,7 +61,6 @@ percent-encoding = { version = "2", optional = true }
 tokio = { version = "1", features = ["rt", "sync"], optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
-pqbench-resource = { path = "../pqbench-resource" }
 url = "2"
 # Must match delta-rs's ObjectStore trait version: stores cross that internal
 # boundary. Keep the pin until delta-rs upgrades its dependency.
@@ -73,4 +69,8 @@ apache-avro = { version = "0.17", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# The tests write a footer or a sample with parquet-rs itself: a second writer,
+# so a measured number is not this crate's own arithmetic. Same features as
+# `pqbench-parquet`, which is where the writer would otherwise live.
+parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
 tokio = { version = "1", features = ["rt", "macros"] }

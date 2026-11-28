@@ -5,9 +5,7 @@ use crate::common;
 use pqbench::bytemass::list_columns;
 use pqbench::v1;
 
-fn fixture(name: &str) -> String {
-    format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
-}
+use crate::support::fixture;
 
 async fn measure(path: &str) -> Vec<v1::Column> {
     list_columns(common::lake(), &v1::name::blob_name(path))
@@ -17,7 +15,7 @@ async fn measure(path: &str) -> Vec<v1::Column> {
 
 #[tokio::test]
 async fn measures_a_local_file_from_its_footer() {
-    let path = fixture("small_snappy.parquet");
+    let path = fixture("small_snappy.parquet").display().to_string();
     let columns = measure(&path).await;
 
     assert!(!columns.is_empty());
@@ -43,7 +41,7 @@ async fn measures_a_local_file_from_its_footer() {
 
 #[tokio::test]
 async fn reports_the_dictionary_page_and_data_encoding() {
-    let columns = measure(&fixture("small_snappy.parquet")).await;
+    let columns = measure(&fixture("small_snappy.parquet").display().to_string()).await;
     let column = &columns[0];
     let mass = column.mass.as_ref().expect("a measured column");
 
@@ -87,7 +85,7 @@ async fn reports_the_page_index_and_the_writer() {
         "parquet-rs records page indexes"
     );
 
-    let unindexed = measure(&fixture("small_snappy.parquet")).await;
+    let unindexed = measure(&fixture("small_snappy.parquet").display().to_string()).await;
     assert!(
         unindexed
             .iter()
@@ -106,7 +104,7 @@ async fn treats_brackets_as_literal_path_characters() {
 
 #[tokio::test]
 async fn a_pattern_is_not_expanded() {
-    let missing = format!("{}/tests/fixtures/*.missing", env!("CARGO_MANIFEST_DIR"));
+    let missing = fixture("*.missing").display().to_string();
     let error = list_columns(common::lake(), &v1::name::blob_name(&missing))
         .await
         .unwrap_err()
@@ -116,7 +114,7 @@ async fn a_pattern_is_not_expanded() {
 
 #[tokio::test]
 async fn viz_draws_summarized_columns() {
-    let path = fixture("small_snappy.parquet");
+    let path = fixture("small_snappy.parquet").display().to_string();
     let blob_name = v1::name::blob_name(&path);
     let blob = pqbench::blob::get(common::lake(), &blob_name)
         .await

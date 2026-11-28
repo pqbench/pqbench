@@ -154,11 +154,23 @@ analogy, convention, or precedent:
   `make check-python` builds the data-only wheel from `crates/pqbench-cli`
   with maturin and smoke-tests the installed binary; CI runs it, the local gate
   does not (it compiles every storage backend).
-- The edit loop, one feature set throughout (`--all-features`):
-  `cargo check --all-features` (no codegen, no link) or `make check-fast`, then
-  `cargo test -p <crate> --test it -- <module>` for the test in hand, then one
-  `make check` before pushing. When the gate already passed, `git commit
-  --no-verify` is acceptable.
+- The edit loop, one feature set throughout (`--all-features`), and one
+  `make check` at the end — not per edit. Most edits touch the local half
+  (`crates/pqbench-parquet`, `crates/pqbench-model-v1`), which has no object
+  store, no Delta, and no Iceberg behind it, so its loop is crate-scoped:
+  - `cargo test --lib -p pqbench-parquet -- lint::` — the rule in hand, its
+    unit tests, this crate only (a few seconds; the whole lib suite is
+    sub-second once built).
+  - `cargo check -p pqbench-model-v1` — the wire model alone, under a second.
+  - `cargo check --all-features` (no codegen, no link) or `make check-fast`
+    when the change crosses a crate boundary, then
+    `cargo test -p pqbench --all-features --test it -- <module>` for a remote
+    path's integration test.
+  A `-p` build is a root of its own, so the workspace members it depends on
+  (`pqbench-model-v1` under `pqbench-parquet`) are built as dependencies, with
+  `[profile.dev.package."*"] debug = false`: a second, tiny copy that the next
+  `--workspace` call rebuilds. That is why the two local crates are kept small
+  enough to make the exchange free; do not grow one into a graph of its own.
 - Docs: the CLI reference is generated from the clap tree with `clap-markdown`;
   `make sync-docs` writes `docs/reference/cli.md`, and `check-docs` fails when
   it is stale. The `console` transcripts in the Markdown are generated into
@@ -227,8 +239,16 @@ analogy, convention, or precedent:
 
 ## Repo layout
 
-- `crates/pqbench/` — the library (bench, bytemass, codecs, compression,
-  experiment, mass, profile, skill, lz, parquet, report, stats, viz)
+- `crates/pqbench-model-v1/` — the wire model: the v1 resources, their name
+  grammar (`name`), their JSON. `serde` only; re-exported as `pqbench::v1`.
+- `crates/pqbench-parquet/` — the local half, no network behind it: `lint`,
+  `bytemass` (footer fold), `compression`, `profile`, `codecs`, `lz`, `mass`,
+  `diff`, `bench`, `report`, `stats`, and the `third_party` codec wrappers.
+  Re-exported at the same paths from `pqbench`.
+- `crates/pqbench/` — the rest: the commands that reach storage or walk a
+  catalog (`table`, `catalog`, `schema`, `metastore`, `file`, `partition`,
+  `blob`, `credentials`, `oauth`, `http`) and the support they need
+  (`capability`, `config`, `viz`, `skill`).
 - `crates/pqbench-cli/` — the `pqbench` command definitions and dispatch (a
   library), plus the thin binary
 - `crates/docsgen/` — generates `docs/reference/cli.md` from the clap tree; a

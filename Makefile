@@ -96,8 +96,13 @@ dbx-walk:
 	$(CARGO) build -p pqbench-cli $(CARGO_FEATURES)
 	PQB="$(TARGET_DIR)/debug/pqbench" ./scripts/dbx-walk.sh
 
+# Lint the workspace's own targets only. `--all-targets` would also lint
+# dependencies (nothing to fix there) and the seven empty rustdoc harnesses;
+# `--lib --bins --tests` is every target the workspace actually has, plus the
+# integration-test modules, and `--no-deps` keeps clippy off the dependency
+# graph.
 lint:
-	@TIMEFORMAT='lint: %3R s'; time $(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
+	@TIMEFORMAT='lint: %3R s'; time $(CARGO) clippy --workspace --lib --bins --tests --no-deps $(CARGO_FEATURES) -- -D warnings
 
 # A linked worktree's bare `cargo` writes to ./target, not the shared root.
 # Point it at the main checkout so every command reuses one artifact tree.
@@ -143,7 +148,8 @@ check: fmt-check check-docs lint isolation lfs-check test test-code-analysis
 check-fast: fmt-check check-docs
 	@TIMEFORMAT='check: %3R s'; time $(CARGO) check --workspace --all-targets $(CARGO_FEATURES)
 
-# `third_party` wrappers keep feature flags in impl.rs, never in api.rs.
+# `third_party` wrappers keep feature flags in impl.rs, never in api.rs; the
+# rule holds for both wrapper homes (crates/pqbench, crates/pqbench-parquet).
 # ISOLATION_FLAGS=--github renders GitHub workflow-command annotations.
 ISOLATION_FLAGS ?=
 isolation:

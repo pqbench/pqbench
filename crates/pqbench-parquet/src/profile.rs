@@ -85,12 +85,10 @@ impl Default for ProfileRequest {
     }
 }
 
-/// One frequent value and how many times it occurred.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-pub struct ValueCount {
-    pub value: String,
-    pub count: u64,
-}
+/// One frequent value and how many times it occurred. The wire type and the
+/// profile's are one record, so the definition lives with the model and this
+/// module re-exports it.
+pub use crate::v1::ValueCount;
 
 /// The facts for one column over the sampled rows.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]

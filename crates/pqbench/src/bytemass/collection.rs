@@ -1,16 +1,14 @@
-//! Read a blob's footer and fold its column chunks into per-column masses.
+//! Read a blob's footer — over the object store, or from a local copy of it —
+//! and hand the folder the footer masses.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::third_party::object_store::api::ObjectStat;
-use crate::third_party::parquet::api::{read_file_masses, ColumnMass, FileMass};
+use crate::third_party::parquet::api::read_file_masses;
 use crate::v1;
 use crate::Lake;
 
-use super::api::MeasuredFile;
 use super::remote;
-use super::Error;
+use super::{Error, MeasuredFile};
 
 /// List the blob's columns, each with its byte mass.
 pub(super) async fn list_columns(lake: &Lake, name: &str) -> Result<Vec<v1::Column>, Error> {
@@ -21,8 +19,13 @@ pub(super) async fn list_columns(lake: &Lake, name: &str) -> Result<Vec<v1::Colu
 pub(super) async fn measure_file(lake: &Lake, name: &str) -> Result<MeasuredFile, Error> {
     let uri = v1::name::blob_uri(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
-    let (stat, mass) = read_input(lake, &uri).await?;
-    measured(name, stat, mass)
+    if uri.contains("://") {
+        let (stat, mass) = remote::read_remote(lake, &uri).await?;
+        return measured(name, stat.size_bytes, stat.storage_class, mass);
+    }
+    let mass = read_file_masses(Path::new(&uri))?;
+    let size_bytes = mass.size_bytes;
+    measured(name, size_bytes, None, mass)
 }
 
 /// Measure the blob from a local copy: the footer comes from `path`, the
@@ -35,222 +38,28 @@ pub(super) async fn measure_local(
     let uri = v1::name::blob_uri(name)
         .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
     let mass = read_file_masses(path)?;
-    let stat = if uri.contains("://") {
-        crate::third_party::object_store::open(lake, &uri)
-            .map_err(Error::Storage)?
+    let size_bytes = mass.size_bytes;
+    if uri.contains("://") {
+        let stat = crate::third_party::object_store::open(lake, &uri)
+            .map_err(storage_error)?
             .stat()
             .await
-            .map_err(Error::Storage)?
-    } else {
-        ObjectStat {
-            size_bytes: mass.size_bytes,
-            ..ObjectStat::default()
-        }
-    };
-    measured(name, stat, mass)
-}
-
-/// Measure the blob from a local file without touching remote storage.
-pub(crate) fn measure_footer(name: &str, path: &Path) -> Result<MeasuredFile, Error> {
-    let _ = v1::name::blob_uri(name)
-        .ok_or_else(|| Error::Name(format!("{name} is not a blobs/… name")))?;
-    let mass = read_file_masses(path)?;
-    let stat = ObjectStat {
-        size_bytes: mass.size_bytes,
-        ..ObjectStat::default()
-    };
-    measured(name, stat, mass)
-}
-
-/// A measured file from its storage facts and footer masses.
-fn measured(name: &str, stat: ObjectStat, mass: FileMass) -> Result<MeasuredFile, Error> {
-    let row_group_count = mass.row_group_count as u64;
-    let row_count = mass.row_count;
-    let writer = mass.writer.clone();
-    let columns = columns(name, mass)?;
-    let blob = v1::Blob {
-        name: name.to_string(),
-        size_bytes: Some(stat.size_bytes),
-        row_count: Some(row_count),
-        storage_class: stat.storage_class,
-        writer,
-        row_group_count: Some(row_group_count),
-        column_count: Some(columns.len() as u64),
-        ..v1::Blob::default()
-    };
-    Ok(MeasuredFile { blob, columns })
-}
-
-/// Fold one `ColumnMass` per chunk into one [`v1::Column`] per leaf column.
-fn columns(blob_name: &str, mass: FileMass) -> Result<Vec<v1::Column>, Error> {
-    let (service, locator) = v1::name::parse_blob(blob_name)
-        .ok_or_else(|| Error::Name(format!("{blob_name} is not a blobs/… name")))?;
-    let row_count = mass.row_count;
-    let row_group_count = mass.row_group_count as u64;
-    let mut at: BTreeMap<String, usize> = BTreeMap::new();
-    let mut columns: Vec<v1::Column> = Vec::new();
-    let mut chunks: Vec<Vec<ColumnMass>> = Vec::new();
-    for chunk in mass.columns {
-        let index = *at.entry(chunk.column.clone()).or_insert_with(|| {
-            let position = columns.len() as u64;
-            columns.push(v1::Column {
-                name: v1::name::column(&service, &locator, &chunk.column),
-                position: Some(position),
-                physical_data_type: Some(chunk.physical_data_type.clone()),
-                max_definition_level: Some(chunk.max_definition_level),
-                max_repetition_level: Some(chunk.max_repetition_level),
-                row_group_count: Some(row_group_count),
-                ..v1::Column::default()
-            });
-            chunks.push(Vec::new());
-            columns.len() - 1
-        });
-        chunks[index].push(chunk);
+            .map_err(storage_error)?;
+        return measured(name, stat.size_bytes, stat.storage_class, mass);
     }
-    for (column, chunks) in columns.iter_mut().zip(chunks) {
-        column.mass = Some(measure(&chunks, row_count));
-    }
-    Ok(columns)
+    measured(name, size_bytes, None, mass)
 }
 
-fn measure(chunks: &[ColumnMass], row_count: u64) -> v1::Bytemass {
-    let compressed_bytes = chunks.iter().map(|chunk| chunk.compressed_bytes).sum();
-    let uncompressed_bytes = chunks.iter().map(|chunk| chunk.uncompressed_bytes).sum();
-    let value_count = chunks.iter().map(|chunk| chunk.num_values).sum();
-    let dictionary = chunks.iter().any(|chunk| chunk.dictionary);
-    let page_index = chunks.iter().all(|chunk| chunk.page_index);
-    let encodings = union(chunks.iter().map(|chunk| chunk.encodings.as_slice()));
-    let data_encodings = known_union(chunks.iter().map(|chunk| chunk.data_encodings.as_deref()));
-    let null_count = known_sum(chunks.iter().map(|chunk| chunk.null_count));
-    let dictionary_bytes = known_sum(
-        chunks
-            .iter()
-            .filter(|chunk| chunk.dictionary)
-            .map(|chunk| chunk.dictionary_bytes),
-    );
-    let plain_data_page_count = known_sum(chunks.iter().map(|chunk| chunk.plain_data_page_count));
-    let dictionary_data_page_count =
-        known_sum(chunks.iter().map(|chunk| chunk.dictionary_data_page_count));
-    let unencoded_bytes = known_sum(chunks.iter().map(|chunk| chunk.unencoded_bytes));
-    let (distinct_count, first_value, last_value) = single_chunk_facts(chunks);
-
-    let mut mass = v1::Bytemass {
-        logical_type: uniform_logical_type(chunks),
-        compressed_bytes: Some(compressed_bytes),
-        uncompressed_bytes: Some(uncompressed_bytes),
-        codec: uniform_codec(chunks),
-        encodings,
-        data_encodings,
-        dictionary,
-        dictionary_bytes,
-        plain_data_page_count,
-        dictionary_data_page_count,
-        page_index,
-        unencoded_bytes,
-        value_count: Some(value_count),
-        null_count,
-        distinct_count,
-        first_value,
-        last_value,
-        ..v1::Bytemass::default()
-    };
-    mass.bytes_per_value = ratio(mass.compressed_bytes, mass.value_count);
-    mass.bytes_per_row = ratio(mass.compressed_bytes, Some(row_count));
-    mass.compression_ratio = ratio(mass.uncompressed_bytes, mass.compressed_bytes);
-    mass.null_fraction = ratio(mass.null_count, mass.value_count);
-    mass.dictionary_fraction = ratio(mass.dictionary_bytes, mass.compressed_bytes);
-    mass
+/// The fold, with a storage error mapped into this crate's error.
+fn measured(
+    name: &str,
+    size_bytes: u64,
+    storage_class: Option<String>,
+    mass: crate::third_party::parquet::api::FileMass,
+) -> Result<MeasuredFile, Error> {
+    pqbench_parquet::bytemass::from_file_mass(name, size_bytes, storage_class, mass)
 }
 
-/// The codec, when every chunk reports the same one.
-fn uniform_codec(chunks: &[ColumnMass]) -> Option<String> {
-    let first = chunks.first()?;
-    chunks
-        .iter()
-        .all(|chunk| chunk.codec == first.codec)
-        .then(|| first.codec.clone())
-}
-
-/// The logical type, when every chunk reports the same one: a column's schema
-/// is the file's, so a difference means the footer did not record all of it.
-fn uniform_logical_type(chunks: &[ColumnMass]) -> Option<String> {
-    let first = chunks.first()?.logical_type.as_deref()?;
-    chunks
-        .iter()
-        .all(|chunk| chunk.logical_type.as_deref() == Some(first))
-        .then(|| first.to_string())
-}
-
-/// The union of encoding sets, in first-seen order.
-fn union<'a>(sets: impl IntoIterator<Item = &'a [String]>) -> Vec<String> {
-    let mut encodings = Vec::new();
-    for set in sets {
-        add_encodings(&mut encodings, set);
-    }
-    encodings
-}
-
-/// The union of encoding sets, when every chunk reports one.
-fn known_union<'a>(sets: impl IntoIterator<Item = Option<&'a [String]>>) -> Option<Vec<String>> {
-    let mut encodings = Vec::new();
-    for set in sets {
-        add_encodings(&mut encodings, set?);
-    }
-    (!encodings.is_empty()).then_some(encodings)
-}
-
-/// Add the encodings a set does not already hold.
-///
-/// The sets are tiny and their first-seen order is visible, so a `Vec` is
-/// simpler than a `BTreeSet` here.
-fn add_encodings(encodings: &mut Vec<String>, set: &[String]) {
-    for encoding in set {
-        if !encodings.contains(encoding) {
-            encodings.push(encoding.clone());
-        }
-    }
-}
-
-/// The sum of parts, when every part is known and at least one exists.
-fn known_sum(parts: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
-    let mut total: u64 = 0;
-    let mut seen = false;
-    for part in parts {
-        total = total.checked_add(part?)?;
-        seen = true;
-    }
-    seen.then_some(total)
-}
-
-/// Distinct, first, and last are file facts only with one chunk: summing
-/// distinct counts double-counts values, and the first/last chunk is not the
-/// file's bounds unless the data is ordered.
-fn single_chunk_facts(chunks: &[ColumnMass]) -> (Option<u64>, Option<String>, Option<String>) {
-    if chunks.len() != 1 {
-        return (None, None, None);
-    }
-    let chunk = &chunks[0];
-    (
-        chunk.distinct_count,
-        chunk.min_value.clone(),
-        chunk.max_value.clone(),
-    )
-}
-
-/// `numerator / denominator`, when the denominator is non-zero.
-fn ratio(numerator: Option<u64>, denominator: Option<u64>) -> Option<f64> {
-    let denominator = denominator?;
-    (denominator > 0).then(|| numerator.unwrap_or(0) as f64 / denominator as f64)
-}
-
-async fn read_input(lake: &Lake, uri: &str) -> Result<(ObjectStat, FileMass), Error> {
-    if uri.contains("://") {
-        return remote::read_remote(lake, uri).await;
-    }
-    let mass = read_file_masses(Path::new(uri))?;
-    let stat = ObjectStat {
-        size_bytes: mass.size_bytes,
-        ..ObjectStat::default()
-    };
-    Ok((stat, mass))
+fn storage_error(error: crate::third_party::object_store::Error) -> Error {
+    Error::Storage(Box::new(error))
 }

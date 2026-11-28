@@ -6,9 +6,11 @@
 //! base (`{root}/v1` or `{root}/v1/{prefix}`), so the commands append
 //! `/namespaces…` directly.
 
-use std::fmt::Write;
-
 use crate::v1::CatalogType;
+
+// A name segment and a query value encode the same way, and a name is only
+// encoded segments, so the one encoder lives with the names.
+pub(crate) use pqbench_model_v1::name::encode;
 
 /// The workspace root an endpoint of either dialect names: an Iceberg REST
 /// catalog base was built from it (`{root}/iceberg-rest/v1[/{prefix}]`), and a
@@ -44,23 +46,6 @@ pub(crate) fn unity_root(endpoint: &str) -> String {
     endpoint
         .split_once("/iceberg-rest/")
         .map_or_else(|| api_root(endpoint), |(root, _)| api_root(root))
-}
-
-/// Percent-encode one path or query value (RFC 3986 unreserved bytes pass).
-pub(crate) fn encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => {
-                // No per-byte allocation: the hex digits go straight to `encoded`.
-                let _ = write!(encoded, "%{byte:02X}");
-            }
-        }
-    }
-    encoded
 }
 
 /// A percent-encoded Iceberg namespace: parts joined by the unit separator.

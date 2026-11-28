@@ -8,6 +8,8 @@ members = [
     "crates/docsgen",
     "crates/pqbench",
     "crates/pqbench-derive",
+    "crates/pqbench-model-v1",
+    "crates/pqbench-parquet",
     "crates/pqbench-resource",
     "crates/pqbench-cli",
     "crates/pqbench-driver",
@@ -20,6 +22,8 @@ default-members = [
     "crates/docsgen",
     "crates/pqbench",
     "crates/pqbench-derive",
+    "crates/pqbench-model-v1",
+    "crates/pqbench-parquet",
     "crates/pqbench-resource",
     "crates/pqbench-cli",
     "crates/pqbench-driver",
@@ -37,6 +41,8 @@ repository = "https://github.com/pqbench/pqbench"
 aipnaming = { version = "0.0.12", path = "crates/aipnaming" }
 docscheck = { version = "0.0.12", path = "crates/docscheck" }
 pqbench = { version = "0.0.12", path = "crates/pqbench" }
+pqbench-model-v1 = { version = "0.0.12", path = "crates/pqbench-model-v1" }
+pqbench-parquet = { version = "0.0.12", path = "crates/pqbench-parquet" }
 pqbench-driver = { version = "0.0.12", path = "crates/pqbench-driver" }
 
 [profile.dev]

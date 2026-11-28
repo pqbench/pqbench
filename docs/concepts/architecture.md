@@ -6,8 +6,17 @@ tidyings; this page covers structure.
 
 ## Layers
 
-- `crates/pqbench` — the library: command implementations, domain types, and
-  the third-party adapters.
+- `crates/pqbench-model-v1` — the wire model: the resources, their name
+  grammar (`v1::name`), and their JSON. `serde` only; it reads no file and
+  speaks to no service, so it compiles in under a second. `pqbench` re-exports
+  it as `pqbench::v1`.
+- `crates/pqbench-parquet` — the local work: a footer's byte masses, page
+  compression, the lint rules, a decoded profile. No network, no object store,
+  no Delta, no Iceberg, so a change to a lint rule rebuilds one small crate.
+  `pqbench` re-exports its modules at the same paths.
+- `crates/pqbench` — the library's remote half: command implementations that
+  read object storage, Delta, Iceberg, or Unity, their domain types, and the
+  network third-party adapters.
 - `crates/pqbench-cli` — a thin wrapper: argument parsing, the JSON documents,
   and output formatting. No command logic.
 - `crates/pqbench-driver` — the partition-version state driver, a separate
@@ -32,10 +41,15 @@ socket.
 crates/pqbench/src/
   <resource>/
     <verb>/{api.rs, impl.rs, mod.rs}
-  bytemass/{api.rs, raw.rs, analytics.rs, text.rs, json.rs, …}
+  bytemass/{api.rs, collection.rs, remote.rs}
   third_party/
     <crate>/{api.rs, impl.rs, mod.rs}
     <crate>/impl/<module>.rs
+
+crates/pqbench-parquet/src/
+  lint/, compression/, profile.rs, codecs.rs, mass.rs, diff.rs
+  third_party/
+    <codec>/{api.rs, impl.rs, mod.rs}
 ```
 
 - `api.rs` — the command's public entry point and the few helpers a caller

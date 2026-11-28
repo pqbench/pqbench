@@ -17,9 +17,13 @@
 //! ```
 //!
 //! The derive fills `Resource::from_name`, `name`, and `name_mut`; the parse
-//! itself is `pqbench::v1::name::pattern_name`, so the dotted shorthand and
-//! the canonical spelling live there, not in the macro. The `from_json` and
+//! itself is `pqbench_model_v1::name::pattern_name`, so the dotted shorthand
+//! and the canonical spelling live there, not in the macro. The `from_json` and
 //! `to_json` pair is provided once by `pqbench_resource::Resource`.
+//!
+//! The model crate refers to itself by name (`extern crate self as
+//! pqbench_model_v1;`), the way `pqbench` does, so the emitted paths resolve
+//! whether a type is defined in the model crate or derived in another.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -87,7 +91,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             /// The ids the name spells, in path order: the resource name or
             /// its dotted shorthand.
             pub fn parse_name(value: &str) -> Option<#parts_type> {
-                let ids = ::pqbench::v1::name::ids(value, &[#(#segments),*], #alias)?;
+                let ids = ::pqbench_model_v1::name::ids(value, &[#(#segments),*], #alias)?;
                 Some(#parts)
             }
         }
@@ -98,7 +102,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
             fn from_name(value: &str) -> Option<Self> {
                 Some(Self {
-                    #field: ::pqbench::v1::name::pattern_name(value, &[#(#segments),*], #alias)?,
+                    #field: ::pqbench_model_v1::name::pattern_name(value, &[#(#segments),*], #alias)?,
                     ..Self::default()
                 })
             }

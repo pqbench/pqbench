@@ -1,13 +1,13 @@
 //! Prices as data: the S3 list price of each storage class.
 
 /// Whether a blob service is S3 object storage (the Hadoop-prefixed `s3a` too).
-pub(crate) fn object_storage(service: &str) -> bool {
+pub fn object_storage(service: &str) -> bool {
     matches!(service, "s3" | "s3a")
 }
 
 /// Bytes in a gibibyte. The list prices are quoted per GB-month; this uses the
 /// binary gigabyte AWS bills against.
-pub(crate) const GIBIBYTE: f64 = 1_073_741_824.0;
+pub const GIBIBYTE: f64 = 1_073_741_824.0;
 
 /// The S3 list prices per GiB-month (us-east-1) for a storage class, keyed by
 /// access sub-tier: one entry for a class with a single price, five for
@@ -17,9 +17,7 @@ pub(crate) const GIBIBYTE: f64 = 1_073_741_824.0;
 /// access returns every sub-tier (Frequent Access down to Deep Archive Access)
 /// and the consumer picks. The sub-tier is chosen by how often the object is
 /// read; the object monitoring fee is not included.
-pub(crate) fn storage_prices(
-    storage_class: &str,
-) -> Option<&'static [(Option<&'static str>, f64)]> {
+pub fn storage_prices(storage_class: &str) -> Option<&'static [(Option<&'static str>, f64)]> {
     Some(match storage_class {
         "STANDARD" => &[(None, 0.023)],
         "REDUCED_REDUNDANCY" => &[(None, 0.024)],

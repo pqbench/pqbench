@@ -2965,24 +2965,21 @@ dependencies = [
  "buoyant_kernel",
  "bytes",
  "deltalake",
- "flate2",
  "futures",
  "futures-util",
  "glob",
- "lz4",
  "object_store",
  "parquet",
  "percent-encoding",
- "pqbench-resource",
+ "pqbench-model-v1",
+ "pqbench-parquet",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "simd-json",
- "snappy_src",
  "tempfile",
  "tokio",
  "url",
- "zstd",
 ]
 
 [[package]]
@@ -3022,6 +3019,32 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "pqbench-model-v1"
+version = "0.0.12"
+dependencies = [
+ "pqbench-resource",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pqbench-parquet"
+version = "0.0.12"
+dependencies = [
+ "bytes",
+ "flate2",
+ "futures-util",
+ "glob",
+ "lz4",
+ "parquet",
+ "pqbench-model-v1",
+ "serde",
+ "serde_json",
+ "snappy_src",
+ "zstd",
 ]
 
 [[package]]

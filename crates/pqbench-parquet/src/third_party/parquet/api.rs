@@ -257,12 +257,17 @@ pub fn write_parquet(
 mod tests {
     use super::*;
 
+    /// A committed Parquet fixture, read by the tests that assert on real page
+    /// and footer bytes rather than on bytes this crate wrote itself.
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
     #[test]
     fn parse_none_file_extracts_pages() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_reddit_none.parquet"
-        );
+        let path = fixture("small_reddit_none.parquet");
         let buf = std::fs::read(path).expect("missing NONE fixture");
 
         let file = parse_pages(&buf).unwrap();
@@ -285,10 +290,7 @@ mod tests {
 
     #[test]
     fn compressed_input_is_rejected_with_clear_error() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_snappy.parquet"
-        );
+        let path = fixture("small_snappy.parquet");
         let buf = std::fs::read(path).expect("missing snappy fixture");
         let err = parse_pages(&buf).unwrap_err();
         assert!(
@@ -299,11 +301,8 @@ mod tests {
 
     #[test]
     fn read_file_masses_works_on_compressed_file() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_snappy.parquet"
-        );
-        let mass = read_file_masses(Path::new(path)).unwrap();
+        let path = fixture("small_snappy.parquet");
+        let mass = read_file_masses(&path).unwrap();
         assert!(mass.row_count > 0);
         assert!(!mass.columns.is_empty());
         assert!(
@@ -319,11 +318,8 @@ mod tests {
 
     #[test]
     fn read_file_masses_returns_one_entry_per_column_chunk() {
-        let path = Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/small_snappy.parquet"
-        ));
-        let mass = read_file_masses(path).unwrap();
+        let path = fixture("small_snappy.parquet");
+        let mass = read_file_masses(&path).unwrap();
         assert_eq!(mass.columns.len(), mass.row_group_count);
         assert!(mass.row_count > 0);
         assert!(mass

@@ -17,6 +17,14 @@
 //!
 //! [`name`] is the one place a name format lives, so changing it (say, to a
 //! URN) is a one-module change.
+//!
+//! The crate is the wire model and nothing else: `serde`, `serde_json`, and
+//! the `Resource` derive. It reads no file and speaks to no service, so a
+//! consumer that only builds or reads records (the driver's state, the CLI's
+//! render) compiles in under a second. `pqbench` re-exports it as
+//! `pqbench::v1`.
+
+extern crate self as pqbench_model_v1;
 
 mod blob;
 mod bytemass;
@@ -43,6 +51,7 @@ mod suggestion;
 mod table;
 mod table_file;
 mod table_format;
+mod value_count;
 
 pub use blob::Blob;
 pub use bytemass::Bytemass;
@@ -69,3 +78,4 @@ pub use suggestion::{Remedy, Suggestion};
 pub use table::Table;
 pub use table_file::TableFile;
 pub use table_format::TableFormat;
+pub use value_count::ValueCount;

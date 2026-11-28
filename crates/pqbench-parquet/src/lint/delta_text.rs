@@ -100,7 +100,7 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
         v1::Remedy::new(
             "pyarrow",
             format!(
-                "use_dictionary=False with column_encoding={{{leaf}: 'DELTA_BYTE_ARRAY'}} \
+                "use_dictionary=False with column_encoding={{{leaf:?}: 'DELTA_BYTE_ARRAY'}} \
                  (or 'DELTA_LENGTH_BYTE_ARRAY')"
             ),
         ),

@@ -5,7 +5,28 @@
 //! segment, so a name with a `/` in an id (a locator, a dotted column path)
 //! still decodes back to what it names.
 
-use crate::dialect::encode;
+use std::fmt::Write;
+
+/// Percent-encode one path or query value (RFC 3986 unreserved bytes pass).
+///
+/// It lives here because a name is nothing but encoded segments, and because
+/// the endpoints encode their identifiers the same way.
+#[must_use]
+pub fn encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                // No per-byte allocation: the hex digits go straight to `encoded`.
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
 
 /// `metastores/{metastore}`.
 #[must_use]
@@ -112,7 +133,7 @@ const TABLE_PATH: &[&str] = &["catalogs", "", "schemas", "", "tables", ""];
 
 /// The ids a name spells: its resource path (`segments`, a literal or `""`
 /// for an id), or else the dotted shorthand.
-pub(crate) fn ids(value: &str, segments: &[&str], alias: Option<&[&str]>) -> Option<Vec<String>> {
+pub fn ids(value: &str, segments: &[&str], alias: Option<&[&str]>) -> Option<Vec<String>> {
     let parts = split(value);
     if parts.len() == segments.len() {
         let mut ids = Vec::with_capacity(segments.len());
@@ -154,11 +175,7 @@ fn dotted_ids(value: &str, placeholders: usize) -> Option<Vec<String>> {
 /// The canonical name a resource name or its dotted shorthand spells, laid out
 /// as `segments` (a literal, or `""` for an id). This is the one call the
 /// `Resource` derive makes.
-pub(crate) fn pattern_name(
-    value: &str,
-    segments: &[&str],
-    alias: Option<&[&str]>,
-) -> Option<String> {
+pub fn pattern_name(value: &str, segments: &[&str], alias: Option<&[&str]>) -> Option<String> {
     let ids = ids(value, segments, alias)?;
     let mut name = String::new();
     let mut ids = ids.into_iter();
@@ -256,7 +273,7 @@ fn split(value: &str) -> Vec<&str> {
 }
 
 /// Percent-decode one path segment back to its id.
-pub(crate) fn decode(value: &str) -> String {
+pub fn decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -281,7 +298,7 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v1::{Catalog, Schema, Table};
+    use crate::{Catalog, Schema, Table};
 
     #[test]
     fn names_round_trip_through_their_parsers() {

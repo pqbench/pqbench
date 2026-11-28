@@ -1,5 +1,7 @@
 #!/bin/sh
-# Enforce the third-party isolation rule (see crates/pqbench/src/third_party).
+# Enforce the third-party isolation rule, which holds for every wrapper in the
+# workspace: `crates/pqbench/src/third_party` (the network half) and
+# `crates/pqbench-parquet/src/third_party` (the local half) alike.
 #
 # Feature flags live in exactly one place: the `impl` of a third_party wrapper.
 #   third_party/<crate>/api.rs   the isolated surface. No `#[cfg(feature = ...)]`
@@ -10,7 +12,9 @@
 #                                returns an error naming it.
 #
 # So a `cfg(feature = ...)` anywhere else under a crate's `src/` is a violation:
-# not in the library, not in the CLI, not in a wrapper root, not in an api.rs.
+# not in either library, not in the CLI, not in a wrapper root, not in an
+# api.rs. The rule is keyed on the path, not on the crate, so a wrapper that
+# moves between crates keeps it.
 # Tests are exempt — they gate freely on features, and `#[cfg(test)]` code is not
 # checked.
 #
@@ -55,10 +59,15 @@ command -v grep >/dev/null 2>&1 || {
     exit 1
 }
 
-[ -d "$root/crates/pqbench/src/third_party" ] || {
-    echo "FAIL: no third_party directory under $root/crates/pqbench/src" >&2
-    exit 1
-}
+# Both wrapper homes must exist: a crate that quietly loses (or stops being
+# scanned for) its third_party directory would otherwise pass the check with
+# every api.rs gone.
+for crate in pqbench pqbench-parquet; do
+    [ -d "$root/crates/$crate/src/third_party" ] || {
+        echo "FAIL: no third_party directory under $root/crates/$crate/src" >&2
+        exit 1
+    }
+done
 
 # The feature-cfg lines of one file, as `line:col:text`.
 #
