@@ -23,5 +23,9 @@ bytes = "1"
 parquet = { version = "59", default-features = false, features = ["snap", "brotli", "lz4", "zstd", "flate2-rust_backend"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# Base64 text and timestamp text are read with the crates `parquet` already
+# builds: the rules decode and date values, they do not spell them.
+base64 = { workspace = true }
+chrono = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 pqbench-model-v1 = { workspace = true }

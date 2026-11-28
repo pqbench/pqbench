@@ -140,11 +140,9 @@ fn remedy(writer: Writer, leaf: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use parquet::data_type::ByteArray;
-
     use super::{detect, measure, remedy};
     use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{cells, ColumnSample};
     use crate::v1;
 
     fn column(codec: &str, physical_data_type: &str) -> v1::Column {
@@ -156,13 +154,6 @@ mod tests {
             }),
             ..v1::Column::default()
         }
-    }
-
-    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
-        values
-            .iter()
-            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
-            .collect()
     }
 
     /// The pyarrow setting is a Python dict literal, so every column key is a

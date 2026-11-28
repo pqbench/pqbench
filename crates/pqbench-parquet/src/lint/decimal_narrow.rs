@@ -40,12 +40,7 @@ enum Width {
 /// The finding this column earns when its leaf is a `FIXED_LEN_BYTE_ARRAY`
 /// decimal whose precision fits an integer and whose values fit that integer.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
-    if sample.physical() != "FIXED_LEN_BYTE_ARRAY"
-        || sample
-            .column
-            .max_repetition_level
-            .is_some_and(|level| level != 0)
-    {
+    if sample.physical() != "FIXED_LEN_BYTE_ARRAY" || !sample.scalar() {
         return None;
     }
     let (precision, scale) = decimal_type(sample)?;

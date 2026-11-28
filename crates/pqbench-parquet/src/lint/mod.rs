@@ -273,6 +273,14 @@ impl<'a> ColumnSample<'a> {
         self.column.physical_data_type.as_deref() == Some("BYTE_ARRAY")
     }
 
+    /// Whether the leaf's values are scalar: a repeated leaf holds one nested
+    /// value per row, so a rule that reads values has nothing to read there.
+    fn scalar(&self) -> bool {
+        self.column
+            .max_repetition_level
+            .is_none_or(|level| level == 0)
+    }
+
     /// The leaf's physical type, as the footer spells it.
     fn physical(&self) -> &str {
         self.column
@@ -1012,12 +1020,29 @@ fn percent(value: f64) -> String {
     }
 }
 
+/// Canonical UUID text for `value`, as the rule tests write it.
+#[cfg(test)]
+pub(crate) fn uuid_text(value: usize) -> String {
+    format!("{value:08x}-0000-4000-8000-{value:012x}")
+}
+
+/// The values as a decoded byte-array chunk, as the rule tests write it.
+#[cfg(test)]
+pub(crate) fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
+    values
+        .iter()
+        .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
     use std::sync::Arc;
 
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
     use parquet::basic::{Compression, ZstdLevel};
     use parquet::data_type::{ByteArray, ByteArrayType, Int64Type};
     use parquet::file::properties::WriterProperties;
@@ -1025,11 +1050,11 @@ mod tests {
     use parquet::schema::parser::parse_message_type;
 
     use super::{
-        rule, suggestions, verify, ColumnSample, BASE64_TEXT_RULE, CODEC_ZSTD_RULE,
-        DECIMAL_NARROW_RULE, DELTA_INTEGER_RULE, DELTA_LENGTH_RULE, DELTA_TEXT_ENCODING_RULE,
-        DICTIONARY_FALLBACK_RULE, DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE,
-        INT64_NARROW_RULE, INT96_TIMESTAMP_RULE, NUMERIC_TEXT_RULE, STATS_TRUNCATED_RULE,
-        TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
+        cells, rule, suggestions, uuid_text, verify, ColumnSample, BASE64_TEXT_RULE,
+        CODEC_ZSTD_RULE, DECIMAL_NARROW_RULE, DELTA_INTEGER_RULE, DELTA_LENGTH_RULE,
+        DELTA_TEXT_ENCODING_RULE, DICTIONARY_FALLBACK_RULE, DICTIONARY_MISSING_RULE,
+        DICTIONARY_UNIQUE_RULE, INT64_NARROW_RULE, INT96_TIMESTAMP_RULE, NUMERIC_TEXT_RULE,
+        STATS_TRUNCATED_RULE, TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
     };
     use crate::v1;
 
@@ -1057,43 +1082,6 @@ mod tests {
             }),
             ..v1::Column::default()
         }
-    }
-
-    /// Canonical UUID text for `value`.
-    fn uuid_text(value: usize) -> String {
-        format!("{value:08x}-0000-4000-8000-{value:012x}")
-    }
-
-    /// Standard Base64 of `raw`, padded to a multiple of four.
-    fn payloads_base64(raw: &[u8]) -> String {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut text = String::with_capacity(raw.len().div_ceil(3) * 4);
-        for chunk in raw.chunks(3) {
-            let bits = (u32::from(chunk[0]) << 16)
-                | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-                | u32::from(*chunk.get(2).unwrap_or(&0));
-            text.push(ALPHABET[(bits >> 18) as usize & 0x3f] as char);
-            text.push(ALPHABET[(bits >> 12) as usize & 0x3f] as char);
-            text.push(if chunk.len() > 1 {
-                ALPHABET[(bits >> 6) as usize & 0x3f] as char
-            } else {
-                '='
-            });
-            text.push(if chunk.len() > 2 {
-                ALPHABET[bits as usize & 0x3f] as char
-            } else {
-                '='
-            });
-        }
-        text
-    }
-
-    /// The values as a decoded byte-array chunk.
-    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
-        values
-            .iter()
-            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
-            .collect()
     }
 
     /// Check one rule's finding on `sample`, then check the suggestion it
@@ -1150,7 +1138,7 @@ mod tests {
                 let raw: Vec<u8> = (0..96u32)
                     .map(|at| (value.wrapping_mul(31).wrapping_add(at * 7) % 251) as u8)
                     .collect();
-                payloads_base64(&raw)
+                STANDARD.encode(&raw)
             })
             .collect();
         let payload_cells = cells(&payloads);

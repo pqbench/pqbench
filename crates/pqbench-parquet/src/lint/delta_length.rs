@@ -38,10 +38,7 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     if !sample.byte_array()
         || sample.chunk_has_dictionary
         || control::source_encoding(sample.mass).is_some()
-        || sample
-            .column
-            .max_repetition_level
-            .is_some_and(|level| level != 0)
+        || !sample.scalar()
     {
         return None;
     }
@@ -167,11 +164,10 @@ fn remedy(writer: Writer, leaf: &str) -> String {
 #[cfg(test)]
 mod tests {
     use parquet::basic::Encoding;
-    use parquet::data_type::ByteArray;
 
     use super::{common_prefix, detect, measure, remedy};
     use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{cells, ColumnSample};
     use crate::v1;
 
     fn column(codec: &str, encodings: &[Encoding]) -> v1::Column {
@@ -186,13 +182,6 @@ mod tests {
             }),
             ..v1::Column::default()
         }
-    }
-
-    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
-        values
-            .iter()
-            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
-            .collect()
     }
 
     /// Deterministic mixed-case text of length `len`: no shared prefixes, and

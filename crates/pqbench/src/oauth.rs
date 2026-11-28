@@ -21,6 +21,7 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use serde::Deserialize;
 
 use crate::config::Secret;
@@ -218,27 +219,10 @@ fn basic(client_id: &str, secret: &Secret) -> String {
     format!("Basic {}", encode_base64(credentials.as_bytes()))
 }
 
-/// The standard base64 alphabet (RFC 4648 §4).
-const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-/// `bytes` as padded base64, the encoding HTTP Basic carries its credentials
-/// in.
+/// `bytes` as padded Base64: HTTP Basic carries its credentials in the standard
+/// alphabet (RFC 4648 §4).
 fn encode_base64(bytes: &[u8]) -> String {
-    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let mut block = [0u8; 3];
-        block[..chunk.len()].copy_from_slice(chunk);
-        let bits = u32::from_be_bytes([0, block[0], block[1], block[2]]);
-        for index in 0..4 {
-            if index <= chunk.len() {
-                let symbol = (bits >> (18 - 6 * index)) & 0x3f;
-                encoded.push(char::from(ALPHABET[symbol as usize]));
-            } else {
-                encoded.push('=');
-            }
-        }
-    }
-    encoded
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 #[cfg(test)]

@@ -112,7 +112,7 @@ fn remedy(writer: Writer) -> String {
 mod tests {
     use super::{detect, measure, remedy};
     use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{cells, ColumnSample};
     use crate::v1;
 
     fn column(physical_data_type: &str) -> v1::Column {
@@ -125,17 +125,6 @@ mod tests {
             }),
             ..v1::Column::default()
         }
-    }
-
-    fn cells(values: &[String]) -> Vec<Option<parquet::data_type::ByteArray>> {
-        values
-            .iter()
-            .map(|value| {
-                Some(parquet::data_type::ByteArray::from(
-                    value.clone().into_bytes(),
-                ))
-            })
-            .collect()
     }
 
     #[test]

@@ -2962,8 +2962,10 @@ version = "0.0.12"
 dependencies = [
  "apache-avro",
  "async-trait",
+ "base64 0.23.1",
  "buoyant_kernel",
  "bytes",
+ "chrono",
  "deltalake",
  "futures",
  "futures-util",
@@ -2986,6 +2988,7 @@ dependencies = [
 name = "pqbench-cli"
 version = "0.0.12"
 dependencies = [
+ "chrono",
  "clap",
  "futures-util",
  "libc",
@@ -3034,7 +3037,9 @@ dependencies = [
 name = "pqbench-parquet"
 version = "0.0.12"
 dependencies = [
+ "base64 0.23.1",
  "bytes",
+ "chrono",
  "flate2",
  "futures-util",
  "glob",

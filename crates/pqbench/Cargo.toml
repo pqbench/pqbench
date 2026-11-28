@@ -48,6 +48,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 # `raw_value` keeps a pass-through record as the bytes it was read from, so a
 # stream read from the store and written to a client is never parsed to a tree.
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+# The OAuth header's Base64 and the S3 backend's HTTP dates come from the crates
+# `parquet` already builds, not a second parser.
+base64 = { workspace = true }
+chrono = { workspace = true }
 # The optional SIMD JSON parser behind `json-simd`. Its dependency tree is small
 # and it needs no build script: the SIMD kernels are selected at runtime.
 simd-json = { version = "0.15", optional = true }

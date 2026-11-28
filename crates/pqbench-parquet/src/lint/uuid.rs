@@ -106,7 +106,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
 }
 
 /// Parse canonical 36-byte UUID text into its 16 big-endian bytes.
-fn parse_uuid(bytes: &[u8]) -> Option<[u8; 16]> {
+pub(super) fn parse_uuid(bytes: &[u8]) -> Option<[u8; 16]> {
     if bytes.len() != 36 {
         return None;
     }
@@ -132,10 +132,8 @@ fn parse_uuid(bytes: &[u8]) -> Option<[u8; 16]> {
 
 #[cfg(test)]
 mod tests {
-    use parquet::data_type::ByteArray;
-
     use super::{measure, parse_uuid};
-    use crate::lint::ColumnSample;
+    use crate::lint::{cells, uuid_text, ColumnSample};
     use crate::v1;
 
     fn column() -> v1::Column {
@@ -147,17 +145,6 @@ mod tests {
             }),
             ..v1::Column::default()
         }
-    }
-
-    fn uuid_text(value: usize) -> String {
-        format!("{value:08x}-0000-4000-8000-{value:012x}")
-    }
-
-    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
-        values
-            .iter()
-            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
-            .collect()
     }
 
     /// The pyarrow remedy's column key is a Python string literal, so a dotted,

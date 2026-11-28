@@ -9,6 +9,7 @@
 //! reach a rewrite. The control then writes the same bytes as a `BYTE_ARRAY`
 //! under the file's own codec, and the difference is what the rewrite saves.
 
+use base64::engine::{general_purpose, Engine as _, GeneralPurpose};
 use parquet::data_type::ByteArray;
 use parquet::file::properties::WriterVersion;
 
@@ -171,44 +172,28 @@ fn decode(text: &[u8]) -> Option<Vec<u8>> {
     if text.len() < MINIMUM_LENGTH || !text.is_ascii() {
         return None;
     }
-    let alphabet = Alphabet::classify(text)?;
-    if uuid_text(text) || text.iter().all(u8::is_ascii_hexdigit) {
+    if super::uuid::parse_uuid(text).is_some() || text.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
     // A word has letters only: no digit, no `+`, `/`, `-`, `_`, and no padding.
     if text.iter().all(u8::is_ascii_alphabetic) {
         return None;
     }
-    let unpadded = text.strip_suffix(b"=").unwrap_or(text);
-    let unpadded = unpadded.strip_suffix(b"=").unwrap_or(unpadded);
-    // Padding only pads a three-byte group, so it appears on a length that is a
-    // multiple of four: a trailing `=` on a `4k+1` string is a stray character,
-    // not part of a spelling.
-    if text.ends_with(b"=") && !text.len().is_multiple_of(4) {
-        return None;
-    }
-    if unpadded.contains(&b'=') || unpadded.len() % 4 == 1 {
-        return None;
-    }
-    let mut raw = Vec::with_capacity(unpadded.len() * 3 / 4);
-    let mut bits = 0u32;
-    let mut width = 0u32;
-    for byte in unpadded {
-        let value = alphabet.value(*byte)?;
-        bits = (bits << 6) | u32::from(value);
-        width += 6;
-        if width >= 8 {
-            width -= 8;
-            raw.push((bits >> width) as u8);
-            bits &= (1 << width) - 1;
-        }
-    }
-    // A canonical encoding leaves the unused low bits zero.
-    if bits != 0 || raw.len() < MINIMUM_BYTES || !binary(&raw) {
-        return None;
-    }
-    Some(raw)
+    let raw = ENGINES.iter().find_map(|engine| engine.decode(text).ok())?;
+    (raw.len() >= MINIMUM_BYTES && binary(&raw)).then_some(raw)
 }
+
+/// The engines that spell one binary payload: the standard and URL-safe
+/// alphabets, padded or unpadded. Each refuses a spelling that is not
+/// canonical (its padding in the wrong place, its unused trailing bits set),
+/// so a value either alphabet reads decodes to the same bytes, and one no
+/// engine reads is not Base64 of a payload.
+const ENGINES: [&GeneralPurpose; 4] = [
+    &general_purpose::STANDARD,
+    &general_purpose::STANDARD_NO_PAD,
+    &general_purpose::URL_SAFE,
+    &general_purpose::URL_SAFE_NO_PAD,
+];
 
 /// Whether bytes are a binary payload rather than printable text.
 fn binary(raw: &[u8]) -> bool {
@@ -221,62 +206,13 @@ fn binary(raw: &[u8]) -> bool {
     printable as f64 / raw.len().max(1) as f64 <= PRINTABLE_FRACTION
 }
 
-/// Whether the text is a canonical UUID: eight, four, four, four, and twelve
-/// hex digits around four dashes.
-fn uuid_text(text: &[u8]) -> bool {
-    text.len() == 36
-        && text.iter().enumerate().all(|(at, byte)| {
-            if matches!(at, 8 | 13 | 18 | 23) {
-                *byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        })
-}
-
-/// The Base64 alphabets: the standard one and the URL-safe one, which share
-/// the alphanumeric characters and differ only in the last two.
-#[derive(Clone, Copy)]
-enum Alphabet {
-    Standard,
-    UrlSafe,
-}
-
-impl Alphabet {
-    /// The alphabet a spelling uses, from the character that tells them apart.
-    fn classify(text: &[u8]) -> Option<Self> {
-        let standard = text.iter().any(|byte| matches!(*byte, b'+' | b'/'));
-        let url_safe = text.iter().any(|byte| matches!(*byte, b'-' | b'_'));
-        match (standard, url_safe) {
-            (true, false) => Some(Self::Standard),
-            (false, true) => Some(Self::UrlSafe),
-            // No distinguishing character: both alphabets spell it the same.
-            (false, false) => Some(Self::Standard),
-            (true, true) => None,
-        }
-    }
-
-    /// The six bits `byte` carries, or `None` when it is not in the alphabet.
-    fn value(self, byte: u8) -> Option<u8> {
-        Some(match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' if matches!(self, Self::Standard) => 62,
-            b'/' if matches!(self, Self::Standard) => 63,
-            b'-' if matches!(self, Self::UrlSafe) => 62,
-            b'_' if matches!(self, Self::UrlSafe) => 63,
-            _ => return None,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use parquet::data_type::ByteArray;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
 
     use super::{decode, detect, measure};
-    use crate::lint::ColumnSample;
+    use crate::lint::{cells, uuid_text, ColumnSample};
     use crate::v1;
 
     fn column() -> v1::Column {
@@ -291,13 +227,6 @@ mod tests {
         }
     }
 
-    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
-        values
-            .iter()
-            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
-            .collect()
-    }
-
     /// Deterministic incompressible payload bytes of the requested size.
     fn payload(index: u64, len: usize) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(len);
@@ -309,39 +238,10 @@ mod tests {
         bytes
     }
 
-    /// Standard Base64 of `raw`, padded to a multiple of four.
-    fn base64(raw: &[u8]) -> String {
-        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut text = String::with_capacity(raw.len().div_ceil(3) * 4);
-        for chunk in raw.chunks(3) {
-            let bits = (u32::from(chunk[0]) << 16)
-                | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-                | u32::from(*chunk.get(2).unwrap_or(&0));
-            text.push(ALPHABET[(bits >> 18) as usize & 0x3f] as char);
-            text.push(ALPHABET[(bits >> 12) as usize & 0x3f] as char);
-            text.push(if chunk.len() > 1 {
-                ALPHABET[(bits >> 6) as usize & 0x3f] as char
-            } else {
-                '='
-            });
-            text.push(if chunk.len() > 2 {
-                ALPHABET[bits as usize & 0x3f] as char
-            } else {
-                '='
-            });
-        }
-        text
-    }
-
-    /// Canonical UUID text for `value`.
-    fn uuid_text(value: u64) -> String {
-        format!("{value:08x}-0000-4000-8000-{value:012x}")
-    }
-
     #[test]
     fn canonical_base64_decodes_to_its_bytes() {
         let raw = payload(7, 64);
-        let text = base64(&raw);
+        let text = STANDARD.encode(&raw);
         assert_eq!(decode(text.as_bytes()).as_deref(), Some(raw.as_slice()));
     }
 
@@ -353,7 +253,7 @@ mod tests {
         // 19 bytes leave four unused bits in the last character before the
         // padding; setting one of them keeps the same bytes but is not a
         // canonical spelling of them.
-        let text = base64(&payload(3, 19));
+        let text = STANDARD.encode(payload(3, 19));
         assert!(decode(text.as_bytes()).is_some());
         let at = text.find('=').expect("padded text") - 1;
         let mut bytes = text.into_bytes();
@@ -384,11 +284,11 @@ mod tests {
     }
 
     /// A trailing `=` pads a three-byte group, so it only belongs on a
-    /// four-character boundary. A stray one on a `4k+1` length would otherwise
-    /// be stripped and the text read as an unpadded spelling of the same bytes.
+    /// four-character boundary. A stray one on a `4k+1` length is not a spelling
+    /// of the same bytes, so no engine reads it as one.
     #[test]
     fn a_stray_trailing_pad_is_rejected() {
-        let unpadded = base64(&payload(3, 18));
+        let unpadded = STANDARD.encode(payload(3, 18));
         assert_eq!(unpadded.len() % 4, 0);
         assert!(decode(unpadded.as_bytes()).is_some());
 
@@ -402,7 +302,7 @@ mod tests {
     #[test]
     fn base64_binary_payloads_earn_binary_bytes() {
         let values: Vec<String> = (0..2_000)
-            .map(|index| base64(&payload(index, 96)))
+            .map(|index| STANDARD.encode(payload(index, 96)))
             .collect();
         let column = column();
         let cells = cells(&values);
@@ -449,7 +349,7 @@ mod tests {
     #[test]
     fn a_mixed_column_is_not_measured() {
         let mut values: Vec<String> = (0..2_000)
-            .map(|index| base64(&payload(index, 96)))
+            .map(|index| STANDARD.encode(payload(index, 96)))
             .collect();
         values[0] = "not-base64-text-at-all".to_string();
         let column = column();

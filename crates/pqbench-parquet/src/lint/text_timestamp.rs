@@ -6,6 +6,7 @@
 //! control then writes the same instants as `INT64` microseconds, Delta binary
 //! packed, against the source's own text encoding and dictionary state.
 
+use chrono::NaiveDateTime;
 use parquet::basic::Encoding;
 use parquet::file::properties::WriterVersion;
 
@@ -22,11 +23,10 @@ pub const TEXT_TIMESTAMP_RULE: &str = "text-timestamp";
 /// The shortest timestamp text: `YYYY-MM-DDTHH:MM:SS`.
 const MINIMUM_LENGTH: usize = 19;
 
-/// Microseconds in a second, a minute, an hour, and a day.
+/// Microseconds in a second, a minute, and an hour.
 const MICROSECONDS_PER_SECOND: i64 = 1_000_000;
 const MICROSECONDS_PER_MINUTE: i64 = 60 * MICROSECONDS_PER_SECOND;
 const MICROSECONDS_PER_HOUR: i64 = 60 * MICROSECONDS_PER_MINUTE;
-const MICROSECONDS_PER_DAY: i64 = 24 * MICROSECONDS_PER_HOUR;
 
 /// The finding this column earns when every sampled non-null value parses as a
 /// timestamp.
@@ -112,126 +112,99 @@ fn parse_timestamp(text: &[u8]) -> Option<i64> {
     if text.len() < MINIMUM_LENGTH || !text.is_ascii() {
         return None;
     }
-    let year = number(text, 0, 4)?;
-    if text[4] != b'-' {
-        return None;
+    let text = std::str::from_utf8(text).ok()?;
+    let (date_time, rest) = text.split_at(MINIMUM_LENGTH);
+    let date_time = date_time_body(date_time)?;
+    let (fraction_micros, rest) = fraction(rest)?;
+    let offset_micros = offset(rest)?;
+    // chrono validates the civil date (leap years included) and the clock, at
+    // the fixed widths a timestamp has.
+    let date_time = std::str::from_utf8(&date_time).ok()?;
+    let naive = NaiveDateTime::parse_from_str(date_time, "%Y-%m-%dT%H:%M:%S").ok()?;
+    Some(naive.and_utc().timestamp_micros() + fraction_micros - offset_micros)
+}
+
+/// The 19-byte date and time `YYYY-MM-DD[T ]HH:MM:SS`, with the separator
+/// spelled `T` so one format reads it, or `None` when a separator is not where
+/// a timestamp has it or a digit is not a digit. The widths are fixed: a
+/// one-digit month or a three-digit year is not a timestamp this rule reads.
+fn date_time_body(date_time: &str) -> Option<[u8; MINIMUM_LENGTH]> {
+    let mut body = [0u8; MINIMUM_LENGTH];
+    body.copy_from_slice(date_time.as_bytes());
+    match body[10] {
+        b'T' | b't' => body[10] = b'T',
+        b' ' => body[10] = b'T',
+        _ => return None,
     }
-    let month = number(text, 5, 7)?;
-    if text[7] != b'-' {
-        return None;
-    }
-    let day = number(text, 8, 10)?;
-    if !matches!(text[10], b'T' | b't' | b' ') {
-        return None;
-    }
-    let hour = number(text, 11, 13)?;
-    if text[13] != b':' {
-        return None;
-    }
-    let minute = number(text, 14, 16)?;
-    if text[16] != b':' {
-        return None;
-    }
-    let second = number(text, 17, 19)?;
-    if !(1..=12).contains(&month)
-        || day < 1
-        || day > month_days(year, month)
-        || hour > 23
-        || minute > 59
-        || second > 59
-    {
-        return None;
-    }
-    let mut at = MINIMUM_LENGTH;
-    let mut fraction_micros = 0i64;
-    if text.get(at) == Some(&b'.') {
-        at += 1;
-        let start = at;
-        let mut digits = 0usize;
-        while let Some(byte) = text.get(at).copied() {
-            if !byte.is_ascii_digit() {
-                break;
-            }
-            if digits < 6 {
-                fraction_micros = fraction_micros * 10 + i64::from(byte - b'0');
-            }
-            digits += 1;
-            at += 1;
-        }
-        if at == start || digits > 9 {
-            return None;
-        }
-        for _ in digits..6 {
-            fraction_micros *= 10;
-        }
-    }
-    let offset_micros = match text.get(at).copied() {
-        None => 0,
-        Some(b'Z' | b'z') if at + 1 == text.len() => 0,
-        Some(sign @ (b'+' | b'-')) => {
-            let (offset_hour, offset_minute) = match (text.len() - at, text.get(at + 3)) {
-                (6, Some(b':')) => (number(text, at + 1, at + 3)?, number(text, at + 4, at + 6)?),
-                (5, _) => (number(text, at + 1, at + 3)?, number(text, at + 3, at + 5)?),
-                _ => return None,
-            };
-            if offset_hour > 23 || offset_minute > 59 {
-                return None;
-            }
-            let magnitude = i64::from(offset_hour) * MICROSECONDS_PER_HOUR
-                + i64::from(offset_minute) * MICROSECONDS_PER_MINUTE;
-            if sign == b'-' {
-                -magnitude
-            } else {
-                magnitude
-            }
-        }
-        Some(_) => return None,
+    let shaped = body.iter().enumerate().all(|(at, byte)| match at {
+        4 | 7 => *byte == b'-',
+        13 | 16 => *byte == b':',
+        10 => true,
+        _ => byte.is_ascii_digit(),
+    });
+    // A leap second is a minute's 61st second: chrono reads `:60` as the next
+    // minute's first, which is not the instant the text names.
+    let leap_second = &body[17..19] == b"60";
+    (shaped && !leap_second).then_some(body)
+}
+
+/// The microseconds a fraction `text` starts with, and the text after it. A
+/// fraction is a dot and one to nine digits; the digits past the sixth are
+/// sub-microsecond and truncate, as a microsecond `INT64` stores them.
+fn fraction(text: &str) -> Option<(i64, &str)> {
+    let Some(digits) = text.strip_prefix('.') else {
+        return Some((0, text));
     };
-    let days = epoch_days(i64::from(year), i64::from(month), i64::from(day));
-    let seconds = i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second);
-    Some(
-        days * MICROSECONDS_PER_DAY + seconds * MICROSECONDS_PER_SECOND + fraction_micros
-            - offset_micros,
-    )
-}
-
-/// The digits in `text[start..end]` as a number, or `None` when any is not one.
-fn number(text: &[u8], start: usize, end: usize) -> Option<u32> {
-    let digits = text.get(start..end)?;
-    let mut value = 0u32;
-    for digit in digits {
-        if !digit.is_ascii_digit() {
-            return None;
-        }
-        value = value * 10 + u32::from(*digit - b'0');
+    let length = digits.bytes().take_while(u8::is_ascii_digit).count();
+    if length == 0 || length > 9 {
+        return None;
     }
-    Some(value)
-}
-
-/// Whether `year` is a leap year in the Gregorian calendar.
-fn leap_year(year: u32) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-}
-
-/// The days in a month of the Gregorian calendar.
-fn month_days(year: u32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap_year(year) => 29,
-        _ => 28,
+    let mut micros = 0i64;
+    for at in 0..6 {
+        let digit = match at < length {
+            true => i64::from(digits.as_bytes()[at] - b'0'),
+            false => 0,
+        };
+        micros = micros * 10 + digit;
     }
+    Some((micros, &digits[length..]))
 }
 
-/// Days from 1970-01-01 to the given proleptic Gregorian date.
-fn epoch_days(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let month_of_year = (month + 9) % 12;
-    let day_of_year = (153 * month_of_year + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+/// The offset `text` names, in microseconds east of UTC: nothing or `Z` is
+/// UTC, and `±HH:MM` and `±HHMM` are read with an hour under 24 and a minute
+/// under 60.
+fn offset(text: &str) -> Option<i64> {
+    let sign = match text.as_bytes() {
+        [] | [b'Z' | b'z'] => return Some(0),
+        [b'+', ..] => 1,
+        [b'-', ..] => -1,
+        _ => return None,
+    };
+    let (hour, minute) = match text.as_bytes() {
+        [_, hour_high, hour_low, b':', minute_high, minute_low] => (
+            pair(*hour_high, *hour_low)?,
+            pair(*minute_high, *minute_low)?,
+        ),
+        [_, hour_high, hour_low, minute_high, minute_low] => (
+            pair(*hour_high, *hour_low)?,
+            pair(*minute_high, *minute_low)?,
+        ),
+        _ => return None,
+    };
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    let magnitude =
+        i64::from(hour) * MICROSECONDS_PER_HOUR + i64::from(minute) * MICROSECONDS_PER_MINUTE;
+    Some(sign * magnitude)
+}
+
+/// Two decimal digits as a number, or `None` when either is not a digit.
+fn pair(high: u8, low: u8) -> Option<u32> {
+    if !high.is_ascii_digit() || !low.is_ascii_digit() {
+        return None;
+    }
+    Some(u32::from(high - b'0') * 10 + u32::from(low - b'0'))
 }
 
 /// The settings that store one column's timestamps as microsecond `INT64`, one

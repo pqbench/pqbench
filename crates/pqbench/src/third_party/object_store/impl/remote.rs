@@ -14,6 +14,7 @@ use ::object_store::client::{
 use ::object_store::signer::Signer;
 use ::object_store::{GetOptions, ObjectStore, ObjectStoreExt};
 use async_trait::async_trait;
+use chrono::DateTime;
 use url::Url;
 
 use crate::third_party::object_store::api::{
@@ -432,49 +433,13 @@ fn quoted<'a>(value: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// An IMF-fixdate (`Fri, 21 Dec 2012 00:00:00 GMT`) as epoch milliseconds.
+///
+/// The date is an RFC 2822 date, which is what S3 writes: chrono reads the
+/// weekday, the day, the month, the year, and the zone, and rejects a spelling
+/// that is not a date. A date before 1970 has no millisecond count to report.
 fn parse_http_date(value: &str) -> Option<u64> {
-    let mut parts = value.split_whitespace();
-    let _weekday = parts.next()?;
-    let day: i64 = parts.next()?.parse().ok()?;
-    let month = match parts.next()? {
-        "Jan" => 1,
-        "Feb" => 2,
-        "Mar" => 3,
-        "Apr" => 4,
-        "May" => 5,
-        "Jun" => 6,
-        "Jul" => 7,
-        "Aug" => 8,
-        "Sep" => 9,
-        "Oct" => 10,
-        "Nov" => 11,
-        "Dec" => 12,
-        _ => return None,
-    };
-    let year: i64 = parts.next()?.parse().ok()?;
-    let mut clock = parts.next()?.split(':');
-    let hour: i64 = clock.next()?.parse().ok()?;
-    let minute: i64 = clock.next()?.parse().ok()?;
-    let second: i64 = clock.next()?.parse().ok()?;
-    if !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
-        return None;
-    }
-    let seconds = epoch_days(year, month, day)
-        .checked_mul(86_400)?
-        .checked_add(hour * 3_600 + minute * 60 + second)?;
-    u64::try_from(seconds).ok()?.checked_mul(1_000)
-}
-
-/// Days since the Unix epoch for a proleptic Gregorian date, as Howard
-/// Hinnant's `days_from_civil` computes them.
-fn epoch_days(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let month_of_year = (month + 9) % 12;
-    let day_of_year = (153 * month_of_year + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
+    let date = DateTime::parse_from_rfc2822(value).ok()?;
+    u64::try_from(date.timestamp_millis()).ok()
 }
 
 /// Parse size, identity, storage class, and archive state from a HEAD response.

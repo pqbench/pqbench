@@ -39,6 +39,9 @@ pqbench-driver = { workspace = true }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# `--partition` is an ISO date: the civil calendar is chrono's, already in the
+# graph through `parquet`.
+chrono = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 lz4 = "1"
 libc = "0.2"

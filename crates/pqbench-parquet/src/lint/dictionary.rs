@@ -240,7 +240,7 @@ mod tests {
 
     use super::{detect_missing, detect_unique, measure_missing, missing_remedy, unique_remedy};
     use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{cells, ColumnSample};
     use crate::v1;
 
     fn column(physical_data_type: &str, codec: &str) -> v1::Column {
@@ -252,13 +252,6 @@ mod tests {
             }),
             ..v1::Column::default()
         }
-    }
-
-    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
-        values
-            .iter()
-            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
-            .collect()
     }
 
     /// Both pyarrow dictionary settings quote the column key, in the list form

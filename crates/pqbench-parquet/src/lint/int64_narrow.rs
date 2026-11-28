@@ -43,10 +43,7 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
 /// integer annotation a writer adds to a narrowed column. A timestamp, time,
 /// date, decimal, or UUID is an encoded value, not a count.
 fn plain_integer(sample: &ColumnSample<'_>) -> bool {
-    sample
-        .column
-        .max_repetition_level
-        .is_none_or(|level| level == 0)
+    sample.scalar()
         && matches!(
             sample.mass.logical_type.as_deref(),
             None | Some("INT(64,true)")

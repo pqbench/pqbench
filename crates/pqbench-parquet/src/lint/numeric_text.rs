@@ -104,11 +104,7 @@ fn numeric_text(sample: &ColumnSample<'_>) -> Option<(Numbers, f64)> {
 /// and a logical type that is not text (JSON, a UUID, a binary payload) spells
 /// something other than a number.
 fn text_leaf(sample: &ColumnSample<'_>) -> bool {
-    sample
-        .column
-        .max_repetition_level
-        .is_none_or(|level| level == 0)
-        && matches!(sample.mass.logical_type.as_deref(), None | Some("STRING"))
+    sample.scalar() && matches!(sample.mass.logical_type.as_deref(), None | Some("STRING"))
 }
 
 /// Parse one value as a canonical number.
@@ -257,11 +253,9 @@ fn remedy(writer: Writer, leaf: &str, numbers: Numbers) -> String {
 
 #[cfg(test)]
 mod tests {
-    use parquet::data_type::ByteArray;
-
     use super::{detect, measure, parse_number, remedy, Number, NUMERIC_TEXT_RULE};
     use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{cells, ColumnSample};
     use crate::v1;
 
     fn column(codec: &str, logical_type: Option<&str>) -> v1::Column {
@@ -275,13 +269,6 @@ mod tests {
             }),
             ..v1::Column::default()
         }
-    }
-
-    fn cells(values: &[String]) -> Vec<Option<ByteArray>> {
-        values
-            .iter()
-            .map(|value| Some(ByteArray::from(value.clone().into_bytes())))
-            .collect()
     }
 
     /// Only the spellings a value round-trips through are numbers.
