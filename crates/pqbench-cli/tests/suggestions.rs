@@ -847,3 +847,106 @@ fn mixed_text_is_not_a_timestamp_column() {
 
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// A chunk split into many tiny data pages is a candidate for the standard
+/// 1 MiB page size, and the controlled rewrite proves the saving.
+#[test]
+fn tiny_data_pages_earn_a_larger_page_size() {
+    let directory = temporary("page-size");
+    let path = directory.join("data.parquet");
+    let values: Vec<i64> = (0..200_000).map(|value| mix(value).cast_signed()).collect();
+    let rows: Vec<Vec<Value>> = values
+        .iter()
+        .map(|value| vec![Value::Integer(*value)])
+        .collect();
+    let options = WriteOptions {
+        page_size: Some(4 * 1024),
+        ..options(false)
+    };
+    write_column(
+        &path,
+        TypedColumn {
+            name: "id".into(),
+            kind: Kind::Integer,
+        },
+        &rows,
+        options,
+    );
+
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "page-size", "{records:?}");
+    assert_eq!(records[0]["column"], "id");
+    assert!(
+        records[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("data pages average"),
+        "{records:?}"
+    );
+    let remedies = records[0]["remedies"].as_array().expect("remedies");
+    assert!(
+        remedies.iter().any(|remedy| remedy["engine"] == "pyarrow"
+            && remedy["setting"]
+                .as_str()
+                .unwrap()
+                .contains("data_page_size=1048576")),
+        "{records:?}"
+    );
+    assert!(
+        remedies
+            .iter()
+            .any(|remedy| remedy["engine"] == "parquet-rs"
+                && remedy["setting"]
+                    .as_str()
+                    .unwrap()
+                    .contains("set_data_page_size_limit(1048576)")),
+        "{records:?}"
+    );
+
+    let measured = verified(&records);
+    assert_eq!(measured[0]["verified"], true, "{measured:?}");
+    assert!(
+        measured[0]["savings_bytes"].as_u64().unwrap() > 0,
+        "{measured:?}"
+    );
+    assert!(
+        measured[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("controlled rewrite"),
+        "{measured:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+/// The same values at parquet-rs's standard 1 MiB page size are not split into
+/// tiny pages, so the rule must not claim them.
+#[test]
+fn standard_page_sizes_are_not_reported() {
+    let directory = temporary("page-size-standard");
+    let path = directory.join("data.parquet");
+    let values: Vec<i64> = (0..200_000).map(|value| mix(value).cast_signed()).collect();
+    let rows: Vec<Vec<Value>> = values
+        .iter()
+        .map(|value| vec![Value::Integer(*value)])
+        .collect();
+    write_column(
+        &path,
+        TypedColumn {
+            name: "id".into(),
+            kind: Kind::Integer,
+        },
+        &rows,
+        options(false),
+    );
+
+    let records = suggestions(&path);
+    assert!(
+        records.iter().all(|record| record["rule"] != "page-size"),
+        "{records:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(directory);
+}

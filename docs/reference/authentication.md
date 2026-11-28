@@ -30,6 +30,19 @@ Process env (instance role, SSO, shared credentials):
 AWS_PROFILE=analytics pqb table-file s3://bucket/table/part-0.parquet | pqb bytemass
 ```
 
+### Archive classes and tiers
+
+An object in S3 `GLACIER` or `DEEP_ARCHIVE`, or in an Intelligent-Tiering
+`ARCHIVE_ACCESS` or `DEEP_ARCHIVE_ACCESS` tier, cannot be read until a restore
+has finished (`GLACIER_IR` and GCS `ARCHIVE` are online and always readable).
+`get partition-price` HEADs the files it samples without reading them, so it
+still prices an archived partition; its `restore_required` field records
+whether any sampled file needs a restore, and a completed restore clears it.
+A command that would read the body — `bytemass`, `download`, `list
+suggestions` — fails early with an error naming the storage class and the need
+to restore, instead of paying a storage request that can only fail. An absent
+or unknown class is read as usual.
+
 ## Catalog config (Unity / Databricks / Iceberg REST)
 
 The walk's config resolves from three layers, least to most specific:
@@ -260,15 +273,16 @@ one is running, and local tables need none.
   that copy), then `verify` (`get suggestion --local` on the potential
   suggestions, while the copy is still there; the two partition rules that need
   no file — `tombstones` and `small-files` — are added to the same record set).
-  The ten column rules (`uuid-text`, `int96-timestamp`, `text-timestamp`,
-  `codec-zstd`, `dictionary-unique`, `dictionary-missing`, `delta-integer`,
-  `delta-text-encoding`, `dictionary-fallback`, `stats-truncated`) each name
+  The eleven column rules (`uuid-text`, `int96-timestamp`, `text-timestamp`,
+  `codec-zstd`, `page-size`, `dictionary-unique`, `dictionary-missing`,
+  `delta-integer`, `delta-text-encoding`, `dictionary-fallback`,
+  `stats-truncated`) each name
   their change in every engine pqbench knows, so the driver records one
   suggestion per rule with the `remedies` for spark, pyarrow, parquet-rs, Delta,
   Iceberg, and DuckDB. One command runs per CPU at once,
   taking the newest data first and then the largest partition. A version
-  with no live file, or whose files are in an archive class or tier, is
-  `UP_TO_DATE` after its price. With `--low-network` no file is copied: after
+  with no live file, or whose sampled files need a restore, is `UP_TO_DATE`
+  after its price. With `--low-network` no file is copied: after
   its price a version runs `bytemass` on the sample file in place, which reads
   only the footer, and then verifies from the partition's metadata alone,
   since it has no column suggestion to measure. A failure puts the version

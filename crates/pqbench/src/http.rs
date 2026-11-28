@@ -154,12 +154,12 @@ where
             let page = fetch_page(page_token).await?;
             // The next state is the token the page named; a last page names
             // none, which ends the walk.
-            let rows = page.rows.into_iter().map(Ok).collect::<Vec<_>>();
+            let rows = page.rows.into_iter();
             let next = page.next_page_token.map(Some);
             Ok(Some((rows, (next, fetch_page))))
         },
     )
-    .map_ok(stream::iter)
+    .map_ok(|rows| stream::iter(rows.map(Ok)))
     .try_flatten()
 }
 

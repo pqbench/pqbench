@@ -146,6 +146,7 @@ fn sheet<'a>(sample: &ColumnSample<'a>, dictionary: bool) -> Option<Arm<'a>> {
             } else {
                 None
             },
+            data_page_size_limit: None,
             encoding,
             version,
         },

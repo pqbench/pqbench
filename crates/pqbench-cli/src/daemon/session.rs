@@ -258,11 +258,16 @@ impl Daemon {
             return cached.result();
         }
         self.pace().await;
-        let vended = match self.authorized().await {
-            Ok(workspace) => self.vendor.vend(table, &workspace).await,
-            // A bearer that cannot be minted fails this vend like any other
-            // endpoint failure, under the same caching rule.
-            Err(error) => Err(error),
+        // Only a direct vend mints a bearer: a reader's daemon request is sent
+        // under the daemon's identity, which mints and sends its own.
+        let vended = match &self.vendor {
+            Vendor::Direct(_) => match self.authorized().await {
+                Ok(workspace) => direct(&workspace, table).await,
+                // A bearer that cannot be minted fails this vend like any
+                // other endpoint failure, under the same caching rule.
+                Err(error) => Err(error),
+            },
+            Vendor::Daemon { path, .. } => parse_response(ask(path, &Request::lease(table)).await?),
         };
         match vended {
             Ok(vended) => {
@@ -305,18 +310,6 @@ impl Daemon {
             .lock()
             .expect("the lease cache lock is not poisoned")
             .insert(table.to_string(), cached);
-    }
-}
-
-impl Vendor {
-    /// The lease for `table`; `workspace` is the caller's authorized one, which
-    /// carries a minted bearer when the catalog's own identity is a service
-    /// principal.
-    async fn vend(&self, table: &str, workspace: &Workspace) -> Result<Option<Vended>, CliError> {
-        match self {
-            Vendor::Direct(_) => direct(workspace, table).await,
-            Vendor::Daemon { path, .. } => parse_response(ask(path, &Request::lease(table)).await?),
-        }
     }
 }
 

@@ -6,6 +6,6 @@ use crate::support;
 #[rustfmt::skip]
 #[test]
 fn service_principal_oauth_m2m() {
-    // service_principal_oauth_m2m, from line 162
-    support::run("PQB_CONFIG_FILE=examples/pqbenchrc pqb setup", 163, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='unity'", "export AWS_EC2_METADATA_DISABLED='true'"]));
+    // service_principal_oauth_m2m, from line 175
+    support::run("PQB_CONFIG_FILE=examples/pqbenchrc pqb setup", 176, Some(&["export PQB_ENDPOINT='https://dbc-abc123.cloud.databricks.com'", "export PQB_TOKEN='dapi-example'", "export PQB_TABLE_FORMAT='unity'", "export AWS_EC2_METADATA_DISABLED='true'"]));
 }

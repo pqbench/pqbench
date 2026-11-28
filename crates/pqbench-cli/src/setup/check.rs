@@ -13,6 +13,7 @@
 //! credential is described, never shown, and a mint reports only its lifetime.
 
 use std::fmt;
+use std::io::Write;
 
 use pqbench::Workspace;
 
@@ -30,12 +31,12 @@ enum Credential {
 /// The preflight: one line per check, then the exit status.
 pub(crate) async fn run(workspace: &Workspace) -> Result<(), CliError> {
     let mut report = Report::default();
-    report.config(workspace.config());
+    report.config(workspace.config())?;
     // The catalog check reads under the bearer the auth check settled on, so a
     // minted token is what proves the endpoint, exactly as the walk would.
-    let workspace = authorize(workspace, &mut report).await;
+    let workspace = authorize(workspace, &mut report).await?;
     if !workspace.config().endpoint.is_empty() {
-        reach(&workspace, &mut report).await;
+        reach(&workspace, &mut report).await?;
     }
     report.finish()
 }
@@ -50,13 +51,12 @@ struct Report {
 impl Report {
     /// The configuration check: what the layers resolved, and the credential
     /// the run would send.
-    fn config(&mut self, config: &pqbench::Config) {
+    fn config(&mut self, config: &pqbench::Config) -> Result<(), CliError> {
         if config.endpoint.is_empty() {
-            self.failed(
+            return self.failed(
                 "config",
                 "no endpoint: --endpoint, PQB_ENDPOINT, DATABRICKS_HOST, or a ~/.pqbenchrc profile",
             );
-            return;
         }
         let credential = match credential(config) {
             Some(Credential::Token) => "a bearer token",
@@ -70,16 +70,33 @@ impl Report {
                 config.endpoint,
                 config.dialect.as_str()
             ),
-        );
+        )
     }
 
-    fn passed(&mut self, check: &str, detail: impl fmt::Display) {
-        println!("{:<5} {:<8} {detail}", "ok", check);
+    fn passed(&mut self, check: &str, detail: impl fmt::Display) -> Result<(), CliError> {
+        self.line("ok", check, detail)
     }
 
-    fn failed(&mut self, check: &str, detail: impl fmt::Display) {
-        println!("{:<5} {:<8} {detail}", "fail", check);
+    fn failed(&mut self, check: &str, detail: impl fmt::Display) -> Result<(), CliError> {
+        self.line("fail", check, detail)?;
         self.failures += 1;
+        Ok(())
+    }
+
+    /// One report line, written through stdout with a closed pipe treated as
+    /// nothing to say: `| head` is not a failed check.
+    fn line(
+        &mut self,
+        status: &str,
+        check: &str,
+        detail: impl fmt::Display,
+    ) -> Result<(), CliError> {
+        let mut out = std::io::stdout().lock();
+        match writeln!(out, "{status:<5} {check:<8} {detail}") {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// The command's result: green when every check passed, and otherwise the
@@ -95,11 +112,11 @@ impl Report {
 /// The auth check: the bearer the run would send, minted when the credential is
 /// a service principal. The workspace it returns carries a minted bearer, so
 /// the catalog check reads under it.
-async fn authorize(workspace: &Workspace, report: &mut Report) -> Workspace {
+async fn authorize(workspace: &Workspace, report: &mut Report) -> Result<Workspace, CliError> {
     match credential(workspace.config()) {
         Some(Credential::Token) => {
-            report.passed("auth", "the configuration's bearer token");
-            workspace.clone()
+            report.passed("auth", "the configuration's bearer token")?;
+            Ok(workspace.clone())
         }
         Some(Credential::ServicePrincipal) => match pqbench::oauth::mint(workspace).await {
             Ok(token) => {
@@ -109,12 +126,12 @@ async fn authorize(workspace: &Workspace, report: &mut Report) -> Workspace {
                         "service-principal token minted, expires in {} s",
                         token.lifetime().as_secs()
                     ),
-                );
-                workspace.with_token(token.access_token())
+                )?;
+                Ok(workspace.with_token(token.access_token()))
             }
             Err(error) => {
-                report.failed("auth", summary(&error));
-                workspace.clone()
+                report.failed("auth", summary(&error))?;
+                Ok(workspace.clone())
             }
         },
         None => {
@@ -122,15 +139,15 @@ async fn authorize(workspace: &Workspace, report: &mut Report) -> Workspace {
                 "auth",
                 "no credential: --token, PQB_TOKEN, DATABRICKS_TOKEN, or \
                  --client-id/--client-secret (PQB_CLIENT_ID, PQB_CLIENT_SECRET)",
-            );
-            workspace.clone()
+            )?;
+            Ok(workspace.clone())
         }
     }
 }
 
 /// The reachability check: one page of the endpoint's first listing level, the
 /// same route the walk's first stage reads.
-async fn reach(workspace: &Workspace, report: &mut Report) {
+async fn reach(workspace: &Workspace, report: &mut Report) -> Result<(), CliError> {
     let config = workspace.config();
     let url = config.dialect.listing_url(&config.endpoint);
     match pqbench::http::fetch(workspace, &url).await {

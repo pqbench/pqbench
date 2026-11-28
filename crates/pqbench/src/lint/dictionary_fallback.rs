@@ -69,18 +69,21 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
     let current = Settings {
         dictionary: true,
         dictionary_page_size_limit: Some(cap),
+        data_page_size_limit: None,
         encoding: None,
         version,
     };
     let raised = Settings {
         dictionary: true,
         dictionary_page_size_limit: Some(usize::MAX),
+        data_page_size_limit: None,
         encoding: None,
         version,
     };
     let off = Settings {
         dictionary: false,
         dictionary_page_size_limit: None,
+        data_page_size_limit: None,
         encoding: off_encoding,
         version,
     };

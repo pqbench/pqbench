@@ -198,7 +198,7 @@ text              codec-zstd  -                  compression={text: 'zstd'}, com
 username_encoded  codec-zstd  -                  compression={username_encoded: 'zstd'}, compression_level={username_encoded: 3}  uncompressed at 148.73 B/value
 ```
 
-Ten rules read one column's chunk; the first that detects a column wins, so a
+Eleven rules read one column's chunk; the first that detects a column wins, so a
 column's bytes are never priced twice:
 
 | Rule | What it finds | Remedy |
@@ -207,6 +207,7 @@ column's bytes are never priced twice:
 | `int96-timestamp` | the deprecated INT96 timestamp | write an `INT64` microsecond timestamp |
 | `text-timestamp` | every value is ISO-8601 timestamp text | write a microsecond `INT64` timestamp |
 | `codec-zstd` | a chunk stored uncompressed, snappy, or gzip | write the column with zstd |
+| `page-size` | many tiny data pages from a low page-size limit | write it with the standard 1 MiB page size |
 | `delta-integer` | dense or monotone integers without `DELTA_BINARY_PACKED` | write the column Delta binary packed (page v2) |
 | `dictionary-unique` | a dictionary page on nearly unique values | write the column without a dictionary |
 | `dictionary-missing` | repeated values written without a dictionary | write the column with one |
@@ -218,7 +219,9 @@ column's bytes are never priced twice:
 physical type a dictionary can pay on — byte arrays, fixed-length byte arrays,
 `INT32`, `INT64`, `FLOAT`, and `DOUBLE` — and `dictionary-fallback` prices three
 arms at the file's own codec, keeping the smaller of a raised limit and no
-dictionary. `stats-truncated` needs no re-encode: a footer's bounds are the
+dictionary. `page-size` is measured as a controlled pair: the source's own
+effective page size against the standard 1 MiB, at the file's codec and
+encoding. `stats-truncated` needs no re-encode: a footer's bounds are the
 writer's own bytes, so the bytes past the truncation length are exact.
 
 Two more decide from `list partitions` totals, so they read no file and hold

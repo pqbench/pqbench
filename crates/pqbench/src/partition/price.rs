@@ -69,8 +69,13 @@ pub async fn price(lake: &Lake, partition: &v1::Partition) -> Result<v1::Partiti
     }))
     .await?;
     let mut storage_classes: Vec<String> = Vec::new();
-    for blob in heads {
-        let class = blob.storage_class.unwrap_or_else(|| "STANDARD".to_string());
+    let mut restore_required = false;
+    for blob in &heads {
+        restore_required |= blob.restore_required == Some(true);
+        let class = blob
+            .storage_class
+            .clone()
+            .unwrap_or_else(|| "STANDARD".to_string());
         if !storage_classes.contains(&class) {
             storage_classes.push(class);
         }
@@ -85,6 +90,7 @@ pub async fn price(lake: &Lake, partition: &v1::Partition) -> Result<v1::Partiti
             .map(|bytes| costs(&storage_classes, bytes))
             .unwrap_or_default(),
         storage_classes,
+        restore_required: (!heads.is_empty()).then_some(restore_required),
     })
 }
 

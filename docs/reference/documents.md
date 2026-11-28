@@ -71,6 +71,10 @@ label   BYTE_ARRAY  SNAPPY  dict         72          43      24.00       3
 the pipe above hides it to show the table. A file is kept with probability
 `rate × size / 256 MiB`, capped at one, drawn from a hash of its name: the
 same record always makes the same decision. A 256 MiB file is kept at
+`get partition-price` sets `restore_required` when a sampled file is in an S3
+archive class or tier without a completed restore; a HEAD-only price still
+works, and a command that would read the body fails early instead.
+
 `--rate` (the default keeps about one in a hundred), a 1 GiB file four times
 as often. The decision
 needs only the record's name and size, which the log already carries, so the

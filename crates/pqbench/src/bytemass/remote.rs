@@ -29,6 +29,17 @@ const FOOTER_WINDOW: u64 = 64 * 1024;
 pub(super) async fn read_remote(lake: &Lake, uri: &str) -> Result<(ObjectStat, FileMass), Error> {
     let reader = object_store::open(lake, uri).map_err(storage_error)?;
     let stat = reader.stat().await.map_err(storage_error)?;
+    let service = uri.split("://").next().unwrap_or_default();
+    if stat.restore_required(service) {
+        return Err(storage_error(object_store::Error::Archived {
+            uri: uri.to_string(),
+            storage_class: stat
+                .storage_class
+                .clone()
+                .or_else(|| stat.archive_status.clone()),
+            restore_ongoing: stat.restore_ongoing,
+        }));
+    }
     let size = stat.size_bytes;
     if size < PARQUET_FOOTER_SIZE {
         return Err(Error::Invalid(format!(

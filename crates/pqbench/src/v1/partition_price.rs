@@ -30,4 +30,9 @@ pub struct PartitionPrice {
     /// would stop paying.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed_storage_costs: Vec<StorageTierCost>,
+    /// Whether any of the sampled files needs a restore before it can be read.
+    /// Absent when no sampled file is an S3 object. A file whose restore has
+    /// completed is not restore-required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_required: Option<bool>,
 }

@@ -67,10 +67,13 @@ pub async fn get(lake: &Lake, name: &str) -> Result<v1::Blob, Error> {
     }
     let reader = crate::third_party::object_store::open(lake, &uri).map_err(Error::Storage)?;
     let stat = reader.stat().await.map_err(Error::Storage)?;
+    let service = v1::name::parse_blob(name).map(|(service, _)| service);
+    let restore_required = stat.restore_required(service.as_deref().unwrap_or_default());
     Ok(v1::Blob {
         name: name.to_string(),
         size_bytes: Some(stat.size_bytes),
         storage_class: stat.storage_class,
+        restore_required: Some(restore_required),
         ..v1::Blob::default()
     })
 }

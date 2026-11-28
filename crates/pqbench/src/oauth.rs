@@ -56,6 +56,8 @@ pub enum Error {
     },
     /// The answer was not a token document.
     Body(serde_json::Error),
+    /// The answer carried an empty access token.
+    EmptyToken,
 }
 
 impl fmt::Display for Error {
@@ -70,6 +72,7 @@ impl fmt::Display for Error {
                 write!(f, "the token endpoint answered HTTP {status}{detail}")
             }
             Error::Body(_) => f.write_str("the token endpoint's answer was not a token document"),
+            Error::EmptyToken => f.write_str("the token endpoint answered an empty access token"),
         }
     }
 }
@@ -79,7 +82,7 @@ impl std::error::Error for Error {
         match self {
             Error::Transport(error) => Some(error),
             Error::Body(error) => Some(error),
-            Error::Credentials | Error::Status { .. } => None,
+            Error::Credentials | Error::Status { .. } | Error::EmptyToken => None,
         }
     }
 }
@@ -112,7 +115,7 @@ impl Token {
     #[must_use]
     pub fn fresh(&self, minted: Instant, now: Instant) -> bool {
         let margin = REFRESH_MARGIN.min(self.lifetime / 2);
-        now < minted + self.lifetime - margin
+        now.saturating_duration_since(minted) < self.lifetime.saturating_sub(margin)
     }
 }
 
@@ -181,6 +184,9 @@ fn token(response: &Response) -> Result<Token, Error> {
         });
     }
     let minted: Minted = serde_json::from_slice(&response.bytes).map_err(Error::Body)?;
+    if minted.access_token.is_empty() {
+        return Err(Error::EmptyToken);
+    }
     Ok(Token {
         access_token: minted.access_token,
         lifetime: minted
@@ -372,6 +378,15 @@ mod tests {
             !message.contains("s3cret"),
             "the secret was reported: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_empty_access_token_is_rejected() {
+        let (address, _) = endpoint(200, r#"{"access_token":"","expires_in":3600}"#);
+        let error = mint(&workspace(&address, "s"))
+            .await
+            .expect_err("an empty token mints nothing");
+        assert!(matches!(error, Error::EmptyToken), "{error}");
     }
 
     #[tokio::test]

@@ -44,8 +44,7 @@ pub(super) async fn measure_local(
     } else {
         ObjectStat {
             size_bytes: mass.size_bytes,
-            identity: None,
-            storage_class: None,
+            ..ObjectStat::default()
         }
     };
     measured(name, stat, mass)
@@ -58,8 +57,7 @@ pub(crate) fn measure_footer(name: &str, path: &Path) -> Result<MeasuredFile, Er
     let mass = read_file_masses(path)?;
     let stat = ObjectStat {
         size_bytes: mass.size_bytes,
-        identity: None,
-        storage_class: None,
+        ..ObjectStat::default()
     };
     measured(name, stat, mass)
 }
@@ -252,8 +250,7 @@ async fn read_input(lake: &Lake, uri: &str) -> Result<(ObjectStat, FileMass), Er
     let mass = read_file_masses(Path::new(uri))?;
     let stat = ObjectStat {
         size_bytes: mass.size_bytes,
-        identity: None,
-        storage_class: None,
+        ..ObjectStat::default()
     };
     Ok((stat, mass))
 }

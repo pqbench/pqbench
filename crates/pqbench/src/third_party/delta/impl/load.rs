@@ -16,7 +16,7 @@ use deltalake::logstore::{commit_uri_from_version, LogStore, LogStoreRef};
 use deltalake::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use futures::stream::{self, Stream};
 use futures::{StreamExt, TryStreamExt};
-use serde::de::IgnoredAny;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use url::Url;
@@ -546,13 +546,13 @@ fn parse_commit(bytes: &[u8], version: u64) -> Result<ParsedCommit, Error> {
 
 /// One action of a commit file.
 ///
-/// Delta writes one action per line and the line's one key names the kind, which
-/// is what an externally tagged enum reads: the tag is the kind, its value the
-/// action's body. The protocol fixes the kinds, and a kind this reader does not
-/// know is an error rather than a silent drop — the file's actions are the
-/// commit, and half of them is not a commit.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Delta writes one action per line and the line's one key names the kind. The
+/// protocol fixes the kinds this reader knows, so they are typed variants; a
+/// kind a future protocol adds (a checkpoint's `checkpointMetadata`, a
+/// sidecar's metadata) keeps its own name in [`Action::Unknown`] rather than
+/// failing the commit, so `list commits` stays forward-compatible and the
+/// action's kind survives.
+#[derive(Debug)]
 enum Action {
     /// A file the commit wrote.
     Add(ActionBody),
@@ -561,24 +561,71 @@ enum Action {
     /// A change-data-capture file the commit wrote.
     Cdc(ActionBody),
     /// The table's metadata: the snapshot describes it already.
-    #[serde(rename = "metaData")]
     Metadata(IgnoredAny),
     /// The table's protocol: the snapshot describes it already.
     Protocol(IgnoredAny),
     /// A transaction identifier.
     Txn(IgnoredAny),
     /// The commit's own record: its time, and what the writer reports.
-    #[serde(rename = "commitInfo")]
     CommitInfo(Value),
     /// A domain's metadata.
     DomainMetadata(IgnoredAny),
     /// A checkpoint's sidecar file.
     Sidecar(ActionBody),
+    /// An action this reader does not know, under the kind the log spelled.
+    Unknown(String),
+}
+
+impl<'de> Deserialize<'de> for Action {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ActionVisitor;
+
+        impl<'de> Visitor<'de> for ActionVisitor {
+            type Value = Action;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a Delta log action")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Action, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let Some(kind) = map.next_key::<String>()? else {
+                    return Err(serde::de::Error::custom("a Delta log action has no kind"));
+                };
+                let action = match kind.as_str() {
+                    "add" => Action::Add(map.next_value()?),
+                    "remove" => Action::Remove(map.next_value()?),
+                    "cdc" => Action::Cdc(map.next_value()?),
+                    "metaData" => Action::Metadata(map.next_value()?),
+                    "protocol" => Action::Protocol(map.next_value()?),
+                    "txn" => Action::Txn(map.next_value()?),
+                    "commitInfo" => Action::CommitInfo(map.next_value()?),
+                    "domainMetadata" => Action::DomainMetadata(map.next_value()?),
+                    "sidecar" => Action::Sidecar(map.next_value()?),
+                    _ => {
+                        let _: IgnoredAny = map.next_value()?;
+                        Action::Unknown(kind)
+                    }
+                };
+                // An action line is one entry; anything after it is not part of
+                // the action and is skipped.
+                while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+                Ok(action)
+            }
+        }
+
+        deserializer.deserialize_map(ActionVisitor)
+    }
 }
 
 impl Action {
     /// The kind as the log spells it.
-    fn kind(&self) -> &'static str {
+    fn kind(&self) -> &str {
         match self {
             Self::Add(_) => "add",
             Self::Remove(_) => "remove",
@@ -589,6 +636,7 @@ impl Action {
             Self::CommitInfo(_) => "commitInfo",
             Self::DomainMetadata(_) => "domainMetadata",
             Self::Sidecar(_) => "sidecar",
+            Self::Unknown(kind) => kind,
         }
     }
 
@@ -604,7 +652,7 @@ impl Action {
 }
 
 /// The part of an action's body a log record keeps.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ActionBody {
     /// The data path the action names, when it names one.
@@ -943,15 +991,18 @@ fn file_stats(raw: Option<String>, keep_stats: bool) -> Option<v1::FileStats> {
     // The blob is the log's own bytes: parse it where it lies rather than
     // through a copy.
     let mut raw = raw?.into_bytes();
-    let value: Value = json::from_slice_mut(&mut raw).ok()?;
-    let object = value.as_object()?;
-    let record_count = object.get("numRecords").and_then(Value::as_u64)?;
     if !keep_stats {
+        // Only the count is kept, so read only the count: a full value tree for
+        // a stats blob would hold every bound just to drop it.
+        let counted: CountOnly = json::from_slice_mut(&mut raw).ok()?;
         return Some(v1::FileStats {
-            record_count,
+            record_count: counted.record_count,
             ..v1::FileStats::default()
         });
     }
+    let value: Value = json::from_slice_mut(&mut raw).ok()?;
+    let object = value.as_object()?;
+    let record_count = object.get("numRecords").and_then(Value::as_u64)?;
     Some(v1::FileStats {
         record_count,
         bytes_per_row: None,
@@ -960,6 +1011,14 @@ fn file_stats(raw: Option<String>, keep_stats: bool) -> Option<v1::FileStats> {
         null_count: flatten_null_counts(object.get("nullCount")),
         tight_bounds: object.get("tightBounds").and_then(Value::as_bool),
     })
+}
+
+/// The one field a stats blob is read for when the per-column maps are not
+/// kept.
+#[derive(Deserialize)]
+struct CountOnly {
+    #[serde(rename = "numRecords")]
+    record_count: u64,
 }
 
 fn stat_object(object: &Map<String, Value>, key: &str) -> BTreeMap<String, Value> {
@@ -1019,4 +1078,60 @@ fn local_uri(root: &Path, relative: &str) -> Result<String, Error> {
 
 fn delta_error(error: deltalake::DeltaTableError) -> Error {
     Error::Snapshot(Box::new(error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_stats, parse_commit, Action};
+    use crate::third_party::json;
+
+    /// A future protocol's action keeps its own kind instead of failing the
+    /// commit, while a known action stays typed.
+    #[test]
+    fn an_unknown_action_keeps_its_kind() {
+        let line = br#"{"checkpointMetadata":{"version":3,"tags":{}}}"#;
+        let action: Action = json::from_slice(line).expect("an unknown action parses");
+        assert_eq!(action.kind(), "checkpointMetadata");
+        assert!(action.body().is_none());
+
+        let commit = parse_commit(line, 7).expect("the commit parses");
+        assert_eq!(commit.actions.len(), 1);
+        assert_eq!(
+            commit.actions[0].kind.as_deref(),
+            Some("checkpointMetadata")
+        );
+        assert!(commit.actions[0].path.is_none());
+
+        let add = parse_commit(br#"{"add":{"path":"a.parquet","size":12}}"#, 8)
+            .expect("a known action parses");
+        assert_eq!(add.actions[0].kind.as_deref(), Some("add"));
+        assert_eq!(add.actions[0].path.as_deref(), Some("a.parquet"));
+        assert_eq!(add.actions[0].size_bytes, Some(12));
+    }
+
+    /// The record count is read without building the full stats tree when the
+    /// per-column maps are not kept, and the maps are read when they are.
+    #[test]
+    fn file_stats_reads_only_what_the_caller_keeps() {
+        let raw = Some(
+            r#"{"numRecords":3,"minValues":{"name":"alice"},"maxValues":{"name":"carol"},
+                "nullCount":{"name":0},"tightBounds":true}"#
+                .to_string(),
+        );
+        let counted = file_stats(raw.clone(), false).expect("the count parses");
+        assert_eq!(counted.record_count, 3);
+        assert!(counted.first_values.is_empty());
+        assert!(counted.last_values.is_empty());
+        assert!(counted.null_count.is_empty());
+
+        let kept = file_stats(raw, true).expect("the stats parse");
+        assert_eq!(kept.record_count, 3);
+        assert_eq!(kept.first_values["name"], "alice");
+        assert_eq!(kept.last_values["name"], "carol");
+        assert_eq!(kept.null_count["name"], 0);
+        assert_eq!(kept.tight_bounds, Some(true));
+
+        assert!(file_stats(Some("not json".to_string()), false).is_none());
+        assert!(file_stats(None, true).is_none());
+    }
 }

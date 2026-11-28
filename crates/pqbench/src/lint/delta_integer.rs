@@ -97,6 +97,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         settings: Settings {
             dictionary: sample.chunk_has_dictionary,
             dictionary_page_size_limit: sample.dictionary_page_size_limit(),
+            data_page_size_limit: None,
             // The rule never detects a chunk that already records
             // `DELTA_BINARY_PACKED`, so the source's data pages are PLAIN (or
             // dictionary encoded, which the dictionary arm reproduces).
@@ -109,6 +110,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         settings: Settings {
             dictionary: false,
             dictionary_page_size_limit: None,
+            data_page_size_limit: None,
             encoding: Some(Encoding::DELTA_BINARY_PACKED),
             version: WriterVersion::PARQUET_1_0,
         },

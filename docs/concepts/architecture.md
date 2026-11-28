@@ -61,6 +61,29 @@ schema, table, file. Each level's `list` module lists that level's resources
 (the parent rides the argument, or parent refs on standard input); `get` reads
 one resource.
 
+## Partition-version states
+
+`pqbench-driver` moves each `PartitionVersion` through the pipeline one command
+at a time, and a price with nothing left to read stops it there.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> Pricing: price
+    Pricing --> Priced: priced
+    Priced --> Downloading: download sample
+    Downloading --> Downloaded
+    Downloaded --> Bytemassing
+    Bytemassing --> Bytemassed
+    Bytemassed --> Linting: list suggestions
+    Linting --> Listed
+    Listed --> Verifying: get suggestion
+    Verifying --> UpToDate: verified
+    Pricing --> UpToDate: archived
+    Pricing --> Pending: failed (backoff)
+    Pending --> [*]: purged
+```
+
 ## Interfaces
 
 - The public surface is the command's entry point, and the less surface the

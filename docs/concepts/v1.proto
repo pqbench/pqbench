@@ -203,6 +203,10 @@ message Blob {
   // The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
   string storage_class = 3;
 
+  // Whether reading the object needs a restore first. Absent when the storage
+  // service has no such state.
+  optional bool restore_required = 9;
+
   // The writer that produced the file, as its footer names it (`created_by`),
   // e.g. `parquet-mr version 1.13.1`. Absent when the footer names none.
   string writer = 7;
@@ -324,6 +328,10 @@ message PartitionPrice {
 
   // The partition's removed bytes priced the same way.
   repeated StorageTierCost removed_storage_costs = 5;
+
+  // Whether any sampled file needs a restore before it can be read. Absent when
+  // no sampled file is an S3 object.
+  optional bool restore_required = 6;
 }
 
 // A partition at one etag and where it is in the pipeline: the driver's

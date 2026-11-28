@@ -73,6 +73,7 @@ fn measure_priced(
     let baseline = Settings {
         dictionary: sample.chunk_has_dictionary,
         dictionary_page_size_limit: sample.dictionary_page_size_limit(),
+        data_page_size_limit: None,
         encoding: match (control::source_encoding(sample.mass), version) {
             (None, WriterVersion::PARQUET_2_0) => Some(Encoding::PLAIN),
             (recorded, _) => recorded,
@@ -93,6 +94,7 @@ fn measure_priced(
                 Settings {
                     dictionary: false,
                     dictionary_page_size_limit: None,
+                    data_page_size_limit: None,
                     encoding: Some(encoding),
                     version: WriterVersion::PARQUET_1_0,
                 },

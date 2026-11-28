@@ -25,11 +25,6 @@ const MAX_FAILURES: u64 = 2;
 const RETRY_BASE_MS: u64 = 60_000;
 const RETRY_MAX_MS: u64 = 60 * 60_000;
 
-/// Classes whose objects cannot be read without a restore, and the
-/// Intelligent-Tiering access tiers that cannot.
-const ARCHIVE_CLASSES: &[&str] = &["GLACIER", "DEEP_ARCHIVE"];
-const ARCHIVE_TIERS: &[&str] = &["ARCHIVE_ACCESS", "DEEP_ARCHIVE_ACCESS"];
-
 /// What a transition's command reads on standard input.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Input {
@@ -623,18 +618,11 @@ fn parent_prefix(parent: &str) -> Result<String, String> {
     Ok(wanted.join("/"))
 }
 
-/// Whether any of a price's files needs a restore to be read: an archive
-/// class or access tier. Files with no class (not S3 objects) do not.
+/// Whether any of a price's files needs a restore to be read. The fact comes
+/// from the HEADs `get partition-price` made, not from a candidate price tier:
+/// an Intelligent-Tiering price lists every access tier as a candidate cost.
 fn archived(price: &PartitionPrice) -> bool {
-    let archive = |class: &str| ARCHIVE_CLASSES.contains(&class);
-    price.storage_classes.iter().any(|class| archive(class))
-        || price.storage_costs.iter().any(|cost| {
-            archive(&cost.storage_class)
-                || cost
-                    .access_tier
-                    .as_deref()
-                    .is_some_and(|tier| ARCHIVE_TIERS.contains(&tier))
-        })
+    price.restore_required == Some(true)
 }
 
 /// A row as the [`PartitionVersion`] it is, its name put back.
@@ -672,12 +660,21 @@ mod tests {
         (engine, key)
     }
 
-    /// Price one version with a result naming `class` and `tier`, and return
-    /// the state it lands in.
+    /// Price one version with a result naming `class` and `tier` (and whether
+    /// its files need a restore), and return the state it lands in.
     fn priced(file_count: u64, class: &str, tier: Option<&str>) -> State {
+        priced_requiring_restore(file_count, class, tier, None)
+    }
+
+    fn priced_requiring_restore(
+        file_count: u64,
+        class: &str,
+        tier: Option<&str>,
+        restore_required: Option<bool>,
+    ) -> State {
         let (mut engine, key) = found(file_count);
         assert_eq!(engine.start(1).len(), 1);
-        let price: PartitionPrice = serde_json::from_value(serde_json::json!({
+        let mut price: PartitionPrice = serde_json::from_value(serde_json::json!({
             "name": format!("{PARTITION}/price"),
             "partition_etag": "aa",
             "storage_classes": [class],
@@ -685,28 +682,78 @@ mod tests {
                 "dollars_per_gibibyte_per_month": 0.023, "cost_per_month": 1.0}],
         }))
         .unwrap();
+        price.restore_required = restore_required;
         let conclusion = engine.finish(&key, Ok(Some(price))).unwrap();
         assert_eq!(engine.rows[&key].highest_cost_per_month, Some(1.0));
         conclusion.state
     }
 
+    /// The price `get partition-price` writes for an Intelligent-Tiering
+    /// partition: all five access tiers are candidate costs, and none of them
+    /// is a fact about where the object is.
+    fn intelligent_tiering_price(restore_required: Option<bool>) -> PartitionPrice {
+        let costs: Vec<serde_json::Value> = [
+            ("FREQUENT_ACCESS", 0.023),
+            ("INFREQUENT_ACCESS", 0.0125),
+            ("ARCHIVE_INSTANT_ACCESS", 0.004),
+            ("ARCHIVE_ACCESS", 0.0036),
+            ("DEEP_ARCHIVE_ACCESS", 0.00099),
+        ]
+        .into_iter()
+        .map(|(tier, price)| {
+            serde_json::json!({"storage_class": "INTELLIGENT_TIERING", "access_tier": tier,
+                "dollars_per_gibibyte_per_month": price, "cost_per_month": 1.0})
+        })
+        .collect();
+        let mut price: PartitionPrice = serde_json::from_value(serde_json::json!({
+            "name": format!("{PARTITION}/price"),
+            "partition_etag": "aa",
+            "storage_classes": ["INTELLIGENT_TIERING"],
+            "storage_costs": costs,
+        }))
+        .unwrap();
+        price.restore_required = restore_required;
+        price
+    }
+
     /// A price ends the version when there is nothing to read: no live file,
-    /// or a class or access tier that needs a restore.
+    /// or a HEAD that says the files need a restore.
     #[test]
     fn a_price_ends_the_version_when_there_is_nothing_to_read() {
         assert_eq!(priced(1, "STANDARD_IA", None), State::Priced);
         assert_eq!(priced(1, "GLACIER_IR", None), State::Priced);
-        assert_eq!(priced(1, "GLACIER", None), State::UpToDate);
-        assert_eq!(priced(1, "DEEP_ARCHIVE", None), State::UpToDate);
         assert_eq!(
-            priced(1, "INTELLIGENT_TIERING", Some("FREQUENT_ACCESS")),
-            State::Priced
-        );
-        assert_eq!(
-            priced(1, "INTELLIGENT_TIERING", Some("ARCHIVE_ACCESS")),
+            priced_requiring_restore(1, "GLACIER", None, Some(true)),
             State::UpToDate
         );
+        assert_eq!(
+            priced_requiring_restore(1, "DEEP_ARCHIVE", None, Some(true)),
+            State::UpToDate
+        );
+        assert_eq!(
+            priced_requiring_restore(1, "GLACIER", None, Some(false)),
+            State::Priced
+        );
         assert_eq!(priced(0, "STANDARD", None), State::UpToDate);
+    }
+
+    /// An Intelligent-Tiering partition stays priced: its five candidate costs
+    /// are not evidence of an archive tier, so a false positive would leave
+    /// every such partition unmeasured.
+    #[test]
+    fn intelligent_tiering_candidate_costs_are_not_archived() {
+        let (mut engine, key) = found(1);
+        assert_eq!(engine.start(1).len(), 1);
+        let price = intelligent_tiering_price(Some(false));
+        let conclusion = engine.finish(&key, Ok(Some(price))).unwrap();
+        assert_eq!(conclusion.state, State::Priced);
+
+        // An older price without the field is not an archive verdict either.
+        let (mut engine, key) = found(1);
+        assert_eq!(engine.start(1).len(), 1);
+        let price = intelligent_tiering_price(None);
+        let conclusion = engine.finish(&key, Ok(Some(price))).unwrap();
+        assert_eq!(conclusion.state, State::Priced);
     }
 
     /// A transition takes the newest data first, then the biggest partition.

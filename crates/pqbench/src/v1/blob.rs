@@ -19,6 +19,11 @@ pub struct Blob {
     /// The storage class or tier (`STANDARD`, `STANDARD_IA`, …), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_class: Option<String>,
+    /// Whether reading the object needs a restore first (an S3 archive class
+    /// or Intelligent-Tiering archive access tier, without a completed
+    /// restore). Absent when the service has no such state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_required: Option<bool>,
     /// The writer that produced the file, as its footer names it
     /// (`created_by`), e.g. `parquet-mr version 1.13.1`. Absent when the
     /// footer names none.

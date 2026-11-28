@@ -376,15 +376,109 @@ async fn stat_get_opts(
             .attributes
             .get(&::object_store::Attribute::StorageClass)
             .map(|value| value.as_ref().to_string()),
+        ..ObjectStat::default()
     })
 }
 
-/// Parse size, identity, and storage class from a HEAD response.
+/// The S3 restore state HEAD reports in `x-amz-restore`: whether a restore is
+/// still running, when a completed one expires, and whether the header said a
+/// restore completed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Restore {
+    ongoing: bool,
+    expiry_time_ms: Option<u64>,
+    completed: bool,
+}
+
+/// Parse an `x-amz-restore` value: `ongoing-request="true"`, or
+/// `ongoing-request="false", expiry-date="Fri, 21 Dec 2012 00:00:00 GMT"`.
+/// A header this reader cannot read reports no restore, so the storage read
+/// decides rather than a false archive verdict.
+fn parse_restore(value: &str) -> Restore {
+    let Some(ongoing) = flag(value, "ongoing-request") else {
+        return Restore::default();
+    };
+    Restore {
+        ongoing,
+        expiry_time_ms: quoted(value, "expiry-date").and_then(parse_http_date),
+        completed: !ongoing,
+    }
+}
+
+/// A quoted or bare boolean field of an `x-amz-restore` value.
+fn flag(value: &str, name: &str) -> Option<bool> {
+    let rest = value.split_once(name)?.1.trim_start_matches(['=', ' ']);
+    let rest = rest.trim_start_matches('"');
+    let word = rest.split([',', '"']).next()?.trim();
+    match word {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// A quoted field of an `x-amz-restore` value, with its surrounding quotes
+/// removed.
+fn quoted<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+    let rest = value.split_once(name)?.1.trim_start_matches(['=', ' ']);
+    let rest = rest.strip_prefix('"')?;
+    rest.split_once('"').map(|(field, _)| field)
+}
+
+/// An IMF-fixdate (`Fri, 21 Dec 2012 00:00:00 GMT`) as epoch milliseconds.
+fn parse_http_date(value: &str) -> Option<u64> {
+    let mut parts = value.split_whitespace();
+    let _weekday = parts.next()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    let month = match parts.next()? {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    };
+    let year: i64 = parts.next()?.parse().ok()?;
+    let mut clock = parts.next()?.split(':');
+    let hour: i64 = clock.next()?.parse().ok()?;
+    let minute: i64 = clock.next()?.parse().ok()?;
+    let second: i64 = clock.next()?.parse().ok()?;
+    if !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let seconds = epoch_days(year, month, day)
+        .checked_mul(86_400)?
+        .checked_add(hour * 3_600 + minute * 60 + second)?;
+    u64::try_from(seconds).ok()?.checked_mul(1_000)
+}
+
+/// Days since the Unix epoch for a proleptic Gregorian date, as Howard
+/// Hinnant's `days_from_civil` computes them.
+fn epoch_days(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month_of_year = (month + 9) % 12;
+    let day_of_year = (153 * month_of_year + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// Parse size, identity, storage class, and archive state from a HEAD response.
 fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
     let mut size = None;
     let mut etag = None;
     let mut version = None;
     let mut storage_class = None;
+    let mut archive_status = None;
+    let mut restore = Restore::default();
     for (name, value) in headers {
         match name.to_ascii_lowercase().as_str() {
             "content-length" => size = value.parse().ok(),
@@ -393,6 +487,10 @@ fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
             "x-amz-storage-class" | "x-goog-storage-class" if !value.is_empty() => {
                 storage_class = Some((*value).to_string());
             }
+            "x-amz-archive-status" if !value.is_empty() => {
+                archive_status = Some((*value).to_string());
+            }
+            "x-amz-restore" => restore = parse_restore(value),
             _ => {}
         }
     }
@@ -400,6 +498,10 @@ fn head_stat(headers: &[(&str, &str)]) -> Option<ObjectStat> {
         size_bytes: size?,
         identity: etag.or(version),
         storage_class,
+        archive_status,
+        restore_ongoing: restore.ongoing,
+        restore_expiry_time: restore.expiry_time_ms,
+        restore_completed: restore.completed,
     })
 }
 
@@ -539,6 +641,71 @@ mod tests {
         let stat = super::head_stat(&[("content-length", "8")]).unwrap();
         assert_eq!(stat.size_bytes, 8);
         assert!(stat.storage_class.is_none());
+        assert!(!stat.restore_required("s3"));
+    }
+
+    /// HEAD's archive headers are read into the stat: the archive tier, an
+    /// in-progress restore, and a completed restore with its expiry.
+    #[test]
+    fn head_reads_archive_and_restore_headers() {
+        let archived = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "GLACIER"),
+            ("x-amz-restore", "ongoing-request=\"true\""),
+        ])
+        .unwrap();
+        assert_eq!(archived.storage_class.as_deref(), Some("GLACIER"));
+        assert!(archived.restore_ongoing);
+        assert!(archived.restore_required("s3"));
+
+        let restored = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "DEEP_ARCHIVE"),
+            (
+                "x-amz-restore",
+                "ongoing-request=\"false\", expiry-date=\"Fri, 21 Dec 2012 00:00:00 GMT\"",
+            ),
+        ])
+        .unwrap();
+        assert!(!restored.restore_ongoing);
+        assert_eq!(restored.restore_expiry_time, Some(1_356_048_000_000));
+        assert!(!restored.restore_required("s3"));
+
+        let tier = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "INTELLIGENT_TIERING"),
+            ("x-amz-archive-status", "ARCHIVE_ACCESS"),
+        ])
+        .unwrap();
+        assert_eq!(tier.archive_status.as_deref(), Some("ARCHIVE_ACCESS"));
+        assert!(tier.restore_required("s3"));
+    }
+
+    /// A completed restore with no expiry is still a completed restore.
+    #[test]
+    fn a_completed_restore_without_an_expiry_is_readable() {
+        let stat = super::head_stat(&[
+            ("content-length", "42"),
+            ("x-amz-storage-class", "GLACIER"),
+            ("x-amz-restore", "ongoing-request=\"false\""),
+        ])
+        .unwrap();
+        assert!(stat.restore_completed);
+        assert!(stat.restore_expiry_time.is_none());
+        assert!(!stat.restore_required("s3"));
+    }
+
+    #[test]
+    fn http_dates_parse_to_epoch_milliseconds() {
+        assert_eq!(
+            super::parse_http_date("Fri, 21 Dec 2012 00:00:00 GMT"),
+            Some(1_356_048_000_000)
+        );
+        assert_eq!(
+            super::parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"),
+            Some(0)
+        );
+        assert_eq!(super::parse_http_date("not a date"), None);
     }
 
     /// Two opens for one bucket and options share one store, and so one client

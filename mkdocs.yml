@@ -58,6 +58,9 @@ theme:
 extra_css:
   - stylesheets/extra.css
 
+extra_javascript:
+  - https://unpkg.com/mermaid@10/dist/mermaid.esm.min.mjs
+
 extra:
   social:
     - icon: fontawesome/brands/github
@@ -124,6 +127,10 @@ markdown_extensions:
   # headers keep them as plain `console` blocks, which is what they are.
   - pymdownx.superfences:
       relaxed_headers: true
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.emoji:

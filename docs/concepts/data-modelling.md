@@ -55,6 +55,23 @@ response, such as a `ReportRow` or a `ColumnMass`.
 A resource has at most one canonical parent, and a `List` must not require two
 (AIP-124).
 
+```mermaid
+graph TD
+    Metastore --> Catalog
+    Catalog --> Schema
+    Schema --> Table
+    Table --> TableFile
+    Table --> Partition
+    Table --> Commit
+    TableFile --> Blob
+    Partition --> PartitionPrice
+    Partition --> PartitionVersion
+    Partition --> Suggestion
+    Blob --> Column
+    Column --> ColumnProfile
+    Column --> Suggestion
+```
+
 | resource | canonical parent |
 | --- | --- |
 | `Catalog` | `Metastore` |

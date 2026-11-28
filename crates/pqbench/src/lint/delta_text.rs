@@ -64,6 +64,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         settings: Settings {
             dictionary: false,
             dictionary_page_size_limit: None,
+            data_page_size_limit: None,
             encoding: control::source_encoding(sample.mass),
             version: WriterVersion::PARQUET_1_0,
         },
@@ -75,6 +76,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
             settings: Settings {
                 dictionary: false,
                 dictionary_page_size_limit: None,
+                data_page_size_limit: None,
                 encoding: Some(encoding),
                 version: WriterVersion::PARQUET_1_0,
             },
@@ -262,6 +264,7 @@ mod tests {
         let arm = |encoding: Option<Encoding>| Settings {
             dictionary: false,
             dictionary_page_size_limit: None,
+            data_page_size_limit: None,
             encoding,
             version: WriterVersion::PARQUET_1_0,
         };

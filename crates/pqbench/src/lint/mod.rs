@@ -37,6 +37,7 @@ mod delta_text;
 mod dictionary;
 mod dictionary_fallback;
 mod int96;
+mod page_size;
 mod partition;
 mod price;
 mod stats;
@@ -65,6 +66,7 @@ pub use delta_text::DELTA_TEXT_ENCODING_RULE;
 pub use dictionary::{DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE};
 pub use dictionary_fallback::DICTIONARY_FALLBACK_RULE;
 pub use int96::INT96_TIMESTAMP_RULE;
+pub use page_size::PAGE_SIZE_RULE;
 pub use partition::{partition_suggestions, SMALL_FILES_RULE, TOMBSTONES_RULE};
 pub use stats::STATS_TRUNCATED_RULE;
 pub use text_timestamp::TEXT_TIMESTAMP_RULE;
@@ -588,7 +590,8 @@ pub(crate) struct Rule {
 /// last, because its few hundred footer bytes are the smallest win a column can
 /// have. `delta-integer` outranks the dictionary rules because a dense integer
 /// column's dictionary is only present when it overflowed, and packed deltas it
-/// never uses are the larger win.
+/// never uses are the larger win. `page-size` follows `codec-zstd`: a weaker
+/// codec is the larger win, while a zstd chunk's tiny pages still earn it.
 pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: UUID_TEXT_RULE,
@@ -605,6 +608,10 @@ pub(crate) const RULES: &[Rule] = &[
     Rule {
         id: CODEC_ZSTD_RULE,
         detect: codec::detect,
+    },
+    Rule {
+        id: PAGE_SIZE_RULE,
+        detect: page_size::detect,
     },
     Rule {
         id: DELTA_INTEGER_RULE,

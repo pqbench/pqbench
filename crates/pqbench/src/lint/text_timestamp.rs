@@ -73,6 +73,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         settings: Settings {
             dictionary: sample.chunk_has_dictionary,
             dictionary_page_size_limit: sample.dictionary_page_size_limit(),
+            data_page_size_limit: None,
             encoding: control::source_encoding(sample.mass),
             version: WriterVersion::PARQUET_1_0,
         },
@@ -88,6 +89,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
                 Settings {
                     dictionary: false,
                     dictionary_page_size_limit: None,
+                    data_page_size_limit: None,
                     encoding: Some(encoding),
                     version: WriterVersion::PARQUET_1_0,
                 },

@@ -87,6 +87,8 @@ pub(super) struct Settings {
     pub(super) dictionary: bool,
     /// `None` keeps parquet-rs's own dictionary page size limit.
     pub(super) dictionary_page_size_limit: Option<usize>,
+    /// `None` keeps parquet-rs's own data page size limit.
+    pub(super) data_page_size_limit: Option<usize>,
     pub(super) encoding: Option<Encoding>,
     /// The page version the arm writes. A dictionary on a
     /// `FIXED_LEN_BYTE_ARRAY` leaf exists only in the 2.0 page version, so both
@@ -104,6 +106,7 @@ impl Settings {
         Self {
             dictionary,
             dictionary_page_size_limit: None,
+            data_page_size_limit: None,
             encoding: None,
             version: WriterVersion::PARQUET_1_0,
         }
@@ -132,6 +135,9 @@ pub(super) fn price(
         .set_dictionary_enabled(settings.dictionary);
     if let Some(limit) = settings.dictionary_page_size_limit {
         builder = builder.set_dictionary_page_size_limit(limit);
+    }
+    if let Some(limit) = settings.data_page_size_limit {
+        builder = builder.set_data_page_size_limit(limit);
     }
     if let Some(encoding) = settings.encoding {
         builder = builder.set_column_encoding(ColumnPath::from("value"), encoding);

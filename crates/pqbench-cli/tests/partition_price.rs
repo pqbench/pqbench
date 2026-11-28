@@ -42,6 +42,31 @@ fn head_server(
     (address, heads)
 }
 
+/// An S3 stand-in that answers every HEAD with the same extra headers, so a
+/// test can shape an archive class and its restore state.
+fn header_server(headers: &'static str) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(32) {
+            let mut stream = stream.unwrap();
+            let mut buffer = [0u8; 4096];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let response = if request.starts_with("HEAD ") {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nETag: \"e\"\r\n{headers}Connection: close\r\n\r\n"
+                )
+            } else {
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_string()
+            };
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    address
+}
+
 fn get_partition_price(stdin: &str, endpoint: &str) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pqbench"))
         .args(["get", "partition-price"])
@@ -215,4 +240,31 @@ fn get_partition_price_keeps_the_partitions_that_price() {
         .collect();
     assert_eq!(prices.len(), 1);
     assert!(prices[0]["name"].as_str().unwrap().contains("day%3D2"));
+}
+
+/// An archive class makes the price say the files need a restore, without
+/// reading them; a completed restore clears the fact.
+#[test]
+fn get_partition_price_records_whether_a_restore_is_needed() {
+    let stdin = partition(
+        "day=1",
+        [
+            "blobs/s3/lake%2Fone.parquet",
+            "blobs/s3/lake%2Fone.parquet",
+            "blobs/s3/lake%2Fone.parquet",
+        ],
+        GIBIBYTE as u64,
+        0,
+    );
+
+    let endpoint = header_server("x-amz-storage-class: GLACIER\r\n");
+    let price = &records(&get_partition_price(&stdin, &endpoint))[0];
+    assert_eq!(price["restore_required"], true, "{price}");
+
+    let endpoint = header_server(
+        "x-amz-storage-class: GLACIER\r\nx-amz-restore: ongoing-request=\"false\", \
+         expiry-date=\"Fri, 21 Dec 2012 00:00:00 GMT\"\r\n",
+    );
+    let price = &records(&get_partition_price(&stdin, &endpoint))[0];
+    assert_eq!(price["restore_required"], false, "{price}");
 }
