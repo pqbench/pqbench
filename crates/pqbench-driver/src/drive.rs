@@ -32,7 +32,7 @@ use pqbench::v1::{Partition, PartitionPrice, Suggestion};
 use tokio::sync::Notify;
 use tokio::task::{JoinHandle, JoinSet};
 
-use super::engine::{self, Activity, Engine, Input, Key, Run, State, Transition};
+use super::engine::{self, Activity, Engine, Failure, Input, Key, Run, State, Transition};
 use super::process::{self, Worker};
 use super::store::{self, Store, SAMPLE};
 
@@ -55,7 +55,7 @@ pub(crate) struct Settings {
 }
 
 /// How a run ended: its price when it priced the version.
-type Outcome = Result<Option<PartitionPrice>, String>;
+type Outcome = Result<Option<PartitionPrice>, Failure>;
 
 struct Driver {
     engine: Arc<RwLock<Engine>>,
@@ -215,13 +215,21 @@ impl Driver {
     }
 
     /// Give the engine a finished run. A version with no transition left to
-    /// read it drops its copy of the sample file.
+    /// read it drops its copy of the sample file, and one whose pipeline is
+    /// done hands its verified suggestions to the map, so `list suggestions`
+    /// reads them from there rather than from disk.
     fn finish(&mut self, key: &Key, outcome: Outcome) {
         let Some(conclusion) = write_engine(&self.engine).finish(key, outcome) else {
             return;
         };
         if !conclusion.sample {
             self.store.remove_sample(key);
+        }
+        if conclusion.state == State::UpToDate {
+            match self.store.read_suggestions(key) {
+                Ok(suggestions) => write_engine(&self.engine).cache_suggestions(key, suggestions),
+                Err(error) => eprintln!("pqbench-driver: {error}"),
+            }
         }
     }
 
@@ -421,7 +429,7 @@ async fn work(store: &Store, run: &Run, worker: &Worker) -> Outcome {
     let first = first.lines().next().unwrap_or_default();
     json::from_str(first)
         .map(Some)
-        .map_err(|error| format!("bad price: {error}"))
+        .map_err(|error| Failure::new(format!("bad price: {error}")))
 }
 
 /// Verify a version's suggestions while its copy of the sample file is still
@@ -451,7 +459,7 @@ async fn measured(
     key: &Key,
     transition: &'static Transition,
     worker: &Worker,
-) -> Result<Vec<Suggestion>, String> {
+) -> Result<Vec<Suggestion>, Failure> {
     let Some(candidates) = store.read_output(key, store::LIST_SUGGESTIONS)? else {
         return Ok(Vec::new());
     };
@@ -474,8 +482,9 @@ async fn measured(
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            json::from_str(line)
-                .map_err(|error| format!("bad measured suggestion of {}: {error}", key.0))
+            json::from_str(line).map_err(|error| {
+                Failure::new(format!("bad measured suggestion of {}: {error}", key.0))
+            })
         })
         .collect()
 }

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) use pqbench::v1::partition_version::State;
-use pqbench::v1::{Partition, PartitionPrice, PartitionVersion};
+use pqbench::v1::{Partition, PartitionPrice, PartitionVersion, Suggestion};
 
 use super::protocol::DriverStatus;
 use super::store;
@@ -21,9 +21,64 @@ use super::store;
 /// Immediate retries before a version backs off.
 const MAX_FAILURES: u64 = 2;
 
+/// Failures of one version before it is quarantined: a record that is
+/// permanently bad reads no better on the seventh attempt than on the first,
+/// and retrying it costs a re-download every backoff window (MapReduce, OSDI
+/// '04, §4.7: skip the poison pill instead of rescheduling it forever).
+const MAX_TOTAL_FAILURES: u64 = 6;
+
 /// Initial backoff after [`MAX_FAILURES`] failures, doubling up to [`RETRY_MAX_MS`].
 const RETRY_BASE_MS: u64 = 60_000;
 const RETRY_MAX_MS: u64 = 60 * 60_000;
+
+/// A run that did not succeed: its error, and whether its command outlived its
+/// step. The distinction is kept for `status` rather than flattened into the
+/// text, so a timeout is counted as one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Failure {
+    /// What went wrong: the command's error, or the driver's own.
+    pub error: String,
+    /// The command was killed at the step timeout rather than ending on its
+    /// own.
+    pub timed_out: bool,
+}
+
+impl Failure {
+    /// A run that ended in an error of its own, before or during its command.
+    pub(crate) fn new(error: impl Into<String>) -> Self {
+        Failure {
+            error: error.into(),
+            timed_out: false,
+        }
+    }
+
+    /// A run whose command was killed at the step timeout.
+    pub(crate) fn timed_out(error: impl Into<String>) -> Self {
+        Failure {
+            error: error.into(),
+            timed_out: true,
+        }
+    }
+}
+
+impl From<String> for Failure {
+    fn from(error: String) -> Self {
+        Failure::new(error)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(error: &str) -> Self {
+        Failure::new(error)
+    }
+}
+
+/// Whether a version in `state` is unfinished, so scheduling has to consider
+/// it: the done, the quarantined, and the [`State::Deleted`] a stale checkpoint
+/// may name are not.
+fn unfinished(state: State) -> bool {
+    !matches!(state, State::UpToDate | State::Failed | State::Deleted)
+}
 
 /// What a transition's command reads on standard input.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -156,10 +211,35 @@ pub(crate) struct Engine {
     /// The versions by partition and etag; a row's `name` is left empty, the
     /// key holds it, and [`named`] puts it back.
     rows: BTreeMap<Key, PartitionVersion>,
+    /// The keys of the versions still in the pipeline: scheduling walks these
+    /// rather than the whole lake, so a lake whose versions are nearly all
+    /// `UP_TO_DATE` costs its pending versions, not its total (MapReduce, OSDI
+    /// '04, §3.1). Maintained with the rows, never derived from them.
+    active: BTreeSet<Key>,
+    /// The verified suggestions each version holds, read once from its
+    /// results and served from here: `list suggestions` over a lake then costs
+    /// no reads (MapReduce, OSDI '04, §4.3). Pruned with the version.
+    suggestions: BTreeMap<Key, Vec<Suggestion>>,
+    /// What the driver has done since it started; monotonic.
+    counters: Counters,
     /// What the driver is doing: the walk, and the commands in flight.
     activity: Activity,
     /// Whether the rows changed since the last checkpoint.
     changed: bool,
+}
+
+/// What `status` counts about the runs the driver has finished: each only ever
+/// grows, so a reader measuring progress never sees a total move backwards.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Counters {
+    /// Runs that ended in their transition's done state.
+    pub completed_run_count: u64,
+    /// Runs that ended in an error, timeouts included.
+    pub failed_run_count: u64,
+    /// Runs whose command outlived its step and was killed.
+    pub timed_out_run_count: u64,
+    /// Versions quarantined after [`MAX_TOTAL_FAILURES`] failures.
+    pub quarantined_version_count: u64,
 }
 
 /// What the driver is doing, for `status`: it is not the map, so it never
@@ -201,9 +281,17 @@ impl Engine {
             row.name = String::new();
             rows.insert(key, row);
         }
+        let active = rows
+            .iter()
+            .filter(|(_, row)| unfinished(row.state))
+            .map(|(key, _)| key.clone())
+            .collect();
         Ok(Engine {
             transitions,
             rows,
+            active,
+            suggestions: BTreeMap::new(),
+            counters: Counters::default(),
             activity: Activity::default(),
             changed: true,
         })
@@ -262,9 +350,25 @@ impl Engine {
                 .values()
                 .filter(|row| row.failure_count > 0)
                 .count() as u64,
+            completed_run_count: self.counters.completed_run_count,
+            failed_run_count: self.counters.failed_run_count,
+            timed_out_run_count: self.counters.timed_out_run_count,
+            quarantined_version_count: self.counters.quarantined_version_count,
             last_walk_time: self.activity.last_walk_time,
             last_walk_error: self.activity.last_walk_error.clone(),
         }
+    }
+
+    /// A version's verified suggestions, when the map already holds them.
+    pub(crate) fn cached_suggestions(&self, key: &Key) -> Option<&[Suggestion]> {
+        self.suggestions.get(key).map(Vec::as_slice)
+    }
+
+    /// Hold a version's verified suggestions, so the next read of them is the
+    /// map's. They are what its results on disk say, not a change to the map,
+    /// so this asks for no checkpoint.
+    pub(crate) fn cache_suggestions(&mut self, key: &Key, suggestions: Vec<Suggestion>) {
+        self.suggestions.insert(key.clone(), suggestions);
     }
 
     /// What the driver is doing now. A status update is not a map change, so
@@ -334,9 +438,7 @@ impl Engine {
         let (first_listed_time, etag_change_count) =
             newest.map_or((now, 0), |newest| (newest.1, newest.2 + 1));
         let superseded: Vec<Key> = partition.into_iter().map(|(key, ..)| key).collect();
-        for key in &superseded {
-            self.rows.remove(key);
-        }
+        self.remove(&superseded);
         let row = PartitionVersion {
             state: State::Pending,
             create_time: now,
@@ -353,6 +455,7 @@ impl Engine {
             ..PartitionVersion::default()
         };
         self.rows.insert(key.clone(), row);
+        self.active.insert(key.clone());
         superseded
     }
 
@@ -401,14 +504,17 @@ impl Engine {
             if free == 0 {
                 break;
             }
-            let mut ready: Vec<&Key> = self
-                .rows
+            // Only the versions still in the pipeline can run: the done and
+            // the quarantined ones are not in the index.
+            let mut ready: Vec<Key> = self
+                .active
                 .iter()
-                .filter(|(_, row)| {
+                .filter(|key| {
+                    let row = &self.rows[*key];
                     row.state == transition.source
                         && row.retry_time.is_none_or(|until| now >= until)
                 })
-                .map(|(key, _)| key)
+                .cloned()
                 .collect();
             // Only the runs that fit matter, so select them without ordering
             // every ready version; a large map is the normal case after a walk.
@@ -417,9 +523,11 @@ impl Engine {
                 ready.truncate(free);
             }
             ready.sort_by(|left, right| self.priority(left, right));
-            let chosen: Vec<Key> = ready.into_iter().cloned().collect();
-            for key in chosen {
-                let row = self.rows.get_mut(&key).expect("a chosen key is in the map");
+            for key in ready {
+                let row = self
+                    .rows
+                    .get_mut(&key)
+                    .expect("an active key is in the map");
                 row.state = transition.running;
                 runs.push(Run { key, transition });
             }
@@ -452,7 +560,7 @@ impl Engine {
     pub(crate) fn finish(
         &mut self,
         key: &Key,
-        outcome: Result<Option<PartitionPrice>, String>,
+        outcome: Result<Option<PartitionPrice>, Failure>,
     ) -> Option<Conclusion> {
         self.finish_timed(key, outcome, now_ms())
     }
@@ -460,7 +568,7 @@ impl Engine {
     pub(crate) fn finish_timed(
         &mut self,
         key: &Key,
-        outcome: Result<Option<PartitionPrice>, String>,
+        outcome: Result<Option<PartitionPrice>, Failure>,
         now: u64,
     ) -> Option<Conclusion> {
         let row = self.rows.get_mut(key)?;
@@ -468,6 +576,7 @@ impl Engine {
         self.changed = true;
         match outcome {
             Ok(price) => {
+                self.counters.completed_run_count += 1;
                 row.state = transition.done;
                 row.failure_count = 0;
                 row.error = None;
@@ -481,11 +590,22 @@ impl Engine {
                     }
                 }
             }
-            Err(error) => {
+            Err(failure) => {
+                self.counters.failed_run_count += 1;
+                if failure.timed_out {
+                    self.counters.timed_out_run_count += 1;
+                }
                 row.state = transition.source;
                 row.failure_count += 1;
-                row.error = Some(error);
-                if row.failure_count >= MAX_FAILURES {
+                row.error = Some(failure.error);
+                if row.failure_count >= MAX_TOTAL_FAILURES {
+                    // A poison pill: no attempt this driver can make will read
+                    // it, so it stops being rescheduled. It is done for until
+                    // a walk finds a new etag for its partition.
+                    row.state = State::Failed;
+                    row.retry_time = None;
+                    self.counters.quarantined_version_count += 1;
+                } else if row.failure_count >= MAX_FAILURES {
                     let shift = (row.failure_count - MAX_FAILURES).min(6) as u32;
                     let delay = RETRY_BASE_MS
                         .saturating_mul(1_u64 << shift)
@@ -498,10 +618,14 @@ impl Engine {
                 }
             }
         }
-        Some(Conclusion {
-            state: row.state,
-            sample: engine_needs_sample(row),
-        })
+        let state = row.state;
+        let sample = engine_needs_sample(row);
+        if unfinished(state) {
+            self.active.insert(key.clone());
+        } else {
+            self.active.remove(key);
+        }
+        Some(Conclusion { state, sample })
     }
 
     /// Whether the rows changed since the last checkpoint.
@@ -518,13 +642,16 @@ impl Engine {
     fn remove(&mut self, keys: &[Key]) {
         for key in keys {
             self.rows.remove(key);
+            self.active.remove(key);
+            self.suggestions.remove(key);
         }
         self.changed |= !keys.is_empty();
     }
 
     /// Put every version a run was moving back to the state before its
     /// transition: aborting the run killed its command, so a checkpoint taken
-    /// now restarts them there.
+    /// now restarts them there. Every such state is still in the pipeline, so
+    /// the index of active versions does not change.
     pub(crate) fn reset_running(&mut self) {
         let transitions = self.transitions;
         for row in self.rows.values_mut() {
@@ -551,7 +678,8 @@ fn engine_needs_sample(row: &PartitionVersion) -> bool {
 }
 
 /// Whether a version in `state` reads its copy of the sample file: from the
-/// download to the verification that measures the listing against it.
+/// download to the verification that measures the listing against it. A
+/// quarantined version reads nothing, so a copy it left is swept.
 pub(crate) fn needs_sample(state: State) -> bool {
     matches!(
         state,
@@ -669,7 +797,7 @@ fn jitter_ms(delay: u64, key: &Key, failures: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqbench::v1::TableFile;
+    use pqbench::v1::{Suggestion, TableFile};
 
     const PARTITION: &str = "catalogs/c/schemas/s/tables/t/partitions/day%3D1";
 
@@ -818,7 +946,8 @@ mod tests {
         let t0 = 1_000_000;
         for attempt in 0..2 {
             assert_eq!(engine.start_timed(1, t0).len(), 1);
-            let conclusion = engine.finish_timed(&key, Err(format!("boom {attempt}")), t0);
+            let conclusion =
+                engine.finish_timed(&key, Err(Failure::new(format!("boom {attempt}"))), t0);
             assert_eq!(conclusion.map(|c| c.state), Some(State::Pending));
         }
         assert_eq!(engine.rows[&key].failure_count, 2);
@@ -830,6 +959,170 @@ mod tests {
         );
         assert!(engine.start_timed(1, retry_time - 1).is_empty());
         assert_eq!(engine.start_timed(1, retry_time).len(), 1);
+    }
+
+    /// A version that fails its limit of times is quarantined: it is never
+    /// handed out again, not on any later day, and a restart from a checkpoint
+    /// reads its state, count and error back rather than retrying it. A new
+    /// etag — a partition that was written — is a new version, and that one
+    /// runs.
+    #[test]
+    fn a_poison_pill_is_quarantined_until_a_new_etag() {
+        let (mut engine, key) = found(1);
+        let mut now = 1_000_000;
+        for attempt in 0..MAX_TOTAL_FAILURES {
+            if let Some(until) = engine.rows[&key].retry_time {
+                now = until;
+            }
+            assert_eq!(engine.start_timed(1, now).len(), 1, "attempt {attempt}");
+            let conclusion = engine.finish_timed(
+                &key,
+                Err(Failure::new(format!("a bad page {attempt}"))),
+                now,
+            );
+            let state = conclusion.map(|conclusion| conclusion.state);
+            let expected = match attempt + 1 == MAX_TOTAL_FAILURES {
+                true => State::Failed,
+                false => State::Pending,
+            };
+            assert_eq!(state, Some(expected), "attempt {attempt}");
+        }
+        let row = &engine.rows[&key];
+        assert_eq!(row.failure_count, MAX_TOTAL_FAILURES);
+        assert!(
+            row.error
+                .as_deref()
+                .is_some_and(|error| error.contains("a bad page")),
+            "the last error went missing"
+        );
+        assert!(
+            row.retry_time.is_none(),
+            "a quarantined version waits for a retry it will never make"
+        );
+        assert!(
+            engine.start_timed(1, u64::MAX / 2).is_empty(),
+            "a quarantined version was scheduled again"
+        );
+        assert_eq!(engine.status().state_counts["FAILED"], 1);
+
+        // A restart is not a cure: the checkpoint holds the quarantine.
+        let versions: Vec<_> = engine.versions().collect();
+        let mut engine = Engine::new(versions, false).unwrap();
+        assert_eq!(engine.rows[&key].state, State::Failed);
+        assert_eq!(engine.rows[&key].failure_count, MAX_TOTAL_FAILURES);
+        assert!(engine.start_timed(1, u64::MAX / 2).is_empty());
+
+        // The partition is written: a new etag supersedes the quarantined
+        // version, and the new one is pending.
+        let next = super::key(PARTITION, "bb").unwrap();
+        let listing = Partition {
+            file_count: 1,
+            ..Partition::default()
+        };
+        assert_eq!(engine.found(&next, &listing, now), vec![key]);
+        let runs = engine.start_timed(1, now);
+        let scheduled: Vec<Key> = runs.into_iter().map(|run| run.key).collect();
+        assert_eq!(scheduled, vec![next]);
+    }
+
+    /// A lake whose versions are done costs its pending versions, not its
+    /// total: the done ones are not in the scheduling index, so they are never
+    /// handed out.
+    #[test]
+    fn a_lake_of_done_versions_schedules_only_its_pending_ones() {
+        let table = "catalogs/c/schemas/s/tables/t/partitions/day%3D";
+        let done: Vec<PartitionVersion> = (0..2_000)
+            .map(|day| PartitionVersion {
+                name: format!("{table}{day}/versions/aa"),
+                state: State::UpToDate,
+                ..PartitionVersion::default()
+            })
+            .collect();
+        let mut engine = Engine::new(done, false).unwrap();
+        assert!(
+            engine.start_timed(8, 1).is_empty(),
+            "a done version was handed out"
+        );
+
+        let key = key(&format!("{table}new"), "aa").unwrap();
+        let listing = Partition {
+            file_count: 1,
+            ..Partition::default()
+        };
+        engine.found(&key, &listing, 10);
+        let runs = engine.start_timed(8, 10);
+        let scheduled: Vec<Key> = runs.into_iter().map(|run| run.key).collect();
+        assert_eq!(scheduled, vec![key], "the pending version did not run");
+        assert!(
+            engine.start_timed(8, 10).is_empty(),
+            "the version running now was handed out twice"
+        );
+    }
+
+    /// `status`'s run counters count what the driver finished and only ever
+    /// grow: a completed run, failed ones, the ones whose command was killed at
+    /// its step, and the version that was quarantined at the end.
+    #[test]
+    fn the_run_counters_only_grow() {
+        let (mut engine, key) = found(1);
+        assert_eq!(engine.status().completed_run_count, 0);
+        assert_eq!(engine.status().quarantined_version_count, 0);
+
+        assert_eq!(engine.start(1).len(), 1);
+        engine.finish_timed(&key, Ok(None), 1);
+        let mut counted = engine.status();
+        assert_eq!(counted.completed_run_count, 1);
+        assert_eq!(counted.failed_run_count, 0);
+        assert_eq!(counted.quarantined_version_count, 0);
+
+        let mut now = 10;
+        for attempt in 0..MAX_TOTAL_FAILURES {
+            if let Some(until) = engine.rows[&key].retry_time {
+                now = until;
+            }
+            assert_eq!(engine.start_timed(1, now).len(), 1);
+            let failure = match attempt % 2 {
+                0 => Failure::new("boom"),
+                _ => Failure::timed_out("slow"),
+            };
+            engine.finish_timed(&key, Err(failure), now);
+            let status = engine.status();
+            assert!(status.completed_run_count >= counted.completed_run_count);
+            assert!(status.failed_run_count >= counted.failed_run_count);
+            assert!(status.timed_out_run_count >= counted.timed_out_run_count);
+            assert!(status.quarantined_version_count >= counted.quarantined_version_count);
+            counted = status;
+        }
+        assert_eq!(counted.completed_run_count, 1);
+        assert_eq!(counted.failed_run_count, MAX_TOTAL_FAILURES);
+        assert_eq!(counted.timed_out_run_count, MAX_TOTAL_FAILURES / 2);
+        assert_eq!(counted.quarantined_version_count, 1);
+        assert_eq!(counted.state_counts["FAILED"], 1);
+    }
+
+    /// The map holds a version's verified suggestions, and a version that
+    /// leaves the map takes its cached suggestions with it.
+    #[test]
+    fn a_purge_drops_a_versions_cached_suggestions() {
+        let (mut engine, key) = found(1);
+        assert!(
+            engine.cached_suggestions(&key).is_none(),
+            "a version no run has measured holds suggestions"
+        );
+        let suggestions = vec![Suggestion {
+            name: format!("{PARTITION}/suggestions/tombstones"),
+            rule: "tombstones".into(),
+            ..Suggestion::default()
+        }];
+        engine.cache_suggestions(&key, suggestions.clone());
+        assert_eq!(engine.cached_suggestions(&key), Some(&suggestions[..]));
+
+        let purged = engine.missing(parent_table(&key.0), &BTreeSet::new());
+        assert_eq!(purged, vec![key.clone()]);
+        assert!(
+            engine.cached_suggestions(&key).is_none(),
+            "a purged version kept its suggestions"
+        );
     }
 
     /// Two versions that fail in the same tick back off to different times, so
@@ -958,7 +1251,8 @@ mod tests {
 
     /// Whether `state` is a state a version can reach from `previous` in one
     /// step: no transition may skip a state or go backwards except through the
-    /// failure/reset edge back to its source.
+    /// failure/reset edge back to its source, and any step may quarantine the
+    /// version instead.
     fn follows_an_edge(previous: State, state: State) -> bool {
         if previous == state {
             return true;
@@ -969,6 +1263,7 @@ mod tests {
                     && (state == transition.done
                         || state == transition.source
                         || state == State::Priced
+                        || state == State::Failed
                         || state == State::UpToDate))
         })
     }
@@ -1049,21 +1344,28 @@ mod tests {
                         .unwrap()
                     });
                     let outcome = if sequence.pick(3) == 0 {
-                        Err(format!("boom {step}"))
+                        Err(Failure::new(format!("boom {step}")))
                     } else {
                         Ok(price)
                     };
                     let failed = outcome.is_err();
                     engine.finish_timed(&key, outcome, now);
                     if failed && engine.rows[&key].failure_count >= MAX_FAILURES {
-                        let wait = engine.rows[&key]
-                            .retry_time
-                            .expect("a backed-off version waits");
-                        let delay = wait - now;
-                        assert!(
-                            (RETRY_BASE_MS * 3 / 4..=RETRY_MAX_MS).contains(&delay),
-                            "step {step}: a backoff of {delay} ms is outside its bounds"
-                        );
+                        if engine.rows[&key].state == State::Failed {
+                            assert!(
+                                engine.rows[&key].failure_count >= MAX_TOTAL_FAILURES,
+                                "step {step}: a version was quarantined too soon"
+                            );
+                        } else {
+                            let wait = engine.rows[&key]
+                                .retry_time
+                                .expect("a backed-off version waits");
+                            let delay = wait - now;
+                            assert!(
+                                (RETRY_BASE_MS * 3 / 4..=RETRY_MAX_MS).contains(&delay),
+                                "step {step}: a backoff of {delay} ms is outside its bounds"
+                            );
+                        }
                     }
                 }
                 // A table's listing no longer names some of its versions.
@@ -1130,6 +1432,20 @@ mod tests {
                 "step {step}: a version is duplicated"
             );
 
+            // The index of unfinished versions is the map's, exactly:
+            // one stale key would schedule a version that must not run again, and
+            // one missing key would strand a version forever.
+            let indexed: BTreeSet<Key> = engine
+                .rows
+                .iter()
+                .filter(|(_, row)| unfinished(row.state))
+                .map(|(key, _)| key.clone())
+                .collect();
+            assert_eq!(
+                engine.active, indexed,
+                "step {step}: the index of active versions is not the map's"
+            );
+
             // Every state change follows an edge of the transition graph.
             for (key, row) in &engine.rows {
                 if let Some(state) = previous.get(key) {
@@ -1141,7 +1457,7 @@ mod tests {
                         row.state
                     );
                 }
-                let backed_off = row.failure_count >= MAX_FAILURES;
+                let backed_off = row.failure_count >= MAX_FAILURES && row.state != State::Failed;
                 assert_eq!(
                     backed_off,
                     row.retry_time.is_some(),

@@ -286,7 +286,13 @@ one is running, and local tables need none.
   its price a version runs `bytemass` on the sample file in place, which reads
   only the footer, and then verifies from the partition's metadata alone,
   since it has no column suggestion to measure. A failure puts the version
-  back with the command's error; after two it waits.
+  back with the command's error; after two it waits, and after six it is
+  `FAILED` — quarantined, since a record that is permanently bad reads no
+  better on the seventh attempt, and retrying it only re-downloads it every
+  backoff window. A quarantined version is not rescheduled, and a restart keeps
+  it that way: its state, failure count and error are the checkpoint's. A walk
+  that finds a new etag — a partition that was written — makes a new version,
+  and that one is tried.
 
 A command's output lands in `DIR/results/{partition}/{etag}/` through a
 temporary file and is renamed into place when the command succeeds. The map is
@@ -313,12 +319,18 @@ live version. A version with no results yet reports its state instead.
 `state_counts` (the versions in each `PartitionVersion.State`),
 `total_versions`, `running_commands` (the worker commands in flight),
 `failing_versions` (versions whose current transition failed and that back off
-before retrying), `last_walk_time`, and `last_walk_error` when that walk
-failed.
+before retrying, or that are quarantined), `last_walk_time`, and
+`last_walk_error` when that walk failed. Four counters only ever grow while the
+driver runs: `completed_run_count` (runs that reached their transition's done
+state), `failed_run_count` (runs that ended in an error, timeouts included),
+`timed_out_run_count` (runs whose command was killed at `step-timeout`), and
+`quarantined_version_count` (versions that reached `FAILED`).
 
 `pqbench-driver list suggestions [PARENT]` prints the `Suggestion` records the
 driver measured, one per line, largest saving first, all of them or those under
-a catalog, schema, table or partition name. Each record is a version's
+a catalog, schema, table or partition name. The driver holds each version's
+records in its map as soon as the version is done, so a listing over a whole
+lake reads the results it has not read yet, not every version's file. Each record is a version's
 potential column suggestion measured against its control, or one of the two
 partition rules that need no file: `tombstones` (Delta's removed files the log
 no longer needs, with the log's own byte count as the saving) and `small-files`

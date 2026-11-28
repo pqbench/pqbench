@@ -85,11 +85,15 @@ pub enum State {
     /// Every transition the version needs is done: a version with no live file,
     /// or whose files need a restore, is done after its price.
     UpToDate,
+    /// The version failed too many times: it is quarantined, so no transition
+    /// runs on it again. Only a walk that finds a new etag — a partition that
+    /// was written — makes a version that is tried afresh.
+    Failed,
 }
 
 impl State {
-    /// Every state, in pipeline order: what `status` counts by.
-    pub const ALL: [State; 12] = [
+    /// Every state: what `status` counts by.
+    pub const ALL: [State; 13] = [
         State::Deleted,
         State::Pending,
         State::Pricing,
@@ -102,6 +106,7 @@ impl State {
         State::Listed,
         State::Verifying,
         State::UpToDate,
+        State::Failed,
     ];
 
     /// The state's name as the wire spells it.
@@ -120,6 +125,7 @@ impl State {
             State::Listed => "LISTED",
             State::Verifying => "VERIFYING",
             State::UpToDate => "UP_TO_DATE",
+            State::Failed => "FAILED",
         }
     }
 }

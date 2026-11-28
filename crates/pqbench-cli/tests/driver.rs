@@ -819,7 +819,17 @@ fn status_reports_the_map() {
     assert_eq!(status["total_versions"], rows.len());
     assert_eq!(status["state_counts"]["UP_TO_DATE"], rows.len());
     assert_eq!(status["state_counts"]["PENDING"], 0);
+    assert_eq!(status["state_counts"]["FAILED"], 0);
     assert_eq!(status["failing_versions"], 0);
+    // Every version takes a run per transition, so the completed runs outnumber
+    // the versions; the counters only ever grow, so nothing failed here.
+    assert!(
+        status["completed_run_count"].as_u64().unwrap_or(0) >= rows.len() as u64,
+        "{status}"
+    );
+    assert_eq!(status["failed_run_count"], 0);
+    assert_eq!(status["timed_out_run_count"], 0);
+    assert_eq!(status["quarantined_version_count"], 0);
     assert!(
         status["last_walk_time"]
             .as_u64()
@@ -936,6 +946,109 @@ fn a_low_network_still_persists_the_partition_suggestions() {
     assert_eq!(listed[0]["rule"], "tombstones");
     assert_eq!(listed[0]["verified"], true);
     assert_eq!(listed[0]["savings_bytes"], removed_file_bytes);
+}
+
+/// A version that fails its last strike is quarantined: `FAILED`, so no
+/// transition runs on it again, with the copy of the sample file a crash left
+/// swept. The checkpoint holds the state, the count and the error, so a restart
+/// does not un-quarantine it.
+#[test]
+fn the_last_strike_quarantines_a_version_across_restarts() {
+    let directory = tempfile::tempdir().unwrap();
+    let partition = "catalogs/local/schemas/local/tables/events/partitions/day%3D1";
+    let version_dir = directory
+        .path()
+        .join("store/results")
+        .join(partition)
+        .join("aa");
+    std::fs::create_dir_all(&version_dir).unwrap();
+    // The map a previous driver checkpointed: this version has one strike left,
+    // and its listing is gone, so no command can read it.
+    let row = json!({
+        "name": format!("{partition}/versions/aa"),
+        "state": "PENDING",
+        "create_time": 1,
+        "first_listed_time": 1,
+        "failure_count": 5,
+        "error": "five attempts read nothing",
+        "file_count": 1,
+        "size_bytes": 10,
+    });
+    std::fs::write(
+        directory.path().join("store/checkpoint.ndjson"),
+        row.to_string() + "\n",
+    )
+    .unwrap();
+    // A copy a crash left behind: no transition reads it again.
+    std::fs::write(version_dir.join("sample.parquet"), "x").unwrap();
+    let config = directory.path().join("run-control");
+    std::fs::write(&config, "[DEFAULT]\ncheckpoint-codec = none\n").unwrap();
+
+    let running = Driver::configured(directory.path(), &[], &config);
+    let rows = running.wait(|rows| rows.len() == 1 && rows[0]["state"] == "FAILED");
+    assert_eq!(rows[0]["failure_count"], 6);
+    assert!(
+        rows[0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("listing")),
+        "{rows:#?}"
+    );
+    assert!(
+        !version_dir.join("sample.parquet").exists(),
+        "a quarantined version kept its copy of the sample file"
+    );
+
+    let status = driver_status(&running);
+    assert_eq!(status["state_counts"]["FAILED"], 1);
+    assert_eq!(status["quarantined_version_count"], 1);
+    assert_eq!(status["failed_run_count"], 1);
+    assert_eq!(status["timed_out_run_count"], 0);
+    assert_eq!(status["completed_run_count"], 0);
+    assert_eq!(status["failing_versions"], 1);
+
+    // A restart loads the quarantine rather than trying the version again.
+    running.stop();
+    let running = Driver::configured(directory.path(), &[], &config);
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(1_000) {
+        assert_eq!(running.rows(), rows, "the quarantine did not hold");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let status = driver_status(&running);
+    assert_eq!(status["state_counts"]["FAILED"], 1);
+    assert_eq!(status["failed_run_count"], 0);
+}
+
+/// The map holds each version's measured suggestions, so a listing reads no
+/// results file: with every `suggestions.ndjson` gone the records are unchanged
+/// rather than empty.
+#[test]
+fn the_measured_suggestions_are_served_from_the_map() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("events");
+    commit(&root, 0, small_files_table(&root, 8));
+    walk(directory.path(), &[("events", &root)]);
+    let running = Driver::start(directory.path(), &[]);
+    running.wait(|rows| rows.len() == 1 && rows[0]["state"] == "UP_TO_DATE");
+    let listed = list_suggestions(&running, &[]);
+    assert!(!listed.is_empty(), "{listed:#?}");
+
+    let mut removed = 0;
+    for file in walk_files(&running.store.join("results")) {
+        if file
+            .file_name()
+            .is_some_and(|name| name == "suggestions.ndjson")
+        {
+            std::fs::remove_file(&file).unwrap();
+            removed += 1;
+        }
+    }
+    assert!(removed > 0, "the results held no suggestions to delete");
+    assert_eq!(
+        list_suggestions(&running, &[]),
+        listed,
+        "the suggestions were read from disk, not from the map"
+    );
 }
 
 /// A signal stops the driver cleanly: the runs are aborted, the map is

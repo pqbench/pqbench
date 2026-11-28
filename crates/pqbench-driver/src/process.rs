@@ -26,6 +26,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
+use super::engine::Failure;
+
 /// The most of a failed command's standard error kept as its error.
 const ERROR_BYTES: usize = 2000;
 
@@ -128,8 +130,9 @@ impl Worker {
     }
 
     /// Run one command with `input` on its standard input: its standard
-    /// output when it succeeds, else its error.
-    pub(crate) async fn run(&self, arguments: &[String], input: &str) -> Result<Vec<u8>, String> {
+    /// output when it succeeds, else its error. A command killed at the step
+    /// timeout says so, so the driver can count the timeout as one.
+    pub(crate) async fn run(&self, arguments: &[String], input: &str) -> Result<Vec<u8>, Failure> {
         let name = arguments.join(" ");
         let mut child = self
             .command(arguments)
@@ -137,7 +140,7 @@ impl Worker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| format!("cannot start `pqbench {name}`: {error}"))?;
+            .map_err(|error| Failure::new(format!("cannot start `pqbench {name}`: {error}")))?;
         let mut stdin = child.stdin.take().expect("stdin is piped");
         let mut stdout = child.stdout.take().expect("stdout is piped");
         let mut stderr = child.stderr.take().expect("stderr is piped");
@@ -158,22 +161,23 @@ impl Worker {
             );
             out_read
                 .and(err_read)
-                .map_err(|error| format!("`pqbench {name}` was lost: {error}"))?;
-            let status = status.map_err(|error| format!("`pqbench {name}` was lost: {error}"))?;
-            Ok::<_, String>((out, err, status))
+                .map_err(|error| Failure::new(format!("`pqbench {name}` was lost: {error}")))?;
+            let status = status
+                .map_err(|error| Failure::new(format!("`pqbench {name}` was lost: {error}")))?;
+            Ok::<_, Failure>((out, err, status))
         };
         let (stdout, stderr, status) = match timeout(self.step_timeout, collect).await {
             Ok(collected) => collected?,
             Err(_) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                return Err(self.timed_out(&name));
+                return Err(Failure::timed_out(self.timed_out(&name)));
             }
         };
         if status.success() {
             Ok(stdout)
         } else {
-            Err(failure(&name, status, &stderr))
+            Err(Failure::new(failure(&name, status, &stderr)))
         }
     }
 
@@ -309,7 +313,8 @@ mod tests {
             .run(&["-c".to_string(), script], "")
             .await
             .expect_err("a command past its step is an error");
-        assert!(error.contains("timed out"), "{error}");
+        assert!(error.timed_out, "{error:?}");
+        assert!(error.error.contains("timed out"), "{error:?}");
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "the step was not bounded: {:?}",
@@ -334,7 +339,8 @@ mod tests {
             .run(&["-c".to_string(), "echo boom >&2; exit 1".to_string()], "")
             .await
             .expect_err("a failing command is an error");
-        assert_eq!(error, "boom");
+        assert!(!error.timed_out, "a command that ended is no timeout");
+        assert_eq!(error.error, "boom");
     }
 
     /// A walk that outlives its step is killed stage by stage: the command

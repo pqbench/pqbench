@@ -369,6 +369,10 @@ message PartitionVersion {
     // Every transition the version needs is done: a version with no live file, or
     // whose files need a restore, is done after its price.
     UP_TO_DATE = 10;
+    // The version failed too many times: it is quarantined, so no transition
+    // runs on it again. Only a walk that finds a new etag — a partition that
+    // was written — makes a version that is tried afresh.
+    FAILED = 19;
   }
 
   State state = 2;
@@ -388,7 +392,8 @@ message PartitionVersion {
   int64 etag_change_count = 6;
 
   // Failures of the current transition on this version; after repeated
-  // failures the version backs off until `retry_time`.
+  // failures the version backs off until `retry_time`, and after enough of
+  // them it is FAILED.
   int64 failure_count = 7;
 
   // The last failure's error.

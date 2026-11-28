@@ -98,8 +98,21 @@ pub struct DriverStatus {
     /// command, or a walk).
     pub running_commands: u64,
     /// How many versions have failed their current transition and not yet
-    /// moved on; after repeated failures they back off until `retry_time`.
+    /// moved on; after repeated failures they back off until `retry_time`, and
+    /// after enough of them they are quarantined.
     pub failing_versions: u64,
+    /// How many runs the driver finished in their transition's done state
+    /// since it started.
+    pub completed_run_count: u64,
+    /// How many runs ended in an error since it started, timeouts included.
+    pub failed_run_count: u64,
+    /// How many runs had their command killed at the step timeout since it
+    /// started.
+    pub timed_out_run_count: u64,
+    /// How many versions were quarantined since it started: they were
+    /// rescheduled until they failed too often to ever read, and a new write to
+    /// their partition — a new etag — is what tries them afresh.
+    pub quarantined_version_count: u64,
     /// When the last walk started, milliseconds since the Unix epoch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_walk_time: Option<u64>,

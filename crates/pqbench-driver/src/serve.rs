@@ -10,10 +10,10 @@
 //! 0.
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use pqbench::third_party::json;
-use pqbench::v1::{PartitionVersion, Suggestion};
+use pqbench::v1::PartitionVersion;
 use serde::Serialize;
 use serde_json::value::{to_raw_value, RawValue};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -113,23 +113,44 @@ async fn results(
 }
 
 /// The suggestions the live versions under `parent` hold, largest saving
-/// first.
+/// first. A version's suggestions are read from its results once and then held
+/// by the map, so a lake-wide listing costs the reads the map has not done yet.
 async fn suggestions(
     engine: &RwLock<Engine>,
     store: &Store,
     parent: Option<&str>,
 ) -> Result<Vec<Box<RawValue>>, String> {
     let keys = read_engine(engine).keys(parent.unwrap_or_default())?;
-    let store = store.clone();
-    let mut suggestions = tokio::task::spawn_blocking(move || {
-        let mut all = Vec::new();
+    let mut suggestions = Vec::new();
+    let mut missing = Vec::new();
+    {
+        let engine = read_engine(engine);
         for key in keys {
-            all.extend(store.read_suggestions(&key)?);
+            match engine.cached_suggestions(&key) {
+                Some(cached) => suggestions.extend_from_slice(cached),
+                None => missing.push(key),
+            }
         }
-        Ok::<Vec<Suggestion>, String>(all)
-    })
-    .await
-    .map_err(|error| format!("the suggestions read failed: {error}"))??;
+    }
+    if !missing.is_empty() {
+        let store = store.clone();
+        let read = tokio::task::spawn_blocking(move || {
+            missing
+                .into_iter()
+                .map(|key| {
+                    let suggestions = store.read_suggestions(&key)?;
+                    Ok((key, suggestions))
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .await
+        .map_err(|error| format!("the suggestions read failed: {error}"))??;
+        let mut engine = write_engine(engine);
+        for (key, held) in read {
+            suggestions.extend(held.iter().cloned());
+            engine.cache_suggestions(&key, held);
+        }
+    }
     suggestions.sort_by(|left, right| {
         right
             .savings_bytes
@@ -145,6 +166,12 @@ async fn suggestions(
 fn read_engine(engine: &RwLock<Engine>) -> RwLockReadGuard<'_, Engine> {
     engine
         .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn write_engine(engine: &RwLock<Engine>) -> RwLockWriteGuard<'_, Engine> {
+    engine
+        .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
