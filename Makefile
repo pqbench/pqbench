@@ -24,6 +24,9 @@ CARGO_TARGET_DIR ?= $(if $(MAIN_CHECKOUT),$(MAIN_CHECKOUT)/target)
 ifneq ($(CARGO_TARGET_DIR),)
 export CARGO_TARGET_DIR
 endif
+# Where the built binaries land. Targets that run a tool built from the
+# workspace use the binary, never `cargo run -p <tool>` (see `sync-docs`).
+TARGET_DIR ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/target)
 
 # rust-code-analysis CLI and inputs; see the `code-analysis` target.
 RCA ?= rust-code-analysis-cli
@@ -34,8 +37,8 @@ LAKEHOUSE = CARGO="$(CARGO)" ./docker/e2e-lakehouse/lakehouse.sh
 # no portable millisecond format). Each timed target prints `<name>: N s`.
 SHELL := /bin/bash
 
-.PHONY: all fmt fmt-check build test lint link-target samples lakehouse dbx-e2e \
-	dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
+.PHONY: all fmt fmt-check build test test-doc lint link-target samples \
+	lakehouse dbx-e2e dbx-walk lakehouse-up lakehouse-seed-s3 lakehouse-seed-unity \
 	lakehouse-seed-iceberg check check-fast isolation lfs-check check-python sync-docs \
 	check-docs code-analysis test-code-analysis clean
 
@@ -50,11 +53,23 @@ fmt-check:
 build:
 	@TIMEFORMAT='build: %3R s'; time $(CARGO) build --workspace $(CARGO_FEATURES)
 
-# Build every workspace binary first: pqbench-cli's integration tests run the
-# pqbench-driver binary beside pqbench, and `cargo test` builds only the
-# package's own bins, not another crate's.
+# The prerequisite stays the workspace build, not `-p pqbench-cli -p
+# pqbench-driver`: `-p` makes those the only root packages, so every workspace
+# member they depend on (`pqbench`, `pqbench-resource`, `pqbench-derive`) is
+# then a dependency and picks up `[profile.dev.package."*"] debug = false` — a
+# second copy of each, which `cargo test --workspace` compiles again as roots.
+# It builds `pqbench-driver`'s binary, which the gate needs: `pqbench-cli`'s
+# integration tests run it beside `pqbench`, and neither `cargo test` nor a
+# `--bin` selection builds another package's binary.
+#
+# No crate has a doc test, so `--lib --bins --tests` skips the seven empty
+# rustdoc harnesses a bare `cargo test` builds (each runs rustdoc over the whole
+# graph). `test-doc` runs them for a crate that grows one.
 test: build
-	@TIMEFORMAT='test: %3R s'; time $(CARGO) test --workspace $(CARGO_FEATURES) $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
+	@TIMEFORMAT='test: %3R s'; time $(CARGO) test --workspace $(CARGO_FEATURES) --lib --bins --tests $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
+
+test-doc:
+	@TIMEFORMAT='test-doc: %3R s'; time $(CARGO) test --workspace $(CARGO_FEATURES) --doc $(if $(TEST_FLAGS),-- $(TEST_FLAGS))
 
 # The live Databricks metastore e2e (scripts/dbx_e2e.py); needs the service
 # principal credentials. Python drives the built binary: plumbum composes the
@@ -67,7 +82,7 @@ dbx-e2e:
 	python/.venv/bin/python -c 'import plumbum' 2>/dev/null || \
 		python/.venv/bin/python -m pip install -q plumbum
 	$(CARGO) build -p pqbench-cli --features delta-s3,iceberg-s3
-	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" \
+	PQB="$(TARGET_DIR)/debug/pqbench" \
 		python/.venv/bin/python scripts/dbx_e2e.py
 
 # The live walk (scripts/dbx-walk.sh): one pass over the whole Unity Catalog,
@@ -79,7 +94,7 @@ dbx-e2e:
 dbx-walk:
 	@test -n "$$DBX_HOST" || { echo "set DBX_HOST (see docs/guides/auth.md)"; exit 1; }
 	$(CARGO) build -p pqbench-cli $(CARGO_FEATURES)
-	PQB="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/debug/pqbench" ./scripts/dbx-walk.sh
+	PQB="$(TARGET_DIR)/debug/pqbench" ./scripts/dbx-walk.sh
 
 lint:
 	@TIMEFORMAT='lint: %3R s'; time $(CARGO) clippy --workspace --all-targets $(CARGO_FEATURES) -- -D warnings
@@ -154,7 +169,7 @@ check-python:
 	test -d python/.venv || $(PYTHON) -m venv python/.venv
 	python/.venv/bin/python -m pip install -q maturin
 	rm -f python/dist/*.whl
-	CARGO_TARGET_DIR="$(or $(CARGO_TARGET_DIR),$(CURDIR)/target)" \
+	CARGO_TARGET_DIR="$(TARGET_DIR)" \
 		python/.venv/bin/maturin build --profile $(PQB_WHEEL_PROFILE) --out python/dist
 	python/.venv/bin/python -m pip install -q --force-reinstall python/dist/*.whl
 	python/.venv/bin/pqbench --help > /dev/null
@@ -166,13 +181,20 @@ check-python:
 #   commands; `make test` runs them like any other integration test.
 # - `docs/reference/cli.md`, from the clap tree via `crates/docsgen`.
 # `make check-docs` fails if either is out of date with its source.
+#
+# Both generators run the binary `make build` just produced instead of `cargo
+# run -p <tool>`. A `-p` invocation roots the graph at that one tool, so the
+# workspace members it depends on are built as dependencies, without debug info
+# (`[profile.dev.package."*"] debug = false`) — a second copy of `pqbench` and
+# the CLI, rebuilt on every edit. Run from the workspace build, they reuse the
+# same units `make test` links.
 DOCS ?= README.md docs/ skills/ examples/
-sync-docs:
-	@TIMEFORMAT='sync-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- sync $(DOCS)
-	$(CARGO) run -q -p docsgen -- write docs/reference/cli.md
-check-docs:
-	@TIMEFORMAT='check-docs: %3R s'; time $(CARGO) run -q -p docscheck-cli -- check $(DOCS)
-	$(CARGO) run -q -p docsgen -- check docs/reference/cli.md
+sync-docs: build
+	@TIMEFORMAT='sync-docs: %3R s'; time $(TARGET_DIR)/debug/docscheck sync $(DOCS)
+	$(TARGET_DIR)/debug/docsgen write docs/reference/cli.md
+check-docs: build
+	@TIMEFORMAT='check-docs: %3R s'; time $(TARGET_DIR)/debug/docscheck check $(DOCS)
+	$(TARGET_DIR)/debug/docsgen check docs/reference/cli.md
 
 # Software metrics (rust-code-analysis) over the source tree; prints the CLI's
 # own metrics tree. Needs `rust-code-analysis-cli` on PATH — CI pins the

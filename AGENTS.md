@@ -149,10 +149,13 @@ analogy, convention, or precedent:
 - Gate (pre-commit): `make check` = `fmt-check` + `check-docs` +
   `clippy -D warnings` + `isolation` + `lfs-check` + `test` +
   `test-code-analysis`.
+  `make check-fast` is `fmt-check` + `check-docs` + `cargo check
+  --all-targets` (no codegen, no link) for a quick pass.
   `make check-python` builds the data-only wheel from `crates/pqbench-cli`
   with maturin and smoke-tests the installed binary; CI runs it, the local gate
   does not (it compiles every storage backend).
-- The edit loop is `cargo check --all-features` (no codegen, no link), then
+- The edit loop, one feature set throughout (`--all-features`):
+  `cargo check --all-features` (no codegen, no link) or `make check-fast`, then
   `cargo test -p <crate> --test it -- <module>` for the test in hand, then one
   `make check` before pushing. When the gate already passed, `git commit
   --no-verify` is acceptable.
@@ -183,9 +186,19 @@ analogy, convention, or precedent:
   reproduce a specific CI leg.
 - Integration tests are one target per crate: `tests/it.rs` lists every
   `tests/*.rs` file as a `#[path]` module. Add the line when you add a file.
-  `make test` builds the workspace's binaries first: `pqbench-cli`'s driver
-  tests run the `pqbench-driver` binary from beside `pqbench`, which `cargo
-  test` alone does not build.
+  `make test` builds the workspace first: `pqbench-cli`'s driver tests run the
+  `pqbench-driver` binary from beside `pqbench`, which `cargo test` alone does
+  not build. It keeps `--workspace` there — see the `-p` bullet below.
+- `make test` passes `--lib --bins --tests`: no crate has a doc test, so this
+  skips seven empty `rustdoc` harnesses. `make test-doc` runs them when a crate
+  gains one.
+- Do not root a build at one tool. `cargo run -p docsgen` (or any `-p` that is
+  not the whole workspace) makes that package the only root, so every workspace
+  member it depends on is built as a dependency and takes
+  `[profile.dev.package."*"] debug = false`: a second copy of `pqbench` and the
+  CLI, recompiled on every edit and again as roots by `cargo test --workspace`.
+  `make build` builds `--workspace`, and `sync-docs`/`check-docs` run the
+  binaries it produced.
 - Build footprint. Dependencies build without debug info
   (`[profile.dev.package."*"] debug = false`), there is one test binary per
   crate, and the rustc wrapper links with mold when it is installed.
