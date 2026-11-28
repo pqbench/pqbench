@@ -14,27 +14,32 @@
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
-use super::price::{Settings, Values};
+use super::price::Values;
 use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const INT64_NARROW_RULE: &str = "int64-narrow";
+
+/// The remedy: change the column's type, or, for parquet-rs, write the values
+/// at the narrower physical width.
+const REMEDY: RemedyAdvice =
+    RemedyAdvice::new("", "spark").wording(Writer::ArrowRs, "write {leaf} as INT32");
 
 /// The finding this column earns when every sampled `INT64` value fits `INT32`.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     if sample.physical() != "INT64" || !plain_integer(sample) {
         return None;
     }
-    let (first_value, last_value) = narrowable(sample.int64_values)?;
+    let (first_value, last_value) = narrowable(sample.int64s()?)?;
     Some(Finding {
         message: format!(
             "INT64 values between {first_value} and {last_value} at {:.2} B/value \
              fit in INT32",
             sample.text_bpv
         ),
-        remedy: remedy(sample.writer_kind(), sample.leaf),
         remedies: remedies(sample.leaf),
+        advice: REMEDY,
         measure,
     })
 }
@@ -43,14 +48,13 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
 /// integer annotation a writer adds to a narrowed column. A timestamp, time,
 /// date, decimal, or UUID is an encoded value, not a count.
 fn plain_integer(sample: &ColumnSample<'_>) -> bool {
-    sample.scalar()
-        && matches!(
-            sample.mass.logical_type.as_deref(),
-            None | Some("INT(64,true)")
-                | Some("INT(32,true)")
-                | Some("INT(64,false)")
-                | Some("INT(32,false)")
-        )
+    matches!(
+        sample.mass.logical_type.as_deref(),
+        None | Some("INT(64,true)")
+            | Some("INT(32,true)")
+            | Some("INT(64,false)")
+            | Some("INT(32,false)")
+    )
 }
 
 /// The sample's range, when every non-null value fits `INT32`.
@@ -70,11 +74,11 @@ fn narrowable(values: &[Option<i64>]) -> Option<(i64, i64)> {
 /// Price the narrowed values against the source's own values, both written by
 /// the same writer at the file's codec and level and with its own encoding.
 fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
-    if narrowable(sample.int64_values).is_none() {
+    let Some(values) = sample.int64s() else {
         return Ok(None);
-    }
-    let mut narrowed: Vec<Option<i32>> = Vec::with_capacity(sample.int64_values.len());
-    for value in sample.int64_values {
+    };
+    let mut narrowed: Vec<Option<i32>> = Vec::with_capacity(values.len());
+    for value in values {
         match value {
             Some(value) => match i32::try_from(*value) {
                 Ok(value) => narrowed.push(Some(value)),
@@ -83,17 +87,11 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
             None => narrowed.push(None),
         }
     }
-    let settings = Settings {
-        dictionary: sample.chunk_has_dictionary,
-        dictionary_page_size_limit: sample.dictionary_page_size_limit(),
-        data_page_size_limit: None,
-        encoding: control::integer_encoding(sample.mass),
-        version: parquet::file::properties::WriterVersion::PARQUET_1_0,
-    };
+    let settings = sample.source_settings(control::integer_encoding(sample.mass));
     control::compare(
         sample,
         &Arm {
-            values: Values::Int64(sample.int64_values),
+            values: Values::Int64(values),
             settings,
         },
         &Arm {
@@ -126,25 +124,10 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that narrows one column's integers, in the detected writer's
-/// terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    match writer {
-        Writer::ParquetMr => setting("spark"),
-        Writer::Photon => format!("{} (Photon forwarding unverified)", setting("spark")),
-        Writer::ArrowCpp => setting("pyarrow"),
-        Writer::ArrowRs => format!("write {leaf} as INT32"),
-        Writer::Other => setting("iceberg"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{detect, measure, narrowable, remedy};
-    use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use super::{detect, measure, narrowable};
+    use crate::lint::{ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(logical_type: Option<&str>) -> v1::Column {
@@ -166,7 +149,7 @@ mod tests {
     fn a_narrow_int64_earns_an_int32() {
         let leaf = column(None);
         let values: Vec<Option<i64>> = (0..2_000).map(|value| Some(40_000 + value)).collect();
-        let sample = ColumnSample::for_test_int64(&leaf, &values, false);
+        let sample = ColumnSample::for_test_values(&leaf, ColumnValues::Int64(&values), false);
 
         let finding = detect(&sample).expect("a narrow INT64 is a candidate");
         assert!(finding.message.contains("INT32"));
@@ -185,14 +168,19 @@ mod tests {
         let leaf = column(None);
         let mut values: Vec<Option<i64>> = (0..2_000).map(Some).collect();
         values[1_000] = Some(i64::from(i32::MAX) + 1);
-        let sample = ColumnSample::for_test_int64(&leaf, &values, false);
+        let sample = ColumnSample::for_test_values(&leaf, ColumnValues::Int64(&values), false);
         assert!(detect(&sample).is_none());
         assert!(measure(&sample).expect("measure").is_none());
 
         let negative: Vec<Option<i64>> = (0..2_000)
             .map(|value| Some(i64::from(i32::MIN) - 1 - value))
             .collect();
-        assert!(detect(&ColumnSample::for_test_int64(&leaf, &negative, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &leaf,
+            ColumnValues::Int64(&negative),
+            false
+        ))
+        .is_none());
     }
 
     /// A timestamp, time, date, or decimal is an encoded integer whose width is
@@ -209,9 +197,9 @@ mod tests {
             "UUID",
         ] {
             assert!(
-                detect(&ColumnSample::for_test_int64(
+                detect(&ColumnSample::for_test_values(
                     &column(Some(logical_type)),
-                    &values,
+                    ColumnValues::Int64(&values),
                     false
                 ))
                 .is_none(),
@@ -220,9 +208,9 @@ mod tests {
         }
         // The integer annotation a narrowed column carries is still a plain
         // integer.
-        assert!(detect(&ColumnSample::for_test_int64(
+        assert!(detect(&ColumnSample::for_test_values(
             &column(Some("INT(64,true)")),
-            &values,
+            ColumnValues::Int64(&values),
             false
         ))
         .is_some());
@@ -233,14 +221,5 @@ mod tests {
     fn only_the_values_in_range_are_narrowable() {
         assert_eq!(narrowable(&[None, None]), None);
         assert_eq!(narrowable(&[None, Some(7), Some(-9)]), Some((-9, 7)));
-    }
-
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr, "id").contains("INT"));
-        assert!(remedy(Writer::ArrowCpp, "id").contains("pa.int32()"));
-        assert!(remedy(Writer::ArrowCpp, "request.ext").contains("'request.ext'"));
-        assert!(remedy(Writer::Photon, "id").contains("unverified"));
-        assert!(remedy(Writer::Other, "id").contains("TYPE int"));
     }
 }

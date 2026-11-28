@@ -8,14 +8,13 @@
 //! its values, and the control then prices the change at no saving.
 
 use parquet::basic::Encoding;
-use parquet::file::properties::WriterVersion;
 
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
 use super::price::Settings;
 use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const DELTA_INTEGER_RULE: &str = "delta-integer";
@@ -29,6 +28,16 @@ const DENSE_FRACTION: f64 = 0.5;
 /// step between neighbours. Sequential ids and timestamps pass by orders of
 /// magnitude; random identifiers sit at about one.
 const DELTA_MAGNITUDE_DIVISOR: i128 = 16;
+
+/// The remedy: the 2.0 page version selects the Delta encodings, so a
+/// file-level setting names it and a per-column one names the encoding.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("write the file at", "delta")
+    .wording(Writer::ArrowCpp, "{setting}")
+    .wording(Writer::ArrowRs, "{setting}")
+    .wording(
+        Writer::Other,
+        "write the column Delta binary packed ({setting})",
+    );
 
 /// The finding this column earns when its leaf is an `INT32` or `INT64` whose
 /// neighbours are close and whose chunk is not already Delta binary packed.
@@ -54,8 +63,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
             sample.physical(),
             sample.text_bpv
         ),
-        remedy: remedy(sample.writer_kind(), sample.leaf),
         remedies: remedies(sample.leaf),
+        advice: REMEDY,
         measure,
     })
 }
@@ -94,26 +103,14 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
     };
     let baseline = Arm {
         values,
-        settings: Settings {
-            dictionary: sample.chunk_has_dictionary,
-            dictionary_page_size_limit: sample.dictionary_page_size_limit(),
-            data_page_size_limit: None,
-            // The rule never detects a chunk that already records
-            // `DELTA_BINARY_PACKED`, so the source's data pages are PLAIN (or
-            // dictionary encoded, which the dictionary arm reproduces).
-            encoding: None,
-            version: WriterVersion::PARQUET_1_0,
-        },
+        // The rule never detects a chunk that already records
+        // `DELTA_BINARY_PACKED`, so the source's data pages are PLAIN (or
+        // dictionary encoded, which the dictionary arm reproduces).
+        settings: sample.source_settings(None),
     };
     let candidate = Arm {
         values,
-        settings: Settings {
-            dictionary: false,
-            dictionary_page_size_limit: None,
-            data_page_size_limit: None,
-            encoding: Some(Encoding::DELTA_BINARY_PACKED),
-            version: WriterVersion::PARQUET_1_0,
-        },
+        settings: Settings::candidate(Some(Encoding::DELTA_BINARY_PACKED)),
     };
     control::compare(sample, &baseline, &candidate)
 }
@@ -148,33 +145,13 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that Delta-encodes one integer column, in the detected writer's
-/// terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    match writer {
-        Writer::ParquetMr => format!("write the file at {}", setting("spark")),
-        Writer::Photon => format!(
-            "write the file at {} (Photon forwarding unverified)",
-            setting("delta")
-        ),
-        Writer::ArrowCpp => setting("pyarrow"),
-        Writer::ArrowRs => setting("parquet-rs"),
-        Writer::Other => format!(
-            "write the column Delta binary packed ({})",
-            setting("iceberg")
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use parquet::basic::Encoding;
 
-    use super::{detect, measure, neighbours_are_close, remedy};
+    use super::{detect, measure, neighbours_are_close, REMEDY};
     use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{remedy_text, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(physical_data_type: &str, codec: &str) -> v1::Column {
@@ -192,26 +169,17 @@ mod tests {
         (0..len).map(|value| Some(value as i64)).collect()
     }
 
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr, "id").contains("PARQUET_2_0"));
-        assert!(!remedy(Writer::ParquetMr, "id").contains("spark.sql"));
-        assert!(remedy(Writer::ArrowCpp, "id").contains("DELTA_BINARY_PACKED"));
-        assert!(remedy(Writer::ArrowRs, "id").contains("set_column_encoding"));
-        assert!(remedy(Writer::Other, "id").contains("write.parquet.page-version=v2"));
-    }
-
     /// The pyarrow setting is a Python dict literal, so the column key is a
     /// string. A bare key is a `NameError` at the caller, not a rewrite.
     #[test]
     fn the_pyarrow_remedy_quotes_the_column_key() {
-        let setting = remedy(Writer::ArrowCpp, "id");
+        let setting = remedy_text(Writer::ArrowCpp, "id", &super::remedies("id"), &REMEDY);
         assert!(
             setting.contains("column_encoding={'id': 'DELTA_BINARY_PACKED'}"),
             "{setting}"
         );
         for leaf in ["a.b", "site.publisher:ext", "request.@timestamp"] {
-            let exotic = remedy(Writer::ArrowCpp, leaf);
+            let exotic = remedy_text(Writer::ArrowCpp, leaf, &super::remedies(leaf), &REMEDY);
             assert!(
                 exotic.contains(&format!(
                     "column_encoding={{'{}': 'DELTA_BINARY_PACKED'}}",
@@ -253,7 +221,7 @@ mod tests {
     fn dense_integers_without_delta_are_priced() {
         let leaf = column("INT64", "UNCOMPRESSED");
         let values = sequential(10_000);
-        let sample = ColumnSample::for_test_int64(&leaf, &values, false);
+        let sample = ColumnSample::for_test_values(&leaf, ColumnValues::Int64(&values), false);
 
         let finding = detect(&sample).expect("dense integers are a candidate");
         assert!(finding.message.contains("DELTA_BINARY_PACKED"));
@@ -270,7 +238,7 @@ mod tests {
     fn int32_values_are_priced_as_int32() {
         let column = column("INT32", "UNCOMPRESSED");
         let values: Vec<Option<i32>> = (0..10_000).map(Some).collect();
-        let sample = ColumnSample::for_test_int32(&column, &values, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::Int32(&values), false);
         assert!(detect(&sample).is_some());
         let measurement = measure(&sample).expect("measure").expect("uncompressed");
         assert!(measurement.ratio_low > 0.8, "{}", measurement.ratio_low);
@@ -281,7 +249,12 @@ mod tests {
     fn repeated_random_and_delta_columns_are_not_candidates() {
         let leaf = column("INT64", "UNCOMPRESSED");
         let repeated: Vec<Option<i64>> = (0..1_000).map(|value| Some(value % 3)).collect();
-        assert!(detect(&ColumnSample::for_test_int64(&leaf, &repeated, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &leaf,
+            ColumnValues::Int64(&repeated),
+            false
+        ))
+        .is_none());
 
         let mut state = 0x2545_f491_4f6c_dd1d_u64;
         let random: Vec<Option<i64>> = (0..1_000)
@@ -292,7 +265,12 @@ mod tests {
                 Some(state as i64)
             })
             .collect();
-        assert!(detect(&ColumnSample::for_test_int64(&leaf, &random, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &leaf,
+            ColumnValues::Int64(&random),
+            false
+        ))
+        .is_none());
 
         let mut delta = column("INT64", "UNCOMPRESSED");
         delta.mass = Some(v1::Bytemass {
@@ -300,9 +278,9 @@ mod tests {
             encodings: vec!["PLAIN".into(), Encoding::DELTA_BINARY_PACKED.to_string()],
             ..v1::Bytemass::default()
         });
-        assert!(detect(&ColumnSample::for_test_int64(
+        assert!(detect(&ColumnSample::for_test_values(
             &delta,
-            &sequential(1_000),
+            ColumnValues::Int64(&sequential(1_000)),
             false
         ))
         .is_none());
@@ -317,6 +295,11 @@ mod tests {
                 ))
             })
             .collect();
-        assert!(detect(&ColumnSample::for_test(&text, &cells, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &text,
+            ColumnValues::ByteArray(&cells),
+            false
+        ))
+        .is_none());
     }
 }

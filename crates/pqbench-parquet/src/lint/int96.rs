@@ -13,7 +13,7 @@ use crate::v1;
 use super::control::{self, Measurement};
 use super::price::{price, Settings, Values};
 use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const INT96_TIMESTAMP_RULE: &str = "int96-timestamp";
@@ -32,6 +32,13 @@ const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
 /// since the Unix epoch.
 type TimestampCells = (Vec<Option<ByteArray>>, Vec<Option<i64>>);
 
+/// The remedy: write timestamps as microsecond `INT64`, a writer setting for
+/// parquet-mr, Arrow C++, and Arrow Rust, and a type change elsewhere.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("", "spark").wording(
+    Writer::Other,
+    "write timestamps as INT64 TIMESTAMP(MICROS), not deprecated INT96 ({setting})",
+);
+
 /// The finding this column earns when its leaf is an INT96 timestamp. Nothing
 /// is decoded: the footer's physical type is the whole check.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
@@ -40,8 +47,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     }
     Some(Finding {
         message: format!("an INT96 timestamp at {:.2} B/value", sample.text_bpv),
-        remedy: remedy(sample.writer_kind(), sample.leaf),
         remedies: remedies(sample.leaf),
+        advice: REMEDY,
         measure,
     })
 }
@@ -70,15 +77,13 @@ fn measure_priced(
     } else {
         WriterVersion::PARQUET_1_0
     };
+    let encoding = match (control::source_encoding(sample.mass), version) {
+        (None, WriterVersion::PARQUET_2_0) => Some(Encoding::PLAIN),
+        (recorded, _) => recorded,
+    };
     let baseline = Settings {
-        dictionary: sample.chunk_has_dictionary,
-        dictionary_page_size_limit: sample.dictionary_page_size_limit(),
-        data_page_size_limit: None,
-        encoding: match (control::source_encoding(sample.mass), version) {
-            (None, WriterVersion::PARQUET_2_0) => Some(Encoding::PLAIN),
-            (recorded, _) => recorded,
-        },
         version,
+        ..sample.source_settings(encoding)
     };
     control::measure_arms(sample, |compression| {
         let baseline_bytes = price(
@@ -91,13 +96,7 @@ fn measure_priced(
             let bytes = price(
                 Values::Int64(micros_cells),
                 compression,
-                Settings {
-                    dictionary: false,
-                    dictionary_page_size_limit: None,
-                    data_page_size_limit: None,
-                    encoding: Some(encoding),
-                    version: WriterVersion::PARQUET_1_0,
-                },
+                Settings::candidate(Some(encoding)),
             )?;
             candidate_bytes = candidate_bytes.min(bytes);
         }
@@ -210,32 +209,14 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The session setting that writes timestamps as microsecond `INT64`, in the
-/// detected writer's terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    match writer {
-        Writer::ParquetMr => setting("spark"),
-        Writer::Photon => format!("{} (Photon forwarding unverified)", setting("spark")),
-        Writer::ArrowCpp => setting("pyarrow"),
-        Writer::ArrowRs => setting("parquet-rs"),
-        Writer::Other => format!(
-            "write timestamps as INT64 TIMESTAMP(MICROS), not deprecated INT96 ({})",
-            setting("iceberg")
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use parquet::data_type::Int96;
 
     use super::{
-        detect, int96_bytes, measure_priced, micros, remedy, EPOCH_JULIAN_DAY, MICROSECONDS_PER_DAY,
+        detect, int96_bytes, measure_priced, micros, EPOCH_JULIAN_DAY, MICROSECONDS_PER_DAY,
     };
-    use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(physical_data_type: &str) -> v1::Column {
@@ -284,28 +265,28 @@ mod tests {
     #[test]
     fn only_int96_is_a_candidate() {
         let cells = Vec::new();
-        assert!(detect(&ColumnSample::for_test(&column("INT96"), &cells, false)).is_some());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column("INT96"),
+            ColumnValues::ByteArray(&cells),
+            false
+        ))
+        .is_some());
         for physical in ["INT64", "INT32", "BYTE_ARRAY"] {
             assert!(
-                detect(&ColumnSample::for_test(&column(physical), &cells, false)).is_none(),
+                detect(&ColumnSample::for_test_values(
+                    &column(physical),
+                    ColumnValues::ByteArray(&cells),
+                    false
+                ))
+                .is_none(),
                 "{physical}"
             );
         }
     }
 
+    /// Every engine's remedy names the column, in that engine's own spelling.
     #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr, "ts").contains("TIMESTAMP_MICROS"));
-        assert!(remedy(Writer::Photon, "ts").contains("unverified"));
-        assert_eq!(
-            remedy(Writer::ArrowCpp, "ts"),
-            "use_deprecated_int96_timestamps=False"
-        );
-        assert!(remedy(Writer::ArrowRs, "ts").contains("TIMESTAMP(MICROS)"));
-        assert!(remedy(Writer::Other, "ts").contains("TYPE timestamp"));
-
-        // Every engine's setting names the column, and a duckdb identifier is
-        // quoted the way SQL quotes it.
+    fn every_engine_setting_names_the_column() {
         let settings = super::remedies("request.@timestamp");
         for engine in ["spark", "duckdb", "pyarrow", "parquet-rs", "iceberg"] {
             assert!(
@@ -324,7 +305,7 @@ mod tests {
     #[test]
     fn microseconds_in_an_int64_are_much_smaller_than_int96() {
         let column = column("INT96");
-        let sample = ColumnSample::for_test(&column, &[], false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&[]), false);
         let mut int96_cells = Vec::new();
         let mut micros_cells = Vec::new();
         for step in 0..1_000_i64 {

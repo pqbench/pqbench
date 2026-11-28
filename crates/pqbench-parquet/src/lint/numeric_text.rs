@@ -10,14 +10,13 @@
 //! difference is what the rewrite saves.
 
 use parquet::basic::Encoding;
-use parquet::file::properties::WriterVersion;
 
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
 use super::price::{price, Settings, Values};
 use super::writer::Writer;
-use super::{py_string, ColumnSample, Error, Finding};
+use super::{py_string, ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const NUMERIC_TEXT_RULE: &str = "numeric-text";
@@ -27,6 +26,13 @@ const MINIMUM_VALUES: usize = 16;
 
 /// The fraction of sampled non-null values that must be canonical numbers.
 const VALID_FRACTION: f64 = 0.99;
+
+/// The remedy: cast the column before the write, or, for parquet-rs, parse the
+/// text before the writer sees it.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("", "spark").other("duckdb").wording(
+    Writer::ArrowRs,
+    "parse the text with `str::parse` before the writer sees it",
+);
 
 /// What the column's text spells: integers alone, or decimals beside them.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,8 +64,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
             sample.text_bpv,
             fraction * 100.0
         ),
-        remedy: remedy(sample.writer_kind(), sample.leaf, numbers),
         remedies: remedies(sample.leaf, numbers),
+        advice: REMEDY,
         measure,
     })
 }
@@ -100,11 +106,10 @@ fn numeric_text(sample: &ColumnSample<'_>) -> Option<(Numbers, f64)> {
     Some((numbers, fraction))
 }
 
-/// Whether the leaf is a scalar text leaf: a repeated leaf's values are nested,
-/// and a logical type that is not text (JSON, a UUID, a binary payload) spells
-/// something other than a number.
+/// Whether the leaf is a text leaf: a logical type that is not text (JSON, a
+/// UUID, a binary payload) spells something other than a number.
 fn text_leaf(sample: &ColumnSample<'_>) -> bool {
-    sample.scalar() && matches!(sample.mass.logical_type.as_deref(), None | Some("STRING"))
+    matches!(sample.mass.logical_type.as_deref(), None | Some("STRING"))
 }
 
 /// Parse one value as a canonical number.
@@ -206,13 +211,7 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
 /// The source's own dictionary state and encoding: the rewrite changes what a
 /// value is, not how the column is stored, so both arms keep it.
 fn source_settings(sample: &ColumnSample<'_>) -> Settings {
-    Settings {
-        dictionary: sample.chunk_has_dictionary,
-        dictionary_page_size_limit: sample.dictionary_page_size_limit(),
-        data_page_size_limit: None,
-        encoding: control::source_encoding(sample.mass),
-        version: WriterVersion::PARQUET_1_0,
-    }
+    sample.source_settings(control::source_encoding(sample.mass))
 }
 
 /// The settings that store one column's numbers as numbers, one per engine.
@@ -237,25 +236,10 @@ fn remedies(leaf: &str, numbers: Numbers) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that stores one column's numbers as numbers, in the detected
-/// writer's terms.
-fn remedy(writer: Writer, leaf: &str, numbers: Numbers) -> String {
-    let remedies = remedies(leaf, numbers);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    match writer {
-        Writer::ParquetMr => setting("spark"),
-        Writer::Photon => format!("{} (Photon forwarding unverified)", setting("spark")),
-        Writer::ArrowCpp => setting("pyarrow"),
-        Writer::ArrowRs => "parse the text with `str::parse` before the writer sees it".to_string(),
-        Writer::Other => setting("duckdb"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{detect, measure, parse_number, remedy, Number, NUMERIC_TEXT_RULE};
-    use crate::lint::writer::Writer;
-    use crate::lint::{cells, ColumnSample};
+    use super::{detect, measure, parse_number, Number};
+    use crate::lint::{cells, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(codec: &str, logical_type: Option<&str>) -> v1::Column {
@@ -319,7 +303,7 @@ mod tests {
             .map(|value| (100_001 + value).to_string())
             .collect();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
 
         let finding = detect(&sample).expect("canonical integer text is a candidate");
         assert!(finding.message.contains("B/value"));
@@ -342,7 +326,7 @@ mod tests {
             .map(|value| (1_000_000.25 + f64::from(value) * 0.01).to_string())
             .collect();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
 
         let finding = detect(&sample).expect("canonical decimal text is a candidate");
         assert!(finding.message.contains("decimal point"));
@@ -362,52 +346,66 @@ mod tests {
 
         let padded: Vec<String> = (0..2_000).map(|value| format!("{value:06}")).collect();
         let padded_cells = cells(&padded);
-        assert!(detect(&ColumnSample::for_test(&column, &padded_cells, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column,
+            ColumnValues::ByteArray(&padded_cells),
+            false
+        ))
+        .is_none());
 
         let signed: Vec<String> = (0..2_000).map(|value| format!("+{value}")).collect();
         let signed_cells = cells(&signed);
-        assert!(detect(&ColumnSample::for_test(&column, &signed_cells, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column,
+            ColumnValues::ByteArray(&signed_cells),
+            false
+        ))
+        .is_none());
 
         let mut mixed: Vec<String> = (0..2_000).map(|value| value.to_string()).collect();
         mixed[17] = "unknown".to_string();
         let mixed_cells = cells(&mixed);
-        assert!(detect(&ColumnSample::for_test(&column, &mixed_cells, false)).is_some());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column,
+            ColumnValues::ByteArray(&mixed_cells),
+            false
+        ))
+        .is_some());
         assert!(
-            measure(&ColumnSample::for_test(&column, &mixed_cells, false))
-                .expect("measure")
-                .is_none(),
+            measure(&ColumnSample::for_test_values(
+                &column,
+                ColumnValues::ByteArray(&mixed_cells),
+                false
+            ))
+            .expect("measure")
+            .is_none(),
             "a stray text value is not the same column rewritten"
         );
     }
 
-    /// A JSON or binary leaf spells something other than a number, and a
-    /// repeated leaf's values are nested.
+    /// A JSON or binary leaf spells something other than a number.
     #[test]
-    fn only_scalar_text_leaves_are_candidates() {
+    fn only_text_leaves_are_candidates() {
         let values: Vec<String> = (0..2_000)
             .map(|value| (100_001 + value).to_string())
             .collect();
         let cells = cells(&values);
 
         let json = column("UNCOMPRESSED", Some("JSON"));
-        assert!(detect(&ColumnSample::for_test(&json, &cells, false)).is_none());
-
-        let mut repeated = column("UNCOMPRESSED", Some("STRING"));
-        repeated.max_repetition_level = Some(1);
-        assert!(detect(&ColumnSample::for_test(&repeated, &cells, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &json,
+            ColumnValues::ByteArray(&cells),
+            false
+        ))
+        .is_none());
 
         // A text leaf whose logical type the footer omits is still text.
         let untyped = column("UNCOMPRESSED", None);
-        assert!(detect(&ColumnSample::for_test(&untyped, &cells, false)).is_some());
-    }
-
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr, "id", super::Numbers::Integers).contains("BIGINT"));
-        assert!(remedy(Writer::ParquetMr, "id", super::Numbers::Doubles).contains("DOUBLE"));
-        assert!(remedy(Writer::ArrowCpp, "id", super::Numbers::Doubles).contains("pa.float64()"));
-        assert!(remedy(Writer::Photon, "id", super::Numbers::Integers).contains("unverified"));
-        assert!(remedy(Writer::Other, "id", super::Numbers::Integers).contains("BIGINT"));
-        assert_eq!(NUMERIC_TEXT_RULE, "numeric-text");
+        assert!(detect(&ColumnSample::for_test_values(
+            &untyped,
+            ColumnValues::ByteArray(&cells),
+            false
+        ))
+        .is_some());
     }
 }

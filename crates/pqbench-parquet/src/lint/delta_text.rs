@@ -3,14 +3,13 @@
 //! smaller one kept.
 
 use parquet::basic::Encoding;
-use parquet::file::properties::WriterVersion;
 
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
 use super::price::Settings;
 use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const DELTA_TEXT_ENCODING_RULE: &str = "delta-text-encoding";
@@ -27,6 +26,16 @@ const CANDIDATES: [Encoding; 2] = [
     Encoding::DELTA_LENGTH_BYTE_ARRAY,
     Encoding::DELTA_BYTE_ARRAY,
 ];
+
+/// The remedy: the 2.0 page version selects the Delta encodings, so a
+/// file-level setting names it and a per-column one names the encoding.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("write the file at", "delta")
+    .wording(Writer::ArrowCpp, "{setting}")
+    .wording(Writer::ArrowRs, "{setting}")
+    .wording(
+        Writer::Other,
+        "write the column Delta byte-array encoded ({setting})",
+    );
 
 /// The finding this column earns when its chunk has no dictionary, its values
 /// are nearly unique, and its data pages are not already `DELTA_BYTE_ARRAY`
@@ -47,8 +56,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
             "nearly-unique text at {:.2} B/value without a dictionary",
             sample.text_bpv
         ),
-        remedy: remedy(sample.writer_kind(), leaf),
         remedies: remedies(leaf),
+        advice: REMEDY,
         measure,
     })
 }
@@ -63,23 +72,14 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         values,
         settings: Settings {
             dictionary: false,
-            dictionary_page_size_limit: None,
-            data_page_size_limit: None,
-            encoding: control::source_encoding(sample.mass),
-            version: WriterVersion::PARQUET_1_0,
+            ..sample.source_settings(control::source_encoding(sample.mass))
         },
     };
     let candidates: Vec<Arm<'_>> = CANDIDATES
         .into_iter()
         .map(|encoding| Arm {
             values,
-            settings: Settings {
-                dictionary: false,
-                dictionary_page_size_limit: None,
-                data_page_size_limit: None,
-                encoding: Some(encoding),
-                version: WriterVersion::PARQUET_1_0,
-            },
+            settings: Settings::candidate(Some(encoding)),
         })
         .collect();
     control::measure_arms(sample, |compression| {
@@ -118,31 +118,11 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that Delta-encodes one column's text, in the detected writer's
-/// terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    match writer {
-        Writer::ParquetMr => format!("write the file at {}", setting("spark")),
-        Writer::Photon => format!(
-            "write the file at {} (Photon forwarding unverified)",
-            setting("delta")
-        ),
-        Writer::ArrowCpp => setting("pyarrow"),
-        Writer::ArrowRs => setting("parquet-rs"),
-        Writer::Other => format!(
-            "write the column Delta byte-array encoded ({})",
-            setting("iceberg")
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{detect, measure, remedy};
+    use super::{detect, measure, REMEDY};
     use crate::lint::writer::Writer;
-    use crate::lint::{cells, ColumnSample};
+    use crate::lint::{cells, remedy_text, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(codec: &str, physical_data_type: &str) -> v1::Column {
@@ -161,7 +141,7 @@ mod tests {
     #[test]
     fn the_pyarrow_remedy_quotes_exotic_column_keys() {
         for leaf in ["request.ext", "site.publisher:ext", "request.@timestamp"] {
-            let setting = remedy(Writer::ArrowCpp, leaf);
+            let setting = remedy_text(Writer::ArrowCpp, leaf, &super::remedies(leaf), &REMEDY);
             assert!(
                 setting.contains(&format!(
                     "column_encoding={{'{}': 'DELTA_BYTE_ARRAY'}}",
@@ -172,15 +152,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr, "id").contains("PARQUET_2_0"));
-        assert!(remedy(Writer::ArrowCpp, "id").contains("DELTA_BYTE_ARRAY"));
-        assert!(remedy(Writer::ArrowRs, "id").contains("set_column_encoding"));
-        assert!(remedy(Writer::Photon, "id").contains("unverified"));
-        assert!(remedy(Writer::Other, "id").contains("write.parquet.page-version=v2"));
-    }
-
     /// Nearly-unique text without a dictionary is a candidate.
     #[test]
     fn nearly_unique_text_without_a_dictionary_is_a_candidate() {
@@ -188,7 +159,7 @@ mod tests {
         let values: Vec<String> = (0..1_000).map(|value| format!("{value:016x}")).collect();
         let cells = cells(&values);
 
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
         let finding = detect(&sample).expect("nearly-unique text is a candidate");
         assert!(finding.message.contains("B/value"));
     }
@@ -202,14 +173,16 @@ mod tests {
         let unique: Vec<String> = (0..1_000).map(|value| format!("{value:016x}")).collect();
         let cells_unique = cells(&unique);
 
-        let with_dictionary = ColumnSample::for_test(&text, &cells_unique, true);
+        let with_dictionary =
+            ColumnSample::for_test_values(&text, ColumnValues::ByteArray(&cells_unique), true);
         assert!(detect(&with_dictionary).is_none());
 
         let repeated: Vec<String> = (0..1_000)
             .map(|value| format!("{:016x}", value % 10))
             .collect();
         let cells_repeated = cells(&repeated);
-        let without_dictionary = ColumnSample::for_test(&text, &cells_repeated, false);
+        let without_dictionary =
+            ColumnSample::for_test_values(&text, ColumnValues::ByteArray(&cells_repeated), false);
         assert!(detect(&without_dictionary).is_none());
 
         let mut delta = column("UNCOMPRESSED", "BYTE_ARRAY");
@@ -218,7 +191,12 @@ mod tests {
             encodings: vec!["DELTA_LENGTH_BYTE_ARRAY".into()],
             ..v1::Bytemass::default()
         });
-        assert!(detect(&ColumnSample::for_test(&delta, &cells_unique, false)).is_some());
+        assert!(detect(&ColumnSample::for_test_values(
+            &delta,
+            ColumnValues::ByteArray(&cells_unique),
+            false
+        ))
+        .is_some());
 
         let mut shared_prefix = column("UNCOMPRESSED", "BYTE_ARRAY");
         shared_prefix.mass = Some(v1::Bytemass {
@@ -226,9 +204,9 @@ mod tests {
             encodings: vec!["DELTA_BYTE_ARRAY".into()],
             ..v1::Bytemass::default()
         });
-        assert!(detect(&ColumnSample::for_test(
+        assert!(detect(&ColumnSample::for_test_values(
             &shared_prefix,
-            &cells_unique,
+            ColumnValues::ByteArray(&cells_unique),
             false
         ))
         .is_none());
@@ -241,7 +219,7 @@ mod tests {
         let column = column("UNCOMPRESSED", "BYTE_ARRAY");
         let values: Vec<String> = (0..2_000).map(|value| format!("{value:08x}")).collect();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
 
         let measurement = measure(&sample).expect("measure").expect("uncompressed");
         assert!(
@@ -257,7 +235,6 @@ mod tests {
     #[test]
     fn the_shared_prefix_encoding_wins_on_sorted_text() {
         use parquet::basic::{Compression, Encoding};
-        use parquet::file::properties::WriterVersion;
 
         use crate::lint::price::{price, Settings};
 
@@ -267,15 +244,9 @@ mod tests {
             .map(|value| format!("{prefix}{value:08}"))
             .collect();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
         let decoded = sample.values().expect("values");
-        let arm = |encoding: Option<Encoding>| Settings {
-            dictionary: false,
-            dictionary_page_size_limit: None,
-            data_page_size_limit: None,
-            encoding,
-            version: WriterVersion::PARQUET_1_0,
-        };
+        let arm = |encoding: Option<Encoding>| Settings::candidate(encoding);
         let bytes = |encoding: Option<Encoding>| {
             price(decoded, Compression::UNCOMPRESSED, arm(encoding)).expect("price")
         };

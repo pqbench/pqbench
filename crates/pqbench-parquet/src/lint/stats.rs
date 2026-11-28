@@ -12,7 +12,7 @@ use crate::v1;
 
 use super::control::Measurement;
 use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const STATS_TRUNCATED_RULE: &str = "stats-truncated";
@@ -20,6 +20,11 @@ pub const STATS_TRUNCATED_RULE: &str = "stats-truncated";
 /// The smallest footer win worth a suggestion: a bound a few bytes past the
 /// truncation length is not worth rewriting a file for.
 const MIN_SAVING_BYTES: u64 = 64;
+
+/// The remedy: truncate the footer statistics, except that Arrow C++ has no
+/// truncation length and only a switch that drops them.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("truncate this column's footer statistics", "spark")
+    .wording(Writer::ArrowCpp, "{lead}: no setting exists ({setting})");
 
 /// The finding this column earns when its chunk records `min_value` and
 /// `max_value` bytes past the truncation length.
@@ -38,8 +43,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
              {ratio:.2}% of the sample chunk's {} bytes",
             sample.chunk_compressed_bytes
         ),
-        remedy: remedy(sample.writer_kind()),
         remedies: remedies(),
+        advice: REMEDY,
         measure,
     })
 }
@@ -90,29 +95,10 @@ fn remedies() -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that truncates a column's statistics, in the detected writer's
-/// terms.
-fn remedy(writer: Writer) -> String {
-    let remedies = remedies();
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    let lead = "truncate this column's footer statistics";
-    match writer {
-        Writer::ParquetMr => format!("{lead}: {}", setting("spark")),
-        Writer::Photon => format!(
-            "{lead}: {} (Photon forwarding unverified)",
-            setting("spark")
-        ),
-        Writer::ArrowCpp => format!("{lead}: no setting exists ({})", setting("pyarrow")),
-        Writer::ArrowRs => format!("{lead}: {}", setting("parquet-rs")),
-        Writer::Other => format!("{lead}: {}", setting("iceberg")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{detect, measure, remedy};
-    use crate::lint::writer::Writer;
-    use crate::lint::{cells, ColumnSample};
+    use super::{detect, measure};
+    use crate::lint::{cells, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(physical_data_type: &str) -> v1::Column {
@@ -127,16 +113,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr).contains("statistics.truncate.length=64"));
-        assert!(remedy(Writer::ArrowRs).contains("set_statistics_truncate_length"));
-        assert!(remedy(Writer::ArrowCpp).contains("no setting exists"));
-        assert!(remedy(Writer::ArrowCpp).contains("no truncation length"));
-        assert!(remedy(Writer::Photon).contains("unverified"));
-        assert!(remedy(Writer::Other).contains("stats-enabled.column"));
-    }
-
     /// A footer whose bounds stay within the truncation length is no
     /// candidate, and one past it is, with the exact ratio.
     #[test]
@@ -145,10 +121,12 @@ mod tests {
         let values: Vec<String> = (0..100).map(|value| format!("value-{value}")).collect();
         let cells = cells(&values);
 
-        let within = ColumnSample::for_test(&column, &cells, false);
+        let within = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
         assert!(detect(&within).is_none());
 
-        let bloated = ColumnSample::for_test(&column, &cells, false).with_stats_excess(1_000);
+        let bloated =
+            ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false)
+                .with_stats_excess(1_000);
         let finding = detect(&bloated).expect("untruncated bounds are a candidate");
         assert!(finding.message.contains("1000 bytes above"));
         assert!(finding.message.contains("0.01%"), "{}", finding.message);
@@ -158,7 +136,9 @@ mod tests {
         assert!((measurement.ratio_low - 0.01).abs() < 1e-12);
 
         // A bound a few bytes past the length is below the reporting floor.
-        let trivial = ColumnSample::for_test(&column, &cells, false).with_stats_excess(10);
+        let trivial =
+            ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false)
+                .with_stats_excess(10);
         assert!(detect(&trivial).is_none());
     }
 
@@ -168,7 +148,8 @@ mod tests {
     fn a_numeric_leaf_is_not_a_candidate() {
         let column = column("INT64");
         let values: Vec<Option<i64>> = (0..100).map(Some).collect();
-        let sample = ColumnSample::for_test_int64(&column, &values, false).with_stats_excess(1_000);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::Int64(&values), false)
+            .with_stats_excess(1_000);
         assert!(detect(&sample).is_none());
     }
 }

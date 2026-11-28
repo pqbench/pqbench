@@ -98,6 +98,18 @@ pub(super) struct Settings {
 }
 
 impl Settings {
+    /// A rewrite arm: no dictionary, the given `encoding`, and the 1.0 page
+    /// version.
+    pub(super) fn candidate(encoding: Option<Encoding>) -> Self {
+        Self {
+            dictionary: false,
+            dictionary_page_size_limit: None,
+            data_page_size_limit: None,
+            encoding,
+            version: WriterVersion::PARQUET_1_0,
+        }
+    }
+
     /// A 1.0-version arm: the page version a footer without one records. A
     /// rule that re-encodes a `FIXED_LEN_BYTE_ARRAY` dictionary sets the 2.0
     /// version instead.

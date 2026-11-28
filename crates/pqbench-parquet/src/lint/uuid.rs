@@ -1,13 +1,12 @@
 //! `uuid-text`: canonical UUID text priced as 16-byte binary.
 
 use parquet::data_type::ByteArray;
-use parquet::file::properties::WriterVersion;
 
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
 use super::price::{Settings, Values};
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const UUID_TEXT_RULE: &str = "uuid-text";
@@ -15,6 +14,13 @@ pub const UUID_TEXT_RULE: &str = "uuid-text";
 /// A UUID's binary width, the `FIXED_LEN_BYTE_ARRAY` length the candidate is
 /// written as.
 const UUID_BYTES: i32 = 16;
+
+/// The remedy when the values carry the UUID version and variant bits.
+const ANNOTATED_REMEDY: RemedyAdvice =
+    RemedyAdvice::sentence("store as BINARY(16) with the UUID logical type");
+
+/// The remedy when the values are UUID text of an unknown version.
+const BINARY_REMEDY: RemedyAdvice = RemedyAdvice::sentence("store as BINARY(16)");
 
 /// The finding this column earns when every sampled non-null value is a
 /// canonical UUID. The control prices the same values as 16-byte binary.
@@ -31,12 +37,11 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     }
     Some(Finding {
         message: format!("UUID text at {:.2} B/value", sample.text_bpv),
-        remedy: if annotated {
-            "store as BINARY(16) with the UUID logical type".to_string()
-        } else {
-            "store as BINARY(16)".to_string()
-        },
         remedies: remedies(sample.leaf),
+        advice: match annotated {
+            true => ANNOTATED_REMEDY,
+            false => BINARY_REMEDY,
+        },
         measure,
     })
 }
@@ -84,23 +89,11 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         values: sample
             .values()
             .ok_or_else(|| Error::Invalid("the sample's byte cells were not decoded".into()))?,
-        settings: Settings {
-            dictionary: sample.chunk_has_dictionary,
-            dictionary_page_size_limit: sample.dictionary_page_size_limit(),
-            data_page_size_limit: None,
-            encoding: control::source_encoding(sample.mass),
-            version: WriterVersion::PARQUET_1_0,
-        },
+        settings: sample.source_settings(control::source_encoding(sample.mass)),
     };
     let candidate = Arm {
         values: Values::FixedLen(UUID_BYTES, &binary),
-        settings: Settings {
-            dictionary: false,
-            dictionary_page_size_limit: None,
-            data_page_size_limit: None,
-            encoding: None,
-            version: WriterVersion::PARQUET_1_0,
-        },
+        settings: Settings::candidate(None),
     };
     control::compare(sample, &baseline, &candidate)
 }
@@ -133,7 +126,7 @@ pub(super) fn parse_uuid(bytes: &[u8]) -> Option<[u8; 16]> {
 #[cfg(test)]
 mod tests {
     use super::{measure, parse_uuid};
-    use crate::lint::{cells, uuid_text, ColumnSample};
+    use crate::lint::{cells, uuid_text, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column() -> v1::Column {
@@ -191,7 +184,7 @@ mod tests {
         let column = column();
         let values: Vec<String> = (0..1_000).map(uuid_text).collect();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
 
         let measurement = measure(&sample).expect("measure").expect("uncompressed");
         assert!(

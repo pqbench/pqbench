@@ -15,11 +15,17 @@ use crate::v1;
 
 use super::control::{self, Measurement};
 use super::price::{price, Settings, Values};
-use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const DICTIONARY_FALLBACK_RULE: &str = "dictionary-fallback";
+
+/// The remedy: raise the cap or turn the column's dictionary off, with Delta
+/// and Photon taking the table's dictionary page size.
+const REMEDY: RemedyAdvice = RemedyAdvice::new(
+    "raise the dictionary page size limit or disable the column's dictionary",
+    "delta",
+);
 
 /// The finding this column earns when its chunk has a dictionary page and fell
 /// back to `PLAIN` data pages.
@@ -37,8 +43,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
              at {:.2} B/value",
             sample.text_bpv
         ),
-        remedy: remedy(sample.writer_kind(), sample.leaf, dictionary_page_size),
         remedies: remedies(sample.leaf, dictionary_page_size),
+        advice: REMEDY,
         measure,
     })
 }
@@ -50,9 +56,12 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
     let Some(values) = sample.values() else {
         return Ok(None);
     };
-    let Some(cap) = sample.chunk_dictionary_page_size.filter(|bytes| *bytes > 0) else {
+    if sample
+        .chunk_dictionary_page_size
+        .is_none_or(|bytes| bytes == 0)
+    {
         return Ok(None);
-    };
+    }
     // The source's own fallback encoding: a v2 writer falls back to a Delta
     // encoding, a v1 writer to PLAIN, and the footer's encoding set says which.
     let fallback_encoding = control::source_encoding(sample.mass);
@@ -67,25 +76,18 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         _ => (WriterVersion::PARQUET_1_0, fallback_encoding),
     };
     let current = Settings {
-        dictionary: true,
-        dictionary_page_size_limit: Some(cap),
-        data_page_size_limit: None,
-        encoding: None,
         version,
+        ..sample.source_settings(None)
     };
     let raised = Settings {
-        dictionary: true,
         dictionary_page_size_limit: Some(usize::MAX),
-        data_page_size_limit: None,
-        encoding: None,
-        version,
+        ..current
     };
     let off = Settings {
         dictionary: false,
         dictionary_page_size_limit: None,
-        data_page_size_limit: None,
         encoding: off_encoding,
-        version,
+        ..current
     };
     control::measure_arms(sample, |compression| {
         let current_bytes = price(values, compression, current)?;
@@ -135,30 +137,12 @@ fn remedies(leaf: &str, cap: usize) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that ends a dictionary fallback, in the detected writer's terms.
-fn remedy(writer: Writer, leaf: &str, cap: usize) -> String {
-    let remedies = remedies(leaf, cap);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    let lead = "raise the dictionary page size limit or disable the column's dictionary";
-    match writer {
-        Writer::ParquetMr => format!("{lead}: {}", setting("spark")),
-        Writer::Photon => format!(
-            "{lead}: {} (Photon forwarding unverified)",
-            setting("delta")
-        ),
-        Writer::ArrowCpp => format!("{lead}: {}", setting("pyarrow")),
-        Writer::ArrowRs => format!("{lead}: {}", setting("parquet-rs")),
-        Writer::Other => format!("{lead}: {}", setting("iceberg")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use parquet::data_type::ByteArray;
 
-    use super::{detect, measure, remedy};
-    use crate::lint::writer::Writer;
-    use crate::lint::{cells, ColumnSample};
+    use super::{detect, measure};
+    use crate::lint::{cells, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(physical_data_type: &str, codec: &str) -> v1::Column {
@@ -173,16 +157,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr, "id", 4_096).contains("parquet.dictionary.page.size"));
-        assert!(remedy(Writer::ParquetMr, "id", 4_096).contains("4096 bytes"));
-        assert!(remedy(Writer::ArrowCpp, "id", 4_096).contains("dictionary_pagesize_limit"));
-        assert!(remedy(Writer::ArrowRs, "id", 4_096).contains("set_dictionary_page_size_limit"));
-        assert!(remedy(Writer::Photon, "id", 4_096).contains("unverified"));
-        assert!(remedy(Writer::Other, "id", 4_096).contains("dict-size-bytes"));
-    }
-
     /// A chunk without a dictionary page, and one that never fell back, are not
     /// candidates.
     #[test]
@@ -193,10 +167,12 @@ mod tests {
             .collect();
         let cells = cells(&values);
 
-        let without_dictionary = ColumnSample::for_test(&column, &cells, false);
+        let without_dictionary =
+            ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
         assert!(detect(&without_dictionary).is_none());
 
-        let dictionary = ColumnSample::for_test(&column, &cells, true);
+        let dictionary =
+            ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), true);
         assert!(detect(&dictionary).is_none());
 
         let fell_back = dictionary.with_dictionary_page(4_096);
@@ -214,7 +190,8 @@ mod tests {
         let column = column("BYTE_ARRAY", "UNCOMPRESSED");
         let values: Vec<String> = (0..4_000).map(|value| format!("{value:032x}")).collect();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, true).with_dictionary_page(4_096);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), true)
+            .with_dictionary_page(4_096);
 
         let measurement = measure(&sample).expect("measure").expect("uncompressed");
         assert!(
@@ -235,7 +212,8 @@ mod tests {
         let cells = cells(&values);
         // 20 values fit in a few hundred bytes, so a 16-byte cap forced the
         // writer to fall back to PLAIN.
-        let sample = ColumnSample::for_test(&column, &cells, true).with_dictionary_page(16);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), true)
+            .with_dictionary_page(16);
 
         let measurement = measure(&sample).expect("measure").expect("uncompressed");
         assert!(
@@ -252,8 +230,8 @@ mod tests {
         let values: Vec<Option<i64>> = (0..4_000)
             .map(|value| Some(value * 2_654_435_761))
             .collect();
-        let sample =
-            ColumnSample::for_test_int64(&column, &values, true).with_dictionary_page(1_024);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::Int64(&values), true)
+            .with_dictionary_page(1_024);
 
         let finding = detect(&sample).expect("a fallen-back chunk is a candidate");
         assert!(finding.message.contains("fell back to PLAIN"));
@@ -270,7 +248,8 @@ mod tests {
         let values: Vec<Option<ByteArray>> = (0..4_000)
             .map(|value| Some(ByteArray::from(vec![(value % 250) as u8; 16])))
             .collect();
-        let sample = ColumnSample::for_test(&column, &values, true).with_dictionary_page(1_024);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&values), true)
+            .with_dictionary_page(1_024);
 
         let measurement = measure(&sample).expect("measure").expect("uncompressed");
         assert!(

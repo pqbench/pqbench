@@ -14,8 +14,7 @@ use crate::v1;
 use super::control::{self, Arm, Measurement};
 use super::decode::{chunk_pages, ChunkPage};
 use super::price::Settings;
-use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const PAGE_SIZE_RULE: &str = "page-size";
@@ -35,6 +34,9 @@ const MIN_DATA_PAGES: usize = 4;
 /// rows in parquet-rs), not a byte-size limit: a larger page size would change
 /// nothing, so the rule must not claim it.
 const ROW_LIMITED_ROWS_PER_PAGE: usize = 16_000;
+
+/// The remedy: raise the writer's page size to the standard 1 MiB.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("write larger data pages", "delta");
 
 /// What a chunk's data pages say about its writer's page-size limit.
 struct PageSizes {
@@ -56,8 +58,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
             sizes.largest_payload_bytes,
             sample.text_bpv
         ),
-        remedy: remedy(sample.writer_kind(), sample.leaf),
         remedies: remedies(sample.leaf),
+        advice: REMEDY,
         measure,
     })
 }
@@ -81,11 +83,9 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         _ => WriterVersion::PARQUET_1_0,
     };
     let settings = Settings {
-        dictionary: sample.chunk_has_dictionary,
-        dictionary_page_size_limit: sample.dictionary_page_size_limit(),
         data_page_size_limit: Some(source_page_size),
-        encoding: control::source_encoding(sample.mass),
         version,
+        ..sample.source_settings(control::source_encoding(sample.mass))
     };
     let baseline = Arm { values, settings };
     let candidate = Arm {
@@ -155,36 +155,4 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
             ),
         ),
     ]
-}
-
-/// The setting that writes larger data pages, in the detected writer's terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    let lead = "write larger data pages";
-    match writer {
-        Writer::ParquetMr => format!("{lead}: {}", setting("spark")),
-        Writer::Photon => format!(
-            "{lead}: {} (Photon forwarding unverified)",
-            setting("delta")
-        ),
-        Writer::ArrowCpp => format!("{lead}: {}", setting("pyarrow")),
-        Writer::ArrowRs => format!("{lead}: {}", setting("parquet-rs")),
-        Writer::Other => format!("{lead}: {}", setting("iceberg")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::remedy;
-    use crate::lint::writer::Writer;
-
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(remedy(Writer::ParquetMr, "id").contains("parquet.page.size=1048576"));
-        assert!(remedy(Writer::ArrowCpp, "id").contains("data_page_size=1048576"));
-        assert!(remedy(Writer::ArrowRs, "id").contains("set_data_page_size_limit(1048576)"));
-        assert!(remedy(Writer::Other, "id").contains("write.parquet.page-size-bytes=1048576"));
-        assert!(remedy(Writer::Photon, "id").contains("unverified"));
-    }
 }

@@ -22,7 +22,7 @@ use parquet::schema::types::ColumnDescriptor;
 
 use crate::third_party::parquet::api::Error as ParquetError;
 
-use super::Error;
+use super::{ColumnValues, Error};
 
 /// The bytes of a chunk's recorded `min_value` and `max_value` beyond the
 /// 64-byte length every writer that truncates statistics uses.
@@ -76,40 +76,28 @@ pub(super) struct DecodedColumn {
 }
 
 impl DecodedColumn {
+    /// The one decoded vector, in the leaf's physical shape.
+    pub(super) fn values(&self) -> ColumnValues<'_> {
+        if !self.bytes.is_empty() {
+            ColumnValues::ByteArray(&self.bytes)
+        } else if !self.int32_values.is_empty() {
+            ColumnValues::Int32(&self.int32_values)
+        } else if !self.int64_values.is_empty() {
+            ColumnValues::Int64(&self.int64_values)
+        } else if !self.float_values.is_empty() {
+            ColumnValues::Float(&self.float_values)
+        } else if !self.double_values.is_empty() {
+            ColumnValues::Double(&self.double_values)
+        } else {
+            ColumnValues::None
+        }
+    }
+
     /// The non-null values the decoded cells hold.
     fn decoded_non_null(&self) -> Option<u64> {
-        if !self.bytes.is_empty() {
-            Some(self.bytes.iter().filter(|cell| cell.is_some()).count() as u64)
-        } else if !self.int32_values.is_empty() {
-            Some(
-                self.int32_values
-                    .iter()
-                    .filter(|cell| cell.is_some())
-                    .count() as u64,
-            )
-        } else if !self.int64_values.is_empty() {
-            Some(
-                self.int64_values
-                    .iter()
-                    .filter(|cell| cell.is_some())
-                    .count() as u64,
-            )
-        } else if !self.float_values.is_empty() {
-            Some(
-                self.float_values
-                    .iter()
-                    .filter(|cell| cell.is_some())
-                    .count() as u64,
-            )
-        } else if !self.double_values.is_empty() {
-            Some(
-                self.double_values
-                    .iter()
-                    .filter(|cell| cell.is_some())
-                    .count() as u64,
-            )
-        } else {
-            None
+        match self.values() {
+            ColumnValues::None => None,
+            values => Some(values.non_null() as u64),
         }
     }
 }

@@ -1126,11 +1126,11 @@ fn numeric_text_earns_an_integer_column() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// Variable-length text with no shared prefixes is a candidate for
-/// `DELTA_LENGTH_BYTE_ARRAY`, and the controlled rewrite confirms the saving.
+/// Variable-length text with no shared prefixes is a candidate for the Delta
+/// text encodings, and the controlled rewrite confirms the saving.
 #[test]
-fn variable_length_text_earns_delta_length() {
-    let directory = temporary("delta-length");
+fn variable_length_text_earns_a_delta_encoding() {
+    let directory = temporary("delta-text");
     let path = directory.join("data.parquet");
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
     let values: Vec<String> = (0..40_000)
@@ -1153,12 +1153,12 @@ fn variable_length_text_earns_delta_length() {
 
     let records = suggestions(&path);
     assert_eq!(records.len(), 1, "{records:?}");
-    assert_eq!(records[0]["rule"], "delta-length-byte-array", "{records:?}");
+    assert_eq!(records[0]["rule"], "delta-text-encoding", "{records:?}");
     assert!(
         records[0]["message"]
             .as_str()
             .unwrap()
-            .contains("length prefix"),
+            .contains("without a dictionary"),
         "{records:?}"
     );
 
@@ -1169,18 +1169,15 @@ fn variable_length_text_earns_delta_length() {
         "{measured:?}"
     );
 
-    // Short sorted text shares its prefix, so its rewrite is
-    // `delta-text-encoding`, not this rule.
+    // Short sorted text shares its prefix, so the same rule prices the
+    // shared-prefix encoding instead.
     let sorted: Vec<String> = (0..40_000)
         .map(|value| format!("org.apache.parquet.column.{value:08}"))
         .collect();
     write_values(&path, &sorted, false, 0);
-    assert!(
-        suggestions(&path)
-            .iter()
-            .all(|record| record["rule"] != "delta-length-byte-array"),
-        "prefix-heavy text claimed the length encoding"
-    );
+    let records = suggestions(&path);
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["rule"], "delta-text-encoding", "{records:?}");
 
     let _ = std::fs::remove_dir_all(directory);
 }

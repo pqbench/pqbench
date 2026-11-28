@@ -12,7 +12,7 @@ use crate::v1;
 use super::control::{self, Measurement};
 use super::decode::{chunk_pages, ChunkPage};
 use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const CODEC_ZSTD_RULE: &str = "codec-zstd";
@@ -27,6 +27,15 @@ const LEVELS_TEXT: &str = "zstd levels 1-3";
 /// The codec families zstd is expected to beat on a writer's own pages.
 const WEAK_CODECS: [&str; 3] = ["uncompressed", "snappy", "gzip"];
 
+/// The remedy: a per-column codec, except that Delta and Iceberg set it on the
+/// table and Photon forwards the Delta property unverified.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("", "delta")
+    .wording(
+        Writer::Photon,
+        "ALTER TABLE <table> SET TBLPROPERTIES ({setting}) (Photon forwarding unverified)",
+    )
+    .wording(Writer::Other, "write the column with zstd ({setting})");
+
 /// The finding this column earns when its chunk is stored with a codec weaker
 /// than zstd. Nothing is decoded: the footer's codec is the whole check.
 pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
@@ -37,8 +46,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
     let leaf = sample.leaf;
     Some(Finding {
         message: format!("{family} at {:.2} B/value", sample.text_bpv),
-        remedy: remedy(sample.writer_kind(), leaf),
         remedies: remedies(leaf),
+        advice: REMEDY,
         measure,
     })
 }
@@ -151,31 +160,14 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that writes one column with zstd, in the detected writer's
-/// terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    match writer {
-        Writer::ParquetMr => setting("spark"),
-        Writer::Photon => format!(
-            "ALTER TABLE <table> SET TBLPROPERTIES ({}) (Photon forwarding unverified)",
-            setting("delta")
-        ),
-        Writer::ArrowCpp => setting("pyarrow"),
-        Writer::ArrowRs => setting("parquet-rs"),
-        Writer::Other => format!("write the column with zstd ({})", setting("iceberg")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{detect, remedy, zstd_measurement};
+    use super::{detect, zstd_measurement, REMEDY};
     use parquet::basic::Encoding;
 
     use crate::lint::decode::ChunkPage;
     use crate::lint::writer::Writer;
-    use crate::lint::ColumnSample;
+    use crate::lint::{remedy_text, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(codec: &str) -> v1::Column {
@@ -225,13 +217,23 @@ mod tests {
         let cells = Vec::new();
         for codec in ["UNCOMPRESSED", "SNAPPY", "GZIP", "GZIP(GzipLevel(9))"] {
             assert!(
-                detect(&ColumnSample::for_test(&column(codec), &cells, false)).is_some(),
+                detect(&ColumnSample::for_test_values(
+                    &column(codec),
+                    ColumnValues::ByteArray(&cells),
+                    false
+                ))
+                .is_some(),
                 "{codec}"
             );
         }
         for codec in ["ZSTD", "ZSTD(ZstdLevel(1))", "LZ4_RAW", "BROTLI"] {
             assert!(
-                detect(&ColumnSample::for_test(&column(codec), &cells, false)).is_none(),
+                detect(&ColumnSample::for_test_values(
+                    &column(codec),
+                    ColumnValues::ByteArray(&cells),
+                    false
+                ))
+                .is_none(),
                 "{codec}"
             );
         }
@@ -243,7 +245,7 @@ mod tests {
     fn the_pyarrow_remedy_quotes_exotic_column_keys() {
         for leaf in ["request.ext", "site.publisher:ext", "request.@timestamp"] {
             let quoted = crate::lint::py_string(leaf);
-            let setting = remedy(Writer::ArrowCpp, leaf);
+            let setting = remedy_text(Writer::ArrowCpp, leaf, &super::remedies(leaf), &REMEDY);
             assert!(
                 setting.contains(&format!(
                     "compression={{{quoted}: 'zstd'}}, compression_level={{{quoted}: 3}}"
@@ -251,25 +253,6 @@ mod tests {
                 "{setting}"
             );
         }
-    }
-
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert!(
-            remedy(Writer::ParquetMr, "id").contains("spark.hadoop.parquet.compression#id=ZSTD")
-        );
-        assert!(
-            remedy(Writer::ParquetMr, "id").contains("spark.hadoop.parquet.compression.level#id=3")
-        );
-        assert!(remedy(Writer::ParquetMr, "id").contains("spark.sql.parquet.compression.codec"));
-        assert!(remedy(Writer::Photon, "id").contains("'delta.parquet.compression.codec'='zstd'"));
-        assert!(remedy(Writer::Photon, "id").contains("unverified"));
-        assert_eq!(
-            remedy(Writer::ArrowCpp, "id"),
-            "compression={'id': 'zstd'}, compression_level={'id': 3}"
-        );
-        assert!(remedy(Writer::ArrowRs, "id").contains("set_column_compression"));
-        assert!(remedy(Writer::Other, "id").contains("write.parquet.compression-codec=zstd"));
     }
 
     /// A chunk's single data page is priced against its whole chunk: repetitive

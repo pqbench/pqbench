@@ -11,14 +11,13 @@
 
 use base64::engine::{general_purpose, Engine as _, GeneralPurpose};
 use parquet::data_type::ByteArray;
-use parquet::file::properties::WriterVersion;
 
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
 use super::price::{Settings, Values};
 use super::writer::Writer;
-use super::{py_string, ColumnSample, Error, Finding};
+use super::{py_string, ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const BASE64_TEXT_RULE: &str = "base64-text";
@@ -41,6 +40,15 @@ const VALID_FRACTION: f64 = 0.99;
 /// (or JSON) text encoded in Base64 is a text column to rewrite on its own
 /// terms, not a binary one.
 const PRINTABLE_FRACTION: f64 = 0.75;
+
+/// The remedy: decode the text before the write. Arrow Rust has no writer
+/// setting for it, so its remedy says to decode it first.
+const REMEDY: RemedyAdvice = RemedyAdvice::new("decode the Base64 text to binary", "spark")
+    .other("duckdb")
+    .wording(
+        Writer::ArrowRs,
+        "{lead}: decode it before the writer sees it",
+    );
 
 /// The finding this column earns when nearly every sampled non-null value is
 /// Base64 text of binary bytes.
@@ -69,8 +77,8 @@ pub(super) fn detect(sample: &ColumnSample<'_>) -> Option<Finding> {
             sample.text_bpv,
             fraction * 100.0
         ),
-        remedy: remedy(sample.writer_kind(), sample.leaf),
         remedies: remedies(sample.leaf),
+        advice: REMEDY,
         measure,
     })
 }
@@ -96,23 +104,11 @@ fn measure(sample: &ColumnSample<'_>) -> Result<Option<Measurement>, Error> {
         values: sample
             .values()
             .ok_or_else(|| Error::Invalid("the sample's byte cells were not decoded".into()))?,
-        settings: Settings {
-            dictionary: sample.chunk_has_dictionary,
-            dictionary_page_size_limit: sample.dictionary_page_size_limit(),
-            data_page_size_limit: None,
-            encoding: control::source_encoding(sample.mass),
-            version: WriterVersion::PARQUET_1_0,
-        },
+        settings: sample.source_settings(control::source_encoding(sample.mass)),
     };
     let candidate = Arm {
         values: Values::Bytes(&raw),
-        settings: Settings {
-            dictionary: false,
-            dictionary_page_size_limit: None,
-            data_page_size_limit: None,
-            encoding: None,
-            version: WriterVersion::PARQUET_1_0,
-        },
+        settings: Settings::candidate(None),
     };
     control::compare(sample, &baseline, &candidate)
 }
@@ -141,24 +137,6 @@ fn remedies(leaf: &str) -> Vec<v1::Remedy> {
             ),
         ),
     ]
-}
-
-/// The setting that decodes one column's Base64 text, in the detected writer's
-/// terms.
-fn remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    let lead = "decode the Base64 text to binary";
-    match writer {
-        Writer::ParquetMr => format!("{lead}: {}", setting("spark")),
-        Writer::Photon => format!(
-            "{lead}: {} (Photon forwarding unverified)",
-            setting("spark")
-        ),
-        Writer::ArrowCpp => format!("{lead}: {}", setting("pyarrow")),
-        Writer::ArrowRs => format!("{lead}: decode it before the writer sees it"),
-        Writer::Other => format!("{lead}: {}", setting("duckdb")),
-    }
 }
 
 /// Decode one value's Base64, standard or URL-safe, when it is binary bytes.
@@ -212,7 +190,7 @@ mod tests {
     use base64::Engine as _;
 
     use super::{decode, detect, measure};
-    use crate::lint::{cells, uuid_text, ColumnSample};
+    use crate::lint::{cells, uuid_text, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column() -> v1::Column {
@@ -306,7 +284,7 @@ mod tests {
             .collect();
         let column = column();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
 
         let finding = detect(&sample).expect("Base64 of binary payloads is a candidate");
         assert!(finding.message.contains("B/value"));
@@ -325,23 +303,43 @@ mod tests {
             .map(|value| format!("value-{value}-with-some-words"))
             .collect();
         let cells_plain = cells(&plain);
-        assert!(detect(&ColumnSample::for_test(&column(), &cells_plain, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column(),
+            ColumnValues::ByteArray(&cells_plain),
+            false
+        ))
+        .is_none());
 
         let uuids: Vec<String> = (0..2_000).map(uuid_text).collect();
         let cells_uuid = cells(&uuids);
-        assert!(detect(&ColumnSample::for_test(&column(), &cells_uuid, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column(),
+            ColumnValues::ByteArray(&cells_uuid),
+            false
+        ))
+        .is_none());
 
         let hex: Vec<String> = (0..2_000)
             .map(|value| format!("{value:016x}{:016x}", value))
             .collect();
         let cells_hex = cells(&hex);
-        assert!(detect(&ColumnSample::for_test(&column(), &cells_hex, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column(),
+            ColumnValues::ByteArray(&cells_hex),
+            false
+        ))
+        .is_none());
 
         let short: Vec<String> = (0..2_000)
             .map(|value| format!("dGVsbG8t{value:04}"))
             .collect();
         let cells_short = cells(&short);
-        assert!(detect(&ColumnSample::for_test(&column(), &cells_short, false)).is_none());
+        assert!(detect(&ColumnSample::for_test_values(
+            &column(),
+            ColumnValues::ByteArray(&cells_short),
+            false
+        ))
+        .is_none());
     }
 
     /// A column with a stray text value stays unmeasured rather than credited
@@ -354,7 +352,7 @@ mod tests {
         values[0] = "not-base64-text-at-all".to_string();
         let column = column();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
 
         assert!(detect(&sample).is_some(), "99% decode");
         assert!(measure(&sample).expect("measure").is_none());

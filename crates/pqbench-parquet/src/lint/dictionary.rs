@@ -14,9 +14,9 @@ use parquet::file::properties::WriterVersion;
 use crate::v1;
 
 use super::control::{self, Arm, Measurement};
-use super::price::{Settings, Values};
+use super::price::Values;
 use super::writer::Writer;
-use super::{ColumnSample, Error, Finding};
+use super::{ColumnSample, Error, Finding, RemedyAdvice};
 
 /// The rule id a suggestion carries.
 pub const DICTIONARY_UNIQUE_RULE: &str = "dictionary-unique";
@@ -38,6 +38,18 @@ const REPEATED_FRACTION: f64 = 0.1;
 /// chunk would earn the same, degenerate finding.
 const MINIMUM_VALUES: usize = 32;
 
+/// The remedy for a dictionary that costs more than it saves: turn the
+/// column's dictionary off.
+const UNIQUE_REMEDY: RemedyAdvice =
+    RemedyAdvice::new("disable the dictionary for this column", "spark")
+        .wording(Writer::Other, "{lead} at write");
+
+/// The remedy for values a dictionary would shrink: turn the column's
+/// dictionary on.
+const MISSING_REMEDY: RemedyAdvice =
+    RemedyAdvice::new("enable the dictionary for this column", "spark")
+        .wording(Writer::Other, "{lead} at write");
+
 /// The finding this column earns when its own chunk carries a dictionary page
 /// and the values are nearly unique.
 pub(super) fn detect_unique(sample: &ColumnSample<'_>) -> Option<Finding> {
@@ -54,8 +66,8 @@ pub(super) fn detect_unique(sample: &ColumnSample<'_>) -> Option<Finding> {
             sample.physical(),
             sample.text_bpv
         ),
-        remedy: unique_remedy(sample.writer_kind(), leaf),
         remedies: unique_remedies(leaf),
+        advice: UNIQUE_REMEDY,
         measure: measure_unique,
     })
 }
@@ -78,8 +90,8 @@ pub(super) fn detect_missing(sample: &ColumnSample<'_>) -> Option<Finding> {
             sample.physical(),
             sample.text_bpv
         ),
-        remedy: missing_remedy(sample.writer_kind(), leaf),
         remedies: missing_remedies(leaf),
+        advice: MISSING_REMEDY,
         measure: measure_missing,
     })
 }
@@ -137,20 +149,14 @@ fn sheet<'a>(sample: &ColumnSample<'a>, dictionary: bool) -> Option<Arm<'a>> {
             (recorded, _) => recorded,
         }
     };
-    Some(Arm {
-        values,
-        settings: Settings {
-            dictionary,
-            dictionary_page_size_limit: if dictionary {
-                sample.dictionary_page_size_limit()
-            } else {
-                None
-            },
-            data_page_size_limit: None,
-            encoding,
-            version,
-        },
-    })
+    let mut settings = sample.source_settings(encoding);
+    settings.dictionary = dictionary;
+    settings.dictionary_page_size_limit = match dictionary {
+        true => sample.dictionary_page_size_limit(),
+        false => None,
+    };
+    settings.version = version;
+    Some(Arm { values, settings })
 }
 
 /// The settings that disable one column's dictionary, one per engine.
@@ -202,45 +208,12 @@ fn missing_remedies(leaf: &str) -> Vec<v1::Remedy> {
     ]
 }
 
-/// The setting that disables one column's dictionary, in the detected writer's
-/// terms.
-fn unique_remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = unique_remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    primary_remedy(writer, "disable", &setting)
-}
-
-/// The setting that enables one column's dictionary, in the detected writer's
-/// terms.
-fn missing_remedy(writer: Writer, leaf: &str) -> String {
-    let remedies = missing_remedies(leaf);
-    let setting = |engine: &str| super::setting(&remedies, engine);
-    primary_remedy(writer, "enable", &setting)
-}
-
-/// The one-line remedy for a writer: the column's dictionary, then the
-/// writer's own setting.
-fn primary_remedy(writer: Writer, verb: &str, setting: &dyn Fn(&str) -> String) -> String {
-    let lead = format!("{verb} the dictionary for this column");
-    match writer {
-        Writer::ParquetMr => format!("{lead}: {}", setting("spark")),
-        Writer::ArrowCpp => format!("{lead}: {}", setting("pyarrow")),
-        Writer::ArrowRs => format!("{lead}: {}", setting("parquet-rs")),
-        Writer::Photon => format!(
-            "{lead}: {} (Photon forwarding unverified)",
-            setting("spark")
-        ),
-        Writer::Other => format!("{lead} at write"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use parquet::data_type::ByteArray;
 
-    use super::{detect_missing, detect_unique, measure_missing, missing_remedy, unique_remedy};
-    use crate::lint::writer::Writer;
-    use crate::lint::{cells, ColumnSample};
+    use super::{detect_missing, detect_unique, measure_missing};
+    use crate::lint::{cells, ColumnSample, ColumnValues};
     use crate::v1;
 
     fn column(physical_data_type: &str, codec: &str) -> v1::Column {
@@ -281,27 +254,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_writer_gets_a_setting_it_has() {
-        assert_eq!(
-            unique_remedy(Writer::ParquetMr, "id"),
-            "disable the dictionary for this column: spark.hadoop.parquet.enable.dictionary#id=false"
-        );
-        assert_eq!(
-            unique_remedy(Writer::ArrowRs, "id"),
-            "disable the dictionary for this column: set_column_dictionary_enabled(\"id\", false)"
-        );
-        assert!(unique_remedy(Writer::ArrowCpp, "id").contains("use_dictionary"));
-        assert!(unique_remedy(Writer::Photon, "id").contains("parquet.enable.dictionary#id=false"));
-        assert!(unique_remedy(Writer::Photon, "id").contains("unverified"));
-        assert!(unique_remedy(Writer::Other, "id").contains("at write"));
-        assert!(missing_remedy(Writer::ParquetMr, "id").contains("=true"));
-        assert_eq!(
-            missing_remedy(Writer::ArrowRs, "id"),
-            "enable the dictionary for this column: set_column_dictionary_enabled(\"id\", true)"
-        );
-    }
-
     /// The rule reads the sample chunk's own dictionary page, not any chunk's.
     #[test]
     fn a_chunk_without_a_dictionary_page_is_not_a_candidate() {
@@ -309,10 +261,12 @@ mod tests {
         let values: Vec<String> = (0..100).map(|value| format!("value-{value}")).collect();
         let cells = cells(&values);
 
-        let with_dictionary = ColumnSample::for_test(&column, &cells, true);
+        let with_dictionary =
+            ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), true);
         assert!(detect_unique(&with_dictionary).is_some());
 
-        let without_dictionary = ColumnSample::for_test(&column, &cells, false);
+        let without_dictionary =
+            ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
         assert!(detect_unique(&without_dictionary).is_none());
     }
 
@@ -334,7 +288,7 @@ mod tests {
             .collect();
         let cells = cells(&values);
 
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
         let finding = detect_missing(&sample).expect("repeated values are a candidate");
         assert!(finding.message.contains("distinct"));
         let measurement = measure_missing(&sample)
@@ -355,11 +309,13 @@ mod tests {
         let column = column("INT64", "UNCOMPRESSED");
         let few: Vec<Option<i64>> = (0..8).map(|value| Some(i64::from(value))).collect();
 
-        let with_dictionary = ColumnSample::for_test_int64(&column, &few, true);
+        let with_dictionary =
+            ColumnSample::for_test_values(&column, ColumnValues::Int64(&few), true);
         assert!(detect_unique(&with_dictionary).is_none());
 
         let repeated: Vec<Option<i64>> = (0..8).map(|value| Some(value % 2)).collect();
-        let without_dictionary = ColumnSample::for_test_int64(&column, &repeated, false);
+        let without_dictionary =
+            ColumnSample::for_test_values(&column, ColumnValues::Int64(&repeated), false);
         assert!(detect_missing(&without_dictionary).is_none());
     }
 
@@ -369,7 +325,7 @@ mod tests {
         let column = column("BYTE_ARRAY", "ZSTD");
         let values: Vec<String> = (0..500).map(|value| format!("value-{value}")).collect();
         let cells = cells(&values);
-        let sample = ColumnSample::for_test(&column, &cells, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&cells), false);
         assert!(detect_missing(&sample).is_none());
     }
 
@@ -387,7 +343,7 @@ mod tests {
             ..v1::Column::default()
         };
         let values: Vec<Option<i64>> = (0..10_000).map(|value| Some(value % 50)).collect();
-        let sample = ColumnSample::for_test_int64(&column, &values, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::Int64(&values), false);
 
         assert!(detect_missing(&sample).is_some());
         let measurement = measure_missing(&sample)
@@ -406,7 +362,7 @@ mod tests {
     fn a_dictionary_on_unique_doubles_is_priced_as_removable() {
         let column = column("DOUBLE", "UNCOMPRESSED");
         let values: Vec<Option<f64>> = (0..2_000).map(|value| Some(value as f64 * 1.5)).collect();
-        let sample = ColumnSample::for_test_double(&column, &values, true);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::Double(&values), true);
 
         assert!(detect_unique(&sample).is_some());
         let measurement = super::measure_unique(&sample)
@@ -433,7 +389,7 @@ mod tests {
             ..v1::Column::default()
         };
         let values: Vec<Option<f32>> = (0..10_000).map(|value| Some((value % 50) as f32)).collect();
-        let sample = ColumnSample::for_test_float(&column, &values, false);
+        let sample = ColumnSample::for_test_values(&column, ColumnValues::Float(&values), false);
 
         assert!(detect_missing(&sample).is_some());
         let measurement = measure_missing(&sample)
@@ -462,7 +418,8 @@ mod tests {
         let values: Vec<Option<ByteArray>> = (0..2_000)
             .map(|value| Some(ByteArray::from(vec![(value % 16) as u8; 16])))
             .collect();
-        let sample = ColumnSample::for_test(&column, &values, false);
+        let sample =
+            ColumnSample::for_test_values(&column, ColumnValues::ByteArray(&values), false);
 
         assert!(detect_missing(&sample).is_some());
         let measurement = measure_missing(&sample)

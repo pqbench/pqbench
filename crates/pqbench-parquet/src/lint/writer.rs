@@ -21,6 +21,20 @@ pub(crate) enum Writer {
 }
 
 impl Writer {
+    /// The number of writers this crate classifies.
+    pub(super) const COUNT: usize = 5;
+
+    /// This writer's index in a per-writer array.
+    pub(super) const fn index(self) -> usize {
+        match self {
+            Self::Photon => 0,
+            Self::ParquetMr => 1,
+            Self::ArrowCpp => 2,
+            Self::ArrowRs => 3,
+            Self::Other => 4,
+        }
+    }
+
     /// Classify a footer's `created_by`.
     pub(crate) fn classify(name: Option<&str>) -> Self {
         let rendered = name.unwrap_or_default().to_lowercase();

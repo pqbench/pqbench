@@ -43,7 +43,6 @@ mod control;
 mod decimal_narrow;
 mod decode;
 mod delta_integer;
-mod delta_length;
 mod delta_text;
 mod dictionary;
 mod dictionary_fallback;
@@ -63,6 +62,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::path::Path;
 
+use parquet::basic::Encoding;
 use parquet::data_type::ByteArray;
 
 use crate::third_party::parquet::api::Error as ParquetError;
@@ -70,14 +70,13 @@ use crate::v1;
 
 use self::control::Measurement;
 use self::decode::{decode_leaves, pages_fell_back, Coverage, DecodedLeaves};
-use self::price::Values;
+use self::price::{Settings, Values};
 use self::writer::Writer;
 
 pub use base64::BASE64_TEXT_RULE;
 pub use codec::CODEC_ZSTD_RULE;
 pub use decimal_narrow::DECIMAL_NARROW_RULE;
 pub use delta_integer::DELTA_INTEGER_RULE;
-pub use delta_length::DELTA_LENGTH_RULE;
 pub use delta_text::DELTA_TEXT_ENCODING_RULE;
 pub use dictionary::{DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE};
 pub use dictionary_fallback::DICTIONARY_FALLBACK_RULE;
@@ -153,6 +152,66 @@ impl From<crate::codecs::Error> for Error {
     }
 }
 
+/// The sample chunk's decoded cells, in the one vector the leaf's physical
+/// type fills. A leaf no rule re-encodes (`BOOLEAN`, `INT96`) has none.
+#[derive(Clone, Copy)]
+pub(super) enum ColumnValues<'a> {
+    /// A leaf no rule re-encodes.
+    None,
+    /// A `BYTE_ARRAY` or `FIXED_LEN_BYTE_ARRAY` leaf's cells.
+    ByteArray(&'a [Option<ByteArray>]),
+    /// An `INT32` leaf's cells.
+    Int32(&'a [Option<i32>]),
+    /// An `INT64` leaf's cells.
+    Int64(&'a [Option<i64>]),
+    /// A `FLOAT` leaf's cells.
+    Float(&'a [Option<f32>]),
+    /// A `DOUBLE` leaf's cells.
+    Double(&'a [Option<f64>]),
+}
+
+impl ColumnValues<'_> {
+    /// The cells the chunk decoded, nulls included.
+    fn len(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::ByteArray(cells) => cells.len(),
+            Self::Int32(cells) => cells.len(),
+            Self::Int64(cells) => cells.len(),
+            Self::Float(cells) => cells.len(),
+            Self::Double(cells) => cells.len(),
+        }
+    }
+
+    /// The non-null cells the chunk decoded.
+    fn non_null(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::ByteArray(cells) => cells.iter().filter(|cell| cell.is_some()).count(),
+            Self::Int32(cells) => cells.iter().filter(|cell| cell.is_some()).count(),
+            Self::Int64(cells) => cells.iter().filter(|cell| cell.is_some()).count(),
+            Self::Float(cells) => cells.iter().filter(|cell| cell.is_some()).count(),
+            Self::Double(cells) => cells.iter().filter(|cell| cell.is_some()).count(),
+        }
+    }
+
+    /// The fraction of the non-null cells that are distinct.
+    fn distinct_fraction(self) -> f64 {
+        match self {
+            Self::None => 0.0,
+            Self::ByteArray(cells) => {
+                distinct_share(cells.iter().map(|cell| cell.as_ref().map(ByteArray::data)))
+            }
+            Self::Int32(cells) => distinct_share(cells.iter().map(Option::as_ref)),
+            Self::Int64(cells) => distinct_share(cells.iter().map(Option::as_ref)),
+            // Two NaNs are one value and `-0.0` equals `0.0` at the physical
+            // width, so the bits are what a dictionary would hold.
+            Self::Float(cells) => distinct_share(cells.iter().map(|cell| cell.map(f32::to_bits))),
+            Self::Double(cells) => distinct_share(cells.iter().map(|cell| cell.map(f64::to_bits))),
+        }
+    }
+}
+
 /// One measured column and its decoded sample: what a rule detects and
 /// measures.
 pub(crate) struct ColumnSample<'a> {
@@ -167,14 +226,10 @@ pub(crate) struct ColumnSample<'a> {
     /// The sample's leaf index in that file's schema.
     column_index: usize,
     /// The representative row group's whole chunk, one cell per row, in the
-    /// vector of the leaf's physical type; every vector is empty for a leaf no
-    /// rule re-encodes (`BOOLEAN`, `INT96`). A byte leaf fills `bytes`, a
-    /// `FIXED_LEN_BYTE_ARRAY` one too, and each numeric leaf its own.
-    bytes: &'a [Option<ByteArray>],
-    int32_values: &'a [Option<i32>],
-    int64_values: &'a [Option<i64>],
-    float_values: &'a [Option<f32>],
-    double_values: &'a [Option<f64>],
+    /// vector of the leaf's physical type; empty for a leaf no rule
+    /// re-encodes (`BOOLEAN`, `INT96`). The name follows its type.
+    // aipnaming: allow(aip-140/plural)
+    values: ColumnValues<'a>,
     /// A `FIXED_LEN_BYTE_ARRAY` leaf's value width.
     fixed_len: Option<i32>,
     /// The sample chunk's real on-disk compressed bytes.
@@ -222,13 +277,7 @@ impl<'a> ColumnSample<'a> {
             let non_null_values = match mass.null_count {
                 Some(nulls) => value_count.saturating_sub(nulls),
                 None => {
-                    let rows = chunk
-                        .bytes
-                        .len()
-                        .max(chunk.int32_values.len())
-                        .max(chunk.int64_values.len())
-                        .max(chunk.float_values.len())
-                        .max(chunk.double_values.len());
+                    let rows = chunk.values().len();
                     if rows == 0 {
                         value_count
                     } else {
@@ -250,11 +299,7 @@ impl<'a> ColumnSample<'a> {
             path,
             row_group: decoded.row_group,
             column_index: chunk.column_index,
-            bytes: chunk.bytes.as_slice(),
-            int32_values: chunk.int32_values.as_slice(),
-            int64_values: chunk.int64_values.as_slice(),
-            float_values: chunk.float_values.as_slice(),
-            double_values: chunk.double_values.as_slice(),
+            values: chunk.values(),
             fixed_len: chunk.fixed_len,
             chunk_compressed_bytes,
             chunk_has_dictionary: chunk.dictionary.present,
@@ -273,14 +318,6 @@ impl<'a> ColumnSample<'a> {
         self.column.physical_data_type.as_deref() == Some("BYTE_ARRAY")
     }
 
-    /// Whether the leaf's values are scalar: a repeated leaf holds one nested
-    /// value per row, so a rule that reads values has nothing to read there.
-    fn scalar(&self) -> bool {
-        self.column
-            .max_repetition_level
-            .is_none_or(|level| level == 0)
-    }
-
     /// The leaf's physical type, as the footer spells it.
     fn physical(&self) -> &str {
         self.column
@@ -292,15 +329,18 @@ impl<'a> ColumnSample<'a> {
     /// The values one arm writes, in the leaf's physical shape. `None` for a
     /// leaf no rule re-encodes, so a rule that needs values never prices one.
     fn values(&self) -> Option<Values<'a>> {
-        match self.physical() {
-            "BYTE_ARRAY" if !self.bytes.is_empty() => Some(Values::Bytes(self.bytes)),
-            "FIXED_LEN_BYTE_ARRAY" if !self.bytes.is_empty() => self
-                .fixed_len
-                .map(|width| Values::FixedLen(width, self.bytes)),
-            "INT32" if !self.int32_values.is_empty() => Some(Values::Int32(self.int32_values)),
-            "INT64" if !self.int64_values.is_empty() => Some(Values::Int64(self.int64_values)),
-            "FLOAT" if !self.float_values.is_empty() => Some(Values::Float(self.float_values)),
-            "DOUBLE" if !self.double_values.is_empty() => Some(Values::Double(self.double_values)),
+        match self.values {
+            ColumnValues::ByteArray(cells) if !cells.is_empty() => match self.physical() {
+                "BYTE_ARRAY" => Some(Values::Bytes(cells)),
+                "FIXED_LEN_BYTE_ARRAY" => {
+                    self.fixed_len.map(|width| Values::FixedLen(width, cells))
+                }
+                _ => None,
+            },
+            ColumnValues::Int32(cells) if !cells.is_empty() => Some(Values::Int32(cells)),
+            ColumnValues::Int64(cells) if !cells.is_empty() => Some(Values::Int64(cells)),
+            ColumnValues::Float(cells) if !cells.is_empty() => Some(Values::Float(cells)),
+            ColumnValues::Double(cells) if !cells.is_empty() => Some(Values::Double(cells)),
             _ => None,
         }
     }
@@ -308,74 +348,41 @@ impl<'a> ColumnSample<'a> {
     /// The decoded byte cells: a byte leaf's values, as the text rules read
     /// them.
     fn cells(&self) -> &'a [Option<ByteArray>] {
-        self.bytes
+        match self.values {
+            ColumnValues::ByteArray(cells) => cells,
+            _ => &[],
+        }
+    }
+
+    /// The leaf's `INT64` values, as the narrowing and Delta rules read them.
+    fn int64s(&self) -> Option<&'a [Option<i64>]> {
+        match self.values {
+            ColumnValues::Int64(cells) => Some(cells),
+            _ => None,
+        }
     }
 
     /// The leaf's values as `i64`, for the integer rules: an `INT32` widens.
     fn integers(&self) -> Option<Vec<Option<i64>>> {
-        if !self.int32_values.is_empty() {
-            Some(
-                self.int32_values
-                    .iter()
-                    .map(|cell| cell.map(i64::from))
-                    .collect(),
-            )
-        } else if !self.int64_values.is_empty() {
-            Some(self.int64_values.to_vec())
-        } else {
-            None
+        match self.values {
+            ColumnValues::Int32(cells) if !cells.is_empty() => {
+                Some(cells.iter().map(|cell| cell.map(i64::from)).collect())
+            }
+            ColumnValues::Int64(cells) if !cells.is_empty() => Some(cells.to_vec()),
+            _ => None,
         }
     }
 
-    /// The non-null values the sample decoded, in the one vector the leaf's
-    /// physical type fills; 0 for a leaf no rule re-encodes.
+    /// The non-null values the sample decoded; 0 for a leaf no rule
+    /// re-encodes.
     fn sampled_values(&self) -> usize {
-        [
-            self.bytes.iter().filter(|cell| cell.is_some()).count(),
-            self.int32_values
-                .iter()
-                .filter(|cell| cell.is_some())
-                .count(),
-            self.int64_values
-                .iter()
-                .filter(|cell| cell.is_some())
-                .count(),
-            self.float_values
-                .iter()
-                .filter(|cell| cell.is_some())
-                .count(),
-            self.double_values
-                .iter()
-                .filter(|cell| cell.is_some())
-                .count(),
-        ]
-        .into_iter()
-        .max()
-        .unwrap_or(0)
+        self.values.non_null()
     }
 
     /// The fraction of sampled non-null values that are distinct within the
     /// chunk (Parquet builds one dictionary per row-group column chunk).
     fn distinct_fraction(&self) -> f64 {
-        if !self.bytes.is_empty() {
-            distinct_share(
-                self.bytes
-                    .iter()
-                    .map(|cell| cell.as_ref().map(ByteArray::data)),
-            )
-        } else if !self.int32_values.is_empty() {
-            distinct_share(self.int32_values.iter().map(Option::as_ref))
-        } else if !self.int64_values.is_empty() {
-            distinct_share(self.int64_values.iter().map(Option::as_ref))
-        } else if !self.float_values.is_empty() {
-            // Two NaNs are one value and `-0.0` equals `0.0` at the physical
-            // width, so the bits are what a dictionary would hold.
-            distinct_share(self.float_values.iter().map(|cell| cell.map(f32::to_bits)))
-        } else if !self.double_values.is_empty() {
-            distinct_share(self.double_values.iter().map(|cell| cell.map(f64::to_bits)))
-        } else {
-            0.0
-        }
+        self.values.distinct_fraction()
     }
 
     /// Whether the sample chunk's own data pages fell back to PLAIN beside a
@@ -414,67 +421,28 @@ impl<'a> ColumnSample<'a> {
         Writer::classify(self.writer)
     }
 
-    /// A sample over one chunk of a byte leaf, for the rules' unit tests.
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        column: &'a v1::Column,
-        cells: &'a [Option<ByteArray>],
-        chunk_has_dictionary: bool,
-    ) -> Self {
-        let mut sample = Self::build(column, cells.len() as u64);
-        sample.bytes = cells;
-        sample.chunk_has_dictionary = chunk_has_dictionary;
-        sample
+    /// The settings that reproduce this chunk's own storage: its dictionary
+    /// state and page limit, the recorded `encoding`, and the 1.0 page version
+    /// a footer without one records.
+    fn source_settings(&self, encoding: Option<Encoding>) -> Settings {
+        Settings {
+            dictionary: self.chunk_has_dictionary,
+            dictionary_page_size_limit: self.dictionary_page_size_limit(),
+            data_page_size_limit: None,
+            encoding,
+            version: parquet::file::properties::WriterVersion::PARQUET_1_0,
+        }
     }
 
-    /// A sample over one chunk of an `INT32` leaf, for the rules' unit tests.
+    /// A sample over one chunk, for the rules' unit tests.
     #[cfg(test)]
-    pub(crate) fn for_test_int32(
+    pub(crate) fn for_test_values(
         column: &'a v1::Column,
-        cells: &'a [Option<i32>],
+        values: ColumnValues<'a>,
         chunk_has_dictionary: bool,
     ) -> Self {
-        let mut sample = Self::build(column, cells.len() as u64);
-        sample.int32_values = cells;
-        sample.chunk_has_dictionary = chunk_has_dictionary;
-        sample
-    }
-
-    /// A sample over one chunk of an `INT64` leaf, for the rules' unit tests.
-    #[cfg(test)]
-    pub(crate) fn for_test_int64(
-        column: &'a v1::Column,
-        cells: &'a [Option<i64>],
-        chunk_has_dictionary: bool,
-    ) -> Self {
-        let mut sample = Self::build(column, cells.len() as u64);
-        sample.int64_values = cells;
-        sample.chunk_has_dictionary = chunk_has_dictionary;
-        sample
-    }
-
-    /// A sample over one chunk of a `FLOAT` leaf, for the rules' unit tests.
-    #[cfg(test)]
-    pub(crate) fn for_test_float(
-        column: &'a v1::Column,
-        cells: &'a [Option<f32>],
-        chunk_has_dictionary: bool,
-    ) -> Self {
-        let mut sample = Self::build(column, cells.len() as u64);
-        sample.float_values = cells;
-        sample.chunk_has_dictionary = chunk_has_dictionary;
-        sample
-    }
-
-    /// A sample over one chunk of a `DOUBLE` leaf, for the rules' unit tests.
-    #[cfg(test)]
-    pub(crate) fn for_test_double(
-        column: &'a v1::Column,
-        cells: &'a [Option<f64>],
-        chunk_has_dictionary: bool,
-    ) -> Self {
-        let mut sample = Self::build(column, cells.len() as u64);
-        sample.double_values = cells;
+        let mut sample = Self::build(column, values.len() as u64);
+        sample.values = values;
         sample.chunk_has_dictionary = chunk_has_dictionary;
         sample
     }
@@ -492,11 +460,7 @@ impl<'a> ColumnSample<'a> {
             path: Path::new(""),
             row_group: 0,
             column_index: 0,
-            bytes: &[],
-            int32_values: &[],
-            int64_values: &[],
-            float_values: &[],
-            double_values: &[],
+            values: ColumnValues::None,
             fixed_len: column
                 .physical_data_type
                 .as_deref()
@@ -543,6 +507,12 @@ impl<'a> ColumnSample<'a> {
 
     /// One potential suggestion, on the column's own name and context.
     fn candidate(&self, rule: &'static str, finding: Finding) -> v1::Suggestion {
+        let remedy = remedy_text(
+            self.writer_kind(),
+            self.leaf,
+            &finding.remedies,
+            &finding.advice,
+        );
         v1::Suggestion {
             name: v1::name::suggestion(self.blob, self.leaf, rule),
             rule: rule.to_string(),
@@ -553,7 +523,7 @@ impl<'a> ColumnSample<'a> {
             size_bytes: self.column.size_bytes,
             writer: self.writer.map(ToString::to_string),
             message: finding.message,
-            remedy: finding.remedy,
+            remedy,
             remedies: finding.remedies,
             verified: None,
             savings_bytes: None,
@@ -566,10 +536,11 @@ impl<'a> ColumnSample<'a> {
 /// What a rule found and how to measure its rewrite.
 pub(crate) struct Finding {
     pub(crate) message: String,
-    pub(crate) remedy: String,
     /// The same advice as one setting per engine, so a reader can apply it in
     /// whichever engine compacts the table.
     pub(crate) remedies: Vec<v1::Remedy>,
+    /// How the one-line remedy reads in each writer's terms.
+    pub(crate) advice: RemedyAdvice,
     pub(crate) measure: Measure,
 }
 
@@ -610,6 +581,117 @@ pub(crate) fn setting(remedies: &[v1::Remedy], engine: &str) -> String {
         .map_or_else(String::new, |remedy| remedy.setting.clone())
 }
 
+/// How one rule's one-line remedy reads in each writer's terms.
+///
+/// The rule's remedy table already names a setting per engine; this picks the
+/// one the file's writer actually has and wraps it in the rule's own wording.
+/// A wording is a template: `{lead}` is the rule's lead clause, `{leaf}` the
+/// column name, and `{setting}` the writer's own setting.
+#[derive(Clone, Copy)]
+pub(crate) struct RemedyAdvice {
+    /// The clause the writer's setting follows; empty when it stands alone.
+    lead: &'static str,
+    /// The engine Photon forwards (unverified): `delta` for a file-level
+    /// setting, `spark` for a per-column one.
+    photon: &'static str,
+    /// The engine a writer this crate does not classify takes.
+    other: &'static str,
+    /// A writer whose remedy is not `lead` + its setting, and its wording.
+    wordings: [Option<&'static str>; Writer::COUNT],
+}
+
+impl RemedyAdvice {
+    /// The common shape: `lead` then the writer's setting, Photon forwarding
+    /// `photon`'s key, and a writer this crate does not classify taking
+    /// `iceberg`'s.
+    pub(crate) const fn new(lead: &'static str, photon: &'static str) -> Self {
+        Self {
+            lead,
+            photon,
+            other: "iceberg",
+            wordings: [None; Writer::COUNT],
+        }
+    }
+
+    /// The same, with a writer this crate does not classify taking `engine`'s
+    /// setting.
+    pub(crate) const fn other(mut self, engine: &'static str) -> Self {
+        self.other = engine;
+        self
+    }
+
+    /// The same, with `writer`'s remedy spelled out.
+    pub(crate) const fn wording(mut self, writer: Writer, wording: &'static str) -> Self {
+        self.wordings[writer.index()] = Some(wording);
+        self
+    }
+
+    /// A remedy that is the same sentence for every writer.
+    pub(crate) const fn sentence(sentence: &'static str) -> Self {
+        Self {
+            lead: "",
+            photon: "spark",
+            other: "iceberg",
+            wordings: [Some(sentence); Writer::COUNT],
+        }
+    }
+}
+
+/// The one-line remedy for `writer`, from the rule's advice and remedy table.
+pub(super) fn remedy_text(
+    writer: Writer,
+    leaf: &str,
+    remedies: &[v1::Remedy],
+    advice: &RemedyAdvice,
+) -> String {
+    let engine = match writer {
+        Writer::ParquetMr => "spark",
+        Writer::Photon => advice.photon,
+        Writer::ArrowCpp => "pyarrow",
+        Writer::ArrowRs => "parquet-rs",
+        Writer::Other => advice.other,
+    };
+    let setting = setting(remedies, engine);
+    let default = match advice.lead.is_empty() {
+        true => "{setting}",
+        false => "{lead}: {setting}",
+    };
+    let wording = advice.wordings[writer.index()].unwrap_or(default);
+    let line = fill(wording, advice.lead, leaf, &setting);
+    match (writer, advice.wordings[writer.index()]) {
+        // Photon forwards the parquet-mr keys, and whether it honors them is
+        // unverified.
+        (Writer::Photon, None) => format!("{line} (Photon forwarding unverified)"),
+        _ => line,
+    }
+}
+
+/// `template` with its keys replaced in one pass, so a column name that spells
+/// one of them is not substituted a second time.
+fn fill(template: &str, lead: &str, leaf: &str, setting: &str) -> String {
+    let mut filled = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(at) = rest.find('{') {
+        filled.push_str(&rest[..at]);
+        rest = &rest[at..];
+        if let Some(tail) = rest.strip_prefix("{lead}") {
+            filled.push_str(lead);
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("{leaf}") {
+            filled.push_str(leaf);
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("{setting}") {
+            filled.push_str(setting);
+            rest = tail;
+        } else {
+            filled.push('{');
+            rest = &rest[1..];
+        }
+    }
+    filled.push_str(rest);
+    filled
+}
+
 /// A rule's controlled measurement of its rewrite.
 pub(crate) type Measure = fn(&ColumnSample<'_>) -> Result<Option<Measurement>, Error>;
 
@@ -639,10 +721,10 @@ pub(crate) struct Rule {
 /// column can have. `delta-integer` outranks the narrowing rules because packed
 /// deltas on a dense column beat a narrower plain width; the narrowing rules
 /// outrank the dictionary rules because a dictionary is only what a writer
-/// reaches for after the width is decided. `delta-length-byte-array` follows
-/// the dictionary rules — a dictionary is the writer's own answer to repeated
-/// text — and precedes `delta-text-encoding`, which also prices the
-/// shared-prefix encoding. `page-size` follows `codec-zstd`: a weaker codec is
+/// reaches for after the width is decided. `delta-text-encoding` follows the
+/// dictionary rules — a dictionary is the writer's own answer to repeated
+/// text — and prices both Delta encodings and the shared-prefix one.
+/// `page-size` follows `codec-zstd`: a weaker codec is
 /// the larger win, while a zstd chunk's tiny pages still earn it.
 pub(crate) const RULES: &[Rule] = &[
     Rule {
@@ -704,11 +786,6 @@ pub(crate) const RULES: &[Rule] = &[
         id: DICTIONARY_MISSING_RULE,
         values: true,
         detect: dictionary::detect_missing,
-    },
-    Rule {
-        id: DELTA_LENGTH_RULE,
-        values: true,
-        detect: delta_length::detect,
     },
     Rule {
         id: DELTA_TEXT_ENCODING_RULE,
@@ -944,8 +1021,13 @@ fn enriched(
     enriched.size_bytes = blob.size_bytes;
     enriched.sample_row_count = Some(coverage.row_count);
     enriched.sample_row_group_count = Some(coverage.row_group_count);
-    enriched.remedy = finding.remedy;
     enriched.remedies = finding.remedies;
+    enriched.remedy = remedy_text(
+        Writer::classify(blob.writer.as_deref()),
+        &enriched.column,
+        &enriched.remedies,
+        &finding.advice,
+    );
     let Some(measurement) = measurement else {
         enriched.verified = None;
         enriched.savings_bytes = None;
@@ -1050,12 +1132,13 @@ mod tests {
     use parquet::schema::parser::parse_message_type;
 
     use super::{
-        cells, rule, suggestions, uuid_text, verify, ColumnSample, BASE64_TEXT_RULE,
-        CODEC_ZSTD_RULE, DECIMAL_NARROW_RULE, DELTA_INTEGER_RULE, DELTA_LENGTH_RULE,
-        DELTA_TEXT_ENCODING_RULE, DICTIONARY_FALLBACK_RULE, DICTIONARY_MISSING_RULE,
-        DICTIONARY_UNIQUE_RULE, INT64_NARROW_RULE, INT96_TIMESTAMP_RULE, NUMERIC_TEXT_RULE,
-        STATS_TRUNCATED_RULE, TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
+        cells, remedy_text, rule, setting, suggestions, uuid_text, verify, ColumnSample,
+        ColumnValues, RemedyAdvice, BASE64_TEXT_RULE, CODEC_ZSTD_RULE, DECIMAL_NARROW_RULE,
+        DELTA_INTEGER_RULE, DELTA_TEXT_ENCODING_RULE, DICTIONARY_FALLBACK_RULE,
+        DICTIONARY_MISSING_RULE, DICTIONARY_UNIQUE_RULE, INT64_NARROW_RULE, INT96_TIMESTAMP_RULE,
+        NUMERIC_TEXT_RULE, STATS_TRUNCATED_RULE, TEXT_TIMESTAMP_RULE, UUID_TEXT_RULE,
     };
+    use crate::lint::writer::Writer;
     use crate::v1;
 
     /// A `BYTE_ARRAY` column whose chunk is stored at `codec`.
@@ -1110,6 +1193,43 @@ mod tests {
             named.push(remedy.engine.clone());
             engines.insert(remedy.engine.clone());
         }
+        for writer in [
+            Writer::Photon,
+            Writer::ParquetMr,
+            Writer::ArrowCpp,
+            Writer::ArrowRs,
+            Writer::Other,
+        ] {
+            let line = remedy_text(writer, sample.leaf, &finding.remedies, &finding.advice);
+            assert!(!line.is_empty(), "{rule_id} has no {writer:?} remedy");
+            for key in ["{lead}", "{leaf}", "{setting}"] {
+                assert!(
+                    !line.contains(key),
+                    "{rule_id}'s {writer:?} remedy leaves `{key}`: {line}"
+                );
+            }
+            if finding.advice.wordings[writer.index()].is_some() {
+                continue;
+            }
+            let engine = match writer {
+                Writer::ParquetMr => "spark",
+                Writer::Photon => finding.advice.photon,
+                Writer::ArrowCpp => "pyarrow",
+                Writer::ArrowRs => "parquet-rs",
+                Writer::Other => finding.advice.other,
+            };
+            let advice = setting(&finding.remedies, engine);
+            assert!(
+                line.contains(&advice),
+                "{rule_id}'s {writer:?} remedy does not name `{advice}`: {line}"
+            );
+            if writer == Writer::Photon {
+                assert!(
+                    line.contains("unverified"),
+                    "{rule_id}'s Photon remedy does not say so: {line}"
+                );
+            }
+        }
         let suggestion = sample.candidate(rule_id, finding);
         assert_eq!(suggestion.remedies.len(), named.len(), "{rule_id}");
         let json = serde_json::to_string(&suggestion).expect("a suggestion serializes");
@@ -1128,7 +1248,11 @@ mod tests {
         let uuid_cells = cells(&uuids);
         check(
             UUID_TEXT_RULE,
-            &ColumnSample::for_test(&uuid_column, &uuid_cells, false),
+            &ColumnSample::for_test_values(
+                &uuid_column,
+                ColumnValues::ByteArray(&uuid_cells),
+                false,
+            ),
             &mut engines,
         );
 
@@ -1144,14 +1268,18 @@ mod tests {
         let payload_cells = cells(&payloads);
         check(
             BASE64_TEXT_RULE,
-            &ColumnSample::for_test(&base64_column, &payload_cells, false),
+            &ColumnSample::for_test_values(
+                &base64_column,
+                ColumnValues::ByteArray(&payload_cells),
+                false,
+            ),
             &mut engines,
         );
 
         let int96_column = typed_column("INT96", "UNCOMPRESSED");
         check(
             INT96_TIMESTAMP_RULE,
-            &ColumnSample::for_test(&int96_column, &[], false),
+            &ColumnSample::for_test_values(&int96_column, ColumnValues::ByteArray(&[]), false),
             &mut engines,
         );
 
@@ -1162,7 +1290,11 @@ mod tests {
         let number_cells = cells(&numbers);
         check(
             NUMERIC_TEXT_RULE,
-            &ColumnSample::for_test(&numeric_column, &number_cells, false),
+            &ColumnSample::for_test_values(
+                &numeric_column,
+                ColumnValues::ByteArray(&number_cells),
+                false,
+            ),
             &mut engines,
         );
 
@@ -1170,7 +1302,7 @@ mod tests {
         let small: Vec<Option<i64>> = (0..100).map(|value| Some(value + 40_000)).collect();
         check(
             INT64_NARROW_RULE,
-            &ColumnSample::for_test_int64(&narrow_column, &small, false),
+            &ColumnSample::for_test_values(&narrow_column, ColumnValues::Int64(&small), false),
             &mut engines,
         );
 
@@ -1189,24 +1321,18 @@ mod tests {
             .collect();
         check(
             DECIMAL_NARROW_RULE,
-            &ColumnSample::for_test(&decimal_column, &amounts, false),
-            &mut engines,
-        );
-
-        let lengths: Vec<String> = (0..100)
-            .map(|value| format!("{value}{}", "x".repeat(value as usize)))
-            .collect();
-        let length_cells = cells(&lengths);
-        check(
-            DELTA_LENGTH_RULE,
-            &ColumnSample::for_test(&byte_column("UNCOMPRESSED"), &length_cells, false),
+            &ColumnSample::for_test_values(
+                &decimal_column,
+                ColumnValues::ByteArray(&amounts),
+                false,
+            ),
             &mut engines,
         );
 
         let snappy_column = byte_column("SNAPPY");
         check(
             CODEC_ZSTD_RULE,
-            &ColumnSample::for_test(&snappy_column, &[], false),
+            &ColumnSample::for_test_values(&snappy_column, ColumnValues::ByteArray(&[]), false),
             &mut engines,
         );
 
@@ -1215,7 +1341,11 @@ mod tests {
         let distinct_cells = cells(&distinct);
         check(
             DICTIONARY_UNIQUE_RULE,
-            &ColumnSample::for_test(&unique_column, &distinct_cells, true),
+            &ColumnSample::for_test_values(
+                &unique_column,
+                ColumnValues::ByteArray(&distinct_cells),
+                true,
+            ),
             &mut engines,
         );
 
@@ -1225,13 +1355,21 @@ mod tests {
         let repeated_cells = cells(&repeated);
         check(
             DICTIONARY_MISSING_RULE,
-            &ColumnSample::for_test(&unique_column, &repeated_cells, false),
+            &ColumnSample::for_test_values(
+                &unique_column,
+                ColumnValues::ByteArray(&repeated_cells),
+                false,
+            ),
             &mut engines,
         );
 
         check(
             DELTA_TEXT_ENCODING_RULE,
-            &ColumnSample::for_test(&unique_column, &distinct_cells, false),
+            &ColumnSample::for_test_values(
+                &unique_column,
+                ColumnValues::ByteArray(&distinct_cells),
+                false,
+            ),
             &mut engines,
         );
 
@@ -1239,22 +1377,30 @@ mod tests {
         let dense: Vec<Option<i64>> = (0..100).map(|value| Some(i64::from(value))).collect();
         check(
             DELTA_INTEGER_RULE,
-            &ColumnSample::for_test_int64(&dense_column, &dense, false),
+            &ColumnSample::for_test_values(&dense_column, ColumnValues::Int64(&dense), false),
             &mut engines,
         );
 
         check(
             DICTIONARY_FALLBACK_RULE,
-            &ColumnSample::for_test(&unique_column, &distinct_cells, true)
-                .with_dictionary_page(4_096),
+            &ColumnSample::for_test_values(
+                &unique_column,
+                ColumnValues::ByteArray(&distinct_cells),
+                true,
+            )
+            .with_dictionary_page(4_096),
             &mut engines,
         );
 
         check(
             STATS_TRUNCATED_RULE,
-            &ColumnSample::for_test(&unique_column, &distinct_cells, false)
-                .with_chunk_compressed_bytes(100_000)
-                .with_stats_excess(1_024),
+            &ColumnSample::for_test_values(
+                &unique_column,
+                ColumnValues::ByteArray(&distinct_cells),
+                false,
+            )
+            .with_chunk_compressed_bytes(100_000)
+            .with_stats_excess(1_024),
             &mut engines,
         );
 
@@ -1264,7 +1410,11 @@ mod tests {
         let stamp_cells = cells(&stamps);
         check(
             TEXT_TIMESTAMP_RULE,
-            &ColumnSample::for_test(&unique_column, &stamp_cells, false),
+            &ColumnSample::for_test_values(
+                &unique_column,
+                ColumnValues::ByteArray(&stamp_cells),
+                false,
+            ),
             &mut engines,
         );
 
@@ -1277,6 +1427,74 @@ mod tests {
             "duckdb",
         ] {
             assert!(engines.contains(engine), "no rule remedies {engine}");
+        }
+    }
+
+    /// The remedy helper wraps a writer's own setting in the rule's lead,
+    /// spells out a writer whose wording differs, substitutes the leaf once,
+    /// and marks Photon's forwarded key unverified.
+    #[test]
+    fn a_remedy_names_each_writer_setting_and_its_own_wording() {
+        let remedies = vec![
+            v1::Remedy::new("spark", "spark.setting"),
+            v1::Remedy::new("delta", "delta.setting"),
+            v1::Remedy::new("duckdb", "duckdb.setting"),
+            v1::Remedy::new("pyarrow", "pyarrow.setting"),
+            v1::Remedy::new("parquet-rs", "parquet-rs.setting"),
+            v1::Remedy::new("iceberg", "iceberg.setting"),
+        ];
+        let advice = RemedyAdvice::new("do the thing", "delta")
+            .wording(Writer::ArrowRs, "write {leaf} directly");
+        assert_eq!(
+            remedy_text(Writer::ParquetMr, "a.b", &remedies, &advice),
+            "do the thing: spark.setting"
+        );
+        assert_eq!(
+            remedy_text(Writer::Photon, "a.b", &remedies, &advice),
+            "do the thing: delta.setting (Photon forwarding unverified)"
+        );
+        assert_eq!(
+            remedy_text(Writer::ArrowCpp, "a.b", &remedies, &advice),
+            "do the thing: pyarrow.setting"
+        );
+        assert_eq!(
+            remedy_text(Writer::ArrowRs, "a.b", &remedies, &advice),
+            "write a.b directly"
+        );
+        assert_eq!(
+            remedy_text(Writer::Other, "a.b", &remedies, &advice),
+            "do the thing: iceberg.setting"
+        );
+
+        let leadless = RemedyAdvice::new("", "spark").other("duckdb");
+        assert_eq!(
+            remedy_text(Writer::ParquetMr, "id", &remedies, &leadless),
+            "spark.setting"
+        );
+        assert_eq!(
+            remedy_text(Writer::Other, "id", &remedies, &leadless),
+            "duckdb.setting"
+        );
+
+        // A leaf that spells a key is substituted once, not expanded twice.
+        let templated = RemedyAdvice::new("", "spark").wording(Writer::ArrowRs, "write {leaf}");
+        assert_eq!(
+            remedy_text(Writer::ArrowRs, "{setting}", &remedies, &templated),
+            "write {setting}"
+        );
+
+        let sentence = RemedyAdvice::sentence("store as BINARY(16)");
+        for writer in [
+            Writer::Photon,
+            Writer::ParquetMr,
+            Writer::ArrowCpp,
+            Writer::ArrowRs,
+            Writer::Other,
+        ] {
+            assert_eq!(
+                remedy_text(writer, "id", &remedies, &sentence),
+                "store as BINARY(16)"
+            );
         }
     }
 
